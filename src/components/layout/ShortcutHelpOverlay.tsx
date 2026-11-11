@@ -113,6 +113,7 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.rootView" />
               <UntestedTag id="steering.rootChrome" />
               <UntestedTag id="steering.answerDigits" />
+              <UntestedTag id="steering.queueMoves" />
               <UntestedTag id="steering.jumpBack" />
               <UntestedTag id="steering.tabKey" />
             </h3>

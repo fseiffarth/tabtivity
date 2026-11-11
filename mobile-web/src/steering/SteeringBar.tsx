@@ -54,7 +54,7 @@ function pillShown(pill: Chip["pill"]): boolean {
 }
 
 /** The shown ones of a level's actions, one chip each, in table order (up and down read as one; Mail, Calendar and To-do as one). */
-function chipsFor(level: PhoneLevel, t: ReturnType<typeof useT>, counts: Record<StatusKind, number>, question: boolean, jumpBack: boolean): Chip[] {
+function chipsFor(level: PhoneLevel, t: ReturnType<typeof useT>, counts: Record<StatusKind, number>, question: boolean, queue: boolean, jumpBack: boolean): Chip[] {
   const out: Chip[] = [];
   const seen = new Set<PhoneSteeringAction>();
   for (const def of phoneBindingsFor(level)) {
@@ -67,6 +67,8 @@ function chipsFor(level: PhoneLevel, t: ReturnType<typeof useT>, counts: Record<
       if (counts[status] > 0) out.push({ id: action, keys: keysText(action, level), label, count: counts[status], pill: "statusJump" });
     } else if (action === "answer") {
       if (question) out.push({ id: action, keys: keysText(action, level), label, pill: "answer" });
+    } else if (action === "queueSend" || action === "queuePull") {
+      if (queue) out.push({ id: action, keys: keysText(action, level), label });
     } else if (action === "jumpBack") {
       if (jumpBack) out.push({ id: action, keys: keysText(action, level), label });
     } else if (action === "type") {
@@ -140,11 +142,11 @@ function useKeyboardTip(): boolean {
  */
 export function SteeringBar() {
   const t = useT();
-  const { active, view, flash, legendFolded, activity, question, jumpBack } = useSteering();
+  const { active, view, flash, legendFolded, activity, question, queue, jumpBack } = useSteering();
   const tip = useKeyboardTip();
   const counts = useMemo(() => statusCounts(activity?.tabs ?? []), [activity]);
   const level = view?.level ?? "projects";
-  const chips = useMemo(() => chipsFor(level, t, counts, question, jumpBack !== null), [level, t, counts, question, jumpBack]);
+  const chips = useMemo(() => chipsFor(level, t, counts, question, queue, jumpBack !== null), [level, t, counts, question, queue, jumpBack]);
   if (!active) {
     return tip
       ? <div className="steer-tip" role="status">

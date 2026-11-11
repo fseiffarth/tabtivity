@@ -31,7 +31,7 @@ import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
-import { registerQuestionField } from "../../lib/agents/readerSteering";
+import { registerQuestionField, registerQueueMoves } from "../../lib/agents/readerSteering";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
@@ -2048,6 +2048,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const pullQueued = useRef<(() => void) | null>(null);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
   const history = useMemo(() => composerHistory(entries, pending.map((item) => item.text)), [entries, pending]);
+  // Keyboard steering's Send now / Cancel and edit act on the same queue the
+  // bubbles' buttons do, and only while those buttons are drawn.
+  const queueMovesLatest = useRef({ shown: false, send: sendQueued });
+  queueMovesLatest.current = { shown: !!queueCli && !openStep && !browsed && pending.length > 0, send: sendQueued };
+  useEffect(() => registerQueueMoves(ptyId, {
+    available: () => queueMovesLatest.current.shown,
+    send: () => queueMovesLatest.current.send(),
+    pull: () => pullQueued.current?.(),
+  }), [ptyId]);
 
   // A prompt sent while the chat shows scrolls it to the bottom.
   useEffect(() => {

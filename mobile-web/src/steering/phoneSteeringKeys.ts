@@ -53,6 +53,8 @@ export type PhoneSteeringAction =
   | "menu"
   | "answer"
   | "type"
+  | "queueSend"
+  | "queuePull"
   | "confirm";
 
 export interface PhoneBindingDef {
@@ -110,6 +112,9 @@ export const PHONE_STEERING_BINDINGS: readonly PhoneBindingDef[] = [
   { action: "closeTab", levels: ["tabs"], desktop: "closeTab", labelKey: "mobile.steering.key.close", group: "act" },
   { action: "menu", levels: ["tabs"], desktop: "menu", labelKey: "steering.menu.label", group: "act" },
   { action: "answer", levels: ["inside"], desktop: SLOTS, labelKey: "mobile.steering.key.answer", group: "act" },
+  // Under a queued prompt in the chat: its Send now and Cancel and edit pair.
+  { action: "queueSend", levels: ["inside"], desktop: "queueSend", labelKey: "mobile.steering.key.queueSend", group: "act" },
+  { action: "queuePull", levels: ["inside"], desktop: "queuePull", labelKey: "mobile.steering.key.queuePull", group: "act" },
   // I stays the phone's type key whichever key the desktop gives its prompt box.
   { action: "type", levels: ["inside"], desktop: "agentPrompt", keys: ["i"], labelKey: "mobile.steering.key.type", group: "act" },
 ];

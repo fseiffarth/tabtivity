@@ -2,16 +2,18 @@
 // chat lists with a digit, and put the caret in the composer. Registered with
 // the steering store while the Terminal is mounted (`registerInside`); the
 // engine (`steering/usePhoneSteering.ts`) calls it lazily at the key.
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useRef, type MutableRefObject, type RefObject } from "react";
 import { freeTextRow, optionForDigit, type SelectOption, type SelectPrompt } from "../../terminal/selectPrompt";
 import { refreshInside, registerInside, type AnswerResult } from "../../steering/steeringState";
 
-export function useTerminalSteering({ focusView, liveQuestion, answerQuestion, composer }: {
+export function useTerminalSteering({ focusView, liveQuestion, answerQuestion, composer, queue }: {
   /** The Focus view is up: the one view that lists the question as rows. */
   focusView: boolean;
   liveQuestion: SelectPrompt | null;
   answerQuestion: (option: SelectOption) => void;
   composer: RefObject<HTMLTextAreaElement | null>;
+  /** The chat's queued prompts: what Send now and Cancel and edit do, and whether they are drawn now. */
+  queue: MutableRefObject<{ shown: boolean; send: () => void; pull: () => void }>;
 }): void {
   const latest = useRef({ focusView, liveQuestion, answerQuestion });
   latest.current = { focusView, liveQuestion, answerQuestion };
@@ -42,9 +44,21 @@ export function useTerminalSteering({ focusView, liveQuestion, answerQuestion, c
         return "focused";
       },
       hasQuestion: () => latest.current.focusView && latest.current.liveQuestion !== null,
+      hasQueue: () => queue.current.shown,
+      sendQueued() {
+        if (!queue.current.shown) return false;
+        queue.current.send();
+        return true;
+      },
+      pullQueued() {
+        if (!queue.current.shown) return false;
+        queue.current.pull();
+        return true;
+      },
     });
     return () => registerInside(null);
-  }, [composer]);
+  }, [composer, queue]);
   const shown = focusView && liveQuestion !== null;
-  useEffect(() => { refreshInside(); }, [shown]);
+  const queued = queue.current.shown;
+  useEffect(() => { refreshInside(); }, [shown, queued]);
 }

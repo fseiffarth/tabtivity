@@ -392,6 +392,13 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
         else if (result === "missing") flash("mobile.steering.noOption", { n });
         return;
       }
+      case "queueSend":
+      case "queuePull": {
+        const inside = getInside();
+        const did = action === "queueSend" ? inside?.sendQueued() : inside?.pullQueued();
+        if (!did) flash("mobile.steering.noQueue");
+        return;
+      }
       case "type": {
         const typed = getInside()?.focusComposer();
         if (typed === "blocked") flash("mobile.steering.blocked");

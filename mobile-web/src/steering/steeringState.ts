@@ -43,6 +43,11 @@ export interface InsideTarget {
   /** "blocked": a question is up; "offline": the box waits for the connection. */
   focusComposer(): "focused" | "blocked" | "offline";
   hasQuestion(): boolean;
+  /** Send now of the chat's queued prompts; false when none is offered. */
+  sendQueued(): boolean;
+  /** Cancel and edit of the queued prompts (they go back into the composer); false when none is offered. */
+  pullQueued(): boolean;
+  hasQueue(): boolean;
 }
 
 /**
@@ -76,6 +81,8 @@ export interface SteeringSnapshot {
   hasInside: boolean;
   /** `hasQuestion()` of the registered target as of the last registry change. */
   question: boolean;
+  /** Queued prompts are on screen with their Send now / Cancel and edit. */
+  queue: boolean;
 }
 
 const FLASH_MS = 3000;
@@ -91,6 +98,7 @@ const initial = (): SteeringSnapshot => ({
   findSeq: 0,
   hasInside: false,
   question: false,
+  queue: false,
 });
 
 let state: SteeringSnapshot = initial();
@@ -215,13 +223,14 @@ export function getInside(): InsideTarget | null {
 /** The Terminal registers its target on mount and passes null on unmount; notifies subscribers either way. */
 export function registerInside(target: InsideTarget | null): void {
   inside = target;
-  set({ hasInside: target !== null, question: target?.hasQuestion() ?? false });
+  set({ hasInside: target !== null, question: target?.hasQuestion() ?? false, queue: target?.hasQueue() ?? false });
 }
 
 /** Re-reads `hasQuestion()` after the question appeared or went; the bar shows the answer key from it. */
 export function refreshInside(): void {
   const question = inside?.hasQuestion() ?? false;
-  if (question !== state.question) set({ question });
+  const queue = inside?.hasQueue() ?? false;
+  if (question !== state.question || queue !== state.queue) set({ question, queue });
 }
 
 /** Test hook: back to a fresh, inactive store with no timers, registry or root attributes. */

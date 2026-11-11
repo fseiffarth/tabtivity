@@ -55,7 +55,7 @@ vi.mock("../../lib/agents/readerLive", async (importOriginal) => {
 });
 
 import { useKeyboard } from "../../hooks/useKeyboard";
-import { registerQuestionField } from "../../lib/agents/readerSteering";
+import { registerQueueMoves, registerQuestionField } from "../../lib/agents/readerSteering";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
@@ -208,6 +208,26 @@ describe("steering digits on a tab that asks", () => {
     press({ key: "3" });
     expect(h.typed.length).toBe(1);
     expect(h.focus).toHaveBeenCalled();
+  });
+
+  it("K sends the Chat's queued prompts now and L takes them back to edit, only while they are queued", () => {
+    const tab = agentTab("a");
+    const id = `p:${tab.key}`;
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    const calls: string[] = [];
+    let shown = false;
+    const off = registerQueueMoves(id, { available: () => shown, send: () => calls.push("send"), pull: () => calls.push("pull") });
+    press({ key: "k" });
+    expect(calls).toEqual([]);
+    shown = true;
+    press({ key: "k" });
+    expect(calls).toEqual(["send"]);
+    expect(useKeyboardSteeringStore.getState().active).toBe(true);
+    press({ key: "l" });
+    expect(calls).toEqual(["send", "pull"]);
+    expect(useKeyboardSteeringStore.getState().active).toBe(false);
+    off();
   });
 
   it("a turn waiting on a decision with no dialog read gets the digit typed as is", () => {

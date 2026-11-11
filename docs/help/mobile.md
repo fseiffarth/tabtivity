@@ -253,7 +253,7 @@ mode. **E S D F** work as the arrow keys throughout.
 | Projects, Tabs, Inside, Mail, Calendar, To-do | **Q / R / X** open the next tab that waits for an answer / is working / is done, in any project (Shift: previous); **Backspace** returns to where you were; **M C T** open Mail, Calendar and To-do; **/** goes to Home's search |
 | Projects (Home) | **N** a new project; **1-9** open project N |
 | Tabs (a project) | **N** or **+** the new-tab button; **W** closes the tab after asking (**Y** or Enter confirms); **.** the card's menu |
-| Inside a tab | **E / D** scroll the chat or terminal (Shift: a page); **F** jumps to the latest; **S / ←** back to the tab list; **H** folds the bar; **1-9** answer the agent's question on screen; **I** puts the caret in the message box |
+| Inside a tab | **E / D** scroll the chat or terminal (Shift: a page); **F** jumps to the latest; **S / ←** back to the tab list; **H** folds the bar; **1-9** answer the agent's question on screen; **K** Send now / **L** Cancel and edit for prompts still queued in the chat; **I** puts the caret in the message box |
 | A sheet or menu on top | **E / D** walk its controls, **Enter** presses one, **S / ← / Esc** close it, **Y** confirms a confirm |
 
 Typing is never taken from you. While the caret is in a text field, every key

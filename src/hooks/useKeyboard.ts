@@ -80,7 +80,7 @@ import {
   type SteeringApp,
 } from "../lib/shortcuts/steeringRegion";
 import { placeSidePanelCursor, steerSidePanel } from "../lib/shortcuts/steeringSidePanel";
-import { cycleReaderView, readerInsideFor, readerViewFor } from "../lib/agents/readerSteering";
+import { cycleReaderView, queueMovesFor, readerInsideFor, readerViewFor } from "../lib/agents/readerSteering";
 import {
   openProjectShellInRootConsole,
   rootViewShown,
@@ -719,6 +719,8 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
             return;
           case "work":
           case "agentPrompt":
+          case "queueSend":
+          case "queuePull":
             break;
           default:
             return;
@@ -862,6 +864,20 @@ export function useKeyboard({ onTogglePanels, onSidePanel, onToggleSidePanel }: 
         case "agentPrompt": {
           const active = steeringActiveTab();
           if (active && requestSteeringPrompt(active.scope, active.tab, level)) handOffSteering("prompt");
+          return;
+        }
+        // The Chat's queued prompts: Send now (Esc / the CLI's queue move)
+        // and Cancel and edit (back into the text box, where Enter re-sends).
+        case "queueSend":
+        case "queuePull": {
+          const active = steeringActiveTab();
+          const moves = active ? queueMovesFor(`${active.scope}:${active.tab.key}`) : null;
+          if (!moves || e.repeat) return;
+          if (action === "queueSend") moves.send();
+          else {
+            moves.pull();
+            exitSteering();
+          }
           return;
         }
       }

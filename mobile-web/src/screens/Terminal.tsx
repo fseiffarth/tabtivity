@@ -2148,7 +2148,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion,
   });
-  useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput });
+  /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
+  const queueSteer = useRef({ shown: false, send: () => {}, pull: () => {} });
+  useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput, queue: queueSteer });
   /** The stored session only grows at message boundaries, so a turn busy in
    * tool calls looked finished. The live screen's interrupt hint says it is
    * not; a choice on screen is waiting on the reader instead. */
@@ -2517,6 +2519,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     ...(sendNowOffered ? [{ key: "send", label: t("terminal.reader.sendNow"), current: false }] : []),
     { key: "pull", label: t("terminal.reader.cancelEdit"), description: t("terminal.reader.cancelEditTitle"), current: false },
   ] : [];
+  queueSteer.current = {
+    shown: queueMoves && (sendNowOffered || queueCli !== null),
+    send: () => { if (connected && sendNowOffered && !sendNowWaiting) sendQueuedNow(); },
+    pull: () => { if (connected && !queuePulling) pullQueued(); },
+  };
   const pickQueue = (key: string) => {
     if (!connected) return;
     if (key === "send" && !sendNowWaiting) sendQueuedNow();

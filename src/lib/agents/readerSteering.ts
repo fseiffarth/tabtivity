@@ -115,6 +115,26 @@ export function openQuestionField(id: string, index: number): boolean {
   return true;
 }
 
+/** What steering does to the Chat's queued prompts (Send now, Cancel and edit). */
+export interface QueueMoves {
+  /** Prompts are still queued and the CLI's queue can be acted on. */
+  available(): boolean;
+  send(): void;
+  pull(): void;
+}
+
+const queueMoves = new Map<string, QueueMoves>();
+
+export function registerQueueMoves(id: string, moves: QueueMoves): () => void {
+  return register(queueMoves, id, moves);
+}
+
+/** Pane `id`'s queue moves when it has queued prompts to act on. */
+export function queueMovesFor(id: string): QueueMoves | null {
+  const moves = queueMoves.get(id);
+  return moves?.available() ? moves : null;
+}
+
 /** What a pane shows and offers, for the legend. */
 export interface ReaderViewFacts {
   view: ReaderViewId;

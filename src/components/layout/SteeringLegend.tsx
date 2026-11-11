@@ -23,7 +23,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { documentScroller } from "../../lib/shortcuts/documentScroll";
-import { useReaderViewFacts } from "../../lib/agents/readerSteering";
+import { queueMovesFor, useReaderViewFacts } from "../../lib/agents/readerSteering";
 import { ChevronRightIcon, KeyboardIcon, MicIcon } from "../common/icons/Icon";
 
 /** What the box steering lent the keyboard to answers — its own keys, fixed,
@@ -214,6 +214,7 @@ export function SteeringLegend() {
           steeringConfirm: region === "overlay" && !!steeringConfirmButton(document),
           tabCard: inPane && !!activeTabCard(),
           subagents: inPane && !!activeSubagentFrame(),
+          queue: (inPane || level === "scroll") && !!activeTab && !!queueMovesFor(`${tabScope}:${activeTab.key}`),
           multiPane,
           apps: { mail, calendar, todo },
           agent: steeringAgentOffer(activeTab),

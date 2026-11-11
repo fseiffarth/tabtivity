@@ -134,7 +134,7 @@ describe("SteeringBar", () => {
     render(<SteeringBar />);
     show(view("inside"));
     expect(keys().join("|")).not.toContain("Answer");
-    act(() => registerInside({ answer: () => "answered", focusComposer: () => "focused", hasQuestion: () => true }));
+    act(() => registerInside({ answer: () => "answered", focusComposer: () => "focused", hasQuestion: () => true, hasQueue: () => false, sendQueued: () => false, pullQueued: () => false }));
     expect(keys().find((k) => k.includes("Answer"))).toContain("1–9");
     act(() => registerInside(null));
     expect(keys().join("|")).not.toContain("Answer");

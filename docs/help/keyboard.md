@@ -88,6 +88,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | E / ↑ | Up a level: tabs → subwindows → projects → the top bar |
 | D / ↓ | Back down a level |
 | 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option opens the Chat view's field, or on the Terminal view moves the highlight there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
+| K / L | On an agent tab whose Chat shows prompts still queued behind a busy turn: **K** Send now (stops the turn so the queue goes at once; steering stays on), **L** Cancel and edit (takes the queued prompts back into the text box and hands you the keyboard). Shown only while the bubbles' buttons are |
 | N / M | New shell / System Monitor tab (projects: new project / mail) |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
 | , | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the wheel, their digit (1–9, 0) opens one at once |

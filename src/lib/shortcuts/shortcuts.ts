@@ -861,6 +861,7 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *   subagents  — the active agent tab's Chat lists subagents, or shows one
  *   mail / calendar / todo — that header app is switched on
  *   agentPrompt — the active tab is an agent (the prompt box sends to it)
+ *   queue      — the active agent tab's Chat shows prompts still queued
  *   intoTerminal — where ←/→ step tabs, and the active tab is a terminal
  *                ↓ can scroll (the scroll level)
  *   intoDocument — the same for a tab whose document scrolls
@@ -900,6 +901,7 @@ export type SteeringCondition =
   | "calendar"
   | "todo"
   | "agentPrompt"
+  | "queue"
   | "intoTerminal"
   | "intoDocument"
   | "inTerminal"
@@ -981,6 +983,8 @@ export interface SteeringLegendState {
   tabCard?: boolean;
   /** The active agent tab's Chat lists subagents, or shows one. */
   subagents?: boolean;
+  /** The active agent tab's Chat shows queued prompts (Send now / Cancel and edit). */
+  queue?: boolean;
   multiPane: boolean;
   apps: { mail: boolean; calendar: boolean; todo: boolean };
   /** The active tab is a live terminal (↓ scrolls it). */
@@ -1042,6 +1046,8 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
       return !!s.subagents;
     case "agentPrompt":
       return !!s.agent?.prompt;
+    case "queue":
+      return !!s.queue;
     case "intoTerminal":
       return !!s.terminal && !readerPanelShown(s) && steeringConditionHolds("stepsTabs", s);
     case "intoReader":
@@ -1148,6 +1154,8 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["subagents"], labelKey: "steering.subagents.label", descKey: "steering.subagents.desc", levels: PANE_LEVELS, when: "subagents", group: "agent" },
   { actions: [], slots: true, labelKey: "steering.answer.label", descKey: "steering.answer.desc", levels: [...PANE_LEVELS, "scroll"], when: "question", group: "agent" },
   { actions: ["agentPrompt"], labelKey: "steering.agentPrompt.label", descKey: "steering.agentPrompt.desc", levels: [...PANE_LEVELS, "scroll"], when: "agentPrompt", group: "agent" },
+  { actions: ["queueSend"], labelKey: "steering.queueSend.label", descKey: "steering.queueSend.desc", levels: [...PANE_LEVELS, "scroll"], when: "queue", group: "agent" },
+  { actions: ["queuePull"], labelKey: "steering.queuePull.label", descKey: "steering.queuePull.desc", levels: [...PANE_LEVELS, "scroll"], when: "queue", group: "agent" },
   { actions: ["exit", "work"], labelKey: "steering.work.label", descKey: "steering.work.desc", levels: [...PANE_LEVELS, "scroll"], group: "mode" },
   // Inside a terminal or a document (its tab's ↓): Shift scrolls a whole screen.
   { actions: ["left", "right"], pair: true, labelKey: "steering.scroll.label", descKey: "steering.scroll.desc", levels: ["scroll"], when: "inTerminal", group: "move" },

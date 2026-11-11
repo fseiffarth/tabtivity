@@ -50,8 +50,11 @@ describe("steering bindings", () => {
   });
 
   it("has the agent keys inside a pane only", () => {
-    expect(steeringActionFor(ev("k"), "panes", null)).toBeNull();
-    expect(steeringActionFor(ev("l"), "panes", null)).toBeNull();
+    expect(steeringActionFor(ev("i"), "panes", null)).toBeNull();
+    expect(steeringActionFor(ev("y"), "panes", null)).toBeNull();
+    // K and L are the Chat's queued prompts (Send now, Cancel and edit).
+    expect(steeringActionFor(ev("k"), "panes", null)).toBe("queueSend");
+    expect(steeringActionFor(ev("l"), "panes", null)).toBe("queuePull");
     // G is the subagents list now (an agent tab's, but not an agent key).
     expect(steeringActionFor(ev("g"), "panes", null)).toBe("subagents");
     expect(steeringActionFor(ev("g"), "projects", null)).toBeNull();

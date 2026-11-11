@@ -116,6 +116,12 @@ describe("phone steering table", () => {
     expect(act("y", "tabs")).toBeNull();
   });
 
+  it("puts the queued prompts' Send now and Cancel and edit on K and L inside a tab only", () => {
+    expect(act("k", "inside")).toBe("queueSend");
+    expect(act("l", "inside")).toBe("queuePull");
+    for (const level of ["projects", "tabs", "region"] as const) expect(act("k", level), level).toBeNull();
+  });
+
   it("reads digits as row N on Home, an answer inside a tab, and nothing elsewhere", () => {
     expect(act("3", "projects")).toBe("openRow");
     expect(act("3", "inside")).toBe("answer");

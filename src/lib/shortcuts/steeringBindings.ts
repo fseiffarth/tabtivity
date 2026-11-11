@@ -64,6 +64,8 @@ export type SteeringAction =
   | "files"
   | "closeTab"
   | "agentPrompt"
+  | "queueSend"
+  | "queuePull"
   | "nextDecision"
   | "nextWorking"
   | "nextDone"
@@ -154,6 +156,9 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   // G: the agent tab's Subagents list (A, its card, was taken).
   { action: "subagents", labelKey: "steering.subagents.label", scopes: ["panes"], defaults: ["g"] },
   { action: "agentPrompt", labelKey: "steering.agentPrompt.label", scopes: ["panes"], defaults: [" "] },
+  // The Chat's queued prompts: Send now (K) and Cancel and edit (L).
+  { action: "queueSend", labelKey: "steering.queueSend.label", scopes: ["panes"], defaults: ["k"] },
+  { action: "queuePull", labelKey: "steering.queuePull.label", scopes: ["panes"], defaults: ["l"] },
   { action: "nextDecision", labelKey: "steering.nextDecision.label", scopes: TAB_BAR, defaults: ["q"] },
   { action: "nextWorking", labelKey: "steering.nextWorking.label", scopes: TAB_BAR, defaults: ["r"] },
   { action: "nextDone", labelKey: "steering.nextDone.label", scopes: TAB_BAR, defaults: ["x"] },
@@ -280,6 +285,8 @@ const LIVE_INSIDE: ReadonlySet<SteeringAction> = new Set<SteeringAction>([
   "work",
   "exit",
   "agentPrompt",
+  "queueSend",
+  "queuePull",
   "readerView",
   ...STEERING_SLOT_ACTIONS,
 ]);
