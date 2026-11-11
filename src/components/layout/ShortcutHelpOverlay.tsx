@@ -105,6 +105,8 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.handoffLegend" />
               <UntestedTag id="steering.dim" />
               <UntestedTag id="steering.popout" />
+              <UntestedTag id="steering.inPopout" />
+              <UntestedTag id="steering.popoutHandover" />
               <UntestedTag id="steering.pointer" />
               <UntestedTag id="steering.landOnTabs" />
               <UntestedTag id="steering.sidePanelRows" />

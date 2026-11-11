@@ -219,8 +219,64 @@ Commit: `feat(steering): status jumps and Back cross windows`
   digit answer itself is not driven, the popout's request is emitted
   directly); counts reach the popout.
 
+## Step 6 — paperwork
+
+Commit: `docs(steering): steering in popouts, help, QA item and untested pills`
+
+- `src/lib/untested.ts` + pills in `ShortcutHelpOverlay.tsx`: new ids
+  `steering.inPopout` (step 3) and `steering.popoutHandover` (steps 4–5).
+  Deviation: the plan names step 3's id `steering.popout`, but that id already
+  exists (J); its row text now says steering goes on in the popout instead of
+  "steering ends".
+- `docs/help/keyboard.md`: a "In a popped-out window" block in the steering
+  section (Up / title bar, J, the Main window keys, Q R X across windows, the
+  refused-focus note); the new-tab chords row says "the window you're in".
+- `todo/group-l-tabs.md`: `213k`, the 🖐️ manual item with the plan's ten live
+  steps and the four platform pairs.
+- `docs/filemap_frontend.md`: new rows `popoutView.ts`, `steeringPopout.ts`,
+  `tabJump.ts`, `focusPopout.ts`; updated `DetachedApp`, `DetachedCenterPanel`,
+  `steeringScope`, `RootNewTabKeys`, `steeringChord` rows.
+- Comments fixed: `steeringChord.ts` header and `STEER_FROM_POPOUT`
+  (`DetachedCenterPanel`'s was fixed in step 3).
+
+## Commits (worktree branch `worktree-agent-aff871cb5baa53f19`, on `develop` 40f3918b2)
+
+1. `beaa0c9fc` refactor(steering): move steering mode into useSteering
+2. `aae4615e6` feat(steering): a popout's tabs are a steering scope
+3. `532133f52` feat(steering): steering runs inside a popout window
+4. `301b33681` feat(steering): steering follows the keyboard between windows
+5. `b4831e066` feat(steering): status jumps and Back cross windows
+6. (the commit adding this section) docs(steering): …
+
+Every step was gated with `scripts/gates.sh` (brand, whitespace, lint, build
+incl. the type-check, `vitest --changed`), all green. Nothing was run live.
+
+## For whoever lands this
+
+- The other session's uncommitted edits (one-subwindow scope: no Subwindows
+  level or rung) apply to code that step 1 moved into `useSteering.ts`, and to
+  `steeringBar.ts`'s `ladder`, which now also has a popout branch: there the
+  popout ladder keeps a Subwindows rung even with one subwindow; drop it the
+  same way when rebasing.
+- Do not edit the worktree while `scripts/gates.sh` runs: it hashes the tree
+  and reports "the tree changed while they ran"; a mixed run once failed the
+  build for that reason (step 3).
+
 ## Flagged for user
 
+- Not verified at all (no live run): that `getCurrentWindow().unminimize()` +
+  `setFocus()` really gives the main window the keyboard on each platform
+  (D7's open question; Wayland especially); that `focus_detached_window`
+  delivers a `focus` event to the popout within 800 ms; how the bar, the
+  title-bar outline and the subwindow badges look in a popout; the
+  `steering-bar` padding on `.detached-center`.
+- J from the main window used to end steering there at once; it now stays on
+  in the main window until the popout announces itself. If the popout never
+  gets the keyboard, steering stays in the main window (by design, D4).
+- The main window's `STEERING_STATUS` `back` flag is "the Back record's
+  origin is still open", not checked against the popout's shown tab, so a
+  popout's bar can list Back while Back would do nothing (the popout is on the
+  origin tab itself). Harmless (the key then does nothing), visible only then.
 - Closing a popout tab with its × does not end the tab's minted local tmux
   session (`local_tmux_kill`); the main window's × does (`closeTabInScope`).
   Steering's W in a popout goes through `closeTabInScope`, so it does end it,

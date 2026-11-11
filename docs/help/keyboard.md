@@ -49,8 +49,8 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 
 ## New tabs
 
-Each opens a tab in the focused pane of the main window and puts the cursor
-in it — from a focused terminal too. The + menu shows each chord beside its
+Each opens a tab in the focused pane of the window you're in — the main window
+or a popped-out one — and puts the cursor in it, from a focused terminal too. The + menu shows each chord beside its
 entry.
 
 | Default | Action |
@@ -149,6 +149,27 @@ file half a screen (Shift: a whole one), **O** opens the highlighted file as a
 tab (Shift+O: in a new subwindow) or the link after the usual "Open link?" ask,
 and **V** shows the file in the viewer beside the list. Moving the highlight
 opens nothing; Enter stays Work here and Space the prompt box.
+
+**In a popped-out window** the mode works the same on that window's own
+subwindows and tabs: Shift+Space there docks the bar at its bottom, and the
+tab, prompt, close and new-tab keys act in it. There are no projects in a
+popout: **E / ↑** from its tabs (or its subwindows) walks its title bar — dock
+back, hide and the window buttons, **Enter** presses one — and one more **↑**
+hands the keyboard to the main window, steering on its tabs. The ladder reads
+Main window › Title bar › Subwindows › Tabs › Inside. Only one window steers at
+a time, and steering follows the keyboard:
+
+- **J** in the main window raises the next popout with steering on in it; J in
+  a popout goes to the next popout, after the last one back to the main window.
+- Keys whose target is only in the main window — the project jump, mail,
+  calendar, to-do, the cockpit, settings, the side panel and the panels — are
+  listed in the popout's bar under *Main window*: pressing one brings the main
+  window forward and runs it there.
+- **Q R X** and Back walk the same tabs from either window and land on the tab
+  wherever it lives, bringing its window forward.
+
+If the desktop does not let a window take the keyboard (some Wayland
+compositors refuse it), steering stays in the window you were in.
 
 The phone has the same mode for a Bluetooth keyboard (Shift+Space, E S D F, Q R X, M C T,
 digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.

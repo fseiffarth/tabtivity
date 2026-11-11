@@ -1,8 +1,9 @@
 /**
- * When the steering chord counts as one, shared by the main window's handler
- * (`hooks/useKeyboard`) and a popout's (`DetachedApp`): a popout has no
- * steering of its own, so it hands the chord to the main window
- * (`DETACHED_STEER` → {@link STEER_FROM_POPOUT}).
+ * When the steering chord counts as one, for the one steering handler
+ * (`hooks/useSteering`) in every window: the main window and each popout
+ * steer themselves. A popout hands steering or a key to the main window over
+ * `DETACHED_STEER`, which the main window's host passes on as
+ * {@link STEER_FROM_POPOUT}.
  */
 import { chordMatches, type ChordDescriptor } from "./shortcuts";
 import { normalizeKey } from "./keyNames";
@@ -36,5 +37,6 @@ export function isTextKey(e: KeyboardEvent): boolean {
   return e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey;
 }
 
-/** Main window: a popout's steering chord arrived (window `CustomEvent`). */
+/** Main window: a popout handed steering or a key over (window `CustomEvent`
+ *  whose `detail` is the popout's `DetachedSteerPayload`). */
 export const STEER_FROM_POPOUT = "app:steer-from-popout";

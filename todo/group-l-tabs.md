@@ -514,6 +514,45 @@ correctness/UX work atop the same layout model #42 detaches.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+213k. **Live-QA steering inside popout windows.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-11). Steering runs in a popout on its own
+    subwindows and tabs, and hands over between windows (one steers at a time,
+    steering follows the keyboard). Plan: `docs/steering_popout_plan.md`;
+    handoff log: `docs/steering_popout_handoff.md`. Verify, after the dev build
+    with these commits: (1) pop a subwindow with two tabs out, click into it,
+    Shift+Space: the bar is at the popout's bottom, the active tab outlined, the
+    main window shows nothing; (2) S/F switch its tabs, D goes inside the
+    terminal and scrolls, E comes back; (3) N opens a shell beside the active
+    tab, + opens the menu under the cursor, W asks then closes; (4) Space on an
+    agent tab opens the prompt box in the popout, Enter sends; (5) E from the
+    tabs: the cursor is on the title bar, Enter on ⤓ docks back; pop out again,
+    E twice: the main window has the keyboard and the bar; (6) J in the main
+    window: the popout has the bar; J again with one popout: back in the main
+    window; with two popouts main → first → second → main; (7) / in a popout:
+    settings open in the main window, steering on its pages; (8) an agent in
+    the main window asks, Q in the popout: the main window comes forward on
+    that tab; answer with a digit: back in the popout; (9) split the popout:
+    E from the tabs reaches the subwindows level with ↓/↑ badges, Shift+S/F
+    jump between them; (10) on Wayland repeat 5 and 6: a refused focus move
+    must leave steering where the keyboard is, never the bar in one window and
+    the keys in another.
+    *Files: `src/hooks/useSteering.ts`, `src/stores/popoutView.ts`,
+    `src/lib/shortcuts/steeringScope.ts`, `src/lib/shortcuts/steeringPopout.ts`,
+    `src/components/layout/DetachedApp.tsx`,
+    `src/components/layout/DetachedCenterPanel.tsx`,
+    `src/lib/shortcuts/tabJump.ts`, `src/lib/window/focusPopout.ts`.*
+    - [x] 🤖 Automated test — `SteeringPopout`, `SteeringScopePopout`,
+      `SteeringHandover`, `SteeringFromPopout`, `DetachedTwoHeap`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 215. **Live-QA one-click installs in the root console.** ✅ Implemented · 🧪
     Awaiting live QA. Every one-click install (`runInstallInTab`: Ollama/agent
     CLI installs, the LaTeX/MiKTeX prompt, `gh`/`glab` install + auth login,
