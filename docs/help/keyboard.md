@@ -108,6 +108,20 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | Space | On an agent tab: a prompt box in the window's middle; Enter sends, Esc returns. Its chips (Alt+M model, Alt+E effort, Alt+C clear, Alt+P / Alt+G plan / goal) include Alt+T Commit: a list of the three commit prompts (↑/↓, Enter or a digit sends one), as the Chat box's Commit chip |
 | Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |
 
+**D** from the tab level steps *Inside* the active tab: the arrows stop
+switching tabs and move through what the tab shows. The ladder names what you
+are in (the terminal, the document, the chat). Space, K / L, the answer digits,
+Tab and Enter keep working there as on the tab level; a tab that starts
+asking puts you back on the tab level.
+
+| Key | Terminal or the Chat view | Document |
+|---|---|---|
+| S F / ← → | Scroll back / forward half a screen, as the mouse wheel does (Shift: a whole screen) | Scroll up / down half a screen (Shift: a whole screen) |
+| D / ↓ | Back to the live end (the newest message) | Jump to the end |
+| E / ↑ | Back to the tabs; the terminal returns to its live end | Back to the tabs; the document keeps its place |
+
+The Diffs and Files views have their own keys Inside:
+
 Inside an agent tab's **Diffs** view (D from the tab level while it shows), a
 highlighted card is the cursor:
 
