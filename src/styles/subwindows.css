@@ -758,7 +758,8 @@
 html[data-steer-bar] {
   --steer-bar-h: 28px;
 }
-html[data-steer-bar] .app-shell {
+html[data-steer-bar] .app-shell,
+html[data-steer-bar] .detached-center {
   padding-bottom: var(--steer-bar-h);
 }
 .steering-bar {
@@ -1392,6 +1393,7 @@ html[data-steer="scroll"] .focus-frame::before {
 html[data-steer-region="side"] .side-panel.open,
 html[data-steer-region="header"] .app-header,
 html[data-steer-region="chrome"] .root-console-backdrop .root-overlay-bar:not(.root-overlay-subbar),
+html[data-steer-region="chrome"] .detached-titlebar,
 html[data-steer-region="overlay"] .steer-layer,
 html[data-steer-region="card"] .subwindow.focused .terminal-sign-in,
 html[data-steer-region="addTab"] .tab-add-menu,

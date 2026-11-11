@@ -22,6 +22,7 @@ import type { Settings } from "../../types";
 import type { SteeringRegion } from "../../stores/keyboardSteering";
 import { steeringInRoot } from "./steeringScope";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { isDetachedWindow } from "../../stores/detachedContext";
 
 const CURSOR_CLASS = "steer-cursor";
 
@@ -69,6 +70,11 @@ const CHROME_ZONE = ".root-overlay-bar, .cockpit-rail-expand, .cockpit-rail-coll
 /** Root's own tab strip sits in the bar too: those tabs are the tab level's. */
 const CHROME_SKIP = ".root-overlay-slot .tab-strip, .root-overlay-slot .tab-new-wrap";
 const ADD_TAB_SUBMENU = "[data-steer-add-tab-submenu]";
+/** A popout's title bar while the chrome region walks it: only its buttons
+ *  (dock back, hide, minimize, maximize, close), never the logo, the grip or
+ *  the name. */
+const popoutChromeFrames = new WeakSet<HTMLElement>();
+const POPOUT_CHROME_ZONE = ".detached-titlebar-actions, .detached-titlebar-controls";
 
 function lastMatch(selector: string): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>(selector);
@@ -101,6 +107,12 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
     case "header":
       return document.querySelector<HTMLElement>(".app-header");
     case "chrome": {
+      // A popout's chrome is its own title bar (`POPOUT_CHROME_ZONE`).
+      if (isDetachedWindow()) {
+        const bar = document.querySelector<HTMLElement>(".detached-titlebar");
+        if (bar) popoutChromeFrames.add(bar);
+        return bar;
+      }
       // The root window's frame, walked only over its chrome (`CHROME_ZONE`).
       const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
       if (frame) {
@@ -437,7 +449,8 @@ function pointerish(el: Element): boolean {
 
 /** Never under the cursor: the project pills (the projects level walks them —
  *  the top bar's walk would wade through every one) and the window's own
- *  minimize / maximize / close buttons. */
+ *  minimize / maximize / close buttons — except in a popout's title bar, whose
+ *  chrome region is exactly those buttons and the dock / hide ones. */
 const NOT_A_TARGET = ".app-header .project-pill, .wm-controls";
 
 /** Everything in `root` the cursor can land on, in document order. A clickable
@@ -447,6 +460,7 @@ const NOT_A_TARGET = ".app-header .project-pill, .wm-controls";
 export function regionTargets(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
   const chrome = chromeFrames.has(root);
+  const popoutChrome = popoutChromeFrames.has(root);
   const app = appFrames.has(root);
   const subagents = subagentFrames.has(root);
   const addTab = root.matches(".tab-add-menu");
@@ -463,7 +477,9 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
     return is;
   };
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
-    if (el.closest(NOT_A_TARGET)) continue;
+    if (popoutChrome) {
+      if (!el.closest(POPOUT_CHROME_ZONE)) continue;
+    } else if (el.closest(NOT_A_TARGET)) continue;
     if (addTab && el.closest(ADD_TAB_SUBMENU)) continue;
     if (chrome && (!el.closest(CHROME_ZONE) || el.closest(CHROME_SKIP))) continue;
     if (app && el.closest(APP_SKIP)) continue;

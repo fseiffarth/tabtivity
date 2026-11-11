@@ -865,6 +865,8 @@ interface TabsStore {
     detachedGroupId: string,
     tab: Omit<TabEntry, "key">,
     targetGroupId: string,
+    /** `besideActive`: right of the group's active tab, as `addTab`'s. */
+    opts?: { besideActive?: boolean },
   ) => string | null;
   // Like `addDetachedTab`, but the new tab carves a NEW pane at `edge` of
   // `targetGroupId` within the popout's subtree instead of appending to it — a
@@ -3392,7 +3394,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     if (closedKey) forgetClosedTab(scope, closedKey);
   },
 
-  addDetachedTab: (scope, detachedGroupId, tab, targetGroupId) => {
+  addDetachedTab: (scope, detachedGroupId, tab, targetGroupId, opts) => {
     let created: string | null = null;
     set((s) => {
       const entries = s.detachedGroupsByScope[scope] ?? [];
@@ -3444,11 +3446,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // (a single-pane popout, or a stale target id).
       const target = findGroup(rec.subtree, targetGroupId) ?? allGroups(rec.subtree)[0];
       if (!target) return {};
-      const nextSub = mapGroup(rec.subtree, target.id, (g) => ({
-        ...g,
-        tabKeys: [...g.tabKeys, key],
-        activeKey: key,
-      }));
+      const nextSub = mapGroup(rec.subtree, target.id, (g) => {
+        const at = opts?.besideActive && g.activeKey ? g.tabKeys.indexOf(g.activeKey) : -1;
+        const tabKeys = [...g.tabKeys];
+        tabKeys.splice(at >= 0 ? at + 1 : tabKeys.length, 0, key);
+        return { ...g, tabKeys, activeKey: key };
+      });
       const nextEntries = [...entries];
       nextEntries[idx] = { ...rec, subtree: nextSub };
       // Append the payload so the MAIN window's pane layer mounts + owns the PTY;

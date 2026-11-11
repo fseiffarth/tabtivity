@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { useKeyboardSteeringStore, type SteeringHandoff } from "../../stores/keyboardSteering";
 import { ROOT_SCOPE, allGroups, useTabsStore } from "../../stores/tabs";
-import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
-import { steeringTabsActive } from "../../lib/shortcuts/steeringScope";
+import { usePopoutViewStore } from "../../stores/popoutView";
+import { useSteeringTabs } from "../../lib/shortcuts/steeringScope";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
@@ -93,21 +93,27 @@ export function SteeringLegend() {
   const handedTo = useKeyboardSteeringStore((s) => s.handedTo);
   const handoffReturn = useKeyboardSteeringStore((s) => s.handoffReturn);
   const jumpBack = useKeyboardSteeringStore((s) => s.jumpBack);
-  // While the Root view is up steering's tab levels are Root's, so the legend
-  // reads Root's subwindows and active tab (`steeringScope`).
-  const rootShown = useRootOverlayStore((s) => rootViewShown(s));
-  const multiPane = useTabsStore((s) => allGroups(rootShown ? (s.layoutByScope[ROOT_SCOPE] ?? null) : s.layout).length >= 2);
-  const popouts = useTabsStore((s) => (s.detachedGroupsByScope[rootShown ? ROOT_SCOPE : s.scope]?.length ?? 0) > 0);
-  const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
+  // The tabs steering walks (`steeringScope`): the workspace's, Root's while
+  // the Root view is up, or a popout's own in a popout window.
+  const walked = useSteeringTabs();
+  const popout = walked.popout;
+  const rootShown = walked.inRoot;
+  const multiPane = allGroups(walked.layout).length >= 2;
+  // A popout always has somewhere for J to go: the main window.
+  const scopePopouts = useTabsStore((s) => (s.detachedGroupsByScope[rootShown ? ROOT_SCOPE : s.scope]?.length ?? 0) > 0);
+  const popouts = popout || scopePopouts;
+  const focusedGroupId = walked.focusedGroupId;
   const mail = useSettingsStore((s) => steeringAppEnabled("mail", s.settings));
   const calendar = useSettingsStore((s) => steeringAppEnabled("calendar", s.settings));
   const todo = useSettingsStore((s) => steeringAppEnabled("todo", s.settings));
   const busyByTab = useActivityStore((s) => s.busyByTab);
   const attentionByTab = useActivityStore((s) => s.attentionByTab);
   const tabsByScope = useTabsStore((s) => s.tabsByScope);
-  const workspaceScope = useTabsStore((s) => s.scope);
-  const tabScope = rootShown ? ROOT_SCOPE : workspaceScope;
-  const activeTab = useTabsStore(() => steeringTabsActive()?.tab);
+  // A popout's heap knows no other window's tabs: its counts and Back are the
+  // main window's (`STEERING_STATUS`).
+  const popoutStatus = usePopoutViewStore((s) => s.status);
+  const tabScope = walked.scope;
+  const activeTab = walked.activeTab ?? undefined;
   const steerKeys = useSettingsStore((s) => s.settings?.steering_keys) as SteeringKeyMap | undefined;
   const handsFreeFlag = useExperimental("voice_hands_free");
   const handsFreeChip = useSettingsStore((s) => s.settings?.voice_hands_free_on ?? false);
@@ -197,7 +203,8 @@ export function SteeringLegend() {
   const readerFacts = useReaderViewFacts(activeTab ? `${tabScope}:${activeTab.key}` : null);
   const reader = readerFacts ? { view: readerFacts.view } : undefined;
   const folded = active && legendHidden;
-  const statusCount = (kind: "decision" | "working" | "done") => statusTabs(kind, busyByTab, attentionByTab, tabsByScope).length;
+  const statusCount = (kind: "decision" | "working" | "done") =>
+    popout ? popoutStatus[kind] : statusTabs(kind, busyByTab, attentionByTab, tabsByScope).length;
   // Read live at render: the bar redraws on every steering key.
   const keys =
     active && !folded
@@ -225,12 +232,13 @@ export function SteeringLegend() {
           popouts,
           // Read off the screen too: the bar redraws on the attention change.
           question: (inPane || level === "scroll") && steeringTabAsks(tabScope, activeTab),
-          jumpBack: !!jumpBackTarget(jumpBack, shownStatusTab(), tabsByScope),
+          jumpBack: popout ? popoutStatus.back : !!jumpBackTarget(jumpBack, shownStatusTab(), tabsByScope),
           statusCounts: {
             decision: statusCount("decision"),
             working: statusCount("working"),
             done: statusCount("done"),
           },
+          popout,
         })
       : NO_KEYS;
   const wanted = [...new Set(keys.map(anchorOf).filter((a): a is CapAnchor => a !== null))];
@@ -311,6 +319,7 @@ export function SteeringLegend() {
             document: !terminal,
             reader,
             lent: box.where,
+            popout,
           }),
         )}
       </div>
@@ -344,7 +353,7 @@ export function SteeringLegend() {
     );
     ladderEl = (
       <div className="steering-bar-ladder">
-        {rungs(ladder({ level, region, regionReturn, document: !terminal, reader }))}
+        {rungs(ladder({ level, region, regionReturn, document: !terminal, reader, popout }))}
       </div>
     );
     if (folded) {
@@ -440,7 +449,7 @@ function useCapPlacements(wanted: CapAnchor[], settleKey: string): CapPlacements
     window.addEventListener("scroll", later, true);
     // Wrapping or folding the legend resizes the panes after its measured
     // height is published. Follow that layout change for bottom-edge caps.
-    const shell = document.querySelector(".app-shell");
+    const shell = document.querySelector(".app-shell") ?? document.querySelector(".detached-center");
     const observer = shell ? new ResizeObserver(later) : null;
     if (shell) observer?.observe(shell);
     return () => {

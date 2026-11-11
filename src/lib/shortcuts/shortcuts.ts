@@ -21,6 +21,7 @@ import { desktopOwnsSuperKey } from "./superKey";
 import { eventKey, isLoneModifier, normalizeKey } from "./keyNames";
 export { eventKey, isLoneModifier, isTabKey, normalizeKey } from "./keyNames";
 import { zoomChord, type ZoomChord } from "./zoomChord";
+import { POPOUT_MAIN_ONLY } from "./steeringPopout";
 import type { TranslationKey } from "../i18n";
 import type { ReaderViewId } from "../agents/readerSteering";
 import {
@@ -878,6 +879,11 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  *                its turn waits on a decision): the digits answer it
  *                (`steeringAnswer`) instead of opening agent N
  *   jumpBack   — a status jump left a tab Back can return to
+ *   upToTitleBar — where ↑ climbs to a popout's title bar: the panes level, or
+ *                the tabs level with one subwindow, in a popout window
+ *   titleBarRegion — the region cursor is on a popout's title bar (←/→ walk
+ *                it, ↓ back down to its tabs)
+ * In a popout `chromeRegion` is false: its chrome is the title bar.
  */
 export type SteeringCondition =
   | "stepsPanes"
@@ -885,6 +891,8 @@ export type SteeringCondition =
   | "tabsMultiPane"
   | "upToProjects"
   | "upToChrome"
+  | "upToTitleBar"
+  | "titleBarRegion"
   | "sideRegion"
   | "settingsRegion"
   | "headerRegion"
@@ -942,8 +950,9 @@ export interface SteeringKeyDef {
   group: SteeringGroup;
 }
 
-/** What a steering key is for — the legend's boxes. */
-export type SteeringGroup = "move" | "new" | "act" | "agent" | "status" | "open" | "mode";
+/** What a steering key is for — the legend's boxes. `main`: in a popout, the
+ *  keys whose target is only in the main window (they hand over, `steeringPopout`). */
+export type SteeringGroup = "move" | "new" | "act" | "agent" | "status" | "open" | "mode" | "main";
 
 /**
  * The legend's boxes, in display order. Each wears one of the code viewer's
@@ -958,6 +967,7 @@ export const STEERING_GROUPS: { id: SteeringGroup; labelKey: TranslationKey; tok
   { id: "status", labelKey: "steering.group.status", tok: "tok-num" },
   { id: "open", labelKey: "steering.group.open", tok: "tok-tag" },
   { id: "mode", labelKey: "steering.group.mode", tok: "tok-comment" },
+  { id: "main", labelKey: "steeringKeys.section.mainWindow", tok: "tok-tag" },
 ];
 
 /** What the legend knows about the moment, for `steeringKeysFor`. */
@@ -1003,6 +1013,9 @@ export interface SteeringLegendState {
   agent?: { clear: boolean; plan: boolean; goal: boolean; prompt: boolean };
   /** How many tabs, in every scope, need an answer / work / finished unseen. */
   statusCounts: { decision: number; working: number; done: number };
+  /** Steering runs in a popout window: no projects level, ↑ climbs to its
+   *  title bar, and the main window's keys are listed as the `main` group. */
+  popout?: boolean;
 }
 
 /** The tab's Reader shows Diffs or Files, which answer the scroll level
@@ -1020,9 +1033,13 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
     case "tabsMultiPane":
       return s.level === "tabs" && s.multiPane;
     case "upToProjects":
-      return !s.inRoot && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
+      return !s.inRoot && !s.popout && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
     case "upToChrome":
       return !!s.inRoot && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
+    case "upToTitleBar":
+      return !!s.popout && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
+    case "titleBarRegion":
+      return !!s.popout && !!s.chromeRegion;
     case "sideRegion":
       return s.sideRegion;
     case "settingsRegion":
@@ -1030,7 +1047,7 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
     case "headerRegion":
       return !!s.headerRegion;
     case "chromeRegion":
-      return !!s.chromeRegion;
+      return !!s.chromeRegion && !s.popout;
     case "overlayRegion":
       return !!s.overlayRegion;
     case "steeringConfirm":
@@ -1077,13 +1094,18 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
   }
 }
 
-/** The keys that act right now — the legend's rows, in table order. */
+/** The keys that act right now — the legend's rows, in table order. In a
+ *  popout the main window's keys move to their own `main` group. */
 export function steeringKeysFor(s: SteeringLegendState): SteeringKeyDef[] {
-  return STEERING_KEYS.filter(
+  const rows = STEERING_KEYS.filter(
     (k) =>
       k.levels.includes(s.level) &&
       (!k.when || steeringConditionHolds(k.when, s)) &&
       (!k.status || s.statusCounts[k.status] > 0),
+  );
+  if (!s.popout) return rows;
+  return rows.map((k) =>
+    k.actions.length === 1 && POPOUT_MAIN_ONLY.has(k.actions[0]) ? { ...k, group: "main" as const } : k,
   );
 }
 
@@ -1140,6 +1162,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["up"], labelKey: "steering.upPanes.label", descKey: "steering.upPanes.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: PANE_LEVELS, when: "upToProjects", group: "move" },
   { actions: ["up"], labelKey: "steering.upChrome.label", descKey: "steering.upChrome.desc", levels: PANE_LEVELS, when: "upToChrome", group: "move" },
+  { actions: ["up"], labelKey: "steering.upTitleBar.label", descKey: "steering.upTitleBar.desc", levels: PANE_LEVELS, when: "upToTitleBar", group: "move" },
   { actions: ["newShell"], labelKey: "steering.newShell.label", descKey: "steering.newShell.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["newMonitor"], labelKey: "steering.newMonitor.label", descKey: "steering.newMonitor.desc", levels: PANE_LEVELS, group: "new" },
   { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, when: "noQuestion", agentSlots: true, group: "new" },
@@ -1193,6 +1216,8 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.chromeWalk.desc", levels: ["region"], when: "chromeRegion", group: "move" },
   { actions: ["down"], labelKey: "steering.chromeOpen.label", descKey: "steering.chromeOpen.desc", levels: ["region"], when: "chromeRegion", group: "act" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: ["region"], when: "chromeRegion", group: "move" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.titleBarWalk.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
+  { actions: ["down"], labelKey: "steering.titleBarDown.label", descKey: "steering.titleBarDown.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
   { actions: ["left"], labelKey: "steering.sideParent.label", descKey: "steering.sideParent.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["right"], labelKey: "steering.sideEnter.label", descKey: "steering.sideEnter.desc", levels: ["region"], when: "sideRegion", group: "move" },

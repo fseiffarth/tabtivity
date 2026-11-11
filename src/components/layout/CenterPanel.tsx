@@ -43,6 +43,8 @@ import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useDragStore } from "../../stores/drag/drag";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { usePopoutViewStore } from "../../stores/popoutView";
+import { useSteeringTabs } from "../../lib/shortcuts/steeringScope";
 import { useWindowFocused } from "../../hooks/useWindowFocused";
 import { useScrollSyncStore } from "../../stores/viewers/scrollSync";
 import { useWindowMoveStore } from "../../stores/drag/windowMove";
@@ -1384,7 +1386,11 @@ export function FocusFrameOverlay({
   frameRects: Record<string, Rect>;
   orderedIds: string[];
 }) {
-  const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
+  // The workspace's focus — or, in a popout window, the popout's own
+  // (`steeringScope`), whose tabs store is empty.
+  const walked = useSteeringTabs();
+  const workspaceFocus = useTabsStore((s) => s.focusedGroupId);
+  const focusedGroupId = walked.popout ? walked.focusedGroupId : workspaceFocus;
   const navActive = useSubwindowNavStore((s) => s.active);
   const previewGroupId = useSubwindowNavStore((s) => s.previewGroupId);
   const steeringActive = useKeyboardSteeringStore((s) => s.active);
@@ -1405,8 +1411,11 @@ export function FocusFrameOverlay({
   // (the same TAB_ACCENT that paints that tab's stripe), so the frame and the
   // current tab read as one continuous accent. Falls back to the CSS default
   // (var(--accent)) when the kind can't be resolved.
-  const layout = useTabsStore((s) => s.layoutByScope[s.scope] ?? null);
-  const tabEntries = useTabsStore((s) => s.tabsByScope[s.scope]);
+  const workspaceLayout = useTabsStore((s) => s.layoutByScope[s.scope] ?? null);
+  const workspaceTabs = useTabsStore((s) => s.tabsByScope[s.scope]);
+  const popoutTabs = usePopoutViewStore((s) => s.tabs);
+  const layout = walked.popout ? walked.layout : workspaceLayout;
+  const tabEntries = walked.popout ? popoutTabs : workspaceTabs;
   const activeTabKey = frameId ? findGroup(layout, frameId)?.activeKey : null;
   const activeKind = activeTabKey
     ? tabEntries?.find((t) => t.key === activeTabKey)?.kind

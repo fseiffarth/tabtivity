@@ -24,7 +24,6 @@ import {
   DETACHED_GAVE_UP,
   DETACHED_REOPEN,
   DETACHED_REQUEST_SEED,
-  DETACHED_STEER,
   DETACHED_ZOOM,
   applyEditToSubtree,
   applyColorToTabs,
@@ -77,8 +76,12 @@ import { listenPdfReveal } from "../../stores/viewers/pdfSync";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
 import { listenTexCenter } from "../../stores/viewers/texCenter";
 import { chordMatches, resolveChord, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
-import { isTextKey, steeringChordFires } from "../../lib/shortcuts/steeringChord";
+import { useSteering } from "../../hooks/useSteering";
 import { DetachedCenterPanel } from "./DetachedCenterPanel";
+import { SteeringLegend } from "./SteeringLegend";
+import { SteeringPromptOverlay } from "./SteeringPromptOverlay";
+import { SteeringConfirmOverlay } from "./SteeringConfirmOverlay";
+import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
 import { OpenExternalHost } from "../common/OpenExternalHost";
@@ -282,26 +285,10 @@ export function DetachedApp({ param }: Props) {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [param.scope, param.groupId]);
 
-  // The steering chord. Steering lives in the main window (it walks no popout),
-  // so the chord sends the keyboard there and turns steering on (DETACHED_STEER).
-  // Captured on `document` so it works from a focused terminal, and held back
-  // in a typing burst exactly as the main window does (`steeringChordFires`).
-  useEffect(() => {
-    let lastTypedAt = -Infinity;
-    const onKeyDown = (e: KeyboardEvent) => {
-      const overrides = useSettingsStore.getState().settings
-        ?.keyboard_shortcuts as ShortcutMap | undefined;
-      if (steeringChordFires(resolveChord("steeringMode", overrides), e, false, lastTypedAt)) {
-        e.preventDefault();
-        e.stopPropagation();
-        void emit(DETACHED_STEER, { scope: param.scope, groupId: param.groupId });
-        return;
-      }
-      if (isTextKey(e)) lastTypedAt = e.timeStamp;
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [param.scope, param.groupId]);
+  // Keyboard steering, in this window: the main window's handler on this
+  // popout's own subwindows and tabs (`useSteering`, `steeringScope`). Its
+  // bar, prompt box, confirm and cheat sheet are mounted below.
+  useSteering({ surface: "popout" });
 
   // Theme, accent/corners/cursor and language follow the main window's
   // Settings live (this popout is its own runtime; see the hook).
@@ -798,13 +785,20 @@ export function DetachedApp({ param }: Props) {
       onMove={(key, targetGroupId, index) =>
         pushEdit({ kind: "move", key, targetGroupId, index })
       }
-      onAddTab={(tab, targetGroupId, edge) =>
-        pushEdit({ kind: "add", tab, targetGroupId, edge })
+      onAddTab={(tab, targetGroupId, edge, opts) =>
+        pushEdit({ kind: "add", tab, targetGroupId, edge, ...(opts?.besideActive ? { besideActive: true } : {}) })
       }
       onFiles={(groupId, patch) => pushEdit({ kind: "files", groupId, ...patch })}
       windowName={windowName}
       onName={(groupId, name) => pushEdit({ kind: "name", groupId, name })}
       />
+      {/* Keyboard steering in this window (`useSteering` above): the bar sets
+          `html[data-steer]`, which every marker rule keys on. The project jump
+          box is the main window's (its key hands over). */}
+      <ShortcutHelpOverlay />
+      <SteeringLegend />
+      <SteeringPromptOverlay />
+      <SteeringConfirmOverlay />
     </>
   );
 }

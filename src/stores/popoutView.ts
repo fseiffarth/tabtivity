@@ -2,6 +2,16 @@ import { create } from "zustand";
 import { allGroups, findGroup } from "./tabs/layoutTree";
 import type { LayoutNode, TabEntry } from "./tabs/types";
 
+/** What the main window tells a popout's steering bar (`STEERING_STATUS`). */
+export interface PopoutSteeringStatus {
+  decision: number;
+  working: number;
+  done: number;
+  back: boolean;
+}
+
+export const NO_STEERING_STATUS: PopoutSteeringStatus = { decision: 0, working: 0, done: 0, back: false };
+
 /**
  * What a popout window shows, in the popout's own heap: its scope, its record
  * id and window label, the streamed layout tree and tab payloads, and which of
@@ -27,6 +37,11 @@ interface PopoutViewState {
   tree: LayoutNode | null;
   tabs: TabEntry[];
   focusedGroupId: string | null;
+  /** The main window's status counts and whether Back has a tab to go to
+   *  (`STEERING_STATUS`): a popout cannot count them from its own heap, and
+   *  its steering bar shows them as the main window's does. */
+  status: PopoutSteeringStatus;
+  setStatus: (status: PopoutSteeringStatus) => void;
   /** Adopt a seed (or an optimistic edit): the focused subwindow is kept while
    *  it is still in the tree, else the first one. */
   setView: (view: Partial<Pick<PopoutViewState, "scope" | "popoutId" | "label" | "tree" | "tabs">>) => void;
@@ -42,6 +57,7 @@ const EMPTY = {
   tree: null,
   tabs: [] as TabEntry[],
   focusedGroupId: null,
+  status: NO_STEERING_STATUS,
 };
 
 /** The focus a tree keeps: `current` while it is one of its groups, else the
@@ -62,6 +78,15 @@ export const usePopoutViewStore = create<PopoutViewState>((set) => ({
     }),
   focusGroup: (groupId) =>
     set((s) => (s.focusedGroupId === groupId || !findGroup(s.tree, groupId) ? {} : { focusedGroupId: groupId })),
+  setStatus: (status) =>
+    set((s) =>
+      s.status.decision === status.decision &&
+      s.status.working === status.working &&
+      s.status.done === status.done &&
+      s.status.back === status.back
+        ? {}
+        : { status },
+    ),
   reset: () => set({ ...EMPTY }),
 }));
 

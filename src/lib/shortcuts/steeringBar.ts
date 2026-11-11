@@ -124,7 +124,7 @@ export function slotRange(keys: string[]): string {
 
 /** Bar groups, in the order they read left to right; a pinned row that found
  *  no control joins them in its own group, after the act keys. */
-const BAR_ORDER: SteeringGroup[] = ["move", "status", "act", "new", "agent", "open"];
+const BAR_ORDER: SteeringGroup[] = ["move", "status", "act", "new", "agent", "open", "main"];
 
 export interface BarModel {
   /** The bar's keys, left to right. */
@@ -261,10 +261,19 @@ function scrollLabel(opts: { document?: boolean; reader?: { view: ReaderViewId }
   }
 }
 
+/** A region's name on the ladder: a popout's chrome is its title bar. */
+export function regionLabel(region: SteeringRegion, popout?: boolean): TranslationKey {
+  return popout && region === "chrome" ? "steering.region.titleBar" : REGION_LABEL[region];
+}
+
 /**
  * Projects › Subwindows › Tabs › Inside, the lit rung being where the arrows
  * act. Inside a surface the ladder is cut to the level it was entered from and
  * the surface's name; lent to a box, to that level and the box.
+ *
+ * In a popout (`popout`) there is no projects level: the ladder is
+ * Main window › Title bar › Subwindows › Tabs › Inside, the title bar lit
+ * while its buttons are walked.
  */
 export function ladder(opts: {
   level: SteeringLevel;
@@ -275,22 +284,34 @@ export function ladder(opts: {
   /** The active tab's Reader view, when it draws a strip: Inside names it. */
   reader?: { view: ReaderViewId };
   lent?: TranslationKey;
+  /** Steering runs in a popout window. */
+  popout?: boolean;
 }): Rung[] {
   const base = (id: SteeringBaseLevel, lit: boolean): Rung => {
     const def = BASE_RUNGS.find((r) => r.id === id)!;
     const labelKey = lit && id === "scroll" ? scrollLabel(opts) : def.labelKey;
     return { id, labelKey, lit };
   };
+  if (opts.popout && !opts.lent) {
+    const titleBar = opts.level === "region" && opts.region === "chrome";
+    if (titleBar || opts.level !== "region") {
+      return [
+        { id: "main", labelKey: "steering.level.mainWindow" },
+        { id: "titleBar", labelKey: "steering.region.titleBar", lit: titleBar },
+        ...BASE_RUNGS.filter((r) => r.id !== "projects").map((r) => base(r.id, r.id === opts.level)),
+      ];
+    }
+  }
   if (opts.lent) {
     const from = opts.level === "region" ? opts.regionReturn : opts.level;
     const rungs: Rung[] = [base(from, false)];
-    if (opts.level === "region" && opts.region) rungs.push({ id: "region", labelKey: REGION_LABEL[opts.region] });
+    if (opts.level === "region" && opts.region) rungs.push({ id: "region", labelKey: regionLabel(opts.region, opts.popout) });
     rungs.push({ id: "lent", labelKey: opts.lent, lit: true, lent: true });
     return rungs;
   }
   if (opts.level === "region") {
     const rungs: Rung[] = [base(opts.regionReturn, false)];
-    if (opts.region) rungs.push({ id: "region", labelKey: REGION_LABEL[opts.region], lit: true });
+    if (opts.region) rungs.push({ id: "region", labelKey: regionLabel(opts.region, opts.popout), lit: true });
     return rungs;
   }
   return BASE_RUNGS.map((r) => base(r.id, r.id === opts.level));

@@ -11,6 +11,7 @@ import { inCockpitRoster, runCockpitRoster, selectCockpitCursor, stepCockpitArea
 import { useEffect } from "react";
 import { ROOT_SCOPE, allGroups, findGroup, useTabsStore } from "../stores/tabs";
 import { steeringInRoot, steeringTabs, steeringTabsActive } from "../lib/shortcuts/steeringScope";
+import { POPOUT_HANDS_OVER } from "../lib/shortcuts/steeringPopout";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
 import { useProjectsStore } from "../stores/projects";
 import { useSettingsStore } from "../stores/settings";
@@ -125,6 +126,11 @@ export const STEERING_BLUR_GRACE_MS = 60_000;
 
 export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOptions) {
   useEffect(() => {
+    // A popout window (`DetachedApp`): its own subwindows and tabs, read through
+    // `steeringScope` and written through the tabs store's popout routing. It
+    // has no projects level, no root console and no side panel; the keys whose
+    // target lives only in the main window hand over (`POPOUT_HANDS_OVER`).
+    const popout = surface === "popout";
     // When the window lost the keyboard while steering was on (`onBlur`).
     let steeringBlurredAt: number | null = null;
 
@@ -187,14 +193,12 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // the dialog or menu on top, when one is up (back from typing in one of its
     // fields, say); Escape then closes it.
     const enterSteering = () => {
-      const tabs = useTabsStore.getState();
-      const first = allGroups(tabs.layout)[0]?.id;
-      if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
+      focusSomeGroup();
       useKeyboardSteeringStore.getState().enter();
       syncLayer();
     };
-    // A popout's steering chord (`DETACHED_STEER`; the popout has no steering
-    // of its own): steering comes on here, where the keyboard was sent back.
+    // A popout's request (`DETACHED_STEER`): steering comes on here, where the
+    // keyboard was sent back.
     const onSteerFromPopout = () => {
       if (!useKeyboardSteeringStore.getState().active) enterSteering();
     };
@@ -371,9 +375,15 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     };
 
     // A focused subwindow for the levels below the projects: the first one
-    // when the scope has none focused.
+    // when the scope has none focused. A popout's view always holds one (its
+    // first by default, `steeringTabs`): it is written back as the focus.
     const focusSomeGroup = () => {
       const tabs = useTabsStore.getState();
+      if (popout) {
+        const walked = steeringTabs();
+        if (walked.focusedGroupId) tabs.focusGroupInScope(walked.scope, walked.focusedGroupId);
+        return;
+      }
       const first = allGroups(tabs.layout)[0]?.id;
       if (!tabs.focusedGroupId && first) tabs.focusGroup(first);
     };
@@ -609,6 +619,12 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
             steering.setLevel("panes");
             return;
           }
+          // A popout: above its tabs is its title bar (dock back, hide, the
+          // window buttons); it has no projects level.
+          if (popout) {
+            if (regionRoot("chrome")) enterRegion("chrome");
+            return;
+          }
           // Root: above its tabs is the window's own chrome (view tabs, rail
           // toggle, bar buttons); the projects are one more up from there.
           if (inRoot && regionRoot("chrome")) {
@@ -640,7 +656,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           // A fullscreen subwindow hides the others: it moves along with the
           // focus, or the focus would land on one nobody can see.
           const carryFullscreen = (id: string) => {
-            if (!inRoot && tabs.fullscreenGroupId && tabs.fullscreenGroupId !== id) tabs.toggleFullscreen(id);
+            if (!inRoot && !popout && tabs.fullscreenGroupId && tabs.fullscreenGroupId !== id) tabs.toggleFullscreen(id);
           };
           // Shift+←/→ on the tabs level walks the subwindows too, without the
           // round trip up to the panes level and back down. Tab always steps
@@ -751,6 +767,10 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
 
     // The keys every tab-bar level shares.
     function steerCommon(e: KeyboardEvent, action: SteeringAction | null) {
+      // A popout does not run a key whose target is the main window's, or one
+      // that crosses windows: it is swallowed here (the handover to the main
+      // window is the cross-window protocol's).
+      if (popout && action && POPOUT_HANDS_OVER.has(action)) return;
       const status = action ? STATUS_ACTIONS[action] : undefined;
       if (status) {
         // Next (Shift: previous) tab needing an answer / working / finished,
@@ -894,8 +914,10 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           }
           if (region === "chrome") {
             // The root window's bar, the same shape: ↓ drops a menu or goes
-            // back down to Root's tabs; ↑ goes on up to the projects.
+            // back down to Root's tabs; ↑ goes on up to the projects. A
+            // popout's title bar has nothing above it in this window.
             if (action === "up") {
+              if (popout) return;
               clearRegionCursor();
               useKeyboardSteeringStore.getState().setLevel("projects");
             } else if (!openCursorPopup()) leaveRegion(region);
@@ -1025,15 +1047,15 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // The root console toggles from anywhere, a focused terminal included —
       // and from inside steering mode, which it leaves (two modes owning the
       // keyboard at once is one too many). Not from behind a dialog, nor are
-      // the chords below.
-      if (!modalUp && chordMatches(resolveChord("rootConsole", overrides), e)) {
+      // the chords below. A popout has no root console.
+      if (!popout && !modalUp && chordMatches(resolveChord("rootConsole", overrides), e)) {
         e.preventDefault();
         e.stopPropagation();
         if (steering.active) exitSteering();
         toggleRootConsole();
         return;
       }
-      if (!modalUp && chordMatches(resolveChord("projectShell", overrides), e)) {
+      if (!popout && !modalUp && chordMatches(resolveChord("projectShell", overrides), e)) {
         e.preventDefault();
         e.stopPropagation();
         if (steering.active) exitSteering();
@@ -1071,8 +1093,9 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       }
       // Reopen the last agent tab closed in this scope — from a focused
       // terminal too, since the tab it lands in after a close is usually one.
-      // With nothing to reopen the key goes on to wherever it was typed.
-      if (!modalUp && chordMatches(resolveChord("reopenClosedTab", overrides), e)) {
+      // With nothing to reopen the key goes on to wherever it was typed. A
+      // popout asks the main window itself (`DetachedApp`, DETACHED_REOPEN).
+      if (!popout && !modalUp && chordMatches(resolveChord("reopenClosedTab", overrides), e)) {
         if (reopenClosedAgentTab(useTabsStore.getState().scope)) {
           e.preventDefault();
           e.stopPropagation();

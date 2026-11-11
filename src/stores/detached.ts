@@ -491,7 +491,9 @@ export type DetachedEdit =
   // (left/right/top/bottom) the tab carves a NEW pane at that edge of the target
   // group (a file dropped on a body edge); omitted or "center" appends it to the
   // target group (the "+" menu, or a drop on a tab bar / pane centre).
-  | { kind: "add"; tab: Omit<TabEntry, "key">; targetGroupId: string; edge?: DropEdge }
+  // `besideActive`: right of the target group's active tab, not at its end —
+  // steering's new tabs (N, O, 1–9, the + menu it opened), as in the main window.
+  | { kind: "add"; tab: Omit<TabEntry, "key">; targetGroupId: string; edge?: DropEdge; besideActive?: boolean }
   // Multi-pane popouts: split `key` into a new pane at `edge` of `targetGroupId`.
   // The popout mints the new pane's ids (`mintDetachedSplitIds`) and ships them,
   // so the main store's copy of the tree names the pane exactly as the popout
@@ -1161,7 +1163,9 @@ export async function listenDetachedHost(): Promise<() => void> {
       const key =
         edit.edge && edit.edge !== "center"
           ? store.addDetachedTabSplit(scope, groupId, edit.tab, edit.targetGroupId, edit.edge)
-          : store.addDetachedTab(scope, groupId, edit.tab, edit.targetGroupId);
+          : store.addDetachedTab(scope, groupId, edit.tab, edit.targetGroupId, {
+              besideActive: edit.besideActive === true,
+            });
       if (!key) return;
       reseedDetached(scope, groupId, key);
       return;

@@ -702,6 +702,23 @@ describe("Group B — two heaps, one protocol", () => {
     expect(popout.tabLayoutTree.allGroups(record().subtree)[0].filesOpen).toBe(true);
   });
 
+  it("a steering add from a popout lands right of the active tab", async () => {
+    const { main, b, record } = await steeringPopout();
+    const group = main.tabLayoutTree.allGroups(record().subtree)[0];
+    // b active, c after it: the new tab goes between them.
+    main.tabs.useTabsStore.getState().applyDetachedEdit("p", record().id, { kind: "activate", key: b.key });
+    await bus.emit(main.detached.DETACHED_EDIT, {
+      scope: "p",
+      groupId: record().id,
+      edit: { kind: "add", tab: shell("d"), targetGroupId: group.id, besideActive: true },
+    });
+    const keys = main.tabLayoutTree.allGroups(record().subtree)[0].tabKeys;
+    expect(keys.indexOf(b.key) + 1).toBe(keys.length - 2);
+    const plain = main.tabs.useTabsStore.getState().addDetachedTab("p", record().id, shell("e"), group.id);
+    const after = main.tabLayoutTree.allGroups(record().subtree)[0].tabKeys;
+    expect(after[after.length - 1]).toBe(plain);
+  });
+
   it("removing a popout tab from its heap closes it through the popout's close", async () => {
     const { main, b, popout } = await steeringPopout();
     popout.tabs.useTabsStore.getState().removeTabInScope("p", b.key);
