@@ -2701,6 +2701,8 @@ export const dict: Dict = {
   "steering.popout.desc": "Trae al frente la subventana separada de este proyecto para trabajar en ella; con varias, cada pulsación pasa a la siguiente. La navegación termina cuando la ventana toma el teclado.",
   "steering.readerView.label": "Siguiente vista",
   "steering.readerView.desc": "Cambia la pestaña de agente activa entre Chat, Cambios, Datos y Terminal; con Mayús, en sentido contrario. Se omiten las vistas sin nada que mostrar.",
+  "steering.readerViewBack.label": "Vista anterior",
+  "steering.readerViewBack.desc": "Lleva la pestaña de agente activa hacia atrás por Terminal, Datos, Cambios y Chat. Se omiten las vistas sin nada que mostrar.",
   "steering.viewToggle.label": "Plegar / desplegar",
   "steering.viewMode.label": "Cambiar la disposición",
   "steering.viewOpen.label": "Abrir el archivo o enlace",

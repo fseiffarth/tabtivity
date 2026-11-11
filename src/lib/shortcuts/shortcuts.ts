@@ -18,8 +18,8 @@
 import { IS_MAC, PLATFORM } from "../platform";
 import type { UntestedId } from "../untested";
 import { desktopOwnsSuperKey } from "./superKey";
-import { isLoneModifier, normalizeKey } from "./keyNames";
-export { isLoneModifier, normalizeKey } from "./keyNames";
+import { eventKey, isLoneModifier, normalizeKey } from "./keyNames";
+export { eventKey, isLoneModifier, isTabKey, normalizeKey } from "./keyNames";
 import { zoomChord, type ZoomChord } from "./zoomChord";
 import type { TranslationKey } from "../i18n";
 import type { ReaderViewId } from "../agents/readerSteering";
@@ -564,7 +564,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
  */
 export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
   if (isLoneModifier(e.key)) return null;
-  const chord: ChordDescriptor = { key: normalizeKey(e.key) };
+  const chord: ChordDescriptor = { key: normalizeKey(eventKey(e)) };
   // AltGr: Windows adds Ctrl+Alt to it, which `chordMatches` ignores for an
   // AltGr chord — so they are not stored either.
   if (e.getModifierState?.("AltGraph")) {
@@ -595,7 +595,7 @@ export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
  */
 export function chordMatches(chord: ChordDescriptor, e: ChordKeyEvent): boolean {
   if (!chord.key || chord.key === LONE_SUPER.key) return false;
-  if (normalizeKey(e.key) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e)) return false;
+  if (normalizeKey(eventKey(e)) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e)) return false;
   if (e.shiftKey !== !!chord.shift) return false;
   // AltGr chords: only Shift besides AltGr counts (see `ChordDescriptor.altGr`).
   if (chord.altGr) return !!e.getModifierState?.("AltGraph");
@@ -1139,8 +1139,10 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, when: "noQuestion", agentSlots: true, group: "new" },
   { actions: ["newTabMenu"], labelKey: "steering.newTabMenu.label", descKey: "steering.newTabMenu.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["files"], labelKey: "steering.files.label", descKey: "steering.files.desc", levels: PANE_LEVELS, group: "act" },
-  // The Reader's view cycle: plain Tab (Shift reverses; the description says so).
+  // The Reader's view cycle: plain Tab on, Shift+Tab back (the one binding, read
+  // with Shift in `useKeyboard`), each with its own legend row.
   { actions: ["readerView"], labelKey: "steering.readerView.label", descKey: "steering.readerView.desc", levels: [...PANE_LEVELS, "scroll"], when: "readerViews", group: "act" },
+  { actions: ["readerView"], shift: true, labelKey: "steering.readerViewBack.label", descKey: "steering.readerViewBack.desc", levels: [...PANE_LEVELS, "scroll"], when: "readerViews", group: "act" },
   { actions: ["closeTab"], labelKey: "steering.closeTab.label", descKey: "steering.closeTab.desc", levels: PANE_LEVELS, group: "act" },
   { actions: ["tabCard"], labelKey: "steering.tabCard.label", descKey: "steering.tabCard.desc", levels: PANE_LEVELS, when: "tabCard", group: "act" },
   { actions: ["subagents"], labelKey: "steering.subagents.label", descKey: "steering.subagents.desc", levels: PANE_LEVELS, when: "subagents", group: "agent" },

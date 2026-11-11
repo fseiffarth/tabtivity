@@ -2705,6 +2705,8 @@ export const enSource = {
   "steering.popout.desc": "Raise this project's popped-out subwindow and work there; with several, each press takes the next. Steering ends as the window takes the keyboard.",
   "steering.readerView.label": "Next view",
   "steering.readerView.desc": "Switch the active agent tab between Chat, Diffs, Data and Terminal; with Shift, the other way. Views with nothing to show are skipped.",
+  "steering.readerViewBack.label": "Previous view",
+  "steering.readerViewBack.desc": "Switch the active agent tab back through Terminal, Data, Diffs and Chat. Views with nothing to show are skipped.",
   "steering.viewToggle.label": "Fold / unfold",
   "steering.viewMode.label": "Switch layout",
   "steering.viewOpen.label": "Open the file or link",

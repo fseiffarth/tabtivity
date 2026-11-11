@@ -39,6 +39,17 @@ describe("the Reader view cycle's legend row", () => {
     expect(steeringRowLabel(row, null)).toBe("Tab");
     expect(steeringRowLabel(row, { readerView: ["i"] })).toBe("I");
   });
+
+  it("has a Previous view row beside it: Shift with the same key, on the same levels", () => {
+    for (const level of ["panes", "tabs", "scroll"] as const) {
+      const l = labels({ level, reader: reader("files") });
+      expect(l.indexOf("steering.readerViewBack.label")).toBe(l.indexOf("steering.readerView.label") + 1);
+    }
+    expect(labels({})).not.toContain("steering.readerViewBack.label");
+    const row = rows({ reader: reader("chat") }).find((k) => k.labelKey === "steering.readerViewBack.label")!;
+    expect(steeringRowLabel(row, null)).toBe("Shift+Tab");
+    expect(steeringRowLabel(row, { readerView: ["i"] })).toBe("Shift+I");
+  });
 });
 
 describe("the Reader's view in the legend", () => {

@@ -109,6 +109,17 @@ describe("steering view cycle", () => {
     expect(steering().active).toBe(true);
   });
 
+  it("takes WebKitGTK's Shift+Tab, which arrives as key Unidentified with code Tab", () => {
+    const { show } = agentTab();
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "Tab", code: "Tab" });
+    expect(show).toHaveBeenLastCalledWith("changes");
+    press({ key: "Unidentified", code: "Tab", shiftKey: true });
+    expect(show).toHaveBeenLastCalledWith("chat");
+    expect(show).toHaveBeenCalledTimes(2);
+  });
+
   it("wraps around the strip and skips views that are not offered", () => {
     const { show } = agentTab({ view: "terminal", offered: ["chat", "files", "terminal"] });
     render(<Harness />);

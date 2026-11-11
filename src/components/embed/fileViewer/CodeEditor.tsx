@@ -1,3 +1,4 @@
+import { isTabKey } from "../../../lib/shortcuts/keyNames";
 import { lineStarts, indexedLine } from "../lineIndex";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -2137,7 +2138,7 @@ export function CodeEditor({
         );
         return;
       }
-      if (e.key === "Enter" || e.key === "Tab") {
+      if (e.key === "Enter" || isTabKey(e)) {
         e.preventDefault();
         acceptCompl(compl.items[compl.index]);
         return;
@@ -2184,7 +2185,7 @@ export function CodeEditor({
         acceptWord(true);
         return;
       }
-      if (e.key === "Tab") {
+      if (isTabKey(e)) {
         e.preventDefault();
         if (e.shiftKey && acCopilot) {
           // The language server has no length modes; nothing to switch.
@@ -2279,7 +2280,7 @@ export function CodeEditor({
       });
       return;
     }
-    if (e.key === "Tab") {
+    if (isTabKey(e)) {
       // After a TeX completion has seeded an argument (`\\begin{}` is the
       // common case), Tab leaves that argument rather than inserting spaces.
       // A visible completion menu above already captured Tab, so it can still

@@ -20,7 +20,7 @@
  * dead there, and everything else of `panes` / `mode` still resolves.
  */
 import type { TranslationKey } from "../i18n";
-import { isLoneModifier, normalizeKey } from "./keyNames";
+import { eventKey, isLoneModifier, normalizeKey } from "./keyNames";
 
 /** How many keys one steering action can hold. */
 export const STEERING_KEYS_PER_ACTION = 2;
@@ -233,7 +233,7 @@ function defsFor(context: SteeringKeyContext): SteeringBindingDef[] {
  *  — AZERTY types `&` on the key US calls 1, the same fallback `chordMatches`
  *  gives the digit chords. */
 export function keyMatches(key: string, e: Pick<KeyboardEvent, "key" | "code">): boolean {
-  if (normalizeKey(e.key) === normalizeKey(key)) return true;
+  if (normalizeKey(eventKey(e)) === normalizeKey(key)) return true;
   return /^[0-9]$/.test(key) && (e.code === `Digit${key}` || e.code === `Numpad${key}`);
 }
 
@@ -260,7 +260,7 @@ export function steeringActionFor(
   // digit another action claims by physical position.
   const defs = defsFor(context);
   for (const def of defs) {
-    if (steeringKeys(def.action, overrides).some((k) => normalizeKey(k) === normalizeKey(e.key))) return def.action;
+    if (steeringKeys(def.action, overrides).some((k) => normalizeKey(k) === normalizeKey(eventKey(e)))) return def.action;
   }
   for (const def of defs) {
     if (steeringKeys(def.action, overrides).some((k) => keyMatches(k, e))) return def.action;
@@ -387,6 +387,6 @@ export function steeringSlotKey(n: number, overrides: SteeringKeyMap | null | un
 
 /** The key a steering capture stores for a keydown, or null for a lone
  *  modifier (the caller keeps waiting). */
-export function steeringKeyFromEvent(e: Pick<KeyboardEvent, "key">): string | null {
-  return isLoneModifier(e.key) ? null : normalizeKey(e.key);
+export function steeringKeyFromEvent(e: Pick<KeyboardEvent, "key"> & { code?: string }): string | null {
+  return isLoneModifier(e.key) ? null : normalizeKey(eventKey(e));
 }

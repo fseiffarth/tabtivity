@@ -2702,6 +2702,8 @@ export const dict: Dict = {
   "steering.popout.desc": "Amène au premier plan la sous-fenêtre détachée de ce projet pour y travailler ; s'il y en a plusieurs, chaque appui passe à la suivante. La navigation s'arrête quand la fenêtre prend le clavier.",
   "steering.readerView.label": "Vue suivante",
   "steering.readerView.desc": "Faire passer l'onglet d'agent actif entre Chat, Modifications, Données et Terminal ; avec Maj, dans l'autre sens. Les vues sans contenu sont ignorées.",
+  "steering.readerViewBack.label": "Vue précédente",
+  "steering.readerViewBack.desc": "Faire revenir l'onglet d'agent actif par Terminal, Données, Modifications et Chat. Les vues sans contenu sont ignorées.",
   "steering.viewToggle.label": "Replier / déplier",
   "steering.viewMode.label": "Changer la disposition",
   "steering.viewOpen.label": "Ouvrir le fichier ou le lien",

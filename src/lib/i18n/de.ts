@@ -2703,6 +2703,8 @@ export const dict: Dict = {
   "steering.popout.desc": "Holt das ausgelagerte Unterfenster dieses Projekts nach vorn, um dort zu arbeiten; bei mehreren nimmt jeder Druck das nächste. Die Navigation endet, sobald das Fenster die Tastatur hat.",
   "steering.readerView.label": "Nächste Ansicht",
   "steering.readerView.desc": "Den aktiven Agent-Tab zwischen Chat, Änderungen, Daten und Terminal umschalten; mit Umschalt in die andere Richtung. Ansichten ohne Inhalt werden übersprungen.",
+  "steering.readerViewBack.label": "Vorige Ansicht",
+  "steering.readerViewBack.desc": "Den aktiven Agent-Tab rückwärts durch Terminal, Daten, Änderungen und Chat schalten. Ansichten ohne Inhalt werden übersprungen.",
   "steering.viewToggle.label": "Auf- / zuklappen",
   "steering.viewMode.label": "Darstellung wechseln",
   "steering.viewOpen.label": "Datei oder Link öffnen",

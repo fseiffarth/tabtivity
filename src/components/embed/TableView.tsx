@@ -1,3 +1,4 @@
+import { isTabKey } from "../../lib/shortcuts/keyNames";
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ViewerHeader } from "./fileViewer/ViewerHeader";
@@ -587,7 +588,7 @@ export function TableView({
     } else if (e.key === "Escape") {
       e.preventDefault();
       setEditing(null);
-    } else if (e.key === "Tab") {
+    } else if (isTabKey(e)) {
       e.preventDefault();
       commitEdit("right");
     }
