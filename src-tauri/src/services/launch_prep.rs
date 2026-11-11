@@ -410,7 +410,7 @@ fn assistant_gate(opts: &mut PtyOptions, state_dir: &std::path::Path, enabled: b
     }
     let (chat_dir, chat_dir_existed) = ensure_chat_dir(state_dir, &uid)?;
     // The web lane finds the chat's attachment record by this tab id (gap 78).
-    crate::services::assistant_attach::note_chat(&opts.id, &uid);
+    crate::services::assistant_attach::note_chat(&opts.id, &uid, launch.cli.takes_pasted_pictures());
     opts.cwd = chat_dir.to_string_lossy().into_owned();
     opts.env = std::collections::HashMap::from([(crate::app_env!("TAB_UID").to_string(), uid.clone())]);
     opts.cmd = launch.cli.bin().to_string();

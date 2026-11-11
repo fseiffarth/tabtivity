@@ -1326,9 +1326,43 @@ fn claude_prompt_text(text: &str) -> Option<String> {
     if CLAUDE_NOT_A_PROMPT.iter().any(|tag| text.starts_with(*tag)) || is_cli_written_block(text) {
         return None;
     }
-    let text = collapse_pasted_blocks(strip_trailing_blocks(text));
+    let text = drop_inbox_picture_chips(&collapse_pasted_blocks(strip_trailing_blocks(text)));
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
+}
+
+/// A prompt that names an inbox file: without the `[Image #N]` chips Claude
+/// Code put in for pictures pasted beside it. A Tabby chat gets each inbox
+/// picture it is sent as such a paste (`assistant_attach::picture_pastes_in`),
+/// the chip lands wherever the cursor stood when Claude took the picture, and
+/// the reference itself already draws the picture: kept, the chip made the
+/// record differ from the words sent, so the sending bubble never settled.
+/// A prompt with no inbox reference keeps its chips.
+fn drop_inbox_picture_chips(text: &str) -> String {
+    const CHIP: &str = "[Image #";
+    let names_inbox = [crate::brand::INBOX_DIR, crate::brand::LEGACY_INBOX_DIR]
+        .iter()
+        .any(|dir| text.contains(&format!("@{dir}/")));
+    if !names_inbox || !text.contains(CHIP) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(CHIP) {
+        let after = &rest[start + CHIP.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 || !after[digits..].starts_with(']') {
+            out.push_str(&rest[..start + CHIP.len()]);
+            rest = after;
+            continue;
+        }
+        // The blank Claude typed before the chip goes with it.
+        let head = &rest[..start];
+        out.push_str(head.strip_suffix(' ').unwrap_or(head));
+        rest = &after[digits + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Text pasted into Claude Code is recorded as `<pasted_content id="…">…

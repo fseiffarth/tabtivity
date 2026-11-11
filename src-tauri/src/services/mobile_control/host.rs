@@ -5999,6 +5999,9 @@ async fn terminal(
     // refuses to yield still produces `session_busy`, from the bridge.
     // Everything but a shell runs an AI: its input obeys the AI switch.
     let ai = tab.public.kind != "shell";
+    // A Tabby chat on Claude: its inbox pictures go in as pastes of the file.
+    let pictures = tab_project.public.kind == ScopeKind::Assistant
+        && crate::services::assistant::AssistantCli::cmd_takes_pasted_pictures(&tab.cmd);
     let tmux = tab.tmux_name.clone();
     let viewer = pty_bridge::Viewer {
         device_id: phone.device_id().to_string(),
@@ -6047,6 +6050,7 @@ async fn terminal(
                 tab_id,
                 catalog,
                 ai,
+                pictures,
                 move |interrupt| {
                     mark_tab_input(&input_socket, input_project.clone(), input_tmux.clone(), interrupt);
                 },

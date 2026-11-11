@@ -2233,6 +2233,31 @@ fn markup_the_user_pasted_stays_their_prompt() {
     );
 }
 
+/// A Tabby chat's inbox picture goes in as a paste beside its reference, and
+/// Claude records an `[Image #N]` chip wherever the cursor stood (2.1.322,
+/// `assistant_attach::picture_pastes_in`): the prompt reads as it was sent.
+#[test]
+fn an_inbox_picture_chip_is_dropped_beside_its_reference() {
+    let inbox = crate::brand::INBOX_DIR;
+    let record = serde_json::json!({
+        "type": "user",
+        "imagePasteIds": [1],
+        "message": {"role": "user", "content": [
+            {"type": "text", "text": format!("@{inbox}/p.jpg Where can I buy this?[Image #1]")},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AA=="}},
+        ]},
+    });
+    assert_eq!(claude_prompt_in_record(&record), Some(format!("@{inbox}/p.jpg Where can I buy this?")));
+    assert_eq!(claude_prompt_text(&format!("@{inbox}/p.jpg [Image #2] hi")), Some(format!("@{inbox}/p.jpg hi")));
+    assert_eq!(claude_prompt_text(&format!("@{inbox}/p.jpg [Image #12]")), Some(format!("@{inbox}/p.jpg")));
+    // With no inbox reference, a chip the user pasted stays; a look-alike too.
+    assert_eq!(claude_prompt_text("look [Image #1]").as_deref(), Some("look [Image #1]"));
+    assert_eq!(
+        claude_prompt_text(&format!("@{inbox}/p.jpg [Image #x]")),
+        Some(format!("@{inbox}/p.jpg [Image #x]"))
+    );
+}
+
 #[test]
 fn a_compact_summary_is_never_a_prompt() {
     let summary: serde_json::Value = serde_json::from_str(concat!(

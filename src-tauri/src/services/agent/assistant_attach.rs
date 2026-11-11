@@ -42,6 +42,12 @@ struct State {
     /// The last user byte seen per chat, so `@` typed one key at a time is
     /// judged by what came before it.
     last_byte: HashMap<String, u8>,
+    /// Chats whose CLI takes a pasted picture path as a picture (Claude),
+    /// noted at spawn: their inbox picture references get a paste
+    /// ([`picture_pastes_in`]).
+    picture_chats: HashSet<String>,
+    /// Per chat: the word being typed, for [`picture_pastes_in`].
+    words: HashMap<String, PictureRefs>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -50,13 +56,22 @@ fn state() -> &'static Mutex<State> {
 }
 
 /// Tie PTY `tab` to chat `uid`; called by the spawn gate, whose uid is the
-/// backend's own (uuid-shaped, checked).
-pub fn note_chat(tab: &str, uid: &str) {
+/// backend's own (uuid-shaped, checked). `pictures`: the chat's CLI takes a
+/// pasted picture path as a picture (`AssistantCli::takes_pasted_pictures`).
+pub fn note_chat(tab: &str, uid: &str, pictures: bool) {
     let mut st = state().lock_ok();
     if st.chats.len() >= MAX_CHATS && !st.chats.contains_key(tab) {
         st.chats.clear();
     }
     st.chats.insert(tab.to_string(), uid.to_string());
+    if st.picture_chats.len() >= MAX_CHATS && !st.picture_chats.contains(uid) {
+        st.picture_chats.clear();
+    }
+    if pictures {
+        st.picture_chats.insert(uid.to_string());
+    } else {
+        st.picture_chats.remove(uid);
+    }
 }
 
 /// The chat PTY `tab` runs, if it is a Tabby chat spawned by this process.
@@ -172,6 +187,208 @@ pub fn note_tab_file(tab: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pictures for a chat whose CLI has no file tool.
+//
+// A picture reaches a chat as `@<inbox>/<leaf>` (the phone's upload, a drop, a
+// pasted image), and Claude Code 2.1.322 no longer reads an `@` picture
+// itself: it leaves the reference for the model's `Read` tool, which a Tabby
+// chat does not have (`--tools WebSearch`), so the model saw only the path
+// (2026-11-10; text files still arrive). What Claude does take as a picture
+// is a bracketed paste of the file's absolute path, alone: it reads the file
+// itself and shows `[Image #N]`. So the user's own bytes into such a chat
+// get that paste after each inbox picture reference, here in the backend,
+// which alone knows the chat's folder (no path crosses to the phone or the
+// renderer). The reference stays, so the chat still draws the picture and
+// the transcript reader drops the `[Image #N]` again
+// (`agent_session::claude_prompt_text`).
+// ---------------------------------------------------------------------------
+
+/// How long an Enter waits after a picture paste it would otherwise follow
+/// at once. Claude reads and scales the picture before it takes the paste,
+/// and an Enter in the same write as the paste is lost (the prompt is left
+/// unsent); an 11.5 MB photo took about 200 ms on 2.1.322.
+pub const PICTURE_SUBMIT_HOLD: std::time::Duration = std::time::Duration::from_millis(1000);
+
+/// The longest word followed; a longer one is no reference.
+const MAX_WORD: usize = 512;
+
+/// The picture types Claude Code takes as an image.
+const PICTURE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+
+const PASTE_START: &[u8] = b"\x1b[200~";
+const PASTE_END: &[u8] = b"\x1b[201~";
+
+/// One chat's input, followed far enough to see an inbox reference end.
+#[derive(Default)]
+struct PictureRefs {
+    /// The bytes typed since the last blank or key.
+    word: Vec<u8>,
+    /// The word outgrew [`MAX_WORD`]: no reference.
+    overflow: bool,
+    /// Inside a bracketed paste of the user's own: nothing is added there.
+    pasting: bool,
+}
+
+impl PictureRefs {
+    fn reset(&mut self) {
+        self.word.clear();
+        self.overflow = false;
+    }
+
+    /// The word just ended: the leaf it names in the inbox, if it is a
+    /// picture reference.
+    fn take_reference(&mut self) -> Option<String> {
+        let leaf = (!self.overflow).then(|| picture_leaf(&self.word)).flatten();
+        self.reset();
+        leaf
+    }
+
+    /// `bytes` with a paste of each picture reference's file put in after the
+    /// blank that ends it, split where an Enter must wait
+    /// ([`PICTURE_SUBMIT_HOLD`]). `None` when nothing was added.
+    fn feed(&mut self, bytes: &[u8], resolve: impl Fn(&str) -> Option<String>) -> Option<Vec<Vec<u8>>> {
+        let mut pieces = Vec::new();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut added = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == 0x1b {
+                let rest = &bytes[i..];
+                for (marker, pasting) in [(PASTE_START, true), (PASTE_END, false)] {
+                    if rest.starts_with(marker) {
+                        self.pasting = pasting;
+                    }
+                }
+                self.reset();
+                out.push(b);
+                i += 1;
+                continue;
+            }
+            if self.pasting {
+                out.push(b);
+                i += 1;
+                continue;
+            }
+            match b {
+                b' ' | b'\t' | b'\n' | b'\r' => match self.take_reference().and_then(|leaf| resolve(&leaf)) {
+                    Some(path) => {
+                        added = true;
+                        let paste = [PASTE_START, path.as_bytes(), PASTE_END].concat();
+                        if b == b'\r' {
+                            out.push(b' ');
+                            out.extend_from_slice(&paste);
+                            pieces.push(std::mem::take(&mut out));
+                            out.push(b);
+                        } else {
+                            out.push(b);
+                            out.extend_from_slice(&paste);
+                        }
+                    }
+                    None => out.push(b),
+                },
+                0x7f | 0x08 => {
+                    if !self.overflow {
+                        self.word.pop();
+                    }
+                    out.push(b);
+                }
+                c if c < 0x20 => {
+                    self.reset();
+                    out.push(b);
+                }
+                _ => {
+                    if self.word.len() < MAX_WORD {
+                        self.word.push(b);
+                    } else {
+                        self.overflow = true;
+                    }
+                    out.push(b);
+                }
+            }
+            i += 1;
+        }
+        if !added {
+            return None;
+        }
+        pieces.push(out);
+        Some(pieces)
+    }
+}
+
+/// The inbox leaf `word` refers to when it is a picture reference
+/// `@<inbox>/<leaf>` (the current folder name or the former one), read as the
+/// chat reads one (`mobile-web/src/terminal/inboxRefs.ts`): the leaf is a run
+/// of letters, digits, `.`, `_`, `-`, without a sentence's closing dots.
+fn picture_leaf(word: &[u8]) -> Option<String> {
+    let word = std::str::from_utf8(word).ok()?.strip_prefix('@')?;
+    let rest = [crate::brand::INBOX_DIR, crate::brand::LEGACY_INBOX_DIR]
+        .into_iter()
+        .find_map(|dir| word.strip_prefix(dir)?.strip_prefix('/'))?;
+    let end = rest.find(|c: char| !(c.is_alphanumeric() || matches!(c, '.' | '_' | '-'))).unwrap_or(rest.len());
+    let leaf = rest[..end].trim_end_matches('.');
+    let (_, ext) = leaf.rsplit_once('.')?;
+    let ext = ext.to_ascii_lowercase();
+    (!leaf.starts_with('.') && PICTURE_EXTENSIONS.contains(&ext.as_str())).then(|| leaf.to_string())
+}
+
+/// The absolute path of picture `leaf` in chat `uid`'s inbox, as the chat's
+/// CLI sees it (the fence binds the chat folder at its own path): a plain
+/// file in a real folder of the chat, no link on the way down from the chat
+/// folder (the agent can write there), and no blank in the path (a paste is
+/// split at one). The current inbox folder first, then the former one.
+fn chat_picture(state_dir: &Path, uid: &str, leaf: &str) -> Option<String> {
+    let chat = crate::services::assistant::chat_dir(state_dir, uid).ok()?;
+    if !std::fs::symlink_metadata(&chat).is_ok_and(|meta| meta.is_dir()) {
+        return None;
+    }
+    let found = [crate::brand::INBOX_DIR, crate::brand::LEGACY_INBOX_DIR].into_iter().find_map(|dir| {
+        let mut path = chat.clone();
+        for part in dir.split('/') {
+            path.push(part);
+            if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+                return None;
+            }
+        }
+        path.push(leaf);
+        std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()).then_some(path)
+    })?;
+    let path = found.to_str()?;
+    (!path.chars().any(char::is_whitespace)).then(|| path.to_string())
+}
+
+/// The writes that deliver `bytes`, typed into chat `uid`, to its PTY: the
+/// bytes with a paste of each inbox picture they reference, in pieces to be
+/// written [`PICTURE_SUBMIT_HOLD`] apart. `None` for a chat whose CLI was not
+/// noted as taking pasted pictures, or when nothing was added: write `bytes`.
+pub fn picture_pastes_in(state_dir: &Path, uid: &str, bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let mut st = state().lock_ok();
+    if !st.picture_chats.contains(uid) {
+        return None;
+    }
+    if st.words.len() >= MAX_CHATS && !st.words.contains_key(uid) {
+        st.words.clear();
+    }
+    st.words.entry(uid.to_string()).or_default().feed(bytes, |leaf| chat_picture(state_dir, uid, leaf))
+}
+
+/// [`picture_pastes_in`] for the PTY `tab`, under the live state dir.
+pub fn tab_picture_pastes(tab: &str, bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let uid = chat_of_tab(tab)?;
+    picture_pastes_in(&crate::storage::state_dir(), &uid, bytes)
+}
+
+/// Mark chat `uid` as one whose CLI takes pasted pictures (the phone's
+/// bridge, which may run where the spawn did not and reads it off the tab).
+pub fn note_picture_chat(uid: &str) {
+    let mut st = state().lock_ok();
+    if st.picture_chats.len() >= MAX_CHATS && !st.picture_chats.contains(uid) {
+        st.picture_chats.clear();
+    }
+    st.picture_chats.insert(uid.to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,14 +464,113 @@ mod tests {
             ("the phone's upload", body(host, "async fn inbox_upload("), "note_chat_file("),
             ("the phone's desktop picture", body(host, "async fn attach_desktop_image("), "assistant_attach::note_attachment_in"),
             ("the spawn that ties a tab to its chat", body(launch, "fn assistant_gate("), "assistant_attach::note_chat"),
+            ("the window's keystrokes, for pictures", body(terminal, "pub async fn pty_write("), "assistant_attach::tab_picture_pastes"),
+            ("the phone's bytes, for pictures", body(bridge, "pub async fn attach("), "assistant_attach::picture_pastes_in"),
         ] {
             assert!(text.contains(needle), "{what} no longer calls {needle}");
         }
     }
 
+    fn inbox_ref(leaf: &str) -> String {
+        format!("@{}/{leaf}", crate::brand::INBOX_DIR)
+    }
+
+    fn paste(path: &str) -> Vec<u8> {
+        [PASTE_START, path.as_bytes(), PASTE_END].concat()
+    }
+
+    #[test]
+    fn a_picture_reference_is_read_as_the_chat_reads_one() {
+        assert_eq!(picture_leaf(inbox_ref("a-1_b.JPG").as_bytes()).as_deref(), Some("a-1_b.JPG"));
+        assert_eq!(picture_leaf(format!("{}.", inbox_ref("p.png")).as_bytes()).as_deref(), Some("p.png"));
+        assert_eq!(picture_leaf(format!("{},", inbox_ref("p.webp")).as_bytes()).as_deref(), Some("p.webp"));
+        assert_eq!(picture_leaf(format!("@{}/old.gif", crate::brand::LEGACY_INBOX_DIR).as_bytes()).as_deref(), Some("old.gif"));
+        for word in [inbox_ref("notes.txt"), inbox_ref("noext"), inbox_ref(".jpg"), inbox_ref(""), "@pic.jpg".into(), inbox_ref("p.jpg")[1..].to_string()] {
+            assert_eq!(picture_leaf(word.as_bytes()), None, "{word}");
+        }
+    }
+
+    #[test]
+    fn a_paste_follows_the_blank_after_a_picture_reference() {
+        let mut refs = PictureRefs::default();
+        let resolve = |leaf: &str| Some(format!("/chat/inbox/{leaf}"));
+        let typed = format!("{} where is this?", inbox_ref("p.jpg"));
+        let pieces = refs.feed(typed.as_bytes(), resolve).unwrap();
+        let want = [inbox_ref("p.jpg").as_bytes(), b" ", &paste("/chat/inbox/p.jpg"), b"where is this?"].concat();
+        assert_eq!(pieces, vec![want]);
+        // Typed in pieces, the reference is still seen whole.
+        let mut refs = PictureRefs::default();
+        let typed = inbox_ref("p.jpg");
+        let (head, tail) = typed.split_at(9);
+        assert_eq!(refs.feed(head.as_bytes(), resolve), None);
+        assert_eq!(refs.feed(tail.as_bytes(), resolve), None);
+        assert_eq!(refs.feed(b"\n", resolve), Some(vec![[b"\n".as_slice(), &paste("/chat/inbox/p.jpg")].concat()]));
+    }
+
+    #[test]
+    fn an_enter_right_after_a_picture_reference_waits_for_the_paste() {
+        let mut refs = PictureRefs::default();
+        let resolve = |leaf: &str| Some(format!("/chat/inbox/{leaf}"));
+        assert_eq!(refs.feed(inbox_ref("p.png").as_bytes(), resolve), None);
+        let pieces = refs.feed(b"\r", resolve).unwrap();
+        assert_eq!(pieces, vec![[b" ".as_slice(), &paste("/chat/inbox/p.png")].concat(), b"\r".to_vec()]);
+    }
+
+    #[test]
+    fn nothing_is_added_for_other_words_keys_or_the_users_own_paste() {
+        let resolve = |leaf: &str| Some(format!("/chat/inbox/{leaf}"));
+        let mut refs = PictureRefs::default();
+        assert_eq!(refs.feed(format!("{} more", inbox_ref("notes.txt")).as_bytes(), resolve), None);
+        assert_eq!(refs.feed(b"mail me@example.org ", resolve), None);
+        // A reference the user pasted themselves stays as pasted.
+        let pasted = [PASTE_START, inbox_ref("p.jpg").as_bytes(), b" hi", PASTE_END].concat();
+        assert_eq!(refs.feed(&pasted, resolve), None);
+        // A key in the middle (Ctrl+A Ctrl+K resets the line) breaks the word.
+        let broken = format!("{}\u{1}\u{b}x ", &inbox_ref("p.jpg")[..5]);
+        assert_eq!(refs.feed(broken.as_bytes(), resolve), None);
+        // Backspace edits the word being typed.
+        let mut refs = PictureRefs::default();
+        let typed = format!("{}x\u{7f} ", inbox_ref("p.jpg"));
+        assert!(refs.feed(typed.as_bytes(), resolve).is_some());
+        // A file that is not there is left as typed.
+        assert_eq!(PictureRefs::default().feed(format!("{} ", inbox_ref("p.jpg")).as_bytes(), |_| None), None);
+    }
+
+    #[test]
+    fn only_a_noted_chats_own_inbox_picture_is_pasted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let uid = fresh_uid(5);
+        let chat = crate::services::assistant::chat_dir(tmp.path(), &uid).unwrap();
+        let inbox = crate::brand::INBOX_DIR.split('/').fold(chat.clone(), |path, part| path.join(part));
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("p.jpg"), b"jpeg").unwrap();
+        let typed = format!("{} hi", inbox_ref("p.jpg"));
+        // Not noted (Codex, OpenCode): nothing.
+        assert_eq!(picture_pastes_in(tmp.path(), &uid, typed.as_bytes()), None);
+        note_picture_chat(&uid);
+        let pieces = picture_pastes_in(tmp.path(), &uid, typed.as_bytes()).unwrap();
+        let path = inbox.join("p.jpg").to_string_lossy().into_owned();
+        assert!(pieces[0].windows(path.len()).any(|w| w == path.as_bytes()), "{pieces:?}");
+        // A missing file, or a folder that is not a real one, gets nothing.
+        assert_eq!(picture_pastes_in(tmp.path(), &uid, format!("{} hi", inbox_ref("q.jpg")).as_bytes()), None);
+        assert_eq!(chat_picture(tmp.path(), &uid, "q.jpg"), None);
+        #[cfg(unix)]
+        {
+            let outside = tmp.path().join("outside");
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::write(outside.join("s.jpg"), b"secret").unwrap();
+            std::os::unix::fs::symlink(outside.join("s.jpg"), inbox.join("link.jpg")).unwrap();
+            assert_eq!(chat_picture(tmp.path(), &uid, "link.jpg"), None);
+            let top = chat.join(crate::brand::INBOX_DIR.split('/').next().unwrap());
+            std::fs::rename(&top, chat.join("moved")).unwrap();
+            std::os::unix::fs::symlink(chat.join("moved"), &top).unwrap();
+            assert_eq!(chat_picture(tmp.path(), &uid, "p.jpg"), None);
+        }
+    }
+
     #[test]
     fn a_chat_is_found_by_its_tab_and_by_its_tmux_session() {
-        note_chat("assistant:t-attach", UID);
+        note_chat("assistant:t-attach", UID, false);
         assert_eq!(chat_of_tab("assistant:t-attach").as_deref(), Some(UID));
         assert_eq!(chat_of_tab("assistant:other"), None);
         assert!(!tab_attached("assistant:other"));

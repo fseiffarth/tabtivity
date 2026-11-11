@@ -963,6 +963,10 @@ pub async fn attach(
     catalog: Arc<Mutex<CatalogCache>>,
     // The tab runs an agent: its input obeys the AI switch.
     ai: bool,
+    // A Tabby chat whose CLI takes a pasted picture path as the picture
+    // (Claude): its inbox picture references get that paste
+    // (`assistant_attach::picture_pastes_in`).
+    pictures: bool,
     // Called on the leading edge of each burst of typing from this viewer (see
     // `INPUT_REPORT_INTERVAL`), and on every interrupt key with `true` (see
     // `is_interrupt_frame`). A callback rather than a desktop call of its
@@ -978,6 +982,9 @@ pub async fn attach(
     // own input, which decides whether the chat has had an `@` attachment
     // (`assistant_attach`, gap 78). The backend reads it here, off the bytes.
     let chat = crate::services::assistant_attach::chat_of_tmux(&tmux_name);
+    if let (Some(uid), true) = (&chat, pictures) {
+        crate::services::assistant_attach::note_picture_chat(uid);
+    }
     let guard = registry.acquire(&tmux_name, viewer).await?;
     // Do this before the live attach starts redrawing. The browser receives it
     // before every PTY byte below, and tmux's clear/redraw then leaves these
@@ -1233,7 +1240,22 @@ pub async fn attach(
                         if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
                         continue;
                     }
-                    if writer.write_all(&bytes).is_err() || writer.flush().is_err() { break Ok(()); }
+                    // A picture reference in a Tabby chat: the file's paste
+                    // goes in after it, and an Enter right behind waits for
+                    // the CLI to take it (the loop holds the next frames).
+                    let pieces = chat
+                        .as_deref()
+                        .filter(|_| pictures)
+                        .and_then(|uid| crate::services::assistant_attach::picture_pastes_in(&state_dir, uid, &bytes))
+                        .unwrap_or_else(|| vec![bytes.to_vec()]);
+                    let mut written = true;
+                    for (index, piece) in pieces.iter().enumerate() {
+                        if index > 0 {
+                            tokio::time::sleep(crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).await;
+                        }
+                        if writer.write_all(piece).is_err() || writer.flush().is_err() { written = false; break; }
+                    }
+                    if !written { break Ok(()); }
                     // After the write, so a frame that never reached the PTY is
                     // never reported as having commanded it — and never acked.
                     input_frames += 1;

@@ -105,6 +105,19 @@ impl AssistantCli {
         }
     }
 
+    /// Whether the CLI takes a bracketed paste of a picture's absolute path
+    /// as the picture (Claude Code), which is how a chat with no file tool
+    /// gets an attached picture (`assistant_attach::picture_pastes_in`).
+    pub fn takes_pasted_pictures(self) -> bool {
+        matches!(self, Self::Claude | Self::ClaudeLocal)
+    }
+
+    /// Whether a chat's tab record `cmd` is a CLI that
+    /// [takes pasted pictures](Self::takes_pasted_pictures).
+    pub fn cmd_takes_pasted_pictures(cmd: &str) -> bool {
+        Self::ALL.into_iter().any(|cli| cli.takes_pasted_pictures() && cli.bin() == cmd)
+    }
+
     /// Whether the model is a local Ollama model (the profile runs in the
     /// `assistant.local` home, `PtyOptions.local_model`) rather than the
     /// CLI's own cloud model.

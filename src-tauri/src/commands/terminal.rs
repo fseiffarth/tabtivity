@@ -480,13 +480,39 @@ pub async fn pty_write(
         }
         return Err(crate::services::ai_switch::AI_OFF.to_string());
     }
-    if let Some(sender) = sender {
-        sender
-            .send(data)
-            .await
-            .map_err(|_| format!("terminal '{id}' is no longer accepting input"))?;
+    let Some(sender) = sender else { return Ok(()) };
+    let closed = || format!("terminal '{id}' is no longer accepting input");
+    // A Tabby chat whose CLI has no file tool gets each inbox picture it is
+    // sent as a paste of the file (`assistant_attach`, Claude); an Enter
+    // straight after one waits for the CLI to take it. Writes to one chat
+    // queue behind that wait, so a key typed meanwhile stays after the Enter.
+    if crate::services::assistant_attach::chat_of_tab(&id).is_some() {
+        let _turn = chat_write_lock(&id).lock_owned().await;
+        let Some(pieces) = crate::services::assistant_attach::tab_picture_pastes(&id, &data) else {
+            return sender.send(data).await.map_err(|_| closed());
+        };
+        for (index, piece) in pieces.into_iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).await;
+            }
+            sender.send(piece).await.map_err(|_| closed())?;
+        }
+        return Ok(());
     }
-    Ok(())
+    sender.send(data).await.map_err(|_| closed())
+}
+
+/// One lock per Tabby chat PTY, held across a `pty_write` that may wait out
+/// [`assistant_attach::PICTURE_SUBMIT_HOLD`](crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).
+fn chat_write_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Default::default).lock_ok();
+    if locks.len() >= 256 && !locks.contains_key(id) {
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+    }
+    locks.entry(id.to_string()).or_default().clone()
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]

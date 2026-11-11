@@ -175,6 +175,24 @@ a stub model (`docs/third_party_update_checklist.md`).
   forged: probed 2026-10-30 on 2.1.311, Haiku refused 6 of 6 text files and
   Sonnet 0 of 6 (pictures were read by both). With the exception, 8 of 8 text
   reads on Haiku, and it still refuses `~/.ssh/config` and a home listing.
+- **Pictures go in as a paste (2026-11-10, Claude 2.1.322).** Claude no longer
+  reads an `@` *picture* itself: it leaves the reference for the model's `Read`,
+  which the chat lacks, so the model saw only the path (text files still
+  arrive). What it takes as a picture is a bracketed paste of the file's
+  absolute path, alone; a relative path or `@path` stays text. So
+  `assistant_attach::picture_pastes_in` follows the user's own bytes into a
+  Claude chat (`AssistantCli::takes_pasted_pictures`; `pty_write`, the phone's
+  bridge) and, after the blank that ends an `@<inbox>/<leaf>` picture
+  reference, adds that paste: a png/jpg/gif/webp, a plain file reached through
+  no link below the chat folder, no blank in the path. The reference stays (the
+  chat draws its picture from it). An Enter in the same write as the paste is
+  lost, so one right after a reference is held back `PICTURE_SUBMIT_HOLD` (1 s;
+  an 11.5 MB photo took ~200 ms); `pty_write` queues a chat's writes behind
+  that. Claude records `[Image #N]` wherever the cursor stood when it took the
+  picture; `agent_session::drop_inbox_picture_chips` takes it out of a prompt
+  that names an inbox file, so the sending bubble settles. Not covered: a
+  scheduled prompt (`scheduler`, tmux `send-keys`). Codex and OpenCode get
+  nothing added.
 - **After an attachment the lane narrows (gap 78).** A chat that has had an `@`
   attachment can hold file text next to `web_fetch`/`web_search`, so
   `services::assistant_attach` keeps a backend-decided flag per chat: set when
@@ -341,7 +359,8 @@ same picker (`setAssistantReach`); turning the switch off drops the list.
   the phone's file or desktop image lands in the chat's folder
   (`host::drop_box`: `chat_dir` by the chat's uid, refused when missing or a
   link) and goes in as an `@.tabtivity/inbox/…` reference, which the CLI reads
-  itself, not through a tool. Codex has `view_image` off, so it gets the
+  itself, not through a tool (a picture for Claude also as a paste of its path,
+  above). Codex has `view_image` off, so it gets the
   reference and cannot see the picture. Nothing else reaches that folder: the
   state dir is masked in every fence and `assistant_chat_mount` binds one
   chat's, so a chat's files are its own, and `drop_sweep` prunes them at 90
