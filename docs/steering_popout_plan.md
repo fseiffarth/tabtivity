@@ -1,8 +1,9 @@
 # Steering inside popout windows — plan
 
-Status: plan only, 2026-11-11. Decisions U1–U4 settled with the user the same
-day. Frontend only (no `src-tauri/` change). Nothing implemented, never run
-live.
+Status: implemented 2026-11-11, on `develop` as 367e8e095..0103a6333; never run
+live. Decisions U1–U4 settled with the user the same day. Frontend only (no
+`src-tauri/` change). What was built, and where it departs from this plan:
+`docs/steering_popout_handoff.md`.
 
 ## Why
 
@@ -224,9 +225,10 @@ implementer, steps 1–6 in order, one commit per step, in a worktree reset to
 `develop` HEAD (not `origin/main`), with the handoff log
 `docs/steering_popout_handoff.md`. The implementer builds on what `develop`
 HEAD does and never reads or writes the main checkout's working files. The
-main agent lands the range: only after the other session's edits are
-committed, rebasing onto them (their two `useKeyboard.ts` hunks then apply to
-the moved code in `useSteering.ts`).
+main agent lands the range. As landed (user: "when done land it on develop"):
+fast-forward, with the other session's still-uncommitted edits merged onto
+the new files in the working tree and its `useKeyboard.ts` hunks ported to
+`useSteering.ts`, uncommitted as before.
 
 ### 1. Pure move: `hooks/useSteering.ts`
 
