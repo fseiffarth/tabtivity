@@ -289,3 +289,88 @@ incl. the type-check, `vitest --changed`), all green. Nothing was run live.
   raw eslint / grep output.
 - Compound shell commands (pipes into `{ …; }`, `cp` chains) are refused by
   the worktree guard; edit through scripts in the scratchpad or plain calls.
+
+## Popout steering is slow
+
+Report (user, after trying it live): "Steering navigation in popped out window
+is incredible slow." Which keys was not said. Nothing here was run live.
+
+### What was measured
+
+`src/__tests__/windows/SteeringPopoutCost.test.tsx`: a real `DetachedApp` (its
+`TabPane` replaced by a memoised counter, as the real one is memoised) against
+a real main-window host on the two-heap harness; events cross a bus that
+serialises payloads as Tauri does. One → in the popout (steering on, tabs
+level, a group of three tabs), counted once the 150 ms reseed debounce has
+passed:
+
+| per one → key                          | before | after | main window (legend only) |
+| -------------------------------------- | ------ | ----- | ------------------------- |
+| events popout ↔ main                   | 2 (`detached-edit`, then a `detached-seed`) | 1 (`detached-edit`) | 0 |
+| tab payloads serialised and shipped    | all 3, back | none | n/a |
+| pane renders                           | 5 (3 tabs; two flip visibility, the third is pure echo) | 2 | n/a |
+| `DetachedCenterPanel` renders          | 3      | 1     | n/a |
+| `listen("agent-schedules-changed")` re-subscribed (IPC) | 1 | 0 | n/a |
+| legend renders                         | 7      | 4     | 3 |
+| `measureCaps` calls                    | 5      | 3     | 2 |
+| `getBoundingClientRect` calls          | 55     | 31    | 0 (legend), n/a |
+
+The lit tab moves synchronously (the popout applies its own `activate` edit
+before sending it), before and after: nothing waits on the main window for the
+tab to move. Nothing per key waits on an 800 ms arrival either (that path is
+J / Up / handed-over keys only), and one key emits nothing but the edit
+(`STEERING_OWNER` / `STEERING_STATUS` go out on entering steering, not per key).
+
+### Cause (demonstrated)
+
+The main window answers every popout edit with a reseed. Its sweep
+(`listenDetachedHost`, `stores/detached.ts`) signs each popout's subtree by node
+identity, and an `activate` replaces the node, so the tab switch the popout had
+already applied came back 150 ms later as a full seed: every tab payload,
+freshly deserialised. In the popout that re-rendered every pane (a fresh `tab`
+object defeats `TabPane`'s `memo`, and a terminal pane builds a new
+`PaneTabContext` value, so the Reader / Chat underneath render too, hidden tabs
+included), re-subscribed the schedules listener (an IPC round trip each way),
+re-ran the cap measurement and the pane-rect measurement. That is a cost the
+main window's own key does not have; clicking a tab in a popout paid it too.
+
+### Fix
+
+`listenDetachedHost`: the `DETACHED_EDIT` handler marks the popout while it
+applies an `activate`, and the sweep that edit triggers records the new
+signature and schedules nothing. Any other change (a main-side rename, retitle,
+status jump through `applyDetachedEdit`, a `close`, `add`, `reorder`, ...) still
+reseeds; a reseed already pending for such a change still goes out and carries
+the switch. Tests: `SteeringPopoutCost.test.tsx` (5; the first three fail on
+the old code, the last two guard the reseeds that must stay).
+
+### Still a hypothesis, not measured
+
+- The test counts renders, events and measurements; it does not time them. How
+  much each reseed cost with real agent / viewer panes (a Reader transcript
+  re-render, hidden tabs included) can only be seen live, and so can whether
+  removing it is what the user feels as "incredibly slow". It is the only cost
+  that scaled with the popout's content and that the main window's key lacks;
+  the rest of the table is small in jsdom.
+- Race: with the old code a reseed from key n, delivered after the popout had
+  already applied key n+1, put the lit tab back a step until the next reseed.
+  The bus here is synchronous, so the test cannot reproduce that; the fix
+  removes the reseed that would do it for `activate`.
+- On WebKitGTK the main window's and the popouts' JS may share one web
+  process, in which case the main window's per-edit work (its store write and
+  every subscriber of `detachedGroupsByScope`, which is not removed by the fix)
+  competes with the popout's. Not checked.
+
+### Left alone, flagged
+
+- The legend renders once more per key in a popout than in the main window
+  (4 vs 3): `DetachedApp` re-renders it with the new tree before
+  `DetachedCenterPanel` has written the tree to the popout view. Wrapping it in
+  `memo` removes that render but would also stop the legend refreshing its
+  non-reactive reads (`activeTabCard()`, `steeringTabAsks`, ...) on a parent
+  render, so it was not done.
+- A seed still replaces every tab object with a new one (the main window
+  reseeds on any retitle, rename or host change); reusing unchanged payloads
+  in the popout's seed handler would spare its panes on those. Out of scope.
+- Other popout edits (`files`, `reorder`, `resize`, `move`) also answer with a
+  reseed; only `activate` was the steering key.

@@ -1162,6 +1162,12 @@ export async function listenDetachedHost(): Promise<() => void> {
     }
   };
   let hostReady = false;
+  // The popout whose own edit is being applied right now (see the edit handler):
+  // the sweep that edit triggers records the new signature and sends nothing.
+  // A reseed is a full copy of the group's tab payloads, and every pane of the
+  // popout re-renders from it, so answering each tab switch with one made a
+  // steering key cost a round trip through the main window.
+  let echoedGroupId: string | null = null;
   const queuedSeeds: DetachedSeedRequest[] = [];
   let publishStatus = (_force = false) => {};
   const answerSeed = ({ label, scope, groupId }: DetachedSeedRequest) => {
@@ -1231,7 +1237,14 @@ export async function listenDetachedHost(): Promise<() => void> {
       }
     }
     if (edit.kind === "close" && edit.user) noteClosedPopoutTabs(scope, groupId, [edit.key]);
-    store.applyDetachedEdit(scope, groupId, edit);
+    // An `activate` is already on screen in the popout (it applied it before
+    // sending), so the sweep below must not answer it with a whole reseed.
+    if (edit.kind === "activate") echoedGroupId = groupId;
+    try {
+      store.applyDetachedEdit(scope, groupId, edit);
+    } finally {
+      echoedGroupId = null;
+    }
   });
 
   await on<DetachedBoundsEnvelope>(DETACHED_BOUNDS, (ev) => {
@@ -1477,6 +1490,10 @@ export async function listenDetachedHost(): Promise<() => void> {
         if (!lastSig.has(entry.label)) {
           // First sighting: the popout's own seed request covers it. Record the
           // signature so only a LATER change reseeds.
+          lastSig.set(entry.label, sig);
+          continue;
+        }
+        if (entry.id === echoedGroupId) {
           lastSig.set(entry.label, sig);
           continue;
         }
