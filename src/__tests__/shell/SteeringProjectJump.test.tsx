@@ -88,7 +88,7 @@ function openJump(level: "projects" | "panes" | "tabs" = "tabs") {
     steering().enter();
     if (level !== "tabs") steering().setLevel(level);
   });
-  press({ key: "/" });
+  press({ key: "," });
 }
 
 const ORIGINAL = {
@@ -242,7 +242,7 @@ describe("steering project jump", () => {
   it("stays in steering when no jump box is mounted", () => {
     render(<Harness />);
     act(() => steering().enter());
-    press({ key: "/" });
+    press({ key: "," });
     expect(steering()).toMatchObject({ active: true, level: "tabs" });
   });
 });

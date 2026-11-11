@@ -333,7 +333,7 @@ describe("Mobile steering — status jumps, section keys and the way back", () =
     expect(getSteering().jumpBack).toBeNull();
   });
 
-  it("M, C and T open the sections and / asks for the search", async () => {
+  it("M, C and T open the sections and , asks for the search", async () => {
     const openSection = vi.fn();
     const findProject = vi.fn();
     await mountProject({ openSection, findProject });
@@ -341,7 +341,7 @@ describe("Mobile steering — status jumps, section keys and the way back", () =
     press(null, "m");
     press(null, "c");
     press(null, "t");
-    press(null, "/");
+    press(null, ",");
     expect(openSection.mock.calls.map(([name]) => name)).toEqual(["mail", "calendar", "todo"]);
     expect(findProject).toHaveBeenCalledTimes(1);
   });

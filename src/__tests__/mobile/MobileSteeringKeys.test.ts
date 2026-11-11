@@ -95,10 +95,10 @@ describe("phone steering table", () => {
       expect(act("m", level)).toBe("mail");
       expect(act("c", level)).toBe("calendar");
       expect(act("t", level)).toBe("todo");
-      expect(act("/", level)).toBe("search");
+      expect(act(",", level)).toBe("search");
       expect(act("h", level)).toBe("legend");
     }
-    for (const key of ["q", "r", "x", "m", "c", "t", "/", "h", "Backspace"]) expect(act(key, "region"), key).toBeNull();
+    for (const key of ["q", "r", "x", "m", "c", "t", ",", "h", "Backspace"]) expect(act(key, "region"), key).toBeNull();
   });
 
   it("gives each level its own acts", () => {

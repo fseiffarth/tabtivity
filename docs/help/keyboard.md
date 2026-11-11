@@ -90,7 +90,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option moves there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
 | N / M | New shell / System Monitor tab (projects: new project / mail) |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
-| / | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the wheel, their digit (1–9, 0) opens one at once |
+| , | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the wheel, their digit (1–9, 0) opens one at once |
 | V | Toggle the pane's file viewer |
 | Tab / Shift+Tab | On an agent tab with a view strip: the next / previous view, Chat → Diffs → Files → Terminal (wraps; views with nothing to show are skipped). Works on the subwindow, tab and Inside levels and keeps the level |
 | W | Close the active tab: it asks first; W again (or Y, Enter) closes, Esc keeps it |
@@ -101,7 +101,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | P | Toggle the side panels |
 | Q / R / X | Next tab waiting for an answer / working / done (Shift: previous) |
 | Backspace | Back to the tab you were on before Q / R / X (again: return). Answering a question you jumped to with Q brings you back by itself |
-| , | Open Settings and walk it: ← → pages, E D controls |
+| / | Open Settings and walk it: ← → pages, E D controls |
 | ? | Open the cheat sheet: E D scroll it |
 | Space | On an agent tab: a prompt box in the window's middle; Enter sends, Esc returns |
 | Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |

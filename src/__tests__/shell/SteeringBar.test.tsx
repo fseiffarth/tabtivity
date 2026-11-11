@@ -338,7 +338,7 @@ describe("steering key caps on a window", () => {
       (document.querySelector(".app-header") as HTMLElement).style.visibility = "";
       useKeyboardSteeringStore.getState().setLevel("panes");
     });
-    expect(caps("settings")).toEqual([","]);
+    expect(caps("settings")).toEqual(["/"]);
   });
 
   it("measures the region cursor for Enter", () => {

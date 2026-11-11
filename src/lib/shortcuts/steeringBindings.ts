@@ -161,8 +161,8 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "jumpBack", labelKey: "steering.jumpBack.label", scopes: TAB_BAR, defaults: ["Backspace"] },
   { action: "sidePanel", labelKey: "steering.sidePanel.label", scopes: TAB_BAR, defaults: ["b"] },
   { action: "panels", labelKey: "steering.panels.label", scopes: TAB_BAR, defaults: ["p"] },
-  { action: "settings", labelKey: "steering.settings.label", scopes: TAB_BAR, defaults: [","] },
-  { action: "jumpProject", labelKey: "steering.jumpProject.label", scopes: TAB_BAR, defaults: ["/"] },
+  { action: "settings", labelKey: "steering.settings.label", scopes: TAB_BAR, defaults: ["/"] },
+  { action: "jumpProject", labelKey: "steering.jumpProject.label", scopes: TAB_BAR, defaults: [","] },
   { action: "popout", labelKey: "steering.popout.label", scopes: TAB_BAR, defaults: ["j"] },
   // The agent tab's Reader view (Chat / Diffs / Files / Terminal), one step on;
   // with Shift the other way. Live on the tabs and Inside, not in the projects.
