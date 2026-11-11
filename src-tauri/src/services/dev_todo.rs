@@ -186,9 +186,10 @@ pub fn write_in(root: &Path, name: &str, expected: &str, next: &str) -> Result<W
         use std::os::unix::fs::PermissionsExt;
         file.metadata().map_err(|e| e.to_string())?.permissions().mode() & 0o7777
     };
+    // Windows refuses to rename over a file that is still open: close it first.
     #[cfg(not(unix))]
     let mode = {
-        let _ = &file;
+        drop(file);
         0o600
     };
     crate::storage::write_private_atomic_mode(&path, next.as_bytes(), mode)?;

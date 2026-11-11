@@ -1233,10 +1233,15 @@ mod tests {
         // Control: a scope's home registers it.
         let sibling = prepare_home_in(state, &scope_home_in(state, "p1"), "p1", &[], Seed::Scope).unwrap().dir;
         let settings = std::fs::read_to_string(sibling.join(".claude/settings.json")).unwrap_or_default();
-        assert!(settings.contains(&hook_script), "the control home has the hook: {settings}");
+        // JSON doubles a Windows path's backslashes: look for the command as the
+        // file would spell it, and as it is.
+        let hook_json = serde_json::to_string(&hook_script).unwrap();
+        let hook_json = hook_json.trim_matches('"');
+        let registers = |text: &str| text.contains(&hook_script) || text.contains(hook_json);
+        assert!(registers(&settings), "the control home has the hook: {settings}");
         for rel in [".claude/settings.json", ".codex/config.toml", ".codex/hooks.json", ".gemini/settings.json"] {
             if let Ok(text) = std::fs::read_to_string(home.join(rel)) {
-                assert!(!text.contains(&hook_script), "{rel} registers the session hook");
+                assert!(!registers(&text), "{rel} registers the session hook");
             }
         }
         // A second preparation reuses it.
