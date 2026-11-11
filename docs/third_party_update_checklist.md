@@ -668,6 +668,24 @@ tab and resume/fork remain tagged for live verification.
 
 **Assumes**
 
+- **0.167.1 (2026-11-11), outside Tabtivity, beside 0.167.0** — both from the
+  agent install's `releases/` folder, private `CODEX_HOME`, a work folder that is
+  its own git root, `--no-daemon` and the local Ollama provider. Upstream's
+  three commits only add opt-in incremental tools for Responses and limit the
+  legacy ones to Bedrock (core, no TUI or rollout file). `--help` of the top level,
+  `exec`, `resume`, `fork`, `mcp`, `login` and `queue` is identical. Both
+  real-binary probes pass (local catalog, API-key proxy). `tui.py` captured the
+  folder trust question, idle, both `/model` steps and Shift+Tab's `Plan mode`
+  at 100 and 60 columns. Replayed, they read the same: the picker
+  rows sit five lines lower on 0.167.0 only because it now draws an "Update
+  available! 0.167.0 -> 0.167.1" box on top. The writer lock was probed on both
+  with `scripts/verify-cli/codex/writer_lock.py`: a second `codex resume <id>`
+  gets a lock screen, `🔒 This conversation is open in another app … r retry
+  f fork` (no longer the words `active writer`; nothing in Tabtivity reads them),
+  and after the first writer is SIGKILLed a third resume opens with the
+  history. No approval for a model's tool call was captured (the stub speaks
+  chat completions, not Responses). Hooks, a real model turn and the window
+  were not exercised.
 - **0.167.0 (2026-11-06), CLI checks outside Tabtivity** — installed Linux
   standalone binary, isolated `CODEX_HOME`, private 100-column tmux, `--no-daemon`
   and local Ollama provider. Launch/resume/exec flags remain available. Both
@@ -1133,10 +1151,55 @@ Version probes (`agent_versions::VERSION_ARGV`) exist for Antigravity
 `Muse Code 1.3.0 (1.3.0-R3057.1)`) as well. Muse's launcher script starts a
 background self-update on any invocation once its interval has passed, so its
 probe sets `MUSE_NO_AUTO_UPDATE=1` (`VERSION_ENV`); a launcher that renames
-that switch turns the daily probe into an updater. Muse has a recipe but no
-recorded check, so Manage CLIs calls it unverified; the 1.4.1-era launcher
-(`api.meta.ai/muse-launcher.sh`, fetched 2026-09-30) still honours the switch
-and still defaults the login to `$XDG_CONFIG_HOME` or `~/.config/muse/auth.json`.
+that switch turns the daily probe into an updater. Muse's first recorded check
+is **1.4.15** (2026-11-11), next section.
+
+**Meta Muse Code** (`muse`; registry row in `agent_registry.rs`, the
+`--model`/`--reasoning-effort` rows in `agent_defaults.rs`, `fence_env`'s
+`TBH_CREDENTIAL_BACKEND=file` in `agent_auth.rs`, the `⟩` menu in
+`prompt.ts`). How it ships: `dev.meta.ai/install.sh` puts a bash launcher at
+`~/.local/bin/muse` (`MUSE_INSTALL_DIR` overrides), and the launcher downloads
+`muse-bin-<version>-R<build>` beside itself from the public channel manifest
+`api.meta.ai/muse-code/channels/muse-stable` → a release manifest on
+`lookaside.facebook.com` with a sha256 and size per platform. No login is needed
+to download. A new binary is fetched without installing by reading those two
+manifests and checking the sha256. Checked on 2026-11-11, 1.4.15 (the channel's
+version) beside the 1.3.0 still installed here, in scratch homes, outside
+Tabtivity:
+
+- The launcher is now version 3. It still honours `MUSE_NO_AUTO_UPDATE=1` and
+  still keeps the login at `$XDG_CONFIG_HOME` or `~/.config/muse/auth.json`.
+  It drops the URL overrides (`MUSE_CHANNEL_URL`, `MUSE_DOWNLOAD_HOST`, …) and
+  adds `MUSE_CHANNEL` (`muse-stable` or `muse-canary`).
+- `--version` keeps the `Muse Code X.Y.Z (X.Y.Z-R…)` shape. `--model` and
+  `--reasoning-effort` (`none` … `ultra`, now with an `--effort` alias) are
+  unchanged. New: `-c KEY=VALUE`, `--provider local` (behind a `local_models`
+  experiment) and the subcommands `sessions`, `attach`, `usage`, `plugins`,
+  `voice`, `mxp` and `model-profile`.
+- `resume --last` and `resume <uuid|name>` exist (since 1.3.0), but the
+  registry keeps `Resume::No`. Sessions live in `~/.local/share/muse/sessions/
+  <Y>/<M>/<D>/<id>/session.jsonl` plus `session-index.db`, and trust in
+  `~/.config/muse/trust.json`. A running session also registers a socket under
+  `/tmp/tbh-<uid>-rt/muse/`, which is outside `$HOME` and machine-wide.
+- Its menus number rows with no stop: `⟩ 1  Trust and continue` / `  2  Quit`
+  (1.3.0 drew `>`). Neither version lit the decision lamp. `prompt.ts`
+  `hasMuseMenu` now reads the 1.4.15 shape, held by `agentPrompt.test.ts`.
+  The phone's question reader (`selectPrompt.ts`) still does not read it.
+- Inside a fence its shell sandbox (bubblewrap, user namespaces) is
+  unavailable. Its footer says so, and its strings say unsandboxed execution then
+  needs an approval, so expect a prompt per shell command, as with Codex.
+  Not run.
+- Windows: `irm https://dev.meta.ai/install.ps1 | iex` installs
+  `%LOCALAPPDATA%\Programs\muse\muse.cmd`. The registry has no Windows row yet.
+
+Not verified: a tool-approval prompt (`Would you like to allow this tool
+action?` with `Allow once` / `Reject once` / `Allow for this session` /
+`Block for this session`, per the strings), `/model` with a login, sign-in,
+the session store under a real turn, a real tab. `--base-url` to a
+local Responses stub was not a reliable way to force calls. With
+`META_API_KEY=test`, one turn's answer did not come from the stub, and its
+endpoint is unknown. Don't drive Muse's `meta` provider from a probe until that
+is understood: offline work uses `--provider echo`.
 Copilot's row started at 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
 `--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
 `storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.
@@ -1200,6 +1263,25 @@ model") captured trust, idle, the create approval at 110 and 60 columns and
 the Esc after it; every frame reads the same on both, the hangless wrap
 included. The changelog's `-p --output-format json` session events are not
 read (Tabtivity reads `events.jsonl`).
+
+Re-checked **1.0.109** (2026-11-11, `npm pack @github/copilot-linux-x64`, beside
+1.0.108): all 13 `copilot-events-probe.py` checks pass on both. `--help` is
+re-sorted alphabetically but has the same 78 flags, the same text except a
+longer `--usage-output-file` description (now also for `-p`); it adds
+the help topics `extensions`, `lsp`, `network`, `parallel-work`, `timeline`,
+`providers-local` and `providers-env`, which is the old BYOK variables page,
+now marked legacy (the probe's `COPILOT_PROVIDER_*` still work). `login --help`
+only reorders. The runtimes hold `authTokens`, `lastLoggedInUser` and
+`storeTokenPlaintext` in as many files, plus `.copilot/skills` and
+`.agents/skills`. `tui.py` (trust, idle, create approval at 110 and 60
+columns, the Esc after it) reads the same on both, the hangless wrap
+included. Changelog items near what Tabtivity reads: number keys in
+approval dialogs after the "No, and tell Copilot" row, file-move prompts
+naming both paths, URL prompts that can approve every subdomain (a choice
+row the generic dialog reader takes as is), `session.usage_info.isInitial`
+now only on a session's first report (not read), and a `sessionStart`
+`additionalContext: null` treated as absent (the hint hook prints text).
+Real sign-in, model pickers and a model's own output were not exercised.
 
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
@@ -1688,6 +1770,15 @@ and every `main`/`main42` frame reads the same; `signin.py` at 42×24 and
 80×24 differs only in the OAuth link's random parameters. `--continue` with
 `--model/--effort` flags still drops the history, as on 1.5.3. No release
 notes are published for it.
+1.5.5 on 2026-11-11 (the installed copy, made read-only, beside the 1.5.4
+copy): `main.py` at 80 and 42 columns prints the same lines, `agy models`
+exits 0, `--help` and `models --help` are identical, and 40 of 48 frames read
+the same. The other eight are the sign-in link frames at 80×24 and 42×24,
+differing only in the PKCE challenge. The 1.5.5 binary carries 1.5.4's
+notes: `agy acp` Auto mode, hook input gains `hookEventName`, `cwd`
+and `toolCall.id` (nothing here hooks Antigravity's tools), and fixes for
+subagent prompts, PgUp/PgDn and the `remote-control` service. Neither the
+second-window notice nor a real sign-in was exercised.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
