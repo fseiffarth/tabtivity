@@ -107,6 +107,7 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -849,8 +850,11 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     const working = { ...TAB, agent_status: "working" } as typeof TAB;
     const { rerender } = render(<Terminal tab={working} back={() => {}} />);
     await settle();
+    vi.useFakeTimers();
+    const inputFrames = () => FakeWebSocket.instances[0].sent.filter((frame) => frame === "<bytes>").length;
+    const beforeClear = inputFrames();
     fireEvent.click(screen.getByRole("button", { name: "Start a new conversation" }));
-    await settle();
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
     // Claude queues it: the conversation is not cleared yet, so nothing is
     // hidden and there is nothing to undo — an Undo now resumed an older chat.
     expect(screen.getByText("add a clear button")).toBeTruthy();
@@ -858,13 +862,13 @@ describe(`${BRAND.display} Mobile Focus reads the stored session`, () => {
     // The tap is not lost from sight: the phone says the clear waits, and a
     // second tap meanwhile queues no second /clear.
     expect(screen.getByText(/the new conversation starts when this turn ends/)).toBeTruthy();
-    const sentBefore = FakeWebSocket.instances[0].sent.length;
+    expect(inputFrames()).toBe(beforeClear + 3); // Line reset, command text, Enter.
     fireEvent.click(screen.getByRole("button", { name: "Start a new conversation" }));
-    await settle();
-    expect(FakeWebSocket.instances[0].sent.length).toBe(sentBefore);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(inputFrames()).toBe(beforeClear + 3);
 
     rerender(<Terminal tab={{ ...TAB, agent_status: "idle" } as typeof TAB} back={() => {}} />);
-    await settle();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.queryByText(/the new conversation starts when this turn ends/)).toBeNull();
     expect(screen.queryByText("add a clear button")).toBeNull();
     expect(screen.getByRole("button", { name: "Bring back the conversation you just cleared" })).toBeTruthy();

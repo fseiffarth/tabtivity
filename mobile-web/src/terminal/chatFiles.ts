@@ -41,7 +41,10 @@ function pathsOf(texts: readonly string[]): string[] {
  * Each path is asked about once, except that the newest answer's are asked
  * again: an agent often says what it will write before it has. A failed ask
  * leaves the paths unasked for the next change of `texts`. The map stands
- * until a new file turns up, so a poll re-renders no answer.
+ * until a new file turns up, so a poll re-renders no answer. It holds only
+ * what the current `texts` name: after a clear or a resume, the earlier
+ * conversation's files drop out (and come back at once, already known, when
+ * its words return).
  */
 export function useNamedFiles(tabId: string, texts: readonly string[], enabled: boolean): ReadonlyMap<string, OutboxFile> {
   const [found, setFound] = useState(NOTHING);
@@ -79,7 +82,11 @@ export function useNamedFiles(tabId: string, texts: readonly string[], enabled: 
     })();
     return () => controller.abort();
   }, [tabId, shown]);
-  return found;
+  return useMemo(() => {
+    if (found.size === 0) return found;
+    const named = new Set(pathsOf(shown ? shown.split("\u0000") : []));
+    return [...found.keys()].every((path) => named.has(path)) ? found : new Map([...found].filter(([path]) => named.has(path)));
+  }, [found, shown]);
 }
 
 /** The previews under one answer: the pictures and PDFs it names, in order,

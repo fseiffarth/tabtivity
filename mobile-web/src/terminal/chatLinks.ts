@@ -3,8 +3,8 @@
 // (`promptHtml` / `answerHtml`, whose allowlist keeps a `data-href` only where
 // `chatLinkUrl` accepts it) and the `.md-link[data-href]` it carries are read
 // back. No second link parser, so this list and the Chat cannot disagree. The
-// desktop's Files view lists them (open-only, through the Chat's own confirm);
-// the phone can add a group on the same rows later.
+// desktop's Files view and the phone's Links index list them through the
+// Chat's own confirmation.
 import { answerHtml, chatLinkUrl, promptHtml } from "./answerMarkdown";
 
 /** One link of the conversation, ready to list. */

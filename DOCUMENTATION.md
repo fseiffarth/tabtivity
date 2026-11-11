@@ -509,8 +509,9 @@ without it.
 With that switch on, the phone's chat treats files as the desktop's does: a
 picture or PDF an answer names follows it as a message of its own, a path in
 the answer opens the file, and **Files (N)** over the chat also lists what the
-agent changed and what its answers name. A file deleted since, or one in
-another worktree, stays in **Diffs**.
+agent changed and what its answers mention. A file deleted since, or one in
+another worktree, stays in **Diffs**. The list holds the current conversation
+only: after a clear or a resume, an earlier conversation's files drop out.
 
 Marking up is a loop, not one shot (`docs/done/pdf_markup_rounds_plan.md`):
 **Submit keeps the view open.** The round's marks stay on show, dimmed, and are

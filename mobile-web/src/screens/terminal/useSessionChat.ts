@@ -248,11 +248,15 @@ export function useSessionEntries({
     [sessionEntries],
   );
   const namedFiles = useNamedFiles(tab.id, answerTexts, filesInReach);
-  const changed = useChangedFiles(tab.id, filesInReach);
-  /** Every file of the conversation, for the list beside the subagent index. */
+  // Until the desktop reads the new session, its changes are the cleared one's.
+  const changed = useChangedFiles(tab.id, filesInReach && sinceClear === null);
+  /** Every file of this conversation, for the list beside the subagent index:
+   * of what the tab sent, only the posts the chat shows — a send from an
+   * earlier conversation of the same tab is not this chat's. */
+  const postedFiles = useMemo(() => [...chatPosts.values()].flat().flatMap((post) => post.files), [chatPosts]);
   const chatFiles = useMemo(
-    () => sentFiles(outbox, promptLeaves, inboxFiles, changed.files, namedFiles),
-    [outbox, promptLeaves, inboxFiles, changed.files, namedFiles],
+    () => sentFiles(postedFiles, promptLeaves, inboxFiles, changed.files, namedFiles),
+    [postedFiles, promptLeaves, inboxFiles, changed.files, namedFiles],
   );
   return { cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents, earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles, namedFiles, changedMore: changed.more };
 }
@@ -261,7 +265,7 @@ export function useSessionEntries({
  * up and across subagents. */
 export function useSubagentReader({
   tab, readableHost, view, setAtBottom, atBottomRef, pending, setSubagentNote, setSubagentPath,
-  setSubagentListOpen, setSentListOpen, openStep, subRead, setSubRead, setSubLimit, subLimit,
+  closeChatIndex, openStep, subRead, setSubRead, setSubLimit, subLimit,
   restoreScroll, sessionEntries, screenRows,
 }: {
   tab: TabRow;
@@ -272,8 +276,7 @@ export function useSubagentReader({
   pending: PendingPrompt[];
   setSubagentNote: Dispatch<SetStateAction<"" | TranslationKey>>;
   setSubagentPath: Dispatch<SetStateAction<readonly SubagentStep[]>>;
-  setSubagentListOpen: Dispatch<SetStateAction<boolean>>;
-  setSentListOpen: Dispatch<SetStateAction<boolean>>;
+  closeChatIndex: () => void;
   openStep: SubagentStep;
   subRead: { token: string; transcript: SessionTranscript; } | null;
   setSubRead: Dispatch<SetStateAction<{ token: string; transcript: SessionTranscript; } | null>>;
@@ -296,8 +299,6 @@ export function useSubagentReader({
     setSubagentPath([]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setSubagentListOpen(false); setSentListOpen(false); }, [tab.id]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setSubagentNote(""); }, [tab.id, subToken]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -330,7 +331,7 @@ export function useSubagentReader({
     if (!token) return;
     const top = readableHost.current?.scrollTop ?? 0;
     setSubagentPath((path) => openSubagent(path, { token, task: turn.text, role: turn.role, ...(turn.workflow ? { workflow: true } : {}) }, levelEntriesRef.current, top));
-    if (!fromList) setSubagentListOpen(false);
+    if (!fromList) closeChatIndex();
     // A conversation opens on its newest turn, as the session does.
     atBottomRef.current = true;
     setAtBottom(true);
@@ -368,7 +369,7 @@ export function useSubagentReader({
     const entry = found[0];
     setSubagentPath((path) => (path.length === 1 && path[0].token === token ? path
       : openSubagent([], { token, task: entry.text, role: entry.role }, sessionEntries, -1)));
-    setSubagentListOpen(false);
+    closeChatIndex();
     atBottomRef.current = true;
     setAtBottom(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps

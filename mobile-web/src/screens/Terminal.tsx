@@ -7,6 +7,8 @@ import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type TapHandlers } from "../components/MessageMenu";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
+import { ChatLinksIndex } from "../components/ChatLinksIndex";
+import { chatLinksOf } from "../terminal/chatLinks";
 import { OptionSheet, type SheetOption } from "../components/OptionSheet";
 import { ConfirmSheet } from "../components/ConfirmSheet";
 import { AttachSheet, type AttachTile } from "../components/AttachSheet";
@@ -1171,16 +1173,14 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** The subagents walked into from the stored session (`subagents.ts`),
    * outermost first; empty while the session itself is read. */
   const [subagentPath, setSubagentPath] = useState<readonly SubagentStep[]>(() => subagent && tab.kind === "agent" ? [subagent] : []);
-  const [subagentListOpen, setSubagentListOpen] = useState(false);
-  /** Whether the chat's file list is open. The strip holds one open list at
-   * a time: the subagents' or the files'. */
-  const [sentListOpen, setSentListOpen] = useState(false);
+  const [openChatIndex, setOpenChatIndex] = useState<"subagents" | "files" | "links" | null>(null);
+  const closeChatIndex = useCallback(() => setOpenChatIndex(null), []);
+  const toggleChatIndex = (index: NonNullable<typeof openChatIndex>) => setOpenChatIndex((open) => open === index ? null : index);
+  const subagentListOpen = openChatIndex === "subagents";
+  const { askUrl: askIndexLink, close: closeIndexLink, sheet: indexLinkSheet } = useChatLinks();
   /** The strip over the chat: a tap anywhere else shuts its open list. */
   const chatIndex = useRef<HTMLDivElement>(null);
-  useTapOutside(chatIndex, subagentListOpen || sentListOpen, () => {
-    setSubagentListOpen(false);
-    setSentListOpen(false);
-  });
+  useTapOutside(chatIndex, openChatIndex !== null, closeChatIndex);
   const openStep = subagentPath[subagentPath.length - 1];
   /** The last read of a subagent's conversation, and whose it is — a read
    * that belongs to another subagent is never drawn under this one's bar. */
@@ -1248,6 +1248,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setUndoable(false);
     setUndoNote("");
     setFocusMenu(false);
+    closeChatIndex();
+    closeIndexLink();
     setTranscriptLimit(TRANSCRIPT_STEP);
     setLines([]);
     setClipped(false);
@@ -1299,7 +1301,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       // Abandons a mode walk still waiting between two Shift+Tabs.
       modeWalk.current += 1;
     };
-  }, [tab.id]);
+  }, [tab.id, closeChatIndex, closeIndexLink]);
 
   // A Tabby chat's head names its model: read the rows once per chat, quietly
   // (the sheet asks again when it opens, and says what went wrong).
@@ -1339,11 +1341,15 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     tab, project, cloudTab, liveScreen, uploads, outbox, transcript, pending, clearedAt, undoing, setUndoing,
     sessionFocus,
   });
+  const chatLinks = useMemo(
+    () => sessionFocus && tab.kind === "agent" ? chatLinksOf(transcriptTurns(sessionEntries)) : [],
+    [sessionFocus, tab.kind, sessionEntries],
+  );
   const {
     subToken, subTranscript, openSubagentTurn, openListedSubagent, subagentUp, subagentSibling,
   } = useSubagentReader({
     tab, readableHost, view, setAtBottom, atBottomRef, pending, setSubagentNote, setSubagentPath,
-    setSubagentListOpen, setSentListOpen, openStep, subRead, setSubRead, setSubLimit, subLimit,
+    closeChatIndex, openStep, subRead, setSubRead, setSubLimit, subLimit,
     restoreScroll, sessionEntries, screenRows,
   });
   const subagentEntries = useMemo(() => withPending(
@@ -2187,7 +2193,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     {cloudSession && openTab && <div className="readable-notice">{teleportError || t("mobile.focus.cloudTeleportNote")}</div>}
   </>;
   // New turns push the prompt up as surely as a scroll does.
-  useLayoutEffect(checkPinnedPrompt, [checkPinnedPrompt, view, sessionFocus, sessionEntries, openStep, subagentListOpen, sentListOpen]);
+  useLayoutEffect(checkPinnedPrompt, [checkPinnedPrompt, view, sessionFocus, sessionEntries, openStep, openChatIndex]);
   const jumpToLatest = () => {
     const stream = readableHost.current;
     if (!stream) return;
@@ -2572,12 +2578,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             followReadable(stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120);
             checkPinnedPrompt();
           }}>
-          {/* The sticky strip over the chat: the session's subagents and the
-              files it carried, each a chip that opens its list. */}
-          {sessionFocus && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0) && <div ref={chatIndex} className="chat-index">
+          {/* The session's subagents, files and links, one open list at a time. */}
+          {sessionFocus && !openStep && (sessionAgents.length > 0 || agentsEarlier || chatFiles.length > 0 || chatLinks.length > 0) && <div ref={chatIndex} className="chat-index">
             {(sessionAgents.length > 0 || agentsEarlier) &&
             <nav className={`subagent-index${subagentListOpen ? " open" : ""}`} aria-label={t("mobile.subagent.indexRegion")}>
-              <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => { setSentListOpen(false); setSubagentListOpen((open) => !open); }}>
+              <button type="button" className="subagent-index-toggle" aria-expanded={subagentListOpen} aria-controls="mobile-subagent-list" onClick={() => toggleChatIndex("subagents")}>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v7a4 4 0 0 0 4 4h7m-3-3 3 3-3 3" /></svg>
                 <span>{t("mobile.subagent.index", { count: sessionAgents.length + earlierAgents })}{subagentUntested && <em> · {subagentUntested}</em>}</span>
                 <svg className={subagentListOpen ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
@@ -2602,7 +2607,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 {agentsEarlier && <button type="button" className="subagent-index-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.subagent.earlier")}</button>}
               </div>}
             </nav>}
-            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={sentListOpen} onToggle={() => { setSubagentListOpen(false); setSentListOpen((open) => !open); }} onOpen={openChatFile} />}
+            {chatFiles.length > 0 && <SentFilesIndex tabId={tab.id} project={project} files={chatFiles} more={changedMore} open={openChatIndex === "files"} onToggle={() => toggleChatIndex("files")} onOpen={openChatFile} />}
+            {chatLinks.length > 0 && <ChatLinksIndex links={chatLinks} open={openChatIndex === "links"} onToggle={() => toggleChatIndex("links")} onOpen={askIndexLink} />}
           </div>}
           {sessionFocus && openStep
             ? subagentView
@@ -2687,6 +2693,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
                 <ReadableTurns lines={painted} chat={false} promptLabel={t("mobile.transcript.prompt")} />
               </div>}
         </section>
+        {indexLinkSheet}
         {!openStep && pinnedPrompt && <button className="readable-pinned-prompt" style={pinnedTop ? { top: pinnedTop + 6 } : undefined} aria-label={t("mobile.focus.lastPrompt")}
           onClick={() => pinnedPromptEl.current?.scrollIntoView({ block: "start", behavior: "smooth" })}>
           <span className="readable-pinned-prompt-text">{pinnedPrompt}</span>

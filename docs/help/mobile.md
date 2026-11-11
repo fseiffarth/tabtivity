@@ -172,10 +172,14 @@ is refused. Works with the desktop window closed.
   tab has no conversation, so its pill offers **Reader** (the screen as text)
   and **Terminal**. The desktop offers the same chat on its agent tabs (help
   topic `agent-clis`).
-- Over the chat, **Files (n)** lists every file the conversation carried —
-  what the agent sent from this tab and what you sent with your prompts —
-  newest first, with who sent it; tap one to open it. It sits beside
-  **Subagents (n)**; one list opens at a time.
+- Over the chat, **Files (n)** lists every file this conversation carried, in
+  groups: **Sent by the agent**, **Changed by the agent** and **Mentioned in
+  its answers** (with Project files on the phone on), then **Sent by you** —
+  each with a line saying what it holds, newest first; tap one to open it.
+  Files from an earlier conversation of the same tab are not listed. It sits
+  beside **Subagents (n)**; one list opens at a time.
+- A file the agent sends shows in the chat at the end of the turn it was sent
+  in, after the agent's last answer, not between its steps.
 - A PDF or picture in an agent tab's viewer has **Mark up**: draw on it and
   **Submit** sends the marks to that tab. Marked from the project screen's
   files, Submit opens a new tab of your default agent; its **Open tab** shows

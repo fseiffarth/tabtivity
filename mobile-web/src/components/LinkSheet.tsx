@@ -81,11 +81,17 @@ export interface LinkHandlers {
  * a tap. A path link (`linkPathsInHtml`) goes to `openPath` instead: it opens
  * a file of the project in the app, so it needs no confirmation.
  */
-export function useChatLinks(openPath?: (path: string) => void): { links: LinkHandlers; sheet: React.ReactNode } {
+export function useChatLinks(openPath?: (path: string) => void) {
   const [url, setUrl] = useState<string | null>(null);
   const downAt = useRef(0);
   const opener = useRef(openPath);
   opener.current = openPath;
+  const askUrl = useCallback((address?: string): boolean => {
+    const href = chatLinkUrl(address);
+    if (!href) return false;
+    setUrl(href);
+    return true;
+  }, []);
   const ask = useCallback((target: EventTarget): boolean => {
     const path = target instanceof Element ? target.closest(`[${PATH_LINK_ATTR}]`)?.getAttribute(PATH_LINK_ATTR) : null;
     if (path && opener.current) {
@@ -93,11 +99,8 @@ export function useChatLinks(openPath?: (path: string) => void): { links: LinkHa
       return true;
     }
     const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href]") : null;
-    const href = chatLinkUrl(link?.dataset.href);
-    if (!href) return false;
-    setUrl(href);
-    return true;
-  }, []);
+    return askUrl(link?.dataset.href);
+  }, [askUrl]);
   const links = useMemo<LinkHandlers>(() => ({
     onPointerDown: (event) => { downAt.current = event.timeStamp; },
     onClick: (event) => {
@@ -109,5 +112,5 @@ export function useChatLinks(openPath?: (path: string) => void): { links: LinkHa
     },
   }), [ask]);
   const close = useCallback(() => setUrl(null), []);
-  return { links, sheet: url && <LinkSheet url={url} onClose={close} /> };
+  return { links, askUrl, close, sheet: url && <LinkSheet url={url} onClose={close} /> };
 }

@@ -3348,8 +3348,10 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   corner — and one send of several files is one album bubble (2 side by
   side, 3 as one wide over two, 4+ as a 2×2 whose last tile reads "+N").
   Non-picture files are slim cards in the same bubble. The 🖼 gallery stays.
-  - Placement (`mobile-web/src/terminal/outboxPosts.ts`): after the last
-    record written at or before the file's mtime; files ≤ 10 s apart with no
+  - Placement (`mobile-web/src/terminal/outboxPosts.ts`): at the end of the
+    turn of the last record written at or before the file's mtime (after the
+    turn's last answer, before the next prompt — 2026-11-10, the user asked
+    for files last, not between the output); files ≤ 10 s apart with no
     record between them are one post. Files older than the first shown record
     (earlier sessions, truncated turns) stay gallery-only; the screen chat has
     no times, so it shows none. The outbox is per project, so another tab of
@@ -4022,9 +4024,11 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
-  - [ ] 🖐️ Files (N) in the strip over the chat: Changed by the agent and Named in
-    the chat list the right files, each once; a tap opens the file; a deleted
-    file brings the note that Diffs holds more.
+  - [ ] 🖐️ Files (N) in the strip over the chat: Changed by the agent and Mentioned
+    in its answers list the right files, each once; a tap opens the file; a deleted
+    file brings the note that Diffs holds more. After a /clear (or Clear from the
+    phone) the list holds only the new chat's files, none of the earlier one's
+    (2026-11-10); each group has its colour dot, hint line and tinted tiles.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
