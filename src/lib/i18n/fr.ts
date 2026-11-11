@@ -2602,8 +2602,10 @@ export const dict: Dict = {
 
   "steering.move.desc": "Déplace la surbrillance vers le contrôle précédent / suivant.",
 
-  "steering.sideRow.label": "Ligne · dossier",
-  "steering.sideRow.desc": "Le long des boutons d’une ligne ; → ouvre un dossier, ← remonte au dossier parent. Sur les onglets de vue : vue précédente / suivante.",
+  "steering.sideParent.label": "Dossier parent · précédent",
+  "steering.sideParent.desc": "Remonter au dossier parent. Sur les autres contrôles : bouton ou vue précédent.",
+  "steering.sideEnter.label": "Ouvrir le dossier · suivant",
+  "steering.sideEnter.desc": "Ouvrir le dossier sélectionné. Sur les autres contrôles : bouton ou vue suivant.",
   "steering.sideViewJump.label": "Changer de vue",
   "steering.sideViewJump.desc": "Va à la N-ième vue du panneau latéral (le chiffre sur son onglet) et entre dans sa liste.",
 

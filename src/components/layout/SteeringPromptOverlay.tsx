@@ -225,10 +225,38 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
    * sends, edits or ignores it. */
   const shownSuggestion = suggestion && !value && !busy && !working && !picking && !effortOpen ? suggestion : "";
 
+  /** OpenCode's picker is answered by typing a row's query into its search
+   * field, and its walk (`OpenCodePickerWalk`) moves the dialog's highlight
+   * to list the whole list. The `current` it reports is the model in use
+   * (`●`, none on mini), not the highlight. So ↑/↓ move a cursor of the
+   * box's own over the rows as they are shown, and Enter answers that row. */
+  const ownCursor = isOpenCodeTab(agent);
+  // Held by the row's words, not its index: the walk can still put rows
+  // above the ones listed so far.
+  const [rowAt, setRowAt] = useState<string | null>(null);
+  const shownStep = session.shownStep;
+  const shownGroups = shownStep
+    ? ownCursor && shownStep.title === "Select model"
+      ? groupOpenCodeModels(shownStep.options)
+      : [{ key: "all", provider: undefined, options: shownStep.options }]
+    : [];
+  const shownRows = shownGroups.flatMap((group) => group.options);
+  const rowKey = (option: { label: string; description?: string }) => `${option.label}\u0000${option.description ?? ""}`;
+  const startRow = session.picker && session.picker.current >= 0 ? session.picker.current : null;
+  const cursorRow = !ownCursor
+    ? session.picker?.current ?? null
+    : (rowAt !== null ? shownRows.find((option) => rowKey(option) === rowAt)?.index : undefined) ?? startRow;
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ownCursor || cursorRow === null) return;
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [ownCursor, cursorRow]);
+
   // A picker just gone: the status line may name another model or effort.
   const [wasPicking, setWasPicking] = useState(picking);
   if (wasPicking !== picking) {
     setWasPicking(picking);
+    setRowAt(null);
     if (!picking) setStatus(readStatus());
   }
   // Leaving the box leaves no picker open in the session.
@@ -362,6 +390,23 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         if (option) session.choose(option.index);
         return true;
       }
+      if (ownCursor) {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          const n = shownRows.length;
+          if (n === 0) return true;
+          const at = shownRows.findIndex((option) => option.index === cursorRow);
+          const next = at < 0
+            ? (e.key === "ArrowDown" ? 0 : n - 1)
+            : (at + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+          setRowAt(rowKey(shownRows[next]));
+          return true;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          if (cursorRow !== null && !(session.busy && !session.remembered)) session.choose(cursorRow);
+          return true;
+        }
+        return false;
+      }
       // ↑/↓ go to the session's own picker, so its highlight is the cursor
       // and it scrolls its window to the rows it does not draw.
       if ((e.key === "ArrowUp" || e.key === "ArrowDown") && session.picker && !session.busy) {
@@ -439,7 +484,6 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     }
   }
 
-  const shownStep = session.shownStep;
   const chips: { chip: Chip; label: string; shown: boolean; disabled?: boolean; on?: boolean; title?: string }[] = [
     {
       chip: "model",
@@ -517,23 +561,21 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
       />
       {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
       {(picking || effortOpen) && (
-        <div className="steering-prompt-list" role="listbox"
+        <div ref={listRef} className="steering-prompt-list" role="listbox"
           aria-label={picking ? shownStep?.title ?? t("terminal.reader.modelTitle") : t("terminal.reader.effortTitle")}>
           <div className="steering-prompt-list-head">
             {picking ? shownStep?.title ?? t("terminal.reader.modelTitle") : t("terminal.reader.effortTitle")}
           </div>
           {picking ? (
             shownStep ? (
-              (isOpenCodeTab(agent) && shownStep.title === "Select model"
-                ? groupOpenCodeModels(shownStep.options)
-                : [{ key: "all", options: shownStep.options }]).map((group) => <div className="steering-prompt-option-group" role="group" aria-label={group.key !== "all" ? openCodeModelGroupTitle(group, t) : undefined} key={group.key}>
+              shownGroups.map((group) => <div className="steering-prompt-option-group" role="group" aria-label={group.key !== "all" ? openCodeModelGroupTitle(group, t) : undefined} key={group.key}>
                 {group.key !== "all" && <div className="terminal-reader-option-group-title" role="presentation">{openCodeModelGroupTitle(group, t)}</div>}
                 {group.options.map((option) => (
                 <button
                   key={`${option.index}:${option.label}`}
                   type="button"
                   role="option"
-                  aria-selected={!!session.picker && option.index === session.picker.current}
+                  aria-selected={option.index === cursorRow}
                   className="terminal-reader-option"
                   disabled={session.busy}
                   onClick={() => { session.choose(option.index); refocus(); }}

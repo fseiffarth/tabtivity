@@ -2601,8 +2601,10 @@ export const dict: Dict = {
 
   "steering.move.desc": "Sposta l'evidenziazione al controllo precedente / successivo.",
 
-  "steering.sideRow.label": "Riga · cartella",
-  "steering.sideRow.desc": "Lungo i pulsanti di una riga; → apre una cartella, ← sale alla cartella superiore. Sulle schede delle viste: vista precedente / successiva.",
+  "steering.sideParent.label": "Cartella superiore · precedente",
+  "steering.sideParent.desc": "Salire alla cartella superiore. Sugli altri controlli: pulsante o vista precedente.",
+  "steering.sideEnter.label": "Apri cartella · successivo",
+  "steering.sideEnter.desc": "Aprire la cartella evidenziata. Sugli altri controlli: pulsante o vista successivo.",
   "steering.sideViewJump.label": "Cambia vista",
   "steering.sideViewJump.desc": "Va alla N-esima vista del pannello laterale (il numero sulla sua scheda) ed entra nel suo elenco.",
 

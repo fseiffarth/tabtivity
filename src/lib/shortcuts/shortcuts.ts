@@ -1186,7 +1186,8 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["down"], labelKey: "steering.chromeOpen.label", descKey: "steering.chromeOpen.desc", levels: ["region"], when: "chromeRegion", group: "act" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: ["region"], when: "chromeRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
-  { actions: ["left", "right"], pair: true, labelKey: "steering.sideRow.label", descKey: "steering.sideRow.desc", levels: ["region"], when: "sideRegion", group: "move" },
+  { actions: ["left"], labelKey: "steering.sideParent.label", descKey: "steering.sideParent.desc", levels: ["region"], when: "sideRegion", group: "move" },
+  { actions: ["right"], labelKey: "steering.sideEnter.label", descKey: "steering.sideEnter.desc", levels: ["region"], when: "sideRegion", group: "move" },
   // The view tabs wear these keys themselves (`SideViewKey`); the bar lists them too.
   { actions: [], slots: true, labelKey: "steering.sideViewJump.label", descKey: "steering.sideViewJump.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.settingsPage.label", descKey: "steering.settingsPage.desc", levels: ["region"], when: "settingsRegion", group: "move" },

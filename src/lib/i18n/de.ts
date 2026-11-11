@@ -2603,8 +2603,10 @@ export const dict: Dict = {
 
   "steering.move.desc": "Bewegt die Markierung zum vorherigen / nächsten Bedienelement.",
 
-  "steering.sideRow.label": "Zeile · Ordner",
-  "steering.sideRow.desc": "Entlang der Knöpfe einer Zeile; → öffnet einen Ordner, ← geht zum übergeordneten Ordner. Auf den Ansichts-Tabs: vorherige / nächste Ansicht.",
+  "steering.sideParent.label": "Überordner · zurück",
+  "steering.sideParent.desc": "Zum übergeordneten Ordner gehen. Bei anderen Steuerelementen: vorheriger Knopf oder vorherige Ansicht.",
+  "steering.sideEnter.label": "Ordner öffnen · weiter",
+  "steering.sideEnter.desc": "Den markierten Ordner öffnen. Bei anderen Steuerelementen: nächster Knopf oder nächste Ansicht.",
   "steering.sideViewJump.label": "Ansicht wechseln",
   "steering.sideViewJump.desc": "Wechselt zur N-ten Ansicht des Seitenpanels (die Zahl auf ihrem Tab) und springt in deren Liste.",
 

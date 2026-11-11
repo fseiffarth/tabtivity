@@ -686,10 +686,11 @@ describe("legend table", () => {
 
   it("lists the side panel's row keys and view numbers only while the cursor is in it", () => {
     expect(labels({ level: "region", sideRegion: true })).toEqual(
-      expect.arrayContaining(["steering.sideRow.label", "steering.sideViewJump.label"]),
+      expect.arrayContaining(["steering.sideParent.label", "steering.sideEnter.label", "steering.sideViewJump.label"]),
     );
     expect(labels({ level: "region", sideRegion: true })).not.toContain("steering.sideView.label");
-    expect(labels({ level: "region" })).not.toContain("steering.sideRow.label");
+    expect(labels({ level: "region" })).not.toContain("steering.sideParent.label");
+    expect(labels({ level: "region" })).not.toContain("steering.sideEnter.label");
     expect(labels({ level: "region" })).not.toContain("steering.sideViewJump.label");
   });
 

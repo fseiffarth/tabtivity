@@ -43,7 +43,7 @@ const labels = (m: ReturnType<typeof model>) => m.items.map((i) => i.labelKey);
 describe("steering bar model", () => {
   it("pins each key to the control it fires, and only keys of the level", () => {
     const act = (a: string) => rowsFor({}).find((r) => r.actions.includes(a as never))!;
-    expect(anchorOf(act("newShell"))).toBe("add");
+    expect(anchorOf(act("newShell"))).toBeNull();
     expect(anchorOf(act("newTabMenu"))).toBe("add");
     expect(anchorOf(act("closeTab"))).toBe("tab");
     expect(anchorOf(act("files"))).toBe("files");
@@ -63,7 +63,7 @@ describe("steering bar model", () => {
 
   it("lists the side panel's row and view-switch keys in the bar; the tabs wear their own caps", () => {
     const side = steeringKeysFor({ ...state, level: "region", sideRegion: true });
-    const row = side.find((r) => r.labelKey === "steering.sideRow.label")!;
+    const row = side.find((r) => r.labelKey === "steering.sideParent.label")!;
     const jump = side.find((r) => r.labelKey === "steering.sideViewJump.label")!;
     // Neither is pinned to a floating cap any more (there is no `sideViews` anchor).
     expect(anchorOf(row)).toBeNull();
@@ -71,7 +71,8 @@ describe("steering bar model", () => {
     const m = barModel(side, "region", new Set<CapAnchor>(["cursor"]), null, [], tokFor);
     const jumpItem = m.items.find((i) => i.labelKey === "steering.sideViewJump.label")!;
     expect(jumpItem.caps).toEqual(["1–9"]);
-    expect(m.items.find((i) => i.labelKey === "steering.sideRow.label")!.caps).toEqual(["S", "F"]);
+    expect(m.items.find((i) => i.labelKey === "steering.sideParent.label")!.caps).toEqual(["S"]);
+    expect(m.items.find((i) => i.labelKey === "steering.sideEnter.label")!.caps).toEqual(["F"]);
     // The number keys follow the user's slot bindings.
     const rebound = barModel(side, "region", new Set<CapAnchor>(), { slot1: ["a"], slot2: ["b"] }, [], tokFor);
     expect(rebound.items.find((i) => i.labelKey === "steering.sideViewJump.label")!.caps[0]).toMatch(/^A B/);
@@ -87,8 +88,6 @@ describe("steering bar model", () => {
     const placed = model(rowsFor({}), "tabs", ["add", "tab", "prompt", "files", "mail"]);
     const bar = labels(placed);
     for (const gone of [
-      "steering.newShell.label",
-      "steering.newMonitor.label",
       "steering.newTabMenu.label",
       "steering.closeTab.label",
       "steering.files.label",
@@ -100,17 +99,19 @@ describe("steering bar model", () => {
     }
     // Not placed: the settings gear's key stays in the bar.
     expect(bar).toContain("steering.settings.label");
+    expect(bar).toEqual(expect.arrayContaining(["steering.newShell.label", "steering.newMonitor.label"]));
     expect([...placed.caps.keys()].sort()).toEqual(["add", "files", "mail", "prompt", "tab"]);
   });
 
-  it("orders a control's caps by press order: N O 1–3 + above the +, Space L G K on the prompt strip", () => {
+  it("keeps only the menu cap above + and labels creation shortcuts in the bar", () => {
     const m = model(rowsFor({}), "tabs", ["add", "prompt"], [
       { key: "1", label: "Claude" },
       { key: "2", label: "Codex" },
       { key: "3", label: "Gemini" },
     ]);
     const text = (a: CapAnchor) => m.caps.get(a)!.flatMap((r) => r.caps.map((c) => c.key));
-    expect(text("add")).toEqual(["N", "O", "1–3", "+"]);
+    expect(text("add")).toEqual(["+"]);
+    expect(m.items.find((i) => i.labelKey === "steering.newAgent.clis")).toMatchObject({ caps: ["1–3"], title: "1 Claude · 2 Codex · 3 Gemini" });
     expect(text("prompt")).toEqual(["Space"]);
     // Each cap wears its group's token colour.
     expect(m.caps.get("add")![0].caps[0].tok).toBe("tok-string");
@@ -121,12 +122,12 @@ describe("steering bar model", () => {
     const overrides = { newShell: ["l"], left: ["a"], right: ["z"] };
     const rows = rowsFor({});
     const m = barModel(rows, "tabs", new Set<CapAnchor>(["add"]), overrides, [], tokFor);
-    expect(m.caps.get("add")![0].caps[0].key).toBe("L");
+    expect(m.items.find((i) => i.labelKey === "steering.newShell.label")!.caps).toEqual(["L"]);
     const tabs = m.items.find((i) => i.labelKey === "steering.tabs.label")!;
     expect(tabs.caps).toEqual(["A", "Z"]);
     // A key bound to nothing has no cap at all.
     const none = barModel(rows, "tabs", new Set<CapAnchor>(["add"]), { newMonitor: [] }, [], tokFor);
-    expect(none.caps.get("add")![0].caps.map((c) => c.key)).not.toContain("O");
+    expect(none.items.some((i) => i.labelKey === "steering.newMonitor.label")).toBe(false);
     expect(rowCaps(rows.find((r) => r.actions.includes("newMonitor"))!, { newMonitor: [] })).toEqual([]);
   });
 
@@ -220,6 +221,7 @@ describe("steering key caps on a window", () => {
   afterEach(() => {
     window.removeEventListener(NEW_TAB_SLOTS_EVENT, answer);
     cleanup();
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
   });
 
@@ -227,11 +229,36 @@ describe("steering key caps on a window", () => {
     [...document.querySelectorAll(`.steering-cap-row[data-anchor="${anchor}"] .steering-cap`)].map((c) => c.textContent);
   const barLabels = () => [...document.querySelectorAll(".steering-bar-label")].map((l) => l.textContent);
 
-  it("hangs the new-tab keys above the + and the close key on the steered tab", () => {
+  it("reserves the measured bar height after wrapping or folding and releases it on exit", () => {
+    let resize = () => {};
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { resize = callback; }
+      observe() {}
+      disconnect = disconnect;
+    });
+    render(<SteeringLegend />);
+    act(() => useKeyboardSteeringStore.getState().enter());
+    const bar = document.querySelector(".steering-bar")!;
+    const root = document.documentElement;
+    place(bar, rect(0, 700, 900, 84));
+    act(() => resize());
+    expect(root.style.getPropertyValue("--steer-bar-h")).toBe("84px");
+    act(() => useKeyboardSteeringStore.getState().toggleLegend());
+    place(bar, rect(0, 756, 900, 28));
+    act(() => resize());
+    expect(root.style.getPropertyValue("--steer-bar-h")).toBe("28px");
+    act(() => useKeyboardSteeringStore.getState().exit());
+    expect(root.hasAttribute("data-steer-bar")).toBe(false);
+    expect(root.style.getPropertyValue("--steer-bar-h")).toBe("");
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("hangs only the menu key above + and the close key on the steered tab", () => {
     subwindow();
     render(<SteeringLegend />);
     act(() => useKeyboardSteeringStore.getState().enter());
-    expect(caps("add")).toEqual(["N", "O", "1–3", "+"]);
+    expect(caps("add")).toEqual(["+"]);
     expect(caps("tab")).toEqual(["W"]);
     const add = document.querySelector('.steering-cap-row[data-anchor="add"]') as HTMLElement;
     // Hung 4 px into the control's top edge, from its left edge less 2 px.
@@ -242,7 +269,9 @@ describe("steering key caps on a window", () => {
     expect(tab.classList.contains("end")).toBe(true);
     expect(tab.style.left).toBe("222px");
     // Pinned keys leave the bar; the rest stay.
-    expect(barLabels()).not.toContain("New shell");
+    expect(barLabels()).toContain("New shell");
+    expect(barLabels()).toContain("New monitor");
+    expect(barLabels()).toContain("CLIs");
     expect(barLabels()).not.toContain("Close tab");
     expect(barLabels()).toContain("Switch tab");
   });
@@ -251,7 +280,7 @@ describe("steering key caps on a window", () => {
     subwindow();
     render(<SteeringLegend />);
     act(() => useKeyboardSteeringStore.getState().enter());
-    expect(barLabels()).not.toContain("New shell");
+    expect(barLabels()).toContain("New shell");
     act(() => {
       document.querySelector(".tab-new-btn")!.remove();
       // The next steering key redraws the bar, which measures again.
@@ -264,10 +293,10 @@ describe("steering key caps on a window", () => {
 
   it("follows a rebound key onto its cap", () => {
     subwindow();
-    useSettingsStore.setState({ settings: { steering_keys: { newShell: ["l"] } } as never });
+    useSettingsStore.setState({ settings: { steering_keys: { newTabMenu: ["l"] } } as never });
     render(<SteeringLegend />);
     act(() => useKeyboardSteeringStore.getState().enter());
-    expect(caps("add")).toEqual(["L", "O", "1–3", "+"]);
+    expect(caps("add")).toEqual(["L"]);
   });
 
   it("draws no caps when folded, and the bar alone says where steering is", () => {

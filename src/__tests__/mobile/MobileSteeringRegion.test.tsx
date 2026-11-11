@@ -81,6 +81,21 @@ describe("Mobile steering — a sheet on top is the region", () => {
     expect(document.activeElement?.closest("[role='dialog']")).toBeTruthy();
   });
 
+  it("leaves a focused slider its native arrows and resumes on Escape", () => {
+    render(<><div role="dialog" aria-modal="true"><input aria-label="Level" type="range" /></div><Engine /></>);
+    const slider = screen.getByLabelText("Level");
+    press(null, " ", { shift: true });
+    act(() => { slider.focus(); });
+    expect(press(slider, "Enter")).toBe(false);
+    expect(getSteering().active).toBe(true);
+    expect(document.activeElement).toBe(slider);
+    expect(press(slider, "ArrowRight")).toBe(false);
+    expect(press(slider, "ArrowLeft")).toBe(false);
+    expect(press(slider, "Escape")).toBe(true);
+    expect(document.activeElement).not.toBe(slider);
+    expect(getSteering().active).toBe(true);
+  });
+
   it("→ presses a choice too", async () => {
     const onPick = vi.fn();
     render(<><BackNest>{sheet({ onPick })}</BackNest><Engine /></>);

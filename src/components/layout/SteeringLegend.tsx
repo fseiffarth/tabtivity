@@ -59,13 +59,14 @@ const tokFor = (g: SteeringGroup) => TOK_BY_GROUP.get(g) ?? "tok-comment";
  * user's own bindings (`steeringRowKeys`, `steeringSlotKey`), so it can never
  * list a key the handler doesn't act on:
  *
- *  - a 28 px bar docked under the panes: the badge (a click folds it), the
+ *  - a wrapping bar docked under the panes: the badge (a click folds it), the
  *    ladder Projects › Subwindows › Tabs › Inside with the lit rung being where
  *    the arrows act, the level's move keys, the status jumps with their counts,
  *    and at the right end the keys that leave the mode. It takes its height out
  *    of the window (`html[data-steer-bar]`), so it never covers the prompt line.
- *  - every other key as a small cap in its group's `.tok-*` colour, pinned to
- *    the control it fires (N O 1–N + above the + button, W on the steered tab,
+ *  - creation keys with labels in the bar; other keys as small caps in their
+ *    group's `.tok-*` colour, pinned to
+ *    the control it fires (+ above the + button, W on the steered tab,
  *    I L G K on the prompt strip, M C T , on the header, B P on the rail …;
  *    `steeringBar.anchorOf`, `steeringCaps`). A key whose control is not on
  *    screen stays in the bar.
@@ -145,12 +146,22 @@ export function SteeringLegend() {
   // The bar takes its height out of the window while it is up
   // (`html[data-steer-bar] .app-shell`), lent to a box or not.
   const barUp = active || !!handedTo;
-  useEffect(() => {
+  const barRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
     if (!barUp) return;
     const root = document.documentElement;
     root.dataset.steerBar = "";
+    const bar = barRef.current;
+    const measure = () => {
+      if (bar) root.style.setProperty("--steer-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (bar) observer.observe(bar);
     return () => {
+      observer.disconnect();
       delete root.dataset.steerBar;
+      root.style.removeProperty("--steer-bar-h");
     };
   }, [barUp]);
 
@@ -382,12 +393,14 @@ export function SteeringLegend() {
 
   return createPortal(
     <>
-      <div className={`steering-bar${folded ? " folded" : ""}`} role="status" aria-label={t("steering.legendTitle")}>
+      <div ref={barRef} className={`steering-bar${folded ? " folded" : ""}`} role="status" aria-label={t("steering.legendTitle")}>
         {badge}
-        {ladderEl}
-        <UntestedTag id="steering.bar" />
+        <div className="steering-bar-heading">
+          {ladderEl}
+          <UntestedTag id="steering.bar" />
+          <div className="steering-bar-tail">{tailItems}</div>
+        </div>
         <div className="steering-bar-keys">{keyItems}</div>
-        <div className="steering-bar-tail">{tailItems}</div>
       </div>
       {caps}
     </>,
@@ -424,8 +437,14 @@ function useCapPlacements(wanted: CapAnchor[], settleKey: string): CapPlacements
     };
     window.addEventListener("resize", later);
     window.addEventListener("scroll", later, true);
+    // Wrapping or folding the legend resizes the panes after its measured
+    // height is published. Follow that layout change for bottom-edge caps.
+    const shell = document.querySelector(".app-shell");
+    const observer = shell ? new ResizeObserver(later) : null;
+    if (shell) observer?.observe(shell);
     return () => {
       cancelAnimationFrame(frame);
+      observer?.disconnect();
       window.removeEventListener("resize", later);
       window.removeEventListener("scroll", later, true);
     };

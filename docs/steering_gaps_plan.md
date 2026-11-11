@@ -87,3 +87,7 @@ could not be written to the read-only Cargo cache under the agent sandbox.
 The later Rust gates therefore did not run. This implementation changes no
 backend source. Nothing was started, stopped or restarted, and nothing was
 committed or pushed. Live verification remains for the user.
+
+Parent review: confirmed that phone sliders already receive native arrows
+through the typing-target policy. Added a regression covering arrow passthrough
+and Escape returning to steering. Desktop focused regressions passed 36/36.

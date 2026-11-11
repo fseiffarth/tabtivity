@@ -2601,8 +2601,10 @@ export const dict: Dict = {
 
   "steering.move.desc": "Mueve el resaltado al control anterior / siguiente.",
 
-  "steering.sideRow.label": "Fila · carpeta",
-  "steering.sideRow.desc": "A lo largo de los botones de una fila; → abre una carpeta, ← sube a la carpeta superior. En las pestañas de vista: vista anterior / siguiente.",
+  "steering.sideParent.label": "Carpeta superior · anterior",
+  "steering.sideParent.desc": "Subir a la carpeta superior. En otros controles: botón o vista anterior.",
+  "steering.sideEnter.label": "Abrir carpeta · siguiente",
+  "steering.sideEnter.desc": "Abrir la carpeta resaltada. En otros controles: botón o vista siguiente.",
   "steering.sideViewJump.label": "Cambiar vista",
   "steering.sideViewJump.desc": "Va a la N.ª vista del panel lateral (el número de su pestaña) y entra en su lista.",
 

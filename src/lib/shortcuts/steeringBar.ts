@@ -51,8 +51,6 @@ const ACTION_ANCHOR: Partial<Record<SteeringAction, CapAnchor>> = {
   sidePanel: "sidePanel",
   panels: "panels",
   closeTab: "tab",
-  newShell: "add",
-  newMonitor: "add",
   newTabMenu: "add",
   files: "files",
   tabCard: "card",
@@ -72,7 +70,9 @@ const CAP_RANK: Partial<Record<SteeringAction, number>> = {
 
 /** The anchor a row is pinned to, or null when it belongs in the bar. */
 export function anchorOf(row: SteeringKeyDef): CapAnchor | null {
-  if (row.agentSlots) return "add";
+  // Creation shortcuts need labels; a cluster of N O 1–9 + above one small
+  // button obscures neighbouring controls. Only the menu key rides the +.
+  if (row.agentSlots) return null;
   // The side panel's own key closes it again (a mode row): the bar's.
   if (row.group === "mode") return null;
   return row.actions.length === 1 ? (ACTION_ANCHOR[row.actions[0]] ?? null) : null;
