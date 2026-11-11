@@ -1176,11 +1176,24 @@ Tabtivity:
   unchanged. New: `-c KEY=VALUE`, `--provider local` (behind a `local_models`
   experiment) and the subcommands `sessions`, `attach`, `usage`, `plugins`,
   `voice`, `mxp` and `model-profile`.
-- `resume --last` and `resume <uuid|name>` exist (since 1.3.0), but the
-  registry keeps `Resume::No`. Sessions live in `~/.local/share/muse/sessions/
-  <Y>/<M>/<D>/<id>/session.jsonl` plus `session-index.db`, and trust in
-  `~/.config/muse/trust.json`. A running session also registers a socket under
-  `/tmp/tbh-<uid>-rt/muse/`, which is outside `$HOME` and machine-wide.
+- Resume: the registry's `resume --last` (since 2026-11-11), which
+  `muse_session::resolve` aims at a Resume-menu pick (`resume <id>`) or drops
+  in a folder with no session, because there 1.4.15 prints `no retained
+  sessions found for this workspace` and exits 1. Its "workspace" is the exact
+  folder Muse started in, not the git root: run from a subfolder, it found no
+  session. Sessions live in `~/.local/share/muse/sessions/<Y>/<M>/<D>/<id>/
+  session.jsonl` (UUIDv7 ids; a resume appends to the same file;
+  memory-reminder children under `<id>/subagent/`) plus `session-index.db`, and
+  trust in `~/.config/muse/trust.json`. A running session also registers a
+  socket under `/tmp/tbh-<uid>-rt/muse/`, which is outside `$HOME` and
+  machine-wide.
+- Chat view and Resume menu (`muse_session.rs`): the `metadata` record's
+  `workspace_root`, a top-level `run` `started` with `prompt`, and
+  `assistant_message_committed` `text`. Re-check with
+  `MUSE_PROBE_HOME=<home> MUSE_PROBE_DIR=<folder> cargo test -p tabtivity --lib
+  reads_a_real_muse_store -- --ignored --nocapture` on a store the new
+  version wrote (`--provider echo`, a turn, then `resume --last` and another).
+  Tool calls are not read, so there are no Diffs.
 - Its menus number rows with no stop: `⟩ 1  Trust and continue` / `  2  Quit`
   (1.3.0 drew `>`). Neither version lit the decision lamp. `prompt.ts`
   `hasMuseMenu` now reads the 1.4.15 shape, held by `agentPrompt.test.ts`.
@@ -1192,7 +1205,8 @@ Tabtivity:
 - Windows: `irm https://dev.meta.ai/install.ps1 | iex` installs
   `%LOCALAPPDATA%\Programs\muse\muse.cmd`. The registry has no Windows row yet.
 
-Not verified: a tool-approval prompt (`Would you like to allow this tool
+Not verified: a session with tool calls or a real model's answers (an answer
+split around tool calls should read as several answers), a tool-approval prompt (`Would you like to allow this tool
 action?` with `Allow once` / `Reject once` / `Allow for this session` /
 `Block for this session`, per the strings), `/model` with a login, sign-in,
 the session store under a real turn, a real tab. `--base-url` to a
