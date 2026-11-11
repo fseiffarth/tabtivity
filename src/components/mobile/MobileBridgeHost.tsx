@@ -2944,7 +2944,7 @@ async function refreshSlices(projectId: string | null | undefined, slices: strin
 
 /** The agents whose transcript `services::agent_transcript` reads; any other
  * family answers `unsupported` there, and so does the short-circuit below. */
-const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "opencode", "gemini", "agy"]);
+const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "opencode", "gemini", "agy", "muse"]);
 
 /**
  * The phone's Focus view on an agent tab: the conversation as the agent's own
@@ -2971,7 +2971,7 @@ async function agentTranscriptFor(
   // A local-model tab's `cmd` is its launcher; only an OpenCode driver has a
   // transcript to read (`readerAgent`).
   const agent = readerAgent(tab);
-  if (!tab.sessionId && !["opencode", "gemini", "agy"].includes(agent)) {
+  if (!tab.sessionId && !["opencode", "gemini", "agy", "muse"].includes(agent)) {
     // Two different answers for the phone: a family whose transcript is
     // never read (the backend's `unsupported`, decided by the same list) hands
     // Focus to the terminal; a tab that has no session id *yet* — every tab

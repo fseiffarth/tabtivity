@@ -17,16 +17,16 @@ export type { SessionTranscript };
 
 /** The agents whose transcript the backend reads; any other family answers
  * `unsupported` there. The phone bridge's list (`MobileBridgeHost`). */
-const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot"]);
+const READER_AGENTS = new Set(["claude", "codex", "opencode", "agy", "copilot", "muse"]);
 
 /** The agents whose session is found by the tab's folder (and launch moment)
  * rather than by a launch id Tabtivity mints: they read with no `sessionId`. */
-const FOLDER_AGENTS = new Set(["opencode", "agy"]);
+const FOLDER_AGENTS = new Set(["opencode", "agy", "muse"]);
 
 /** Whether a Reader of `agent` can list the files its conversation changed:
- * Antigravity's transcript carries no tool results to diff. */
+ * Antigravity's and Muse's transcripts carry no tool results to diff. */
 export function changesOffered(agent: string): boolean {
-  return agent !== "agy";
+  return agent !== "agy" && agent !== "muse";
 }
 
 /** A local-model tab's driver (`list_local_drivers` id): the one it was

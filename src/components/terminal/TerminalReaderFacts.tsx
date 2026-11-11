@@ -612,6 +612,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
         )}
         {tab.cmd === "opencode" && <UntestedTag id="agents.opencode.v2" />}
         {tab.cmd === "copilot" && <UntestedTag id="agents.copilot.reader" />}
+        {tab.cmd === "muse" && <UntestedTag id="agents.muse.reader" />}
         <UntestedTag id="terminal.reader.facts" />
         <UntestedTag id="terminal.reader.factsMore" />
         {shownPath && <span className="terminal-reader-fact terminal-reader-fact-path" title={shownPath}>{shortPath(shownPath)}</span>}
