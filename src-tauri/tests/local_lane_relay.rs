@@ -9,7 +9,6 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 const TAGS: &str = r#"{"models":[{"name":"llama3:latest"},{"name":"x:cloud","remote_host":"https://ollama.com"}]}"#;
 
@@ -68,11 +67,17 @@ fn the_relay_binary_pumps_to_the_lane_and_execs_the_command_in_its_own_process()
     assert!(text.contains(&format!("PID={pid}")), "the command is not the relay's own process: {text}");
     // The lane filtered the list on its way back.
     assert!(text.contains("llama3:latest") && !text.contains("x:cloud"), "{text}");
-    // The server process went with the command: nothing listens on the port any more.
-    let started = Instant::now();
-    while TcpStream::connect(("127.0.0.1", port)).is_ok() {
-        assert!(started.elapsed() < Duration::from_secs(10), "the relay's server outlived its command");
-        std::thread::sleep(Duration::from_millis(100));
+    // The server process went with the command: nothing listens on the port any
+    // more. Linux only: the server dies with the command through
+    // `PR_SET_PDEATHSIG`, which macOS has no counterpart of (the lane and the
+    // fence it serves are Linux's).
+    #[cfg(target_os = "linux")]
+    {
+        let started = std::time::Instant::now();
+        while TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            assert!(started.elapsed() < std::time::Duration::from_secs(10), "the relay's server outlived its command");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
     server.stop();
     assert!(!sock.exists());
