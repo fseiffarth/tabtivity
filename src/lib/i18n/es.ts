@@ -2716,6 +2716,7 @@ export const dict: Dict = {
   "steering.help.label": "Ayuda de atajos",
   "steering.help.desc": "Abre la guía de atajos: ↑/↓ la desplazan, Escape la cierra.",
   "steering.search.label": "Buscar",
+  "steering.field.label": "Campo de texto",
   "steering.search.desc": "Escribir en el campo de búsqueda de la superficie (filtro del menú +, búsqueda del correo, …). Esc allí vuelve a la navegación de {app}.",
   "steering.jumpProject.label": "Ir a proyecto",
   "steering.jumpProject.desc": "Escribir el nombre de un proyecto abierto o inactivo y pulsar Intro para cambiar a él; uno inactivo se activa. Antes de escribir, el círculo muestra los demás proyectos abiertos y usados recientemente. Con diez resultados o menos se colocan en círculo alrededor del campo y su dígito (1–9, 0) abre uno al instante. Después vuelve la navegación de {app}.",

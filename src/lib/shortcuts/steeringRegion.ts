@@ -642,6 +642,15 @@ function isTextEntry(el: HTMLElement): boolean {
   );
 }
 
+/** The text field `layer` holds the caret in — a dialog that focused its own
+ *  name box, say — or null. A dropdown (`select`) does not count: arrows walk
+ *  it either way. */
+export function focusedTypingField(layer: HTMLElement): HTMLElement | null {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement) || el instanceof HTMLSelectElement || !layer.contains(el)) return null;
+  return isTextEntry(el) ? el : null;
+}
+
 /**
  * Press the control under the cursor. "type" — it takes text, so it now has
  * DOM focus and the caller leaves steering for the user to type; "press" — it

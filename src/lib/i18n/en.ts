@@ -2720,6 +2720,7 @@ export const enSource = {
   "steering.help.label": "Shortcut help",
   "steering.help.desc": "Open the shortcut cheat sheet: ↑/↓ scroll it, Escape closes it.",
   "steering.search.label": "Search",
+  "steering.field.label": "Text field",
   "steering.search.desc": "Type into the surface's search field (the + menu's filter, the mail search, …). Esc there comes back to {app} navigation.",
   "steering.jumpProject.label": "Jump to project",
   "steering.jumpProject.desc": "Type an open or inactive project's name and press Enter to switch to it; an inactive one is activated. Before you type, the ring holds your other open and recently used projects. With ten results or fewer they sit on a ring round the field and their digit (1–9, 0) opens one at once. {app} navigation comes back after the pick.",

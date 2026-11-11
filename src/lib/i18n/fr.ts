@@ -2717,6 +2717,7 @@ export const dict: Dict = {
   "steering.help.label": "Aide des raccourcis",
   "steering.help.desc": "Ouvre l'aide-mémoire des raccourcis : ↑/↓ le font défiler, Échap le ferme.",
   "steering.search.label": "Rechercher",
+  "steering.field.label": "Champ de texte",
   "steering.search.desc": "Saisir dans le champ de recherche de la surface (filtre du menu +, recherche du courrier, …). Échap y ramène à la navigation {app}.",
   "steering.jumpProject.label": "Aller au projet",
   "steering.jumpProject.desc": "Saisir le nom d'un projet ouvert ou inactif et appuyer sur Entrée pour y passer ; un projet inactif est activé. Avant la saisie, le cercle montre les autres projets ouverts et récemment utilisés. Avec dix résultats ou moins, ils se placent en cercle autour du champ et leur chiffre (1–9, 0) en ouvre un aussitôt. La navigation {app} revient ensuite.",

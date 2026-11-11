@@ -128,8 +128,13 @@ New project dialog, a right-click menu, a top-bar menu, the root console — get
 the highlight: E D go row to row, S F along a row, Enter presses, and Esc closes
 it the way its own Escape would. The mode then returns to where the dialog was
 opened. On the top bar, S F walk its buttons and D drops a button's menu.
-Enter on a text field leaves the mode so you can type there; Shift+Space brings
-it back on the same dialog.
+A text field takes your typing whenever the caret is in it: a dialog that
+opens with one focused (New Folder, Rename project), an inline field a menu
+pick opened (a tab's or box's rename), or Enter on any text field. Esc in a
+dialog's field brings the highlight back to the dialog; an inline field's Esc
+is its own (a rename cancels) and the mode comes back after it. The mode also
+resumes by itself once the field or its dialog goes away (Enter submitted it);
+a click elsewhere leaves it off.
 
 In the new-tab menu (+), highlight **More agents**, **Cloud session**, or a row's
 **▾** button and press Enter. E/D or ↑/↓ move through the submenu. Esc closes

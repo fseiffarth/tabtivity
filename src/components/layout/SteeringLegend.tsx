@@ -44,6 +44,7 @@ const HANDOFF: Record<SteeringHandoff, { where: TranslationKey; keys: [string, T
     ],
   },
   search: { where: "steering.search.label", keys: [] },
+  field: { where: "steering.field.label", keys: [] },
 };
 const HANDOFF_BACK_KEY = "Esc";
 

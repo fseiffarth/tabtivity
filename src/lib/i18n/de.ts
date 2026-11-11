@@ -2718,6 +2718,7 @@ export const dict: Dict = {
   "steering.help.label": "Tastenkürzel-Hilfe",
   "steering.help.desc": "Öffnet die Tastenkürzel-Übersicht: ↑/↓ scrollen, Escape schließt sie.",
   "steering.search.label": "Suchen",
+  "steering.field.label": "Textfeld",
   "steering.search.desc": "In das Suchfeld der Fläche tippen (Filter des +-Menüs, Mail-Suche, …). Esc dort führt zurück in die {app}-Navigation.",
   "steering.jumpProject.label": "Zu Projekt springen",
   "steering.jumpProject.desc": "Namen eines offenen oder inaktiven Projekts tippen und mit Enter hinwechseln; ein inaktives wird aktiviert. Vor dem Tippen liegen die übrigen offenen und zuletzt genutzten Projekte im Kreis. Bei höchstens zehn Treffern liegen sie im Kreis um das Feld, und ihre Ziffer (1–9, 0) öffnet eines sofort. Danach geht die {app}-Navigation weiter.",

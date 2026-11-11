@@ -2716,6 +2716,7 @@ export const dict: Dict = {
   "steering.help.label": "Aiuto scorciatoie",
   "steering.help.desc": "Apre il riepilogo delle scorciatoie: ↑/↓ lo scorrono, Esc lo chiude.",
   "steering.search.label": "Cerca",
+  "steering.field.label": "Campo di testo",
   "steering.search.desc": "Scrivere nel campo di ricerca della superficie (filtro del menu +, ricerca della posta, …). Esc lì torna alla navigazione {app}.",
   "steering.jumpProject.label": "Vai al progetto",
   "steering.jumpProject.desc": "Digitare il nome di un progetto aperto o inattivo e premere Invio per passarci; uno inattivo viene attivato. Prima di digitare, il cerchio mostra gli altri progetti aperti e usati di recente. Con dieci risultati o meno stanno in cerchio attorno al campo e la loro cifra (1–9, 0) ne apre uno subito. Poi si torna alla navigazione {app}.",

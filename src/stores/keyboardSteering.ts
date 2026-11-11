@@ -54,8 +54,9 @@ export type SteeringBaseLevel = Exclude<SteeringLevel, "region">;
 
 /** A text box steering lent the keyboard to and takes it back from: the
  *  project jump (`/` on the tab-bar levels), the prompt box (I, and the Plan /
- *  Goal keys), a surface's own search field (`/` in a region). */
-export type SteeringHandoff = "jump" | "prompt" | "search";
+ *  Goal keys), a surface's own search field (`/` in a region), a dialog's text
+ *  field (one it focused itself — a New Folder name — or Enter on one). */
+export type SteeringHandoff = "jump" | "prompt" | "search" | "field";
 
 /**
  * Transient state for keyboard steering mode (the `steeringMode` chord).
