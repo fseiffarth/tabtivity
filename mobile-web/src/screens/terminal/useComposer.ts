@@ -159,7 +159,7 @@ export function useComposerSend({
   setEditNote, editNote, setSubagentSending, subagentSending, setSubagentNote, setQueueNote,
   queuePulling, setQueuePulling, setUndoNote, setUndoing, undoRun, setTranscriptReload,
   setClearRefused, liveBusy, setSendNowWaiting, sendNowWaiting, agentAtWork, subagentPath, openStep,
-  transcriptCurrent, transcriptVersion, storedEntries, queuedShown,
+  transcriptCurrent, transcriptVersion, storedEntries, queuedShown, onSubagentSent,
 }: {
   tab: TabRow;
   bare: boolean;
@@ -243,6 +243,7 @@ export function useComposerSend({
   transcriptVersion: MutableRefObject<string | undefined>;
   storedEntries: TranscriptEntry[];
   queuedShown: boolean;
+  onSubagentSent: (token: string, text: string) => void;
 }) {
   /** The tab's CLI where its queue can be read off the screen. */
   const queueCli = queueFamily(agentKey);
@@ -397,8 +398,8 @@ export function useComposerSend({
    * whose own TUI takes words for a subagent. */
   const subagentTarget = openStep && agentFamily(tab.agent_label ?? tab.label) === "claude" && !inWorkflow(subagentPath) ? openStep : undefined;
   /** Words for the open subagent, delivered through Claude's agent list
-   * (`subagentInput`); the Reader stays on the subagent, whose conversation
-   * shows them once it has taken them. Words that did not get there go back
+   * (`subagentInput`); show the words as soon as the write succeeds, while
+   * Claude may still have them queued. Words that did not get there go back
    * into an empty composer, with the reason under it. */
   /** Types `words` as the composer would, once its last write is out. */
   const typeOut = async (words: string) => {
@@ -418,6 +419,7 @@ export function useComposerSend({
       type: () => typeOut(text),
     }, target, SUBAGENT_WALK).then((result) => {
       if (result.ok) {
+        onSubagentSent(target.token, text);
         setLastSent(text);
         return;
       }

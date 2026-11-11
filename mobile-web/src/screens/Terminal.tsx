@@ -102,7 +102,7 @@ import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
-import { type PendingPrompt } from "../terminal/pendingPrompts";
+import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
 import { inboxInPlace, inboxLeaves, inboxSegments, withoutInboxReferences } from "../terminal/inboxRefs";
 import { type ClearMark } from "../terminal/clearedSession";
@@ -364,11 +364,12 @@ function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`.
  * `queuedActions` goes under every queued prompt's bubble. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, taskLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
   promptLabel: string;
+  taskLabel?: string;
   /** The heading over a plan's bubble, and its untested mark. */
   planLabel?: string;
   planUntested?: string;
@@ -428,7 +429,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
       : turn.command
       ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} />
       : turn.kind === "prompt"
-      ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...tap(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
+      ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={index === 0 && taskLabel ? taskLabel : promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...tap(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
           <PromptBody text={turn.text} links={links} inbox={inbox} />
           {turn.cut && <small className="transcript-cut">{cutLabel}</small>}
           {time}
@@ -1079,6 +1080,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * shown as the reader's bubbles at the end of the session chat. Those the
    * desktop still holds come back with the tab (`heldPrompts.ts`). */
   const [pending, setPending] = useState<PendingPrompt[]>(() => readHeld(tab.id));
+  const [subagentPending, setSubagentPending] = useState<(PendingPrompt & { tabId: string; token: string })[]>([]);
   const pendingId = useRef(0);
   /** Where the stored session stood when this phone cleared it
    * (`clearedSession.ts`): until the new chat has a transcript of its own, what
@@ -1344,6 +1346,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setSubagentListOpen, setSentListOpen, openStep, subRead, setSubRead, setSubLimit, subLimit,
     restoreScroll, sessionEntries, screenRows,
   });
+  const subagentEntries = useMemo(() => withPending(
+    subTranscript?.entries ?? [],
+    subagentPending.filter((prompt) => prompt.tabId === tab.id && prompt.token === subToken),
+  ), [subTranscript, subagentPending, subToken, tab.id]);
   useReadAloud({ tab, t, listening, transcript, readAloud, sessionFocus });
   // A new turn in the stored session, or a file the agent sent into the
   // Focus chat, scrolls the view to it, as new screen output does, unless
@@ -1352,7 +1358,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (!sessionFocus || !atBottom) return;
     const stream = readableHost.current;
     if (stream && typeof stream.scrollTo === "function") stream.scrollTo({ top: stream.scrollHeight });
-  }, [sessionFocus, transcript, pending, chatPosts, namedFiles, atBottom, subToken, subTranscript]);
+  }, [sessionFocus, transcript, pending, chatPosts, namedFiles, atBottom, subToken, subagentEntries]);
   useOutboxPoll({ tab, bare, setOutbox, setGallery, setOutboxOpen, setInboxOpen });
   useLimitsPoll({ tab, setLimitsNow, rememberLimits });
   const {
@@ -1381,6 +1387,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     setSubagentNote, setQueueNote, queuePulling, setQueuePulling, setUndoNote, setUndoing, undoRun,
     setTranscriptReload, setClearRefused, liveBusy, setSendNowWaiting, sendNowWaiting, agentAtWork,
     subagentPath, openStep, transcriptCurrent, transcriptVersion, storedEntries, queuedShown,
+    onSubagentSent: (token, text) => {
+      const prompt = pendingPrompt(++pendingId.current, text, subTranscript?.entries ?? []);
+      setSubagentPending((current) => [...current, { ...prompt, tabId: tab.id, token }].slice(-MAX_PENDING));
+    },
   });
   const {
     commitOptions, pickCommit, lang, slashMenu, pickSlash, prefixCommands, activePrefix,
@@ -2422,11 +2432,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       ? <div className="readable-empty"><strong>{t("mobile.subagent.loading")}</strong></div>
       : !subTranscript.available
       ? <div className="readable-empty"><strong>{t("mobile.subagent.missing")}</strong><span>{t("mobile.subagent.missingHint")}</span><button onClick={subagentUp}>{t("mobile.subagent.back", { name: subagentParent })}</button></div>
-      : subTranscript.entries.length === 0
+      : subagentEntries.length === 0
       ? <div className="readable-empty"><strong>{t("mobile.subagent.empty")}</strong></div>
       : <div className="readable-lines chat transcript" data-testid="subagent-transcript">
           {subTranscript.truncated && <button className="readable-earlier" onClick={() => setSubLimit((limit) => limit + TRANSCRIPT_STEP)}>{t("mobile.transcript.earlier")}</button>}
-          <TranscriptTurns entries={subTranscript.entries} cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.subagent.task")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={subagentWorking} onOpenAgent={openSubagentTurn} />
+          <TranscriptTurns entries={subagentEntries} cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} taskLabel={!subTranscript.truncated && subTranscript.entries[0]?.kind === "prompt" ? t("mobile.subagent.task") : undefined} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={subagentWorking} onOpenAgent={openSubagentTurn} />
           {subagentWorking && <div className="transcript-working" role="status" data-testid="subagent-working">
             <span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span>
             {subagentModel ? t("mobile.focus.workingModel", { model: subagentModel }) : t("mobile.focus.working")}

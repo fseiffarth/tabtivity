@@ -1624,7 +1624,7 @@ fn parse_entries(
             runs.extend(claude_workflow_launch(&value));
         }
         let records = match kind {
-            TranscriptKind::Claude => claude_records(&value),
+            TranscriptKind::Claude => claude_records(&value, sidechain),
             TranscriptKind::Codex => codex_entry(&value).map(|(role, raw)| Record::Turn(role, raw)).into_iter().collect(),
             TranscriptKind::Copilot => copilot_records(&value),
         };
@@ -2044,7 +2044,7 @@ fn clean_text(raw: &str) -> Option<String> {
 /// the questions its `AskUserQuestion` calls asked. Thinking and other tool-use blocks are stepped over, as is a sidechain (a
 /// subagent's) record, and a `<synthetic>` one Claude writes for itself
 /// ("No response requested." on a resume) unless it reports an API error.
-fn claude_records(value: &Value) -> Vec<Record> {
+fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
     let sidechain = value.get("isSidechain").and_then(Value::as_bool) == Some(true);
     let placeholder = value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
         && value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true);
@@ -2069,7 +2069,7 @@ fn claude_records(value: &Value) -> Vec<Record> {
             let Some(content) = value.get("message").and_then(|m| m.get("content")) else {
                 return Vec::new();
             };
-            let (text, spawns) = match content {
+            let (text, tools) = match content {
                 Value::String(text) => (text.clone(), Vec::new()),
                 Value::Array(blocks) => (
                     blocks
@@ -2080,7 +2080,14 @@ fn claude_records(value: &Value) -> Vec<Record> {
                         .join("\n\n"),
                     blocks
                         .iter()
-                        .filter_map(|b| claude_plan(b).or_else(|| claude_spawn(b)).or_else(|| claude_workflow(b)).or_else(|| claude_shell(b)).or_else(|| claude_question(b)))
+                        .filter_map(|b| {
+                            claude_plan(b)
+                                .or_else(|| claude_spawn(b))
+                                .or_else(|| claude_workflow(b))
+                                .or_else(|| claude_shell(b))
+                                .or_else(|| claude_question(b))
+                                .or_else(|| subagent_file.then(|| claude_handback_answer(b)).flatten())
+                        })
                         .collect(),
                 ),
                 _ => return Vec::new(),
@@ -2089,11 +2096,22 @@ fn claude_records(value: &Value) -> Vec<Record> {
             (!text.is_empty())
                 .then(|| Record::Turn("answer", text.to_string()))
                 .into_iter()
-                .chain(spawns)
+                .chain(tools)
                 .collect()
         }
         _ => Vec::new(),
     }
+}
+
+/// Claude can write a subagent's final report as the input to this tool
+/// instead of a text block. Read it from the subagent's own conversation.
+fn claude_handback_answer(block: &Value) -> Option<Record> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use")
+        || block.get("name").and_then(Value::as_str) != Some("SubagentHandback")
+    {
+        return None;
+    }
+    Some(Record::Turn("answer", block.pointer("/input/message")?.as_str()?.to_string()))
 }
 
 /// The records on branches Claude abandoned, by uuid. Claude chains its

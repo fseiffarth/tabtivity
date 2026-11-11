@@ -681,6 +681,34 @@ fn only_turns_left_out_that_spawned_a_subagent_promise_earlier_ones() {
 }
 
 #[test]
+fn a_claude_subagent_chat_shows_the_follow_up_and_final_handback() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("s.jsonl");
+    let folder = main.with_extension("").join("subagents");
+    std::fs::create_dir_all(&folder).unwrap();
+    let handback = r#"{"type":"assistant","timestamp":"2026-11-10T22:40:55.548Z","message":{"content":[{"type":"tool_use","id":"report","name":"SubagentHandback","input":{"message":"All checks passed.\n\nThe build is ready."}}]}}"#;
+    std::fs::write(&main, handback).unwrap();
+    let records = [
+        r#"{"type":"user","isSidechain":true,"message":{"content":"Check the build."}}"#,
+        r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Running the build."}]}}"#,
+        r#"{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":"Run the tests too.","origin":{"kind":"human"},"isMeta":true}}"#,
+        r#"{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":"Internal notification.","origin":{"kind":"peer"},"isMeta":true}}"#,
+        handback,
+        r#"{"type":"user","isSidechain":true,"message":{"content":[{"type":"tool_result","tool_use_id":"report","content":"Handed back."}]}}"#,
+    ];
+    std::fs::write(folder.join("agent-child.jsonl"), records.join("\n")).unwrap();
+    let read = claude_transcript_at(&main, Some(&subagent_token("child")), None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![
+        ("prompt", "Check the build."),
+        ("answer", "Running the build."),
+        ("prompt", "Run the tests too."),
+        ("answer", "All checks passed.\n\nThe build is ready."),
+    ]);
+    assert_eq!(read.entries[3].at.as_deref(), Some("2026-11-10T22:40:55.548Z"));
+    assert!(claude_transcript_at(&main, None, None, DEFAULT_LIMIT).unwrap().entries.is_empty());
+}
+
+#[test]
 fn a_background_claude_subagent_runs_until_its_task_notification() {
     let dir = tempfile::tempdir().unwrap();
     let main = dir.path().join("s.jsonl");
