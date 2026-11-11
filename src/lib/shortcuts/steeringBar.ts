@@ -268,7 +268,8 @@ export function regionLabel(region: SteeringRegion, popout?: boolean): Translati
 
 /**
  * Projects › Subwindows › Tabs › Inside, the lit rung being where the arrows
- * act. Inside a surface the ladder is cut to the level it was entered from and
+ * act; on the projects the top bar above them leads, and with one subwindow
+ * there is no Subwindows rung. Inside a surface the ladder is cut to the level it was entered from and
  * the surface's name; lent to a box, to that level and the box.
  *
  * In a popout (`popout`) there is no projects level: the ladder is
@@ -284,10 +285,16 @@ export function ladder(opts: {
   /** The active tab's Reader view, when it draws a strip: Inside names it. */
   reader?: { view: ReaderViewId };
   lent?: TranslationKey;
+  /** False with one subwindow: no Subwindows rung, and a subwindow level
+   *  left behind (its split closed) reads as the tabs, whose keys it has. */
+  multiPane?: boolean;
   /** Steering runs in a popout window. */
   popout?: boolean;
 }): Rung[] {
-  const base = (id: SteeringBaseLevel, lit: boolean): Rung => {
+  const single = opts.multiPane === false;
+  const shown = (id: SteeringBaseLevel): SteeringBaseLevel => (single && id === "panes" ? "tabs" : id);
+  const base = (level: SteeringBaseLevel, lit: boolean): Rung => {
+    const id = shown(level);
     const def = BASE_RUNGS.find((r) => r.id === id)!;
     const labelKey = lit && id === "scroll" ? scrollLabel(opts) : def.labelKey;
     return { id, labelKey, lit };
@@ -298,7 +305,9 @@ export function ladder(opts: {
       return [
         { id: "main", labelKey: "steering.level.mainWindow" },
         { id: "titleBar", labelKey: "steering.region.titleBar", lit: titleBar },
-        ...BASE_RUNGS.filter((r) => r.id !== "projects").map((r) => base(r.id, r.id === opts.level)),
+        ...BASE_RUNGS.filter((r) => r.id !== "projects" && (!single || r.id !== "panes")).map((r) =>
+          base(r.id, r.id === (opts.level === "panes" ? shown("panes") : opts.level)),
+        ),
       ];
     }
   }
@@ -314,5 +323,9 @@ export function ladder(opts: {
     if (opts.region) rungs.push({ id: "region", labelKey: regionLabel(opts.region, opts.popout), lit: true });
     return rungs;
   }
-  return BASE_RUNGS.map((r) => base(r.id, r.id === opts.level));
+  const lit = opts.level === "panes" ? shown("panes") : opts.level;
+  const rungs = BASE_RUNGS.filter((r) => !single || r.id !== "panes").map((r) => base(r.id, r.id === lit));
+  // On the projects the top bar (↑ from there) leads the ladder; elsewhere
+  // it is one level too far up to be worth the room.
+  return opts.level === "projects" ? [{ id: "header", labelKey: REGION_LABEL.header }, ...rungs] : rungs;
 }

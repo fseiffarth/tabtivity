@@ -73,7 +73,8 @@ the **Root** chip). See `mail-calendar`.
 ## Tabtivity navigation
 
 Press **Shift+Space**. A bar docks under the panes (the level ladder
-Projects › Subwindows › Tabs › Inside, the move keys, the jumps, and the keys
+Projects › Subwindows › Tabs › Inside — Top bar leads it on the project level,
+Subwindows is left out with one subwindow — the move keys, the jumps, and the keys
 that leave) and every other key shows as a small coloured cap on the control it
 fires: W on the tab, N O 1–9 + above the + button, Space L G K on the prompt line,
 M C T , on the top bar, B P on the side rail. **H** folds the bar down to its
@@ -85,7 +86,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 |---|---|
 | (unbound) | Next / previous tab (Shift: back), running on into the next subwindow past the last one, on the subwindow level too. No default key — Tab cycles the Reader views; bind one in Settings → Keyboard |
 | S F / ← → | Previous / next tab as well (on the subwindow level: subwindow; on the project level: project) |
-| E / ↑ | Up a level: tabs → subwindows → projects → the top bar |
+| E / ↑ | Up a level: tabs → subwindows → projects → the top bar (the subwindow level only exists with two or more subwindows; with one, ↑/↓ skip it) |
 | D / ↓ | Back down a level |
 | 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option opens the Chat view's field, or on the Terminal view moves the highlight there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
 | K / L | On an agent tab whose Chat shows prompts still queued behind a busy turn: **K** Send now (stops the turn so the queue goes at once; steering stays on), **L** Cancel and edit (takes the queued prompts back into the text box and hands you the keyboard). Shown only while the bubbles' buttons are |

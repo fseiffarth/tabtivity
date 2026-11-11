@@ -175,6 +175,25 @@ describe("steering bar model", () => {
     expect(lent.map((r) => r.labelKey)).toEqual(["steering.level.tabs", "steering.agentPrompt.label"]);
     expect(lent[1]).toMatchObject({ lit: true, lent: true });
   });
+
+  it("leaves the Subwindows rung out with one subwindow, a stale subwindow level lighting Tabs", () => {
+    const ids = (l: ReturnType<typeof ladder>) => l.map((r) => r.id);
+    expect(ids(ladder({ level: "tabs", region: null, regionReturn: "tabs", multiPane: false }))).toEqual(["projects", "tabs", "scroll"]);
+    const stale = ladder({ level: "panes", region: null, regionReturn: "tabs", multiPane: false });
+    expect(stale.filter((r) => r.lit).map((r) => r.id)).toEqual(["tabs"]);
+    expect(ladder({ level: "region", region: "side", regionReturn: "panes", multiPane: false })[0].labelKey).toBe("steering.level.tabs");
+  });
+
+  it("puts the top bar above the projects, only on the projects level", () => {
+    const projects = ladder({ level: "projects", region: null, regionReturn: "tabs" });
+    expect(projects.map((r) => r.id)).toEqual(["header", "projects", "panes", "tabs", "scroll"]);
+    expect(projects[0].labelKey).toBe("steering.region.header");
+    expect(projects[0].lit).toBeFalsy();
+    expect(projects.find((r) => r.lit)?.id).toBe("projects");
+    for (const level of ["panes", "tabs", "scroll"] as const) {
+      expect(ladder({ level, region: null, regionReturn: "tabs" }).some((r) => r.id === "header")).toBe(false);
+    }
+  });
 });
 
 describe("steering key caps on a window", () => {

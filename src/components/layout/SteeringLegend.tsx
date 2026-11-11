@@ -319,6 +319,7 @@ export function SteeringLegend() {
             document: !terminal,
             reader,
             lent: box.where,
+            multiPane,
             popout,
           }),
         )}
@@ -353,7 +354,7 @@ export function SteeringLegend() {
     );
     ladderEl = (
       <div className="steering-bar-ladder">
-        {rungs(ladder({ level, region, regionReturn, document: !terminal, reader, popout }))}
+        {rungs(ladder({ level, region, regionReturn, document: !terminal, reader, multiPane, popout }))}
       </div>
     );
     if (folded) {

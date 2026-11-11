@@ -167,9 +167,9 @@ describe("steering bar contents", () => {
     render(<SteeringLegend />);
     act(() => steering().enter());
     const bar = document.querySelector(".steering-bar")!;
+    // One subwindow (none split off here): no Subwindows rung.
     expect([...bar.querySelectorAll(".steering-rung")].map((r) => r.textContent)).toEqual([
       "Projects",
-      "Subwindows",
       "Tabs",
       "Inside",
     ]);

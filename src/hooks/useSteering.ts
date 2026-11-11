@@ -595,9 +595,11 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           if (switched) landOnTabs(switched);
           return;
         }
+        // Down to the subwindows — or straight to the tabs when there is
+        // only one subwindow, which has no level of its own.
         case "down":
           focusSomeGroup();
-          steering.setLevel("panes");
+          steering.setLevel(allGroups(steeringTabs().layout).length >= 2 ? "panes" : "tabs");
           return;
         // Above the projects: the top bar — its apps, menus and switches.
         case "up":

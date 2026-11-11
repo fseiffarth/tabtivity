@@ -137,6 +137,16 @@ describe("steering levels", () => {
     expect(steering().active).toBe(false);
   });
 
+  it("skips the subwindow level both ways while there is one subwindow", () => {
+    useTabsStore.getState().addTab({ label: "a1", cmd: "bash", cwd: "/p", kind: "shell" });
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    press({ key: "ArrowUp" });
+    expect(steering().level).toBe("projects");
+    press({ key: "ArrowDown" });
+    expect(steering().level).toBe("tabs");
+  });
+
   it("E S D F steer like the arrows, and Escape leaves", () => {
     const { a, b } = twoPanes();
     render(<Harness />);
