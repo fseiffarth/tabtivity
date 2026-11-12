@@ -1494,7 +1494,309 @@ fn the_headless_spawn_records_its_view_and_session_and_the_switch_sweeps_them() 
     );
     let command = source("commands/agent_privacy.rs");
     let close = body_of(&command, "async fn close_unverified_agents(");
-    assert!(close.contains("end_detached_agents("), "the switch sweeps the sessions no PTY holds");
-    let sweep = body_of(&command, "fn end_detached_agents(");
-    assert!(sweep.contains("tmux_sessions_to_end(") && sweep.contains("reap_child_subtree(") && sweep.contains("local_tmux_kill_args("));
+    assert!(close.contains("agent_privacy::sweep_sessions("), "the switch sweeps the sessions no PTY holds");
+    let service = source("services/agent/agent_privacy.rs");
+    assert!(body_of(&service, "pub fn sweep_sessions_in(").contains("tmux_sessions_to_end("));
+    let end = body_of(&service, "pub fn end_sessions_in(");
+    assert!(end.contains("reap(") && end.contains("kill_exact_args(") && end.contains("listed_sessions("), "reaped, killed, then confirmed");
+    assert!(body_of(&service, "fn reap_pane(").contains("reap_child_subtree("));
+}
+
+// ── The sweep's own failures (gap 109): "nothing to end" is not "could not find out" ──
+
+/// A scripted tmux: each call is answered by `answer(argv, how many `ls` came before)`,
+/// and every argv is recorded.
+struct FakeTmux<F: FnMut(&[String], usize) -> Result<TmuxRun, String>> {
+    answer: F,
+    calls: Vec<Vec<String>>,
+    listings: usize,
+}
+
+impl<F: FnMut(&[String], usize) -> Result<TmuxRun, String>> FakeTmux<F> {
+    fn new(answer: F) -> Self {
+        FakeTmux { answer, calls: Vec::new(), listings: 0 }
+    }
+
+    fn call(&mut self, argv: &[String]) -> Result<TmuxRun, String> {
+        self.calls.push(argv.to_vec());
+        let before = self.listings;
+        if argv.first().is_some_and(|a| a == "ls") {
+            self.listings += 1;
+        }
+        (self.answer)(argv, before)
+    }
+
+    fn kills(&self) -> Vec<String> {
+        self.calls.iter().filter(|c| c[0] == "kill-session").map(|c| c[2].clone()).collect()
+    }
+}
+
+fn ok(stdout: &str) -> Result<TmuxRun, String> {
+    Ok(TmuxRun { success: true, stdout: stdout.to_string(), stderr: String::new() })
+}
+
+fn failed(stderr: &str) -> Result<TmuxRun, String> {
+    Ok(TmuxRun { success: false, stdout: String::new(), stderr: stderr.to_string() })
+}
+
+fn ls_line(session: &str, cwd: &str) -> String {
+    format!("{session}\t1\t1700000000\t0\t1700000000\tclaude\t{cwd}\n")
+}
+
+const NO_SERVER: &str = "no server running on /tmp/tmux-1000/default";
+
+/// Run [`sweep_sessions_in`] for project `lock` (folder `dir`) on a fake tmux; the
+/// reaped pane pids and the tmux the run left are handed back with the sweep.
+fn sweep_on<F: FnMut(&[String], usize) -> Result<TmuxRun, String>>(
+    dir: &Path,
+    forced: &[String],
+    tmux: &mut FakeTmux<F>,
+) -> (Sweep, Vec<u32>) {
+    let mut reaped = Vec::new();
+    let sweep = sweep_sessions_in("lock", Some(dir), forced, forced, &[], &|_| false, &mut |argv| tmux.call(argv), &mut |pid| {
+        reaped.push(pid)
+    });
+    (sweep, reaped)
+}
+
+#[test]
+fn a_machine_with_no_tmux_server_is_a_complete_sweep() {
+    let tmp = tempfile::tempdir().unwrap();
+    for stderr in [NO_SERVER, "error connecting to /tmp/tmux-1000/default (No such file or directory)"] {
+        let mut tmux = FakeTmux::new(|_: &[String], _| failed(stderr));
+        let (sweep, reaped) = sweep_on(tmp.path(), &[], &mut tmux);
+        assert!(sweep.complete(), "{stderr}: {sweep:?}");
+        assert!(sweep.ended.is_empty() && reaped.is_empty());
+        assert_eq!(tmux.calls.len(), 1, "one listing, nothing to end");
+    }
+    // A server with no agent session of the project is complete as well.
+    let mut tmux = FakeTmux::new(|_: &[String], _| ok(&ls_line("someone-else", "/elsewhere")));
+    assert!(sweep_on(tmp.path(), &[], &mut tmux).0.complete());
+}
+
+#[test]
+fn a_listing_tmux_would_not_give_is_an_incomplete_sweep_not_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    // The client did not start, or tmux answered with a real failure.
+    type Answer = Box<dyn FnMut(&[String], usize) -> Result<TmuxRun, String>>;
+    let mut cases: Vec<Answer> = vec![
+        Box::new(|_: &[String], _| Err("No such file or directory (os error 2)".to_string())),
+        Box::new(|_: &[String], _| failed("error connecting to /tmp/tmux-1000/default (Permission denied)")),
+        Box::new(|_: &[String], _| failed("")),
+    ];
+    for answer in cases.iter_mut() {
+        let mut tmux = FakeTmux::new(|argv: &[String], n| answer(argv, n));
+        let (sweep, _) = sweep_on(tmp.path(), &[], &mut tmux);
+        assert!(!sweep.complete(), "{sweep:?}");
+        assert!(sweep.errors[0].contains("could not be listed"), "{:?}", sweep.errors);
+    }
+    // A closed tab's session is still ended when the listing fails, and confirmed if it can be.
+    let tab = agent_session("lock", 1);
+    let mut tmux = FakeTmux::new(|argv: &[String], before| match argv[0].as_str() {
+        "ls" if before == 0 => failed("server busy"),
+        "ls" => ok(""),
+        "list-panes" => ok(&format!("{}\t4242\n", agent_session("lock", 1))),
+        _ => ok(""),
+    });
+    let (sweep, reaped) = sweep_on(tmp.path(), std::slice::from_ref(&tab), &mut tmux);
+    assert_eq!(tmux.kills(), [format!("={tab}")]);
+    assert_eq!(reaped, [4242]);
+    assert_eq!(sweep.ended, [tab]);
+    assert!(!sweep.complete(), "the sessions no window shows were never seen");
+}
+
+#[test]
+fn a_kill_tmux_refuses_leaves_the_session_unconfirmed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("secret");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (stuck, gone) = (agent_session("lock", 1), agent_session("lock", 2));
+    let listing = format!("{}{}", ls_line(&stuck, &s(&dir)), ls_line(&gone, &s(&dir)));
+    let (stuck_c, gone_c) = (stuck.clone(), gone.clone());
+    let mut tmux = FakeTmux::new(move |argv: &[String], before| match argv[0].as_str() {
+        "ls" if before == 0 => ok(&listing),
+        "ls" => ok(&ls_line(&stuck_c, "/x")),
+        "list-panes" => ok(&format!("{stuck_c}\t11\n{gone_c}\t12\n")),
+        "kill-session" if argv[2] == format!("={stuck_c}") => failed("server too busy"),
+        // Gone between the listing and the kill: the end state wanted.
+        "kill-session" => failed(&format!("can't find session: {gone_c}")),
+        _ => ok(""),
+    });
+    let (sweep, mut reaped) = sweep_on(&dir, &[], &mut tmux);
+    reaped.sort();
+    assert_eq!(reaped, [11, 12], "every pane's subtree first");
+    assert_eq!(sweep.ended, [gone]);
+    assert_eq!(sweep.unconfirmed, std::slice::from_ref(&stuck));
+    assert!(sweep.errors.iter().any(|e| e.contains(&stuck) && e.contains("server too busy")), "{:?}", sweep.errors);
+    assert!(!sweep.complete());
+}
+
+#[test]
+fn a_session_still_listed_after_its_kill_is_unconfirmed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("secret");
+    std::fs::create_dir_all(&dir).unwrap();
+    let survivor = agent_session("lock", 3);
+    let line = ls_line(&survivor, &s(&dir));
+    let mut tmux = FakeTmux::new(move |argv: &[String], _| match argv[0].as_str() {
+        "ls" => ok(&line),
+        _ => ok(""),
+    });
+    let (sweep, _) = sweep_on(&dir, &[], &mut tmux);
+    assert!(sweep.ended.is_empty());
+    assert_eq!(sweep.unconfirmed, [survivor]);
+    assert!(!sweep.complete());
+}
+
+#[test]
+fn panes_tmux_would_not_name_or_a_confirmation_that_fails_leave_every_session_in_doubt() {
+    let sessions = vec![agent_session("lock", 4), agent_session("lock", 5)];
+    let mut tmux = FakeTmux::new(|argv: &[String], _| match argv[0].as_str() {
+        "list-panes" => failed("lost server"),
+        "ls" => failed(NO_SERVER),
+        _ => ok(""),
+    });
+    let mut reaped = Vec::new();
+    let sweep = end_sessions_in(&sessions, &mut |argv| tmux.call(argv), &mut |pid| reaped.push(pid));
+    assert!(reaped.is_empty());
+    assert_eq!(sweep.unconfirmed, sessions, "killed, but their processes were never reaped");
+    assert!(sweep.ended.is_empty() && !sweep.complete());
+
+    let mut tmux = FakeTmux::new(|argv: &[String], _| match argv[0].as_str() {
+        "ls" => Err("tmux vanished".to_string()),
+        _ => ok(""),
+    });
+    let sweep = end_sessions_in(&sessions, &mut |argv| tmux.call(argv), &mut |_| {});
+    assert_eq!(sweep.unconfirmed, sessions);
+    assert!(sweep.errors.iter().any(|e| e.contains("could not be confirmed")), "{:?}", sweep.errors);
+
+    // Everything answered, and the server went with the last session: complete.
+    let mut tmux = FakeTmux::new(|argv: &[String], _| match argv[0].as_str() {
+        "ls" => failed(NO_SERVER),
+        _ => ok(""),
+    });
+    let sweep = end_sessions_in(&sessions, &mut |argv| tmux.call(argv), &mut |_| {});
+    assert_eq!(sweep.ended, sessions);
+    assert!(sweep.complete());
+    // Nothing to end asks tmux nothing.
+    let mut tmux = FakeTmux::new(|_: &[String], _| ok(""));
+    assert!(end_sessions_in(&[], &mut |argv| tmux.call(argv), &mut |_| {}).complete());
+    assert!(tmux.calls.is_empty());
+}
+
+#[test]
+fn the_switch_reports_an_incomplete_sweep_and_keeps_the_setting() {
+    let command = source("commands/agent_privacy.rs");
+    let set = body_of(&command, "pub async fn set_project_agent_privacy(");
+    // Stored first, never rolled back; the sweep's failure is reported, not returned as an error.
+    assert!(set.find("agent_privacy::set(").unwrap() < set.find("close_unverified_agents(").unwrap());
+    assert!(!set.contains("close_unverified_agents(&ctx, &project_id).await?"), "a failed sweep must not turn into an error after the setting is stored");
+    assert!(set.contains("sweep_error") && set.contains("unconfirmed"));
+}
+
+// ── A spawn in flight when the switch turns on (gap 110) ──
+
+fn check_of(opts: &PtyOptions) -> SpawnCheck {
+    SpawnCheck::of(opts).expect("an agent")
+}
+
+/// The barrier the sweep cannot see: the gate and the fence gate both ran while the
+/// project was open, the switch was persisted, and only then was the spawn registered.
+/// The re-check after registration refuses it; a verified local launch stays.
+#[test]
+fn a_spawn_registered_after_the_switch_went_on_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let share = tmp.path().join("share");
+    let secret = tmp.path().join("secret");
+    let locked_list = locked_registry(tmp.path());
+    let open_list = registry(tmp.path(), json!({ "local_models_only": false }));
+    // Before the switch: both gates let a cloud agent through.
+    let gated = World::healthy().gate(opts("claude", &[], Some("lock"), &secret), &open_list, &share).unwrap();
+    assert!(!stamped(&gated));
+    assert_eq!(fence_gate_in(&locked_projects(&open_list), &gated, "lock").unwrap(), None);
+    let check = check_of(&gated);
+    // The switch is persisted here, between the fence gate and registration.
+    let now = locked_projects(&locked_list);
+    let refusal = recheck_spawn_in(&now, &check, &is_verified, true).unwrap_err();
+    assert!(refusal.starts_with(REFUSAL) && refusal.contains("Secret") && refusal.contains("was ended"), "{refusal}");
+    // Had nothing changed, it would stay.
+    assert!(recheck_spawn_in(&locked_projects(&open_list), &check, &is_verified, true).is_ok());
+
+    // A verified local launch of the locked project stays.
+    let local = World::healthy().gate(opts("ollama", LINE, Some("lock"), &secret), &locked_list, &share).unwrap();
+    assert!(recheck_spawn_in(&now, &check_of(&local), &is_verified, true).is_ok());
+    // Its stamp without the gate's record (or the record without the stamp) does not.
+    let mut forged = check_of(&local);
+    forged.tab = fresh_tab_id();
+    assert!(recheck_spawn_in(&now, &forged, &is_verified, true).is_err());
+    let mut unstamped = check_of(&local);
+    unstamped.stamp = None;
+    assert!(recheck_spawn_in(&now, &unstamped, &is_verified, true).is_err());
+}
+
+#[test]
+fn the_recheck_leaves_shells_and_agents_outside_every_locked_folder_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let now = locked_projects(&locked_registry(tmp.path()));
+    let mut shell = opts("bash", &[], Some("lock"), &tmp.path().join("secret"));
+    shell.agent = false;
+    assert_eq!(SpawnCheck::of(&shell), None, "a shell tab is not re-checked at all");
+    let open = check_of(&opts("claude", &[], Some("open"), &tmp.path().join("open")));
+    assert!(recheck_spawn_in(&now, &open, &|_, _| false, true).is_ok());
+    // A fence that shows only its own folder, or that masked the locked one, stays.
+    let mut fenced = open.clone();
+    fenced.view = Some(view(&[&tmp.path().join("open")], &[]));
+    assert!(recheck_spawn_in(&now, &fenced, &|_, _| false, true).is_ok());
+    let mut parent = check_of(&opts("claude", &[], Some("open"), tmp.path()));
+    parent.view = Some(view(&[tmp.path()], &[&tmp.path().join("secret")]));
+    assert!(recheck_spawn_in(&now, &parent, &|_, _| false, true).is_ok());
+}
+
+#[test]
+fn the_recheck_ends_a_spawn_whose_fence_was_built_before_and_shows_the_folder() {
+    let tmp = tempfile::tempdir().unwrap();
+    let now = locked_projects(&locked_registry(tmp.path()));
+    // A root-console agent whose fence (or container) shows the locked folder.
+    let mut root = check_of(&opts("claude", &[], None, &tmp.path().join("work")));
+    root.tab = "root:console".into();
+    root.view = Some(view(&[&tmp.path().join("work"), &tmp.path().join("secret")], &[]));
+    assert!(recheck_spawn_in(&now, &root, &|_, _| false, true).unwrap_err().contains("shows the folder"));
+    // Its own scope by tab id, whatever cwd it claims.
+    let mut own = check_of(&opts("claude", &[], None, &tmp.path().join("open")));
+    own.tab = "lock:agent-1".into();
+    assert!(recheck_spawn_in(&now, &own, &|_, _| false, true).is_err());
+}
+
+#[test]
+fn an_unreadable_registry_refuses_the_recheck() {
+    // `recheck_spawn` reads the live registry through `locked_now`, whose error is the refusal.
+    let service = source("services/agent/agent_privacy.rs");
+    assert!(body_of(&service, "pub fn recheck_spawn(").contains("locked_now()?"));
+}
+
+/// Both registration sites re-check after the spawn is registered and committed, and
+/// end what they started when it is refused.
+#[test]
+fn every_registration_site_rechecks_after_it_registers() {
+    let terminal = source("commands/terminal.rs");
+    let spawn = body_of(&terminal, "pub async fn pty_spawn(");
+    let (registered, committed, rechecked) = (
+        spawn.find("crate::terminal::spawn_pty(").unwrap(),
+        spawn.find("prepared.commit()").unwrap(),
+        spawn.find("recheck_privacy(").unwrap(),
+    );
+    assert!(registered < committed && committed < rechecked, "pty_spawn re-checks once the PTY is registered and committed");
+    assert!(spawn[rechecked..].contains("end_refused_spawn("), "a refused PTY is ended");
+    let host = source("services/mobile_control/host.rs");
+    let launch = body_of(&host, "impl Default for HeadlessSpawner");
+    let (started, committed, rechecked) = (
+        launch.find("spawn_detached_with(").unwrap(),
+        launch.find("prepared.commit()").unwrap(),
+        launch.find("recheck_privacy(").unwrap(),
+    );
+    assert!(started < committed && committed < rechecked, "the headless launch re-checks once the session exists");
+    assert!(launch[rechecked..].contains("agent_privacy::end_sessions("), "a refused session is ended");
+    let prep = source("services/launch_prep.rs");
+    let prepare = body_of(&prep, "pub async fn prepare(");
+    assert!(prepare.find("agent_privacy::gate(").unwrap() < prepare.find("SpawnCheck::of(").unwrap(), "the check is what the gate handed back");
 }

@@ -1966,11 +1966,10 @@ pub fn set_project_sandbox_blocking(
 
     // A local-models-only project runs no container yet
     // (`services::agent_privacy`).
-    if enabled && crate::services::agent_privacy::is_locked(&entry) {
-        return Err(format!(
-            "\"{}\" is set to Local models only, which does not support container projects yet. Switch that off first.",
-            entry.name
-        ));
+    if enabled {
+        if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
+            return Err(refusal);
+        }
     }
 
     // Existing spec: the `projects.json` mirror in the state dir is the ONLY
@@ -2064,11 +2063,8 @@ pub fn set_project_sandbox_spec(
     clean(&mut spec.network);
     if spec.enabled {
         if let Ok(entry) = crate::services::remote::project_entry(&project_id) {
-            if crate::services::agent_privacy::is_locked(&entry) {
-                return Err(format!(
-                    "\"{}\" is set to Local models only, which does not support container projects yet. Switch that off first.",
-                    entry.name
-                ));
+            if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
+                return Err(refusal);
             }
         }
     }

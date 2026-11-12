@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { ProjectEntry } from "../../types";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
-import { isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
+import { isCutNetwork, isLocalModelsOnly, sweepIncomplete } from "../../lib/projects/localModelsOnly";
 import { useT } from "../../lib/i18n";
 import { DialogShell } from "../common/PromptDialogs";
 import { UntestedTag } from "../common/UntestedTag";
@@ -17,6 +17,9 @@ import { restartLocalTabs } from "../../stores/agents/restartLocalTabs";
  * network; elsewhere the Cut network switch is shown but cannot be turned on.
  * Changing Cut network leaves the project's running local tabs on the old
  * setting, so the dialog asks whether to restart them; it never does so itself.
+ * Turning the switch on ends the running agents it must not leave reading the
+ * folder; the ones the backend could not confirm stopped are named before
+ * anything else (the switch stays on: it holds for new agents either way).
  * Siblings: `CategoryEditor` (frame) and the Remote card of `ProjectDialog`
  * (the switch cards).
  */
@@ -27,6 +30,8 @@ export function AgentPrivacyDialog({ project, onClose }: { project: ProjectEntry
   const [cut, setCut] = useState(() => isCutNetwork(project));
   // The running local tabs a saved change left on the other Cut network setting.
   const [restartTabs, setRestartTabs] = useState<string[] | null>(null);
+  // Switched on, but the sweep could not confirm every agent it had to end.
+  const [incomplete, setIncomplete] = useState<{ agents: string[]; error: string | null } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The agent tabs that turning the switch on ends: running cloud agents.
@@ -42,8 +47,15 @@ export function AgentPrivacyDialog({ project, onClose }: { project: ProjectEntry
     setError(null);
     try {
       const change = await setProjectAgentPrivacy(project.id, localOnly, cutOn);
-      if (change.restart_tabs && change.restart_tabs.length > 0) {
-        setRestartTabs(change.restart_tabs);
+      const restartable = change.restart_tabs && change.restart_tabs.length > 0 ? change.restart_tabs : null;
+      if (change.local_models_only && sweepIncomplete(change)) {
+        setIncomplete({ agents: change.unconfirmed ?? [], error: change.sweep_error ?? null });
+        setRestartTabs(restartable);
+        setSaving(false);
+        return;
+      }
+      if (restartable) {
+        setRestartTabs(restartable);
         setSaving(false);
         return;
       }
@@ -62,6 +74,40 @@ export function AgentPrivacyDialog({ project, onClose }: { project: ProjectEntry
       onClose();
     }
   };
+
+  if (incomplete) {
+    return (
+      <DialogShell
+        frame="project-dialog"
+        className="agent-privacy-dialog"
+        title={<>{project.name} — {t("agentPrivacy.title")}</>}
+        onDismiss={onClose}
+      >
+        <div className="project-dialog-error" role="alert">
+          {incomplete.agents.length > 0
+            ? t("agentPrivacy.incomplete", { count: incomplete.agents.length })
+            : t("agentPrivacy.incompleteUnknown")}
+        </div>
+        {incomplete.agents.length > 0 && (
+          <ul className="project-dialog-path">
+            {incomplete.agents.map((agent) => (
+              <li key={agent}>
+                <code>{agent}</code>
+              </li>
+            ))}
+          </ul>
+        )}
+        {incomplete.error && (
+          <div className="project-dialog-path">{t("agentPrivacy.incompleteError", { error: incomplete.error })}</div>
+        )}
+        <div className="project-dialog-actions">
+          <button type="button" onClick={() => (restartTabs ? setIncomplete(null) : onClose())}>
+            {t("agentPrivacy.incompleteOk")}
+          </button>
+        </div>
+      </DialogShell>
+    );
+  }
 
   if (restartTabs) {
     return (

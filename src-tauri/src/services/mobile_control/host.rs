@@ -164,8 +164,25 @@ impl Default for HeadlessSpawner {
                     let prepared = crate::services::launch_prep::prepare(opts, None, None).await?;
                     #[cfg(unix)]
                     {
+                        let check = prepared.privacy_check();
+                        let (tab, seq, session) =
+                            (prepared.opts.id.clone(), prepared.spawn_seq(), prepared.opts.tmux_session.clone());
                         crate::services::tmux_local::spawn_detached_with(&prepared.opts, None)?;
                         prepared.commit();
+                        // Local models only switched on while this agent was starting
+                        // (`launch_prep::recheck_privacy`): refused, its session ends here.
+                        if let Err(refusal) = crate::services::launch_prep::recheck_privacy(check).await {
+                            let sweep = app_core::rt::blocking("Local models only", move || {
+                                let sweep = crate::services::agent_privacy::end_sessions(session.as_slice());
+                                crate::services::launch_prep::on_tab_gone(&tab, seq);
+                                sweep
+                            })
+                            .await;
+                            return Err(match crate::commands::agent_privacy::unconfirmed_note(sweep) {
+                                Some(note) => format!("{refusal} {note}"),
+                                None => refusal,
+                            });
+                        }
                         Ok(())
                     }
                     #[cfg(not(unix))]

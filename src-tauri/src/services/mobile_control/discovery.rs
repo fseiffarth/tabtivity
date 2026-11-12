@@ -1407,7 +1407,7 @@ fn tmux_ls_command(format: &str) -> Command {
 /// file or directory)` (no socket at all, tmux ≥ 3.x), and the older `failed
 /// to connect to server`. Any other failure — a permission error, an
 /// exhausted table, a server too busy to accept — is tmux not answering.
-fn tmux_says_no_server(stderr: &str) -> bool {
+pub(crate) fn tmux_says_no_server(stderr: &str) -> bool {
     stderr.contains("no server running")
         || stderr.contains("failed to connect to server")
         || (stderr.contains("error connecting to")

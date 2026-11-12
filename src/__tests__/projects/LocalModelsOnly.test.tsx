@@ -135,6 +135,44 @@ describe("the Agent privacy dialog", () => {
     expect(restartMock).not.toHaveBeenCalled();
   });
 
+  it("says the switch is on but names the agents it could not confirm stopped", async () => {
+    mockInvoke.mockResolvedValue({
+      local_models_only: true,
+      cut_network: false,
+      closed_tabs: [],
+      unconfirmed: ["s-agent-1"],
+      sweep_error: "tmux could not end the session s-agent-1 (server too busy)",
+    });
+    const onClose = vi.fn();
+    render(<AgentPrivacyDialog project={proj()} onClose={onClose} />);
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.save")));
+    });
+    // Stored as on, not closed: the agents and the reason are on screen.
+    expect(isLocalModelsOnly(useProjectsStore.getState().projects[0])).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(translate("en", "agentPrivacy.incomplete", { count: 1 }))).toBeTruthy();
+    expect(screen.getByText("s-agent-1")).toBeTruthy();
+    expect(screen.getByText(/server too busy/)).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.incompleteOk")));
+    });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("says so when the sweep could not check the running agents at all", async () => {
+    mockInvoke.mockResolvedValue({ local_models_only: true, cut_network: false, closed_tabs: [], unconfirmed: [], sweep_error: "tmux could not list its sessions" });
+    const onClose = vi.fn();
+    render(<AgentPrivacyDialog project={proj()} onClose={onClose} />);
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    await act(async () => {
+      fireEvent.click(screen.getByText(translate("en", "agentPrivacy.save")));
+    });
+    expect(screen.getByText(translate("en", "agentPrivacy.incompleteUnknown"))).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("restarts exactly the named tabs when asked to", async () => {
     restartMock.mockClear();
     mockInvoke.mockResolvedValue({ local_models_only: true, cut_network: false, closed_tabs: [], restart_tabs: ["p1:t1"] });

@@ -636,6 +636,9 @@ pub struct PreparedLaunch {
     /// A local agent's sandbox, home and CLI, for the hover card
     /// (`services::agent_features`); its API keys are read off the final env.
     features: Option<LocalAgentFeatures>,
+    /// The agent as the Local models only gate judged it, for the re-check once
+    /// its process is registered ([`recheck_privacy`]); `None` for anything else.
+    privacy_check: Option<crate::services::agent_privacy::SpawnCheck>,
     spawned_tab_id: String,
     generation: SpawnGeneration,
 }
@@ -745,6 +748,12 @@ impl PreparedLaunch {
     /// it, so every teardown names the spawn it ends.
     pub fn spawn_seq(&self) -> u64 {
         self.generation.seq
+    }
+
+    /// What [`recheck_privacy`] judges once the process is registered: taken before
+    /// [`Self::commit`], which consumes the launch, and checked after it.
+    pub fn privacy_check(&self) -> Option<crate::services::agent_privacy::SpawnCheck> {
+        self.privacy_check.clone()
     }
 
     /// The process exists: keep the MCP token and the Codex resume claim,
@@ -973,9 +982,11 @@ pub async fn prepare(
     // for it. Runs after the authority and cwd checks above, so the project
     // and folder it judges are the backend's own; it asks the local Ollama,
     // hence off the async runtime. A chat assistant has no project folder.
+    let mut privacy_check = None;
     if !assistant {
         let gated = opts.clone();
         opts = app_core::rt::try_blocking("Local models only", move || crate::services::agent_privacy::gate(gated)).await?;
+        privacy_check = crate::services::agent_privacy::SpawnCheck::of(&opts);
     }
 
     // The tab's scope, for the agent shims a shell tab may run
@@ -1575,14 +1586,26 @@ pub async fn prepare(
         mcp_spawn_guard,
         resume_claim,
         fenced_scope,
-        fence_view,
         host_agent_tab,
         features,
+        privacy_check: privacy_check.map(|check| crate::services::agent_privacy::SpawnCheck { view: fence_view.clone(), ..check }),
+        fence_view,
         spawned_tab_id,
         generation,
         drop_dir,
         ai,
     })
+}
+
+/// The Local models only re-check once a spawn is registered (the window's PTY, the
+/// phone's detached session) and committed: both gates read the setting before the
+/// process existed, and the switch's sweep snapshots only registered ones, so a spawn
+/// in between is judged here (`agent_privacy::recheck_spawn`). `Err` is the refusal;
+/// the caller then ends what it started. Nothing to do for a spawn that is no agent;
+/// one registry read off the async runtime otherwise.
+pub async fn recheck_privacy(check: Option<crate::services::agent_privacy::SpawnCheck>) -> Result<(), String> {
+    let Some(check) = check else { return Ok(()) };
+    app_core::rt::try_blocking("Local models only", move || crate::services::agent_privacy::recheck_spawn(&check)).await
 }
 
 /// Whether a launch runs an AI, for the AI switch: an agent by the fence's
@@ -1674,7 +1697,7 @@ mod tests {
         };
         PreparedLaunch {
             opts, named: false, interrupted: false, resting: false, live_turn: None, drop_dir: None, ai: true, mcp_spawn_guard: None,
-            resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, spawned_tab_id: tab.into(), generation,
+            resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, privacy_check: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
 

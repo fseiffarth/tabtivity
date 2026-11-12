@@ -170,6 +170,18 @@ pub fn is_locked(entry: &ProjectEntry) -> bool {
     privacy_of(entry).local_models_only
 }
 
+/// Why `entry` cannot be switched to a container: a Local-models-only project
+/// has no container tier yet. `None` when it may. The settings-time refusal;
+/// [`container_refusal`] is the spawn-time one, which also covers the mount.
+pub fn locked_refusal(entry: &ProjectEntry) -> Option<String> {
+    is_locked(entry).then(|| {
+        format!(
+            "\"{}\" is set to Local models only, which does not support container projects yet. Switch that off first.",
+            entry.name
+        )
+    })
+}
+
 /// `path` with `.` and `..` folded away lexically.
 fn lexical(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
@@ -233,13 +245,19 @@ pub fn mask_dirs(locked: &[Locked], own: Option<&str>) -> Vec<PathBuf> {
 /// error and the fence is not built: a fence with no masks would hand a locked
 /// project's folder to whatever else is bound over it.
 pub fn mask_dirs_now(own: Option<&str>) -> Result<Vec<PathBuf>, String> {
-    mask_dirs_from(crate::services::remote::projects().map(|p| p.to_vec()), own)
+    masks_of(crate::services::remote::projects().as_deref(), own)
 }
 
 /// [`mask_dirs_now`] over a given read of the registry.
 pub fn mask_dirs_from(projects: Result<ProjectsList, String>, own: Option<&str>) -> Result<Vec<PathBuf>, String> {
+    masks_of(projects.as_ref(), own)
+}
+
+/// [`mask_dirs`] over a borrowed read of the registry, so the shared live
+/// copy is not cloned for every fence.
+fn masks_of(projects: Result<&ProjectsList, &String>, own: Option<&str>) -> Result<Vec<PathBuf>, String> {
     let projects = projects.map_err(|e| format!("{REFUSAL}: the project list could not be read ({e}), so no sandbox was built."))?;
-    Ok(mask_dirs(&locked_projects(&projects), own))
+    Ok(mask_dirs(&locked_projects(projects), own))
 }
 
 // ── The environment of a verified tab ───────────────────────────────────────
@@ -1141,6 +1159,332 @@ pub fn tmux_sessions_to_end(
         })
         .map(|s| s.session.clone())
         .collect()
+}
+
+// ── Ending what the switch must not leave running ───────────────────────────
+
+/// One tmux client call's exit, as the switch's sweep reads it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TmuxRun {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// The tmux the sweep talks to: runs one argv, `Err` when the client could not be
+/// started. [`end_sessions`] and [`sweep_sessions`] hand in this machine's; a test its own.
+pub type TmuxCall<'a> = dyn FnMut(&[String]) -> Result<TmuxRun, String> + 'a;
+
+/// What turning the switch on did to the tmux sessions it had to end: the ones it
+/// confirmed gone, the ones it could not, and why. The switch is fully on only when
+/// [`Sweep::complete`]; otherwise it holds for new spawns while agents it could not
+/// stop may still read the folder, and the dialog says so.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Sweep {
+    /// Ended, and gone from tmux's own listing afterwards.
+    pub ended: Vec<String>,
+    /// Meant to end, but not confirmed gone: a kill tmux refused, a pane whose
+    /// processes could not be found, a session still listed, a listing that failed.
+    pub unconfirmed: Vec<String>,
+    /// One line per failure on the way; empty for a complete sweep.
+    pub errors: Vec<String>,
+}
+
+impl Sweep {
+    /// Every session meant to end is confirmed gone and nothing failed: "verified
+    /// nothing left", which a sweep that could not ask tmux never is.
+    pub fn complete(&self) -> bool {
+        self.unconfirmed.is_empty() && self.errors.is_empty()
+    }
+
+    fn doubt(&mut self, session: &str) {
+        if !self.unconfirmed.iter().any(|s| s == session) {
+            self.unconfirmed.push(session.to_string());
+        }
+    }
+}
+
+/// tmux's own words for a failed call, or the bare fact when it said nothing.
+fn tmux_why(run: &TmuxRun) -> String {
+    match run.stderr.trim() {
+        "" => "tmux exited with an error".to_string(),
+        why => why.to_string(),
+    }
+}
+
+/// The app's tmux sessions a `tmux ls` exit ([`crate::services::tmux_local::local_tmux_ls_args`])
+/// lists, with each one's folder. None when tmux says no server runs — how it says "no
+/// sessions": the server exits with its last one and a client that finds none exits
+/// non-zero (`discovery::tmux_says_no_server`). Any other failure, and a client that did
+/// not start, is an error: tmux was not asked, which is never "none".
+pub fn listed_sessions(run: Result<TmuxRun, String>) -> Result<Vec<TmuxAgent>, String> {
+    let run = run.map_err(|e| format!("tmux could not be asked for its sessions ({e})"))?;
+    if !run.success {
+        if crate::services::mobile_control::discovery::tmux_says_no_server(&run.stderr) {
+            return Ok(Vec::new());
+        }
+        return Err(format!("tmux could not list its sessions ({})", tmux_why(&run)));
+    }
+    Ok(crate::services::ssh_exec::parse_tmux_ls(&run.stdout)
+        .into_iter()
+        .filter(|s| crate::services::tmux_local::is_app_local_tmux_session(&s.name))
+        .map(|s| TmuxAgent { session: s.name, cwd: s.current_path })
+        .collect())
+}
+
+/// `tmux kill-session` of exactly `session` (`=`: a name that is gone must not
+/// prefix-match a sibling's, `-agent-1` ending `-agent-10`).
+fn kill_exact_args(session: &str) -> Vec<String> {
+    vec!["kill-session".into(), "-t".into(), format!("={session}")]
+}
+
+/// End `sessions`: each one's pane process with its whole subtree (`reap`, given the
+/// pane's pid, all found before any session goes), then the session itself (a kill
+/// that finds it already gone counts), then one more listing to confirm. A session is
+/// reported ended only when that listing no longer has it and nothing on the way
+/// failed for it. A pane table tmux would not give leaves every session in doubt (its
+/// processes were not reaped; `kill-session` only hangs the pane up), and so does a
+/// confirming listing that fails.
+pub fn end_sessions_in(sessions: &[String], tmux: &mut TmuxCall<'_>, reap: &mut dyn FnMut(u32)) -> Sweep {
+    let mut out = Sweep::default();
+    if sessions.is_empty() {
+        return out;
+    }
+    let panes_argv: Vec<String> = ["list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}"].map(String::from).to_vec();
+    let panes = match tmux(&panes_argv) {
+        Ok(run) if run.success => Ok(crate::services::agent_fence::parse_tmux_pane_pids(&run.stdout)),
+        // No server: no pane, and no session either (the listing below confirms it).
+        Ok(run) if crate::services::mobile_control::discovery::tmux_says_no_server(&run.stderr) => Ok(HashMap::new()),
+        Ok(run) => Err(tmux_why(&run)),
+        Err(e) => Err(e),
+    };
+    match panes {
+        Ok(panes) => {
+            for session in sessions {
+                if let Some(pid) = panes.get(session) {
+                    reap(*pid);
+                }
+            }
+        }
+        Err(e) => {
+            out.errors.push(format!("tmux would not name the agents' processes, so they were not ended with their subprocesses ({e})"));
+            for session in sessions {
+                out.doubt(session);
+            }
+        }
+    }
+    for session in sessions {
+        match tmux(&kill_exact_args(session)) {
+            Ok(run) if run.success || crate::services::tmux_local::kill_failure_is_already_gone(&run.stderr) => {}
+            Ok(run) => {
+                out.errors.push(format!("tmux could not end the session {session} ({})", tmux_why(&run)));
+                out.doubt(session);
+            }
+            Err(e) => {
+                out.errors.push(format!("tmux could not end the session {session} ({e})"));
+                out.doubt(session);
+            }
+        }
+    }
+    match listed_sessions(tmux(&crate::services::tmux_local::local_tmux_ls_args())) {
+        Ok(left) => {
+            for session in sessions {
+                if left.iter().any(|l| &l.session == session) {
+                    out.doubt(session);
+                } else if !out.unconfirmed.contains(session) {
+                    out.ended.push(session.clone());
+                }
+            }
+        }
+        Err(e) => {
+            out.errors.push(format!("whether the agents ended could not be confirmed: {e}"));
+            for session in sessions {
+                out.doubt(session);
+            }
+        }
+    }
+    out
+}
+
+/// The switch's tmux sweep for `project` (folder `dir`): `forced`, the sessions of the
+/// PTYs it has just ended (their tmux client is gone, the agent runs on in the session),
+/// and every session no registry PTY holds (`held`) that [`tmux_sessions_to_end`] picks
+/// from one listing. All are ended and confirmed by [`end_sessions_in`]. A listing tmux
+/// would not give is not "none": the forced sessions are still ended, and the sweep is
+/// incomplete. tmux saying no server runs is the normal empty machine, and complete.
+#[allow(clippy::too_many_arguments)]
+pub fn sweep_sessions_in(
+    project: &str,
+    dir: Option<&Path>,
+    forced: &[String],
+    held: &[String],
+    known: &[KnownSession],
+    verified: &dyn Fn(&str) -> bool,
+    tmux: &mut TmuxCall<'_>,
+    reap: &mut dyn FnMut(u32),
+) -> Sweep {
+    let mut doomed: Vec<String> = Vec::new();
+    for session in forced {
+        if !doomed.contains(session) {
+            doomed.push(session.clone());
+        }
+    }
+    let listing_error = match listed_sessions(tmux(&crate::services::tmux_local::local_tmux_ls_args())) {
+        Ok(sessions) => {
+            for session in tmux_sessions_to_end(project, dir, &sessions, held, known, verified) {
+                if !doomed.contains(&session) {
+                    doomed.push(session);
+                }
+            }
+            None
+        }
+        Err(e) => Some(format!("the agents' tmux sessions could not be listed, so one no window shows may still run: {e}")),
+    };
+    let mut out = end_sessions_in(&doomed, tmux, reap);
+    if let Some(e) = listing_error {
+        out.errors.insert(0, e);
+    }
+    out
+}
+
+/// One call of this machine's tmux client (`tmux_local::tmux_command`). Blocking.
+fn machine_tmux(argv: &[String]) -> Result<TmuxRun, String> {
+    let out = crate::services::tmux_local::tmux_command().args(argv).output().map_err(|e| e.to_string())?;
+    Ok(TmuxRun {
+        success: out.status.success(),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
+fn reap_pane(pid: u32) {
+    crate::terminal::reap_child_subtree(pid, crate::terminal::ReapMode::Graceful);
+}
+
+/// What a session ended on purpose leaves behind (as `local_tmux_kill` drops it): its
+/// launcher script and its agent's API proxy grants — taken for every session the
+/// sweep meant to end, confirmed gone or not.
+fn forget_sessions(sweep: &Sweep) {
+    for session in sweep.ended.iter().chain(&sweep.unconfirmed) {
+        crate::services::tmux_local::remove_launcher(session);
+        crate::services::api_proxy::on_tmux_session_gone(session);
+    }
+}
+
+/// [`end_sessions_in`] on this machine's tmux. Blocking. Without tmux (Windows, or
+/// none installed) no session exists to end.
+pub fn end_sessions(sessions: &[String]) -> Sweep {
+    if sessions.is_empty() || !crate::services::tmux_local::tmux_available() {
+        return Sweep::default();
+    }
+    let sweep = end_sessions_in(sessions, &mut machine_tmux, &mut reap_pane);
+    forget_sessions(&sweep);
+    sweep
+}
+
+/// [`sweep_sessions_in`] on this machine's tmux, the live spawns' recorded sessions and
+/// the gate's record. Blocking. Without tmux no session exists to end.
+pub fn sweep_sessions(project: &str, dir: Option<&Path>, forced: &[String], held: &[String]) -> Sweep {
+    if !crate::services::tmux_local::tmux_available() {
+        return Sweep::default();
+    }
+    let sweep = sweep_sessions_in(
+        project,
+        dir,
+        forced,
+        held,
+        &crate::services::agent_fence::live_tmux_tabs(),
+        &|tab| is_verified(tab, project),
+        &mut machine_tmux,
+        &mut reap_pane,
+    );
+    forget_sessions(&sweep);
+    sweep
+}
+
+// ── The re-check once a spawn is registered ─────────────────────────────────
+
+/// A spawn as the gate judged it, kept for the check [`recheck_spawn`] repeats once
+/// the process is registered. By then the argv is the fence's and tmux's, so this
+/// holds what stays reliable: the tab, its project and folder, the program the gate
+/// saw, the stamp it left, and what the fence showed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpawnCheck {
+    pub tab: String,
+    pub project_id: Option<String>,
+    pub cwd: String,
+    /// The program before any wrap renamed it, for the refusal's words.
+    pub cmd: String,
+    /// [`STAMP_ENV`] as the gate left it: the locked project it verified the spawn for.
+    pub stamp: Option<String>,
+    /// What the spawn's fence (or container) shows, when that was recorded.
+    pub view: Option<FenceView>,
+}
+
+impl SpawnCheck {
+    /// `opts` as [`gate`] handed it back; `None` for a spawn that is no agent, which
+    /// neither gate judges and the re-check leaves alone.
+    pub fn of(opts: &PtyOptions) -> Option<Self> {
+        crate::services::agent_fence::is_agent(opts).then(|| SpawnCheck {
+            tab: opts.id.clone(),
+            project_id: opts.project_id.clone(),
+            cwd: opts.cwd.clone(),
+            cmd: opts.cmd.clone(),
+            stamp: opts.env.get(STAMP_ENV).cloned(),
+            view: None,
+        })
+    }
+}
+
+/// Whether the spawn `spawn`, registered a moment ago, may keep running under `locked`
+/// as it is now. Both gates read the setting before the process was registered, and the
+/// switch's sweep takes one snapshot of the registered ones after it persisted the
+/// setting: a spawn between the two is caught here instead. It may stay only where the
+/// sweep would have kept it — no locked project it works in (its own scope, or its folder
+/// inside one) but the one the gate verified and stamped it for, and no other locked
+/// folder its fence still shows. `verified(tab, project)` is the gate's record.
+pub fn recheck_spawn_in(
+    locked: &[Locked],
+    spawn: &SpawnCheck,
+    verified: &dyn Fn(&str, &str) -> bool,
+    pins_claude: bool,
+) -> Result<(), String> {
+    let mut hit = subjects(locked, spawn.project_id.as_deref(), &spawn.cwd);
+    for l in locked {
+        if spawn.tab.starts_with(&format!("{}:", l.id)) && !hit.iter().any(|h| h.id == l.id) {
+            hit.push(l);
+        }
+    }
+    if let Some(subject) = hit.first().copied() {
+        if hit.len() > 1 {
+            return Err(refuse(subject, "this agent would work in more than one local-models-only project, and it was ended."));
+        }
+        if spawn.stamp.as_deref() != Some(subject.id.as_str()) || !verified(&spawn.tab, &subject.id) {
+            return Err(refuse(
+                subject,
+                &format!(
+                    "this agent, still starting when the switch was turned on, was ended. {}",
+                    unstamped_reason(subject, &spawn.cmd, pins_claude)
+                ),
+            ));
+        }
+    }
+    let Some(view) = spawn.view.as_ref() else { return Ok(()) };
+    for l in locked.iter().filter(|l| !hit.iter().any(|h| h.id == l.id)) {
+        if l.dir.as_deref().is_some_and(|dir| sees(view, dir)) {
+            return Err(refuse(
+                l,
+                "this agent, still starting when the switch was turned on, was ended: its sandbox was built before and shows the folder. Open it again.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// [`recheck_spawn_in`] against the live registry and the gate's record; an unreadable
+/// registry refuses, as both gates do. Blocking: one registry read.
+pub fn recheck_spawn(spawn: &SpawnCheck) -> Result<(), String> {
+    recheck_spawn_in(&locked_now()?, spawn, &is_verified, claude_pinned_platform())
 }
 
 // ── Which tabs the gate verified ────────────────────────────────────────────

@@ -93,4 +93,14 @@ export interface AgentPrivacyChange {
   /** Running verified local tabs whose sandbox was built under the other Cut network
    *  setting (`<scope>:<tab key>`): they keep it until reopened. Offered, never restarted silently. */
   restart_tabs?: string[];
+  /** Agent tmux sessions the switch meant to end but could not confirm gone: the setting
+   *  holds for new agents, but these may still read the folder. */
+  unconfirmed?: string[];
+  /** Why the sweep could not finish or confirm its work; absent or null when it did. */
+  sweep_error?: string | null;
+}
+
+/** Whether turning the switch on left agents it could not confirm stopped. */
+export function sweepIncomplete(change: AgentPrivacyChange): boolean {
+  return (change.unconfirmed?.length ?? 0) > 0 || !!change.sweep_error;
 }

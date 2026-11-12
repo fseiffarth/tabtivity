@@ -105,6 +105,8 @@ pub async fn pty_spawn(
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
     let turn = prepared.live_turn.map(crate::services::agent_turn::TurnState::as_str);
     let drop_dir = prepared.drop_dir.clone();
+    let privacy_check = prepared.privacy_check();
+    let (spawned_id, spawned_seq) = (prepared.opts.id.clone(), prepared.spawn_seq());
     let result = crate::terminal::spawn_pty(
         ctx.0.clone(),
         registry.clone(),
@@ -129,6 +131,16 @@ pub async fn pty_spawn(
         if mcp_token_handed_out {
             // The MCP session access fold lists live sessions; a new token is one.
             ctx.emit(crate::commands::root_mcp::SESSIONS_EVENT, ());
+        }
+        // Local models only switched on while this agent was starting: both gates
+        // ran before the PTY existed, the switch's sweep saw only registered ones.
+        // Judged again now that it is registered; refused, it ends here.
+        if let Err(refusal) = crate::services::launch_prep::recheck_privacy(privacy_check).await {
+            let note = crate::commands::agent_privacy::end_refused_spawn(registry, &spawned_id, spawned_seq).await;
+            return Err(match note {
+                Some(note) => format!("{refusal} {note}"),
+                None => refusal,
+            });
         }
     }
     result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn })
