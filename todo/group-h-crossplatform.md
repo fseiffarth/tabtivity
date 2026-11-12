@@ -9,15 +9,28 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
 *Intentional gaps (decided, not forgotten — do not re-open without new facts):*
 - *Windows:* `make_sticky` (no public show-on-all-desktops API), window
   **embedding** (no safe cross-process reparenting), ControlMaster and with it
-  the ssh-link monitor + `net_usage` sampler (Win32-OpenSSH has no mux support).
+  the ssh-link monitor + `net_usage` sampler, port forwards and the terminal
+  sign-in hand-off (Win32-OpenSSH has no mux support). No **agent fence** (no
+  unprivileged filesystem sandbox): local agents run with the user's rights
+  after a one-time acceptance, so Cut network is refused too. No **tmux**: no
+  session persistence, and the phone cannot attach to, create, schedule or
+  send to terminals on a Windows host.
 - *macOS:* window **embedding** (impossible), **per-window** parking of foreign
   apps (only app-granularity `NSRunningApplication hide/unhide`; per-window needs
   private CGS/SkyLight APIs — rejected as build-fragile), popout self-parking
   (hiding our own app would hide the MAIN window — deferred), `make_sticky`
-  (no public Spaces API), system-monitor process table limited to the calling
-  user's processes when unprivileged (`proc_pidinfo` visibility).
-- *Both:* the network pane's per-connection table (interfaces only; an
-  explanatory warning is shown in the pane).
+  (no public Spaces API), `position_window`, renderer-memory attribution
+  (WebContent processes are XPC services, not children), system-monitor
+  process table limited to the calling user's processes when unprivileged
+  (`proc_pidinfo` visibility). The fence is `sandbox-exec`, filesystem only.
+  Under Local models only, Cut network and a verified Claude tab are refused.
+  Piper voices are not offered (the OS voice is used).
+- *Both:* Copilot inline completion (Linux builds only), the hosted server,
+  sharing and the key keeper (Linux-only; other hosts run them in a Linux VM),
+  the loopback-listener ownership check and the phone OAuth callback relay,
+  the `state_gc` WebKitCache trim (WebKitGTK-only).
+
+Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
 
 - [ ] 🖐️ **Cross-platform install/model smoke test:** run the reusable
   [cross-platform testing checklist](../docs/cross-platform-testing.md), starting
@@ -482,14 +495,13 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
-    - [ ] **31f — macOS ssh-link traffic via nettop** (design note, no code).
-      ControlMaster exists on macOS, so remote projects mux fine; what's
-      missing is per-socket byte counters for the ssh-link monitor +
-      `net_usage` sampler (`ss -ti` is Linux-only). Design: resolve the master
-      pid from `ssh -O check` (as on Linux), then sample
-      `nettop -P -x -L 1 -p <master-pid>` and parse its CSV (`bytes_in`/
-      `bytes_out` columns) into the existing `SshLinkSnapshot`. Needs a mac to
-      verify nettop's CSV shape/permissions before writing the parser.
+    - [ ] **31f — macOS ssh-link traffic via nettop.** Built (2026-09 parity
+      sweep; `commands/network.rs`, "macOS: the master's cumulative socket
+      counters from `nettop`"), ⚠️ never run on a Mac. ControlMaster exists on
+      macOS, so remote projects mux fine; the ssh-link monitor + `net_usage`
+      sampler resolve the master pid from `ssh -O check` (as on Linux) and
+      sample `nettop` per master pid where Linux reads `ss -ti`. Open: verify
+      nettop's CSV shape and permissions on a real Mac.
 
 32. **OS parity sweep (2026-09-16).** ✅ Code-complete, ⚠️ **none of it
     verified live** — deferred items are listed under 32z below. Every item below
@@ -913,6 +925,114 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         decisions; breaks international Option input.
       - `NSLocalNetworkUsageDescription`, richer macOS crash log — low value
         vs. signal-handler risk.
+
+2442. **OS parity audit (2026-11-12).** A reading audit of Windows and macOS
+    against Linux at `214933ab5`; nothing was run on either OS. Evidence,
+    `file:line` and fix directions for every sub-item:
+    [docs/cross_os_parity_2026_11_12.md](../docs/cross_os_parity_2026_11_12.md).
+    *(likely)* = also rests on OS or third-party behaviour; confirm live first.
+    Items already deferred in 32z are marked so — they need the product call
+    recorded there, not a rediscovery.
+
+    *Windows*
+    - [ ] **2442a — Windows CI is red; no installer since v0.2.64.** The
+      `muse_session` test fixture writes a raw temp path into JSON
+      (`muse_session.rs:357`); backslashes make it invalid. JSON-escape `root`
+      in that test module. Blocks every other push.
+    - [ ] **2442b — Codex ignores its scope home** *(likely)*. Nothing sets
+      `CODEX_HOME`, and Codex takes its home from the profile Known Folder, not
+      `USERPROFILE`. Add a per-CLI home-override table beside `fence_env`.
+    - [ ] **2442c — live tabs do not redirect `APPDATA` / `LOCALAPPDATA` /
+      `HOMEDRIVE` / `HOMEPATH`.** The installer and probe redirect `APPDATA`;
+      `home_env` does not. Goose is the visible case.
+    - [ ] **2442d — a CLI typed into a shell tab is not shimmed.** The per-CLI
+      shims are extensionless POSIX scripts; write `.cmd` shims that apply the
+      home env.
+    - [ ] **2442e — Grok's Windows row installs the stale third-party client.**
+      Switch to xAI's PowerShell installer (verify the URL first).
+    - [ ] **2442f — Windows install commands for Muse, Cursor, Kiro, Goose,
+      Vibe.** All `None` today; the CLIs reportedly ship for Windows. Verify
+      each vendor command, then fill the rows. Plandex: confirm it has none.
+    - [ ] **2442g — agent `git_push` refuses a repo with a pre-push hook.**
+      Run the hook under `exec_trust` through `hardened_git_command_in`.
+    - [ ] **2442h — PowerShell session hook lacks the stray-`--resume`
+      check.** Port the "no Claude above this one" test from the POSIX hook.
+    - [ ] **2442i — TeX builds carry `\\?\` paths** *(likely)*. Run cwd,
+      `-outdir` and the returned `pdf_path` through `paths::display_path`.
+    - [ ] **2442j — sync mirror accepts Windows-hostile names** *(likely)*.
+      Reuse `mail_attach::windows_part_refusal` in `rel_components`; decide the
+      case-only collision policy.
+    - [ ] **2442k — tab close is a hard kill, no job object.** Deferred in
+      32z ("Job Object for ConPTY children").
+    - [ ] **2442l — background-job lamp never lights.** Needs a reader of
+      another process's environment (PEB walk) or a different tab marker.
+    - [ ] **2442m — small Windows items.** MiKTeX `latexmk` without Perl has
+      no check and no engine fallback; shell tab is always `COMSPEC`; system
+      monitor shows 0 for unreadable processes; env deny-list lacks
+      `HOMEDRIVE`/`HOMEPATH`; `C:\Windows\Fonts` literal; login keeper has no
+      file identity; no-op `prefetch_release`, `run_heartbeat`,
+      `sweep_stale_askpass`, launch-family tracking. (`restart_renderer`:
+      deferred in 32z.)
+
+    *macOS*
+    - [ ] **2442n — the Seatbelt fence leaves the ssh-agent, shared temp dirs
+      and `open` / `osascript` reachable** (security). Build
+      `docs/agent_fence_cross_os_plan.md` §5, or at least unset
+      `SSH_AUTH_SOCK`, give each scope a private `TMPDIR` and deny `lsopen` /
+      `appleevent-send`. Until then the threat model must say so (2442ac).
+    - [ ] **2442o — launched apps are mostly untracked.** `open -a` is not the
+      app's parent and the family marker is Linux-only: no row, no parking, no
+      close unless a window shows within ~2 s; "Open in IDE" always
+      relaunches; pid-0 rows never prune. Resolve the real pid by bundle id.
+    - [ ] **2442p — Keychain logins are invisible to `agent_auth`**
+      *(likely)*. Claude's sign-in state and the `claude_token` fallback
+      condition read a file a Keychain login never writes. Related 32z entry:
+      "Keychain file read for fenced Claude on macOS".
+    - [ ] **2442q — webview data does not follow the rename (macOS and
+      Windows).** `state_gc::webview_data_root` is `None` off Linux. Add the
+      WKWebView and WebView2 data dirs.
+    - [ ] **2442r — a Mac without tmux gets non-persistent tabs and no phone
+      terminals, silently.** Probe and say so on the persist toggle and in
+      phone setup; add a one-click install tab; re-probe instead of the
+      `OnceLock`.
+    - [ ] **2442s — the Tailscale setup button types a bare `tailscale`.**
+      Use the bundle path the backend already resolves.
+    - [ ] **2442t — install hints assume Homebrew.** Check for `brew` and
+      offer its bootstrap; for git, `xcode-select --install`.
+    - [ ] **2442u — the main window is forced fullscreen at every launch.**
+      Deferred in 32z ("fullscreen restore") as a product decision.
+    - [ ] **2442v — the phone sidecar is the bundle's executable copied out**
+      *(likely)*. May fail signature validation on arm64. Check on a Mac; if
+      it fails, point the launchd plist into the bundle.
+    - [ ] **2442w — Seatbelt rules use un-canonicalised roots** *(likely)*.
+      Add the canonical spelling beside the lexical one.
+    - [ ] **2442x — keyboard.** Alt+letter defaults match on `e.key` (match
+      `e.code` when Alt is held); keyboard-select ignores ⌘C/⌘X; "Ctrl" in
+      static strings; Ctrl-drag file export collides with Ctrl-click; native
+      menu titles are English literals.
+    - [ ] **2442y — fixed PATH list misses version managers; Homebrew rsync 3
+      is never used.** Login-shell PATH import is deferred in 32z (runs user
+      rc files); extending the list is the cheap half.
+    - [ ] **2442z — small macOS items.** Background-job detection lacks the
+      task-output and start-time checks; no `PR_SET_PDEATHSIG` / `RLIMIT_AS`
+      twins; fenced agents cannot read `crash.log`; byte-sync has no case-fold
+      or NFC/NFD handling; `AGENT_FENCE_DEFAULT_PATHS` lists Linux dirs only.
+
+    *Both*
+    - [ ] **2442aa — print: grayscale, two-sided and paper are ignored off
+      Linux** while the preview offers them and an approved `print_request`
+      drops them. Apply them natively, or disable the controls and say so.
+    - [ ] **2442ab — platform clippy is still `continue-on-error`.** Fix what
+      the Windows and macOS runners print, then make both steps blocking.
+    - [ ] **2442ac — docs.** `threat_model.md`: the macOS fence escapes
+      (2442n). `docs/context/openvpn.md`: the Windows service path.
+      `docs/context/print_mcp.md`: the platform note (2442aa).
+    - [ ] **2442ad — verify where each agent CLI keeps its login and sessions
+      on Windows and macOS** (table in the audit doc). Known wrong or
+      doubtful: Cursor's `.config/cursor/auth.json`, Droid's `auth.v2.json`,
+      Antigravity's token file, Muse's store. Add a file-storage switch to
+      `fence_env` wherever the CLI offers one (Cursor:
+      `AGENT_CLI_CREDENTIAL_STORE=file`).
 
 254. **The bare Super key belongs to the desktop, not to the OS.** ✅ Fixed
     2026-09-07, ⚠️ untested live. `useKeyboard` gated its lone Meta/Super panel
