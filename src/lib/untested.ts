@@ -376,6 +376,7 @@ export const UNTESTED = {
   "settings.agentFenceCargoCredentials": { area: "layout", what: "SettingsSubPanels · Allow Cargo registry credential files" },
   "settings.agentFencePlatformAccepted": { area: "layout", what: "SettingsSubPanels · Windows: withdraw the accepted 'agents run with your full rights'" },
   "settings.claudeToken": { area: "layout", what: "SettingsSubPanels · Claude long-lived token: Generate (claude setup-token tab, token read off its screen), paste, remove; fallback login of Claude tabs without a shared login" },
+  "agents.claudeTokenCard": { area: "layout", what: "SettingsSubPanels · Claude card: a 'Claude long-lived token' fold with the same token row as Accounts & keys (a save in one re-reads the other)" },
   "settings.claudeTokenRemote": { area: "layout", what: "SettingsSubPanels · Claude token also on remote hosts (ssh SendEnv LC_*, used only without the host's own login; tmux update-environment slot 8700)" },
   "settings.copilotFenceAuth": { area: "layout", what: "SettingsSubPanels · Copilot sign-in for fenced tabs (kept in Tabtivity's keyring, passed as COPILOT_GITHUB_TOKEN)" },
   "settings.rootFenceProjects": { area: "layout", what: "SettingsSubPanels · Root agent reads projects (root fence shows every project read-only)" },

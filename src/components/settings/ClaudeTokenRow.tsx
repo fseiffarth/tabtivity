@@ -14,7 +14,6 @@ interface ClaudeTokenStatus {
   saved: boolean;
   /** New local Claude tabs run on it now: no shared Claude login. */
   inUse: boolean;
-  remote: boolean;
   /** Saves since the backend started: a new token replacing an old one. */
   revision: number;
 }
@@ -23,12 +22,21 @@ interface ClaudeTokenStatus {
 const WAIT_MS = 15 * 60 * 1000;
 const POLL_MS = 3000;
 
+/** Every mounted row's refresh: the row sits in the Accounts & keys group and
+ *  in Claude's card, so a save, removal or toggle in one re-reads the other. */
+const mounted = new Set<() => void>();
+const refreshAll = () => mounted.forEach((f) => f());
+
 /** Claude's long-lived token (`claude setup-token`): generated in a tab whose
  *  screen the backend reads the token from, or pasted; the fallback login of
- *  every Claude tab while no shared login holds one, remote hosts included. */
-export function ClaudeTokenRow() {
+ *  every Claude tab while no shared login holds one, remote hosts included.
+ *  `heading={false}` drops the title line, for a host that shows the title
+ *  itself (the fold in Claude's card); the help then shows as a line. */
+export function ClaudeTokenRow({ heading = true }: { heading?: boolean }) {
   const t = useT();
   const [status, setStatus] = useState<ClaudeTokenStatus | null>(null);
+  // The backend's default is on (`Settings::claude_token_remote`).
+  const remote = useSettingsStore((s) => s.settings?.claude_token_remote ?? true);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -46,7 +54,12 @@ export function ClaudeTokenRow() {
         return null;
       });
   useEffect(() => {
-    void refresh();
+    const reread = () => void refresh();
+    mounted.add(reread);
+    reread();
+    return () => {
+      mounted.delete(reread);
+    };
   }, []);
 
   useEffect(() => {
@@ -61,6 +74,7 @@ export function ClaudeTokenRow() {
         if (s && s.saved && s.revision !== waitingFrom) {
           setWaitingFrom(null);
           setNote(t("settings.claudeTokenSaved"));
+          refreshAll();
         }
       });
     }, POLL_MS);
@@ -93,7 +107,7 @@ export function ClaudeTokenRow() {
       .catch((e: unknown) => setNote(String(e)))
       .finally(() => {
         setBusy(false);
-        void refresh();
+        refreshAll();
       });
   };
 
@@ -106,10 +120,12 @@ export function ClaudeTokenRow() {
 
   return (
     <div className="agents-block">
-      <div className="settings-subheader">
-        {t("settings.claudeToken")} <UntestedTag id="settings.claudeToken" />
-        <AgentsHelp text={t("settings.claudeTokenHelp")} />
-      </div>
+      {heading && (
+        <div className="settings-subheader">
+          {t("settings.claudeToken")} <UntestedTag id="settings.claudeToken" />
+          <AgentsHelp text={t("settings.claudeTokenHelp")} />
+        </div>
+      )}
       <div className="agents-row">
         <div className="agents-row-main">
           <AgentsStatus tone={status.saved ? "ok" : "off"}>{state}</AgentsStatus>
@@ -161,15 +177,12 @@ export function ClaudeTokenRow() {
       <div className="agents-option">
         <ToggleRow
           label={<>{t("settings.claudeTokenRemote")} <UntestedTag id="settings.claudeTokenRemote" /></>}
-          checked={status.remote}
-          onChange={(e) => {
-            const on = e.target.checked;
-            setStatus({ ...status, remote: on });
-            void useSettingsStore.getState().updateSettings({ claude_token_remote: on });
-          }}
+          checked={remote}
+          onChange={(e) => void useSettingsStore.getState().updateSettings({ claude_token_remote: e.target.checked })}
         />
         <p className="settings-help">{t("settings.claudeTokenRemoteHelp")}</p>
       </div>
+      {!heading && <p className="settings-help">{t("settings.claudeTokenHelp")}</p>}
       {waitingFrom !== null && <p className="settings-help">{t("settings.claudeTokenWaiting")}</p>}
       {note && <p className="settings-help">{note}</p>}
     </div>

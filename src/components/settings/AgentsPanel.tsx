@@ -49,6 +49,7 @@ import {
 } from "./agentNotices";
 import type { AgentLogin } from "./AgentLoginsRows";
 import { CodexAutoReviewToggle, AgentAccounts } from "./AgentAccounts";
+import { ClaudeTokenRow } from "./ClaudeTokenRow";
 import { AgentFenceCard } from "./AgentFenceCard";
 import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
@@ -653,6 +654,13 @@ export function AgentsPanel({
       {a.installed && (
         <AgentsFold label={<>{t("agents.defaultsTitle")} <UntestedTag id="agents.launchDefaults" /></>}>
           <AgentDefaults agent={a} />
+        </AgentsFold>
+      )}
+      {/* The token also lives in Accounts & keys; here it is where someone
+          looking for Claude's own sign-in looks first. */}
+      {a.id === "claude" && a.installed && (
+        <AgentsFold label={<>{t("settings.claudeToken")} <UntestedTag id="agents.claudeTokenCard" /></>}>
+          <ClaudeTokenRow heading={false} />
         </AgentsFold>
       )}
       {a.installed && installedExtras && (
