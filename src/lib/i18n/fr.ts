@@ -5757,6 +5757,7 @@ export const dict: Dict = {
   "terminal.reader.sendNowHint": "Encore en file — ↑ dans la zone vide le reprend pour le modifier, Échap arrête le tour et l'envoie tout de suite",
   "terminal.reader.sendNow": "Envoyer maintenant",
   "terminal.reader.sendNowTitle": "Arrêter le tour de l'agent (Échap) : les prompts en file partent alors aussitôt",
+  "terminal.reader.sendNowTitleClaude": "Envoyer maintenant les prompts en file dans le tour (Ctrl+X Ctrl+S) : une commande encore en cours passe en arrière-plan",
   "terminal.reader.cancelEdit": "Annuler et modifier",
   "terminal.reader.cancelEditTitle": "Reprendre les prompts de la file de l'agent dans la zone de texte (↑)",
   "terminal.reader.pullFailed": "Pas repris — l'agent n'a pas rendu le message en file. Regarde dans le terminal de l'agent.",

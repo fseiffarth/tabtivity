@@ -47,6 +47,20 @@ describe("queuePull", () => {
     expect(queuedHintShown([RULE, "❯ ", RULE])).toBe(false);
   });
 
+  it("sends Claude's queue with its own Ctrl+X Ctrl+S in one write, never Esc", async () => {
+    // 2.1.322 (`scripts/verify-cli/claude/send_now.py`): Esc hands a prompt
+    // the turn has not answered back into the box; the chord keeps it.
+    const { state, driver } = fakeClaude(["second"]);
+    expect(await sendQueuedNow(driver, "claude")).toBe(true);
+    expect(state.keys).toEqual(["\u0018\u0013"]);
+  });
+
+  it("presses nothing in Claude once the turn took the queue", async () => {
+    const { state, driver } = fakeClaude([]);
+    expect(await sendQueuedNow(driver, "claude")).toBe(false);
+    expect(state.keys).toEqual([]);
+  });
+
   it("reads the box as 2.1.310 draws it, a no-break space after the ❯", () => {
     expect(inputBoxLines([RULE, "❯\u00a0one", "\u00a0\u00a0two", RULE])).toEqual(["one", "two"]);
     expect(queuedHintShown([RULE, `❯\u00a0${HINT}`, RULE])).toBe(true);

@@ -84,6 +84,13 @@ const OPENCODE_KIND = /\s{2,}\S+\s*$/u;
 const CTRL_X = "\u0018";
 const CTRL_D = "\u0004";
 const ESCAPE = "\u001b";
+/** Claude's own `chat:sendNow`, Ctrl+X Ctrl+S, in one write (probed on
+ * 2.1.322, `scripts/verify-cli/claude/send_now.py`): a running Bash command
+ * moves to the background instead of being killed, a streaming answer stops
+ * unmarked, and a turn not yet answering keeps its prompt — where Esc hands
+ * it back into the box, unsent. Claude draws `ctrl+x ctrl+s to send now`
+ * under a queued message. */
+const CLAUDE_SEND_NOW = "\u0018\u0013";
 /** Most prompts a walk takes: `MAX_PENDING`. */
 const MAX_QUEUED = 50;
 const TIMING: QueuePullTiming = { waitMs: 1500, pollMs: 60 };
@@ -266,12 +273,13 @@ export async function finishSendNow(driver: QueuePullDriver, family: QueueFamily
   if (gone(await pollUntil(() => driver.rows(), gone, { ...timing, waitMs: 4000 }))) await driver.key("\r");
 }
 
-/** Send now off the desktop's own copy of the pane: Esc as the CLI's stop
- * takes it, while the screen still shows the queue. Also any plain stop of a
- * Codex turn with a queue, which would otherwise leave it in a box the chat
- * does not show. */
+/** Send now off the desktop's own copy of the pane, while the screen still
+ * shows the queue: Claude's own send-now chord, Esc as the other CLIs' stop
+ * takes it. Also any plain stop of a Codex turn with a queue, which would
+ * otherwise leave it in a box the chat does not show. */
 export async function sendQueuedNow(driver: QueuePullDriver, family: QueueFamily): Promise<boolean> {
   if (!queuedHintShown(driver.rows(), family)) return false;
+  if (family === "claude") return driver.key(CLAUDE_SEND_NOW);
   if (!(await driver.key(ESCAPE))) return false;
   if (family === "opencode") {
     await sleep(ESC_GAP_MS);

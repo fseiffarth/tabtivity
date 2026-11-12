@@ -5974,6 +5974,7 @@ export const enSource = {
   "terminal.reader.sendNowHint": "Still queued — ↑ in the empty box takes it back to edit, Esc stops the turn and sends it now",
   "terminal.reader.sendNow": "Send now",
   "terminal.reader.sendNowTitle": "Stop the agent's turn (Esc): the queued prompts then go at once",
+  "terminal.reader.sendNowTitleClaude": "Send the queued prompts into the turn now (Ctrl+X Ctrl+S): a command still running moves to the background",
   "terminal.reader.cancelEdit": "Cancel and edit",
   "terminal.reader.cancelEditTitle": "Take the queued prompts back out of the agent's queue into the text box (↑)",
   "terminal.reader.pullFailed": "Not taken back — the agent did not hand the queued prompt back. Look in the agent's terminal.",

@@ -663,10 +663,11 @@ export function useComposerSend({
     const release = codexQueueShown();
     if (type(AGENT_INTERRUPT) && release) void releaseCodexQueue();
   };
-  /** The queued bubbles' Send now: Esc stops the agent's turn, and the CLI
-   * then sends what waits in its queue at once (the desktop chat's Send now).
-   * But Claude takes a queued message into the running turn at its next tool
-   * call, and an Esc after that stops the turn that was to answer it. The
+  /** The queued bubbles' Send now (the desktop chat's): Claude's own
+   * Ctrl+X Ctrl+S sends what waits in its queue into the turn at once; the
+   * other CLIs' Esc stops the turn and then sends it. But Claude takes a
+   * queued message into the running turn at its next tool call, after which
+   * there is nothing left to send now. The
    * phone's copy of the screen is too late to judge that by, so the desktop
    * does, beside the pane (`send_now`): it presses only while the queue hint
    * shows. Until then — the desktop has not typed the prompt in yet, or the

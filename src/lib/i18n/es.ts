@@ -5755,6 +5755,7 @@ export const dict: Dict = {
   "terminal.reader.sendNowHint": "Aún en cola — ↑ en el cuadro vacío lo recupera para editarlo, Esc detiene el turno y lo envía ya",
   "terminal.reader.sendNow": "Enviar ya",
   "terminal.reader.sendNowTitle": "Detener el turno del agente (Esc): los prompts en cola salen entonces de inmediato",
+  "terminal.reader.sendNowTitleClaude": "Enviar ya al turno los prompts en cola (Ctrl+X Ctrl+S): un comando aún en marcha pasa a segundo plano",
   "terminal.reader.cancelEdit": "Cancelar y editar",
   "terminal.reader.cancelEditTitle": "Sacar los prompts de la cola del agente al cuadro de texto (↑)",
   "terminal.reader.pullFailed": "No recuperado — el agente no devolvió el mensaje en cola. Mira en el terminal del agente.",

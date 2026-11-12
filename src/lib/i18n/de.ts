@@ -5781,6 +5781,7 @@ export const dict: Dict = {
   "terminal.reader.sendNowHint": "Noch in der Warteschlange — ↑ im leeren Feld holt sie zum Bearbeiten zurück, Esc hält den Schritt an und sendet sie sofort",
   "terminal.reader.sendNow": "Jetzt senden",
   "terminal.reader.sendNowTitle": "Schritt des Agenten anhalten (Esc): die wartenden Prompts gehen dann sofort raus",
+  "terminal.reader.sendNowTitleClaude": "Wartende Prompts jetzt in den Schritt schicken (Strg+X Strg+S): ein noch laufender Befehl läuft im Hintergrund weiter",
   "terminal.reader.cancelEdit": "Abbrechen und bearbeiten",
   "terminal.reader.cancelEditTitle": "Die wartenden Prompts aus der Warteschlange des Agenten zurück ins Textfeld holen (↑)",
   "terminal.reader.pullFailed": "Nicht zurückgeholt — der Agent hat die wartende Nachricht nicht zurückgegeben. Sieh im Terminal des Agenten nach.",

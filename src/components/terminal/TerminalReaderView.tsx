@@ -2101,10 +2101,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** What ↑ in the composer can take back out of the CLI's queue: the prompts
    * still sending while its turn runs. */
   const queuedPrompts = useMemo(() => (queueCli ? pending : []), [queueCli, pending]);
-  /** A queued bubble's Send now. Claude's stop sends its queue by itself. */
+  /** A queued bubble's Send now: Claude's Ctrl+X Ctrl+S, which keeps the
+   * turn's running command and never hands the prompt back; the others' stop. */
   const sendQueued = () => {
-    if (queueCli === "claude") pressEscape();
-    else if (queueCli) void sendQueuedNow(paneDriver(), queueCli);
+    if (queueCli) void sendQueuedNow(paneDriver(), queueCli);
   };
   stoppableRef.current = () => [
     ...entries.filter((entry) => entry.kind === "prompt").slice(-3).map((entry) => ({ text: entry.text })),
@@ -2584,8 +2584,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           {!openStep && !browsed && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
-              {/* Queued behind a busy turn: Esc stops it and the queue goes
-                  at once; ↑ in the empty composer takes it back. Both act on
+              {/* Queued behind a busy turn: Send now sends the queue at once
+                  (Claude's Ctrl+X Ctrl+S, the others' Esc); ↑ in the empty
+                  composer takes it back. Both act on
                   the whole queue; every queued bubble carries them. */}
               {queueCli && (
                 <small className="terminal-reader-pending-hint">
@@ -2596,7 +2597,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
               )}
               {queueCli && (
                 <div className="terminal-reader-queued-actions">
-                  <button type="button" className="terminal-reader-stop" onClick={sendQueued} title={t("terminal.reader.sendNowTitle")}>
+                  <button type="button" className="terminal-reader-stop" onClick={sendQueued} title={t(queueCli === "claude" ? "terminal.reader.sendNowTitleClaude" : "terminal.reader.sendNowTitle")}>
                     {t("terminal.reader.sendNow")}
                   </button>
                   <button type="button" className="terminal-reader-stop" onClick={() => pullQueued.current?.()} title={t("terminal.reader.cancelEditTitle")}>

@@ -5755,6 +5755,7 @@ export const dict: Dict = {
   "terminal.reader.sendNowHint": "Ancora in coda — ↑ nella casella vuota lo riprende per modificarlo, Esc ferma il turno e lo invia subito",
   "terminal.reader.sendNow": "Invia ora",
   "terminal.reader.sendNowTitle": "Ferma il turno dell'agente (Esc): i prompt in coda partono subito",
+  "terminal.reader.sendNowTitleClaude": "Invia ora nel turno i prompt in coda (Ctrl+X Ctrl+S): un comando ancora in corso passa in background",
   "terminal.reader.cancelEdit": "Annulla e modifica",
   "terminal.reader.cancelEditTitle": "Riprendi i prompt dalla coda dell'agente nella casella di testo (↑)",
   "terminal.reader.pullFailed": "Non ripreso — l'agente non ha restituito il messaggio in coda. Guarda nel terminale dell'agente.",
