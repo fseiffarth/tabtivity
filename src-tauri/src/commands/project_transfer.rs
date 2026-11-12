@@ -2456,11 +2456,21 @@ fn free_dir(parent: &Path, leaf: &str) -> PathBuf {
 
 /// Unpack one bundle section into `dest`.
 ///
-/// Two ordering rules make this safe against a hand-crafted zip:
+/// Three rules make this safe against a hand-crafted zip:
 /// `enclosed_name` rejects any entry that would escape (absolute, `..`, drive
-/// prefix), and symlinks are created only after every directory and file, so no
-/// regular-file write can ever run through a link this same archive placed.
-fn extract_section(zip: &mut Bundle, section: &str, dest: &Path) -> Result<u64, String> {
+/// prefix); symlinks are created only after every directory and file, so no
+/// regular-file write can ever run through a link this same archive placed;
+/// and a link whose folder sits under a link (one this archive placed earlier)
+/// is skipped, so no link is ever created through another one.
+///
+/// `only`, when given, is the whole allowlist: just those top-level regular
+/// files are unpacked, and every folder, link or other name is dropped.
+fn extract_section(
+    zip: &mut Bundle,
+    section: &str,
+    dest: &Path,
+    only: Option<&[&str]>,
+) -> Result<u64, String> {
     let prefix = format!("{section}/");
     fs::create_dir_all(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
     let mut links: Vec<(PathBuf, String)> = Vec::new();
@@ -2476,6 +2486,13 @@ fn extract_section(zip: &mut Bundle, section: &str, dest: &Path) -> Result<u64, 
         };
         if rel.as_os_str().is_empty() || !entry.name().is_ok_and(|name| name.starts_with(&prefix)) {
             continue;
+        }
+        if let Some(only) = only {
+            let allowed = rel.to_str().is_some_and(|name| only.contains(&name));
+            if !allowed || entry.is_dir() || entry.is_symlink() {
+                eprintln!("project_transfer: {section}/{} is not carried; dropped", rel.display());
+                continue;
+            }
         }
         let out = dest.join(rel);
         if entry.is_dir() {
@@ -2499,6 +2516,17 @@ fn extract_section(zip: &mut Bundle, section: &str, dest: &Path) -> Result<u64, 
     }
 
     for (out, target) in links {
+        if let Some(linked) = linked_ancestor(dest, &out) {
+            // A link under a link would be created wherever the first one
+            // points — outside the import. Skipped and reported like a link the
+            // platform could not make.
+            eprintln!(
+                "project_transfer: symlink {} -> {target} skipped: {} is a link",
+                out.display(),
+                linked.display()
+            );
+            continue;
+        }
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -2509,6 +2537,25 @@ fn extract_section(zip: &mut Bundle, section: &str, dest: &Path) -> Result<u64, 
         }
     }
     Ok(files)
+}
+
+/// The first folder between `dest` (exclusive) and `out`'s parent (inclusive)
+/// that is itself a link, judged without following any of them. `out` is
+/// always `dest.join(rel)` with an enclosed `rel`.
+fn linked_ancestor(dest: &Path, out: &Path) -> Option<PathBuf> {
+    let rel = out.strip_prefix(dest).ok()?;
+    let parent = rel.parent()?;
+    let mut at = dest.to_path_buf();
+    for component in parent.components() {
+        at.push(component);
+        match fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() => return Some(at),
+            // Missing from here down: `create_dir_all` makes plain folders.
+            Err(_) => return None,
+            Ok(_) => {}
+        }
+    }
+    None
 }
 
 #[cfg(unix)]
@@ -2747,14 +2794,14 @@ pub fn import_project_export_blocking(
     // ── Unpack ──────────────────────────────────────────────────────────
     if manifest.remote {
         if manifest.contents.state {
-            files += extract_section(&mut zip, SECTION_STATE, &directory)?;
+            files += extract_section(&mut zip, SECTION_STATE, &directory, Some(REMOTE_STATE_FILES))?;
         } else {
             fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         }
         if let Some(mirror) = &mirror {
             let mirror = Path::new(mirror);
             if manifest.contents.mirror {
-                files += extract_section(&mut zip, SECTION_MIRROR, mirror)?;
+                files += extract_section(&mut zip, SECTION_MIRROR, mirror, None)?;
             } else {
                 fs::create_dir_all(mirror).map_err(|e| e.to_string())?;
                 notes.push("mirrorEmpty".to_string());
@@ -2764,7 +2811,7 @@ pub fn import_project_export_blocking(
         // its keychain, and its sync/lockstep state was never packed.
         notes.push("remoteCredentials".to_string());
     } else if manifest.contents.dir {
-        files += extract_section(&mut zip, SECTION_DIR, &directory)?;
+        files += extract_section(&mut zip, SECTION_DIR, &directory, None)?;
     } else {
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         notes.push("noFiles".to_string());
@@ -3530,10 +3577,92 @@ mod tests {
         }
         let mut zip = zip::ZipArchive::new(set::FileWindow::whole(bundle.to_str().unwrap()).unwrap()).unwrap();
         let dest = tmp.path().join("out");
-        let files = extract_section(&mut zip, SECTION_DIR, &dest).unwrap();
+        let files = extract_section(&mut zip, SECTION_DIR, &dest, None).unwrap();
         assert_eq!(files, 1);
         assert!(dest.join("ok.txt").exists());
         assert!(!tmp.path().join("escaped.txt").exists());
+    }
+
+    /// A bundle at `bundle` with the given `(name, Some(link target) | None for
+    /// a file of the name's bytes)` entries, in that order, plus the manifest.
+    fn crafted_bundle(bundle: &Path, entries: &[(&str, Option<&str>)]) -> Bundle {
+        {
+            let file = fs::File::create(bundle).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::FileOptions::<()>::default();
+            for (name, link) in entries {
+                match link {
+                    Some(target) => zip.add_symlink(*name, *target, opts).unwrap(),
+                    None => {
+                        zip.start_file(*name, opts).unwrap();
+                        zip.write_all(name.as_bytes()).unwrap();
+                    }
+                }
+            }
+            zip.start_file(BUNDLE_MANIFEST, opts).unwrap();
+            zip.write_all(b"{}").unwrap();
+            zip.finish().unwrap();
+        }
+        zip::ZipArchive::new(set::FileWindow::whole(bundle.to_str().unwrap()).unwrap()).unwrap()
+    }
+
+    /// Link-through-link: `dir/a` points outside the import, and a later
+    /// `dir/a/planted` would be created through it — out there. The second link
+    /// is skipped; the first one stays (it is only a link, like any other).
+    #[cfg(unix)]
+    #[test]
+    fn a_link_under_a_link_from_the_same_bundle_is_never_created() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let bundle = tmp.path().join(concat!("evil.", crate::app_slug!(), "proj"));
+        let outside_text = outside.to_string_lossy().to_string();
+        let mut zip = crafted_bundle(
+            &bundle,
+            &[
+                ("dir/a", Some(outside_text.as_str())),
+                ("dir/a/planted", Some("../payload")),
+                ("dir/a/sub/deeper", Some("../payload")),
+                ("dir/ok", Some("payload")),
+                ("dir/payload", None),
+            ],
+        );
+        let dest = tmp.path().join("out");
+        let files = extract_section(&mut zip, SECTION_DIR, &dest, None).unwrap();
+        assert_eq!(files, 1);
+        assert!(fs::symlink_metadata(dest.join("a")).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(dest.join("ok")).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0, "nothing lands outside");
+    }
+
+    /// A remote project's `state/` section unpacks only what export carries:
+    /// a hand-made bundle's `sync.json`, `git_peer.json`, folders and links are
+    /// dropped, never adopted.
+    #[test]
+    fn a_remote_state_section_keeps_only_the_carried_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = tmp.path().join(concat!("state.", crate::app_slug!(), "proj"));
+        let mut zip = crafted_bundle(
+            &bundle,
+            &[
+                ("state/project.json", None),
+                ("state/sync.json", None),
+                ("state/git_peer.json", None),
+                ("state/local_loss.json", None),
+                ("state/sub/project.json", None),
+                ("state/link", Some("project.json")),
+            ],
+        );
+        let dest = tmp.path().join("state-out");
+        let files =
+            extract_section(&mut zip, SECTION_STATE, &dest, Some(REMOTE_STATE_FILES)).unwrap();
+        assert_eq!(files, 1);
+        let mut names: Vec<String> = fs::read_dir(&dest)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["project.json".to_string()]);
     }
 
     /// An imported bundle never opens the project to a phone: the switch, its
