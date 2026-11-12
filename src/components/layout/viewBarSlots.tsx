@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import { wrapStep } from "../../lib/wrapStep";
 import { createPortal } from "react-dom";
 
 /**
@@ -42,6 +43,40 @@ export function ViewBarAgentSlot({ children }: { children: React.ReactNode }) {
   return agent ? createPortal(children, agent) : null;
 }
 
+/**
+ * A view tab's press, click and keys: the left button picks on its press; a
+ * click that is no mouse press (detail 0, steering's Enter on the window bar)
+ * picks too, a real one has already picked on its mouse-down. Enter / Space
+ * pick; the arrows walk focus over the tablist's tabs (roving), wrapping.
+ */
+export function viewTabHandlers(pick: () => void) {
+  return {
+    onMouseDown: (e: React.MouseEvent<HTMLElement>) => {
+      if (e.button === 0) pick();
+    },
+    onClick: (e: React.MouseEvent<HTMLElement>) => {
+      if (e.detail === 0) pick();
+    },
+    onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+        return;
+      }
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const tabs = Array.from(
+        e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
+      );
+      const at = tabs.indexOf(e.currentTarget);
+      const next = tabs[wrapStep(at, e.key === "ArrowRight" ? 1 : -1, tabs.length)];
+      if (next) {
+        e.preventDefault();
+        next.focus();
+      }
+    },
+  };
+}
+
 export interface ViewSubTab<T extends string> {
   id: T;
   label: string;
@@ -78,29 +113,7 @@ export function ViewSubTabs<T extends string>({
             aria-selected={value === item.id}
             className={`tab root-view-subtab${value === item.id ? " active" : ""}`}
             data-view-section={item.id}
-            onMouseDown={(e) => {
-              if (e.button === 0) onChange(item.id);
-            }}
-            onClick={(e) => {
-              if (e.detail === 0) onChange(item.id);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onChange(item.id);
-                return;
-              }
-              if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-              const tabs = Array.from(
-                e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
-              );
-              const at = tabs.indexOf(e.currentTarget);
-              const next = tabs[(at + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
-              if (next) {
-                e.preventDefault();
-                next.focus();
-              }
-            }}
+            {...viewTabHandlers(() => onChange(item.id))}
           >
             <span className="tab-label">{item.label}</span>
           </div>

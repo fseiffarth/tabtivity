@@ -5,7 +5,7 @@
  * cannot be read, or is over the export's size cap, is left out and counted —
  * one bad file does not sink the rest. Remote text is data only.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { readFileText } from "../files/fileAccess";
 import type { SyncEntryStatus } from "../../stores/remote/sync";
 import { buildHandoffFile, type HandoffFile } from "./syncHandoff";
 import { newerFileSide, type SideTimes } from "./syncSideTimes";
@@ -53,8 +53,8 @@ export async function collectHandoffFiles(input: {
     const rel = rels[i];
     try {
       const [localText, remoteText] = await Promise.all([
-        invoke<string>("read_file_text", { path: `${mirrorRoot}/${rel}`, projectId }),
-        invoke<string>("read_file_text", { path: joinRemote(remotePath, rel), projectId }),
+        readFileText(`${mirrorRoot}/${rel}`, projectId),
+        readFileText(joinRemote(remotePath, rel), projectId),
       ]);
       if (tooBig(localText) || tooBig(remoteText)) {
         skipped++;

@@ -6,6 +6,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { CliOverviewBody } from "../agents/CliOverviewView";
 import { ViewSubTabs } from "../layout/viewBarSlots";
+import { useVisitedSections } from "./useVisitedSections";
 import { AgentsPanel } from "../settings/AgentsPanel";
 import { SkillsLibraryView } from "../skills/SkillsLibraryView";
 import { AgentChips } from "./ModelsHubSections";
@@ -39,13 +40,7 @@ export function AgentsView() {
   const t = useT();
   const section = useModelsOverlayStore((s) => s.agentsSection);
   const setSection = useModelsOverlayStore((s) => s.setAgentsSection);
-  // Sections shown so far; derived with the section so a first show renders in
-  // the same frame, not one effect later.
-  const [visited, setVisited] = useState<ReadonlySet<AgentsSection>>(() => new Set([section]));
-  useEffect(() => {
-    setVisited((v) => (v.has(section) ? v : new Set(v).add(section)));
-  }, [section]);
-  const mounted = (id: AgentsSection) => id === section || visited.has(id);
+  const mounted = useVisitedSections(section);
 
   return (
     <div className="app-view app-view-agents models-overlay-body">

@@ -84,6 +84,14 @@ const tokFor = (g: SteeringGroup) => TOK_BY_GROUP.get(g) ?? "tok-comment";
  * `document.body` so no pane clips it. Nothing here animates or blurs.
  */
 export function SteeringLegend() {
+  // Mounted for the app's whole life, drawn only while steering is on or lent
+  // to a box. The store reads and layout effects live in the body, so an idle
+  // bar does not re-render on every agent's activity.
+  const barUp = useKeyboardSteeringStore((s) => s.active || !!s.handedTo);
+  return barUp ? <SteeringLegendBody /> : null;
+}
+
+function SteeringLegendBody() {
   const t = useT();
   const active = useKeyboardSteeringStore((s) => s.active);
   const level = useKeyboardSteeringStore((s) => s.level);

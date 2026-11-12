@@ -15,7 +15,6 @@ import {
   groupChanges,
   buildMerged,
   applyBlockToggle,
-  canToggle,
   locateBlock,
   blockSideLines,
   type AlignRow,
@@ -455,12 +454,17 @@ export function CompareView({
       return { id: b.id, left, right, newer };
     });
   }, [sideTimes, rows, blocks]);
-  const timesOf = (side: "left" | "right") => {
-    if (!blockTimes) return undefined;
-    const m = new Map<number, { time: SideTime | null; newer: boolean }>();
-    for (const bt of blockTimes) m.set(bt.id, { time: bt[side], newer: bt.newer === side });
-    return m;
-  };
+  // Each side column's dates by block id, built once per `blockTimes`.
+  const sideBlockTimes = useMemo(() => {
+    if (!blockTimes) return null;
+    const of = (side: "left" | "right") => {
+      const m = new Map<number, { time: SideTime | null; newer: boolean }>();
+      for (const bt of blockTimes) m.set(bt.id, { time: bt[side], newer: bt.newer === side });
+      return m;
+    };
+    return { left: of("left"), right: of("right") };
+  }, [blockTimes]);
+  const timesOf = (side: "left" | "right") => sideBlockTimes?.[side];
 
   // A merge in progress (GitMergeView's conflict resolve, SyncMergeView): picks
   // or hand edits not yet applied live only here. Plain diffs (no `onApply`)
@@ -499,30 +503,52 @@ export function CompareView({
     if (decisionOf(b) !== d) toggle(b);
   };
 
-  const toggleEnabled = (b: ChangeBlock): boolean =>
-    !manual || canToggle(resultText, b, decisionOf(b));
-
   // Syntax-highlight the editable result so the middle column reads like the two
   // side columns instead of flat monochrome text. The highlighted lines paint a
   // backdrop that the transparent-text textarea sits on top of (its caret and
   // selection stay live); scroll is mirrored from the textarea in its onScroll.
   const lang = useMemo(() => languageForPath(path), [path]);
   const resultLines = useMemo(() => resultText.split("\n"), [resultText]);
-  const resultHtml = useMemo(() => resultLines.map((line) => highlight(line, lang)), [resultLines, lang]);
+  // `highlight` reads one line alone, so a keystroke re-highlights only the
+  // lines it changed: the rest come from the previous render's lines (kept for
+  // the same language only, and only the lines still in the buffer).
+  const highlightCache = useRef<{ lang: string; lines: Map<string, string | null> }>({ lang: "", lines: new Map() });
+  const resultHtml = useMemo(() => {
+    const prev = highlightCache.current.lang === lang ? highlightCache.current.lines : new Map<string, string | null>();
+    const next = new Map<string, string | null>();
+    const html = resultLines.map((line) => {
+      const known = next.has(line) ? next.get(line) : prev.get(line);
+      const out = known !== undefined ? known : highlight(line, lang);
+      next.set(line, out);
+      return out;
+    });
+    highlightCache.current = { lang, lines: next };
+    return html;
+  }, [resultLines, lang]);
+
+  // Where each block's current side sits in the live buffer, located by context
+  // so it survives hand-edits and the per-hunk toggles (`locateBlock`); null for
+  // a block that can't be uniquely located. One pass serves the toggles and the
+  // changed-line tint.
+  const located = useMemo(() => {
+    const m = new Map<number, { start: number; len: number } | null>();
+    for (const b of blocks) m.set(b.id, locateBlock(resultLines, b, decisions[b.id] ?? "accept"));
+    return m;
+  }, [blocks, resultLines, decisions]);
+
+  const toggleEnabled = (b: ChangeBlock): boolean =>
+    !manual || located.get(b.id) != null;
 
   // Which result lines currently belong to a change block — used to tint the
   // changed regions in the middle backdrop (the same blue as the mid ruler bars).
-  // Located by context against the live buffer so it survives hand-edits and the
-  // per-hunk toggles; a block that can't be uniquely located just isn't marked.
+  // A block that can't be uniquely located just isn't marked.
   const changedLines = useMemo(() => {
     const s = new Set<number>();
-    for (const b of blocks) {
-      const loc = locateBlock(resultLines, b, decisionOf(b));
+    for (const loc of located.values()) {
       if (loc) for (let k = 0; k < loc.len; k++) s.add(loc.start + k);
     }
     return s;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, resultLines, decisions]);
+  }, [located]);
 
   // Proportional scroll-sync across the three panes (content heights differ, so
   // this is by ratio, not line-for-line). Feedback is suppressed by *echo

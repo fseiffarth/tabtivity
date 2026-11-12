@@ -17,6 +17,7 @@
  * so a surface needs no steering code of its own to be walkable.
  */
 import { experimentalEnabled } from "../experimental";
+import { wrapStep } from "../wrapStep";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import type { Settings } from "../../types";
 import type { SteeringRegion } from "../../stores/keyboardSteering";
@@ -76,6 +77,16 @@ const ADD_TAB_SUBMENU = "[data-steer-add-tab-submenu]";
 const popoutChromeFrames = new WeakSet<HTMLElement>();
 const POPOUT_CHROME_ZONE = ".detached-titlebar-actions, .detached-titlebar-controls";
 
+/** The root console's window frame (the cockpit, its apps and its chrome), when open. */
+function rootFrame(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+}
+
+/** The first element under `within` matching `selector` that is on screen. */
+function firstShown(selector: string, within: ParentNode = document): HTMLElement | null {
+  return Array.from(within.querySelectorAll<HTMLElement>(selector)).find(shown) ?? null;
+}
+
 function lastMatch(selector: string): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>(selector);
   return all.length > 0 ? all[all.length - 1] : null;
@@ -86,7 +97,7 @@ function lastMatch(selector: string): HTMLElement | null {
 export function regionRoot(region: SteeringRegion): HTMLElement | null {
   switch (region) {
     case "cockpit": {
-      const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+      const frame = rootFrame();
       if (frame) { chromeFrames.delete(frame); appFrames.delete(frame); }
       return frame;
     }
@@ -114,7 +125,7 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
         return bar;
       }
       // The root window's frame, walked only over its chrome (`CHROME_ZONE`).
-      const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+      const frame = rootFrame();
       if (frame) {
         appFrames.delete(frame);
         chromeFrames.add(frame);
@@ -144,7 +155,7 @@ export function regionRoot(region: SteeringRegion): HTMLElement | null {
     default: {
       // The three apps are views of the root console's window: the region
       // walks its frame, minus the view strip (`APP_SKIP`).
-      const frame = document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+      const frame = rootFrame();
       if (frame) {
         chromeFrames.delete(frame);
         appFrames.add(frame);
@@ -258,7 +269,7 @@ export function dismissLayer(layer: HTMLElement, after?: () => void): void {
   }, 0);
   function fallBack() {
     if (!layer.isConnected || !shown(layer)) return;
-    const close = Array.from(layer.querySelectorAll<HTMLElement>(".dialog-close-btn")).find(shown);
+    const close = firstShown(".dialog-close-btn", layer);
     if (close) {
       close.click();
       return;
@@ -308,16 +319,14 @@ export function openContextMenu(el: HTMLElement): void {
  *  walks the Root view (`steeringScope`), the one in Root's strip. */
 export function activeTabElement(): HTMLElement | null {
   if (steeringInRoot()) {
-    const within = (selector: string) =>
-      Array.from(document.querySelectorAll<HTMLElement>(selector));
     // A split layout draws a strip per subwindow (inside `.root-overlay-group`):
     // the focused one's active tab. Unsplit, the one strip sits in the window's
     // bar, outside any group. (A single selector for both would also match
     // every other subwindow's active tab, and the first in the document wins.)
-    const inFocusedGroup = within(".root-console-backdrop .root-overlay-group.focused .tab.active").find(shown);
+    const inFocusedGroup = firstShown(".root-console-backdrop .root-overlay-group.focused .tab.active");
     if (inFocusedGroup) return inFocusedGroup;
     return (
-      within(".root-console-backdrop .tab-strip .tab.active:not(.root-view-tab)").find(
+      Array.from(document.querySelectorAll<HTMLElement>(".root-console-backdrop .tab-strip .tab.active:not(.root-view-tab)")).find(
         (el) => shown(el) && !el.closest(".root-overlay-group"),
       ) ?? null
     );
@@ -331,7 +340,7 @@ export function activeTabElement(): HTMLElement | null {
  *  its frame); only the active tab's pane is on screen. */
 export function activeTabCard(): HTMLElement | null {
   if (steeringInRoot()) {
-    return Array.from(document.querySelectorAll<HTMLElement>(".root-console-backdrop .terminal-sign-in")).find(shown) ?? null;
+    return firstShown(".root-console-backdrop .terminal-sign-in");
   }
   const all = Array.from(document.querySelectorAll<HTMLElement>(".subwindow.focused .terminal-sign-in"));
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
@@ -342,7 +351,7 @@ export function activeTabCard(): HTMLElement | null {
 function activeSubagentControl(): HTMLElement | null {
   const controls = ".terminal-reader-subagent-toggle, .terminal-reader-subagent-bar";
   if (steeringInRoot()) {
-    return Array.from(document.querySelectorAll<HTMLElement>(`.root-console-backdrop :is(${controls})`)).find(shown) ?? null;
+    return firstShown(`.root-console-backdrop :is(${controls})`);
   }
   const active = steeringTabsActive();
   if (!active) return null;
@@ -352,7 +361,7 @@ function activeSubagentControl(): HTMLElement | null {
     (el) => el.dataset.scopeKey === active.scope && el.dataset.tabKey === active.tab.key && shown(el),
   );
   if (!pane) return null;
-  return Array.from(pane.querySelectorAll<HTMLElement>(controls)).find(shown) ?? null;
+  return firstShown(controls, pane);
 }
 
 /** The pane the subagents region walks: the one holding both the Chat's top bar
@@ -369,7 +378,7 @@ export function activeSubagentFrame(): HTMLElement | null {
  *  draws after this event, not yet. */
 export function openSubagentList(frame: HTMLElement): boolean {
   if (frame.querySelector(".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)")) return false;
-  const toggle = Array.from(frame.querySelectorAll<HTMLElement>(".terminal-reader-subagent-toggle")).find(shown);
+  const toggle = firstShown(".terminal-reader-subagent-toggle", frame);
   if (!toggle || toggle.getAttribute("aria-expanded") === "true") return false;
   toggle.click();
   return true;
@@ -392,7 +401,7 @@ export function placeSubagentCursor(frame: HTMLElement): boolean {
 
 /** The current project's pill (or box chip) in the header. */
 export function activeProjectElement(): HTMLElement | null {
-  return Array.from(document.querySelectorAll<HTMLElement>(".project-pill.active, .box-chip.active")).find(shown) ?? null;
+  return firstShown(".project-pill.active, .box-chip.active");
 }
 
 /** Scroll `root`'s first scrolling box by part of its height — for a surface
@@ -438,7 +447,7 @@ export function stepSettingsPage(delta: 1 | -1): boolean {
   );
   if (pages.length === 0) return false;
   const at = pages.findIndex((el) => el.matches('[aria-current]:not([aria-current="false"])'));
-  const next = at < 0 ? (delta > 0 ? 0 : pages.length - 1) : (at + delta + pages.length) % pages.length;
+  const next = at < 0 ? (delta > 0 ? 0 : pages.length - 1) : wrapStep(at, delta, pages.length);
   if (next === at) return false;
   pages[next].click();
   return true;
@@ -598,7 +607,7 @@ export function moveRegionCursor(root: HTMLElement, delta: 1 | -1): void {
       ? delta > 0
         ? 0
         : targets.length - 1
-      : (at + delta + targets.length) % targets.length;
+      : wrapStep(at, delta, targets.length);
   setCursor(targets[next], root);
 }
 
@@ -635,7 +644,7 @@ export function moveRegionCursorByLine(root: HTMLElement, delta: 1 | -1): void {
   const current = cursor;
   const at = current ? lines.findIndex((line) => line.includes(current)) : -1;
   const next =
-    at < 0 ? (delta > 0 ? 0 : lines.length - 1) : (at + delta + lines.length) % lines.length;
+    at < 0 ? (delta > 0 ? 0 : lines.length - 1) : wrapStep(at, delta, lines.length);
   setCursor(lines[next][0], root);
 }
 

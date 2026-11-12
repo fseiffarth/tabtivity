@@ -9,8 +9,9 @@ import {
   type SideTimes,
 } from "../../lib/viewers/syncSideTimes";
 
-/** How many file+content blames to keep (each is one `git blame` per side). */
-const CACHE_MAX = 24;
+/** How many file+content blames to keep (each is one `git blame` per side, so
+ *  the last three files opened). Each holds a whole file's blame map. */
+const CACHE_MAX = 6;
 const blameCache = new Map<string, Promise<Map<number, BlameEntry>>>();
 
 /** One `git_blame`, cached per side + directory + file + content. A failure is

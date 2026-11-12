@@ -121,6 +121,14 @@ export function pasteIntoAgentBox(
   return true;
 }
 
+/** `current` with `text` put in at offset `at`, a space before it unless it
+ *  starts the text or follows whitespace: how a box for an agent tab takes an
+ *  `@` reference, a pasted file or a dictated piece. */
+export function spliceSpaced(current: string, at: number, text: string): string {
+  const before = current.slice(0, at);
+  return `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+}
+
 type ReaderInsert = (text: string) => void;
 const readerInserts = new Map<string, ReaderInsert>();
 

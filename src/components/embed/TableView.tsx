@@ -304,6 +304,11 @@ export function TableView({
   const widths = useMemo(() => columnWidths(rows, width), [rows, width]);
 
   const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setAppliedQuery(query), 150);
+    return () => window.clearTimeout(timer);
+  }, [query]);
   const [sort, setSort] = useState<SortSpec | null>(null);
   // What the reader has picked (cells, rows or columns). Keyed by source row
   // index and parsed column index, so a re-sort or filter leaves it on the same
@@ -425,7 +430,7 @@ export function TableView({
   // merely slid down when an earlier row was inserted is not counted as new.
   const [flashRows, setFlashRows] = useState<Set<number>>(new Set());
   const prevSigsRef = useRef<Map<string, number> | null>(null);
-  const flashTimers = useRef<number[]>([]);
+  const flashTimers = useRef(new Set<number>());
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
 
@@ -435,43 +440,46 @@ export function TableView({
       prevSigsRef.current = null;
       return;
     }
-    const bodyRows = rowsRef.current.slice(1);
-    const counts = new Map<string, number>();
-    for (const cells of bodyRows) {
-      const sig = JSON.stringify(cells);
-      counts.set(sig, (counts.get(sig) ?? 0) + 1);
-    }
     const prev = prevSigsRef.current;
-    prevSigsRef.current = counts;
-    if (prev == null) return; // first settled content: seed only, don't flash
-
-    const remaining = new Map(prev);
+    const counts = new Map<string, number>();
     const added = new Set<number>();
-    bodyRows.forEach((cells, i) => {
-      const sig = JSON.stringify(cells);
-      const left = remaining.get(sig) ?? 0;
-      if (left > 0) remaining.set(sig, left - 1);
-      else added.add(i + 1); // +1: source index, past the header at 0
-    });
+    for (let i = 1; i < rowsRef.current.length; i++) {
+      const sig = JSON.stringify(rowsRef.current[i]);
+      counts.set(sig, (counts.get(sig) ?? 0) + 1);
+      if (prev != null) {
+        const left = prev.get(sig) ?? 0;
+        if (left > 0) prev.set(sig, left - 1);
+        else added.add(i);
+      }
+    }
+    prevSigsRef.current = counts;
+    // The first settled content has no `prev`, so it adds nothing: seed only.
     if (added.size === 0) return;
 
     setFlashRows((cur) => new Set([...cur, ...added]));
     const timer = window.setTimeout(() => {
+      flashTimers.current.delete(timer);
       setFlashRows((cur) => {
         const next = new Set(cur);
         for (const idx of added) next.delete(idx);
         return next;
       });
     }, 3000);
-    flashTimers.current.push(timer);
+    flashTimers.current.add(timer);
   }, [content, isSheet]);
 
-  useEffect(() => () => flashTimers.current.forEach((timer) => clearTimeout(timer)), []);
+  useEffect(() => {
+    const timers = flashTimers.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
 
   const body = useMemo(() => bodyRefs(rows), [rows]);
   // Filtering follows the eye: a row matched on a hidden column would show up with
   // nothing on it to explain why.
-  const filtered = useMemo(() => filterRefs(body, query, cols), [body, query, cols]);
+  const filtered = useMemo(() => filterRefs(body, appliedQuery, cols), [body, appliedQuery, cols]);
   const visible = useMemo(() => {
     if (!sort) return filtered;
     if (sort.col === GUTTER_SORT_COL) return sortRefsByIndex(filtered, sort.dir);
@@ -860,7 +868,7 @@ export function TableView({
   );
 
   const countLabel =
-    query.trim() !== ""
+    appliedQuery.trim() !== ""
       ? t("tableView.rowsFilteredCount", { shown: visible.length, total: body.length })
       : body.length === 1
         ? t("tableView.rowCountOne", { count: body.length })
@@ -1374,7 +1382,7 @@ export function TableView({
           </table>
           {total === 0 && body.length > 0 && (
             <div style={{ padding: "8px 10px", fontSize: 12, opacity: 0.7 }}>
-              {t("tableView.noRowsMatch", { query })}
+              {t("tableView.noRowsMatch", { query: appliedQuery })}
             </div>
           )}
           {/* The horizontal scrollbar is an overlay (`customScrollbar`, 8px) drawn

@@ -54,7 +54,8 @@ import {
 } from "../../../../mobile-web/src/markup/layer";
 import { drawMark, drawPage, INK, type Paint } from "../../../../mobile-web/src/markup/rasterize";
 import { colorsFor, eraserPx, inkStyle, penCursor, SNAP_HOLD_MS, SNAP_SLOP_PX, strokePressure, strokeWidth } from "../../../../mobile-web/src/markup/pen";
-import { COLOR_KEYS, selectionColors } from "./PdfMarkupBar";
+import { selectionColors } from "./PdfMarkupBar";
+import { PEN_STYLE_KEYS, SwatchButtons } from "./PdfMarkupDock";
 import type { CommentDraft, MarkupEdit, NoteDraft } from "./usePdfMarkup";
 
 /** How strongly the marks of earlier rounds show — sent, never sent again. */
@@ -693,13 +694,8 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   );
 }
 
-/** The pen styles' names, the highlighter's (`marker`) among them. */
-const STYLE_NAME_KEYS: Record<PenStyle, TranslationKey> = {
-  pen: "mobile.markup.style.pen",
-  marker: "mobile.markup.tool.highlight",
-  dashed: "mobile.markup.style.dashed",
-  arrow: "mobile.markup.style.arrow",
-};
+/** The pen styles' names, the highlighter's (`marker`) by its tool's name. */
+const STYLE_NAME_KEYS: Record<PenStyle, TranslationKey> = { ...PEN_STYLE_KEYS, marker: "mobile.markup.tool.highlight" };
 /** How far a copy lands from the marks it copies, CSS pixels. */
 const COPY_PX = 16;
 /** The selection bar's height and its gap to the marks, CSS pixels. */
@@ -726,20 +722,7 @@ function MarkupSelectionBar({ box, scale, pageWidth, edit }: { box: [number, num
       onPointerDown={(event) => event.stopPropagation()}
     >
       <span className="file-viewer-pdf-markup-colors" role="group" aria-label={t("mobile.markup.color")}>
-        {selectionColors(edit.base, selection).map((color) => (
-          <button
-            key={color}
-            type="button"
-            className={`file-viewer-zoom-btn file-viewer-pdf-markup-swatch is-${color}${shared === color ? " active" : ""}`}
-            aria-pressed={shared === color}
-            title={t("mobile.markup.colorOf", { color: t(COLOR_KEYS[color]) })}
-            aria-label={t("mobile.markup.colorOf", { color: t(COLOR_KEYS[color]) })}
-            onClick={() => edit.restyleSelection({ color })}
-            style={{ ["--swatch" as string]: INK[color] }}
-          >
-            <span aria-hidden="true" />
-          </button>
-        ))}
+        <SwatchButtons colors={selectionColors(edit.base, selection)} chosen={shared} onPick={(color) => edit.restyleSelection({ color })} />
       </span>
       {inks.length > 0 && (
         <select
@@ -812,20 +795,7 @@ function MarkupNoteEditor({ note, scale, pageWidth, edit }: { note: NoteDraft; s
       />
       {/* The note's colour — the prompt names it unless black. */}
       <div className="file-viewer-pdf-markup-colors file-viewer-pdf-markup-note-colors" role="group" aria-label={t("mobile.markup.noteColor")}>
-        {colorsFor("text", "pen").map((color) => (
-          <button
-            key={color}
-            type="button"
-            className={`file-viewer-zoom-btn file-viewer-pdf-markup-swatch is-${color}${note.color === color ? " active" : ""}`}
-            aria-pressed={note.color === color}
-            title={t("mobile.markup.colorOf", { color: t(COLOR_KEYS[color]) })}
-            aria-label={t("mobile.markup.colorOf", { color: t(COLOR_KEYS[color]) })}
-            onClick={() => edit.editNoteColor(color)}
-            style={{ ["--swatch" as string]: INK[color] }}
-          >
-            <span aria-hidden="true" />
-          </button>
-        ))}
+        <SwatchButtons colors={colorsFor("text", "pen")} chosen={note.color} onPick={edit.editNoteColor} />
       </div>
       <div className="file-viewer-pdf-note-actions">
         <button

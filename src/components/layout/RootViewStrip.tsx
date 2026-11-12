@@ -12,6 +12,7 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ChevronDownIcon } from "../common/icons/Icon";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { VIEW_LABEL, ViewIcon } from "../cockpit/viewIcons";
+import { viewTabHandlers } from "./viewBarSlots";
 
 /**
  * The Root tab's lamp: one scope's activity (root's) rolled into the tab's own
@@ -40,28 +41,6 @@ function RootTabLamp({ children }: { children: (lamp: ScopeLamp, stateClass: str
 }
 
 const pick = (id: RootOverlayView) => useRootOverlayStore.getState().openView(id);
-
-function onTabKeys(id: RootOverlayView) {
-  return (e: React.KeyboardEvent<HTMLElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      pick(id);
-      return;
-    }
-    // Roving focus: the arrows walk the tabs, across the groups (Enter / Space
-    // choose).
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    const tabs = Array.from(
-      e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
-    );
-    const at = tabs.indexOf(e.currentTarget);
-    const next = tabs[(at + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
-    if (next) {
-      e.preventDefault();
-      next.focus();
-    }
-  };
-}
 
 /**
  * The window's view strip, in the title bar: `Now Projects Tonight │ Mail
@@ -92,15 +71,8 @@ export function RootViewStrip({ view, band }: { view: RootOverlayView; band: Fra
         title={label}
         className={`tab root-view-tab${extra}${view === id ? " active" : ""}`}
         data-root-view={id}
-        onMouseDown={(e) => {
-          if (e.button === 0) pick(id);
-        }}
-        // A click that is no mouse press (detail 0): steering's Enter on the
-        // window bar. A real one has already picked on its mouse-down.
-        onClick={(e) => {
-          if (e.detail === 0) pick(id);
-        }}
-        onKeyDown={onTabKeys(id)}
+        // Roving arrows across the groups; Enter / Space and steering's Enter pick.
+        {...viewTabHandlers(() => pick(id))}
       >
         {children}
       </div>

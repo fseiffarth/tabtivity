@@ -7,8 +7,9 @@
  * levels and the region cursor.
  */
 import { hasActiveModal } from "./useModalFocus";
+import { wrapStep } from "../lib/wrapStep";
 import { inCockpitRoster, runCockpitRoster, selectCockpitCursor, stepCockpitArea } from "../lib/shortcuts/steeringCockpit";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ROOT_SCOPE, allGroups, findGroup, useTabsStore } from "../stores/tabs";
 import { steeringInRoot, steeringTabs, steeringTabsActive } from "../lib/shortcuts/steeringScope";
 import { POPOUT_HANDS_OVER } from "../lib/shortcuts/steeringPopout";
@@ -26,8 +27,8 @@ import {
   type DetachedSteerRequest,
   type SteerAct,
 } from "../stores/detached";
-import { popoutAfter, raisePopout } from "../lib/window/focusPopout";
-import { MAIN_TAB_HOME } from "../lib/shortcuts/tabJump";
+import { focusNextPopout, popoutAfter, raisePopout } from "../lib/window/focusPopout";
+import { MAIN_TAB_HOME, jumpToTab } from "../lib/shortcuts/tabJump";
 import { usePopoutViewStore, type PopoutSteeringStatus } from "../stores/popoutView";
 import { reopenClosedAgentTab } from "../stores/agents/closedAgentTabs";
 import { useProjectsStore } from "../stores/projects";
@@ -39,8 +40,6 @@ import {
   type SteeringRegion,
 } from "../stores/keyboardSteering";
 import { useActivityStore } from "../stores/activity";
-import { jumpToTab } from "../lib/shortcuts/tabJump";
-import { focusNextPopout } from "../lib/window/focusPopout";
 
 import { STEER_FROM_POPOUT, isTextKey, steeringChordFires } from "../lib/shortcuts/steeringChord";
 import {
@@ -151,7 +150,17 @@ export const STEERING_BLUR_GRACE_MS = 60_000;
  */
 export const STEER_HANDOVER_WAIT_MS = 800;
 
+/** The keys the cockpit roster takes itself while steering is in it. */
+const ROSTER_ACTIONS: ReadonlySet<string> = new Set([
+  "up", "down", "cockpitUp", "cockpitDown", "cockpitJump", "cockpitShow", "cockpitContinue", "cockpitFilter",
+]);
+
 export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOptions) {
+  // The host passes fresh closures on every render. Read through a ref, they
+  // do not rebuild this effect, whose listeners and steering memory (the panel
+  // steering opened, the field it handed the keys to) then outlive a render.
+  const host = useRef({ onTogglePanels, onSidePanel });
+  host.current = { onTogglePanels, onSidePanel };
   useEffect(() => {
     // A popout window (`DetachedApp`): its own subwindows and tabs, read through
     // `steeringScope` and written through the tabs store's popout routing. It
@@ -186,9 +195,18 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // A surface steering just opened is not on screen yet (the panel mounts its
     // tree on open, mail and the board are lazy chunks): try for about a second.
     // `resume`: back on a surface steering left for one over it — the cursor
-    // goes where it was.
-    const placeCursorSoon = (region: SteeringRegion, tries = 20, resume = false) => {
+    // goes where it was. `delay`: the first try waits that long (the surface
+    // re-renders after this key), and only while steering is still on it.
+    const placeCursorSoon = (region: SteeringRegion, tries = 20, resume = false, delay?: number) => {
       cancelPlace();
+      if (delay !== undefined) {
+        placeTimer = window.setTimeout(() => {
+          placeTimer = null;
+          const s = useKeyboardSteeringStore.getState();
+          if (s.active && s.region === region) placeCursorSoon(region, tries, resume);
+        }, delay);
+        return;
+      }
       const root = regionRoot(region);
       // The side panel's cursor lands in its list (`steeringSidePanel`), not on its header.
       const place = (el: HTMLElement) =>
@@ -238,13 +256,6 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // target's announcement, so a focus move the window manager refused leaves
     // steering where the keys still go.
     const myLabel = popout ? (getDetachedWindowContext()?.label ?? "") : MAIN_STEERING_LABEL;
-    const announceOwner = () => {
-      try {
-        void emit(STEERING_OWNER, { label: myLabel }).catch(() => {});
-      } catch {
-        /* no Tauri event bus */
-      }
-    };
     const sendSteer = (event: string, payload: unknown) => {
       try {
         void emit(event, payload).catch(() => {});
@@ -252,6 +263,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         /* no Tauri event bus */
       }
     };
+    const announceOwner = () => sendSteer(STEERING_OWNER, { label: myLabel });
     // Another window took steering: this one steps aside, and a box it lent
     // the keyboard to no longer brings it back.
     const onOwner = (label: string) => {
@@ -585,7 +597,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       cancelPlace();
       clearRegionCursor();
       if (region === "side") {
-        if (panelOpenedBySteering) onSidePanel?.(false);
+        if (panelOpenedBySteering) host.current.onSidePanel?.(false);
         panelOpenedBySteering = false;
       } else if (region === "addTab") {
         // The menu request toggles; only send it while the menu is still up.
@@ -609,7 +621,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     };
     const openSidePanel = () => {
       if (!regionRoot("side")) {
-        onSidePanel?.(true);
+        host.current.onSidePanel?.(true);
         panelOpenedBySteering = true;
       }
       enterRegion("side");
@@ -796,12 +808,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         }
         return;
       }
-      const record = steering.jumpBack;
-      if (!shown || shown.scope !== from.scope || shown.key !== from.key) return;
-      if (!record || record.landed.scope !== from.scope || record.landed.key !== from.key) return;
-      const target = jumpBackTarget(record, shown, useTabsStore.getState().tabsByScope);
-      steering.setJumpBack(null);
-      if (target) goToTab(target);
+      if (shown && shown.scope === from.scope && shown.key === from.key) returnFrom(shown);
     };
     // A digit on the active tab while it asks (`steeringAnswer`): the row by
     // that number, typed into the session straight away. False when the tab
@@ -981,7 +988,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           const neighbour = (id: string | null) => {
             const from = id ? ids.indexOf(id) : -1;
             const base = from >= 0 ? from : 0;
-            return ids[(base + (fwd ? 1 : -1) + ids.length) % ids.length];
+            return ids[wrapStep(base, fwd ? 1 : -1, ids.length)];
           };
           // A fullscreen subwindow hides the others: it moves along with the
           // focus, or the focus would land on one nobody can see.
@@ -1014,7 +1021,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
               else tabs.focusGroupInScope(scope, next);
               carryFullscreen(next);
             } else if (len > 1) {
-              tabs.setGroupActiveInScope(scope, group.id, group.tabKeys[(step + len) % len]);
+              tabs.setGroupActiveInScope(scope, group.id, group.tabKeys[wrapStep(cur, fwd ? 1 : -1, len)]);
             }
           }
           return;
@@ -1057,12 +1064,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           // on the toggle it would find now.
           clearRegionCursor();
           useKeyboardSteeringStore.getState().enterRegion("subagents");
-          cancelPlace();
-          placeTimer = window.setTimeout(() => {
-            placeTimer = null;
-            const s = useKeyboardSteeringStore.getState();
-            if (s.active && s.region === "subagents") placeCursorSoon("subagents");
-          }, 0);
+          placeCursorSoon("subagents", 20, false, 0);
           return;
         }
         case "menu": {
@@ -1150,7 +1152,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           return;
         }
         case "panels": // toggle the side panels
-          onTogglePanels?.();
+          host.current.onTogglePanels?.();
           return;
         // Open settings — same door the header ⚙ menu fires — and walk it:
         // ←/→ its pages, ↑/↓ the page's controls, Escape closes it.
@@ -1196,7 +1198,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       }
       if (region === "cockpit") {
         if (action === "cockpitPanel") { stepCockpitArea(root, cockpitBackwards); return; }
-        if (inCockpitRoster() && action && ["up", "down", "cockpitUp", "cockpitDown", "cockpitJump", "cockpitShow", "cockpitContinue", "cockpitFilter"].includes(action)) {
+        if (inCockpitRoster() && action && ROSTER_ACTIONS.has(action)) {
           const mapped = action === "up" ? "cockpitUp" : action === "down" ? "cockpitDown" : action;
           const selected = runCockpitRoster(mapped);
           if (mapped === "cockpitFilter") handOffSteering("search");
@@ -1266,10 +1268,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
             if (stepSettingsPage(delta)) {
               clearRegionCursor();
               // The click re-renders the page after this key; land on the new one.
-              placeTimer = window.setTimeout(() => {
-                placeTimer = null;
-                placeCursorSoon("settings");
-              }, 0);
+              placeCursorSoon("settings", 20, false, 0);
             }
           } else {
             moveRegionCursor(root, delta);
@@ -1338,27 +1337,28 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // Esc in a surface's search field steering handed the keyboard to:
       // back to steering on that surface, the cursor on its first control.
       // Ahead of the modal check — the + menu and settings are dialogs too.
-      // An inline field's Esc is its own (a rename cancels, and goes away):
-      // steering comes back after it, the field's caret dropped if it stayed.
-      if (!steering.active && steering.handedTo === "field" && !handedLayer && e.key === "Escape" && !e.isComposing) {
-        const field = handedField;
-        window.setTimeout(() => {
-          if (useKeyboardSteeringStore.getState().handedTo !== "field" || handedField !== field) return;
-          handedField = null;
-          if (field?.isConnected) field.blur();
-          useKeyboardSteeringStore.getState().resume();
-          syncLayer();
-          const { region } = useKeyboardSteeringStore.getState();
-          if (region) placeCursorSoon(region, 20, true);
-        }, 0);
-        return;
-      }
       if (
         !steering.active &&
         (steering.handedTo === "search" || steering.handedTo === "field") &&
         e.key === "Escape" &&
         !e.isComposing
       ) {
+        // An inline field's Esc (no layer handed it) is its own (a rename
+        // cancels, and goes away): steering comes back after it, the field's
+        // caret dropped if it stayed.
+        if (steering.handedTo === "field" && !handedLayer) {
+          const field = handedField;
+          window.setTimeout(() => {
+            if (useKeyboardSteeringStore.getState().handedTo !== "field" || handedField !== field) return;
+            handedField = null;
+            if (field?.isConnected) field.blur();
+            useKeyboardSteeringStore.getState().resume();
+            syncLayer();
+            const { region } = useKeyboardSteeringStore.getState();
+            if (region) placeCursorSoon(region, 20, true);
+          }, 0);
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         handedField = handedLayer = null;
@@ -1373,14 +1373,18 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       const modalUp = hasActiveModal();
       const overrides = useSettingsStore.getState().settings
         ?.keyboard_shortcuts as ShortcutMap | undefined;
+      // A chord below that fires is the app's alone, and leaves steering.
+      const swallow = () => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (steering.active) exitSteering();
+      };
 
       // The chord toggles: enter when inactive, exit when active (not in a
       // typing burst, `steeringChordFires`).
       if (steeringChordFires(resolveChord("steeringMode", overrides), e, steering.active, lastTypedAt)) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (steering.active) exitSteering();
-        else enterSteering();
+        swallow();
+        if (!steering.active) enterSteering();
         return;
       }
       // The root console toggles from anywhere, a focused terminal included —
@@ -1388,16 +1392,12 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // keyboard at once is one too many). Not from behind a dialog, nor are
       // the chords below. A popout has no root console.
       if (!popout && !modalUp && chordMatches(resolveChord("rootConsole", overrides), e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (steering.active) exitSteering();
+        swallow();
         toggleRootConsole();
         return;
       }
       if (!popout && !modalUp && chordMatches(resolveChord("projectShell", overrides), e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (steering.active) exitSteering();
+        swallow();
         openProjectShellInRootConsole();
         return;
       }
@@ -1419,9 +1419,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           ? requestOverlayAgent(overlayApp, newTab.slot)
           : requestNewTab(newTab))
       ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (steering.active) exitSteering();
+        swallow();
         // The chord went to Root's subwindow while the Root view is up
         // (`RootNewTabKeys`), or docked an agent in the shown app's column
         // (`overlayApp`), so the window stays; otherwise the tab is the
@@ -1436,9 +1434,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // popout asks the main window itself (`DetachedApp`, DETACHED_REOPEN).
       if (!popout && !modalUp && chordMatches(resolveChord("reopenClosedTab", overrides), e)) {
         if (reopenClosedAgentTab(useTabsStore.getState().scope)) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (steering.active) exitSteering();
+          swallow();
           return;
         }
       }
@@ -1693,7 +1689,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       window.removeEventListener("focus", onFocus);
       window.removeEventListener(STEER_FROM_POPOUT, onSteerFromPopout);
     };
-  }, [surface, onTogglePanels, onSidePanel]);
+  }, [surface]);
 }
 
 /** Steering's status jumps and the tab state each walks. */
@@ -1735,7 +1731,7 @@ export function cycleProject(delta: 1 | -1): Promise<unknown> | null {
   const next =
     idx < 0 && stations.length > 1
       ? stations[delta > 0 ? 1 : stations.length - 1]
-      : stations[(idx + delta + stations.length) % stations.length];
+      : stations[wrapStep(idx, delta, stations.length)];
   return next !== here ? landOnStation(next) : null;
 }
 

@@ -1,4 +1,5 @@
 import type { SteeringAction } from "./steeringBindings";
+import { wrapStep } from "../wrapStep";
 import { placeRegionCursor, pointRegionCursor, regionCursor, regionTargets } from "./steeringRegion";
 
 /** The mounted roster owns its actions and current filtered rows. */
@@ -22,7 +23,7 @@ export function stepCockpitArea(root: HTMLElement, backwards: boolean): void {
   )].filter((el) => regionTargets(el).length > 0);
   const current = regionCursor();
   const at = areas.findIndex((area) => current && area.contains(current));
-  const next = areas[(at + (backwards ? -1 : 1) + areas.length) % areas.length];
+  const next = areas[wrapStep(at, backwards ? -1 : 1, areas.length)];
   if (next) placeRegionCursor(next);
 }
 

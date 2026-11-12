@@ -10,6 +10,16 @@ export type SearchRow =
   | { kind: "box"; box: ProjectBox }
   | { kind: "all" };
 
+/** A row's name as listed: the project's or box's, or `allProjectsLabel`. */
+export function searchRowName(row: SearchRow, allProjectsLabel: string): string {
+  return row.kind === "all" ? allProjectsLabel : row.kind === "box" ? row.box.name : row.project.name;
+}
+
+/** A row's id within one list, unique across projects and boxes. */
+export function searchRowId(row: SearchRow): string {
+  return `${row.kind}-${row.kind === "box" ? row.box.id : row.kind === "project" ? row.project.id : "all"}`;
+}
+
 /** Location line(s) shown under a project's name — and the text the query is
  *  matched against. A remote (SSH) project lives in two places at once, so both
  *  its host target and its paired local mirror are listed; its `directory` is

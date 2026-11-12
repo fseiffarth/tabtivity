@@ -86,7 +86,7 @@ export function MarkedText({ text, marks }: { text: string; marks?: readonly Wor
  *  Add/del tints come from the `.diff-line.is-add` / `.is-del` theme classes;
  *  `marks` are the word-level changes inside it (see `hunkWordMarks`). Text is
  *  rendered as React children, which auto-escapes — no raw HTML. */
-export function DiffLineRow({ line, marks }: { line: DiffLine; marks?: readonly WordMark[] }) {
+export const DiffLineRow = memo(function DiffLineRow({ line, marks }: { line: DiffLine; marks?: readonly WordMark[] }) {
   const muted = line.type === "hunk" || line.type === "meta" || line.type === "nonewline";
   const marker =
     line.type === "add" ? "+" : line.type === "del" ? "-" : line.type === "context" ? " " : "";
@@ -140,6 +140,41 @@ export function DiffLineRow({ line, marks }: { line: DiffLine; marks?: readonly 
         )}
       </span>
     </div>
+  );
+});
+
+/** `lines` as split (before / after) rows: a note across both sides, or the
+ *  two cells with their line numbers and word marks. Shared with the Reader's
+ *  Changes panel. `anchorOf` (DiffView) gives a change's first row its
+ *  `data-jump` id, by the row's index in `lines`; `current` marks the one the
+ *  previous / next buttons last landed on. Text is rendered as React children,
+ *  which auto-escapes — no raw HTML. */
+export function SplitRows({ lines, marks, anchorOf, current }: {
+  lines: readonly DiffLine[];
+  marks: ReadonlyMap<DiffLine, readonly WordMark[]>;
+  anchorOf?: (at: number) => string;
+  current?: string;
+}) {
+  return (
+    <>
+      {splitDiffRows(lines).map((row, index) => {
+        if (row.note !== undefined) {
+          return <div className="terminal-changes-split-note" key={index}>{row.note}</div>;
+        }
+        const id = row.start && anchorOf ? anchorOf(row.at) : undefined;
+        return (
+          <div
+            className="terminal-changes-split-row"
+            key={index}
+            data-jump={id !== undefined ? `c:${id}` : undefined}
+            data-current={id !== undefined && current === id ? "true" : undefined}
+          >
+            <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before && <MarkedText text={row.before.text} marks={marks.get(row.before)} />}</code></div>
+            <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after && <MarkedText text={row.after.text} marks={marks.get(row.after)} />}</code></div>
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -219,23 +254,12 @@ const HunkBody = memo(function HunkBody({
         if (split) {
           return (
             <Fragment key={seg.from}>
-              {splitDiffRows(part).map((row, index) => {
-                if (row.note !== undefined) {
-                  return <div className="terminal-changes-split-note" key={index}>{row.note}</div>;
-                }
-                const id = anchorId(fileIndex, hunkIndex, offset + seg.from + row.at);
-                return (
-                  <div
-                    className="terminal-changes-split-row"
-                    key={index}
-                    data-jump={row.start ? `c:${id}` : undefined}
-                    data-current={row.start && current === id ? "true" : undefined}
-                  >
-                    <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before && <MarkedText text={row.before.text} marks={marks.get(row.before)} />}</code></div>
-                    <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after && <MarkedText text={row.after.text} marks={marks.get(row.after)} />}</code></div>
-                  </div>
-                );
-              })}
+              <SplitRows
+                lines={part}
+                marks={marks}
+                anchorOf={(at) => anchorId(fileIndex, hunkIndex, offset + seg.from + at)}
+                current={current}
+              />
             </Fragment>
           );
         }

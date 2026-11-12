@@ -4,13 +4,12 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { basename, relativePathWithin } from "../../lib/paths";
 import { parseUnifiedDiff, type DiffLine } from "../../lib/viewers/diff";
-import { splitDiffRows } from "../../lib/viewers/diffRows";
 import { disabledViewers, type FileEntry } from "../../lib/viewers/fileUtils";
 import { readerRequest } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
 import { useSettingsStore } from "../../stores/settings";
 import type { TabEntry } from "../../stores/tabs";
-import { DiffLineRow, MarkedText } from "../embed/DiffView";
+import { DiffLineRow, SplitRows } from "../embed/DiffView";
 import { hunkWordMarks, type WordMark } from "../../lib/viewers/wordDiff";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
 import { openFileEntry } from "../../lib/files/openFileEntry";
@@ -182,12 +181,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
             <div className="diff-hunk" key={hunkIndex}>
               {split ? <div className="terminal-changes-split">
                 <div className="terminal-changes-split-heading"><span>{t("terminal.changes.before")}</span><span>{t("terminal.changes.after")}</span></div>
-                {splitDiffRows(hunk.lines).map((row, index) => row.note !== undefined
-                  ? <div className="terminal-changes-split-note" key={index}>{row.note}</div>
-                  : <div className="terminal-changes-split-row" key={index}>
-                    <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before && <MarkedText text={row.before.text} marks={marks.get(row.before)} />}</code></div>
-                    <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after && <MarkedText text={row.after.text} marks={marks.get(row.after)} />}</code></div>
-                  </div>)}
+                <SplitRows lines={hunk.lines} marks={marks} />
               </div> : hunk.lines.map((line, lineIndex) => <DiffLineRow line={line} marks={marks.get(line)} key={lineIndex} />)}
             </div>
           ))}

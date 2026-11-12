@@ -23,6 +23,7 @@
  * came — there is no timer for the caller to cancel.
  */
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { wrapStep } from "../wrapStep";
 import { useProjectsStore } from "../../stores/projects";
 import {
   activateRegionCursor,
@@ -316,7 +317,7 @@ function stepView(root: HTMLElement, cur: HTMLElement, delta: 1 | -1) {
   if (tabs.length < 2) return;
   const active = tabs.findIndex(isActiveTab);
   const from = active >= 0 ? active : tabs.indexOf(cur);
-  const next = tabs[(from + delta + tabs.length) % tabs.length];
+  const next = tabs[wrapStep(from, delta, tabs.length)];
   const view = next.dataset.view;
   const gen = generation;
   next.click();

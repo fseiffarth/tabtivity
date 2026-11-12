@@ -15,11 +15,11 @@
  * still asks.
  */
 import { terminalFor } from "../terminal/terminalRegistry";
-import { answerKeys, freeTextRow, readReaderLive, UNNUMBERED } from "../agents/readerLive";
+import { answerKeys, freeTextRow, readReaderLive } from "../agents/readerLive";
 import { openQuestionField } from "../agents/readerSteering";
 import { typePaneKeys } from "../agents/paneKeys";
 import { dialogOnScreen } from "../agents/dialogOnScreen";
-import { selectMoveKeys, type SelectOption, type SelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
+import { optionForDigit, selectMoveKeys, type SelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
 import { agentTabLabel } from "../../stores/agents/agentModels";
 import { useActivityStore } from "../../stores/activity";
 import type { TabEntry } from "../../stores/tabs";
@@ -71,15 +71,6 @@ export function steeringTabAsks(scope: string, tab: TabEntry | null | undefined)
   if (!tab || !isAgentTab(tab)) return false;
   if (useActivityStore.getState().attentionByTab[`${scope}:${tab.key}`] === "decision") return true;
   return liveQuestion(scope, tab) !== null;
-}
-
-/** The row digit `n` picks: the one printed with that number; on a dialog
- *  that prints none, the nth row. */
-export function optionForDigit(question: SelectPrompt, n: number): SelectOption | null {
-  const numbered = question.options.find((option) => option.number === n);
-  if (numbered) return numbered;
-  if (question.options.every((option) => option.number === UNNUMBERED)) return question.options[n - 1] ?? null;
-  return null;
 }
 
 /** Answer the active tab's dialog with row `n` (1–9). */

@@ -231,11 +231,20 @@ function scopeFits(scopes: readonly SteeringScope[], context: SteeringKeyContext
 
 /** The defs that can answer on `context`, in resolution order: Inside, the
  *  `inside` letters first, then the rest in table order. */
-function defsFor(context: SteeringKeyContext): SteeringBindingDef[] {
+function buildDefs(context: SteeringKeyContext): SteeringBindingDef[] {
   const fits = STEERING_BINDINGS.filter((def) => scopeFits(def.scopes, context));
   if (context === "cockpit") return [...fits.filter((d) => d.scopes.includes("cockpit")), ...fits.filter((d) => !d.scopes.includes("cockpit"))];
   if (context !== "inside") return fits;
   return [...fits.filter((d) => d.scopes.includes("inside")), ...fits.filter((d) => !d.scopes.includes("inside"))];
+}
+
+/** `buildDefs` once per context: the table is constant and this runs on every
+ *  steering keydown. */
+const DEFS_BY_CONTEXT = new Map<SteeringKeyContext, readonly SteeringBindingDef[]>();
+function defsFor(context: SteeringKeyContext): readonly SteeringBindingDef[] {
+  let defs = DEFS_BY_CONTEXT.get(context);
+  if (!defs) DEFS_BY_CONTEXT.set(context, (defs = buildDefs(context)));
+  return defs;
 }
 
 /** Whether a keydown is `key`: by character, and a digit also by physical key
@@ -268,8 +277,9 @@ export function steeringActionFor(
   // Character matches first, so a letter bound to one action never loses to a
   // digit another action claims by physical position.
   const defs = defsFor(context);
+  const pressed = normalizeKey(eventKey(e));
   for (const def of defs) {
-    if (steeringKeys(def.action, overrides).some((k) => normalizeKey(k) === normalizeKey(eventKey(e)))) return def.action;
+    if (steeringKeys(def.action, overrides).some((k) => normalizeKey(k) === pressed)) return def.action;
   }
   for (const def of defs) {
     if (steeringKeys(def.action, overrides).some((k) => keyMatches(k, e))) return def.action;

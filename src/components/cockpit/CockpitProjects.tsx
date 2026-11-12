@@ -154,10 +154,6 @@ function Row({ card, now, band }: { card: ProjectCard; now: number; band: Band }
           type="button"
           className="cockpit-prow-open"
           title={t("cockpit.projects.open")}
-          onClick={(e) => {
-            e.stopPropagation();
-            void openProject(card.id);
-          }}
         >
           {card.name}
         </button>

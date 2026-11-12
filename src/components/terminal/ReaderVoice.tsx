@@ -24,7 +24,7 @@ import {
 } from "../../lib/voice/desktopVoice";
 import { playChime } from "../../lib/voice/chime";
 import { sentTurnOver, useAgentTurn } from "../../lib/voice/agentTurn";
-import { createPickStage, createSendGuard, type GuardPhase, type PickStage, type SendGuard, type VoicePick, type VoicePickResult } from "../../../shared/handsFree";
+import { createPickStage, createStagedSendGuard, type GuardPhase, type PickStage, type SendGuard, type VoicePick, type VoicePickResult } from "../../../shared/handsFree";
 import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
@@ -128,11 +128,11 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   // A spoken pick waits in `staged` and rides the same guard (gap 80).
   const staged = useRef<PickStage<VoicePick>>(createPickStage<VoicePick>());
   const [pickHeard, setPickHeard] = useState("");
-  guard.current ??= createSendGuard(0, {
-    hasDraft: () => staged.current.pending() !== null || handlers.current.hasDraft(),
+  // A reset or cancel of the guard drops a staged pick with it.
+  guard.current ??= createStagedSendGuard(0, staged.current, {
+    hasDraft: () => handlers.current.hasDraft(),
     onWindow: () => playChime(),
-    onSend: () => {
-      const pick = staged.current.take();
+    onSend: (pick) => {
       if (!pick) {
         handlers.current.onSend();
         return;
@@ -140,7 +140,6 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       handlers.current.commitPick(pick);
       awaitTurnRef.current();
     },
-    onCancel: () => staged.current.clear(),
     onPhase: (next) => {
       setGuardPhase(next);
       if (next === "idle") setPickHeard("");
@@ -149,7 +148,6 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
 
   const reset = () => {
     session.current = null;
-    staged.current.clear();
     guard.current?.reset();
     paintMicLevel(buttonRef.current, null);
     setPhase("off");
@@ -160,7 +158,6 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
 
   /** Hands-free waits for the turn what was sent (or answered) starts. */
   const awaitTurn = () => {
-    staged.current.clear();
     guard.current?.reset();
     answerAtSend.current = lastAnswerRef.current;
     setHeard("");
@@ -267,7 +264,6 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const stop = () => {
     attempt.current += 1;
     setWaitingSince(null);
-    staged.current.clear();
     guard.current?.reset();
     const active = session.current;
     if (active) active.stop();
@@ -300,7 +296,6 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
 
   /** The stop key or a click on the line: a send window is cancelled. */
   const cancelSend = () => {
-    staged.current.clear();
     guard.current?.cancel();
   };
 
@@ -318,7 +313,6 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
     attempt.current += 1;
     session.current?.abort();
     session.current = null;
-    staged.current.clear();
     guard.current?.reset();
   }, [tabKey]);
 

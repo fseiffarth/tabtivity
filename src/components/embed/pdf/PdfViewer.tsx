@@ -124,6 +124,7 @@ import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { PdfMarkupLayer } from "./PdfMarkupLayer";
 import { markupStripKey, markupStripKeyUp, PdfMarkupBar, PdfMarkupUndoConfirm } from "./PdfMarkupBar";
 import { PdfMarkupDock } from "./PdfMarkupDock";
+import { PdfMarkupPageRail } from "./PdfMarkupPageRail";
 import { PdfMarkupAgentPanel } from "./PdfMarkupAgentPanel";
 import { PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
 import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
@@ -5292,33 +5293,13 @@ function PdfCanvas({
           />
         )}
         {marking && doc && (
-          // While marking, a read-only rail of the pages: a click goes there, a
-          // dot says the page carries marks. The arranging rail stays off —
-          // marks and an arrangement edit never mix.
-          <nav className="file-viewer-pdf-markup-pages" aria-label={t("pdfMarkup.pages")}>
-            {pages.map((ref, i) => {
-              if (ref.src !== SELF) return null;
-              const marked = !!markup.edit.base.pages[ref.page];
-              const label = marked ? t("pdfMarkup.pageMarked", { n: ref.page }) : t("pdfViewer.pageOf", { n: ref.page });
-              return (
-                <button
-                  key={ref.id}
-                  type="button"
-                  className={`file-viewer-pdf-markup-page${visiblePage === i + 1 ? " active" : ""}`}
-                  aria-current={visiblePage === i + 1 ? "page" : undefined}
-                  aria-label={label}
-                  title={label}
-                  onClick={() => jumpToPage(ref.page)}
-                >
-                  <span className="file-viewer-pdf-markup-page-card">
-                    <PdfThumb doc={doc} page={ref.page} rot={ref.rot} />
-                    {marked && <span className="file-viewer-pdf-markup-page-dot" aria-hidden="true" />}
-                  </span>
-                  <span className="file-viewer-pdf-markup-page-n">{i + 1}</span>
-                </button>
-              );
-            })}
-          </nav>
+          <PdfMarkupPageRail
+            pages={pages}
+            marked={(page) => !!markup.edit.base.pages[page]}
+            visiblePage={visiblePage}
+            onJump={jumpToPage}
+            thumb={(ref) => <PdfThumb doc={doc} page={ref.page} rot={ref.rot} />}
+          />
         )}
         {railOpen && doc && !marking && (
           // The page rail: the SAME <PageStrip> the print preview uses, stood on its

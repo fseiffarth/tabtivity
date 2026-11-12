@@ -1,4 +1,5 @@
 import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { wrapStep } from "../../lib/wrapStep";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../lib/i18n";
@@ -24,6 +25,7 @@ import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { SessionPickerOpenError, submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInput";
 import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
+import { copyText } from "../../lib/terminal/copyText";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry";
 import { noteUserInput, useActivityStore } from "../../stores/activity";
@@ -83,7 +85,7 @@ import { questionSpeech, voicePick, voicePickable } from "../../../mobile-web/sr
 import { isStopWord } from "../../../shared/voice";
 import type { VoicePick, VoicePickResult } from "../../../shared/handsFree";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
-import { insertIntoReader, onReaderInsert, pasteIntoAgentBox } from "../../lib/terminal/terminalDrop";
+import { insertIntoReader, onReaderInsert, pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
 import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
@@ -246,11 +248,8 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
       if (error) setPasteError(error);
       if (!text) return;
       const box = typedBox.current;
-      setTyped((current) => {
-        const at = box ? Math.min(box.selectionEnd ?? current.length, current.length) : current.length;
-        const before = current.slice(0, at);
-        return `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
-      });
+      setTyped((current) =>
+        spliceSpaced(current, box ? Math.min(box.selectionEnd ?? current.length, current.length) : current.length, text));
       box?.focus();
     });
   };
@@ -454,7 +453,7 @@ function CopyCodeButton({ block }: { block: HTMLElement }) {
       const code = block.querySelector("pre code") ?? block.querySelector("pre");
       if (!code) return;
       try {
-        await navigator.clipboard.writeText(code.textContent ?? "");
+        await copyText(code.textContent ?? "");
         setStatus("copied");
       } catch {
         setStatus("failed");
@@ -859,9 +858,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const box = composerRef.current;
     const focusedBox = box !== null && document.activeElement === box;
     const current = draftRef.current;
-    const at = focusedBox ? box.selectionEnd : current.length;
-    const before = current.slice(0, at);
-    const next = `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+    const next = spliceSpaced(current, focusedBox ? box.selectionEnd : current.length, text);
     undo.current.record(current, next, false);
     draftRef.current = next;
     setDraft(next);
@@ -927,7 +924,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       return;
     }
     const current = draftRef.current;
-    const next = `${current}${current && !/\s$/.test(current) ? " " : ""}${clean}`;
+    const next = spliceSpaced(current, current.length, clean);
     const spoken = spokenSend(next);
     if (spoken === null) voiceEdits.piece(current, next, clean);
     editDraft(spoken ?? next);
@@ -2390,7 +2387,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
           if (!buttons.length) return;
           const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : wrapStep(at, event.key === "ArrowDown" ? 1 : -1, buttons.length);
           buttons[next]?.focus();
         }}>
           {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {

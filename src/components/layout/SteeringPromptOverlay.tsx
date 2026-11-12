@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { wrapStep } from "../../lib/wrapStep";
 import { DialogShell } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
@@ -14,7 +15,8 @@ import {
   type SteeringPromptDetail,
 } from "../../lib/shortcuts/steeringAgent";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
-import { pasteIntoAgentBox } from "../../lib/terminal/terminalDrop";
+import { pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
+import { onParsedSettled } from "../../lib/terminal/parsedSettled";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { readReaderLive } from "../../lib/agents/readerLive";
 import { isNewConversationCommand } from "../../lib/agents/typedClear";
@@ -98,9 +100,7 @@ export function SteeringPromptOverlay() {
   if (!open) return null;
   const close = () => {
     setOpen(null);
-    const steering = useKeyboardSteeringStore.getState();
-    steering.enter();
-    if (open.level !== "tabs") steering.setLevel(open.level);
+    useKeyboardSteeringStore.getState().enter(open.level);
   };
   // Keyed by the tab, so a box reopened for another tab takes that tab's draft.
   const id = `${open.scope}:${open.tab.key}`;
@@ -172,17 +172,8 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   useEffect(() => {
     const term = terminalFor(ptyId);
     if (!term || !isClaudeCommand(target.tab.cmd)) return;
-    let settle: ReturnType<typeof setTimeout> | undefined;
-    const writes = term.onWriteParsed(() => {
-      settle ??= setTimeout(() => {
-        settle = undefined;
-        setSuggestion(promptSuggestionOf(ptyId, agent));
-      }, SUGGESTION_SETTLE_MS);
-    });
-    return () => {
-      writes.dispose();
-      if (settle) clearTimeout(settle);
-    };
+    const writes = onParsedSettled(term, () => setSuggestion(promptSuggestionOf(ptyId, agent)), SUGGESTION_SETTLE_MS);
+    return () => writes.dispose();
   }, [ptyId, agent, target.tab.cmd]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -435,7 +426,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           const at = shownRows.findIndex((option) => option.index === cursorRow);
           const next = at < 0
             ? (e.key === "ArrowDown" ? 0 : n - 1)
-            : (at + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+            : wrapStep(at, e.key === "ArrowDown" ? 1 : -1, n);
           setRowAt(rowKey(shownRows[next]));
           return true;
         }
@@ -466,7 +457,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         return true;
       }
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-        setCommitCursor((at) => (at + (e.key === "ArrowDown" ? 1 : -1) + n) % n);
+        setCommitCursor((at) => wrapStep(at, e.key === "ArrowDown" ? 1 : -1, n));
         return true;
       }
       if (e.key === "Enter" && !e.shiftKey) {
@@ -483,7 +474,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         return true;
       }
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-        setEffortCursor((at) => (at + (e.key === "ArrowDown" ? 1 : -1) + n) % n);
+        setEffortCursor((at) => wrapStep(at, e.key === "ArrowDown" ? 1 : -1, n));
         return true;
       }
       if (e.key === "Enter" && !e.shiftKey) {
@@ -499,9 +490,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   const insertAtCaret = (text: string) => {
     const box = input.current;
     setValue((current) => {
-      const at = box ? Math.min(box.selectionEnd, current.length) : current.length;
-      const before = current.slice(0, at);
-      const next = `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+      const next = spliceSpaced(current, box ? Math.min(box.selectionEnd, current.length) : current.length, text);
       drafts.set(draftKey, next);
       return next;
     });

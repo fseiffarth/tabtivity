@@ -10,6 +10,7 @@
  * strip order — so pressing the key again goes on from the tab it landed on.
  */
 import type { AttentionKind } from "../../stores/activity";
+import { wrapStep } from "../wrapStep";
 import { projectStations, type SteeringJumpBack } from "../../stores/keyboardSteering";
 import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { ROOT_SCOPE, allGroups, isPtyTabKind, useTabsStore, type TabEntry } from "../../stores/tabs";
@@ -65,7 +66,7 @@ export function nextStatusTab(
     ? list.findIndex((t) => t.scope === current.scope && t.key === current.key)
     : -1;
   if (at < 0) return list[delta > 0 ? 0 : list.length - 1];
-  return list[(at + delta + list.length) % list.length];
+  return list[wrapStep(at, delta, list.length)];
 }
 
 /** The tab a status jump walks on from: the one showing. While the root

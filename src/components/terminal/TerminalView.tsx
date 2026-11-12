@@ -39,6 +39,8 @@ import { isAiOffRefusal, useAiOff, whenAiOn } from "../../lib/aiSwitch";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
+// Aliased: the component has its own `copyText` (a link copy with its toast).
+import { copyText as writeClipboard } from "../../lib/terminal/copyText";
 import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFiles } from "../../lib/files/droppedFiles";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
@@ -1310,15 +1312,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // the same transient toast the OSC 52 path uses, once the clipboard took it
     // — and a refused one says so.
     //
-    // Through the backend first, like OSC 52: the webview's `navigator.clipboard`
-    // writes only while WebKit still counts the press as a user gesture, and it
-    // dropped some mouse-up copies outright — the "copy works sometimes" report.
-    // The webview stays as the fallback (and for text past the backend's cap).
+    // Through the backend first, like OSC 52 (`copyText`): the webview's
+    // `navigator.clipboard` writes only while WebKit still counts the press as
+    // a user gesture, and it drops some mouse-up copies outright. The webview
+    // stays as the fallback (and for text past the backend's cap).
     const copyToClipboard = (text: string) => {
-      const copied = () => useProjectsStore.setState({ switchToast: copiedNoticeRef.current(text) });
-      invoke("copy_text_to_clipboard", { text })
-        .then(copied)
-        .catch(() => (navigator.clipboard ? navigator.clipboard.writeText(text).then(copied) : Promise.reject()))
+      writeClipboard(text)
+        .then(() => useProjectsStore.setState({ switchToast: copiedNoticeRef.current(text) }))
         .catch(() => useProjectsStore.setState({ switchToast: copyFailedRef.current }));
     };
     let columnSelect = false;

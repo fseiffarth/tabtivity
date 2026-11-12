@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
+import { wrapStep } from "../../lib/wrapStep";
 import type { ProjectBox, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { BoxSwatch } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
-import { memberNames, projectSearchRows, searchPaths, type SearchRow } from "../../lib/projects/projectSearchRows";
+import { memberNames, projectSearchRows, searchPaths, searchRowId, searchRowName, type SearchRow } from "../../lib/projects/projectSearchRows";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useBoxSliceStore } from "../../stores/boxSlice";
 
@@ -62,15 +63,9 @@ export function ProjectSearch({
   );
   const typed = !!query.trim();
   const expanded = typed || (focused && results.length > 0);
-  const optionId = (row: SearchRow) =>
-    `${listId}-${row.kind}-${row.kind === "box" ? row.box.id : row.kind === "project" ? row.project.id : "all"}`;
+  const optionId = (row: SearchRow) => `${listId}-${searchRowId(row)}`;
   const selectedRow = results[selected];
-  const selectedName =
-    selectedRow?.kind === "box"
-      ? selectedRow.box.name
-      : selectedRow?.kind === "all"
-        ? allProjectsLabel
-        : selectedRow?.project.name;
+  const selectedName = selectedRow ? searchRowName(selectedRow, allProjectsLabel) : undefined;
 
   // A narrowed query can remove the currently highlighted row. Keep the
   // selection valid so Enter always picks a visible result.
@@ -144,7 +139,7 @@ export function ProjectSearch({
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
             setSelected((index) =>
-              results.length === 0 ? 0 : (index - 1 + results.length) % results.length,
+              results.length === 0 ? 0 : wrapStep(index, -1, results.length),
             );
           } else if (e.key === "Enter") {
             e.preventDefault();

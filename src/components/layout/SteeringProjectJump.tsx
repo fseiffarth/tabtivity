@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from "react";
+import { wrapStep } from "../../lib/wrapStep";
 import { DialogShell } from "../common/PromptDialogs";
 import { UntestedTag } from "../common/UntestedTag";
 import { BoxSwatch } from "../common/icons/Icon";
 import { useT } from "../../lib/i18n";
 import { PROJECT_JUMP_EVENT, type ProjectJumpDetail } from "../../lib/projects/projectJumpEvent";
-import { jumpStartRows, projectSearchRows, rowSwitches, searchPaths, type SearchRow } from "../../lib/projects/projectSearchRows";
+import { jumpStartRows, projectSearchRows, rowSwitches, searchPaths, searchRowId, searchRowName, type SearchRow } from "../../lib/projects/projectSearchRows";
 import { recentProjectIds, trackProjectRecency } from "../../lib/projects/projectRecency";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useBoxesStore } from "../../stores/boxes";
@@ -81,9 +82,7 @@ export function SteeringProjectJump() {
   if (!level) return null;
   const close = (switched: boolean) => {
     setLevel(null);
-    const steering = useKeyboardSteeringStore.getState();
-    steering.enter();
-    if (level !== "tabs" && !switched) steering.setLevel(level);
+    useKeyboardSteeringStore.getState().enter(switched ? "tabs" : level);
   };
   return <JumpBox onClose={close} />;
 }
@@ -126,8 +125,7 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
   };
 
   const optionId = (index: number) => `${listId}-${index}`;
-  const rowName = (row: SearchRow) =>
-    row.kind === "all" ? allProjectsLabel : row.kind === "box" ? row.box.name : row.project.name;
+  const rowName = (row: SearchRow) => searchRowName(row, allProjectsLabel);
   const optionProps = (index: number) =>
     ({
       id: optionId(index),
@@ -166,7 +164,7 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
         } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
           const step = e.key === "ArrowDown" ? 1 : -1;
-          if (results.length) setSelected((current + step + results.length) % results.length);
+          if (results.length) setSelected(wrapStep(current, step, results.length));
         } else if (e.key === "Enter") {
           e.preventDefault();
           if (current >= 0) pick(results[current]);
@@ -202,7 +200,7 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
           {ring
             ? results.map((row, index) => (
                 <button
-                  key={rowKey(row)}
+                  key={searchRowId(row)}
                   {...optionProps(index)}
                   className={index === current ? "steering-jump-slot on" : "steering-jump-slot"}
                   style={ringSpot(index, results.length)}
@@ -218,7 +216,7 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
             : results.map((row, index) => {
                 const where = row.kind === "project" ? searchPaths(row.project)[0] : undefined;
                 return (
-                  <button key={rowKey(row)} {...optionProps(index)} className="terminal-reader-option">
+                  <button key={searchRowId(row)} {...optionProps(index)} className="terminal-reader-option">
                     <span className="terminal-reader-option-label">
                       <span className="steering-jump-row-name">
                         {row.kind === "box" && <BoxSwatch className="project-search-box-swatch" color={boxColor(row.box)} />}
@@ -249,8 +247,4 @@ function JumpBox({ onClose }: { onClose: (switched: boolean) => void }) {
       </div>
     </DialogShell>
   );
-}
-
-function rowKey(row: SearchRow): string {
-  return row.kind === "all" ? "all" : row.kind === "box" ? `box:${row.box.id}` : row.project.id;
 }

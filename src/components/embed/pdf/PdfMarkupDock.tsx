@@ -267,22 +267,25 @@ export function PdfMarkupDock({
   );
 }
 
-/** A row of colour swatches; `chosen` is pressed, digit keys 1–6 in order. */
-function DockSwatches({ colors, chosen, onPick }: { colors: readonly MarkColor[]; chosen: MarkColor | null; onPick: (color: MarkColor) => void }) {
+/** Colour swatch buttons, `chosen` pressed; the caller wraps them in its own
+ *  group. `title` names a swatch's tooltip from its colour's name and place;
+ *  without it the tooltip is the swatch's label. Shared by the dock and the
+ *  markup layer's selection bar and note editor. */
+export function SwatchButtons({ colors, chosen, onPick, title }: { colors: readonly MarkColor[]; chosen: MarkColor | null; onPick: (color: MarkColor) => void; title?: (name: string, index: number) => string }) {
   const t = useT();
-  const chordHint = useChordHint();
   return (
-    <span className="file-viewer-pdf-markup-colors file-viewer-pdf-markup-pop-row" role="group" aria-label={t("mobile.markup.color")}>
+    <>
       {colors.map((color, i) => {
         const name = t(COLOR_KEYS[color]);
+        const label = t("mobile.markup.colorOf", { color: name });
         return (
           <button
             key={color}
             type="button"
             className={`file-viewer-zoom-btn file-viewer-pdf-markup-swatch is-${color}${chosen === color ? " active" : ""}`}
             aria-pressed={chosen === color}
-            title={chordHint(name, { key: String(i + 1) })}
-            aria-label={t("mobile.markup.colorOf", { color: name })}
+            title={title ? title(name, i) : label}
+            aria-label={label}
             onClick={() => onPick(color)}
             style={{ ["--swatch" as string]: INK[color] }}
           >
@@ -290,6 +293,17 @@ function DockSwatches({ colors, chosen, onPick }: { colors: readonly MarkColor[]
           </button>
         );
       })}
+    </>
+  );
+}
+
+/** The dock's row of colour swatches; `chosen` is pressed, digit keys 1–6 in order. */
+function DockSwatches({ colors, chosen, onPick }: { colors: readonly MarkColor[]; chosen: MarkColor | null; onPick: (color: MarkColor) => void }) {
+  const t = useT();
+  const chordHint = useChordHint();
+  return (
+    <span className="file-viewer-pdf-markup-colors file-viewer-pdf-markup-pop-row" role="group" aria-label={t("mobile.markup.color")}>
+      <SwatchButtons colors={colors} chosen={chosen} onPick={onPick} title={(name, i) => chordHint(name, { key: String(i + 1) })} />
     </span>
   );
 }

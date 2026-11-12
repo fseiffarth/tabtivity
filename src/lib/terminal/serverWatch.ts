@@ -1,5 +1,6 @@
 import type { Terminal } from "@xterm/xterm";
 import { findServerUrls, type ServerUrl } from "./serverUrls";
+import { onParsedSettled } from "./parsedSettled";
 
 /** Rows above the viewport still read for a server URL. */
 const SERVER_SCROLLBACK_ROWS = 60;
@@ -15,10 +16,8 @@ const SCAN_DELAY_MS = 300;
  * list is whatever the screen shows.
  */
 export function watchServers(term: Terminal, onChange: (servers: ServerUrl[]) => void): { dispose(): void } {
-  let timer: ReturnType<typeof setTimeout> | null = null;
   let last = "";
   const scan = () => {
-    timer = null;
     const buf = term.buffer.active;
     const servers = findServerUrls(
       (n) => buf.getLine(n),
@@ -31,14 +30,5 @@ export function watchServers(term: Terminal, onChange: (servers: ServerUrl[]) =>
     last = signature;
     onChange(servers);
   };
-  const sub = term.onWriteParsed(() => {
-    timer ??= setTimeout(scan, SCAN_DELAY_MS);
-  });
-  return {
-    dispose() {
-      sub.dispose();
-      if (timer) clearTimeout(timer);
-      timer = null;
-    },
-  };
+  return onParsedSettled(term, scan, SCAN_DELAY_MS);
 }

@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useModelsOverlayStore, type ModelsSection } from "../../stores/modelsOverlay";
 import { initLocalModelEvents, useOllamaActivityStore } from "../../stores/agents/ollamaActivity";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { ViewSubTabs } from "../layout/viewBarSlots";
+import { useVisitedSections } from "./useVisitedSections";
 import { OllamaPanel } from "../settings/OllamaPanel";
 import { LocalModelsSection, MachineMeters } from "./ModelsHubSections";
 import { useModelsHub } from "./useModelsHub";
@@ -31,11 +32,7 @@ export function ModelsView() {
   const t = useT();
   const section = useModelsOverlayStore((s) => s.modelsSection);
   const setSection = useModelsOverlayStore((s) => s.setModelsSection);
-  const [visited, setVisited] = useState<ReadonlySet<ModelsSection>>(() => new Set([section]));
-  useEffect(() => {
-    setVisited((v) => (v.has(section) ? v : new Set(v).add(section)));
-  }, [section]);
-  const mounted = (id: ModelsSection) => id === section || visited.has(id);
+  const mounted = useVisitedSections(section);
 
   return (
     <div className="app-view app-view-models models-overlay-body">

@@ -38,17 +38,21 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const text = (v: unknown, max: number): string | undefined =>
   typeof v === "string" ? Array.from(v).slice(0, max).join("") : undefined;
 const stamp = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined);
+/** A `{ text, setAt }` line (the activity, the blocker), or undefined unless both are well-formed. */
+const stampedLine = (v: unknown, max: number): { text: string; setAt: number } | undefined => {
+  if (!isRecord(v)) return undefined;
+  const line = text(v.text, max);
+  const setAt = stamp(v.setAt);
+  return line !== undefined && setAt !== undefined ? { text: line, setAt } : undefined;
+};
 
 /** A saved record's `cockpitMeta`, or undefined when absent or not this schema. */
 export function readCockpitMeta(raw: unknown): CockpitMeta | undefined {
   if (!isRecord(raw) || raw.v !== 1) return undefined;
   const revision = typeof raw.revision === "number" && Number.isSafeInteger(raw.revision) && raw.revision >= 0 ? raw.revision : 0;
   const meta: CockpitMeta = { v: 1, revision };
-  if (isRecord(raw.activity)) {
-    const line = text(raw.activity.text, ACTIVITY_MAX);
-    const setAt = stamp(raw.activity.setAt);
-    if (line !== undefined && setAt !== undefined) meta.activity = { text: line, setAt };
-  }
+  const activity = stampedLine(raw.activity, ACTIVITY_MAX);
+  if (activity) meta.activity = activity;
   if (isRecord(raw.handoff)) {
     const summary = text(raw.handoff.summary, FIELD_MAX);
     const checks = text(raw.handoff.checks, FIELD_MAX);
@@ -76,11 +80,8 @@ export function readCockpitMeta(raw: unknown): CockpitMeta | undefined {
   }
   const progress = readProgress(raw.progress);
   if (progress) meta.progress = progress;
-  if (isRecord(raw.blocker)) {
-    const line = text(raw.blocker.text, BLOCKER_MAX);
-    const setAt = stamp(raw.blocker.setAt);
-    if (line !== undefined && setAt !== undefined) meta.blocker = { text: line, setAt };
-  }
+  const blocker = stampedLine(raw.blocker, BLOCKER_MAX);
+  if (blocker) meta.blocker = blocker;
   const verification = readVerification(raw.verification);
   if (verification) meta.verification = verification;
   if (isRecord(raw.attention)) {
@@ -159,7 +160,11 @@ export function isActivityFresh(setAt: number, now: number): boolean {
  *  line is fresh. The backend already dropped a previous spawn's line at the
  *  new spawn; this hides an old one in between. */
 export function currentActivity(meta: CockpitMeta | undefined, now: number, live: boolean): { text: string; setAt: number } | undefined {
-  const line = meta?.activity;
+  return liveLine(meta?.activity, now, live);
+}
+
+/** `line` while the agent is live and it says something and is fresh. */
+function liveLine(line: { text: string; setAt: number } | undefined, now: number, live: boolean) {
   return live && line && line.text.trim() !== "" && isActivityFresh(line.setAt, now) ? line : undefined;
 }
 
@@ -181,8 +186,7 @@ export function currentResults(meta: CockpitMeta | undefined): NonNullable<Cockp
  *  the agent is live and the line is under 30 minutes old. The agent's own
  *  statement; it is not an app-detected state. */
 export function currentBlocker(meta: CockpitMeta | undefined, now: number, live: boolean): { text: string; setAt: number } | undefined {
-  const line = meta?.blocker;
-  return live && line && line.text.trim() !== "" && isActivityFresh(line.setAt, now) ? line : undefined;
+  return liveLine(meta?.blocker, now, live);
 }
 
 /** The agent's plan steps and whether they describe work in progress. They are
