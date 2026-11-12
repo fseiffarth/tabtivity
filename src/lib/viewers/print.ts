@@ -570,8 +570,13 @@ export interface PrintApproval {
   note?: string;
   /** The agent's options, laid over the user's for this job only. */
   preset: Partial<PrintOptions>;
-  /** Whether the request still waits — checked before anything prints. */
-  stillPending: () => Promise<boolean>;
+  /** Claim the request for this window before anything is laid out or sent
+   *  (`services::print_mcp::claim`): `false` when it ended or another window
+   *  claimed it, and then nothing prints. */
+  claim: () => Promise<boolean>;
+  /** Give a claim back when nothing was sent (layout or the native print
+   *  failed, the system dialog was cancelled): the request waits again. */
+  release: () => Promise<void>;
   /** The job left for the printer (or its system dialog took it over). */
   onPrinted: () => Promise<void>;
   onReject: () => Promise<void>;
@@ -931,7 +936,7 @@ export function printDocument(fullHtml: string, native?: NativePrint, approval?:
 
       if (!ready) return;
       const empty = paged && sequence.length === 0;
-      printBtn.disabled = empty || decided;
+      printBtn.disabled = empty || decided || claimHeld;
       if (empty) {
         printBtn.textContent = translateNow("print.noneSelected");
       } else {
@@ -1234,27 +1239,44 @@ export function printDocument(fullHtml: string, native?: NativePrint, approval?:
     // ── Approval (an agent's request) ───────────────────────────────────────
     /** The request was approved or rejected: Approve and Reject are spent. */
     let decided = false;
+    /** This window holds the request's claim: a print is under way, so
+     *  neither Reject nor a second Approve may run until it settles. */
+    let claimHeld = false;
     const settle = () => {
       decided = true;
       rejectBtn.disabled = true;
       printBtn.disabled = true;
     };
-    /** Approve: the request must still wait, or nothing prints. */
-    const stillWaiting = async (): Promise<boolean> => {
+    /** Approve: claim the request before anything is laid out or sent. Only
+     *  the winner prints; one that ended, or that another window claimed,
+     *  prints nothing here. */
+    const claimed = async (): Promise<boolean> => {
       if (!approval) return true;
-      if (await approval.stillPending().catch(() => false)) return true;
+      if (await approval.claim().catch(() => false)) {
+        claimHeld = true;
+        rejectBtn.disabled = true;
+        return true;
+      }
       settle();
       showFailure(new Error(translateNow("printRequest.gone")));
       return false;
     };
     /** The job left (or the system dialog owns it): record the approval. */
     const approved = () => {
+      claimHeld = false;
       if (!approval || decided) return;
       settle();
       void approval.onPrinted().catch(() => {});
     };
+    /** Nothing was sent: give the claim back, so the request waits again. */
+    const released = () => {
+      if (!approval || !claimHeld) return;
+      claimHeld = false;
+      if (!decided) rejectBtn.disabled = false;
+      void approval.release().catch(() => {});
+    };
     rejectBtn.addEventListener("click", () => {
-      if (!approval || decided) return;
+      if (!approval || decided || claimHeld) return;
       settle();
       void approval.onReject().catch(() => {}).finally(() => cleanup());
     });
@@ -1284,16 +1306,18 @@ export function printDocument(fullHtml: string, native?: NativePrint, approval?:
     });
     document.addEventListener("keydown", onKeyDown);
 
-    const printFrame = () => {
-      if (!frameWin) return;
+    /** `window.print()` on the preview; whether the dialog could be asked for. */
+    const printFrame = (): boolean => {
+      if (!frameWin) return false;
       try {
         frameWin.focus();
         frameWin.print();
       } catch {
         /* printing unsupported / dialog refused: leave preview open */
-        return;
+        return false;
       }
       void followJob();
+      return true;
     };
 
     /** A native print that failed says so where the user is looking. */
@@ -1309,29 +1333,41 @@ export function printDocument(fullHtml: string, native?: NativePrint, approval?:
 
     printBtn.addEventListener("click", () => void onPrint());
     const onPrint = async () => {
-      if (printBtn.disabled || !frameWin || decided) return;
+      if (printBtn.disabled || !frameWin || decided || claimHeld) return;
       printBtn.disabled = true;
-      if (!(await stillWaiting()) || done) return;
+      // Nothing below lays out or sends a page unless this window won the
+      // request's claim (`services::print_mcp::claim`).
+      if (!(await claimed())) return;
+      if (done) {
+        // The preview closed while the claim was on its way: nothing was sent.
+        released();
+        return;
+      }
       if (!native || pageEls.length === 0) {
         printBtn.disabled = false;
-        printFrame();
         // `window.print()` says nothing about a cancelled dialog: the user saw
-        // the job and pressed Approve, which is the decision.
-        approved();
+        // the job and pressed Approve, which is the decision — once the dialog
+        // could be asked for at all.
+        if (printFrame()) approved();
+        else released();
         return;
       }
       native(printSequence(arrangement, opts), opts)
         .then((outcome) => {
-          if (done) return;
-          if (outcome === "unsupported") {
-            printFrame();
+          if (outcome === "sent" || outcome === "opened") {
+            // Recorded even when the preview closed meanwhile: the job left.
             approved();
-          } else if (outcome === "sent" || outcome === "opened") {
+            if (outcome === "sent" && !done) void followJob();
+          } else if (outcome === "unsupported" && !done && printFrame()) {
             approved();
-            if (outcome === "sent") void followJob();
+          } else {
+            // The system dialog was cancelled, or the preview closed before
+            // the fallback could open: nothing was sent.
+            released();
           }
         })
         .catch((e) => {
+          released();
           if (!done) showFailure(e);
         })
         .finally(() => {

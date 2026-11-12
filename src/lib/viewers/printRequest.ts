@@ -20,7 +20,6 @@ import { NUP_CHOICES, type NUp } from "./printImposition";
 import { printPdfNative } from "../window/printing";
 import {
   decidePrintRequest,
-  printRequests,
   printRequestPdf,
   type PrintRequest,
   type PrintRequestOptions,
@@ -74,7 +73,8 @@ export async function reviewPrintRequest(request: PrintRequest, requester: strin
       requester,
       note: request.note,
       preset: presetFor(request.options),
-      stillPending: async () => (await printRequests()).some((r) => r.id === request.id),
+      claim: () => decidePrintRequest(request.id, "claim").then(() => true, () => false),
+      release: () => decidePrintRequest(request.id, "release"),
       onPrinted: () => decidePrintRequest(request.id, "printed"),
       onReject: () => decidePrintRequest(request.id, "rejected"),
     });

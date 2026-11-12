@@ -1,7 +1,7 @@
 //! The window's half of the print MCP (`services::print_mcp`): list the
 //! pending agent print requests (the Print Manager tab and the toast), hand
-//! the preview a request's PDF snapshot, and record the user's Approve or
-//! Reject. All three are `client` commands: approval is the window's own
+//! the preview a request's PDF snapshot, and record the user's Approve (claim,
+//! then printed or release) or Reject. All three are `client` commands: approval is the window's own
 //! print preview and this machine's printers, so a browser or phone client
 //! has none of them. The service rings `print-mcp-changed` through the hook
 //! installed here, so it stays context-free.
@@ -32,15 +32,20 @@ pub async fn print_mcp_pdf(id: String) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes.as_ref().clone()))
 }
 
-/// The user's decision: `printed` once the system print dialog took the job
-/// (Approve & print), `rejected` for Reject. `gone` when the request is no
-/// longer pending (withdrawn, expired, its tab closed, decided elsewhere).
+/// The user's decision, in steps: `claim` on Approve & print, before anything
+/// is laid out or sent (only one window wins it); then `printed` once the
+/// system print dialog took the job, or `release` when nothing was sent (the
+/// layout failed, the dialog was cancelled). `rejected` for Reject. `gone`
+/// when the request is not in the state the step needs (withdrawn, expired,
+/// its tab closed, decided or claimed elsewhere).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn print_mcp_decide(id: String, outcome: String) -> Result<(), String> {
-    let outcome = match outcome.as_str() {
-        "printed" => State::Printed,
-        "rejected" => State::Rejected,
+    let result = match outcome.as_str() {
+        "claim" => print_mcp::claim(&id),
+        "release" => print_mcp::release(&id),
+        "printed" => print_mcp::decide(&id, State::Printed),
+        "rejected" => print_mcp::decide(&id, State::Rejected),
         _ => return Err("invalid_outcome".into()),
     };
-    print_mcp::decide(&id, outcome).map_err(|e| e.code().to_string())
+    result.map_err(|e| e.code().to_string())
 }

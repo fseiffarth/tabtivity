@@ -14,7 +14,7 @@ Tools on `/mcp/print` (`Caller::Printer`, server `<slug>-print`,
 
 Every refusal is a normal result with a fixed `category` (`invalid`,
 `file_not_found`, `not_pdf`, `too_large`, `budget`, `pending_limit`, `off`,
-`not_found`). Budget: ten requests per tab per hour, two pending per tab,
+`not_found`, `printing`). Budget: ten requests per tab per hour, two pending per tab,
 eight pending in the process.
 
 ## Decisions (2026-11-10)
@@ -49,9 +49,16 @@ eight pending in the process.
   short-edge two-sided). The user can change any of them before approving.
 - **The agent's options are never saved** as the user's printer preferences
   (`apply()` skips `savePrintOptions` in approval mode).
-- **Approve re-checks** that the request still waits (`stillPending`) before
-  anything goes to the printer; a withdrawn, expired or closed request
-  answers "no longer waiting".
+- **Approve claims first** (`print_mcp_decide` `claim`, gap 107): Pending →
+  `printing` compare-and-set under the store lock, before anything is laid
+  out or sent; a withdrawn, expired, closed or other-window-claimed request
+  answers "no longer waiting" and nothing prints. While `printing`,
+  `print_cancel` is refused (`printing`) and neither expiry nor the tab-exit
+  sweep ends it; Reject is off. The window settles it `printed` (also after a
+  `window.print()` it could open) or `release`s it back to pending when
+  nothing was sent (layout or native print failed, dialog cancelled). A claim
+  unsettled after 30 min (`PRINTING_TTL`, the window died) becomes
+  `unconfirmed` — never withdrawn/expired — and a late `printed` still lands.
 - **Window only.** `Runtime::serves_print` (root lane *and* web lane = the
   window) gates the grant; the Mobile host and a server daemon grant nothing,
   so the route authenticates nobody there. The three window commands are
@@ -65,9 +72,10 @@ eight pending in the process.
 
 ## State
 
-In memory, like markup asks: a request ends printed, rejected, withdrawn,
-expired (24 h) or closed (its session gone); its bytes go the moment it ends,
-the record (for `print_status`) after 24 h. Changes ring `print-mcp-changed`
+In memory, like markup asks: a request ends printed, unconfirmed, rejected,
+withdrawn, expired (24 h) or closed (its session gone); its bytes go the
+moment it ends, the record (for `print_status`) 24 h after its request (or its
+claim). A `printing` request counts against the pending caps. Changes ring `print-mcp-changed`
 through a hook `commands::print_mcp` installs.
 
 ## User-run live QA

@@ -20,13 +20,23 @@
 //! Shape copied from its siblings: wired like markup (`services::markup_mcp`),
 //! refusals like git push — every refusal is a normal tool result with a fixed
 //! `category` (`invalid`, `file_not_found`, `not_pdf`, `too_large`, `budget`,
-//! `pending_limit`, `off`, `not_found`) and one `message`. The audit ring keeps
-//! session, tool and category, never the file or the note ([`audited`]).
+//! `pending_limit`, `off`, `not_found`, `printing`) and one `message`. The
+//! audit ring keeps session, tool and category, never the file or the note
+//! ([`audited`]).
 //!
 //! State is in memory only. A request ends when printed, rejected, withdrawn,
 //! after 24 h ([`RETENTION`]), or when its session is gone (tab closed,
 //! respawned or revoked); its bytes are dropped the moment it ends, and the
 //! record itself (for `print_status`) after [`RETENTION`].
+//!
+//! **Approve claims first.** Before the window lays anything out or opens the
+//! system dialog it [`claim`]s the request: Pending → [`State::Printing`] under
+//! the store lock, so of two windows only one dispatches, and from then on
+//! nothing can end it as withdrawn, expired or closed — it may reach paper.
+//! The window then settles it [`State::Printed`] ([`decide`]) or, when nothing
+//! was sent (layout failed, the dialog was cancelled), [`release`]s it back to
+//! Pending. A claim the window never settles (it died mid-print) becomes
+//! [`State::Unconfirmed`] after [`PRINTING_TTL`].
 //!
 //! **Window only.** Approval needs the window's preview and the machine's
 //! printers, so only the window's listener grants the lane
@@ -36,7 +46,7 @@
 //! `AppHandle`-free: the window learns of changes through a hook the command
 //! layer installs ([`set_change_hook`], `commands::print_mcp`).
 
-use std::collections::{HashMap, VecDeque};
+use crate::services::root_mcp_security::{admit_keyed, RollingWindows, HOUR};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -74,6 +84,10 @@ pub const MAX_PENDING_PER_TAB: usize = 2;
 /// Pending requests in this process, all tabs: bounds the snapshots held.
 pub const MAX_PENDING_TOTAL: usize = 8;
 pub const RETENTION: Duration = Duration::from_secs(24 * 3600);
+/// How long a claim ([`State::Printing`]) may wait for the window to report
+/// back — the layout plus however long the user keeps the system print dialog
+/// open — before it is settled [`State::Unconfirmed`].
+pub const PRINTING_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_RECORDS: usize = 200;
 /// How many requests `print_status` lists without an id.
 const STATUS_LIST: usize = 10;
@@ -82,15 +96,27 @@ const STATUS_LIST: usize = 10;
 #[serde(rename_all = "snake_case")]
 pub enum State {
     Pending,
+    /// The user pressed Approve & print and one window [`claim`]ed it: layout
+    /// and the system print dialog are under way. Neither `print_cancel`,
+    /// expiry nor the tab closing ends it; the window settles it.
+    Printing,
     /// The user approved and the system dialog took the job (or, on Windows,
     /// opened — the OS owns the rest and reports nothing back).
     Printed,
+    /// A claim the window never settled within [`PRINTING_TTL`] (it closed or
+    /// died mid-print): it may or may not have printed. A late report from the
+    /// window still turns it [`State::Printed`].
+    Unconfirmed,
     Rejected,
     Withdrawn,
     Expired,
     /// The tab's session ended before the user decided.
     Closed,
 }
+
+/// Whether a request is still outstanding: it holds its snapshot and counts
+/// against the pending caps.
+fn open(state: State) -> bool { matches!(state, State::Pending | State::Printing) }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,6 +150,9 @@ struct Request {
     created: Instant,
     created_at: String,
     state: State,
+    /// When the window claimed it ([`claim`]); cleared by [`release`], kept by
+    /// a settle so the record's retention runs from the print.
+    claimed: Option<Instant>,
 }
 
 /// A request as the window shows it. Only the desktop window reads these
@@ -154,35 +183,45 @@ pub fn set_change_hook(hook: Box<dyn Fn() + Send + Sync>) { let _ = CHANGE_HOOK.
 fn changed() { if let Some(hook) = CHANGE_HOOK.get() { hook(); } }
 
 /// End what has run out: a pending request past [`RETENTION`] expires, one
-/// whose session is gone closes (both drop their bytes), and any record past
-/// [`RETENTION`] goes. Whether a pending request ended.
-fn prune(list: &mut Vec<Request>) -> bool {
+/// whose session is gone closes (both drop their bytes), a claim past
+/// [`PRINTING_TTL`] becomes [`State::Unconfirmed`] (never expired or closed:
+/// it may have printed), and any finished record past [`RETENTION`] — counted
+/// from its claim when it had one — goes. Whether an open request ended.
+fn prune(list: &mut Vec<Request>) -> bool { prune_at(list, Instant::now()) }
+
+/// [`prune`] as of `now` (tests pass a later instant instead of waiting).
+fn prune_at(list: &mut Vec<Request>, now: Instant) -> bool {
+    let age = |at: Instant| now.saturating_duration_since(at);
     let mut ended = false;
-    for request in list.iter_mut().filter(|r| r.state == State::Pending) {
-        let next = if request.created.elapsed() >= RETENTION { Some(State::Expired) }
-            else if !crate::services::root_mcp::session_alive(&request.session) { Some(State::Closed) }
-            else { None };
+    for request in list.iter_mut() {
+        let next = match request.state {
+            State::Pending if age(request.created) >= RETENTION => Some(State::Expired),
+            State::Pending if !crate::services::root_mcp::session_alive(&request.session) => Some(State::Closed),
+            State::Printing if request.claimed.is_none_or(|at| age(at) >= PRINTING_TTL) => Some(State::Unconfirmed),
+            _ => None,
+        };
         if let Some(state) = next {
             request.state = state;
             request.bytes = None;
             ended = true;
         }
     }
-    list.retain(|r| r.created.elapsed() < RETENTION);
+    list.retain(|r| r.state == State::Printing || age(r.claimed.unwrap_or(r.created)) < RETENTION);
     let over = list.len().saturating_sub(MAX_RECORDS);
     if over > 0 {
-        // Oldest finished records first; a pending one is never dropped here
+        // Oldest finished records first; an open one is never dropped here
         // (there are at most MAX_PENDING_TOTAL of them).
         let mut dropped = 0;
         list.retain(|r| {
-            if dropped < over && r.state != State::Pending { dropped += 1; false } else { true }
+            if dropped < over && !open(r.state) { dropped += 1; false } else { true }
         });
     }
     ended
 }
 
 /// Run [`prune`] and ring the window when a pending request ended — called
-/// when a tab's session ends (`terminal` exit path) and on every list.
+/// when a tab's session ends (`terminal` exit path) and on every list. A
+/// claimed ([`State::Printing`]) request survives it.
 pub fn sweep() -> bool {
     let ended = prune(&mut store().lock_ok());
     if ended { changed(); }
@@ -225,22 +264,58 @@ pub fn pdf(id: &str) -> Result<Arc<Vec<u8>>, DecideError> {
     found.ok_or(DecideError::Gone)
 }
 
-/// The user's decision on a pending request: [`State::Printed`] (approved and
-/// handed to the print system) or [`State::Rejected`]. Anything else, or a
-/// request that is no longer pending, is `Gone`.
-pub fn decide(id: &str, outcome: State) -> Result<(), DecideError> {
-    if !matches!(outcome, State::Printed | State::Rejected) { return Err(DecideError::Gone); }
+/// Run `step` on the store after a prune, then ring the window (always: the
+/// request may have left or rejoined the window's list either way).
+fn settle_with(step: impl FnOnce(&mut Vec<Request>) -> Result<(), DecideError>) -> Result<(), DecideError> {
     let mut list = store().lock_ok();
     prune(&mut list);
-    let Some(request) = list.iter_mut().find(|r| r.id == id && r.state == State::Pending) else {
-        drop(list);
-        changed();
-        return Err(DecideError::Gone);
-    };
-    request.state = outcome;
-    request.bytes = None;
+    let result = step(&mut list);
     drop(list);
     changed();
+    result
+}
+
+/// Approve & print, before anything is laid out or sent: Pending →
+/// [`State::Printing`], compare-and-set under the store lock, so of two
+/// windows only the winner dispatches. `Gone` for anything not pending
+/// (withdrawn, expired, closed, decided, or claimed by another window).
+pub fn claim(id: &str) -> Result<(), DecideError> { settle_with(|list| claim_in(list, id, Instant::now())) }
+
+fn claim_in(list: &mut [Request], id: &str, now: Instant) -> Result<(), DecideError> {
+    let request = list.iter_mut().find(|r| r.id == id && r.state == State::Pending).ok_or(DecideError::Gone)?;
+    request.state = State::Printing;
+    request.claimed = Some(now);
+    Ok(())
+}
+
+/// Nothing was sent after all (layout or the native print failed, the system
+/// dialog was cancelled, the preview closed first): a claimed request waits
+/// again. `Gone` unless it is [`State::Printing`].
+pub fn release(id: &str) -> Result<(), DecideError> { settle_with(|list| release_in(list, id)) }
+
+fn release_in(list: &mut [Request], id: &str) -> Result<(), DecideError> {
+    let request = list.iter_mut().find(|r| r.id == id && r.state == State::Printing).ok_or(DecideError::Gone)?;
+    request.state = State::Pending;
+    request.claimed = None;
+    Ok(())
+}
+
+/// The user's decision: [`State::Printed`] (the job was handed to the print
+/// system) settles a claimed request — or a late report on an
+/// [`State::Unconfirmed`] one; [`State::Rejected`] ends a pending one. A
+/// claimed request cannot be rejected (it may be printing). Anything else is
+/// `Gone`.
+pub fn decide(id: &str, outcome: State) -> Result<(), DecideError> { settle_with(|list| decide_in(list, id, outcome)) }
+
+fn decide_in(list: &mut [Request], id: &str, outcome: State) -> Result<(), DecideError> {
+    let from = |state: State| match outcome {
+        State::Printed => matches!(state, State::Printing | State::Unconfirmed),
+        State::Rejected => state == State::Pending,
+        _ => false,
+    };
+    let request = list.iter_mut().find(|r| r.id == id && from(r.state)).ok_or(DecideError::Gone)?;
+    request.state = outcome;
+    request.bytes = None;
     Ok(())
 }
 
@@ -348,18 +423,13 @@ pub fn read_pdf(root: &Path, file: &str) -> Result<(String, Vec<u8>), ReadError>
 
 // ── Budget ──────────────────────────────────────────────────────────────────
 
-fn rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
-    static RATES: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+fn rates() -> &'static Mutex<RollingWindows> {
+    static RATES: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     RATES.get_or_init(Default::default)
 }
 /// [`REQUESTS_PER_HOUR`] `print_request` calls per tab, rolling.
 fn admit_rate(tab: &str) -> bool {
-    let mut map = rates().lock_ok();
-    map.retain(|_, calls| { calls.retain(|at| at.elapsed() < Duration::from_secs(3600)); !calls.is_empty() });
-    let calls = map.entry(tab.to_string()).or_default();
-    if calls.len() >= REQUESTS_PER_HOUR { return false; }
-    calls.push_back(Instant::now());
-    true
+    admit_keyed(&mut rates().lock_ok(), tab, REQUESTS_PER_HOUR, HOUR, Instant::now())
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────
@@ -372,6 +442,8 @@ const BUDGET: &str = "budget";
 const PENDING_LIMIT: &str = "pending_limit";
 const OFF: &str = "off";
 const NOT_FOUND: &str = "not_found";
+/// `print_cancel` on a request the user approved and the window is printing.
+const PRINTING: &str = "printing";
 
 fn refused(category: &'static str, message: impl Into<String>) -> Value {
     json!({"status": "refused", "category": category, "message": message.into()})
@@ -389,6 +461,7 @@ pub fn refusal_reason(reply: &Value) -> Option<&'static str> {
         Some(PENDING_LIMIT) => PENDING_LIMIT,
         Some(OFF) => OFF,
         Some(NOT_FOUND) => NOT_FOUND,
+        Some(PRINTING) => PRINTING,
         _ => INVALID,
     })
 }
@@ -414,11 +487,11 @@ pub fn tools() -> Value {
             "note": {"type":"string","maxLength":MAX_NOTE_CHARS,"description":"Optional: one line for the user on why or what (shown on the request)."}
          }), json!(["file"]))},
         {"name": TOOL_STATUS,
-         "description": "This tab's print requests and their state (pending, printed, rejected, withdrawn, expired, closed): one by id, or the latest ten.",
+         "description": "This tab's print requests and their state (pending; printing — approved, being printed; printed; unconfirmed — approved, but the outcome was never reported; rejected, withdrawn, expired, closed): one by id, or the latest ten.",
          "inputSchema": object(json!({"id":{"type":"string","maxLength":64,"description":"The id print_request returned (optional)."}}), json!([])),
          "annotations": {"readOnlyHint": true}},
         {"name": TOOL_CANCEL,
-         "description": "Withdraw this tab's pending print request (it disappears from the user's list). `not_found` when it is not pending.",
+         "description": "Withdraw this tab's pending print request (it disappears from the user's list). `printing` once the user approved it and it is being printed; `not_found` when it is not pending.",
          "inputSchema": object(json!({"id":{"type":"string","maxLength":64,"description":"The id print_request returned."}}), json!(["id"])),
          "annotations": {"idempotentHint": true}}
     ])
@@ -443,8 +516,8 @@ fn call_request(session: &Session, project: &str, ctx: &Context, args: &Value) -
     {
         let mut list = store().lock_ok();
         prune(&mut list);
-        let tab_pending = list.iter().filter(|r| r.state == State::Pending && r.tab == session.identity.tab).count();
-        let all_pending = list.iter().filter(|r| r.state == State::Pending).count();
+        let tab_pending = list.iter().filter(|r| open(r.state) && r.tab == session.identity.tab).count();
+        let all_pending = list.iter().filter(|r| open(r.state)).count();
         if tab_pending >= MAX_PENDING_PER_TAB || all_pending >= MAX_PENDING_TOTAL {
             return refused(PENDING_LIMIT, format!("At most {MAX_PENDING_PER_TAB} print requests per tab wait for the user. Poll print_status, or print_cancel one."));
         }
@@ -470,14 +543,15 @@ fn call_request(session: &Session, project: &str, ctx: &Context, args: &Value) -
     prune(&mut list);
     // Checked again under the lock the push takes: two calls racing past the
     // first check must not both land.
-    let tab_pending = list.iter().filter(|r| r.state == State::Pending && r.tab == session.identity.tab).count();
-    if tab_pending >= MAX_PENDING_PER_TAB || list.iter().filter(|r| r.state == State::Pending).count() >= MAX_PENDING_TOTAL {
+    // A claimed request still holds its snapshot, so it counts as pending.
+    let tab_pending = list.iter().filter(|r| open(r.state) && r.tab == session.identity.tab).count();
+    if tab_pending >= MAX_PENDING_PER_TAB || list.iter().filter(|r| open(r.state)).count() >= MAX_PENDING_TOTAL {
         return refused(PENDING_LIMIT, format!("At most {MAX_PENDING_PER_TAB} print requests per tab wait for the user. Poll print_status, or print_cancel one."));
     }
     list.push(Request {
         id: id.clone(), session: session.id.clone(), tab: session.identity.tab.clone(), project: project.to_string(),
         file: file.clone(), bytes: Some(Arc::new(bytes)), size, sha256, options: parsed.options, note: parsed.note,
-        created: Instant::now(), created_at: chrono::Local::now().to_rfc3339(), state: State::Pending,
+        created: Instant::now(), created_at: chrono::Local::now().to_rfc3339(), state: State::Pending, claimed: None,
     });
     prune(&mut list);
     drop(list);
@@ -516,11 +590,24 @@ fn call_cancel(session: &Session, args: &Value) -> Value {
     let args: IdArgs = match serde_json::from_value(args.clone()) { Ok(a) => a, Err(e) => return refused(INVALID, format!("invalid arguments: {e}")) };
     let mut list = store().lock_ok();
     let ended = prune(&mut list);
-    let found = list.iter_mut().find(|r| r.id == args.id && r.tab == session.identity.tab && r.state == State::Pending);
-    let withdrawn = found.map(|request| { request.state = State::Withdrawn; request.bytes = None; }).is_some();
+    // A claimed request is past withdrawing: the user approved it and it may
+    // already be on its way to the printer.
+    let outcome = match list.iter_mut().find(|r| r.id == args.id && r.tab == session.identity.tab && open(r.state)) {
+        Some(request) if request.state == State::Pending => {
+            request.state = State::Withdrawn;
+            request.bytes = None;
+            Ok(())
+        }
+        Some(_) => Err(PRINTING),
+        None => Err(NOT_FOUND),
+    };
     drop(list);
-    if ended || withdrawn { changed(); }
-    if withdrawn { json!({"status": "withdrawn"}) } else { refused(NOT_FOUND, "No pending print request of this tab has that id.") }
+    if ended || outcome.is_ok() { changed(); }
+    match outcome {
+        Ok(()) => json!({"status": "withdrawn"}),
+        Err(PRINTING) => refused(PRINTING, "The user already approved this request and it is being printed; it can no longer be withdrawn. Poll print_status for the outcome."),
+        Err(_) => refused(NOT_FOUND, "No pending print request of this tab has that id."),
+    }
 }
 
 /// One JSON-RPC message from a [`Caller::Printer`] session against the live
@@ -541,36 +628,24 @@ pub fn enabled() -> bool { enabled_in(&crate::storage::settings_path()) }
 /// session or one without its project binding is refused here too, whatever
 /// the route said.
 pub fn handle_with(session: &Session, message: &Value, ctx: &Context) -> Option<Value> {
-    let error = |id: Value, code: i64, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}}));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return error(Value::Null, -32600, "invalid request");
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, tool_err, tool_ok, LaneInfo, LaneMethod};
+    let id = match rpc_request_id(message) { Err(reply) => return Some(reply), Ok(id) => id? };
+    if session.identity.caller != Caller::Printer || session.check().is_err() { return Some(rpc_error(id, -32000, "access refused")); }
+    let Some(project) = session.identity.project.as_deref() else { return Some(rpc_error(id, -32000, "access refused")) };
+    let lane = LaneInfo { name: SERVER_NAME, instructions: INSTRUCTIONS, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return Some(reply),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(Value::Null)),
+    };
+    if !crate::services::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Printer)) {
+        return Some(rpc_result(id, tool_err("unknown tool")));
     }
-    let id = message.get("id").cloned()?;
-    if session.identity.caller != Caller::Printer || session.check().is_err() { return error(id, -32000, "access refused"); }
-    let Some(project) = session.identity.project.as_deref() else { return error(id, -32000, "access refused") };
-    let ok = |value: Value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
-            "serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS})),
-        "ping" => ok(json!({})),
-        "tools/list" => ok(json!({"tools": tools()})),
-        "tools/call" => {
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            let args = message["params"].get("arguments").cloned().unwrap_or(Value::Null);
-            if !crate::services::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Printer)) {
-                return ok(json!({"content":[{"type":"text","text":"unknown tool"}],"isError":true}));
-            }
-            let value = match name {
-                TOOL_REQUEST => call_request(session, project, ctx, &args),
-                TOOL_STATUS => call_status(session, &args),
-                _ => call_cancel(session, &args),
-            };
-            ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}))
-        }
-        _ => error(id, -32601, "method not found"),
-    }
+    let value = match name {
+        TOOL_REQUEST => call_request(session, project, ctx, &args),
+        TOOL_STATUS => call_status(session, &args),
+        _ => call_cancel(session, &args),
+    };
+    Some(rpc_result(id, tool_ok(value)))
 }
 
 #[cfg(test)]
@@ -679,6 +754,8 @@ mod tests {
         assert_eq!(shown.options.duplex.as_deref(), Some("long"));
         assert_eq!(shown.note.as_deref(), Some("for the meeting"));
         assert_eq!(call(&s, &ctx, TOOL_STATUS, json!({"id": id}))["requests"][0]["state"], "pending");
+        assert_eq!(decide(&id, State::Printed), Err(DecideError::Gone), "printed only after a claim");
+        claim(&id).unwrap();
         decide(&id, State::Printed).unwrap();
         assert_eq!(call(&s, &ctx, TOOL_STATUS, json!({"id": id}))["requests"][0]["state"], "printed");
         assert_eq!(pdf(&id), Err(DecideError::Gone), "the bytes go with the decision");
@@ -717,5 +794,160 @@ mod tests {
         sweep();
         assert!(pending().iter().all(|r| r.id != id));
         assert_eq!(pdf(&id), Err(DecideError::Gone));
+    }
+
+    /// The state of one request in the shared store, read directly (a revoked
+    /// session can no longer ask `print_status`).
+    fn state_of(id: &str) -> Option<State> {
+        store().lock_ok().iter().find(|r| r.id == id).map(|r| r.state)
+    }
+
+    fn holds_bytes(id: &str) -> bool {
+        store().lock_ok().iter().find(|r| r.id == id).is_some_and(|r| r.bytes.is_some())
+    }
+
+    /// The claim tests run one at a time: together with the older tests they
+    /// would otherwise risk the process-wide [`MAX_PENDING_TOTAL`].
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static ONE: Mutex<()> = Mutex::new(());
+        ONE.lock_ok()
+    }
+
+    #[test]
+    fn a_claim_is_won_once_and_cannot_be_withdrawn() {
+        let _one = serial();
+        let (_dir, root) = root();
+        let (_, s) = test_session_bound(Caller::Printer, "print-claim", "p", "t");
+        let find = move || Some(root.clone());
+        let ctx = Context { enabled: true, root: &find };
+        let id = call(&s, &ctx, TOOL_REQUEST, json!({"file": "build/report.pdf"}))["id"].as_str().unwrap().to_string();
+        claim(&id).unwrap();
+        assert_eq!(claim(&id), Err(DecideError::Gone), "a second window loses the claim");
+        assert!(holds_bytes(&id), "the snapshot stays while printing");
+        assert!(pending().iter().all(|r| r.id != id), "no other window offers it while it prints");
+        let refused = call(&s, &ctx, TOOL_CANCEL, json!({"id": id}));
+        assert_eq!(refused["category"], PRINTING, "{refused}");
+        assert_eq!(refusal_reason(&json!({"result": {"structuredContent": refused}})), Some(PRINTING));
+        assert_eq!(call(&s, &ctx, TOOL_STATUS, json!({"id": id}))["requests"][0]["state"], "printing");
+        assert_eq!(decide(&id, State::Rejected), Err(DecideError::Gone), "a claimed request may be printing");
+        // A claimed request still counts against the tab's pending cap.
+        call(&s, &ctx, TOOL_REQUEST, json!({"file": "build/report.pdf"}));
+        assert_eq!(call(&s, &ctx, TOOL_REQUEST, json!({"file": "build/report.pdf"}))["category"], PENDING_LIMIT);
+        decide(&id, State::Printed).unwrap();
+        assert_eq!(call(&s, &ctx, TOOL_STATUS, json!({"id": id}))["requests"][0]["state"], "printed");
+        assert!(!holds_bytes(&id));
+        assert_eq!(release(&id), Err(DecideError::Gone), "a settled request is not released");
+        let left = call(&s, &ctx, TOOL_STATUS, json!({}))["requests"][0]["id"].as_str().unwrap().to_string();
+        decide(&left, State::Rejected).unwrap();
+    }
+
+    #[test]
+    fn two_windows_racing_for_one_claim_dispatch_once() {
+        let _one = serial();
+        let (_dir, root) = root();
+        let (_, s) = test_session_bound(Caller::Printer, "print-race", "p", "t");
+        let find = move || Some(root.clone());
+        let ctx = Context { enabled: true, root: &find };
+        let id = call(&s, &ctx, TOOL_REQUEST, json!({"file": "build/report.pdf"}))["id"].as_str().unwrap().to_string();
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let winners: usize = (0..8)
+            .map(|_| {
+                let (id, barrier) = (id.clone(), barrier.clone());
+                std::thread::spawn(move || { barrier.wait(); claim(&id).is_ok() })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| usize::from(h.join().unwrap()))
+            .sum();
+        assert_eq!(winners, 1);
+        release(&id).unwrap();
+    }
+
+    #[test]
+    fn a_released_claim_waits_again() {
+        let _one = serial();
+        let (_dir, root) = root();
+        let (_, s) = test_session_bound(Caller::Printer, "print-release", "p", "t");
+        let find = move || Some(root.clone());
+        let ctx = Context { enabled: true, root: &find };
+        let id = call(&s, &ctx, TOOL_REQUEST, json!({"file": "build/report.pdf"}))["id"].as_str().unwrap().to_string();
+        assert_eq!(release(&id), Err(DecideError::Gone), "only a claim is released");
+        claim(&id).unwrap();
+        release(&id).unwrap();
+        assert_eq!(state_of(&id), Some(State::Pending));
+        assert_eq!(pdf(&id).unwrap().as_slice(), b"%PDF-1.7\nhello", "the same snapshot");
+        assert!(pending().iter().any(|r| r.id == id));
+        assert_eq!(call(&s, &ctx, TOOL_CANCEL, json!({"id": id}))["status"], "withdrawn");
+        assert_eq!(claim(&id), Err(DecideError::Gone), "a withdrawn request cannot be claimed");
+    }
+
+    #[test]
+    fn the_tab_closing_mid_print_does_not_end_the_claim() {
+        let _one = serial();
+        let (_dir, root) = root();
+        let (token, s) = test_session_bound(Caller::Printer, "print-sweep", "p", "t");
+        let find = move || Some(root.clone());
+        let ctx = Context { enabled: true, root: &find };
+        let printed = call(&s, &ctx, TOOL_REQUEST, json!({"file": "build/report.pdf"}))["id"].as_str().unwrap().to_string();
+        let cancelled = call(&s, &ctx, TOOL_REQUEST, json!({"file": "build/report.pdf"}))["id"].as_str().unwrap().to_string();
+        claim(&printed).unwrap();
+        claim(&cancelled).unwrap();
+        crate::services::root_mcp::revoke_token(&token);
+        sweep();
+        assert_eq!(state_of(&printed), Some(State::Printing), "the sweep leaves a claim alone");
+        assert!(holds_bytes(&printed));
+        decide(&printed, State::Printed).unwrap();
+        assert_eq!(state_of(&printed), Some(State::Printed));
+        // The dialog was cancelled after the tab went: the request waits again
+        // and closes with its session.
+        release(&cancelled).unwrap();
+        sweep();
+        assert_eq!(state_of(&cancelled), Some(State::Closed));
+        assert!(!holds_bytes(&cancelled));
+    }
+
+    fn record(id: &str, session: &str, state: State, created: Instant, claimed: Option<Instant>) -> Request {
+        Request {
+            id: id.into(), session: session.into(), tab: "t".into(), project: "p".into(), file: "a.pdf".into(),
+            bytes: Some(Arc::new(b"%PDF-1.7\n".to_vec())), size: 9, sha256: String::new(), options: Options::default(),
+            note: None, created, created_at: String::new(), state, claimed,
+        }
+    }
+
+    #[test]
+    fn expiry_never_ends_a_claim_and_a_stuck_claim_is_unconfirmed() {
+        let (_, s) = test_session_bound(Caller::Printer, "print-ttl", "p", "t");
+        let t0 = Instant::now();
+        let late = t0 + RETENTION + Duration::from_secs(1);
+        let mut list = vec![
+            record("waiting", &s.id, State::Pending, t0, None),
+            // Asked a day ago, approved just now.
+            record("printing", &s.id, State::Printing, t0, Some(late)),
+        ];
+        assert!(prune_at(&mut list, late));
+        assert!(list.iter().all(|r| r.id != "waiting"), "the pending one expired and its record went");
+        let claimed = list.iter().find(|r| r.id == "printing").expect("a claim outlives the request's retention");
+        assert_eq!(claimed.state, State::Printing);
+        assert!(claimed.bytes.is_some());
+        // Its session gone: still printing.
+        let mut list = vec![record("orphan", "print-no-such-session", State::Printing, t0, Some(t0))];
+        assert!(!prune_at(&mut list, t0 + Duration::from_secs(60)));
+        assert_eq!(list[0].state, State::Printing);
+        // The window never reported back.
+        assert!(prune_at(&mut list, t0 + PRINTING_TTL));
+        assert_eq!(list[0].state, State::Unconfirmed, "never expired, closed or withdrawn");
+        assert!(list[0].bytes.is_none());
+        assert_eq!(release_in(&mut list, "orphan"), Err(DecideError::Gone));
+        assert_eq!(decide_in(&mut list, "orphan", State::Rejected), Err(DecideError::Gone));
+        // A late report from the window is the truth.
+        decide_in(&mut list, "orphan", State::Printed).unwrap();
+        assert_eq!(list[0].state, State::Printed);
+        assert!(!prune_at(&mut list, t0 + PRINTING_TTL + Duration::from_secs(60)), "the record stays for print_status");
+        assert_eq!(list.len(), 1);
+        // A claim taken in `claim_in` carries its own clock.
+        let mut list = vec![record("fresh", &s.id, State::Pending, t0, None)];
+        claim_in(&mut list, "fresh", t0).unwrap();
+        assert!(!prune_at(&mut list, t0 + PRINTING_TTL - Duration::from_secs(1)));
+        assert_eq!(list[0].state, State::Printing);
     }
 }

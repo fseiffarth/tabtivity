@@ -56,8 +56,15 @@ export async function printRequestPdf(id: string): Promise<Uint8Array> {
   return out instanceof ArrayBuffer ? new Uint8Array(out) : Uint8Array.from(out);
 }
 
-/** Record the user's decision. Rejects with `gone` when it is no longer
- *  pending (withdrawn, expired, its tab closed). */
-export function decidePrintRequest(id: string, outcome: "printed" | "rejected"): Promise<void> {
+/** A step of the user's decision: `claim` on Approve & print, before anything
+ *  is laid out or sent (one window wins it); then `printed` once the system
+ *  dialog took the job, or `release` when nothing was sent. `rejected` for
+ *  Reject. */
+export type PrintDecision = "claim" | "release" | "printed" | "rejected";
+
+/** Record a step of the user's decision. Rejects with `gone` when the request
+ *  is not in the state the step needs (withdrawn, expired, its tab closed,
+ *  decided or claimed elsewhere). */
+export function decidePrintRequest(id: string, outcome: PrintDecision): Promise<void> {
   return invoke("print_mcp_decide", { id, outcome });
 }
