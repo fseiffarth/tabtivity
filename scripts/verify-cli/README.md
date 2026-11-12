@@ -69,7 +69,11 @@ gives its usage.
   resume flags and `agy models`. `second.py` checks two windows on one
   conversation. `signin.py <label> <bin> <cols> <rows>` reaches the sign-in
   link at a width. Copy `<bin>` into a directory you made read-only first:
-  agy updates itself in place.
+  agy updates itself in place. `store.py <label> [<label>…]` reads `main.py`'s
+  home the way the phone Chat does (`google_chat`'s queries and protobuf
+  fields) and prints the schema statements that differ between labels.
+  A pinned build: the updater manifest (`agent_latest::Source::Manifest`)
+  names the tarball and its sha512.
 - **Codex** (`codex/`): `writer_lock.py <label> <bin> [model]` opens a
   thread on the local Ollama, resumes it in a second window (it must show the
   lock screen), SIGKILLs the first and resumes again (it must open). Beyond

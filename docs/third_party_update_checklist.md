@@ -1793,6 +1793,24 @@ notes: `agy acp` Auto mode, hook input gains `hookEventName`, `cwd`
 and `toolCall.id` (nothing here hooks Antigravity's tools), and fixes for
 subagent prompts, PgUp/PgDn and the `remote-control` service. Neither the
 second-window notice nor a real sign-in was exercised.
+1.5.6 on 2026-11-12 (the updater manifest's tarball, sha512 checked and the
+same bytes as the installed copy, in a read-only directory, beside the 1.5.5
+copy): `main.py` at 80 and 42 columns prints the same lines, `agy models` the
+same list, `--help` and `models --help` are identical, and 40 of 48 frames
+read the same; the other eight are the sign-in frames, differing only in
+the PKCE `state` and challenge (link whole at 80×24, page notes `1–20` and
+`14–33` at 42×24 as before). `second.py` shows the `⚠ Conversation already
+open` notice with the history. `agy changelog` now carries notes through
+1.5.6. 1.5.5 added swarms (`/swarm`, a full-screen `/swarm board`, and a
+`● Swarm(<title>)` row in the tray *below* the prompt while one runs) and
+Gemini 4 Carbon for `AGY_ADC_AUTH` sign-ins; 1.5.6 adds a `continuation_active`
+field to Stop-hook input (nothing here hooks Antigravity), Kitty-graphics bees
+in the swarm board, and Auto-mode, plugin, gateway and undo-cursor fixes.
+Not reached here, as the stub starts no swarm: whether the swarm tray row
+moves the footer the model reader takes. The conversation store gained a
+`conversation_parents` table (the search index's companion, joined to
+`conversations_fts` in the binary); `conversation_summaries` and its
+`parent_conversation_id` are unchanged.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
@@ -1832,7 +1850,11 @@ as an example binary (a `src-tauri/examples` file calling
 `app_lib::services::google_chat`). 1.4.12 (2026-10-31) the same, beside 1.4.11:
 schemas and row counts identical, six entries off three turns, the conversation
 listed. 1.5.0 (2026-11-04) the same, beside 1.4.12 (the example built in a
-throwaway worktree and then deleted).
+throwaway worktree and then deleted). 1.5.6 (2026-11-12) through
+`scripts/verify-cli/antigravity/store.py`, which reads a probe home with the
+reader's own queries and fields: three prompts and three answers decode on
+both 1.5.5 and 1.5.6, and the only schema change is the search index's new
+`conversation_parents` table.
 
 Vibe and Copilot are full-screen (alternate-screen) TUIs, as plain `opencode`
 is; the phone's Focus view cannot read them — a release that changes that is an
