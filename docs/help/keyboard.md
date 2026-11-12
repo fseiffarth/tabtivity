@@ -105,7 +105,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | Backspace | Back to the tab you were on before Q / R / X (again: return). Answering a question you jumped to with Q brings you back by itself |
 | / | Open Settings and walk it: ← → pages, E D controls |
 | ? | Open the cheat sheet: E D scroll it |
-| Space | On an agent tab: a prompt box in the window's middle; Enter sends, Esc returns. Its chips (Alt+M model, Alt+E effort, Alt+C clear, Alt+P / Alt+G plan / goal) include Alt+T Commit: a list of the three commit prompts (↑/↓, Enter or a digit sends one), as the Chat box's Commit chip |
+| Space | On an agent tab: with its Chat view shown, the Chat's own input field appears (hidden while steering) and takes the keys; Enter sends and hides it, Esc hides it without sending. In the Terminal view (or while a dialog is up): a prompt box in the window's middle; Enter sends, Esc returns. Its chips (Alt+M model, Alt+E effort, Alt+C clear, Alt+P / Alt+G plan / goal) include Alt+T Commit: a list of the three commit prompts (↑/↓, Enter or a digit sends one), as the Chat box's Commit chip |
 | Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |
 
 **D** from the tab level steps *Inside* the active tab: the arrows stop
@@ -135,7 +135,7 @@ highlighted card is the cursor:
 | U | Switch between split and unified |
 | O | Open the file in a tab (Shift+O: in a new subwindow) |
 | V | Open the card's whole file in the diff viewer |
-| Enter / Space | Work here (leave navigation, the keys stay in the view) / the prompt box |
+| Enter / Space | Work here (leave navigation, the keys stay in the view) / the Chat's input field (else the prompt box) |
 
 Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
 New project dialog, a right-click menu, a top-bar menu, the root console — gets

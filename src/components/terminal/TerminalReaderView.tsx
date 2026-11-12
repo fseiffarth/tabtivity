@@ -19,7 +19,7 @@ import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { DraftUndo, caretAfterSwap } from "../../lib/agents/draftUndo";
 import { actionMatches } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
-import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
+import { clearAgentTab, ledDraft, sendSteeringPrompt, type SteeringAgentCommand } from "../../lib/shortcuts/steeringAgent";
 import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { SessionPickerOpenError, submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInput";
 import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
@@ -31,11 +31,11 @@ import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
-import { registerQuestionField, registerQueueMoves } from "../../lib/agents/readerSteering";
+import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
-import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { AGENT_ITEMS, buildSignInTabSpec } from "../../lib/tabs/newTabItems";
 import { signInLaunch } from "../../lib/agents/signInLaunch";
@@ -584,7 +584,9 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
  * box, never the conversation above it — with a long chat that was every turn
  * and the facts row per key, on the one renderer thread typing waits for.
  * Mounted while steering holds the keyboard (drawn as nothing), so a draft
- * survives steering; an unsent draft is kept per tab (`readerDrafts`), so
+ * survives steering; steering's Prompt key shows it again with the keyboard
+ * (`registerReaderComposer`), and sending or Esc hides it, steering back on
+ * the level the key was pressed on. An unsent draft is kept per tab (`readerDrafts`), so
  * it survives the Reader unmounting too — another tab shown, the switch
  * flipped. Sends through the prompt box's path (`sendSteeringPrompt`); ↑/↓
  * walk `history`; Esc is `onEscape`. ↑ in the empty box while Claude shows
@@ -758,6 +760,73 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     forgetSlashCommand(cli, line);
     setUsedSlash(readSlashCommands(cli));
     setSlashAt(null);
+  };
+
+  /** Steering's Prompt key showed the composer under steering: the level
+   * steering comes back on once the prompt is sent or Esc pressed. */
+  const [steerOpen, setSteerOpen] = useState<SteeringBaseLevel | null>(null);
+  const steerOpenRef = useRef(steerOpen);
+  steerOpenRef.current = steerOpen;
+  const openForSteering = useRef<(level: SteeringBaseLevel, lead?: SteeringAgentCommand) => boolean>(() => false);
+  openForSteering.current = (level, lead) => {
+    if (lead) {
+      const next = ledDraft(draftRef.current, lead);
+      editDraft(next);
+      caretAt.current = next.length;
+    }
+    setSteerOpen(level);
+    return true;
+  };
+  // Only a composer on show that takes text answers the key; else the prompt
+  // box over the window does.
+  const steerable = visible && !inputBlocked;
+  useEffect(
+    () => steerable ? registerReaderComposer(ptyId, (level, lead) => openForSteering.current(level, lead)) : undefined,
+    [ptyId, steerable],
+  );
+  // Shown with the keyboard, caret at the end of the text.
+  useLayoutEffect(() => {
+    const box = composerRef.current;
+    if (steerOpen === null || !box) return;
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }, [steerOpen]);
+  // Steering went on again, or its handoff was dropped: the composer is the
+  // Prompt key's no more.
+  useEffect(() => {
+    if (steerOpen === null) return;
+    const check = (handedTo: string | null) => {
+      if (handedTo !== "prompt") setSteerOpen(null);
+    };
+    check(useKeyboardSteeringStore.getState().handedTo);
+    return useKeyboardSteeringStore.subscribe((state) => check(state.handedTo));
+  }, [steerOpen]);
+  // A dialog came up, or the Chat went out of view: steering takes it from here.
+  useEffect(() => {
+    if (steerOpen === null || steerable) return;
+    setSteerOpen(null);
+    const steeringState = useKeyboardSteeringStore.getState();
+    if (steeringState.handedTo === "prompt") steeringState.enter(steerOpen);
+  }, [steerOpen, steerable]);
+  // A press outside the composer and its chips: the pointer has taken over,
+  // nothing waits to come back (the composer stays, as without steering).
+  useEffect(() => {
+    if (steerOpen === null) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      const within = !!target && (!!composerRef.current?.closest(".terminal-reader-composer")?.contains(target) || !!chipSlot?.contains(target));
+      if (!within && useKeyboardSteeringStore.getState().handedTo === "prompt") useKeyboardSteeringStore.getState().dropHandoff();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [steerOpen, chipSlot]);
+  /** Hide the composer the Prompt key showed: steering back on its level. */
+  const backToSteering = () => {
+    const level = steerOpenRef.current;
+    if (level === null) return;
+    setSteerOpen(null);
+    composerRef.current?.blur();
+    if (useKeyboardSteeringStore.getState().handedTo === "prompt") useKeyboardSteeringStore.getState().enter(level);
   };
 
   // The keyboard goes to the composer whenever this pane is the focused one,
@@ -949,6 +1018,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       setDraft("");
       undo.current.clear();
       historyAt.current = null;
+      backToSteering();
     } catch (error) {
       setSendError(sendFailure(error));
     } finally {
@@ -1149,11 +1219,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       void send();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      onEscape();
+      if (steerOpenRef.current !== null) backToSteering();
+      else onEscape();
     }
   };
 
-  if (steering) return null;
+  if (steering && steerOpen === null) return null;
   const chips = <ReaderComposerChips
     prefixes={prefixCommands}
     active={draftPrefix(draft, prefixCommands)}
@@ -1206,6 +1277,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
       {assistantChat && <UntestedTag id="assistant.clear" />}
+      {steerOpen !== null && <UntestedTag id="steering.promptComposer" />}
     </div>
     {holding && !sendError && (
       <div className="terminal-reader-waiting" role="status">
@@ -1377,8 +1449,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const requestStatus = (panel: ReaderPanel) => { setStatusOpen(panel); setStatusRequest((request) => request + 1); };
   const closeStatus = () => setStatusOpen(null);
   /** Steering holds the keyboard (or its prompt box does): a composer on show
-   * would take typing that goes to steering, so it stands aside — the Prompt
-   * key (I) is how a prompt goes in then. */
+   * would take typing that goes to steering, so it stands aside — steering's
+   * Prompt key shows it again with the keyboard (`registerReaderComposer`). */
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
   const agentLabel = tab ? agentTabLabel(tab) : "";
   const use24h = useUse24h();

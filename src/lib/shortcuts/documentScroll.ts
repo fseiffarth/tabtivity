@@ -70,6 +70,16 @@ export function largestScroller(root: HTMLElement): HTMLElement | null {
   return scrollerBelow(root) ?? (scrolls(root) ? root : null);
 }
 
+/** Give Work here the active document's editing caret, even in a short file
+ *  with no scrolling box. Keep the selection and viewport where they were. */
+export function focusDocumentEditor(scope: string, tabKey: string): boolean {
+  const pane = paneFor(scope, tabKey);
+  const editor = pane?.querySelector<HTMLTextAreaElement>("textarea.file-viewer-editor:not(:disabled)");
+  if (!editor || editor.closest('[hidden], [inert]') || getComputedStyle(editor).display === "none" || getComputedStyle(editor).visibility === "hidden") return false;
+  editor.focus({ preventScroll: true });
+  return document.activeElement === editor;
+}
+
 /**
  * The document's scrolling box in the tab's pane — the largest that can
  * scroll now — or null when nothing in it scrolls (a short file, a picture,

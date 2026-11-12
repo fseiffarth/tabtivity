@@ -116,7 +116,7 @@ import {
 } from "../lib/shortcuts/steeringConfirm";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
-import { documentScroller, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
+import { documentScroller, focusDocumentEditor, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
 import { chordMatches, isLoneModifier, resolveChord, type ShortcutMap } from "../lib/shortcuts/shortcuts";
 
 export type SteeringSurface = "main" | "popout";
@@ -962,12 +962,14 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           steering.setLevel("projects");
           return;
         }
-        // Work here — steering steps aside, focus stays where it was put.
-        // (The mode opens on this level, so Escape climbing out through three
-        // levels would be three presses to leave.)
-        case "work":
+        // Work here puts the caret in the selected file, including a short
+        // document that has no Inside scroll level.
+        case "work": {
+          const active = steeringActiveTab();
           exitSteering();
+          if (active) focusDocumentEditor(active.scope, active.tab.key);
           return;
+        }
         case "down":
           if (walksPanes) steering.setLevel("tabs");
           else if (steeringActivePty() || steeringActiveDocument()) steering.setLevel("scroll");
@@ -1069,8 +1071,9 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
           if (tab) openContextMenu(tab);
           return;
         }
-        // A text box over the window for the active agent tab; Enter sends it
-        // and steering comes back on this level (the box re-enters it).
+        // The active agent tab's Chat composer shown (else a text box over
+        // the window); Enter sends it, Esc hides it, and steering comes back
+        // on this level (the composer or box re-enters it).
         case "agentPrompt": {
           const active = steeringActiveTab();
           if (active && requestSteeringPrompt(active.scope, active.tab, level)) handOffSteering("prompt");

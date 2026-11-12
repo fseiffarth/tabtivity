@@ -86,8 +86,9 @@ interface KeyboardSteeringState {
    *  settings, a menu dropped from the top bar. Leaving a region comes back
    *  to the nearest one still on screen before the base level. */
   regionStack: SteeringRegion[];
-  /** Enter the mode on the current project's tabs. */
-  enter: () => void;
+  /** Enter the mode on the current project's tabs, then go to `level` when
+   *  that is another (the level a box over steering came from). */
+  enter: (level?: SteeringBaseLevel) => void;
   exit: () => void;
   setLevel: (level: SteeringBaseLevel) => void;
   enterRegion: (region: SteeringRegion) => void;
@@ -143,7 +144,10 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
   region: null,
   regionReturn: "tabs",
   regionStack: [],
-  enter: () => set({ visit: get().visit + 1, active: true, level: "tabs", region: null, regionStack: [], handedTo: null, legendHidden: false }),
+  enter: (level = "tabs") => {
+    set({ visit: get().visit + 1, active: true, level: "tabs", region: null, regionStack: [], handedTo: null, legendHidden: false });
+    if (level !== "tabs") get().setLevel(level);
+  },
   exit: () => set({ active: false, level: "tabs", region: null, regionStack: [], handedTo: null }),
   setLevel: (level) => set({ level, region: null, regionStack: [] }),
   enterRegion: (region) => {
@@ -209,8 +213,9 @@ export function projectStations(): (string | null)[] {
   const scope = useTabsStore.getState().scope;
   const { projects, activeId } = useProjectsStore.getState();
   const strip = stripProjects(projects, box, scope);
-  // A slice ignores the hidden lists (looking into a box is where its hidden
-  // members are found); only the unsliced strip drops them.
+  // A slice ignores the hidden lists and hide mode (looking into a box is
+  // where its hidden members are found); only the unsliced strip drops them —
+  // in hide mode all but the project in scope, so the ring is root + that one.
   const hidden = box ? new Set<string>() : barHiddenIdsNow(strip.map((p) => p.id));
   return [null, ...strip.filter((p) => !hidden.has(p.id) || p.id === scope || p.id === activeId).map((p) => p.id)];
 }

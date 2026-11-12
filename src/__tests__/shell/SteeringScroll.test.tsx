@@ -373,6 +373,32 @@ describe("steering scroll level in a document", () => {
     return scrollBox(documentPane(tab.key), { w: 600, h: 400, content: 4000 });
   }
 
+  it.each([false, true])("Work here focuses the selected text editor (scrolling: %s)", (scrolling) => {
+    const tab = useTabsStore.getState().addTab({ label: "notes.txt", cmd: "", cwd: "/p", kind: "files" });
+    const hiddenPane = documentPane(tab.key, "other");
+    hiddenPane.innerHTML = '<textarea class="file-viewer-editor">other scope</textarea>';
+    const pane = documentPane(tab.key);
+    const doc = scrollBox(pane, { w: 600, h: 400, content: scrolling ? 4000 : 400 });
+    const editor = document.createElement("textarea");
+    editor.className = "file-viewer-editor";
+    editor.value = "keep this caret";
+    editor.setSelectionRange(5, 9);
+    doc.appendChild(editor);
+    const previous = document.createElement("button");
+    document.body.appendChild(previous);
+    previous.focus();
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    if (scrolling) {
+      press({ key: "d" });
+      expect(steering().level).toBe("scroll");
+    }
+    press({ key: "Enter" });
+    expect(steering().active).toBe(false);
+    expect(document.activeElement).toBe(editor);
+    expect([editor.selectionStart, editor.selectionEnd]).toEqual([5, 9]);
+  });
+
   it("D steps into the document, S/F scroll it, D jumps to its end, E keeps the place", () => {
     const doc = oneDocumentTab();
     render(<Harness />);

@@ -4,7 +4,8 @@
  * The Reader's view (Chat / Diffs / Files / Terminal) is local state of
  * `TerminalView`, and its Diffs and Files panels are components of their own;
  * steering lives outside both. This module is the meeting point, keyed by the
- * pane id (`${scope}:${tab.key}`, the `TerminalView` id), in four parts:
+ * pane id (`${scope}:${tab.key}`, the `TerminalView` id), in four parts
+ * (plus the Chat's question field, queue moves and composer):
  *
  *  - the **view registry**: `TerminalView` registers what it can show and how
  *    to switch (`registerReaderViews`), steering's view-cycle key calls it;
@@ -21,11 +22,12 @@
  * twice mounts two panes under one id).
  */
 import { useSyncExternalStore } from "react";
-import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
 import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { useTabsStore } from "../../stores/tabs";
 import { steeringTabsActive } from "../shortcuts/steeringScope";
 import type { SteeringAction } from "../shortcuts/steeringBindings";
+import type { SteeringAgentCommand } from "../shortcuts/steeringAgent";
 
 export type ReaderViewId = "chat" | "changes" | "files" | "terminal";
 
@@ -113,6 +115,25 @@ export function openQuestionField(id: string, index: number): boolean {
   if (!open) return false;
   open(index);
   return true;
+}
+
+/** Shows pane `id`'s Chat composer for steering's Prompt key (it stands aside
+ *  under steering otherwise), its text led with `lead`; the composer brings
+ *  steering back on `level` once the prompt is sent or Esc pressed. False when
+ *  it cannot take the prompt now. */
+export type ReaderComposerOpen = (level: SteeringBaseLevel, lead?: SteeringAgentCommand) => boolean;
+
+const composers = new Map<string, ReaderComposerOpen>();
+
+/** Register pane `id`'s Chat composer, while it is shown and can take text. */
+export function registerReaderComposer(id: string, open: ReaderComposerOpen): () => void {
+  return register(composers, id, open);
+}
+
+/** Shows pane `id`'s Chat composer for steering; false when the pane has none
+ *  on show (Terminal view, another CLI, a dialog up) — the prompt box then. */
+export function openReaderComposer(id: string, level: SteeringBaseLevel, lead?: SteeringAgentCommand): boolean {
+  return composers.get(id)?.(level, lead) ?? false;
 }
 
 /** What steering does to the Chat's queued prompts (Send now, Cancel and edit). */

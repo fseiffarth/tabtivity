@@ -7,7 +7,7 @@
  *    (`submitScheduledAgentCommand`), and offers "Undo clear" as a typed one
  *    does (`noteTypedClear`). Every agent CLI Tabtivity launches reads `/clear` as
  *    a new conversation (see the phone's `NEW_CONVERSATION_COMMAND`).
- *  - Plan / Goal open steering's prompt box led with the command — the user
+ *  - Plan / Goal open steering's prompt (the Chat composer, else the box) led with the command — the user
  *    writes the rest and sends it themselves, as with the chips, and steering
  *    comes back after. Offered only to the CLIs that document them
  *    (`agentDraftPrefixes`).
@@ -36,6 +36,7 @@ import { noteTypedClear } from "../../stores/agents/agentClearUndo";
 import type { TabEntry } from "../../stores/tabs";
 import type { SteeringBaseLevel } from "../../stores/keyboardSteering";
 import { steeringTabsActive } from "./steeringScope";
+import { openReaderComposer } from "../agents/readerSteering";
 
 /** What the Clear key types. */
 const NEW_CONVERSATION_COMMAND = "/clear";
@@ -114,9 +115,10 @@ export function ledDraft(draft: string, lead: SteeringAgentCommand | undefined):
 /** Window event the `SteeringPromptOverlay` answers by opening its text box. */
 export const STEERING_PROMPT_EVENT = "app:steering-prompt";
 
-/** Ask the prompt box to open for `tab`, its text led with `lead`; false when
- *  the tab is not an agent, its CLI does not take `lead`, or no box is
- *  mounted. */
+/** Ask for a text box for `tab`, its text led with `lead`: the pane's own Chat
+ *  composer when it shows one (steering hides it, this shows it again), else
+ *  the prompt box over the window. False when the tab is not an agent, its CLI
+ *  does not take `lead`, or neither answered. */
 export function requestSteeringPrompt(
   scope: string,
   tab: TabEntry,
@@ -124,6 +126,7 @@ export function requestSteeringPrompt(
   lead?: SteeringAgentCommand,
 ): boolean {
   if (!steeringAgentOffer(tab).prompt || (lead && !takesAgentCommand(tab, lead))) return false;
+  if (openReaderComposer(`${scope}:${tab.key}`, level, lead)) return true;
   const detail: SteeringPromptDetail = { scope, tab, level, lead, handled: false };
   window.dispatchEvent(new CustomEvent<SteeringPromptDetail>(STEERING_PROMPT_EVENT, { detail }));
   return detail.handled;

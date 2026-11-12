@@ -34,6 +34,7 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { openReaderComposer } from "../../lib/agents/readerSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { clearSentPrompts, noteSentPrompt } from "../../lib/agents/sentPrompts";
@@ -494,6 +495,33 @@ describe("the agent pane's Reader", () => {
       expect(screen.queryByRole("textbox")).toBeNull();
       act(() => useKeyboardSteeringStore.getState().exit());
       expect(document.activeElement).toBe(screen.getByRole("textbox"));
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+    }
+  });
+
+  it("shows the composer for steering's Prompt key, and hides it again on Esc", async () => {
+    act(() => useKeyboardSteeringStore.getState().enter("scroll"));
+    try {
+      reader(host);
+      await screen.findByText("fix the parser");
+      expect(screen.queryByRole("textbox")).toBeNull();
+      let opened = false;
+      act(() => {
+        opened = openReaderComposer("p:agent-1", "scroll");
+        if (opened) useKeyboardSteeringStore.getState().handOff("prompt");
+      });
+      expect(opened).toBe(true);
+      const box = screen.getByRole("textbox");
+      written.length = 0;
+      expect(document.activeElement).toBe(box);
+      fireEvent.keyDown(box, { key: "Escape" });
+      expect(screen.queryByRole("textbox")).toBeNull();
+      const steering = useKeyboardSteeringStore.getState();
+      expect(steering.active).toBe(true);
+      expect(steering.level).toBe("scroll");
+      // Nothing went to the agent's own Esc.
+      expect(written).not.toContain("\x1b");
     } finally {
       act(() => useKeyboardSteeringStore.getState().exit());
     }
