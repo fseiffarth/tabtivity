@@ -51,21 +51,53 @@ impl Session {
     }
 }
 
+/// How the walk of the store is bounded: the agent writes the store, so it
+/// can fill it with any number of entries and empty folders.
+#[derive(Clone, Copy)]
+struct Walk {
+    /// Sessions returned at most.
+    sessions: usize,
+    /// Entries read from one folder at most (directory order, then sorted).
+    entries: usize,
+    /// Folders listed in the whole walk at most.
+    listings: usize,
+}
+
+/// A store of years of daily use stays far inside every bound: a day holds
+/// a few sessions, and a year's walk lists about 400 folders.
+const WALK: Walk = Walk { sessions: MAX_SESSIONS, entries: 4096, listings: 4096 };
+
 /// The store's sessions, newest first.
 fn sessions(home: &Path) -> Vec<Session> {
+    sessions_within(home, WALK)
+}
+
+/// [`sessions`] within `walk`. A folder with more than `walk.entries` names
+/// is read only that far, so a flooded one may hide some of its sessions;
+/// a normal store is read whole and newest first.
+fn sessions_within(home: &Path, walk: Walk) -> Vec<Session> {
     let Some(root) = HomeDir::open_existing(home, STORE) else { return Vec::new() };
     let mut out = Vec::new();
+    let mut listings = walk.listings;
+    let mut list = |dir: &HomeDir| -> Option<Vec<String>> {
+        listings = listings.checked_sub(1)?;
+        Some(dir.names_capped(walk.entries))
+    };
     let numeric = |name: &String, len: usize| name.len() == len && name.chars().all(|c| c.is_ascii_digit());
-    'walk: for year in root.names().into_iter().rev().filter(|n| numeric(n, 4)) {
+    let Some(years) = list(&root) else { return out };
+    'walk: for year in years.into_iter().rev().filter(|n| numeric(n, 4)) {
         let Some(year_dir) = root.open_subdir(&year) else { continue };
-        for month in year_dir.names().into_iter().rev().filter(|n| numeric(n, 2)) {
+        let Some(months) = list(&year_dir) else { break };
+        for month in months.into_iter().rev().filter(|n| numeric(n, 2)) {
             let Some(month_dir) = year_dir.open_subdir(&month) else { continue };
-            for day in month_dir.names().into_iter().rev().filter(|n| numeric(n, 2)) {
+            let Some(days) = list(&month_dir) else { break 'walk };
+            for day in days.into_iter().rev().filter(|n| numeric(n, 2)) {
                 let Some(day_dir) = month_dir.open_subdir(&day) else { continue };
-                for id in day_dir.names().into_iter().rev().filter(|n| is_uuid_shaped(n)) {
+                let Some(ids) = list(&day_dir) else { break 'walk };
+                for id in ids.into_iter().rev().filter(|n| is_uuid_shaped(n)) {
                     let Some(dir) = day_dir.open_subdir(&id) else { continue };
                     out.push(Session { id, dir });
-                    if out.len() == MAX_SESSIONS { break 'walk; }
+                    if out.len() == walk.sessions { break 'walk; }
                 }
             }
         }
@@ -108,14 +140,20 @@ fn workspace_of(session: &Session) -> Option<String> {
 /// The folder's sessions (the store's newest [`MAX_SESSIONS`]), newest first.
 fn folder_sessions(home: &Path, directory: &str) -> Vec<Session> {
     let canonical = std::fs::canonicalize(directory).ok();
-    sessions(home)
-        .into_iter()
-        .filter(|session| {
-            workspace_of(session).is_some_and(|root| {
-                Path::new(&root) == Path::new(directory) || canonical.as_deref() == Some(Path::new(&root))
-            })
-        })
-        .collect()
+    sessions(home).into_iter().filter(|session| in_folder(session, directory, canonical.as_deref())).collect()
+}
+
+/// Whether `session` began in `directory` (reads the head of its log).
+fn in_folder(session: &Session, directory: &str, canonical: Option<&Path>) -> bool {
+    workspace_of(session)
+        .is_some_and(|root| Path::new(&root) == Path::new(directory) || canonical == Some(Path::new(&root)))
+}
+
+/// The folder's session `id`: matched by id first, so only its own log is
+/// opened rather than every session's.
+fn folder_session(home: &Path, directory: &str, id: &str) -> Option<Session> {
+    let canonical = std::fs::canonicalize(directory).ok();
+    sessions(home).into_iter().filter(|s| s.id == id).find(|s| in_folder(s, directory, canonical.as_deref()))
 }
 
 /// One turn of the log: a prompt or an answer, with its record time.
@@ -220,16 +258,14 @@ pub fn transcript(home: &Path, directory: &str, since: Option<i64>, own: Option<
 
 /// The folder's earlier session `id`, picked in the Resume menu.
 pub fn chat(home: &Path, directory: &str, id: &str, version: Option<&str>, limit: usize) -> AgentTranscript {
-    folder_sessions(home, directory)
-        .iter()
-        .find(|s| s.id == id)
-        .and_then(|session| read(session, "chat", version, limit))
+    folder_session(home, directory, id)
+        .and_then(|session| read(&session, "chat", version, limit))
         .unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
 }
 
 /// Whether `id` is one of the sessions Muse began in `directory`.
 pub fn folder_chat(home: &Path, directory: &str, id: &str) -> bool {
-    is_uuid_shaped(id) && folder_sessions(home, directory).iter().any(|s| s.id == id)
+    is_uuid_shaped(id) && folder_session(home, directory, id).is_some()
 }
 
 /// The folder's chats for the Resume menu, as `google_chat::antigravity_chats`
@@ -266,9 +302,14 @@ pub fn folder_chats(home: &Path, directory: &str, offset: usize, limit: usize, s
 /// The session the tab `uid` in `directory` is in by its record — the one the
 /// Resume menu took it onto, while it began none since.
 pub fn recorded_tab_session(home: &Path, directory: &str, project_id: Option<&str>, uid: &str) -> Option<String> {
-    let (own, at) = crate::services::google_chat::recorded_conversation(project_id, uid)?;
-    let found = folder_sessions(home, directory);
-    tab_session(&found, None, Some((&own, at))).map(|s| s.id.clone()).filter(|id| *id == own)
+    let record = crate::services::google_chat::recorded_conversation(project_id, uid)?;
+    recorded_among(&folder_sessions(home, directory), record)
+}
+
+/// [`recorded_tab_session`] over the folder's sessions already listed
+/// (`found`), for the tab's record `(own, at)`.
+fn recorded_among(found: &[Session], (own, at): (String, i64)) -> Option<String> {
+    tab_session(found, None, Some((&own, at))).map(|s| s.id.clone()).filter(|id| *id == own)
 }
 
 /// Resolve a Muse tab's launch. A tab restored on `resume --last` goes back
@@ -285,8 +326,11 @@ pub fn resolve(mut opts: PtyOptions) -> PtyOptions {
     }
     let home = crate::services::agent_home::scope_home(opts.project_id.as_deref());
     let uid = opts.env.get(crate::app_env!("TAB_UID")).cloned();
-    let own = uid.and_then(|uid| recorded_tab_session(&home, &opts.cwd, opts.project_id.as_deref(), &uid));
-    opts.args = resumed_onto(&opts.args, at, own.as_deref(), || !folder_sessions(&home, &opts.cwd).is_empty());
+    let record = uid.and_then(|uid| crate::services::google_chat::recorded_conversation(opts.project_id.as_deref(), &uid));
+    // One listing of the folder serves both the record and the fallback.
+    let found = folder_sessions(&home, &opts.cwd);
+    let own = record.and_then(|record| recorded_among(&found, record));
+    opts.args = resumed_onto(&opts.args, at, own.as_deref(), || !found.is_empty());
     opts
 }
 
@@ -440,5 +484,45 @@ mod tests {
         std::fs::create_dir_all(store(home.path()).join("notes")).unwrap();
         let ids: Vec<String> = sessions(home.path()).into_iter().map(|s| s.id).collect();
         assert_eq!(ids, [ID]);
+    }
+
+    /// H4: the walk itself is bounded — sessions returned, entries read per
+    /// folder and folders listed — and a normal store still comes back whole,
+    /// newest first.
+    #[test]
+    fn the_store_walk_is_bounded_and_newest_first() {
+        let home = tempfile::tempdir().unwrap();
+        let id = |n: u32| format!("01a1cc{n:02x}-0000-7000-8000-000000000000");
+        let at = |day: &str, n: u32| {
+            let dir = store(home.path()).join("2026").join("11").join(day).join(id(n));
+            std::fs::create_dir_all(&dir).unwrap();
+        };
+        at("10", 1);
+        at("10", 2);
+        at("11", 3);
+        at("11", 4);
+        let ids = |walk: Walk| sessions_within(home.path(), walk).into_iter().map(|s| s.id).collect::<Vec<_>>();
+        let roomy = Walk { sessions: 100, entries: 100, listings: 100 };
+        assert_eq!(ids(roomy), [id(4), id(3), id(2), id(1)]);
+        assert_eq!(sessions(home.path()).len(), 4);
+        assert_eq!(ids(Walk { sessions: 3, ..roomy }), [id(4), id(3), id(2)]);
+        // Root, year, month and one day listed: the older day is never read.
+        assert_eq!(ids(Walk { listings: 4, ..roomy }), [id(4), id(3)]);
+        assert!(ids(Walk { listings: 0, ..roomy }).is_empty());
+        // A flooded day is read only `entries` names deep, not whole.
+        for n in 0..40 {
+            std::fs::create_dir_all(store(home.path()).join("2026").join("11").join("12").join(format!("junk-{n}"))).unwrap();
+        }
+        let capped = ids(Walk { entries: 8, ..roomy });
+        assert!(capped.len() <= 4 + 8, "{capped:?}");
+        assert!(capped.ends_with(&[id(2), id(1)]), "{capped:?}");
+        // Empty folders cost listings, not an unbounded walk.
+        for y in 2000..2020 {
+            std::fs::create_dir_all(store(home.path()).join(y.to_string()).join("01").join("01")).unwrap();
+        }
+        // Root, 2026, its month and three days: the twenty empty years after
+        // them are never walked.
+        assert_eq!(ids(Walk { listings: 6, ..roomy }), [id(4), id(3), id(2), id(1)]);
+        assert_eq!(ids(roomy), [id(4), id(3), id(2), id(1)]);
     }
 }

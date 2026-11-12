@@ -1694,22 +1694,49 @@ fn registry_manifest_url(model: &str) -> Result<String, String> {
 /// How long one request to the registry or ollama.com may take, connect
 /// included. A manifest, a config blob and a search page are a few KB each.
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest body [`registry_get`] reads: a manifest, a config blob and an
+/// ollama.com search page are a few KB to a few hundred. A caller that
+/// legitimately needs more passes its own cap to [`registry_response`].
+const REGISTRY_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 /// `GET url` from Ollama's registry or ollama.com: HTTPS only, redirects
 /// followed (the registry hands blobs to a CDN, which `curl -L` followed too),
-/// and bounded by [`REGISTRY_TIMEOUT`]. The `curl` this replaced had no time
-/// limit, so a stalled server held its caller for as long as TCP kept the
-/// connection (code screen B2). `Ok(None)` is an HTTP error status, what
-/// `curl -f` failed on. `headers` are sent as given (fixed names and values).
+/// and bounded by [`REGISTRY_TIMEOUT`] and [`REGISTRY_MAX_BYTES`]. The `curl`
+/// this replaced had no time limit, so a stalled server held its caller for as
+/// long as TCP kept the connection (code screen B2). `Ok(None)` is an HTTP
+/// error status, what `curl -f` failed on. `headers` are sent as given (fixed
+/// names and values).
 async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<u8>>, String> {
-    Ok(registry_response(url, headers).await?.map(|(_, body)| body))
+    Ok(registry_response(url, headers, REGISTRY_MAX_BYTES).await?.map(|(_, body)| body))
+}
+
+/// Refuse a body whose declared `Content-Length` is over `cap` before any of
+/// it is read.
+fn declared_len_fits(declared: Option<u64>, cap: usize) -> Result<(), String> {
+    match declared {
+        Some(n) if n > cap as u64 => Err(format!("registry response too large ({n} bytes, at most {cap})")),
+        _ => Ok(()),
+    }
+}
+
+/// Append one streamed `chunk` to `body`, refusing once the total would pass
+/// `cap` — a missing or lying `Content-Length` (or a compressed body that
+/// expands) is caught here.
+fn push_capped(body: &mut Vec<u8>, chunk: &[u8], cap: usize) -> Result<(), String> {
+    if body.len().saturating_add(chunk.len()) > cap {
+        return Err(format!("registry response too large (more than {cap} bytes)"));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
 }
 
 /// [`registry_get`] with the response headers kept, for the Hugging Face
-/// search, which hands its next page out in a `Link` header.
+/// search, which hands its next page out in a `Link` header. The body is
+/// read in chunks and refused past `max_bytes`.
 async fn registry_response(
     url: &str,
     headers: &[(&str, &str)],
+    max_bytes: usize,
 ) -> Result<Option<(reqwest::header::HeaderMap, Vec<u8>)>, String> {
     crate::services::mail_engine::install_crypto_provider();
     let client = reqwest::Client::builder()
@@ -1723,19 +1750,24 @@ async fn registry_response(
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
-    let response = request
+    let mut response = request
         .send()
         .await
         .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
     if !response.status().is_success() {
         return Ok(None);
     }
+    declared_len_fits(response.content_length(), max_bytes)?;
     let head = response.headers().clone();
-    let body = response
-        .bytes()
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
-    Ok(Some((head, body.to_vec())))
+        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?
+    {
+        push_capped(&mut body, &chunk, max_bytes)?;
+    }
+    Ok(Some((head, body)))
 }
 
 /// Fetch the Ollama registry manifest (config + layers) for a model ref, through

@@ -29,6 +29,11 @@ const SEARCH_API: &str = "https://huggingface.co/api/models";
 /// Rows per page, about what one ollama.com search page holds.
 const PAGE_SIZE: u32 = 20;
 
+/// The largest search page read. Each row lists its repo's files
+/// (`siblings`), and a repo of split quantizations has hundreds, so a page
+/// can outgrow the registry's own cap; it gets its own, still bounded.
+const SEARCH_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 /// The fields a row needs, and nothing else (a bare search returns none of
 /// them but `siblings`, which `full` would bloat with every file's metadata).
 const EXPAND: &str = "&expand%5B%5D=downloads&expand%5B%5D=lastModified&expand%5B%5D=gated\
@@ -75,7 +80,7 @@ pub async fn search_huggingface_models_in(
     cursor: Option<String>,
 ) -> Result<HfSearchPage, String> {
     let url = search_url(&query, &sort, cursor.as_deref())?;
-    let (head, body) = super::registry_response(&url, &[])
+    let (head, body) = super::registry_response(&url, &[], SEARCH_MAX_BYTES)
         .await?
         .ok_or_else(|| "Hugging Face search request failed".to_string())?;
     let link = head
@@ -216,10 +221,7 @@ fn quant_tags(files: &[&str]) -> Vec<String> {
 
 /// `351061` → `351.1K`, as ollama.com writes its pull counts.
 fn count_label(n: u64) -> String {
-    let short = |v: f64, unit: &str| {
-        let s = format!("{v:.1}");
-        format!("{}{unit}", s.strip_suffix(".0").unwrap_or(&s))
-    };
+    let short = |v: f64, unit: &str| format!("{}{unit}", trim_tenth(v));
     match n {
         0..=999 => n.to_string(),
         1_000..=999_999 => short(n as f64 / 1e3, "K"),
@@ -228,11 +230,16 @@ fn count_label(n: u64) -> String {
     }
 }
 
+/// `v` to one decimal, a whole number without its `.0`.
+fn trim_tenth(v: f64) -> String {
+    let s = format!("{v:.1}");
+    s.strip_suffix(".0").map(str::to_string).unwrap_or(s)
+}
+
 /// `7615616512` → `7.6B`, `494032768` → `494M`.
 fn params_label(n: u64) -> String {
     if n >= 1_000_000_000 {
-        let s = format!("{:.1}", n as f64 / 1e9);
-        format!("{}B", s.strip_suffix(".0").unwrap_or(&s))
+        format!("{}B", trim_tenth(n as f64 / 1e9))
     } else {
         format!("{}M", (n as f64 / 1e6).round() as u64)
     }

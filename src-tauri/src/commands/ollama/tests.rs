@@ -1709,3 +1709,22 @@ fn first_available_model() -> Option<String> {
         .iter()
         .find_map(|m| Some(m["name"].as_str()?.to_owned()))
 }
+
+/// H1: a registry body is refused on a declared length over the cap before
+/// it is read, and while streaming once the running total would pass it.
+#[test]
+fn a_registry_body_is_capped_by_its_declared_length_and_while_streaming() {
+    assert!(declared_len_fits(None, 10).is_ok());
+    assert!(declared_len_fits(Some(10), 10).is_ok());
+    assert!(declared_len_fits(Some(11), 10).unwrap_err().contains("too large"));
+    assert!(declared_len_fits(Some(u64::MAX), REGISTRY_MAX_BYTES).is_err());
+
+    let mut body = Vec::new();
+    push_capped(&mut body, b"12345", 10).unwrap();
+    push_capped(&mut body, b"67890", 10).unwrap();
+    assert_eq!(body, b"1234567890");
+    // One byte past the cap is refused and leaves the body as it was.
+    assert!(push_capped(&mut body, b"x", 10).unwrap_err().contains("too large"));
+    assert_eq!(body.len(), 10);
+    assert!(push_capped(&mut Vec::new(), &[0; 11], 10).is_err());
+}
