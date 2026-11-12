@@ -77,7 +77,9 @@ gives its usage.
 - **Codex** (`codex/`): `writer_lock.py <label> <bin> [model]` opens a
   thread on the local Ollama, resumes it in a second window (it must show the
   lock screen), SIGKILLs the first and resumes again (it must open). Beyond
-  that, use
+  that, `screens.sh <label> <bin> [model]` walks the trust question, idle,
+  both `/model` steps and Shift+Tab's `Plan mode` (100 and 60 columns) for
+  `frames.probe.ts`. Then use
   `C2_PROBE_CODEX=<bin> cargo test -p tabtivity --lib codex_parses_the_local_catalog -- --ignored`
   (checklist §1.2) plus `flags.sh` and `tui.py`. Binaries come from the agent
   install's `.codex/packages/standalone/releases/<v>-<triple>/`. A
