@@ -299,8 +299,17 @@ fn merge_box_doc_for(pair: &crate::brand::Pair, agent_file: &str, existing: &str
     format!("{}\n\n{block}", existing.trim_end())
 }
 
+/// The largest box agent doc the refresh reads back to merge into; a bigger one
+/// is left alone rather than truncated.
+const MAX_BOX_DOC_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Write/refresh the box agent docs (CLAUDE/GEMINI/AGENTS) in `folder`, each with
 /// a managed link block pointing at the member project roots + their md files.
+///
+/// The box folder is writable by every member's fenced agent, so each doc is
+/// read and written without following a link: a doc that is a link, not a
+/// regular file, or not a readable UTF-8 file of at most
+/// [`MAX_BOX_DOC_BYTES`] is skipped (and logged), never followed or replaced.
 fn write_box_agent_docs(
     folder: &Path,
     box_name: &str,
@@ -308,10 +317,24 @@ fn write_box_agent_docs(
 ) -> std::io::Result<()> {
     for agent_file in BOX_AGENT_DOCS {
         let path = folder.join(agent_file);
-        let existing = fs::read_to_string(&path).unwrap_or_default();
+        let existing = match fs::symlink_metadata(&path) {
+            Ok(meta) if !meta.file_type().is_file() => {
+                eprintln!("[boxes] {} is not a regular file; agent doc not refreshed", path.display());
+                continue;
+            }
+            Ok(_) => match crate::services::home_io::read_record_capped(&path, MAX_BOX_DOC_BYTES) {
+                Some(text) => Some(text),
+                None => {
+                    eprintln!("[boxes] {} is unreadable; agent doc not refreshed", path.display());
+                    continue;
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
         let block = box_links_block(agent_file, box_name, members);
-        let merged = merge_box_doc(agent_file, &existing, &block);
-        fs::write(&path, merged)?;
+        let merged = merge_box_doc(agent_file, existing.as_deref().unwrap_or(""), &block);
+        crate::commands::projects::write_no_follow(&path, merged.as_bytes(), existing.is_none())?;
     }
     Ok(())
 }
@@ -825,6 +848,30 @@ pub fn refresh_box_agent_docs(box_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A member agent can replace `CLAUDE.md` in the box folder with a link to
+    /// a file of the user's: the refresh skips it, the target is untouched, and
+    /// the other docs are still written.
+    #[cfg(unix)]
+    #[test]
+    fn box_agent_docs_are_never_written_through_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("box");
+        fs::create_dir_all(&folder).unwrap();
+        let victim = tmp.path().join("gitconfig");
+        fs::write(&victim, "[user]\n").unwrap();
+        std::os::unix::fs::symlink(&victim, folder.join("CLAUDE.md")).unwrap();
+        fs::write(folder.join("AGENTS.md"), "# Mine\n").unwrap();
+        let members = vec![("p".to_string(), tmp.path().join("p"))];
+
+        write_box_agent_docs(&folder, "Box", &members).unwrap();
+
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "[user]\n");
+        assert!(fs::symlink_metadata(folder.join("CLAUDE.md")).unwrap().file_type().is_symlink());
+        assert!(fs::read_to_string(folder.join("GEMINI.md")).unwrap().contains(BOX_LINKS_START));
+        let agents = fs::read_to_string(folder.join("AGENTS.md")).unwrap();
+        assert!(agents.starts_with("# Mine") && agents.contains(BOX_LINKS_START), "{agents}");
+    }
 
     #[test]
     fn a_box_patch_edits_one_box_as_the_file_holds_it() {
