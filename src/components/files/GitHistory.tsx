@@ -933,7 +933,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
     setFetching(true);
     setError(null);
     try {
-      await invoke("git_fetch", { projectDir, ...gitArgs, projectId: authProjectId ?? null });
+      await invokeTrusted("git_fetch", { projectDir, ...gitArgs, projectId: authProjectId ?? null });
       await load();
       onChanged?.();
     } catch (e) {

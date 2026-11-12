@@ -75,7 +75,7 @@ export function GitPullPanel({
     // A failed fetch (offline, auth) still leaves a useful preview against the
     // tracking refs as of the last fetch — say so rather than show nothing.
     try {
-      await invoke("git_fetch", { projectDir, ...gitWorktreeArgs(worktree), projectId });
+      await invokeTrusted("git_fetch", { projectDir, ...gitWorktreeArgs(worktree), projectId });
     } catch (e) {
       setFetchError(String(e));
     }
