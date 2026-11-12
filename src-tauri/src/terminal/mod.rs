@@ -2398,7 +2398,9 @@ fn npm_shim_target(shim: &std::path::Path) -> Option<(std::path::PathBuf, std::p
         return None;
     }
     let dir = shim.parent()?;
-    let script = dir.join(rel.replace('/', "\\"));
+    // One component at a time: a `\` inside a single `join` is a separator on
+    // Windows only, and the shim is read (and tested) on every OS.
+    let script = rel.split(['\\', '/']).filter(|part| !part.is_empty()).fold(dir.to_path_buf(), |path, part| path.join(part));
     if !script.is_file() {
         return None;
     }
