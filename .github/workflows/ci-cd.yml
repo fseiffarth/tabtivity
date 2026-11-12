@@ -297,7 +297,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       # Fail fast: what failed in this branch's last run on this OS runs
-      # before anything else (scripts/ci-failed-first.sh), and the full
+      # before the suites (scripts/ci-failed-first.sh), and the full
       # suites below record what fails for the next run.
       - name: Restore the last run's failed tests
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -308,12 +308,15 @@ jobs:
             ci-failed-${{ runner.os }}-${{ github.ref_name }}-
             ci-failed-${{ runner.os }}-
 
+      # Before the re-run: the crate embeds dist/ (tauri's include_bytes!),
+      # so a frontend build after a `cargo test` recompiles the crate and
+      # relinks every test binary — half an hour on macOS after a red run.
+      - name: Build frontend
+        run: npm run build
+
       - name: Re-run the last run's failed tests first
         shell: bash
         run: bash scripts/ci-failed-first.sh previous
-
-      - name: Build frontend
-        run: npm run build
 
       - name: Run frontend tests
         shell: bash
@@ -390,7 +393,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       # Fail fast: what failed in this branch's last run on this OS runs
-      # before anything else (scripts/ci-failed-first.sh), and the full
+      # before the suites (scripts/ci-failed-first.sh), and the full
       # suites below record what fails for the next run.
       - name: Restore the last run's failed tests
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -401,12 +404,15 @@ jobs:
             ci-failed-${{ runner.os }}-${{ github.ref_name }}-
             ci-failed-${{ runner.os }}-
 
+      # Before the re-run: the crate embeds dist/ (tauri's include_bytes!),
+      # so a frontend build after a `cargo test` recompiles the crate and
+      # relinks every test binary — half an hour on macOS after a red run.
+      - name: Build frontend
+        run: npm run build
+
       - name: Re-run the last run's failed tests first
         shell: bash
         run: bash scripts/ci-failed-first.sh previous
-
-      - name: Build frontend
-        run: npm run build
 
       - name: Run frontend tests
         shell: bash
@@ -470,7 +476,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       # Fail fast: what failed in this branch's last run on this OS runs
-      # before anything else (scripts/ci-failed-first.sh), and the full
+      # before the suites (scripts/ci-failed-first.sh), and the full
       # suites below record what fails for the next run.
       - name: Restore the last run's failed tests
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -481,12 +487,15 @@ jobs:
             ci-failed-${{ runner.os }}-${{ github.ref_name }}-
             ci-failed-${{ runner.os }}-
 
+      # Before the re-run: the crate embeds dist/ (tauri's include_bytes!),
+      # so a frontend build after a `cargo test` recompiles the crate and
+      # relinks every test binary — half an hour on macOS after a red run.
+      - name: Build frontend
+        run: npm run build
+
       - name: Re-run the last run's failed tests first
         shell: bash
         run: bash scripts/ci-failed-first.sh previous
-
-      - name: Build frontend
-        run: npm run build
 
       - name: Run frontend tests
         shell: bash
