@@ -38,6 +38,7 @@ export function TabCloseGuard({ scope, tabKey, children }: { scope: string; tabK
         { id: "save", label: t("fileViewer.closeUnsavedSave"), current: true },
         { id: "discard", label: t("fileViewer.closeUnsavedDiscard") },
       ],
+      untested: "desktop.tabCloseUnsaved",
     });
     if (pick === "discard") return true;
     if (pick !== "save") return false;

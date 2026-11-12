@@ -79,7 +79,10 @@ A release only ever ships a commit `ci-cd.yml` passed on a branch push, and
 `release.yml` never rebuilds: it signs and publishes the bundles that green
 run built (its `package*` artifacts). `ci-cd.yml` itself no longer runs on
 tags. Only `main` is released — `develop` reaches it by PR, and the in-app
-updater installs whatever is released. Three ways in:
+updater installs whatever is released. Every way in also waits for the
+commit's `security.yml` push run (cargo-audit, cargo-deny, npm audit, CodeQL)
+under the same deadline as ci-cd, and refuses unless it passed — so a fresh
+advisory blocks a release even without a code change. Three ways in:
 
 - **Automatically**, on merging into `main`: when ci-cd passes on a push to
   `main`, `release.yml` (its `workflow_run` trigger) releases that commit as
