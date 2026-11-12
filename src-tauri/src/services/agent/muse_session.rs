@@ -316,10 +316,12 @@ mod tests {
 
     /// Records as Muse 1.4.15 writes them (trimmed to the fields read).
     fn log(id: &str, root: &str, turns: &[(&str, &str)]) -> String {
+        // JSON-escaped, as Muse writes it: a Windows path's backslashes.
+        let root = serde_json::to_string(root).unwrap();
         let mut lines = vec![
             "{}".to_string(),
-            format!(r#"{{"schema_version":1,"stream":{{"kind":"session","id":"{id}"}},"sequence":3,"recorded_at":1794425189681551,"record_type":"event","payload_type":"runtime.session.metadata","payload":{{"kind":"metadata","record":{{"build":{{"semver":"1.4.15"}},"model_id":"muse-spark","provider_id":"meta","workspace_root":"{root}"}}}}}}"#),
-            format!(r#"{{"schema_version":1,"stream":{{"kind":"session","id":"{id}"}},"sequence":4,"recorded_at":1794425189681654,"record_type":"event","payload_type":"runtime.session.route_facts","payload":{{"kind":"route_facts","record":{{"cwd":"{root}","pid":1}}}}}}"#),
+            format!(r#"{{"schema_version":1,"stream":{{"kind":"session","id":"{id}"}},"sequence":3,"recorded_at":1794425189681551,"record_type":"event","payload_type":"runtime.session.metadata","payload":{{"kind":"metadata","record":{{"build":{{"semver":"1.4.15"}},"model_id":"muse-spark","provider_id":"meta","workspace_root":{root}}}}}}}"#),
+            format!(r#"{{"schema_version":1,"stream":{{"kind":"session","id":"{id}"}},"sequence":4,"recorded_at":1794425189681654,"record_type":"event","payload_type":"runtime.session.route_facts","payload":{{"kind":"route_facts","record":{{"cwd":{root},"pid":1}}}}}}"#),
         ];
         for (n, (prompt, answer)) in turns.iter().enumerate() {
             let us = 1794425194166373_i64 + n as i64 * 1_000_000;
