@@ -121,7 +121,9 @@ the *why*.
   lockstep reconcile—poll, watcher, retry, checkout, pairing, resolve, or backup
   restore—takes the same per-project async guard before touching bundle paths or
   `git_peer.json`. Worker fan-out has the equivalent per-project/host in-flight
-  guard, including its manual button. The local-loss journal locks its complete
+  guard, including its manual button; an ask that meets a running sync is
+  queued (one coalesced rerun from the newest HEAD, forced if any ask was),
+  never dropped. The local-loss journal locks its complete
   read-modify-write so simultaneous warnings cannot erase one another.
 - **Byte pulls replace local files atomically.** Host bytes are fully read and
   staged beside the mirror destination before rename, matching the push side's

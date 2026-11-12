@@ -19,7 +19,7 @@
 //! The preflight and reset are separate operations: a concurrent writer can still
 //! introduce a collision between them, so pause output writers while syncing.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -39,12 +39,40 @@ use crate::storage;
 const WORKER_BUNDLE: &str = crate::brand::WORKER_BUNDLE;
 
 /// In-memory fan-out registry: the `(project, host)` keys currently syncing, used
-/// as a crude in-flight lock so a commit-triggered and a connect-triggered push to
-/// the same worker never race to write its bundle file. The durable per-worker
-/// `last_head` lives on disk (see [`worker_state_path`]).
+/// as an in-flight lock so a commit-triggered and a connect-triggered push to
+/// the same worker never race to write its bundle file, and the keys a sync was
+/// asked for while one ran ("rerun wanted", with whether any such ask was
+/// forced). The running sync drains that flag before it lets go, so a newer
+/// HEAD or a "Sync code now" is never dropped (screen 2026-11-12 H11). The
+/// durable per-worker `last_head` lives on disk (see [`worker_state_path`]).
 #[derive(Default)]
 pub struct WorkerSyncRegistry {
     in_flight: HashSet<String>,
+    rerun: HashMap<String, bool>,
+}
+
+impl WorkerSyncRegistry {
+    /// Claim `key` for a sync: `true` = the caller runs it; `false` = one is
+    /// already running, which will loop once more for this ask (asks coalesce,
+    /// and a forced one makes the rerun forced).
+    fn begin(&mut self, key: &str, force: bool) -> bool {
+        if self.in_flight.insert(key.to_string()) {
+            return true;
+        }
+        *self.rerun.entry(key.to_string()).or_insert(false) |= force;
+        false
+    }
+
+    /// A sync of `key` finished: `Some(force)` = run once more (an ask came in
+    /// meanwhile; `key` stays claimed), `None` = released. One lock holds the
+    /// check and the release, so no ask can fall between them.
+    fn finish(&mut self, key: &str) -> Option<bool> {
+        let rerun = self.rerun.remove(key);
+        if rerun.is_none() {
+            self.in_flight.remove(key);
+        }
+        rerun
+    }
 }
 
 /// Managed-state handle to the worker-sync registry.
@@ -76,6 +104,9 @@ pub struct WorkerSyncReport {
     pub ok: bool,
     /// Nothing to do — the worker is already at HEAD, or the mirror has no commit.
     pub skipped: bool,
+    /// A sync to this worker was already running: this ask is queued, and that
+    /// sync runs once more when it finishes, emitting its own report then.
+    pub queued: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -227,6 +258,7 @@ pub async fn sync_worker(
         head: None,
         ok: false,
         skipped: false,
+        queued: false,
         error: Some(msg),
     };
 
@@ -248,6 +280,7 @@ pub async fn sync_worker(
             head: None,
             ok: true,
             skipped: true,
+            queued: false,
             error: None,
         };
     }
@@ -272,6 +305,7 @@ pub async fn sync_worker(
             head: None,
             ok: true,
             skipped: true,
+            queued: false,
             error: None,
         };
     };
@@ -284,6 +318,7 @@ pub async fn sync_worker(
             head: Some(short_sha(&head)),
             ok: true,
             skipped: true,
+            queued: false,
             error: None,
         };
     }
@@ -309,6 +344,7 @@ pub async fn sync_worker(
                 head: Some(short_sha(&head)),
                 ok: true,
                 skipped,
+                queued: false,
                 error: None,
             }
         }
@@ -475,8 +511,12 @@ pub async fn fan_out(
     }
 }
 
-/// One worker's fan-out with the in-flight lock + event emit. Skips silently if a
-/// sync to the same worker is already running.
+/// One worker's fan-out with the in-flight lock + event emit. If a sync to the
+/// same worker is already running, this ask is queued (`queued: true`): that
+/// sync runs once more when it finishes, from the mirror's HEAD as it is then
+/// and forced if any queued ask was, so a newer commit or a "Sync code now" is
+/// never dropped. Each pass emits its own report; the caller that ran them gets
+/// the last.
 pub async fn sync_worker_guarded(
     ctx: &CoreCtx,
     pool: &RemotePoolState,
@@ -486,26 +526,26 @@ pub async fn sync_worker_guarded(
     force: bool,
 ) -> WorkerSyncReport {
     let key = remote::conn_key(project_id, host_id);
-    {
-        let mut guard = state.lock().await;
-        if !guard.in_flight.insert(key.clone()) {
-            return WorkerSyncReport {
-                project_id: project_id.to_string(),
-                host_id: host_id.to_string(),
-                head: mirror_head(&mirror_dir(project_id)).map(|sha| short_sha(&sha)),
-                ok: true,
-                skipped: true,
-                error: None,
-            };
+    if !state.lock().await.begin(&key, force) {
+        return WorkerSyncReport {
+            project_id: project_id.to_string(),
+            host_id: host_id.to_string(),
+            head: None,
+            ok: true,
+            skipped: false,
+            queued: true,
+            error: None,
+        };
+    }
+    let mut force = force;
+    loop {
+        let report = sync_worker(pool, project_id, host_id, force).await;
+        ctx.emit("worker-sync-report", &report);
+        match state.lock().await.finish(&key) {
+            Some(rerun_forced) => force = rerun_forced,
+            None => return report,
         }
     }
-    let report = sync_worker(pool, project_id, host_id, force).await;
-    {
-        let mut guard = state.lock().await;
-        guard.in_flight.remove(&key);
-    }
-    ctx.emit("worker-sync-report", &report);
-    report
 }
 
 // ── Output pull-back (§4.4) — the ONLY worker→local byte path, user-initiated ──
@@ -695,6 +735,27 @@ pub async fn on_worker_connect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Screen 2026-11-12 H11: a sync asked for while one to the same worker
+    /// runs is queued, not dropped — the running one loops once more, with
+    /// `force` OR-ed in, and any number of asks coalesce into that one rerun.
+    #[test]
+    fn a_sync_asked_for_mid_run_is_queued_once_and_keeps_force() {
+        let mut reg = WorkerSyncRegistry::default();
+        assert!(reg.begin("p|w", false), "the first ask runs");
+        assert!(!reg.begin("p|w", false), "a second ask while it runs is queued");
+        assert!(!reg.begin("p|w", true), "so is a forced one");
+        assert!(!reg.begin("p|w", false), "and a later plain one keeps the force");
+        assert_eq!(reg.finish("p|w"), Some(true), "one rerun, forced by any forced ask");
+        assert_eq!(reg.finish("p|w"), None, "the rerun drained the queue: released");
+        assert!(reg.begin("p|w", false), "a later ask runs again");
+        assert!(!reg.begin("p|w", false));
+        assert_eq!(reg.finish("p|w"), Some(false), "an unforced ask reruns unforced");
+        assert_eq!(reg.finish("p|w"), None);
+        // Another worker is never held up by this one.
+        assert!(reg.begin("p|w", false));
+        assert!(reg.begin("p|w2", false));
+    }
 
     #[test]
     fn worker_apply_script_never_cleans_and_resets_tracked() {

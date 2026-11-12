@@ -65,6 +65,8 @@ interface WorkerSyncReport {
   head?: string;
   ok: boolean;
   skipped: boolean;
+  /** A sync to this worker was already running and will run once more for this ask. */
+  queued?: boolean;
   error?: string;
 }
 
@@ -856,7 +858,7 @@ export function RemoteMachinesWindow({
               ? `${t("remoteMachines.syncFailedLabel")} ${rep.error}`
               : rep?.head
                 ? `${t("remoteMachines.lastSyncedLabel")} ${rep.head}${rep.skipped ? ` ${t("remoteMachines.alreadyCurrent")}` : ""}`
-                : rep && !rep.ok
+                : rep && (!rep.ok || rep.queued)
                   ? t("remoteMachines.syncingEllipsis")
                   : t("remoteMachines.notSyncedYet");
           return (
