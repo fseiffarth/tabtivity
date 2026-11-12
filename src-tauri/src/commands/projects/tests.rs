@@ -570,7 +570,7 @@ fn a_project_cannot_take_a_reserved_scope_id() {
     })
     .unwrap();
 
-    for id in ["assistant", "Assistant", "root", "assistant "] {
+    for id in ["assistant", "Assistant", "root", "assistant ", "host", "Host"] {
         assert!(validate_project_id(id).is_err(), "{id:?}");
     }
     assert!(validate_project_id("0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a10").is_ok());

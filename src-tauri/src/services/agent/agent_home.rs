@@ -32,8 +32,9 @@ use crate::storage;
 
 /// The directory under the state dir holding every scope's home.
 pub const HOMES_DIR: &str = "agent-homes";
-/// The scope key of the Host session's home. A project id is a UUID and a box
-/// scope is `box:<id>`, so it collides with neither; `root` is the console's.
+/// The scope key of the Host session's home. `storage::is_reserved_scope`
+/// reserves it, so no project, box or imported id can take it (a project
+/// `host` would otherwise share this unfenced home); `root` is the console's.
 pub const HOST_SCOPE_KEY: &str = "host";
 /// The key of the probe home: where `/usage`, the `--version` probes and the
 /// scheduled warm-up run an agent CLI (`prepare_probe_home`). A scope key never
@@ -785,7 +786,15 @@ mod tests {
         assert_eq!(scope_home_in(state, "root"), PathBuf::from("/s/agent-homes/root"));
         assert_eq!(scope_home_in(state, "box:b1"), PathBuf::from("/s/agent-homes/box_b1"));
         assert_eq!(host_home_in(state), PathBuf::from("/s/agent-homes/host"));
-        assert_ne!(scope_home_in(state, "host"), host_home_in(state).join("x"));
+        // `host` folds onto the Host session's home, so every spelling of it
+        // is a reserved scope no project, box or import can take.
+        for id in ["host", "Host", " HOST "] {
+            let collides = scope_home_in(state, id.trim()).file_name().is_some_and(|k| {
+                k.to_string_lossy().eq_ignore_ascii_case(HOST_SCOPE_KEY)
+            });
+            assert!(collides, "{id:?} names the Host home's key");
+            assert!(storage::is_reserved_scope(id), "{id:?} must be reserved");
+        }
         assert_eq!(local_model_home_in(state, "root"), PathBuf::from("/s/agent-homes/root.local"));
         assert_eq!(local_model_home_in(state, "box:b1"), PathBuf::from("/s/agent-homes/box_b1.local"));
         // No scope's own key can spell a local-model home.

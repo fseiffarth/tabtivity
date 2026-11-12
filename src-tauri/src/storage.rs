@@ -675,16 +675,19 @@ pub const ROOT_SCOPE: &str = "root";
 /// `Some` id as a project has to meet this one first (`is_reserved_scope`).
 pub const ASSISTANT_SCOPE: &str = "assistant";
 
-/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`] or
-/// [`ASSISTANT_SCOPE`] — and so can never be a project or box id. Compared
-/// through [`project_key`] and case-insensitively, because the id names a
-/// directory under the state dir and a case-folding filesystem or the key
-/// reduction would otherwise let `Assistant` or `assistant ` share the
-/// reserved scope's state. The one funnel the project/box registries, the
-/// layout sanitiser and the phone's discovery ask.
+/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`], [`ASSISTANT_SCOPE`]
+/// or the Host session's home key (`agent_home::HOST_SCOPE_KEY`) — and so can
+/// never be a project or box id. Compared through [`project_key`] and
+/// case-insensitively, because the id names a directory under the state dir and
+/// a case-folding filesystem or the key reduction would otherwise let
+/// `Assistant` or `assistant ` share the reserved scope's state; a project
+/// `host` would share the unfenced Host session's home. The one funnel the
+/// project/box registries, the layout sanitiser and the phone's discovery ask.
 pub fn is_reserved_scope(id: &str) -> bool {
     let key = project_key(id.trim());
-    [ROOT_SCOPE, ASSISTANT_SCOPE].iter().any(|scope| key.eq_ignore_ascii_case(scope))
+    [ROOT_SCOPE, ASSISTANT_SCOPE, crate::services::agent_home::HOST_SCOPE_KEY]
+        .iter()
+        .any(|scope| key.eq_ignore_ascii_case(scope))
 }
 
 /// Whether `id` names the chat assistant's scope, in any spelling the state
@@ -1306,11 +1309,16 @@ mod tests {
     // ── reserved scopes ───────────────────────────────────────────────────
 
     #[test]
-    fn reserved_scopes_are_root_and_assistant_under_any_spelling() {
+    fn reserved_scopes_are_root_assistant_and_host_under_any_spelling() {
         for id in ["root", "assistant", "Assistant", "ROOT", " assistant ", "assistant\n"] {
             assert!(is_reserved_scope(id), "{id:?}");
         }
-        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant"] {
+        // The Host session's home key: a project `host` would share the
+        // unfenced Host session's home (screen 2026-11-12 H2).
+        for id in ["host", "Host", "HOST", " host ", "host\n"] {
+            assert!(is_reserved_scope(id), "{id:?}");
+        }
+        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant", "hosts", "box:host"] {
             assert!(!is_reserved_scope(id), "{id:?}");
         }
         assert_eq!(project_key(ASSISTANT_SCOPE), ASSISTANT_SCOPE, "the id names its own directory");

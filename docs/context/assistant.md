@@ -229,7 +229,7 @@ and `is_root_agent`, `roots_for_scope(None)` and the Host-session rule key on it
 A `Some` id that is in no list is otherwise an unknown project, so every such
 site was handled (the call-site list is in the plan).
 
-`storage::is_reserved_scope(id)` (root or assistant; trims, reduces through
+`storage::is_reserved_scope(id)` (root, assistant or the Host session's `host` home key; trims, reduces through
 `project_key`, compares case-insensitively) is the one funnel. It refuses or
 drops the id in `projects.json` and `boxes.json` reads and writes,
 `validate_project_id`, `discovery::scope_sources`, `sandbox::project_dir_for`,
