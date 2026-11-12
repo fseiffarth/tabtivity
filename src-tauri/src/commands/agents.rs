@@ -437,41 +437,34 @@ fn installer_uv(spec: &AgentSpec) -> Option<Option<String>> {
 
 /// What brings the installed `spec` up to date: its installer again, or, for a
 /// CLI whose installer cannot (`agent_install::self_update_argv`), its own
-/// update verb on the copy every other command resolves to. That copy must be
-/// in Tabtivity's install home ([`update_target_in`]): a copy somewhere else
-/// belongs to whoever installed it, and Tabtivity never edits another app's
-/// paths.
+/// update verb on the copy every other command resolves to. The verb runs only
+/// on a copy in Tabtivity's install home ([`update_target_in`]): a copy
+/// somewhere else belongs to whoever installed it, and Tabtivity never edits
+/// another app's paths. For that one the installer runs instead and puts a
+/// fresh copy into the install home, whose launcher dirs lead PATH: its
+/// "already installed" check looks only at its own target under the install
+/// home's `HOME`/`LOCALAPPDATA` (Antigravity's `install.sh`/`install.ps1`).
+/// On Windows every Antigravity install used to land in the user's
+/// `%LOCALAPPDATA%\agy`, so Update was refused there every time.
 fn update_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
     let Some(argv) = crate::services::agent_install::self_update_argv(spec.id) else {
         return installer_command(spec);
     };
     let bin = resolve_spec_path(spec).ok_or_else(|| format!("{} is not installed.", spec.label))?;
-    update_target_in(spec, &bin, &crate::services::agent_install::install_root())?;
+    if !update_target_in(&bin, &crate::services::agent_install::install_root()) {
+        return installer_command(spec);
+    }
     let mut c = crate::paths::command_no_window(&bin);
     c.args(argv).stdin(std::process::Stdio::null());
     into_install_home(&mut c, Some(spec))?;
     Ok(c)
 }
 
-/// Refuse an update verb on `bin` unless it lives (links resolved) in `root`,
-/// Tabtivity's install home. Says why, so the Update click explains itself.
-fn update_target_in(spec: &AgentSpec, bin: &std::path::Path, root: &std::path::Path) -> Result<(), String> {
+/// Whether an update verb may run on `bin`: it lives (links resolved) in
+/// `root`, Tabtivity's install home.
+fn update_target_in(bin: &std::path::Path, root: &std::path::Path) -> bool {
     let real = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    if real(bin).starts_with(real(root)) {
-        return Ok(());
-    }
-    Err(format!(
-        concat!(
-            "{} is installed at {}, outside {}'s install home ({}). Update would change a copy ",
-            "{} does not own: update it where it was installed, or install it from {}."
-        ),
-        spec.label,
-        bin.display(),
-        crate::app_name!(),
-        root.display(),
-        crate::app_name!(),
-        crate::app_name!(),
-    ))
+    real(bin).starts_with(real(root))
 }
 
 /// Point an installer at Tabtivity's own install home: create it, hand over
@@ -2255,9 +2248,10 @@ mod tests {
         }
     }
 
-    /// Gap 93: an update verb runs only on a copy in the install home.
+    /// Gap 93: an update verb runs only on a copy in the install home; a copy
+    /// elsewhere gets the installer (a fresh copy in the install home) instead.
     #[test]
-    fn update_refuses_a_binary_outside_the_install_home_and_says_why() {
+    fn the_update_verb_runs_only_on_a_binary_in_the_install_home() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("install");
         let host = tmp.path().join("host");
@@ -2268,23 +2262,21 @@ mod tests {
         let theirs = host.join("agy");
         std::fs::write(&ours, b"").unwrap();
         std::fs::write(&theirs, b"").unwrap();
-        let agy = find_spec("antigravity").expect("antigravity in registry");
 
-        assert_eq!(update_target_in(agy, &ours, &root), Ok(()));
-        let err = update_target_in(agy, &theirs, &root).unwrap_err();
-        assert!(err.contains(&theirs.display().to_string()) && err.contains("install home") && err.contains("does not own"), "{err}");
+        assert!(update_target_in(&ours, &root));
+        assert!(!update_target_in(&theirs, &root));
         // A launcher in the install home that links to a copy elsewhere is that copy.
         #[cfg(unix)]
         {
             let link = root.join(".local").join("bin").join("agy-link");
             std::os::unix::fs::symlink(&theirs, &link).unwrap();
-            assert!(update_target_in(agy, &link, &root).is_err());
+            assert!(!update_target_in(&link, &root));
         }
         // A sibling folder sharing the prefix is not inside.
         let near = tmp.path().join("install-other");
         std::fs::create_dir_all(&near).unwrap();
         std::fs::write(near.join("agy"), b"").unwrap();
-        assert!(update_target_in(agy, &near.join("agy"), &root).is_err());
+        assert!(!update_target_in(&near.join("agy"), &root));
     }
 
     /// Gap 93: a probe command carries the probe home, and none of the

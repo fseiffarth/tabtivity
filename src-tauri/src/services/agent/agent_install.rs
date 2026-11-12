@@ -42,9 +42,13 @@ pub fn install_env_in(state_dir: &Path) -> Vec<(String, String)> {
 /// common installers honour, all under [`install_root_in`]. On Windows also
 /// `USERPROFILE` (what PowerShell's `$HOME` and npm's `~` read there) and
 /// `APPDATA` (npm's default global prefix, `%APPDATA%\npm`, and most
-/// per-user tool configs) inside the install home. An installer that asks
-/// the shell API for the profile folder instead of the environment still
-/// lands in the user's profile; that is not reachable from here.
+/// per-user tool configs) and `LOCALAPPDATA` inside the install home.
+/// Antigravity's `install.ps1` writes `$env:LOCALAPPDATA\agy\bin\agy.exe` and
+/// Codex's its launcher junction `$env:LOCALAPPDATA\Programs\OpenAI\Codex\bin`;
+/// without it both landed in the user's profile, where Update must not touch
+/// them. An installer that asks the shell API for the profile folder instead
+/// of the environment still lands in the user's profile; that is not
+/// reachable from here.
 pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)> {
     let root = install_root_in(state_dir);
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
@@ -61,6 +65,7 @@ pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)>
     if windows {
         env.push(("USERPROFILE".into(), s(root.clone())));
         env.push(("APPDATA".into(), s(root.join("AppData").join("Roaming"))));
+        env.push(("LOCALAPPDATA".into(), s(root.join("AppData").join("Local"))));
     }
     env
 }
@@ -97,6 +102,10 @@ pub fn bin_dirs_for(windows: bool, state_dir: &Path) -> Vec<PathBuf> {
     .collect();
     if windows {
         dirs.insert(2, root.join("npm"));
+        // The `LOCALAPPDATA` installers' launchers ([`install_env_for`]).
+        let local = root.join("AppData").join("Local");
+        dirs.push(local.join("agy").join("bin"));
+        dirs.push(local.join("Programs").join("OpenAI").join("Codex").join("bin"));
     }
     dirs
 }
@@ -361,6 +370,8 @@ mod tests {
         assert_eq!(get(&unix, "APPDATA"), None);
         assert_eq!(get(&win, "USERPROFILE"), Some(root.clone()));
         assert_eq!(get(&win, "APPDATA"), Some(root.join("AppData").join("Roaming")));
+        assert_eq!(get(&unix, "LOCALAPPDATA"), None);
+        assert_eq!(get(&win, "LOCALAPPDATA"), Some(root.join("AppData").join("Local")));
         // Everything Unix sets, Windows sets the same way.
         for (k, v) in &unix {
             assert_eq!(get(&win, k), Some(PathBuf::from(v)), "{k}");
@@ -373,6 +384,12 @@ mod tests {
         assert!(bin_dirs_for(true, state).contains(&root.join("npm")));
         assert!(!bin_dirs_for(false, state).contains(&root.join("npm")));
         assert!(bin_dirs_for(true, state).contains(&root.join(".local").join("bin")));
+        // The `LOCALAPPDATA` installers' launchers come onto PATH from there.
+        let local = root.join("AppData").join("Local");
+        for dir in [local.join("agy").join("bin"), local.join("Programs").join("OpenAI").join("Codex").join("bin")] {
+            assert!(bin_dirs_for(true, state).contains(&dir), "{}", dir.display());
+            assert!(!bin_dirs_for(false, state).contains(&dir), "{}", dir.display());
+        }
     }
 
     #[test]
