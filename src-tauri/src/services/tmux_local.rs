@@ -700,11 +700,12 @@ pub fn attach_argv(session: &str) -> Vec<String> {
     args
 }
 
-/// `tmux kill-session -t <session>` argv, for the explicit-close / Sessions-view
+/// `tmux kill-session -t =<session>` argv, for the explicit-close / Sessions-view
 /// kill of a local persistent tab. `|| true` is unnecessary here (a missing
-/// session just exits non-zero, which the fire-and-forget caller ignores).
+/// session just exits non-zero, which the fire-and-forget caller ignores). `=`
+/// makes the match exact: an exited `train` must not prefix-match `train-2`.
 pub fn local_tmux_kill_args(session: &str) -> Vec<String> {
-    vec!["kill-session".into(), "-t".into(), session.to_string()]
+    vec!["kill-session".into(), "-t".into(), format!("={session}")]
 }
 
 /// `tmux capture-pane -p -J -t =<session>:` argv: the session's visible screen
@@ -745,12 +746,12 @@ pub fn pane_dead_answer(stdout: &str) -> bool {
     stdout.trim() == "1"
 }
 
-/// `tmux rename-session -t <old> <new>` argv.
+/// `tmux rename-session -t =<old> <new>` argv; `=` matches `old` exactly.
 pub fn local_tmux_rename_args(old: &str, new: &str) -> Vec<String> {
     vec![
         "rename-session".into(),
         "-t".into(),
-        old.to_string(),
+        format!("={old}"),
         new.to_string(),
     ]
 }
@@ -1446,14 +1447,16 @@ mod tests {
 
     #[test]
     fn kill_and_rename_argv() {
-        assert_eq!(local_tmux_kill_args("s"), vec!["kill-session", "-t", "s"]);
+        // `=` makes the target exact: killing an exited `train` must never
+        // prefix-match a live `train-2` (screen 2026-11-12 H9).
+        assert_eq!(local_tmux_kill_args("train"), vec!["kill-session", "-t", "=train"]);
         assert_eq!(
             local_tmux_screen_args(concat!(crate::app_slug!(), "-s")),
             vec!["-u", "capture-pane", "-p", "-J", "-t", concat!("=", crate::app_slug!(), "-s:")]
         );
         assert_eq!(
             local_tmux_rename_args("old", "new"),
-            vec!["rename-session", "-t", "old", "new"]
+            vec!["rename-session", "-t", "=old", "new"]
         );
     }
 

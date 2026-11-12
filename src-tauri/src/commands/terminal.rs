@@ -188,6 +188,11 @@ pub async fn agent_fence_marks(
 /// kill of a local persistent tab. No-op on Windows / without tmux.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill(session: String) -> Result<(), String> {
+    // As its siblings: a client names a session, never a tmux pattern or a
+    // special target (`*`, `$0`) that could end a session the app never made.
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session) {
+        return Err(format!("invalid tmux session name '{session}'"));
+    }
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
@@ -752,6 +757,16 @@ pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A client can name no tmux pattern or special target: `*`, `$0`, `%1`
+    /// would end a session the app never made (screen 2026-11-12 H9). The
+    /// check runs before tmux is even looked for, so no tmux server is touched.
+    #[test]
+    fn local_tmux_kill_refuses_a_name_that_is_not_a_session_name() {
+        for name in ["*", "$0", "%1", "", "a:b", "x.y", "train*"] {
+            assert!(app_core::rt::block_on(local_tmux_kill(name.to_string())).is_err(), "{name:?}");
+        }
+    }
 
     #[test]
     fn agent_drop_copies_into_the_tab_folders_inbox() {
