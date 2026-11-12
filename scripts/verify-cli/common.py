@@ -120,6 +120,10 @@ class Tui:
             subprocess.run(self.T + ["send-keys", "-t", "p", x])
             time.sleep(pause)
 
+    def send_keys(self, *k):
+        """Several keys in one `send-keys` call: tmux writes them together."""
+        subprocess.run(self.T + ["send-keys", "-t", "p", *k])
+
     def type(self, text):
         subprocess.run(self.T + ["send-keys", "-t", "p", "-l", text])
         time.sleep(0.4)

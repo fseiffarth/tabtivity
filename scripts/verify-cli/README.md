@@ -49,7 +49,11 @@ gives its usage.
   payload. `meta.py <label>…` lists the transcript record types and
   permission modes. `esc_early.py <label> <bin> [queued|alone|pull]` holds a
   turn unanswered with a sleeping hook and presses Esc (or ↑) on it, for
-  where the prompt goes. `chat_send.py <label> <bin> [case…]` types prompts
+  where the prompt goes. `send_now.py <label> <bin>
+  early|tool|typed|stream esc|chord|chord1` lands Esc or Claude's Ctrl+X
+  Ctrl+S on a held, tool-running, typed or streaming turn, for whether the
+  queue goes at once and what the turn keeps (Send now).
+  `chat_send.py <label> <bin> [case…]` types prompts
   with the Chat's and the phone's exact writes (`agentInputWrites` and its
   pacing) — fresh, idle, two-line, long, while busy — and reads
   `UserPromptSubmit` for whether each Enter submitted. `model.py <label> <bin>
