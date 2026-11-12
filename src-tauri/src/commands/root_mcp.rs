@@ -247,9 +247,9 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         };
         let reason = reply.as_ref().and_then(crate::services::web_lane::refusal_reason);
         if crate::services::web_lane::audited(&message, reason) {
-            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+            audit_lane(&audit_session, &tool, started, reason);
         }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Cockpit {
         let outcome = app_core::rt::spawn_blocking(move || {
@@ -261,10 +261,10 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }).await;
         let Ok((reply, patch, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
         if audited {
-            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+            audit_lane(&audit_session, &tool, started, reason);
         }
         if let Some((scope, version)) = patch { (state.notify)(Notice::Workspace { scope, version }); }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Helper {
         // The help identity (`services::help_mcp`): the compiled-in corpus and
@@ -281,8 +281,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             crate::services::help_mcp::handle_message(&session, &message)
         }).await;
         return match reply {
-            Ok(Some(reply)) => Json(reply).into_response(),
-            Ok(None) => StatusCode::ACCEPTED.into_response(),
+            Ok(reply) => lane_reply(reply),
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
@@ -304,9 +303,9 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }).await;
         let Ok((reply, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
         if audited {
-            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+            audit_lane(&audit_session, &tool, started, reason);
         }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Printer {
         // The print lane (`services::print_mcp`): as markup — the switch is
@@ -325,9 +324,9 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }).await;
         let Ok((reply, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
         if audited {
-            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+            audit_lane(&audit_session, &tool, started, reason);
         }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Scheduler {
         if session.identity.project.as_deref().is_none_or(|p| crate::services::schedule_mcp::level(p).is_err()) || session.check().is_err() {
@@ -352,7 +351,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let failed = reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reply.as_ref().and_then(crate::services::schedule_mcp::refusal_reason));
         if changed { (state.notify)(Notice::Schedules); }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Pusher {
         // The push lane (`services::git_push_mcp`): the global switch is read
@@ -372,7 +371,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let failed = reason.is_some() || reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reason);
         if changed { (state.notify)(Notice::GitPush); }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     // The root lane is served where its mail, review and session controls
     // live: the window, or a server daemon (its browser client). A desktop's
@@ -436,7 +435,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }
     };
     let reason = reply.as_ref().and_then(root_mcp::refusal_reason);
-    security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+    audit_lane(&audit_session, &tool, started, reason);
     // One event per row: a board move can reindex a whole column.
     for change in effects.changes {
         ctx.emit(CHANGED_EVENT, change);
@@ -445,10 +444,21 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         ctx.emit("root-mcp-review-changed",
             crate::services::root_mcp_review::pending_count(&storage::state_dir()));
     }
+    lane_reply(reply)
+}
+
+/// A lane's JSON-RPC reply, or `202 Accepted` with no body for a notification.
+fn lane_reply(reply: Option<Value>) -> Response {
     match reply {
         Some(reply) => Json(reply).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
+}
+
+/// One served request in the audit ring: `refused` under its fixed `reason`,
+/// `allowed` without one.
+fn audit_lane(session: &root_mcp::Session, tool: &str, started: Instant, reason: Option<&'static str>) {
+    security::audit_reason(session, tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
 }
 
 /// Why a request that authenticated is not served, each with its own words:

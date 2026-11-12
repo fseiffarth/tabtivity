@@ -2019,6 +2019,40 @@ pub struct TabJoin {
     pub stale: Option<TakenPty>,
 }
 
+/// Revoke the lane token a tab's spawn held in `var` once the spawn ended, and
+/// tell the views of the lanes that keep per-tab state. Every variable of
+/// `root_mcp::LANE_TOKEN_ENVS` lands here, so a lane without its own arm is
+/// still revoked.
+fn lane_token_gone(ctx: &CoreCtx, var: &str, token: &str) {
+    use crate::services::root_mcp::{self as root_mcp, revoke_token};
+    match var {
+        root_mcp::TOKEN_ENV | root_mcp::SCHEDULE_TOKEN_ENV => {
+            let state = crate::storage::state_dir();
+            crate::services::root_mcp_review::on_spawn_gone(&state, token);
+            ctx.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
+        }
+        root_mcp::GIT_TOKEN_ENV => {
+            revoke_token(token);
+            ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+        }
+        root_mcp::MARKUP_TOKEN_ENV => {
+            // The tab's open markup question goes with its session; the
+            // sweep rings `markup-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::markup_mcp::sweep();
+        }
+        root_mcp::PRINT_TOKEN_ENV => {
+            // The tab's pending print requests close with its session;
+            // the sweep rings `print-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::print_mcp::sweep();
+        }
+        // Help, cockpit, and the assistant's web lane (a chat's token dies
+        // with its CLI): nothing else to tell.
+        _ => { revoke_token(token); }
+    }
+}
+
 /// Open a PTY of `cols`×`rows`, run `cmd` in it, register it under `id` and
 /// stream it. `tab` is the tab's own spawn (its options): the bookkeeping that
 /// follows a tab's process — Codex binding, MCP tokens, the fence — runs for
@@ -2143,18 +2177,13 @@ fn launch(
     } else {
         route_open_at(&id, Some(&payload_id), route_seq);
     }
-    let env = tab.map(|opts| &opts.env);
-    let mcp_token = env.and_then(|env| {
-        env.get(crate::services::root_mcp::TOKEN_ENV)
-            .or_else(|| env.get(crate::services::root_mcp::SCHEDULE_TOKEN_ENV))
-            .cloned()
-    });
-    let help_token = env.and_then(|env| env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned());
-    let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
-    let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
-    let cockpit_token = env.and_then(|env| env.get(crate::services::root_mcp::COCKPIT_TOKEN_ENV).cloned());
-    let print_token = env.and_then(|env| env.get(crate::services::root_mcp::PRINT_TOKEN_ENV).cloned());
-    let web_token = env.and_then(|env| env.get(crate::services::root_mcp::WEB_TOKEN_ENV).cloned());
+    // Every lane token this spawn holds (`root_mcp::LANE_TOKEN_ENVS`), each
+    // revoked when the spawn ends ([`lane_token_gone`]).
+    let lane_tokens: Vec<(&'static str, String)> = tab
+        .map(|opts| crate::services::root_mcp::LANE_TOKEN_ENVS.iter()
+            .filter_map(|var| opts.env.get(*var).map(|token| (*var, token.clone())))
+            .collect())
+        .unwrap_or_default();
     tokio::spawn(async move {
         let emitter = ctx.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
@@ -2199,34 +2228,8 @@ fn launch(
             }
             // A login PTY whose login ended is no paste target any more.
             crate::commands::credentials::forget_login_pty_spawn(&id, route_seq);
-            if let Some(token) = help_token {
-                crate::services::root_mcp::revoke_token(&token);
-            }
-            if let Some(token) = push_token {
-                crate::services::root_mcp::revoke_token(&token);
-                ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
-            }
-            if let Some(token) = markup_token {
-                // The tab's open markup question goes with its session; the
-                // sweep rings `markup-mcp-changed` through the change hook.
-                crate::services::root_mcp::revoke_token(&token);
-                crate::services::markup_mcp::sweep();
-            }
-            if let Some(token) = cockpit_token { crate::services::root_mcp::revoke_token(&token); }
-            if let Some(token) = print_token {
-                // The tab's pending print requests close with its session;
-                // the sweep rings `print-mcp-changed` through the change hook.
-                crate::services::root_mcp::revoke_token(&token);
-                crate::services::print_mcp::sweep();
-            }
-            if let Some(token) = web_token {
-                // The assistant's web lane: a chat's token dies with its CLI.
-                crate::services::root_mcp::revoke_token(&token);
-            }
-            if let Some(token) = mcp_token {
-                let state = crate::storage::state_dir();
-                crate::services::root_mcp_review::on_spawn_gone(&state, &token);
-                ctx.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
+            for (var, token) in &lane_tokens {
+                lane_token_gone(&ctx, var, token);
             }
             let exit = TerminalExit { id: payload_id, code: None };
             match exit_windows {

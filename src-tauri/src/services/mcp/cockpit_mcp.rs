@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::services::{cockpit_meta as meta, cockpit_results as results, root_mcp::{Caller, Session}, root_mcp_security as security, workspace};
 
 pub const SERVER_NAME: &str = concat!(crate::app_slug!(), "-cockpit");
+const INSTRUCTIONS: &str = "Workspace conveniences for your own tab only. On the first task prompt of a new conversation (a new tab or after /clear), use tab_get_info then tab_rename once for a compact task title (2 to 5 words, ideally under 32 characters), before starting on the task. Only replace a generic CLI label, an automatic title derived from that prompt, or a title an earlier conversation gave (tab_get_info labelByAgent true); preserve custom user labels and resumed conversation names. Pass the label you read as expectedLabel; if it changed, leave it alone. After that, rename only when the user requests it. Call tab_get_info for the revision, then tab_set_activity (one line, at meaningful transitions only, never as a heartbeat), tab_set_handoff (what was done, checked and remains) or tab_set_results (project-relative paths of files you produced), tab_set_progress (plan steps and the one you are on), tab_set_blocker (one line, only while you cannot continue without the user; clear it when unblocked) or tab_set_verification (the checks you ran or owe), tab_request_attention (one question, only when you cannot continue without the user; clear it when unblocked) or tab_add_milestone (one finished milestone, with a requestId). Your notes are shown to the user as written by you; they confirm nothing.";
 pub const TOOL_RENAME: &str = "tab_rename";
 pub const TOOL_INFO: &str = "tab_get_info";
 pub const TOOL_ACTIVITY: &str = "tab_set_activity";
@@ -95,9 +96,7 @@ pub fn tools() -> Value {
     json!([
         {"name":TOOL_RENAME,
         "description":concat!("Rename your own ", crate::app_name!(), " tab's display label. Supply only a short, descriptive label. This preserves the session and focus. expectedLabel optionally prevents overwriting a label changed since you last saw it."),
-        "inputSchema":{"type":"object","required":["label"],"additionalProperties":false,
-            "properties":{"label":{"type":"string","minLength":1,"maxLength":120},
-                "expectedLabel":{"type":"string","maxLength":120}}},
+        "inputSchema":rename_schema(),
         "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
         {"name":TOOL_INFO,
         "description":"Read your own tab's display label, the notes you published (activity, handoff, results, progress, blocker, verification, a question you asked the user while it is open, and your milestones; a blocker only while it is current) and the metadata revision to pass as expectedRevision to the tab_set_* tools. Nothing else: no terminal content, no other tabs, no files.",
@@ -169,6 +168,13 @@ pub fn tools() -> Value {
 }
 const ACTIVITY_MAX: usize = meta::ACTIVITY_MAX_CHARS;
 
+/// `tab_rename`'s input schema, which [`rename`] validates against.
+fn rename_schema() -> Value {
+    json!({"type":"object","required":["label"],"additionalProperties":false,
+        "properties":{"label":{"type":"string","minLength":1,"maxLength":120},
+            "expectedLabel":{"type":"string","maxLength":120}}})
+}
+
 fn refused(category: &'static str) -> Value { json!({"status":"refused","category":category}) }
 
 /// The category a storage-layer error string is told as: fixed words only,
@@ -209,8 +215,7 @@ pub(crate) fn guard<'a>(session: &'a Session, binding: &'a Binding) -> impl FnOn
 
 fn rename(session: &Session, args: &Value) -> Value {
     let binding = match bound(session) { Ok(b) => b, Err(refusal) => return refusal };
-    let schema = &tools()[0]["inputSchema"];
-    if security::validate(schema, args).is_err() { return refused("invalid_label"); }
+    if security::validate(&rename_schema(), args).is_err() { return refused("invalid_label"); }
     let Some(label) = args["label"].as_str().and_then(workspace::clean_tab_label) else { return refused("invalid_label") };
     let expected = args.get("expectedLabel").and_then(Value::as_str);
     match workspace::rename_tab_id_in(&binding.path(), &binding.scope, &binding.id, &label, expected,
@@ -234,6 +239,37 @@ fn changed_reply(outcome: &meta::Outcome, field: &'static str, value: Value) -> 
     json!({"status":if outcome.changed { "updated" } else { "unchanged" },"revision":outcome.meta.revision,field:value})
 }
 
+/// Apply one setter's `change` under the workspace lock ([`meta::update_in`],
+/// rechecked by [`guard`]) and answer `field` as `stored` reads it from the
+/// committed metadata.
+fn commit(session: &Session, binding: &Binding, expected: u64, change: &meta::Change, field: &'static str,
+    stored: impl FnOnce(&meta::Meta) -> Value) -> Value {
+    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), change,
+        guard(session, binding)) {
+        Ok(out) => {
+            let value = stored(&out.meta);
+            changed_reply(&out, field, value)
+        }
+        Err(e) => refusal_of(&e),
+    }
+}
+
+/// A one-line setter's text: `null` clears it (`Some(None)`), a string must
+/// pass `clean`; anything else is `None` (`invalid_request`).
+fn nullable_text(value: &Value, clean: fn(&str) -> Option<String>) -> Option<Option<String>> {
+    match value {
+        Value::Null => Some(None),
+        Value::String(raw) => clean(raw).map(Some),
+        _ => None,
+    }
+}
+
+/// `value` with the note's age in whole seconds at `now`, for `tab_get_info`.
+fn aged(mut value: Value, set_at: u64, now: u64) -> Value {
+    value["ageSeconds"] = json!(now.saturating_sub(set_at) / 1000);
+    value
+}
+
 fn activity_json(a: &meta::Activity) -> Value { json!({"text":a.text,"setAt":a.set_at}) }
 fn handoff_json(h: &meta::Handoff) -> Value {
     json!({"summary":h.summary,"checks":h.checks,"remaining":h.remaining,"setAt":h.set_at})
@@ -242,17 +278,9 @@ fn handoff_json(h: &meta::Handoff) -> Value {
 fn set_activity(session: &Session, args: &Value) -> Value {
     let binding = match bound(session) { Ok(b) => b, Err(refusal) => return refusal };
     let Some((expected, text)) = setter_args(args, "text") else { return refused("invalid_request") };
-    let text = match text {
-        Value::Null => None,
-        Value::String(raw) => match meta::clean_activity(raw) { Some(t) => Some(t), None => return refused("invalid_request") },
-        _ => return refused("invalid_request"),
-    };
+    let Some(text) = nullable_text(text, meta::clean_activity) else { return refused("invalid_request") };
     let change = meta::Change::Activity { text, spawn: binding.spawn.clone() };
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &change,
-        guard(session, binding)) {
-        Ok(out) => changed_reply(&out, "activity", out.meta.activity.as_ref().map_or(Value::Null, activity_json)),
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, expected, &change, "activity", |m| m.activity.as_ref().map_or(Value::Null, activity_json))
 }
 
 fn set_handoff(session: &Session, args: &Value) -> Value {
@@ -270,11 +298,7 @@ fn set_handoff(session: &Session, args: &Value) -> Value {
         }
         _ => return refused("invalid_request"),
     };
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &meta::Change::Handoff(text),
-        guard(session, binding)) {
-        Ok(out) => changed_reply(&out, "handoff", out.meta.handoff.as_ref().map_or(Value::Null, handoff_json)),
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, expected, &meta::Change::Handoff(text), "handoff", |m| m.handoff.as_ref().map_or(Value::Null, handoff_json))
 }
 
 fn results_json(r: &meta::Results) -> Value {
@@ -296,11 +320,7 @@ fn set_results(session: &Session, args: &Value) -> Value {
     if items.iter().any(|i| results::reach(&root, &i.relative_path) == results::Reach::Outside) {
         return refused("invalid_request");
     }
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &meta::Change::Results(items),
-        guard(session, binding)) {
-        Ok(out) => changed_reply(&out, "results", out.meta.results.as_ref().map_or(Value::Null, results_json)),
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, expected, &meta::Change::Results(items), "results", |m| m.results.as_ref().map_or(Value::Null, results_json))
 }
 
 fn progress_json(p: &meta::Progress) -> Value {
@@ -326,11 +346,7 @@ fn set_attention(session: &Session, args: &Value) -> Value { set_attention_with(
 pub(crate) fn set_attention_with(session: &Session, args: &Value, mint: impl FnOnce() -> Option<String>) -> Value {
     let binding = match bound(session) { Ok(b) => b, Err(refusal) => return refusal };
     let Some((expected, question)) = setter_args(args, "question") else { return refused("invalid_request") };
-    let question = match question {
-        Value::Null => None,
-        Value::String(raw) => match meta::clean_attention(raw) { Some(q) => Some(q), None => return refused("invalid_request") },
-        _ => return refused("invalid_request"),
-    };
+    let Some(question) = nullable_text(question, meta::clean_attention) else { return refused("invalid_request") };
     // The id is minted here, once per call; the change uses it only when the
     // question is new (an identical open or dismissed one is a no-op). With no
     // randomness a question is refused before anything is written (a zero id
@@ -341,11 +357,7 @@ pub(crate) fn set_attention_with(session: &Session, args: &Value, mint: impl FnO
         (Some(_), None) => return refused("storage_error"),
     };
     let change = meta::Change::Attention { question, id, spawn: binding.spawn.clone() };
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &change,
-        guard(session, binding)) {
-        Ok(out) => changed_reply(&out, "attention", out.meta.attention.as_ref().map_or(Value::Null, attention_json)),
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, expected, &change, "attention", |m| m.attention.as_ref().map_or(Value::Null, attention_json))
 }
 
 fn add_milestone(session: &Session, args: &Value) -> Value {
@@ -356,14 +368,8 @@ fn add_milestone(session: &Session, args: &Value) -> Value {
     let (Some(request_id), Some(text)) = (request_id, text) else { return refused("invalid_request") };
     let change = meta::Change::Milestone { request_id: request_id.to_string(), text };
     // Append-only: no revision to compare (update_in skips it for a milestone).
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, 0, crate::clock::now_ms(), &change,
-        guard(session, binding)) {
-        Ok(out) => {
-            let kept = out.meta.milestones.iter().find(|m| m.request_id == request_id).map_or(Value::Null, milestone_json);
-            changed_reply(&out, "milestone", kept)
-        }
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, 0, &change, "milestone",
+        |m| m.milestones.iter().find(|m| m.request_id == request_id).map_or(Value::Null, milestone_json))
 }
 
 fn set_progress(session: &Session, args: &Value) -> Value {
@@ -371,38 +377,23 @@ fn set_progress(session: &Session, args: &Value) -> Value {
     let Some((expected, list)) = setter_args(args, "steps") else { return refused("invalid_request") };
     let Some(steps) = list.as_array().and_then(|l| meta::clean_progress(l)) else { return refused("invalid_request") };
     let change = meta::Change::Progress { steps, spawn: binding.spawn.clone() };
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &change,
-        guard(session, binding)) {
-        Ok(out) => changed_reply(&out, "progress", out.meta.progress.as_ref().map_or(Value::Null, progress_json)),
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, expected, &change, "progress", |m| m.progress.as_ref().map_or(Value::Null, progress_json))
 }
 
 fn set_blocker(session: &Session, args: &Value) -> Value {
     let binding = match bound(session) { Ok(b) => b, Err(refusal) => return refusal };
     let Some((expected, text)) = setter_args(args, "text") else { return refused("invalid_request") };
-    let text = match text {
-        Value::Null => None,
-        Value::String(raw) => match meta::clean_blocker(raw) { Some(t) => Some(t), None => return refused("invalid_request") },
-        _ => return refused("invalid_request"),
-    };
+    let Some(text) = nullable_text(text, meta::clean_blocker) else { return refused("invalid_request") };
     let change = meta::Change::Blocker { text, spawn: binding.spawn.clone() };
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &change,
-        guard(session, binding)) {
-        Ok(out) => changed_reply(&out, "blocker", out.meta.blocker.as_ref().map_or(Value::Null, blocker_json)),
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, expected, &change, "blocker", |m| m.blocker.as_ref().map_or(Value::Null, blocker_json))
 }
 
 fn set_verification(session: &Session, args: &Value) -> Value {
     let binding = match bound(session) { Ok(b) => b, Err(refusal) => return refusal };
     let Some((expected, list)) = setter_args(args, "entries") else { return refused("invalid_request") };
     let Some(entries) = list.as_array().and_then(|l| meta::clean_verification(l)) else { return refused("invalid_request") };
-    match meta::update_in(&binding.path(), &binding.scope, &binding.id, expected, crate::clock::now_ms(), &meta::Change::Verification(entries),
-        guard(session, binding)) {
-        Ok(out) => changed_reply(&out, "verification", out.meta.verification.as_ref().map_or(Value::Null, verification_json)),
-        Err(e) => refusal_of(&e),
-    }
+    commit(session, binding, expected, &meta::Change::Verification(entries), "verification",
+        |m| m.verification.as_ref().map_or(Value::Null, verification_json))
 }
 
 fn get_info(session: &Session, args: &Value) -> Value {
@@ -417,47 +408,26 @@ fn get_info(session: &Session, args: &Value) -> Value {
             let own = m.activity.as_ref().filter(|a| a.spawn == binding.spawn);
             let activity = own.filter(|a| meta::is_fresh(a.set_at, now))
                 .map(|a| json!({"text":a.text,"setAt":a.set_at,"ageSeconds":now.saturating_sub(a.set_at) / 1000}));
-            let handoff = m.handoff.as_ref().map(|h| {
-                let mut value = handoff_json(h);
-                value["ageSeconds"] = json!(now.saturating_sub(h.set_at) / 1000);
-                value
-            });
-            let results = m.results.as_ref().map(|r| {
-                let mut value = results_json(r);
-                value["ageSeconds"] = json!(now.saturating_sub(r.set_at) / 1000);
-                value
-            });
+            let handoff = m.handoff.as_ref().map(|h| aged(handoff_json(h), h.set_at, now));
+            let results = m.results.as_ref().map(|r| aged(results_json(r), r.set_at, now));
             // The blocker is transient like the activity: this spawn's own, and
             // only while fresh.
             let own_blocker = m.blocker.as_ref().filter(|b| b.spawn == binding.spawn);
             let blocker = own_blocker.filter(|b| meta::is_fresh(b.set_at, now))
-                .map(|b| {
-                    let mut value = blocker_json(b);
-                    value["ageSeconds"] = json!(now.saturating_sub(b.set_at) / 1000);
-                    value
-                });
+                .map(|b| aged(blocker_json(b), b.set_at, now));
             // Progress is history: always returned, with whether it still
             // counts as running (this spawn's, fresh, not ended).
             let progress = m.progress.as_ref().map(|p| {
-                let mut value = progress_json(p);
-                value["ageSeconds"] = json!(now.saturating_sub(p.set_at) / 1000);
+                let mut value = aged(progress_json(p), p.set_at, now);
                 value["current"] = json!(p.spawn == binding.spawn && !p.ended && meta::is_fresh(p.set_at, now));
                 value
             });
-            let verification = m.verification.as_ref().map(|v| {
-                let mut value = verification_json(v);
-                value["ageSeconds"] = json!(now.saturating_sub(v.set_at) / 1000);
-                value
-            });
+            let verification = m.verification.as_ref().map(|v| aged(verification_json(v), v.set_at, now));
             // The question is this spawn's own, and only while it is open (under
             // 24 hours); the agent is told whether the user dismissed it.
             let own_attention = m.attention.as_ref().filter(|a| a.spawn == binding.spawn);
             let attention = own_attention.filter(|a| meta::attention_is_live(a.set_at, now))
-                .map(|a| {
-                    let mut value = attention_json(a);
-                    value["ageSeconds"] = json!(now.saturating_sub(a.set_at) / 1000);
-                    value
-                });
+                .map(|a| aged(attention_json(a), a.set_at, now));
             let milestones = m.milestones.iter().map(milestone_json).collect::<Vec<_>>();
             // Whether the label is the title this tab's agent gave it, which a
             // new conversation in the tab may replace (false: the CLI's own name
@@ -494,51 +464,38 @@ pub fn refusal_reason(reply: &Value) -> Option<&'static str> {
 
 /// One bounded JSON-RPC message. No user-controlled target is accepted.
 pub fn handle_message(session: &Session, message: &Value) -> Option<Value> {
-    let error = |id: Value, code, text| Some(crate::services::root_mcp::rpc_error(id, code, text));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return error(Value::Null, -32600, "invalid request");
-    }
-    let id = message.get("id").cloned()?;
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, tool_err, LaneInfo, LaneMethod};
+    let id = match rpc_request_id(message) { Err(reply) => return Some(reply), Ok(id) => id? };
     if session.identity.caller != Caller::Cockpit || session.cockpit.is_none() || session.check().is_err() {
-        return error(id, -32000, "access refused");
+        return Some(rpc_error(id, -32000, "access refused"));
     }
-    let ok = |value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
-            "serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},
-            "instructions":"Workspace conveniences for your own tab only. On the first task prompt of a new conversation (a new tab or after /clear), use tab_get_info then tab_rename once for a compact task title (2 to 5 words, ideally under 32 characters), before starting on the task. Only replace a generic CLI label, an automatic title derived from that prompt, or a title an earlier conversation gave (tab_get_info labelByAgent true); preserve custom user labels and resumed conversation names. Pass the label you read as expectedLabel; if it changed, leave it alone. After that, rename only when the user requests it. Call tab_get_info for the revision, then tab_set_activity (one line, at meaningful transitions only, never as a heartbeat), tab_set_handoff (what was done, checked and remains) or tab_set_results (project-relative paths of files you produced), tab_set_progress (plan steps and the one you are on), tab_set_blocker (one line, only while you cannot continue without the user; clear it when unblocked) or tab_set_verification (the checks you ran or owe), tab_request_attention (one question, only when you cannot continue without the user; clear it when unblocked) or tab_add_milestone (one finished milestone, with a requestId). Your notes are shown to the user as written by you; they confirm nothing."})),
-        "ping" => ok(json!({})),
-        "tools/list" => ok(json!({"tools":tools()})),
-        "tools/call" => {
-            let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            // One shared budget: every call is charged first, a malformed or
-            // unknown-target one and `tab_get_info` included.
-            let admitted = session.admit_cockpit_rate();
-            if !is_tool(name) {
-                return ok(json!({"content":[{"type":"text","text":"unknown tool"}],"isError":true}));
-            }
-            let value = if !admitted {
-                refused("rate_limited")
-            } else {
-                match name {
-                    TOOL_RENAME => rename(session, &args),
-                    TOOL_INFO => get_info(session, &args),
-                    TOOL_ACTIVITY => set_activity(session, &args),
-                    TOOL_RESULTS => set_results(session, &args),
-                    TOOL_PROGRESS => set_progress(session, &args),
-                    TOOL_BLOCKER => set_blocker(session, &args),
-                    TOOL_VERIFICATION => set_verification(session, &args),
-                    TOOL_ATTENTION => set_attention(session, &args),
-                    TOOL_MILESTONE => add_milestone(session, &args),
-                    _ => set_handoff(session, &args),
-                }
-            };
-            ok(json!({"content":[{"type":"text","text":value.to_string()}],
-                "isError":value["status"] == "refused","structuredContent":value}))
+    let lane = LaneInfo { name: SERVER_NAME, instructions: INSTRUCTIONS, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return Some(reply),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(json!({}))),
+    };
+    // One shared budget: every call is charged first, a malformed or
+    // unknown-target one and `tab_get_info` included.
+    let admitted = session.admit_cockpit_rate();
+    if !is_tool(name) {
+        return Some(rpc_result(id, tool_err("unknown tool")));
+    }
+    let value = if !admitted {
+        refused("rate_limited")
+    } else {
+        match name {
+            TOOL_RENAME => rename(session, &args),
+            TOOL_INFO => get_info(session, &args),
+            TOOL_ACTIVITY => set_activity(session, &args),
+            TOOL_RESULTS => set_results(session, &args),
+            TOOL_PROGRESS => set_progress(session, &args),
+            TOOL_BLOCKER => set_blocker(session, &args),
+            TOOL_VERIFICATION => set_verification(session, &args),
+            TOOL_ATTENTION => set_attention(session, &args),
+            TOOL_MILESTONE => add_milestone(session, &args),
+            _ => set_handoff(session, &args),
         }
-        _ => error(id, -32601, "method not found"),
-    }
+    };
+    Some(rpc_result(id, json!({"content":[{"type":"text","text":value.to_string()}],
+        "isError":value["status"] == "refused","structuredContent":value})))
 }

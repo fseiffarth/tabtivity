@@ -717,32 +717,20 @@ pub async fn handle_message(session: &Session, message: &Value) -> Option<Value>
 }
 
 pub async fn handle_with(session: &Session, ctx: &Ctx, message: &Value) -> Option<Value> {
-    let error = |id: Value, code: i64, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}}));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return error(Value::Null, -32600, "invalid request");
-    }
-    let id = message.get("id").cloned()?;
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, LaneInfo, LaneMethod};
+    let id = match rpc_request_id(message) { Err(reply) => return Some(reply), Ok(id) => id? };
     if session.identity.caller != Caller::Web || session.check().is_err() {
-        return error(id, -32000, "access refused");
+        return Some(rpc_error(id, -32000, "access refused"));
     }
-    let ok = |value: Value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
-            "serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS})),
-        "ping" => ok(json!({})),
-        "tools/list" => ok(json!({"tools": tools()})),
-        "tools/call" => {
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            ok(match call(session, ctx, name, &args).await {
-                Ok(result) => result,
-                Err(category) => refused(category),
-            })
-        }
-        _ => error(id, -32601, "method not found"),
-    }
+    let lane = LaneInfo { name: SERVER_NAME, instructions: INSTRUCTIONS, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return Some(reply),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(json!({}))),
+    };
+    Some(rpc_result(id, match call(session, ctx, name, &args).await {
+        Ok(result) => result,
+        Err(category) => refused(category),
+    }))
 }
 
 /// The fixed category of a refused reply, for the audit ring.

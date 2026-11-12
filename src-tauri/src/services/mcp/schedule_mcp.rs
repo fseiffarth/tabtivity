@@ -229,57 +229,47 @@ pub fn handle_message(session: &Session, message: &Value, reset: Option<DateTime
 /// [`handle_message`] with the [`admit`] verdict already taken — the command
 /// layer takes it first, before deciding whether to run the usage probe.
 pub fn handle_admitted(session: &Session, message: &Value, reset: Option<DateTime<Utc>>, admission: Result<(), String>) -> (Option<Value>, bool) {
-    let error = |id: Value, code, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}}));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return (error(Value::Null, -32600, "invalid request"), false);
-    }
-    let Some(id) = message.get("id").cloned() else { return (None, false) };
-    let ok = |value: Value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    if session.identity.caller != Caller::Scheduler || session.check().is_err() { return (error(id, -32000, "access refused"), false); }
-    let Some(project) = session.identity.project.as_deref() else { return (error(id, -32000, "missing project"), false) };
-    let Some(binding) = session.identity.schedule_target.as_ref() else { return (error(id, -32000, "missing target"), false) };
-    let policy = match level(project) { Ok(l) => l, Err(e) => return (error(id, -32000, &e), false) };
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => (ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},"instructions":CONTRACT})), false),
-        "ping" => (ok(json!({})), false),
-        "tools/list" => (ok(json!({"tools":tools()})), false),
-        "tools/call" => {
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            let result = (|| -> Result<Value, String> {
-                admission?;
-                agent_tasks::mutate(|file| {
-                    session.check()?;
-                    if level(project)? != policy { return Err("policy changed; retry".into()); }
-                    let now = Local::now();
-                    prune_proposals(file, &now.to_rfc3339());
-                    match name {
-                        "schedule_prompt" => apply_create(file, session, serde_json::from_value(args).map_err(|e| e.to_string())?, policy, now, reset),
-                        "cancel_schedule" => {
-                            let args: Cancel = serde_json::from_value(args).map_err(|e| e.to_string())?;
-                            apply_cancel(file, project, &binding.target, &args.id)
-                        }
-                        "list_my_schedules" => {
-                            let _: Empty = serde_json::from_value(args).map_err(|e| e.to_string())?;
-                            let rows: Vec<Value> = file.projects.get(project).and_then(|p| p.get(&binding.target)).into_iter()
-                                .flat_map(|t| &t.schedules).map(|s| schedule_row(s, now)).collect();
-                            Ok(json!({"schedules":rows}))
-                        }
-                        _ => Err("unknown tool".into()),
-                    }
-                })
-            })();
-            let changed = result.is_ok() && name != "list_my_schedules";
-            let value = match result {
-                Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}),
-                Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}),
-            };
-            (ok(value), changed)
-        }
-        _ => (error(id, -32601, "method not found"), false),
-    }
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, tool_err, tool_ok, LaneInfo, LaneMethod};
+    let error = |id: Value, text: &str| (Some(rpc_error(id, -32000, text)), false);
+    let id = match rpc_request_id(message) { Err(reply) => return (Some(reply), false), Ok(None) => return (None, false), Ok(Some(id)) => id };
+    if session.identity.caller != Caller::Scheduler || session.check().is_err() { return error(id, "access refused"); }
+    let Some(project) = session.identity.project.as_deref() else { return error(id, "missing project") };
+    let Some(binding) = session.identity.schedule_target.as_ref() else { return error(id, "missing target") };
+    let policy = match level(project) { Ok(l) => l, Err(e) => return error(id, &e) };
+    let lane = LaneInfo { name: SERVER_NAME, instructions: CONTRACT, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return (Some(reply), false),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(json!({}))),
+    };
+    let result = (|| -> Result<Value, String> {
+        admission?;
+        agent_tasks::mutate(|file| {
+            session.check()?;
+            if level(project)? != policy { return Err("policy changed; retry".into()); }
+            let now = Local::now();
+            prune_proposals(file, &now.to_rfc3339());
+            match name {
+                "schedule_prompt" => apply_create(file, session, serde_json::from_value(args).map_err(|e| e.to_string())?, policy, now, reset),
+                "cancel_schedule" => {
+                    let args: Cancel = serde_json::from_value(args).map_err(|e| e.to_string())?;
+                    apply_cancel(file, project, &binding.target, &args.id)
+                }
+                "list_my_schedules" => {
+                    let _: Empty = serde_json::from_value(args).map_err(|e| e.to_string())?;
+                    let rows: Vec<Value> = file.projects.get(project).and_then(|p| p.get(&binding.target)).into_iter()
+                        .flat_map(|t| &t.schedules).map(|s| schedule_row(s, now)).collect();
+                    Ok(json!({"schedules":rows}))
+                }
+                _ => Err("unknown tool".into()),
+            }
+        })
+    })();
+    let changed = result.is_ok() && name != "list_my_schedules";
+    let value = match result {
+        Ok(value) => tool_ok(value),
+        Err(e) => tool_err(&e),
+    };
+    (Some(rpc_result(id, value)), changed)
 }
 
 #[cfg(test)]

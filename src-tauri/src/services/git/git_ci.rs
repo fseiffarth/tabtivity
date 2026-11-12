@@ -13,7 +13,8 @@
 //! answers its runs, and anything else says where to add a token. Nothing here
 //! writes: no re-run, no cancel, no dispatch. `tip_ci` is the same read for
 //! the Release gate (`git_release::plan`).
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use crate::services::root_mcp_security::{admit_keyed, RollingWindows, HOUR};
 use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -87,7 +88,7 @@ fn api_token(project: &str) -> Option<String> {
 
 /// Per-tab budget, taken at admission.
 pub fn admit_rate(tab: &str) -> bool {
-    static CALLS: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+    static CALLS: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     let mut map = CALLS.get_or_init(Default::default).lock_ok();
     admit_in(&mut map, tab, Instant::now())
 }
@@ -95,15 +96,8 @@ pub fn admit_rate(tab: &str) -> bool {
 /// [`CI_RATE`] calls per tab in the rolling hour before `now`; a refused call
 /// takes nothing. Tabs whose window has emptied are dropped, so a closed tab's
 /// entry does not stay in the map for the life of the process.
-fn admit_in(map: &mut HashMap<String, VecDeque<Instant>>, tab: &str, now: Instant) -> bool {
-    map.retain(|_, calls| {
-        calls.retain(|at| now.saturating_duration_since(*at) < Duration::from_secs(3600));
-        !calls.is_empty()
-    });
-    let calls = map.entry(tab.to_string()).or_default();
-    if calls.len() >= CI_RATE { return false; }
-    calls.push_back(now);
-    true
+fn admit_in(map: &mut RollingWindows, tab: &str, now: Instant) -> bool {
+    admit_keyed(map, tab, CI_RATE, HOUR, now)
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────

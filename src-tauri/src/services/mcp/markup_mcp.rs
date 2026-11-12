@@ -41,7 +41,8 @@
 //! layer installs ([`set_change_hook`], `commands::markup_mcp`; the Mobile
 //! host's hook pokes an open window instead).
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::BTreeMap;
+use crate::services::root_mcp_security::{admit_keyed, RollingWindows, HOUR};
 use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -772,22 +773,17 @@ pub fn resolve_file(root: &Path, file: &str, prove: bool) -> Result<String, Stri
 
 // ── Budget ──────────────────────────────────────────────────────────────────
 
-fn rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
-    static RATES: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+fn rates() -> &'static Mutex<RollingWindows> {
+    static RATES: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     RATES.get_or_init(Default::default)
 }
-fn tick_rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
-    static RATES: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+fn tick_rates() -> &'static Mutex<RollingWindows> {
+    static RATES: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     RATES.get_or_init(Default::default)
 }
 /// `limit` calls per tab in `rates`, rolling; a refused call takes nothing.
-fn admit_in(rates: &Mutex<HashMap<String, VecDeque<Instant>>>, tab: &str, limit: usize) -> bool {
-    let mut map = rates.lock_ok();
-    map.retain(|_, calls| { calls.retain(|at| at.elapsed() < Duration::from_secs(3600)); !calls.is_empty() });
-    let calls = map.entry(tab.to_string()).or_default();
-    if calls.len() >= limit { return false; }
-    calls.push_back(Instant::now());
-    true
+fn admit_in(rates: &Mutex<RollingWindows>, tab: &str, limit: usize) -> bool {
+    admit_keyed(&mut rates.lock_ok(), tab, limit, HOUR, Instant::now())
 }
 /// [`ASKS_PER_HOUR`] `markup_ask` calls per tab.
 fn admit_rate(tab: &str) -> bool { admit_in(rates(), tab, ASKS_PER_HOUR) }
@@ -998,38 +994,26 @@ pub fn enabled() -> bool { enabled_in(&crate::storage::settings_path()) }
 /// session or one without its project/target binding is refused here too,
 /// whatever the route said.
 pub fn handle_with(session: &Session, message: &Value, ctx: &Context) -> Option<Value> {
-    let error = |id: Value, code: i64, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}}));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return error(Value::Null, -32600, "invalid request");
-    }
-    let id = message.get("id").cloned()?;
-    if session.identity.caller != Caller::Marker || session.check().is_err() { return error(id, -32000, "access refused"); }
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, tool_err, tool_ok, LaneInfo, LaneMethod};
+    let id = match rpc_request_id(message) { Err(reply) => return Some(reply), Ok(id) => id? };
+    if session.identity.caller != Caller::Marker || session.check().is_err() { return Some(rpc_error(id, -32000, "access refused")); }
     let (Some(project), Some(target)) = (session.identity.project.as_deref(), session.identity.schedule_target.as_ref().map(|b| b.target.as_str())) else {
-        return error(id, -32000, "access refused");
+        return Some(rpc_error(id, -32000, "access refused"));
     };
-    let ok = |value: Value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
-            "serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS})),
-        "ping" => ok(json!({})),
-        "tools/list" => ok(json!({"tools": tools()})),
-        "tools/call" => {
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            if !crate::services::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Marker)) {
-                return ok(json!({"content":[{"type":"text","text":"unknown tool"}],"isError":true}));
-            }
-            let value = match name {
-                TOOL_ASK => call_ask(session, project, target, ctx, &args),
-                TOOL_DONE => call_done(session, project, target, ctx, &args),
-                _ => call_withdraw(project, target, &args),
-            };
-            ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}))
-        }
-        _ => error(id, -32601, "method not found"),
+    let lane = LaneInfo { name: SERVER_NAME, instructions: INSTRUCTIONS, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return Some(reply),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(json!({}))),
+    };
+    if !crate::services::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Marker)) {
+        return Some(rpc_result(id, tool_err("unknown tool")));
     }
+    let value = match name {
+        TOOL_ASK => call_ask(session, project, target, ctx, &args),
+        TOOL_DONE => call_done(session, project, target, ctx, &args),
+        _ => call_withdraw(project, target, &args),
+    };
+    Some(rpc_result(id, tool_ok(value)))
 }
 
 /// Open an ask for `(project, target)` as tab `tab`'s agent would, bound to

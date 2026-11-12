@@ -49,7 +49,7 @@ use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
-use super::root_mcp_security::{self as security, Access, Policy};
+use super::root_mcp_security::{self as security, Access, Policy, RollingWindow, RollingWindows, HOUR};
 
 use serde_json::{json, Value};
 
@@ -87,6 +87,19 @@ pub const PRINT_URL_ENV: &str = crate::app_env!("PRINT_MCP_URL");
 /// `services::assistant::LaneGrant::from_env` reads them back.
 pub const WEB_TOKEN_ENV: &str = crate::app_env!("WEB_MCP_TOKEN");
 pub const WEB_URL_ENV: &str = crate::app_env!("WEB_MCP_URL");
+/// Every lane's token variable, the one table a scrub or a rollback walks
+/// (`SpawnTokenGuard`, the pre-push hook's environment). A new lane's
+/// `*_TOKEN_ENV` goes here too; a source-scan test fails until it does.
+pub const LANE_TOKEN_ENVS: &[&str] = &[
+    TOKEN_ENV,
+    SCHEDULE_TOKEN_ENV,
+    GIT_TOKEN_ENV,
+    COCKPIT_TOKEN_ENV,
+    HELP_TOKEN_ENV,
+    MARKUP_TOKEN_ENV,
+    PRINT_TOKEN_ENV,
+    WEB_TOKEN_ENV,
+];
 /// The server name the agent CLIs list the tools under.
 pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
 
@@ -229,7 +242,7 @@ impl TokenStore {
         });
         let session = Session {
             cockpit: None,
-            cockpit_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            cockpit_rate: Arc::default(),
             id: crate::digest::sha256_hex(token.as_bytes()),
             access: Access::initial(identity.caller), identity,
             revoked: Arc::new(AtomicBool::new(false)),
@@ -237,8 +250,8 @@ impl TokenStore {
             projects_grant: Arc::new(std::sync::Mutex::new(ProjectsGrant::Hidden)),
             permits: Arc::new(tokio::sync::Semaphore::new(2)),
             rate: Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0))),
-            schedule_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
-            push_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            schedule_rate: Arc::default(),
+            push_rate: Arc::default(),
         };
         map.insert(token, session);
     }
@@ -507,7 +520,7 @@ pub struct Session {
     pub identity: Identity,
     pub access: Access,
     pub(crate) cockpit: Option<super::cockpit_mcp::Binding>,
-    cockpit_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
+    cockpit_rate: Arc<std::sync::Mutex<RollingWindow>>,
     revoked: Arc<AtomicBool>,
     /// Latched by the first mail read tool this spawn calls
     /// ([`Self::mark_read_mail`]). A local-model tab is only tainted once it
@@ -524,8 +537,8 @@ pub struct Session {
     projects_grant: Arc<std::sync::Mutex<ProjectsGrant>>,
     pub permits: Arc<tokio::sync::Semaphore>,
     rate: Arc<std::sync::Mutex<(std::time::Instant, u32)>>,
-    schedule_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
-    push_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
+    schedule_rate: Arc<std::sync::Mutex<RollingWindow>>,
+    push_rate: Arc<std::sync::Mutex<RollingWindow>>,
 }
 
 /// The most tabs the web lane's hourly budget remembers at once.
@@ -535,8 +548,8 @@ const WEB_BUDGET_TABS: usize = 512;
 /// the same tab, and the budget must not reset with it. Entries older than an
 /// hour are pruned on every admit; past [`WEB_BUDGET_TABS`] the tab that
 /// called longest ago is dropped.
-fn web_budgets() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>> {
-    static BUDGETS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>>> = OnceLock::new();
+fn web_budgets() -> &'static std::sync::Mutex<RollingWindows> {
+    static BUDGETS: OnceLock<std::sync::Mutex<RollingWindows>> = OnceLock::new();
     BUDGETS.get_or_init(Default::default)
 }
 
@@ -549,27 +562,15 @@ pub(crate) const WEB_BUDGET_TABS_MAX: usize = WEB_BUDGET_TABS;
 
 impl Session {
     pub(crate) fn admit_cockpit_rate(&self) -> bool {
-        let mut calls = self.cockpit_rate.lock_ok();
-        calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(60));
-        if calls.len() >= 30 { return false; }
-        calls.push_back(std::time::Instant::now());
-        true
+        self.cockpit_rate.lock_ok().admit(30, std::time::Duration::from_secs(60), std::time::Instant::now())
     }
 
     pub fn admit_schedule_rate(&self) -> bool {
-        let mut calls = self.schedule_rate.lock_ok();
-        calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
-        if calls.len() >= 12 { return false; }
-        calls.push_back(std::time::Instant::now());
-        true
+        self.schedule_rate.lock_ok().admit(12, HOUR, std::time::Instant::now())
     }
     /// Six `git_push` calls per tab per rolling hour (`services::git_push_mcp`).
     pub fn admit_push_rate(&self) -> bool {
-        let mut calls = self.push_rate.lock_ok();
-        calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
-        if calls.len() >= 6 { return false; }
-        calls.push_back(std::time::Instant::now());
-        true
+        self.push_rate.lock_ok().admit(6, HOUR, std::time::Instant::now())
     }
     /// [`crate::services::web_lane::CALLS_PER_HOUR`] `web_fetch` / `web_search`
     /// calls per tab per rolling hour, counted together
@@ -577,17 +578,14 @@ impl Session {
     /// is refused for any other reason than this budget still spent one: the
     /// count is of attempts.
     pub fn admit_web_rate(&self) -> bool {
-        let hour = std::time::Duration::from_secs(3600);
+        let now = std::time::Instant::now();
         let mut map = web_budgets().lock_ok();
-        map.retain(|_, calls| { calls.retain(|at| at.elapsed() < hour); !calls.is_empty() });
+        map.retain(|_, calls| calls.prune(HOUR, now));
         if !map.contains_key(&self.identity.tab) && map.len() >= WEB_BUDGET_TABS {
-            let oldest = map.iter().filter_map(|(tab, calls)| calls.back().map(|at| (*at, tab.clone()))).min().map(|(_, tab)| tab);
+            let oldest = map.iter().filter_map(|(tab, calls)| calls.last().map(|at| (at, tab.clone()))).min().map(|(_, tab)| tab);
             if let Some(tab) = oldest { map.remove(&tab); }
         }
-        let calls = map.entry(self.identity.tab.clone()).or_default();
-        if calls.len() >= super::web_lane::CALLS_PER_HOUR { return false; }
-        calls.push_back(std::time::Instant::now());
-        true
+        map.entry(self.identity.tab.clone()).or_default().admit(super::web_lane::CALLS_PER_HOUR, HOUR, now)
     }
     pub fn admit_rate(&self) -> bool {
         let mut rate = self.rate.lock_ok();
@@ -839,29 +837,26 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, cockpit: Option<String>, print: Option<String>, armed: bool }
+/// Every lane's token ([`LANE_TOKEN_ENVS`]) is taken, so no lane is left out.
+pub struct SpawnTokenGuard { tokens: Vec<String>, listed: bool, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
-            token: opts.env.get(TOKEN_ENV).or_else(|| opts.env.get(SCHEDULE_TOKEN_ENV)).cloned(),
-            push: opts.env.get(GIT_TOKEN_ENV).cloned(),
-            help: opts.env.get(HELP_TOKEN_ENV).cloned(),
-            markup: opts.env.get(MARKUP_TOKEN_ENV).cloned(),
-            web: opts.env.get(WEB_TOKEN_ENV).cloned(),
-            cockpit: opts.env.get(COCKPIT_TOKEN_ENV).cloned(),
-            print: opts.env.get(PRINT_TOKEN_ENV).cloned(),
+            tokens: LANE_TOKEN_ENVS.iter().filter_map(|var| opts.env.get(*var).cloned()).collect(),
+            listed: [TOKEN_ENV, SCHEDULE_TOKEN_ENV, GIT_TOKEN_ENV].iter().any(|var| opts.env.contains_key(*var)),
             armed: true,
         }
     }
     pub fn keep(&mut self) { self.armed = false; }
     /// Whether this spawn was handed a listed token (root, reader, schedule
-    /// or push); the help, markup and web tokens alone do not count.
-    pub fn holds_token(&self) -> bool { self.token.is_some() || self.push.is_some() }
+    /// or push); the cockpit, help, markup, print and web tokens alone do not
+    /// count.
+    pub fn holds_token(&self) -> bool { self.listed }
 }
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web, &self.cockpit, &self.print].into_iter().flatten() { revoke_token(token); }
+            for token in &self.tokens { revoke_token(token); }
         }
     }
 }
@@ -3796,6 +3791,68 @@ pub(crate) fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// A JSON-RPC success reply carrying `result`.
+pub(crate) fn rpc_result(id: Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+/// The id of one JSON-RPC message a tool lane (`services::mcp`) received:
+/// `Err` with the `-32600` reply for a malformed message, `Ok(None)` for a
+/// notification (no `id`), which gets no reply. Every lane runs this before
+/// its own access checks.
+pub(crate) fn rpc_request_id(message: &Value) -> Result<Option<Value>, Value> {
+    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
+        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
+        || message.get("params").is_some_and(|p| !p.is_object()) {
+        return Err(rpc_error(Value::Null, -32600, "invalid request"));
+    }
+    Ok(message.get("id").cloned())
+}
+
+/// What a tool lane (`services::mcp`) answers `initialize` and `tools/list` with.
+pub(crate) struct LaneInfo {
+    pub name: &'static str,
+    pub instructions: &'static str,
+    pub tools: fn() -> Value,
+}
+
+/// One request a tool lane serves once its access checks passed: a finished
+/// reply, or a `tools/call` for the lane's own body.
+pub(crate) enum LaneMethod<'a> {
+    Reply(Value),
+    /// `args` is the raw `params.arguments`, `None` when absent: each lane
+    /// picks its own default.
+    Call { name: &'a str, args: Option<Value> },
+}
+
+/// The methods every tool lane answers alike — `initialize`, `ping`,
+/// `tools/list`, and `-32601` for any other than `tools/call`.
+pub(crate) fn lane_method<'a>(lane: &LaneInfo, id: &Value, message: &'a Value) -> LaneMethod<'a> {
+    let ok = |result: Value| LaneMethod::Reply(rpc_result(id.clone(), result));
+    match message["method"].as_str().unwrap_or_default() {
+        "initialize" => ok(json!({"protocolVersion":PROTOCOL_VERSION,"capabilities":{"tools":{}},
+            "serverInfo":{"name":lane.name,"version":env!("CARGO_PKG_VERSION")},"instructions":lane.instructions})),
+        "ping" => ok(json!({})),
+        "tools/list" => ok(json!({"tools":(lane.tools)()})),
+        "tools/call" => LaneMethod::Call {
+            name: message["params"]["name"].as_str().unwrap_or_default(),
+            args: message["params"].get("arguments").cloned(),
+        },
+        _ => LaneMethod::Reply(rpc_error(id.clone(), -32601, "method not found")),
+    }
+}
+
+/// A tool lane's successful `tools/call` result: `value` as text and as
+/// structured content.
+pub(crate) fn tool_ok(value: Value) -> Value {
+    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
+}
+
+/// A tool lane's failed `tools/call` result: `text` alone, `isError` set.
+pub(crate) fn tool_err(text: &str) -> Value {
+    json!({"content":[{"type":"text","text":text}],"isError":true})
+}
+
 /// The fixed category an audited refusal of [`handle_message`] is logged under
 /// (`security::audit_reason`), as the other lanes log theirs: `None` for a
 /// served call. Only fixed texts are matched — never a tool's own message, which
@@ -3841,13 +3898,10 @@ pub fn refusal_reason(reply: &Value) -> Option<&'static str> {
 /// Answer one JSON-RPC message. `None` for a notification (no `id`), which MCP
 /// answers with `202 Accepted` and no body. Blocking: it reads and writes files.
 pub fn handle_message(stores: &Stores, tab: &str, message: &Value) -> (Option<Value>, Effects) {
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return (Some(rpc_error(Value::Null, -32600, "invalid request")), Effects::default());
-    }
-    let Some(id) = message.get("id").filter(|v| !v.is_null()).cloned() else {
-        return (None, Effects::default());
+    let id = match rpc_request_id(message) {
+        Err(reply) => return (Some(reply), Effects::default()),
+        Ok(None) => return (None, Effects::default()),
+        Ok(Some(id)) => id,
     };
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     let ok = |result: Value| Some(json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result }));

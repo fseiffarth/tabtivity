@@ -738,6 +738,51 @@ fn stale_spawn_teardown_cannot_revoke_a_replacement_token() {
     assert!(caller(Some("Bearer generation-new")).is_none());
 }
 
+/// H2: one table names every lane's token variable. A `*_TOKEN_ENV` declared
+/// in this module but missing from [`LANE_TOKEN_ENVS`] would be left out of
+/// the spawn rollback and the pre-push hook's scrub.
+#[test]
+fn every_lane_token_env_is_in_the_one_table() {
+    let src = include_str!("../root_mcp.rs");
+    let declared: Vec<&str> = src
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("pub const "))
+        .filter_map(|l| l.split(':').next())
+        .filter(|name| name.ends_with("TOKEN_ENV"))
+        .collect();
+    assert!(declared.len() >= 8, "{declared:?}");
+    let table = src.split("pub const LANE_TOKEN_ENVS").nth(1).and_then(|t| t.split("];").next()).expect("the table");
+    for name in &declared {
+        assert!(table.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == *name), "{name} is not in LANE_TOKEN_ENVS");
+    }
+    assert_eq!(LANE_TOKEN_ENVS.len(), declared.len());
+    // The pre-push hook's scrub walks the table, not a hand-kept list.
+    let push = include_str!("../mcp/git_push_mcp.rs");
+    let scrub = push.split("cmd.env_remove(var)").next().and_then(|s| s.rsplit("for var in").next()).expect("the scrub loop");
+    assert!(scrub.contains("LANE_TOKEN_ENVS"), "{scrub}");
+}
+
+/// H2: a failed spawn takes back every lane's token, the cockpit and web
+/// lanes' included.
+#[test]
+fn a_failed_spawn_revokes_every_lane_token() {
+    let mut options = opts("claude", &[], None);
+    for (i, var) in LANE_TOKEN_ENVS.iter().enumerate() {
+        let token = format!("lane-guard-{i}");
+        register_token(token.clone(), Identity { schedule_target: None, push: None, tab: format!("root:lane-guard-{i}"), caller: Caller::Agent, project: None, endpoint: None, model: None }, false);
+        options.env.insert((*var).into(), token);
+    }
+    let guard = SpawnTokenGuard::new(&options);
+    assert!(guard.holds_token());
+    drop(guard);
+    for (i, var) in LANE_TOKEN_ENVS.iter().enumerate() {
+        assert!(caller(Some(&format!("Bearer lane-guard-{i}"))).is_none(), "lane {var} kept its token");
+    }
+    let mut helper_only = opts("claude", &[], None);
+    helper_only.env.insert(HELP_TOKEN_ENV.into(), "lane-guard-help".into());
+    assert!(!SpawnTokenGuard::new(&helper_only).holds_token());
+}
+
 #[test]
 fn the_endpoint_tells_callers_apart_and_local_only_refuses_agents() {
     register_token("tok".into(), Identity { schedule_target: None, push: None, tab: "root:auth-agent".into(), caller: Caller::Agent, project: None, endpoint: None, model: None }, false);

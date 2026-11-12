@@ -130,8 +130,20 @@ async fn settle_undelivered(peer: Option<&Path>) {
     }
 }
 
-fn has_undelivered() -> bool {
-    !UNDELIVERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+impl Undelivered {
+    fn new(peer: Option<&Path>, project_id: String, target: String, ask_id: String, receipt: String) -> Self {
+        Undelivered { peer: peer.map(Path::to_path_buf).unwrap_or_default(), project_id, target, ask_id, receipt }
+    }
+}
+
+/// The error a peer's reply other than the one asked for comes to: its
+/// refusal code, or `gone` from an older peer that does not know the request
+/// (nothing taken).
+fn peer_refusal(reply: AdminResponse) -> String {
+    match reply {
+        AdminResponse::MarkupRefused { code } => code,
+        _ => AnswerError::Gone.code().to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -148,7 +160,7 @@ pub async fn list_with(peer: Option<&Path>, project_id: String, schedule_target_
     valid_target(&project_id, &schedule_target_id)?;
     let (p, t, pa) = (project_id.clone(), schedule_target_id.clone(), path.clone());
     let here = blocking(move || asks_here(&p, &t, pa.as_deref())).await?;
-    if has_undelivered() { settle_undelivered(peer).await; }
+    settle_undelivered(peer).await;
     let theirs = match ask_peer(peer, AdminRequest::MarkupList { project_id, target: schedule_target_id, path }).await {
         Some(AdminResponse::MarkupAsks { asks }) => asks,
         _ => Vec::new(),
@@ -207,7 +219,7 @@ pub async fn answer_with(
         Ok(taken) => Ok(MarkupAnswered { prompt: taken.prompt, receipt: taken.receipt }),
         Err(AnswerError::Gone) => {
             if peer.is_none() { return Err(AnswerError::Gone.code().to_string()); }
-            if has_undelivered() { settle_undelivered(peer).await; }
+            settle_undelivered(peer).await;
             // Minted here, so a reply lost on the way back still leaves the
             // window able to undo the answer the peer may have taken.
             let receipt = markup_mcp::mint_receipt();
@@ -220,11 +232,9 @@ pub async fn answer_with(
             };
             match ask_peer(peer, request).await {
                 Some(AdminResponse::MarkupAnswered { prompt, receipt }) => Ok(MarkupAnswered { prompt, receipt }),
-                Some(AdminResponse::MarkupRefused { code }) => Err(code),
-                // An older peer that does not know the request: nothing taken.
-                Some(_) => Err(AnswerError::Gone.code().to_string()),
+                Some(other) => Err(peer_refusal(other)),
                 None => {
-                    note_undelivered(Undelivered { peer: peer.map(Path::to_path_buf).unwrap_or_default(), project_id, target: schedule_target_id, ask_id, receipt });
+                    note_undelivered(Undelivered::new(peer, project_id, schedule_target_id, ask_id, receipt));
                     settle_undelivered(peer).await;
                     Err("markup_failed".to_string())
                 }
@@ -251,7 +261,7 @@ pub async fn reopen_with(peer: Option<&Path>, project_id: String, schedule_targe
     match here {
         Ok(()) => Ok(()),
         Err(AnswerError::Gone) if peer.is_some() => {
-            if has_undelivered() { settle_undelivered(peer).await; }
+            settle_undelivered(peer).await;
             let request = AdminRequest::MarkupReopen {
                 project_id: project_id.clone(),
                 target: schedule_target_id.clone(),
@@ -260,11 +270,10 @@ pub async fn reopen_with(peer: Option<&Path>, project_id: String, schedule_targe
             };
             match ask_peer(peer, request).await {
                 Some(AdminResponse::Ok) => Ok(()),
-                Some(AdminResponse::MarkupRefused { code }) => Err(code),
-                Some(_) => Err(AnswerError::Gone.code().to_string()),
+                Some(other) => Err(peer_refusal(other)),
                 // No reply: the ask may still be closed there; keep trying.
                 None => {
-                    note_undelivered(Undelivered { peer: peer.map(Path::to_path_buf).unwrap_or_default(), project_id, target: schedule_target_id, ask_id, receipt });
+                    note_undelivered(Undelivered::new(peer, project_id, schedule_target_id, ask_id, receipt));
                     Err("markup_failed".to_string())
                 }
             }

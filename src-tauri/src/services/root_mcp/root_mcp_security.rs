@@ -13,6 +13,43 @@ pub const MAX_PENDING: usize = 500;
 pub const MAX_PENDING_PER_TAB: usize = 100;
 pub const MAX_LOG_BYTES: usize = 8 * 1024 * 1024;
 
+/// The usual budget window: calls per rolling hour.
+pub const HOUR: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// The times of the calls a budget admitted, oldest first: the one "N calls
+/// per rolling window" limiter every lane's budget uses.
+#[derive(Debug, Default)]
+pub struct RollingWindow(std::collections::VecDeque<std::time::Instant>);
+
+impl RollingWindow {
+    /// Forget calls `window` or longer before `now`; whether any are left.
+    pub fn prune(&mut self, window: std::time::Duration, now: std::time::Instant) -> bool {
+        self.0.retain(|at| now.saturating_duration_since(*at) < window);
+        !self.0.is_empty()
+    }
+    /// Admit one call at `now` when fewer than `limit` fall in the `window`
+    /// before it. A refused call takes nothing.
+    pub fn admit(&mut self, limit: usize, window: std::time::Duration, now: std::time::Instant) -> bool {
+        self.prune(window, now);
+        if self.0.len() >= limit { return false; }
+        self.0.push_back(now);
+        true
+    }
+    /// The newest admitted call.
+    pub fn last(&self) -> Option<std::time::Instant> { self.0.back().copied() }
+}
+
+/// One [`RollingWindow`] per key (a tab id), as a lane's budget map holds them.
+pub type RollingWindows = std::collections::HashMap<String, RollingWindow>;
+
+/// [`RollingWindow::admit`] for `key`'s window. Every key whose window emptied
+/// is dropped first, so a closed tab's entry does not stay in the map for the
+/// life of the process.
+pub fn admit_keyed(map: &mut RollingWindows, key: &str, limit: usize, window: std::time::Duration, now: std::time::Instant) -> bool {
+    map.retain(|_, calls| calls.prune(window, now));
+    map.entry(key.to_string()).or_default().admit(limit, window, now)
+}
+
 #[derive(Clone, Serialize)]
 pub struct Audit {
     /// Empty for a request that never authenticated ([`audit_admission`]).

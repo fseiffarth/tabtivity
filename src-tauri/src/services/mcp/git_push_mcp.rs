@@ -770,7 +770,8 @@ fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote
             cmd
         }
     };
-    for var in [crate::app_env!("GIT_TOKEN"), crate::services::root_mcp::TOKEN_ENV, crate::services::root_mcp::SCHEDULE_TOKEN_ENV, crate::services::root_mcp::GIT_TOKEN_ENV, crate::services::root_mcp::HELP_TOKEN_ENV, crate::services::root_mcp::MARKUP_TOKEN_ENV, crate::services::root_mcp::PRINT_TOKEN_ENV, "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"] {
+    // Every lane's token (`root_mcp::LANE_TOKEN_ENVS`), not a hand-kept subset.
+    for var in crate::services::root_mcp::LANE_TOKEN_ENVS.iter().copied().chain([crate::app_env!("GIT_TOKEN"), "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_WORK_TREE"]) {
         cmd.env_remove(var);
     }
     cmd.env(crate::app_env!("PUSH_PREFLIGHT"), "1");
@@ -1846,64 +1847,54 @@ pub fn handle_message(session: &Session, message: &Value) -> (Option<Value>, boo
 }
 
 pub fn handle_admitted(session: &Session, message: &Value, admission: Result<(), String>) -> (Option<Value>, bool) {
-    let error = |id: Value, code, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}}));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return (error(Value::Null, -32600, "invalid request"), false);
-    }
-    let Some(id) = message.get("id").cloned() else { return (None, false) };
-    let ok = |value: Value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    if session.identity.caller != Caller::Pusher || session.check().is_err() { return (error(id, -32000, "access refused"), false); }
-    let Some(project) = session.identity.project.as_deref() else { return (error(id, -32000, "missing project"), false) };
-    let Some(binding) = session.identity.push.as_ref() else { return (error(id, -32000, "missing project directory"), false) };
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, tool_err, tool_ok, LaneInfo, LaneMethod};
+    let error = |id: Value, text: &str| (Some(rpc_error(id, -32000, text)), false);
+    let id = match rpc_request_id(message) { Err(reply) => return (Some(reply), false), Ok(None) => return (None, false), Ok(Some(id)) => id };
+    if session.identity.caller != Caller::Pusher || session.check().is_err() { return error(id, "access refused"); }
+    let Some(project) = session.identity.project.as_deref() else { return error(id, "missing project") };
+    let Some(binding) = session.identity.push.as_ref() else { return error(id, "missing project directory") };
     if crate::services::remote::remote_target_for(project).is_some() {
-        return (ok(json!({"content":[{"type":"text","text":"not_local"}],"structuredContent":{"status":"refused","category":Category::NotLocal,"message":"Only local projects can be pushed through this lane.","output":"","state":Value::Null},"isError":false})), false);
+        return (Some(rpc_result(id, json!({"content":[{"type":"text","text":"not_local"}],"structuredContent":{"status":"refused","category":Category::NotLocal,"message":"Only local projects can be pushed through this lane.","output":"","state":Value::Null},"isError":false}))), false);
     }
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => (ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS})), false),
-        "ping" => (ok(json!({})), false),
-        "tools/list" => (ok(json!({"tools":tools()})), false),
-        "tools/call" => {
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            // The keyring-free process (the Mobile host) refuses pushes and
-            // releases whatever the project's policy says; arguments first.
-            if keyring_free() && admission.is_ok() && matches!(name, "git_push" | "git_release") {
-                let value = window_required(&binding.dir);
-                return (ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})), false);
-            }
-            // Gap 19: only the git dir that was there at spawn is pushed or
-            // read CI for — never one an agent made or swapped in since.
-            if admission.is_ok() && matches!(name, "git_push" | "git_release" | "ci_runs" | "ci_run" | "ci_security_alerts") {
-                if let Some(value) = repo_changed(binding) {
-                    return (ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})), false);
-                }
-            }
-            let policy = match policy(project) { Ok(p) => p, Err(e) => return (error(id, -32000, &e), false) };
-            let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            let result: Result<Value, String> = match admission {
-                Err(reason) => Ok(admission_result(&reason)),
-                Ok(()) => match name {
-                    "git_push" => serde_json::from_value(args).map_err(|e| e.to_string()).and_then(|args| call_push(session, project, &binding.dir, policy.level(), args)),
-                    "git_release" => serde_json::from_value(args).map_err(|e| e.to_string()).and_then(|args| call_release(session, project, &binding.dir, policy.level(), args)),
-                    "ci_runs" | "ci_run" | "ci_security_alerts" => match ci_target(session, project, &binding.dir, &policy, &ci_repos(project)) {
-                        Err(refusal) => Ok(refusal),
-                        Ok(target) => call_ci(name, &target, project, args),
-                    },
-                    "git_push_cancel" => serde_json::from_value::<Cancel>(args).map_err(|e| e.to_string()).and_then(|args| call_cancel(session, &args.id)),
-                    "git_push_status" => serde_json::from_value::<Empty>(args).map_err(|e| e.to_string()).map(|_| call_status(session, &binding.dir, &policy)),
-                    _ => Err("unknown tool".into()),
-                },
-            };
-            let changed = result.as_ref().is_ok_and(|v| matches!(name, "git_push" | "git_release" | "git_push_cancel") || v["category"] == "ci_repo_unconfirmed");
-            let value = match result {
-                Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}),
-                Err(e) => json!({"content":[{"type":"text","text":e}],"isError":true}),
-            };
-            (ok(value), changed)
+    let lane = LaneInfo { name: SERVER_NAME, instructions: INSTRUCTIONS, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return (Some(reply), false),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(json!({}))),
+    };
+    // The keyring-free process (the Mobile host) refuses pushes and
+    // releases whatever the project's policy says; arguments first.
+    if keyring_free() && admission.is_ok() && matches!(name, "git_push" | "git_release") {
+        let value = window_required(&binding.dir);
+        return (Some(rpc_result(id, tool_ok(value))), false);
+    }
+    // Gap 19: only the git dir that was there at spawn is pushed or
+    // read CI for — never one an agent made or swapped in since.
+    if admission.is_ok() && matches!(name, "git_push" | "git_release" | "ci_runs" | "ci_run" | "ci_security_alerts") {
+        if let Some(value) = repo_changed(binding) {
+            return (Some(rpc_result(id, tool_ok(value))), false);
         }
-        _ => (error(id, -32601, "method not found"), false),
     }
+    let policy = match policy(project) { Ok(p) => p, Err(e) => return error(id, &e) };
+    let result: Result<Value, String> = match admission {
+        Err(reason) => Ok(admission_result(&reason)),
+        Ok(()) => match name {
+            "git_push" => serde_json::from_value(args).map_err(|e| e.to_string()).and_then(|args| call_push(session, project, &binding.dir, policy.level(), args)),
+            "git_release" => serde_json::from_value(args).map_err(|e| e.to_string()).and_then(|args| call_release(session, project, &binding.dir, policy.level(), args)),
+            "ci_runs" | "ci_run" | "ci_security_alerts" => match ci_target(session, project, &binding.dir, &policy, &ci_repos(project)) {
+                Err(refusal) => Ok(refusal),
+                Ok(target) => call_ci(name, &target, project, args),
+            },
+            "git_push_cancel" => serde_json::from_value::<Cancel>(args).map_err(|e| e.to_string()).and_then(|args| call_cancel(session, &args.id)),
+            "git_push_status" => serde_json::from_value::<Empty>(args).map_err(|e| e.to_string()).map(|_| call_status(session, &binding.dir, &policy)),
+            _ => Err("unknown tool".into()),
+        },
+    };
+    let changed = result.as_ref().is_ok_and(|v| matches!(name, "git_push" | "git_release" | "git_push_cancel") || v["category"] == "ci_repo_unconfirmed");
+    let value = match result {
+        Ok(value) => tool_ok(value),
+        Err(e) => tool_err(&e),
+    };
+    (Some(rpc_result(id, value)), changed)
 }
 
 #[cfg(test)]
