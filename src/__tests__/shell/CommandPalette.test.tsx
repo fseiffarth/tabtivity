@@ -27,6 +27,8 @@ import { useTabsStore } from "../../stores/tabs";
 import { useBoxesStore } from "../../stores/boxes";
 import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 import type { TabEntry } from "../../stores/tabs/types";
+import { useSettingsStore } from "../../stores/settings";
+import type { Settings } from "../../types";
 
 const tab = (key: string, label: string): TabEntry => ({ key, label, cmd: "", cwd: "/p", kind: "shell", scope: "p1" });
 
@@ -196,6 +198,37 @@ describe("CommandPalette boxes", () => {
       fireEvent.mouseDown(row as Element);
     });
     expect(useBoxSliceStore.getState().sliceBoxId).toBeNull();
+  });
+
+  it("toggles hide mode outside a slice, naming the switch's other state", async () => {
+    const { settings: before, updateSettings: realUpdate } = useSettingsStore.getState();
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+    useSettingsStore.setState({ settings: {} as Settings, updateSettings });
+    render(<CommandPalette />);
+    await openPalette();
+    type("other projects");
+    const hide = rows().find((r) => r.textContent?.includes("Hide other projects"));
+    expect(hide).toBeTruthy();
+    await act(async () => {
+      fireEvent.mouseDown(hide as Element);
+    });
+    expect(updateSettings).toHaveBeenLastCalledWith({ bar_solo: true });
+    cleanup();
+
+    useSettingsStore.setState({ settings: { bar_solo: true } as Settings, updateSettings });
+    render(<CommandPalette />);
+    await openPalette();
+    type("other projects");
+    expect(rows().some((r) => r.textContent?.includes("Show other projects"))).toBe(true);
+    cleanup();
+
+    useBoxesStore.setState({ boxes: [box("b1", "Thesis", ["p1"])] });
+    useBoxSliceStore.setState({ sliceBoxId: "b1" });
+    render(<CommandPalette />);
+    await openPalette();
+    type("other projects");
+    expect(rows().some((r) => r.textContent?.includes("other projects"))).toBe(false);
+    useSettingsStore.setState({ settings: before, updateSettings: realUpdate });
   });
 
   it("adds the current project to a box it is not in, once something is typed", async () => {

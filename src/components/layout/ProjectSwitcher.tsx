@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
-import { barHiddenReason, setProjectBarHidden, useBarHidden } from "../../lib/projects/barHidden";
+import { barHiddenReason, setBarSolo, setProjectBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
 import { BoxEmptyLine } from "../projects/BoxEmptyLine";
 import { useBoxNameCheck, useQuickCreateBox } from "../projects/useQuickCreateBox";
@@ -382,21 +382,25 @@ export function ProjectSwitcher({
   // whole box's members (`lib/projects/barHidden`) — except the project in
   // scope, for the same reason a slice keeps it. A slice ignores the lists:
   // looking into a box is where its hidden members are still found.
+  // Hide mode (`bar_solo`) leaves only the project in scope, the rest in the
+  // dropdown's hidden list, so following the scope keeps one pill on the row.
   const barHiddenSplit = useMemo(() => {
     const shown: ProjectEntry[] = [];
     const own: ProjectEntry[] = [];
+    const others: ProjectEntry[] = [];
     const byBox = new Map<string, ProjectEntry[]>();
     for (const p of activeProjects) {
       const why = p.id === scope ? null : barHiddenReason(p.id, membership.get(p.id), barHidden);
       if (!why) shown.push(p);
       else if (why.kind === "project") own.push(p);
+      else if (why.kind === "solo") others.push(p);
       else byBox.set(why.boxId, [...(byBox.get(why.boxId) ?? []), p]);
     }
     const groups = boxes
       .filter((b) => byBox.has(b.id))
       .sort((a, b) => a.position - b.position)
       .map((box) => ({ box, members: byBox.get(box.id) ?? [] }));
-    return { shown, own, groups };
+    return { shown, own, others, groups };
   }, [activeProjects, barHidden, boxes, membership, scope]);
   const aliveProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
   const aliveBoxIds = useMemo(() => new Set(boxes.map((b) => b.id)), [boxes]);
@@ -709,6 +713,7 @@ export function ProjectSwitcher({
                 : {
                     projects: barHiddenSplit.own,
                     byBox: barHiddenSplit.groups,
+                    others: barHiddenSplit.others,
                     aliveProjectIds,
                     aliveBoxIds,
                     onOpen: (id) => void setActive(id),
@@ -793,6 +798,17 @@ export function ProjectSwitcher({
                   station={stationById?.get(project.id)}
                   barHidden={barHidden.projects.has(project.id)}
                   onToggleBarHidden={(hide) => void setProjectBarHidden(project.id, hide, aliveProjectIds)}
+                  solo={barHidden.solo}
+                  // "Hide other projects" from any pill keeps THAT one: it
+                  // switches there first, since hide mode keeps the scope's.
+                  onToggleSolo={
+                    currentBox
+                      ? undefined
+                      : () => {
+                          if (!barHidden.solo && project.id !== scope) void setActive(project.id);
+                          void setBarSolo(!barHidden.solo);
+                        }
+                  }
                 />
               );
             })}

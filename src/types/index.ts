@@ -255,6 +255,9 @@ export interface Settings {
   bar_hidden_projects?: string[];
   /** Box ids whose members are kept off the "All projects" strip. */
   bar_hidden_boxes?: string[];
+  /** Hide mode: the "All projects" strip shows only the project in scope
+   *  (`lib/projects/barHidden`). Absent = off. */
+  bar_solo?: boolean;
   /** Default printer per network, keyed by `networkKey()` in
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */

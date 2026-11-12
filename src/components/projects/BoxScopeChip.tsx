@@ -23,7 +23,7 @@ import { BoxMemberChecklist } from "./BoxMemberChecklist";
 import { useBoxNameCheck, useQuickCreateBox } from "./useQuickCreateBox";
 import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PlusIcon, SquareIcon } from "../common/icons/Icon";
 import { setBoxBarHidden, useBarHidden } from "../../lib/projects/barHidden";
-import { BarHiddenSection, type BarHiddenSet } from "./BarHiddenList";
+import { BarHiddenSection, BarSoloToggle, type BarHiddenSet } from "./BarHiddenList";
 
 /** This chip's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const SCOPE_MENU_ID = "box-scope-chip";
@@ -112,7 +112,8 @@ interface Props {
   /** Keyboard-steering station digits, while steering mode is active. */
   rootStation?: number;
   /** What the "All projects" strip leaves out; the dropdown's "N hidden"
-   *  entry lists it. Unset inside a slice, which ignores the lists. */
+   *  entry lists it, under the hide-mode switch. Unset inside a slice, which
+   *  ignores the lists and the mode (neither is offered there). */
   hidden?: BarHiddenSet;
 }
 
@@ -632,6 +633,9 @@ export function BoxScopeChip({
             >
               {t("boxChip.allProjects")}
             </button>
+            {/* Hide mode and what it (and the lists) keep off the row; both
+                only outside a slice, which ignores them. */}
+            {hidden && <BarSoloToggle />}
             {hidden && <BarHiddenSection hidden={hidden} onPicked={dismiss} />}
             {ordered.length > 0 && <div className="box-chip-menu-sep" />}
             {ordered.length > 0 && (

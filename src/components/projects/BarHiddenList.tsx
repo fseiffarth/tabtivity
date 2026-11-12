@@ -2,9 +2,9 @@ import { useState } from "react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { boxColor } from "../../lib/theme/boxColor";
-import { setBoxBarHidden, setProjectBarHidden } from "../../lib/projects/barHidden";
+import { setBarSolo, setBoxBarHidden, setProjectBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 import { UntestedTag } from "../common/UntestedTag";
-import { BoxSwatch, EyeIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckboxIcon, EyeIcon, SquareIcon } from "../common/icons/Icon";
 
 /** What the "All projects" strip leaves out (`lib/projects/barHidden`). */
 export interface BarHiddenSet {
@@ -12,6 +12,8 @@ export interface BarHiddenSet {
   projects: ProjectEntry[];
   /** Hidden boxes with the open members they keep off the strip. */
   byBox: { box: ProjectBox; members: ProjectEntry[] }[];
+  /** Open projects off the strip only because hide mode (`bar_solo`) is on. */
+  others: ProjectEntry[];
   /** Every known project / box id, so a toggle prunes stale ids. */
   aliveProjectIds: ReadonlySet<string>;
   aliveBoxIds: ReadonlySet<string>;
@@ -19,13 +21,42 @@ export interface BarHiddenSet {
 }
 
 export function barHiddenCount(hidden: BarHiddenSet): number {
-  return hidden.projects.length + hidden.byBox.reduce((n, g) => n + g.members.length, 0);
+  return (
+    hidden.projects.length + hidden.byBox.reduce((n, g) => n + g.members.length, 0) + hidden.others.length
+  );
+}
+
+/**
+ * The logo dropdown's hide-mode switch (`bar_solo`): on, the "All projects"
+ * strip keeps only the project in scope; the rest wait in the "N hidden" list
+ * below it. Stays open across toggles, like the box-pill checkboxes.
+ */
+export function BarSoloToggle() {
+  const t = useT();
+  const { solo } = useBarHidden();
+  return (
+    <button
+      type="button"
+      className="context-menu-check bar-solo-toggle"
+      role="menuitemcheckbox"
+      aria-checked={solo}
+      title={t("barHidden.soloTitle")}
+      onClick={() => void setBarSolo(!solo)}
+    >
+      <span className="context-menu-checkmark" aria-hidden>
+        {solo ? <CheckboxIcon /> : <SquareIcon />}
+      </span>
+      <span className="box-chip-menu-name">{t("barHidden.solo")}</span>
+      <UntestedTag id="barHidden.solo" />
+    </button>
+  );
 }
 
 /**
  * The logo dropdown's "N hidden" entry (BoxScopeChip), the one way back to
  * projects hidden from the "All projects" strip: the entry unfolds the list in
- * place — a name opens that project (its pill rejoins the strip while it is in
+ * place — hide mode's projects (names only: the switch shows them all), then
+ * the hidden lists — a name opens that project (its pill rejoins the strip while it is in
  * scope), the eye shows it, or a hidden box's members, on the strip again. The
  * eyes leave the dropdown open; a name closes it (`onPicked`).
  */
@@ -34,7 +65,7 @@ export function BarHiddenSection({ hidden, onPicked }: { hidden: BarHiddenSet; o
   const [open, setOpen] = useState(false);
   const count = barHiddenCount(hidden);
   if (count === 0) return null;
-  const { projects, byBox, aliveProjectIds, aliveBoxIds, onOpen } = hidden;
+  const { projects, byBox, others, aliveProjectIds, aliveBoxIds, onOpen } = hidden;
 
   const pick = (id: string) => {
     onPicked();
@@ -58,6 +89,16 @@ export function BarHiddenSection({ hidden, onPicked }: { hidden: BarHiddenSet; o
       </button>
       {open && (
         <div className="bar-hidden-list">
+          {/* Hide mode's projects first: they are the open projects one click
+              away, and turning the mode off (the switch above) shows them all. */}
+          {others.length > 0 && (
+            <div className="box-chip-menu-label">{t("barHidden.soloGroup")}</div>
+          )}
+          {others.map((p) => (
+            <button key={p.id} onClick={() => pick(p.id)} title={t("barHidden.openTitle", { name: p.name })}>
+              {p.name}
+            </button>
+          ))}
           {projects.length > 0 && (
             <div className="box-chip-menu-label">{t("barHidden.projectsGroup")}</div>
           )}

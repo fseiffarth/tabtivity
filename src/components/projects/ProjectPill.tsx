@@ -108,6 +108,11 @@ interface Props {
    *  Absent = the View group offers no hide/show row. */
   barHidden?: boolean;
   onToggleBarHidden?: (hide: boolean) => void;
+  /** Hide mode is on (`bar_solo`: the strip shows only the project in scope).
+   *  With `onToggleSolo`, the View group offers "Hide other projects" / "Show
+   *  other projects"; both absent inside a slice, which ignores the mode. */
+  solo?: boolean;
+  onToggleSolo?: () => void;
 }
 
 /** File endings that mark a project as holding Python — the "Python interpreter…"
@@ -1207,6 +1212,8 @@ export function ProjectPill({
   station,
   barHidden,
   onToggleBarHidden,
+  solo,
+  onToggleSolo,
 }: Props) {
   const t = useT();
   // Shared hover card (identical popup in the right file-viewer). Owns the
@@ -1846,6 +1853,19 @@ export function ProjectPill({
               >
                 {t(barHidden ? "pill.showOnAllProjects" : "pill.hideFromAllProjects")}
                 <UntestedTag id="pill.hideFromAllProjects" />
+              </button>
+            )}
+            {onToggleSolo && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  onToggleSolo();
+                }}
+                title={t(solo ? "pill.showOtherProjectsTitle" : "pill.hideOtherProjectsTitle")}
+              >
+                {t(solo ? "pill.showOtherProjects" : "pill.hideOtherProjects")}
+                <UntestedTag id="barHidden.solo" />
               </button>
             )}
             {!hostPinned && (

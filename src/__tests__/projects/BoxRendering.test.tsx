@@ -12,7 +12,7 @@
  * hit-testing is driven by stubbing `getBoundingClientRect`, the same approach
  * `PageStrip.test.tsx`/`DragDropSplit.test.tsx` take for their pointer drags.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, fireEvent, cleanup, screen, within } from "@testing-library/react";
 import type { ProjectBox, ProjectEntry } from "../../types";
 
@@ -34,6 +34,9 @@ import { useActivityStore } from "../../stores/activity";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { MAX_BOX_PILLS } from "../../components/projects/BoxScopeChip";
 import { boxColor } from "../../lib/theme/boxColor";
+import { useSettingsStore } from "../../stores/settings";
+import { projectStations } from "../../stores/keyboardSteering";
+import type { Settings } from "../../types";
 
 function proj(id: string, position: number): ProjectEntry {
   return {
@@ -1756,5 +1759,83 @@ describe("box pill menu — shared checklist, dissolve, rename check (AS5a)", ()
     const menu = await openChipMenu(container);
     expect(menuRow(menu, "Edit boxes")).toBeUndefined();
     expect(menuRow(menu, "New Box")).toBeTruthy();
+  });
+});
+
+describe("hide mode (bar_solo)", () => {
+  const realSettings = useSettingsStore.getState();
+
+  async function withSolo(on: boolean) {
+    const updateSettings = vi.fn(async (patch: Partial<Settings>) => {
+      useSettingsStore.setState((s) => ({ settings: { ...(s.settings ?? {}), ...patch } as Settings }));
+    });
+    useSettingsStore.setState({ settings: (on ? { bar_solo: true } : {}) as Settings, updateSettings });
+    return updateSettings;
+  }
+
+  afterEach(() => {
+    cleanup();
+    useSettingsStore.setState({ settings: realSettings.settings, updateSettings: realSettings.updateSettings });
+  });
+
+  it("keeps only the project in scope on the row, following the scope", async () => {
+    await withSolo(true);
+    useProjectsStore.setState({ projects: [proj("p1", 10), proj("p2", 20), proj("p3", 30)], activeId: "p2", loaded: true });
+    useTabsStore.setState({ scope: "p2" });
+
+    const container = await renderSwitcher();
+    expect(pillNames(container)).toEqual(["p2"]);
+    expect(projectStations()).toEqual([null, "p2"]);
+
+    await act(async () => {
+      useTabsStore.setState({ scope: "p3" });
+      useProjectsStore.setState({ activeId: "p3" });
+    });
+    expect(pillNames(container)).toEqual(["p3"]);
+
+    // The others wait in the dropdown's hidden list, a click away.
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "2 hidden"));
+    });
+    expect(within(menu).getByText("Hidden by hide mode")).toBeTruthy();
+    expect(menuRow(menu, "p1")).toBeTruthy();
+    expect(menuRow(menu, "p2")).toBeTruthy();
+  });
+
+  it("the dropdown switch turns it on and off", async () => {
+    const updateSettings = await withSolo(false);
+    useProjectsStore.setState({ projects: [proj("p1", 10), proj("p2", 20)], activeId: "p1", loaded: true });
+    useTabsStore.setState({ scope: "p1" });
+
+    const container = await renderSwitcher();
+    expect(pillNames(container)).toEqual(["p1", "p2"]);
+    const menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "Show only the current project"));
+    });
+    expect(updateSettings).toHaveBeenLastCalledWith({ bar_solo: true });
+    expect(pillNames(container)).toEqual(["p1"]);
+
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "Show only the current project"));
+    });
+    expect(updateSettings).toHaveBeenLastCalledWith({ bar_solo: undefined });
+    expect(pillNames(container)).toEqual(["p1", "p2"]);
+  });
+
+  it("a slice ignores it and offers no switch", async () => {
+    await withSolo(true);
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p2"])], openBox: vi.fn(openBoxScope) });
+    useProjectsStore.setState({ projects: [proj("p1", 10), proj("p2", 20)], activeId: null, loaded: true });
+
+    const container = await renderSwitcher();
+    let menu = await openChipMenu(container);
+    await act(async () => {
+      fireEvent.click(menuRow(menu, "boxA"));
+    });
+    expect(pillNames(container)).toEqual(["p1", "p2"]);
+    menu = await openChipMenu(container);
+    expect(menuRow(menu, "Show only the current project")).toBeUndefined();
   });
 });

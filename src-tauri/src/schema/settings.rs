@@ -1082,6 +1082,10 @@ pub struct Settings {
     /// Box ids whose members are kept off the "All projects" strip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar_hidden_boxes: Option<Vec<String>>,
+    /// Hide mode: the "All projects" strip shows only the project in scope.
+    /// Absent = off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_solo: Option<bool>,
     /// Default printer per network, keyed by the network key the frontend
     /// derives (`wlan:<ssid>`, `lan:<hashed gateway mac>`, `lan`). When the machine
     /// joins a keyed network, the print manager's host makes that printer the

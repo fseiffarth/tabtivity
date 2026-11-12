@@ -6,6 +6,11 @@
  * is a view choice only: the project stays open, keeps its tabs and agents,
  * shows in its boxes' slices and in search, and its pill comes back while it
  * is the project in scope — a strip that hides where you are has lost you.
+ *
+ * On top of the lists, **hide mode** (`bar_solo`) hides every other open
+ * project at once: the strip keeps only the project in scope, wherever the
+ * user goes. It is one switch, not a third list, so turning it off restores
+ * exactly the strip the lists describe. Slices ignore it like the lists.
  */
 import { useMemo } from "react";
 import { useBoxesStore, boxMembership } from "../../stores/boxes";
@@ -16,28 +21,35 @@ const EMPTY: readonly string[] = [];
 export interface BarHidden {
   projects: ReadonlySet<string>;
   boxes: ReadonlySet<string>;
+  /** Hide mode: every project but the one in scope is off the strip. */
+  solo: boolean;
 }
 
-/** The two hidden lists as sets, live from settings. */
+/** The two hidden lists as sets and the hide-mode switch, live from settings. */
 export function useBarHidden(): BarHidden {
   const projects = useSettingsStore((s) => s.settings?.bar_hidden_projects ?? EMPTY);
   const boxes = useSettingsStore((s) => s.settings?.bar_hidden_boxes ?? EMPTY);
-  return useMemo(() => ({ projects: new Set(projects), boxes: new Set(boxes) }), [projects, boxes]);
+  const solo = useSettingsStore((s) => s.settings?.bar_solo === true);
+  return useMemo(() => ({ projects: new Set(projects), boxes: new Set(boxes), solo }), [projects, boxes, solo]);
 }
 
 /**
  * Why `projectId` is off the All-projects strip: `"project"` when hidden on
- * its own, else the first hidden box it is a member of, else `null` (shown).
- * Pure; `boxIds` is the project's memberships (`useBoxMembership`).
+ * its own, else the first hidden box it is a member of, else `"solo"` while
+ * hide mode is on, else `null` (shown). The lists win over hide mode, so the
+ * dropdown files a project under the reason that outlives the mode. Pure;
+ * `boxIds` is the project's memberships (`useBoxMembership`). The caller keeps
+ * the project in scope in, whatever this says.
  */
 export function barHiddenReason(
   projectId: string,
   boxIds: readonly string[] | undefined,
   hidden: BarHidden,
-): { kind: "project" } | { kind: "box"; boxId: string } | null {
+): { kind: "project" } | { kind: "box"; boxId: string } | { kind: "solo" } | null {
   if (hidden.projects.has(projectId)) return { kind: "project" };
   const boxId = boxIds?.find((id) => hidden.boxes.has(id));
-  return boxId ? { kind: "box", boxId } : null;
+  if (boxId) return { kind: "box", boxId };
+  return hidden.solo ? { kind: "solo" } : null;
 }
 
 /**
@@ -51,8 +63,10 @@ export function barHiddenIdsNow(projectIds: readonly string[]): Set<string> {
   const hidden: BarHidden = {
     projects: new Set(settings?.bar_hidden_projects ?? EMPTY),
     boxes: new Set(settings?.bar_hidden_boxes ?? EMPTY),
+    solo: settings?.bar_solo === true,
   };
   const out = new Set<string>();
+  if (hidden.solo) return new Set(projectIds);
   if (hidden.projects.size === 0 && hidden.boxes.size === 0) return out;
   const membership = boxMembership(useBoxesStore.getState().boxes);
   for (const id of projectIds) {
@@ -80,4 +94,10 @@ export function setBoxBarHidden(boxId: string, hidden: boolean, aliveBoxIds: Rea
   const store = useSettingsStore.getState();
   const next = toggled(store.settings?.bar_hidden_boxes, boxId, hidden, aliveBoxIds);
   return store.updateSettings({ bar_hidden_boxes: next.length ? next : undefined });
+}
+
+/** Turn hide mode on (only the project in scope stays on the All-projects
+ *  strip) or off. Off is stored as absent, so an untouched file keeps its bytes. */
+export function setBarSolo(on: boolean): Promise<void> {
+  return useSettingsStore.getState().updateSettings({ bar_solo: on ? true : undefined });
 }

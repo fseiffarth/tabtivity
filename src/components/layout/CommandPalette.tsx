@@ -14,6 +14,7 @@ import { attentionStateClass, busyStateClass, useActivityStore } from "../../sto
 import { useProjectsStore } from "../../stores/projects";
 import { scopeDisplayName, useBoxesStore } from "../../stores/boxes";
 import { useBoxSliceStore } from "../../stores/boxSlice";
+import { setBarSolo } from "../../lib/projects/barHidden";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
@@ -314,6 +315,23 @@ export function CommandPalette({ local }: { local?: LocalPaletteTabs }) {
             },
           ]
         : []),
+      // Hide mode (`lib/projects/barHidden`), only where it applies: the
+      // unsliced strip. One row that names the switch's other state.
+      ...(sliceId
+        ? []
+        : [
+            (() => {
+              const solo = useSettingsStore.getState().settings?.bar_solo === true;
+              const label = t(solo ? "pill.showOtherProjects" : "pill.hideOtherProjects");
+              return {
+                id: "boxaction:solo",
+                group: "",
+                label,
+                text: label,
+                run: () => void setBarSolo(!solo),
+              };
+            })(),
+          ]),
       ...(query && current
         ? [...boxes]
             .sort((a, b) => a.position - b.position)
