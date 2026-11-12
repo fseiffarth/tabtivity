@@ -61,7 +61,12 @@ function bindsName(code: string, name: string): boolean {
 
 /** Every native-dialog call left in one file's source. */
 function nativeDialogCalls(source: string): string[] {
-  const code = codeOnly(source);
+  // A member declared under the name (`confirm(): Promise<boolean>;` in an
+  // interface, `async confirm() {` in a class) is not a call.
+  const code = codeOnly(source).replace(
+    /^\s*(?:async\s+)?(?:confirm|prompt|alert)\s*\([^()]*\)\s*[:{]/gm,
+    "",
+  );
   const found: string[] = [];
   for (const m of code.matchAll(/\b(?:window|globalThis|self)\s*\.\s*(confirm|prompt|alert)\s*\(/g)) {
     found.push(m[0].replace(/\s+/g, ""));
@@ -97,6 +102,10 @@ describe("no native browser dialogs", () => {
     expect(nativeDialogCalls(`const confirm = () => {};\nconfirm();`)).toEqual([]);
     expect(nativeDialogCalls(`function Row({ confirm, busy }: P) { confirm({}); }`)).toEqual([]);
     expect(nativeDialogCalls(`await roundUndo.confirm();`)).toEqual([]);
+    expect(nativeDialogCalls(`interface G {\n  confirm(): Promise<boolean>;\n}`)).toEqual([]);
+    expect(nativeDialogCalls(`class G {\n  async confirm(x: string) {\n  }\n}`)).toEqual([]);
+    // …but a call that starts its line still is one.
+    expect(nativeDialogCalls(`if (x)\n  confirm("sure?");`)).toEqual(["confirm("]);
     expect(nativeDialogCalls(`// used to call window.confirm()\n/* alert("x") */`)).toEqual([]);
     expect(nativeDialogCalls(`const url = "https://x"; window.alert(url);`)).toEqual(["window.alert("]);
     expect(nativeDialogCalls(`const s = "{count} prompt(s) waiting";`)).toEqual([]);
