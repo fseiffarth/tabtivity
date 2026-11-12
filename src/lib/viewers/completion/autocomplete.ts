@@ -81,6 +81,13 @@ export function typeThrough(before: string, after: string, ghost: CompletionGhos
   return text ? { ...ghost, text, at: ghost.at + count } : null;
 }
 
+/** Whether only whitespace and closers (brackets, quotes, `$`) follow the
+ * caret on its line — where an automatic suggestion can land. */
+export function caretAtLineEnd(text: string, caret: number): boolean {
+  const end = text.indexOf("\n", caret);
+  return /^[\s)\]}>"'`$]*$/.test(text.slice(caret, end < 0 ? undefined : end));
+}
+
 /** Languages where the text around the caret is natural language. They prefer
  * the `autocomplete_prose` role (an instruct model on the chat path) over the
  * code role (typically a fill-in-the-middle coder model). */

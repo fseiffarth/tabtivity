@@ -690,6 +690,11 @@ select.file-viewer-run-args-input {
   font-size: 10px;
   cursor: var(--cur-pointer, pointer);
 }
+/* Why the chosen autocomplete provider is silent in this file. */
+.file-viewer-ai-note {
+  color: var(--text-muted);
+  font-size: 10px;
+}
 /* A failed dictionary download beside the "＋ Language" menu. */
 .file-viewer-spell-error {
   color: var(--danger);

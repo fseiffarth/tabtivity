@@ -130,7 +130,13 @@ calling; the Models & agents menu tags models without it "no tools".
 1. Reveal the file panel, open its **Project settings**, and in the **Native
    Viewers** table tick **Autocomplete** for the file types you want. It is
    off by default and local-only.
-2. In the editor, pause typing or press **Ctrl+Space**. **Tab** accepts,
+   The editor toolbar's **Autocomplete** button turns it on for that one tab;
+   beside it pick **Local** or **Copilot** (with the experimental Copilot
+   feature on) and **Auto** or **On request**. Copilot defaults to On request,
+   so it spends no completions until you ask; Auto asks only after a pause
+   with the caret at the end of a line. A short note says why nothing comes
+   (no local model loaded, Copilot not allowed for this project).
+2. In the editor, pause typing (Auto) or press **Ctrl+Space**. **Tab** accepts,
    **Alt+→** takes one word, **Shift+Tab** cycles the length (sentence → block
    → scope), **Esc** dismisses.
 

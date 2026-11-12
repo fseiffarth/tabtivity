@@ -2,7 +2,7 @@ import { isTabKey } from "../../../lib/shortcuts/keyNames";
 import { lineStarts, indexedLine } from "../lineIndex";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CompletionCache, completionLineLength, completionWindow, typeThrough, type CompletionGhost } from "../../../lib/viewers/completion/autocomplete";
+import { CompletionCache, caretAtLineEnd, completionLineLength, completionWindow, typeThrough, type CompletionGhost } from "../../../lib/viewers/completion/autocomplete";
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
 import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
@@ -16,7 +16,7 @@ import { useProjectsStore } from "../../../stores/projects";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
 import { highlight, languageForPath, lineCommentMarker } from "../../../lib/viewers/highlight";
 import { basename, isPathWithin } from "../../../lib/paths";
-import { resolveProjectDirectory, type AutocompleteMode, type GrammarIssue } from "../../../types";
+import { resolveProjectDirectory, type AutocompleteMode, type AutocompleteTrigger, type GrammarIssue } from "../../../types";
 import { ContextFilePicker } from "../ContextFilePicker";
 import { useFileScope, usePaneVisible, readFileText } from "../../../lib/files/fileAccess";
 import {
@@ -90,7 +90,7 @@ import {
   textareaMirrorToViewport,
   textareaCaretMirrorOffsets,
 } from "./caretMirror";
-import { nextAcMode, acModeLabel } from "./editorPrefs";
+import { nextAcMode, acModeLabel, effectiveAcTrigger } from "./editorPrefs";
 import { onCtrlWheelFont, useZoomModifierWheel } from "./fontZoom";
 import { type BlameLine, isUncommitted, blameRelDate, authorAbbrev } from "./codeTools";
 import { CloseIcon } from "../../common/icons/Icon";
@@ -126,6 +126,9 @@ export function LinkOpenHint({
 // suggestion is requested for the focused editor. Long enough not to fire on
 // every keystroke, short enough to feel responsive.
 const AUTO_AC_DEBOUNCE_MS = 600;
+// Copilot's automatic requests spend the account's completions, so it waits
+// for a real pause rather than a breath between words.
+const COPILOT_AUTO_AC_DEBOUNCE_MS = 1200;
 
 // Dictionary spell check (the Hunspell `spell_check` command): idle time after
 // the last keystroke before the draft is re-checked. A lookup, not a model call.
@@ -288,7 +291,7 @@ export function CodeEditor({
    *  `preferred` is the user's active local model (🧠 menu); the completion runs
    *  against whichever model is *currently loaded* in Ollama memory at trigger
    *  time, preferring `preferred` when it is among the loaded set. */
-  autocomplete?: { enabled: boolean; preferred?: string; preferredProse?: string; mode?: AutocompleteMode };
+  autocomplete?: { enabled: boolean; preferred?: string; preferredProse?: string; mode?: AutocompleteMode; trigger?: AutocompleteTrigger };
   /** Opt-in dictionary (Hunspell) spell check. When enabled the draft is
    *  checked by the backend's loaded dictionary after a short idle; `language`
    *  is the dictionary code (unset → the backend's default). Issues are
@@ -1792,6 +1795,9 @@ export function CodeEditor({
     acDismissed.current = null;
     const { prefix } = completionWindow(snapshot, caret);
     if (auto && prefix.replace(/\s+/g, "").length < 3) return;
+    // An automatic request only where a suggestion can land: at the end of the
+    // line (closers and whitespace aside). Editing mid-line asks on Ctrl+Space.
+    if (auto && !caretAtLineEnd(snapshot, caret)) return;
     recordAcOutcome(false);
     acCandidates.current = [];
     acCandidate.current = opts?.candidate ?? 0;
@@ -1863,12 +1869,16 @@ export function CodeEditor({
   // change; the cleanup clears the prior timer, so only an idle pause fires it.
   // Skipped while a suggestion is already showing or the \ref/\cite dropdown is
   // open. The focus/caret/context guards live in `requestCompletion`.
+  // On request only ("manual", Copilot's default) skips all of this: one
+  // Ctrl+Space, one request.
+  const acAuto = effectiveAcTrigger(autocomplete?.trigger, acCopilot) === "auto";
   useEffect(() => {
-    if (!autocomplete?.enabled || !loaded || !acVisible) return;
+    if (!autocomplete?.enabled || !acAuto || !loaded || !acVisible) return;
     if (suggestion || compl) return;
-    const id = window.setTimeout(() => void requestCompletion({ auto: true }), AUTO_AC_DEBOUNCE_MS);
+    const id = window.setTimeout(() => void requestCompletion({ auto: true }),
+      acCopilot ? COPILOT_AUTO_AC_DEBOUNCE_MS : AUTO_AC_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
-  }, [autocomplete?.enabled, loaded, draft, suggestion, compl, requestCompletion, acVisible]);
+  }, [autocomplete?.enabled, acAuto, acCopilot, loaded, draft, suggestion, compl, requestCompletion, acVisible]);
 
   // The ghost mounts fresh (scrollTop 0) each time a suggestion appears; align it
   // to the editor's current scroll so the inserted preview lands at the caret.

@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
-import { completionModelOrder, completionWindow, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
+import { caretAtLineEnd, completionModelOrder, completionWindow, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
 
 const { mockInvoke, mockListen, mockBump } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockListen: vi.fn(), mockBump: vi.fn() }));
 vi.mock("../../stores/usage", () => ({ bumpUsage: mockBump }));
@@ -465,6 +465,51 @@ describe("local autocomplete (#45)", () => {
       { timeout: 2000 },
     );
     await waitFor(() => expect(screen.getByText("return 42")).toBeTruthy());
+  });
+});
+
+describe("autocomplete trigger (spending)", () => {
+  beforeEach(() => {
+    copilotOn = false;
+    vi.clearAllMocks();
+    setup();
+  });
+  const idle = () => act(async () => { await new Promise((r) => setTimeout(r, 1500)); });
+
+  it("Copilot asks only on request: a typing pause sends nothing", async () => {
+    autocompleteOn = true;
+    copilotOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    expect(screen.getByText("On request")).toBeTruthy();
+    el.focus();
+    const typed = SOURCE + "ret";
+    await act(async () => { fireEvent.change(el, { target: { value: typed } }); });
+    el.selectionStart = el.selectionEnd = typed.length;
+    await idle();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "copilot_complete")).toBe(false);
+  });
+
+  it("a local model asks automatically, but never with text after the caret", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    expect(screen.getByText("Auto")).toBeTruthy();
+    el.focus();
+    const typed = "defx foo():\n    ";
+    await act(async () => { fireEvent.change(el, { target: { value: typed } }); });
+    el.selectionStart = el.selectionEnd = 4;
+    await idle();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+  });
+
+  it("caret at line end tolerates closers and whitespace only", () => {
+    expect(caretAtLineEnd("foo(bar", 7)).toBe(true);
+    expect(caretAtLineEnd("foo(ba)  \nnext", 6)).toBe(true);
+    expect(caretAtLineEnd("$x^2$ and", 4)).toBe(false);
+    expect(caretAtLineEnd("\\cite{a} more", 8)).toBe(false);
   });
 });
 

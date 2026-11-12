@@ -24,6 +24,8 @@ export interface GlobalAppEntry {
  *  - `"scope"` — complete the whole enclosing function or scope.
  */
 export type AutocompleteMode = "sentence" | "block" | "scope";
+/** When an editor asks for a suggestion: after a typing pause, or only on request. */
+export type AutocompleteTrigger = "auto" | "manual";
 
 /**
  * Category of an editor proofreading issue. Drives the underline colour in the

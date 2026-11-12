@@ -172,6 +172,7 @@ export const UNTESTED = {
   "syncHandoff.panel": { area: "files", what: "ProjectFilesView · orange list · Hand N to an agent: the files both sides changed, exported in one folder" },
   "deckView.presentationTitle": { area: "embed", what: "DeckView · Presentation" },
   "fileViewer.autocompleteLabel": { area: "embed", what: "FileViewerPane · Autocomplete" },
+  "fileViewer.autocompleteProvider": { area: "embed", what: "FileViewerPane · Autocomplete always shown: Local/Copilot picker, Auto/On request trigger, why-silent note" },
   "fileViewer.spellingAddLanguage": { area: "embed", what: "FileViewerPane · ＋ Language (download a spelling dictionary)" },
   "fileViewer.beamerToggle": { area: "embed", what: "FileViewerPane · Beamer" },
   "fileViewer.compileUnchangedMsg": { area: "embed", what: "FileViewerPane · Nothing changed since the last build — every source on disk still matches the previous ru…" },

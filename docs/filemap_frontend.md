@@ -364,7 +364,7 @@ stores stay at the top. No `index.ts` barrels.
 | `embed/fileViewer/caretMirror.ts` | Native-textarea caret geometry: device-pixel snapping, the caret mirror offsets. |
 | `embed/fileViewer/CodeEditor.tsx` | The textarea code editor: highlighting, autocomplete ghost/visibility/acceptance (streaming/model/cache work in `lib/viewers/completion/`), spelling, hover preview, search, blame gutter. |
 | `embed/fileViewer/toolbar.tsx` | Header buttons: Save, Print, Undo/Redo, Format, Compare, mode toggle, syntax-check banner. |
-| `embed/fileViewer/editorPrefs.tsx` | Per-tab AI prefs (autocomplete mode, spelling), `EditorAiControls`, the spelling-language picker. |
+| `embed/fileViewer/editorPrefs.tsx` | Per-tab AI prefs (autocomplete mode, trigger auto/on request — Copilot defaults to on request — spelling), `EditorAiControls` (Autocomplete always shown, Local/Copilot picker, why-silent note), the spelling-language picker. |
 | `embed/fileViewer/fontZoom.tsx` | Editor font size (Ctrl+wheel, controls) and the shared zoom-modifier wheel hook (one module-scope key listener). |
 | `embed/fileViewer/codeTools.tsx` | Editor jump, blame, breakpoints, Run/Debug buttons, the Slurm `#SBATCH` bar. |
 | `embed/fileViewer/TextView.tsx` | Code/YAML/JSON/table/SVG text viewer (tree/grid/card halves, rendered/SVG previews). |

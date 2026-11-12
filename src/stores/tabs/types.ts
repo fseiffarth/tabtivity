@@ -4,7 +4,7 @@
 import type { TabColor } from "../../lib/theme/tabColors";
 import type { TabMark } from "../../lib/tabMarks";
 import type { InternalViewer } from "../../lib/viewers/fileUtils";
-import type { AutocompleteMode } from "../../types";
+import type { AutocompleteMode, AutocompleteTrigger } from "../../types";
 import type { LoginTarget } from "../../lib/remote/loginTarget";
 import type { AssistantLaunch } from "../../lib/assistant";
 
@@ -123,6 +123,9 @@ export interface ViewerState {
   // to the per-type setting. Toggled from the in-tab AI-assist controls.
   autocomplete?: boolean;
   autocompleteMode?: AutocompleteMode;
+  // When suggestions are asked for: "auto" after a typing pause, "manual" only
+  // on Ctrl+Space. Absent → Copilot asks on request, a local model on a pause.
+  autocompleteTrigger?: AutocompleteTrigger;
   spellCheck?: boolean;
   // The TeX editor's hover-preview and beamer switches are NOT here: they are
   // the project's, in `stores/viewers/texViewPref` (a tab of a deck is not where "this
