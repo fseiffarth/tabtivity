@@ -639,8 +639,9 @@ pub fn is_agent_cmd(cmd: &str) -> bool {
 
 /// Re-derive a spawn's authority flags from the trustworthy project record.
 ///
-/// - **No owning project** (root/global scope, connection terminals): pass through
-///   — there is no project record to consult and no container to apply.
+/// - **No owning project** (root/global scope, connection terminals): `sandbox`
+///   forced off — there is no project record to consult and no container to
+///   apply; `local_only` is left as requested.
 /// - **Remote project**: containers are local-only, so `sandbox` is forced off;
 ///   `local_only` is left to the renderer because it is a legitimate per-tab
 ///   choice there (run in the local mirror vs. on the host) and cannot escape a
@@ -667,7 +668,10 @@ pub fn resolve_spawn_authority(
     host_bound_marker: bool,
 ) -> SpawnAuthority {
     if !has_project {
-        return requested;
+        return SpawnAuthority {
+            sandbox: false,
+            local_only: requested.local_only,
+        };
     }
     if is_remote || !toggle_on {
         return SpawnAuthority {
@@ -702,6 +706,15 @@ pub fn resolve_spawn_authority(
 /// result to `opts` in place. Called from `pty_spawn` before any wrapping.
 pub fn enforce_spawn_authority(opts: &mut PtyOptions) {
     let Some(project_id) = opts.project_id.clone() else {
+        // The root scope has no container: a renderer's `sandbox` would only
+        // skip the fence and both wraps (screen 2026-11-12 H1).
+        if opts.sandbox {
+            eprintln!(
+                "sandbox: root-scope tab '{}' resolved to sandbox: false (no container)",
+                opts.id
+            );
+        }
+        opts.sandbox = false;
         return;
     };
     // Box scopes (`box:<id>`) run local + uncontained by design (v1 trust
@@ -2598,13 +2611,50 @@ mod tests {
     }
 
     #[test]
-    fn a_projectless_spawn_passes_through_untouched() {
-        // Root scope / connection terminals: no project record to consult.
-        let requested = want(false, true);
-        assert_eq!(
-            resolve_all(false, false, false, requested, "", false),
-            requested
-        );
+    fn a_projectless_spawn_keeps_local_only_and_never_a_container() {
+        // Root scope / connection terminals: no project record to consult, and
+        // no container to apply — `sandbox` is forced off, `local_only` kept.
+        for local_only in [false, true] {
+            for sandbox in [false, true] {
+                assert_eq!(
+                    resolve_all(false, false, false, want(sandbox, local_only), "claude", false),
+                    want(false, local_only)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_root_scope_spawn_never_keeps_the_renderers_sandbox_flag() {
+        // `sandbox: true, local_only: true` with no project skipped both the
+        // docker and the ssh wrap while `decide` answered "container": the
+        // agent ran unfenced with the real `$HOME` (screen 2026-11-12 H1).
+        let mut opts = PtyOptions {
+            login: None,
+            assistant: None,
+            id: "t".to_string(),
+            cmd: "claude".to_string(),
+            args: vec![],
+            env: Default::default(),
+            cwd: String::new(),
+            cols: 80,
+            rows: 24,
+            local_only: true,
+            sandbox: true,
+            agent: true,
+            project_id: None,
+            remote_host_id: None,
+            tmux_session: None,
+            tmux_attach: None,
+            host_bound_uid: None,
+            local_model: false,
+            schedule_target_id: None,
+            host_session: false,
+            api_key: None,
+        };
+        enforce_spawn_authority(&mut opts);
+        assert!(!opts.sandbox, "the root scope has no container");
+        assert!(opts.local_only, "local_only is left as requested");
     }
 
     // ── Agents-only scope ─────────────────────────────────────────────────

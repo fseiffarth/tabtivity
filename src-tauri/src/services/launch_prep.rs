@@ -713,6 +713,27 @@ fn push_fence_scope(
     }
 }
 
+/// Whether a local agent whose fence decision no explicit arm of [`prepare`]
+/// handled may still spawn (screen 2026-11-12 H1). Only a decision whose
+/// boundary really applied passes: "container" when the docker wrap ran,
+/// "remote host" when the ssh wrap ran, the Host session, and a non-agent
+/// ("shell"). Anything else — "container" with no container, a reason added
+/// later — fails closed rather than running the CLI on the host unfenced.
+fn unfenced_local_agent_allowed(
+    decision: &crate::services::agent_fence::FenceDecision,
+    docker_wrapped: bool,
+    ssh_wrapped: bool,
+) -> bool {
+    use crate::services::agent_fence::{FenceDecision, HOST_SESSION_REASON};
+    match decision {
+        FenceDecision::NotApplicable { reason: "shell" } => true,
+        FenceDecision::NotApplicable { reason: HOST_SESSION_REASON } => true,
+        FenceDecision::NotApplicable { reason: "container" } => docker_wrapped,
+        FenceDecision::NotApplicable { reason: "remote host" } => ssh_wrapped,
+        _ => false,
+    }
+}
+
 impl PreparedLaunch {
     /// Whether the spawn was handed a root/push MCP token (the sessions fold
     /// lists live tokens; the window emits its event on that).
@@ -1274,11 +1295,17 @@ pub async fn prepare(
         || opts.sandbox
         || crate::services::ssh_exec::remote_target_of(&opts).is_none())
     .then(|| opts.cwd.clone());
+    // Which boundary actually wrapped the spawn: the fence match below lets a
+    // local agent's "container" / "remote host" decision through only when
+    // its wrap really ran (screen 2026-11-12 H1).
+    let mut docker_wrapped = false;
+    let mut ssh_wrapped = false;
     if opts.sandbox && !opts.local_only {
         // Every host, Windows included: the mount destinations and `-w` are
         // spelled for the container by `sandbox::container_path`, so a `C:\`
         // project lands at `/c/…` inside the Linux container.
         crate::services::sandbox::wrap_pty_options_docker(&mut opts)?;
+        docker_wrapped = true;
     } else if !opts.local_only {
         // `wrap_pty_options` below spawns a bare `ssh` with no BatchMode and no
         // askpass — it only ever rides an already-authenticated ControlMaster.
@@ -1333,6 +1360,7 @@ pub async fn prepare(
         if crate::services::ssh_exec::remote_target_of(&opts).is_some() {
             crate::services::claude_token::inject_remote(&mut opts);
         }
+        ssh_wrapped = crate::services::ssh_exec::remote_target_of(&opts).is_some();
         crate::services::ssh_exec::wrap_pty_options(&mut opts)?;
     }
 
@@ -1484,7 +1512,17 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::Unavailable => {
                 return Err(crate::services::agent_fence::fence_unavailable_message());
             }
-            _ => {}
+            // An ssh or docker process (`!local_agent`) carries its own
+            // boundary. A local agent no arm above handled runs only where
+            // that boundary really applied; anything else fails closed.
+            other => {
+                if local_agent && !unfenced_local_agent_allowed(&other, docker_wrapped, ssh_wrapped) {
+                    return Err(format!(
+                        "terminal: tab '{}' was not started: no agent fence applies to it ({other:?})",
+                        opts.id
+                    ));
+                }
+            }
         }
         // A chat runs only in the two arms above, each of which takes its home:
         // any other decision (an unforeseen `NotApplicable`) leaves it unused,
@@ -1728,6 +1766,37 @@ mod tests {
         ] {
             assert_eq!(push_fence_scope(&decision, true, "p1"), None, "{decision:?}");
         }
+    }
+
+    #[test]
+    fn an_unwrapped_local_agent_never_runs_unfenced() {
+        // Screen 2026-11-12 H1: "container" with no docker wrap ran the agent
+        // on the host, unfenced, with the user's `$HOME`.
+        use crate::services::agent_fence::{FenceDecision, HOST_SESSION_REASON};
+        let na = |reason| FenceDecision::NotApplicable { reason };
+        assert!(unfenced_local_agent_allowed(&na("shell"), false, false));
+        assert!(unfenced_local_agent_allowed(&na(HOST_SESSION_REASON), false, false));
+        assert!(unfenced_local_agent_allowed(&na("container"), true, false));
+        assert!(unfenced_local_agent_allowed(&na("remote host"), false, true));
+        assert!(!unfenced_local_agent_allowed(&na("container"), false, false));
+        assert!(!unfenced_local_agent_allowed(&na("container"), false, true));
+        assert!(!unfenced_local_agent_allowed(&na("remote host"), false, false));
+        assert!(!unfenced_local_agent_allowed(&na("remote host"), true, false));
+        assert!(!unfenced_local_agent_allowed(&na("something new"), true, true));
+        for decision in [FenceDecision::Fenced { roots: vec![] }, FenceDecision::PlatformUnaccepted, FenceDecision::Unavailable] {
+            assert!(!unfenced_local_agent_allowed(&decision, true, true), "{decision:?}");
+        }
+    }
+
+    /// The fence match in [`prepare`] ends in the fail-closed arm, never a
+    /// silent `_ => {}`.
+    #[test]
+    fn prepare_fence_match_has_no_silent_catch_all() {
+        let source = include_str!("launch_prep.rs");
+        let start = source.find("pub async fn prepare(").expect("prepare");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+        assert!(body.contains("unfenced_local_agent_allowed("), "prepare must check the unhandled decisions");
+        assert!(!body.contains("_ => {}"), "an unhandled fence decision must not fall through silently");
     }
 
     // ── control variables: Tabtivity's to set, never the tab's (gap 17) ────
