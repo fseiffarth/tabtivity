@@ -1642,7 +1642,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           // opened this tab with a command, so its work counts as asked-for.
           noteUserInput(id);
           // A Windows host's ssh or container tab still ends in a POSIX shell.
-          const onRemote = !localOnly && (!!remoteHostId ||
+          // A shell tab's default location is "remote", i.e. `remoteHostId`
+          // "primary" even in the root console or a local project, where the
+          // backend resolves it to the local shell: only a worker host or a
+          // project that really is remote makes this a POSIX shell.
+          const onRemote = !localOnly && ((!!remoteHostId && remoteHostId !== "primary") ||
             !!useProjectsStore.getState().projects.find((p) => p.id === projectId)?.remote);
           writePtyInput(
             id,
