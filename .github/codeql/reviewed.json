@@ -276,7 +276,7 @@
     "line": 1053,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
+    "sha256": "6d8e961ac0ce8a9c402c4f0527c13a3bda5fbcea733f27793a137b45cfd8f5bc",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_open reads only the fixed settings.json leaf to check the assistant opt-in."
   },
   {
@@ -284,7 +284,7 @@
     "line": 1092,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
+    "sha256": "6d8e961ac0ce8a9c402c4f0527c13a3bda5fbcea733f27793a137b45cfd8f5bc",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_devices reads only the fixed settings.json leaf for the assistant's per-phone list."
   },
   {
@@ -292,7 +292,7 @@
     "line": 1345,
     "source": "let projects: Vec<ProjectRecord> = match fs::read(state_dir.join(\"projects.json\")) {",
     "rule": "rust/path-injection",
-    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
+    "sha256": "6d8e961ac0ce8a9c402c4f0527c13a3bda5fbcea733f27793a137b45cfd8f5bc",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. launch_place reads only the fixed projects.json registry, never a project-folder file."
   },
   {
@@ -300,7 +300,7 @@
     "line": 1486,
     "source": "fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
+    "sha256": "6d8e961ac0ce8a9c402c4f0527c13a3bda5fbcea733f27793a137b45cfd8f5bc",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input: shells_open is called with state.config.state_dir (host.rs) or the headless state_dir. It reads only the fixed settings.json leaf for the shells switch."
   },
   {
@@ -308,7 +308,7 @@
     "line": 1609,
     "source": "fs::read(&path)",
     "rule": "rust/path-injection",
-    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
+    "sha256": "6d8e961ac0ce8a9c402c4f0527c13a3bda5fbcea733f27793a137b45cfd8f5bc",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. read_session reads <state_dir>/sessions/<key>/terminals.json, where project_key maps every character outside [A-Za-z0-9_-] to '_' (and empty to 'x'), so no id can climb out of sessions/."
   },
   {
@@ -417,66 +417,66 @@
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2289,
+    "line": 2341,
     "source": "\"missing accept-new in {args:?}\"",
     "rule": "rust/cleartext-logging",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the ssh argv built for a fixture host when the accept-new check fails; the password builders put no password in argv (it goes through askpass)."
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2348,
+    "line": 2400,
     "source": "let ap = make_askpass(\"hunter2\", &vetted_args()).unwrap();",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2453,
+    "line": 2505,
     "source": "let ap = make_askpass(\"hunter2\", &vetted_args()).unwrap();",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2595,
+    "line": 2647,
     "source": "let ap = make_askpass_for(SecretKind::KeyPassphrase, \"hunter2\", &args).unwrap();",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2622,
+    "line": 2674,
     "source": "let ap = make_askpass_for(SecretKind::KeyPassphrase, \"hunter2\", &args).unwrap();",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2752,
+    "line": 2848,
     "source": "match make_askpass(\"hunter2\", &args) {",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2759,
+    "line": 2855,
     "source": "assert!(make_askpass(\"hunter2\", &key_args).is_err());",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
   },
   {
     "path": "src-tauri/src/services/remote/ssh_common.rs",
-    "line": 2762,
+    "line": 2858,
     "source": "assert!(make_askpass(\"hunter2\", &vetted_args()).is_ok());",
     "rule": "rust/hard-coded-cryptographic-value",
-    "sha256": "8181cc31f1f75fe01d0c01b3fe5ff5ddef07d456efceaaf418d02b85ca5bedcb",
+    "sha256": "517b610d2987f7bea96361a4801132b214e44805a81232643d9b3bbe3bae9551",
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Fixture secret fed to make_askpass/make_askpass_for to test the askpass helper; never a real credential."
   },
   {
@@ -505,19 +505,11 @@
   },
   {
     "path": "src-tauri/src/services/tmux_local.rs",
-    "line": 825,
+    "line": 826,
     "source": "eprintln!(\"tmux_local: could not write launcher for '{session}': {e}\");",
     "rule": "rust/cleartext-logging",
-    "sha256": "fa77f48d4fd548660ce28a1f0b578f1a505dbf197f7cfe241c390fc2950e75d2",
+    "sha256": "5c19676068b1e14c853de9fa283dbf0d8d879e2c157d0eaec5e111bb7764ae3c",
     "reason": "Logs the tmux session name and an io::Error from writing the launcher script. The session name is a tab-derived identifier, not a credential; the script (which may hold env values) is never logged."
-  },
-  {
-    "path": "src-tauri/src/services/tmux_local.rs",
-    "line": 844,
-    "source": "args.insert(at + 1, \"-d\".into());",
-    "rule": "rust/cleartext-logging",
-    "sha256": "fa77f48d4fd548660ce28a1f0b578f1a505dbf197f7cfe241c390fc2950e75d2",
-    "reason": "Vec::insert of the literal \"-d\" into the tmux argv; nothing here is logged. The argv carries injected API-key env to the spawned tmux client only, and no caller prints PtyOptions, its args or env."
   },
   {
     "path": "src/__tests__/helpers/pdfFixture.ts",
@@ -548,7 +540,7 @@
     "line": 14,
     "source": "let content = fs::read_to_string(path)?;",
     "rule": "rust/path-injection",
-    "sha256": "6adb41ce04af406ae0a9808e9ced111fc611a2d567a41df40a72852dbad963b5",
+    "sha256": "32aaaf6b4a31ec25f3033f34829ad5b0bc0820462010c535cc7aec3df6e6c4bb",
     "reason": "Generic sink: read_json opens the path its caller built. Every non-test caller was audited: a fixed file under the startup state dir; sessions/<project_key(id)>/ (project_key allows only [A-Za-z0-9_-]); an archive folder after validate_project_id; remote-projects/<id>/ through remote_project_dir_in, which keeps an id to one path component; a projects.json record's local_file; or a listing inside the state dir. CodeQL's flow source was not visible for this review, so a new caller needs its own check."
   },
   {

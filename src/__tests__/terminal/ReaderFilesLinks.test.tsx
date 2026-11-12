@@ -40,7 +40,7 @@ describe("Reader Data: Files and Links sections", () => {
     const onOpenLink = vi.fn();
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const { container } = render(<TerminalReaderFiles {...base} files={[file]} links={[pr]} onOpenLink={onOpenLink} />);
-    const row = screen.getByRole("option", { name: (label) => label.includes("github.com") });
+    const row = within(screen.getByRole("listbox", { name: "Links this conversation names" })).getByRole("option");
     expect(row.tagName).toBe("BUTTON");
     expect(row.getAttribute("title")).toContain("https://github.com/o/r/pull/7");
     fireEvent.click(row);
