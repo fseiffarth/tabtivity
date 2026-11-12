@@ -125,8 +125,8 @@ export interface TabPaneProps {
   tmuxSession?: string;
   /** The owning project lives only on its host (`isHostPinned`: a VM or a
    *  remote-only project), so tab locality is pinned to it (agents-default-local
-   *  is exactly the escape those forbid). Resolved by PaneSlot; a popout omits
-   *  it — its panes are attach-only and never spawn. */
+   *  is exactly the escape those forbid). Every host passes it, attach-only
+   *  ones too: it decides where the pane's Chat reads the conversation. */
   hostPinned?: boolean;
   /** A terminal pane shows its Reader always, with no toggle (the Tabby
    *  overlay's chats; see `TerminalView.readerAlways`). */

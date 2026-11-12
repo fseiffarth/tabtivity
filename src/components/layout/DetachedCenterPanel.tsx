@@ -1773,6 +1773,10 @@ export function DetachedCenterPanel({
                     visible={visible}
                     focused={visible && isFocused}
                     attachOnly
+                    // A host-pinned project's tab runs on its host: without
+                    // this the pane resolved it as local, and its Chat read
+                    // this machine's disk instead of the host's conversation.
+                    hostPinned={hostPinned}
                     filesProjectDir={tab.cwd}
                     terminalCwd={localTabCwd(tab, {
                       isRemoteProject: isRemote,

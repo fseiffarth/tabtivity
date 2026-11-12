@@ -3,6 +3,7 @@ import { ROOT_SCOPE, type TabEntry } from "../../stores/tabs";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useProjectsStore } from "../../stores/projects";
 import { TabScopeContext } from "../../lib/tabs/tabScopeContext";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { TabPane } from "../tabs/TabPane";
 
 interface Props {
@@ -32,6 +33,9 @@ interface Props {
  */
 export function AttachedAgentPane({ scope, tab, focused, readerAlways = false, scopeDir }: Props) {
   const rootDir = useProjectsStore((s) => s.rootDir) ?? "";
+  // A VM or remote-only project's tab runs on its host, as `PaneSlot` resolves
+  // it: the pane's Chat reads the conversation from there.
+  const hostPinned = useProjectsStore((s) => isHostPinned(s.projects.find((p) => p.id === scope)));
   const tabKey = tab.key;
   useEffect(() => {
     const { markShown, unmarkShown } = useOverlayAgentStore.getState();
@@ -50,6 +54,7 @@ export function AttachedAgentPane({ scope, tab, focused, readerAlways = false, s
         visible
         focused={focused}
         attachOnly
+        hostPinned={hostPinned}
         readerAlways={readerAlways}
         filesProjectDir={cwd}
         terminalCwd={cwd}
