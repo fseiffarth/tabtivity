@@ -146,7 +146,7 @@ fn peer_refusal(reply: AdminResponse) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn undelivered_for(peer: &Path) -> usize {
     UNDELIVERED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().filter(|e| e.peer == peer).count()
 }

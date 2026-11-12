@@ -681,11 +681,6 @@ fn gdk_monitor_of(win: &tauri::WebviewWindow) -> Option<MonitorRect> {
         .map(|m| gdk_monitor_rect(&m))
 }
 
-#[cfg(not(target_os = "linux"))]
-fn gdk_monitor_of(_win: &tauri::WebviewWindow) -> Option<MonitorRect> {
-    None
-}
-
 /// Where a [`present_on_monitor`] popout is in its fullscreen round trip.
 #[cfg(any(target_os = "linux", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1767,6 +1762,7 @@ fn emit_retire_withdrawn(app: &AppHandle, label: &str) {
 /// GDK says of a popout while it is placed, and for a moment after, is not
 /// recorded as its screen or size. `present_on_monitor` sets it as the hop
 /// starts and clears it where the hop ends.
+#[cfg(target_os = "linux")]
 fn mark_placing(app: &AppHandle, label: &str, placing: bool) {
     let reg = app.state::<WindowRegistryState>();
     let mut reg = reg.lock_ok();
