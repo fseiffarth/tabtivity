@@ -277,15 +277,6 @@ export function scanDictation(event: MobileSpeechRecognitionResultEvent): Dictat
   return { heard, interim: interim.join(" "), starts, tail, live };
 }
 
-/** What `scanDictation` says without the utterances: the finalized words and
- * the live guess. */
-export function readDictation(
-  event: MobileSpeechRecognitionResultEvent,
-): { heard: string[]; interim: string } {
-  const { heard, interim } = scanDictation(event);
-  return { heard, interim };
-}
-
 /** Whether `heard` is a result list starting over (Chrome on Android starts
  * one after a pause), against the last reading `prev`. */
 function resultListRestarted(prev: string[], heard: string[]): boolean {
@@ -418,12 +409,6 @@ export interface UtteranceStep {
   /** Words are being held back (a possible command, or a first word that
    * cannot tell yet): speech is still open as far as hands-free's pause goes. */
   held: boolean;
-}
-
-/** The live utterance as words ("how are you today"), finalized and interim
- * together. */
-export function currentUtterance(scan: DictationScan): string[] {
-  return scan.live;
 }
 
 /** A flag that may be asked late. */

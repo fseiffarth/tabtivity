@@ -116,7 +116,8 @@ export function press(el: HTMLElement): "clicked" | "focused" {
   return "clicked";
 }
 
-function actButton(scope: ParentNode, act: SteerAct): HTMLElement | null {
+/** The first reachable `act` button under `scope`. */
+export function actButton(scope: ParentNode, act: SteerAct): HTMLElement | null {
   return [...scope.querySelectorAll<HTMLElement>(`[data-steer-act='${act}']`)].find(isReachable) ?? null;
 }
 

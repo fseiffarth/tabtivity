@@ -19,9 +19,9 @@ import {
   didNotCatchLine, ambiguityLine, match, matchConfirm, matchNavLeave, matchNavigate, matchStartWord, resolveAmbiguity,
   type VoiceAmbiguity, type VoiceCommand, type VoiceListItem, type VoiceLists, type VoiceMatch,
 } from "../../../../src/lib/voice/voiceCommands";
-import { api, getActivity, type ProjectDetail, type ProjectRow, type TabRow } from "../../api";
+import { api, getActivity, getProjectDetail, type ProjectDetail, type ProjectRow, type TabRow } from "../../api";
 import { speechLanguage, speechTag } from "../../speechLang";
-import { currentSpeechId, guardSpeech, speak, speechOutputSupported, stopSpeaking, subscribeSpeech } from "../../speechOutput";
+import { speak, speechOutputSupported, stopSpeaking, whenSpeechQuiet } from "../../speechOutput";
 import { markDoneSeen, readSeenDone } from "../../seenDone";
 import {
   agentTabChoice, detailLists, latestAgentTab, leaveLanding, navQueue, nextInQueue, noteJump, projectItems, tabAtNumber,
@@ -190,28 +190,8 @@ export function useVoiceNav({
       if (turn.current !== mine || epoch.current !== mineEpoch) return;
       if (recognition.current !== undefined) endDictation();
       speak(`nav:${mine}`, text, speechTag(), true);
-      let timer = 0;
-      let done = false;
-      // A voice that never ends must not keep the mic closed for good.
-      const unguard = guardSpeech();
-      const finish = () => {
-        if (done) return;
-        done = true;
-        off();
-        unguard();
-        window.clearTimeout(timer);
-        proceed();
-      };
-      const check = () => {
-        window.clearTimeout(timer);
-        if (currentSpeechId() === null) timer = window.setTimeout(finish, NAV_TAIL_MS);
-      };
-      const off = subscribeSpeech(check);
-      wait.current = {
-        finish,
-        cancel: () => { done = true; off(); unguard(); window.clearTimeout(timer); },
-      };
-      check();
+      // Guarded: a voice that never ends must not keep the mic closed for good.
+      wait.current = whenSpeechQuiet(NAV_TAIL_MS, proceed);
     });
   };
 
@@ -222,7 +202,7 @@ export function useVoiceNav({
       const here = live.current.project;
       const [rows, detail] = await Promise.all([
         api<{ projects: ProjectRow[] }>("/api/v1/projects?view=active").then((body) => body.projects, () => [] as ProjectRow[]),
-        here ? api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(here)}`).catch(() => null) : Promise.resolve(null),
+        here ? getProjectDetail(here).catch(() => null) : Promise.resolve(null),
         // The lines and the command phrases are said and heard in the spoken language.
         loadDict(lang()),
       ]);
@@ -254,7 +234,7 @@ export function useVoiceNav({
   const openProjectTab = async (item: VoiceListItem, mineEpoch: number) => {
     let detail: ProjectDetail;
     try {
-      detail = await api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(item.id)}`);
+      detail = await getProjectDetail(item.id);
     } catch {
       if (epoch.current === mineEpoch) say(tr("voice.nav.desktopDown"), "listen");
       return;

@@ -28,7 +28,6 @@ import "@xterm/xterm/css/xterm.css";
 import {
   ANY_FILE_ACCEPT,
   ApiError,
-  api,
   attachDesktopImage,
   closeTab,
   inboxFileUrl,
@@ -39,6 +38,7 @@ import {
   pickPhoneFiles,
   refreshProjectFile,
   sentName,
+  getProjectDetail,
   getTabWorktrees,
   moveTabWorktree,
   getTabLocations,
@@ -50,7 +50,6 @@ import {
   type OutboxFile,
   type PhoneMarkupFile,
   type ViewerScope,
-  type ProjectDetail,
   type SessionTranscript,
   type AskedQuestion,
   type TabRow,
@@ -1961,7 +1960,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     const controller = new AbortController();
     const read = () => {
       if (document.visibilityState !== "visible") return;
-      api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(project)}`, { signal: controller.signal })
+      getProjectDetail(project, controller.signal)
         .then((detail) => {
           setFilesLabel(detail.files || detail.host_files ? detail.project.label : null);
           setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
@@ -2306,6 +2305,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     : tabbyLine ? tabbyLine
     : voiceStatus ? sayVoice(voiceStatus) : "";
   const handsFreeLine = handsFreeLineFor(voiceProblem !== null);
+  /** A voice line over the composer: a button when a tap acts on it, else a
+   * status line; each with its untested mark when that is on. */
+  const voiceStrip = (line: { text: string; run?: () => void }, buttonUntested: boolean, statusUntested: boolean) => line.run
+    ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={line.run}>{line.text}{buttonUntested && <em>{t("mobile.focus.untested")}</em>}</button>
+    : <div className="voice-feedback hands-free" role="status" aria-live="polite">{line.text}{statusUntested && <em>{t("mobile.focus.untested")}</em>}</div>;
   /** What the sheet paints: the live step, or — between the tap and the
    * session's redraw — the answered one, listed but not tappable, so the sheet
    * does not blink empty on the way to the next step. */
@@ -2512,7 +2516,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * (`sendQueuedNow`, `pullQueued`), under the same conditions. */
   const modelPill = tablet && tab.kind === "agent" && !bare && !tab.local_model;
   const queuePill = tablet && tab.kind === "agent" && queueCli !== null;
-  const queuedCount = sessionEntries.filter((entry) => entry.kind === "prompt" && entry.queued).length;
+  // Memoised: the header renders on every keystroke in the composer.
+  const queuedCount = useMemo(() => sessionEntries.filter((entry) => entry.kind === "prompt" && entry.queued).length, [sessionEntries]);
   // Where the bubbles carry the pair: the session chat on screen (not the
   // Terminal view, nor a subagent's chat), under a queued prompt.
   const queueMoves = sessionFocus && !openStep && queuedCount > 0 && agentAtWork && !editing && queueReadable && queuedShown;
@@ -2799,12 +2804,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       </>}
     </div>
     <div className="terminal-controls">
-      {tab.kind === "agent" && navLine && (navLine.run
-        ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={navLine.run}>{navLine.text}{isUntested("mobile.voice.navigate") && <em>{t("mobile.focus.untested")}</em>}</button>
-        : <div className="voice-feedback hands-free" role="status" aria-live="polite">{navLine.text}{isUntested("mobile.voice.navigate") && <em>{t("mobile.focus.untested")}</em>}</div>)}
-      {tab.kind === "agent" && !navLine && handsFreeLine && (handsFreeLine.run
-        ? <button type="button" className="voice-feedback hands-free" aria-live="polite" onClick={handsFreeLine.run}>{handsFreeLine.text}{isUntested("mobile.voice.handsFree") && <em>{t("mobile.focus.untested")}</em>}</button>
-        : <div className="voice-feedback hands-free" role="status" aria-live="polite">{handsFreeLine.text}</div>)}
+      {tab.kind === "agent" && navLine && voiceStrip(navLine, isUntested("mobile.voice.navigate"), isUntested("mobile.voice.navigate"))}
+      {/* The hands-free status line carries no untested mark; its button does. */}
+      {tab.kind === "agent" && !navLine && handsFreeLine && voiceStrip(handsFreeLine, isUntested("mobile.voice.handsFree"), false)}
       {tab.kind === "agent" && !navLine && !handsFreeLine && voiceLine && <div className={voiceProblem ? "voice-feedback error" : "voice-feedback"} role={voiceProblem ? "alert" : "status"} aria-live="polite">{voiceLine}{listening && !voiceProblem && !voicePreview && (isUntested("mobile.voice.keepListening") || isUntested("mobile.voice.spokenSend") || isUntested("mobile.voice.draftEdits") || (tabbyLine !== "" && isUntested("mobile.voice.tabbyStart"))) && <em>{t("mobile.focus.untested")}</em>}</div>}
       {stoppedReason && <div className="voice-feedback error" role="alert">{stoppedReason}{isUntested("mobile.link.failureText") && <em> · {t("mobile.focus.untested")}</em>}</div>}
       {sendFailed && !stoppedReason && <div className="voice-feedback error" role="alert">{t("mobile.composer.notDelivered")}</div>}

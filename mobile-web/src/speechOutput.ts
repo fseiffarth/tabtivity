@@ -367,6 +367,42 @@ export function guardSpeech(): () => void {
 /** The floor of `guardSpeech`'s wait; the piece's length at 100 ms a character is added. */
 export const SPEECH_STALL_MS = 15_000;
 
+/** A wait for the voice to fall quiet: once nothing has been said for
+ * `tailMs`, `onQuiet` runs, once. Speech that starts again inside the tail
+ * starts the tail over, and `guardSpeech` stops a voice that never ends, so
+ * the wait cannot hold for good. `finish` ends the wait now and runs
+ * `onQuiet` (a skip); `cancel` ends it without. Ending it, either way, drops
+ * the subscription, the guard and the timer. */
+export function whenSpeechQuiet(tailMs: number, onQuiet: () => void): { finish(): void; cancel(): void } {
+  let timer = 0;
+  let done = false;
+  const unguard = guardSpeech();
+  const stop = () => {
+    off();
+    unguard();
+    window.clearTimeout(timer);
+  };
+  const finish = () => {
+    if (done) return;
+    done = true;
+    stop();
+    onQuiet();
+  };
+  const check = () => {
+    window.clearTimeout(timer);
+    if (currentSpeechId() === null) timer = window.setTimeout(finish, tailMs);
+  };
+  const off = subscribeSpeech(check);
+  check();
+  return {
+    finish,
+    cancel: () => {
+      done = true;
+      stop();
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Feeding a tab's answers
 

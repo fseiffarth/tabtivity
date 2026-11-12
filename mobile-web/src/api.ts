@@ -194,6 +194,11 @@ export interface ActivityList { tabs: ActivityTab[]; desktop_available: boolean;
 export function getActivity(signal?: AbortSignal): Promise<ActivityList> {
   return api<ActivityList>("/api/v1/activity", { signal });
 }
+
+/** `GET /api/v1/projects/{id}` — the project's row, tabs, agents and file sides. */
+export function getProjectDetail(projectId: string, signal?: AbortSignal): Promise<ProjectDetail> {
+  return api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(projectId)}`, signal ? { signal } : undefined);
+}
 export type ScheduleRule =
   | { type: "once"; at: string }
   | { type: "daily"; time: string }

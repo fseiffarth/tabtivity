@@ -10,7 +10,6 @@ import {
   advanceDictation,
   DICTATION_START,
   dictationPreview,
-  readDictation,
   scanDictation,
   settleDictation,
   settleUtterances,
@@ -130,7 +129,7 @@ describe(`${BRAND.display} Mobile voice input`, () => {
       },
     } as unknown as MobileSpeechRecognitionResultEvent;
 
-    expect(readDictation(event)).toEqual({
+    expect(scanDictation(event)).toMatchObject({
       heard: ["fix", "the", "login", "and", "add", "a", "test"],
       interim: "please",
     });
@@ -147,7 +146,7 @@ describe(`${BRAND.display} Mobile voice input`, () => {
       },
     } as unknown as MobileSpeechRecognitionResultEvent;
 
-    expect(readDictation(event)).toEqual({ heard: ["Fix", "the", "login,", "and", "test"], interim: "and" });
+    expect(scanDictation(event)).toMatchObject({ heard: ["Fix", "the", "login,", "and", "test"], interim: "and" });
   });
 
   it("collapses a later utterance that is finalized again as it grows", () => {
@@ -163,7 +162,7 @@ describe(`${BRAND.display} Mobile voice input`, () => {
       },
     } as unknown as MobileSpeechRecognitionResultEvent;
 
-    expect(readDictation(event)).toEqual({
+    expect(scanDictation(event)).toMatchObject({
       heard: ["fix", "the", "login", "How", "are", "you", "today"],
       interim: "and",
     });
@@ -179,7 +178,7 @@ describe(`${BRAND.display} Mobile voice input`, () => {
       },
     } as unknown as MobileSpeechRecognitionResultEvent;
 
-    expect(readDictation(event).heard).toEqual(["fix", "the", "login", "page", "now"]);
+    expect(scanDictation(event).heard).toEqual(["fix", "the", "login", "page", "now"]);
   });
 
   it("does not take a shorter, unrelated list for the old one because a word matches", () => {
@@ -327,7 +326,7 @@ describe(`${BRAND.display} Mobile utterance layer`, () => {
     const session = new Session({ holdBack: false });
     let old = DICTATION_START;
     for (const event of events) {
-      const step = advanceDictation(old, readDictation(listing(...event)).heard);
+      const step = advanceDictation(old, scanDictation(listing(...event)).heard);
       old = step.progress;
       expect(session.hear(...event), JSON.stringify(event)).toBe(step.insert);
       expect(session.progress.inserted).toBe(old.inserted);

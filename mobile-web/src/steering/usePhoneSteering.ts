@@ -36,10 +36,10 @@ import {
 } from "./phoneSteeringKeys";
 import { nextStatusTab, type StatusKind } from "./phoneStatusJump";
 import {
+  actButton,
   controls,
   cursorRow,
   focusRow,
-  isReachable,
   ownKeysUp,
   press,
   rowById,
@@ -130,9 +130,7 @@ function createEngine(input: { current: PhoneSteeringInput }): () => void {
   const laneRows = (): HTMLElement[] => rows(lane());
   const laneRowById = (id: string): HTMLElement | null => rowById(id, lane());
   /** Clicks the first reachable `act` button under `scope` (`screenAct`, `rowAct`, scoped). */
-  const clickAct = (scope: ParentNode, act: SteerAct) => {
-    [...scope.querySelectorAll<HTMLElement>(`[data-steer-act='${act}']`)].find(isReachable)?.click();
-  };
+  const clickAct = (scope: ParentNode, act: SteerAct) => actButton(scope, act)?.click();
   const keyId = (e: KeyboardEvent) => e.code || e.key;
   const swallow = (e: KeyboardEvent) => {
     e.preventDefault();

@@ -20,7 +20,7 @@ import { matchReading } from "../../../../src/lib/voice/voiceCommands";
 import { transcriptTurns } from "../../terminal/transcriptTurns";
 import { type SelectOption, type SelectPrompt } from "../../terminal/selectPrompt";
 import { type ReadableLine } from "../../terminal/readableScreen";
-import { createPickStage, createSendGuard, type GuardPhase, type SendGuard, type VoicePick } from "../../../../shared/handsFree";
+import { createPickStage, createStagedSendGuard, type GuardPhase, type SendGuard, type VoicePick } from "../../../../shared/handsFree";
 import { isStopWord } from "../../../../shared/voice";
 import { playChime } from "../../../../src/lib/voice/chime";
 import { HANDS_FREE_PAUSE_MS, TURN_SETTLE_MS, handsFreeTurnOver, questionSpeech, voicePick, voicePickable } from "../../handsFree";
@@ -118,36 +118,21 @@ export function useHandsFree({
   /** The send guard (`shared/handsFree.ts`), made on first use: its pause
    * ends in the chime and the cancel window, the window in a send. */
   const handsFreeGuard = () => {
-    if (!sendGuard.current) {
-      const guard = createSendGuard(HANDS_FREE_PAUSE_MS, {
-        hasDraft: () => staged.current.pending() !== null || draftRef.current.trim() !== "",
-        onWindow: () => playChime(),
-        onSend: () => {
-          tabbyGate.clear();
-          const pick = staged.current.take();
-          if (pick) commitPickRef.current(pick);
-          else if (submitDraftRef.current()) awaitTurnRef.current();
-        },
-        onCancel: () => staged.current.clear(),
-        onPhase: (next) => {
-          setGuardPhase(next);
-          if (next === "idle") setPickHeard("");
-        },
-      });
-      // Whatever resets the guard (a typed send, the mic's stop) drops a
-      // staged pick with it.
-      const reset = guard.reset;
-      guard.reset = () => {
-        staged.current.clear();
-        reset();
-      };
-      const cancel = guard.cancel;
-      guard.cancel = () => {
-        staged.current.clear();
-        cancel();
-      };
-      sendGuard.current = guard;
-    }
+    // Whatever resets or cancels the guard (a typed send, the mic's stop)
+    // drops a staged pick with it (`createStagedSendGuard`).
+    sendGuard.current ??= createStagedSendGuard(HANDS_FREE_PAUSE_MS, staged.current, {
+      hasDraft: () => draftRef.current.trim() !== "",
+      onWindow: () => playChime(),
+      onSend: (pick) => {
+        tabbyGate.clear();
+        if (pick) commitPickRef.current(pick);
+        else if (submitDraftRef.current()) awaitTurnRef.current();
+      },
+      onPhase: (next) => {
+        setGuardPhase(next);
+        if (next === "idle") setPickHeard("");
+      },
+    });
     return sendGuard.current;
   };
   /** The window closed on a staged pick: it answers only the dialog it was

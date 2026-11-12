@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadDict, translate, type TranslationKey } from "../../../../src/lib/i18n";
 import { type SessionTranscript, type TabRow } from "../../api";
 import { speechLanguage, speechTag } from "../../speechLang";
-import { currentSpeechId, guardSpeech, readTurn, speak, stopSpeaking, subscribeSpeech } from "../../speechOutput";
+import { readTurn, speak, stopSpeaking, whenSpeechQuiet } from "../../speechOutput";
 import { landingRead, takeLanding, type Landing } from "../../voiceNav";
 import { type StartVoiceOptions } from "./useVoiceInput";
 import { NAV_TAIL_MS, type NavLine } from "./useVoiceNav";
@@ -104,27 +104,14 @@ export function useVoiceLanding({
   // next prompt: dictation, the gate on.
   useEffect(() => {
     if (phase !== "speaking") return;
-    let timer = 0;
-    const open = () => {
-      window.clearTimeout(timer);
+    // Guarded: a voice that never ends must not keep the mic closed for good.
+    const wait = whenSpeechQuiet(NAV_TAIL_MS, () => {
       setLine(null);
       setPhase("done");
       void startVoiceRef.current({ gate: !hasDraft() });
-    };
-    const check = () => {
-      window.clearTimeout(timer);
-      if (currentSpeechId() === null) timer = window.setTimeout(open, NAV_TAIL_MS);
-    };
-    skip.current = () => { stopSpeaking(); open(); };
-    const off = subscribeSpeech(check);
-    // A voice that never ends must not keep the mic closed for good.
-    const unguard = guardSpeech();
-    check();
-    return () => {
-      off();
-      unguard();
-      window.clearTimeout(timer);
-    };
+    });
+    skip.current = () => { stopSpeaking(); wait.finish(); };
+    return () => wait.cancel();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 

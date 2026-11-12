@@ -3,7 +3,7 @@ import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { tabColorCss } from "../../../src/lib/theme/tabColors";
 import { isUntested } from "../../../src/lib/untested";
 import { goBack } from "../backStack";
-import { ApiError, api, type OutboxFile, type ProjectDetail, type ViewerScope } from "../api";
+import { ApiError, getProjectDetail, type OutboxFile, type ProjectDetail, type ViewerScope } from "../api";
 import { onFavorites, onFolderColors, readFavoritePlaces, rememberFilesPlace, removeFavorite, savedPlace, type FavoritePlace, type FilesSaved } from "../filesPlace";
 import { FileGlyph, FilesLibrary, asViewerFile, failureKey, lookUpSaved, noteFileOpened } from "./FilesLibrary";
 import { OptionSheet } from "./OptionSheet";
@@ -50,7 +50,7 @@ export function FavoritesPage() {
   useEffect(() => {
     const controller = new AbortController();
     for (const id of ids.split("\n").filter(Boolean)) {
-      void api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`, { signal: controller.signal }).then(
+      void getProjectDetail(id, controller.signal).then(
         (detail) => setProjects((known) => ({ ...known, [id]: detail })),
         (reason: unknown) => {
           if (controller.signal.aborted) return;

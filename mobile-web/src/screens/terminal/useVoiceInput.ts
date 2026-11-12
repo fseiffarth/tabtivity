@@ -204,6 +204,22 @@ export function useVoiceInput({
         onWithheld: (text) => (after ? after.capture || matchNavigate(text, spokenIn) !== null || matchDraftEdit(text, spokenIn) !== null : dispatch(text)),
       };
     };
+    /** A spoken send ("go on" last): it skips the hands-free window, so the
+     * guard goes back to idle first; `beforeSubmit` runs between that reset and
+     * the submit. Sent, the draft empties and hands-free waits for the turn. */
+    const sendSpoken = (text: string, guard: SendGuard | undefined, beforeSubmit?: () => void) => {
+      guard?.reset();
+      beforeSubmit?.();
+      if (submitSpokenRef.current(text)) {
+        draftRef.current = "";
+        if (guard) {
+          handsFree.awaitTurn.current();
+          // The mic is open for the next prompt: say so, and from here on
+          // only an utterance that starts with the start word is dictated.
+          tabbyGate.arm();
+        }
+      }
+    };
     /** "Tabby scratch that", "Tabby replace X by Y", "Tabby plan" …: the draft is
      * edited, and the words never go into it (`draftEdit.ts`). */
     const applyEdit = (edit: SpokenDraftEdit, text: string) => {
@@ -218,14 +234,7 @@ export function useVoiceInput({
       showEditNote(outcome.note);
       if (edit.send && draftRef.current.trim()) {
         // "… go on" after the edit: sent as a spoken send is.
-        guard?.reset();
-        if (submitSpokenRef.current(draftRef.current)) {
-          draftRef.current = "";
-          if (guard) {
-            handsFree.awaitTurn.current();
-            tabbyGate.arm();
-          }
-        }
+        sendSpoken(draftRef.current, guard);
       } else {
         // Hands-free: the pause before a send counts again from here; an
         // emptied draft sends nothing.
@@ -333,18 +342,9 @@ export function useVoiceInput({
         if (spoken !== null) {
           // Deliberate: it skips the hands-free window. The mic stays open
           // for the next prompt; hands-free still holds the turn's answers
-          // back so the mic never takes down the voice reading them.
-          guard?.reset();
-          forgetDictation();
-          if (submitSpokenRef.current(spoken)) {
-            draftRef.current = "";
-            if (guard) {
-              handsFree.awaitTurn.current();
-              // The mic is open for the next prompt: say so, and from here on
-              // only an utterance that starts with the start word is dictated.
-              tabbyGate.arm();
-            }
-          }
+          // back so the mic never takes down the voice reading them. The
+          // dictation is forgotten after the reset, before the submit.
+          sendSpoken(spoken, guard, forgetDictation);
           return;
         }
       }

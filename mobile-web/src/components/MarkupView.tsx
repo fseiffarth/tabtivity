@@ -18,7 +18,7 @@ import {
   colorOf, colorsFor, ERASER_MODES, eraserPx, inkStyle, PEN_ONLY_STYLES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
   applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX,
   armDock, armProof, dockToolOf, DOCK_TOOLS, isArmed, LASSO_MODES, PROOF_PICKS, proofOf, removePreset, SIZE_MAX, SIZE_MIN, clampSize,
-  type DockTool, type PenPrefs, type PenTool, type ProofPick,
+  type DockTool, type PenPrefs, type PenTool,
 } from "../markup/pen";
 import { openMarkupTab, useOpenedTabAgent } from "../markup/newTab";
 import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
@@ -58,14 +58,6 @@ const REMARKS_FAILURES: Record<string, TranslationKey> = {
 };
 /** How near a tap of the select tool must come to a mark, CSS pixels. */
 const SELECT_PX = 12;
-/** A Proof mark's glyph in the slot's grid. */
-function proofGlyph(pick: ProofPick): string {
-  return PROOF_GLYPHS[pick];
-}
-/** A dock slot's icon at the phone's size. */
-function DockGlyph({ tool }: { tool: DockTool }) {
-  return <DockIcon tool={tool} size={20} />;
-}
 /** How long a favourite is held before it is taken out. */
 const FAVOURITE_HOLD_MS = 600;
 type Size = [number, number];
@@ -2224,11 +2216,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     else overlays.current.delete(n);
   }, []);
   /** Annotate's tools: a tap arms one, the armed one again opens its sheet. */
+  const toggleColors = () => setPopover((open) => (open === "colors" ? null : "colors"));
   const pickTool = (name: Tool) => {
-    if (tool === name) {
-      setPopover((open) => (open === "colors" ? null : "colors"));
-      return;
-    }
+    if (tool === name) return toggleColors();
     // Each tool draws in its own remembered colour (`colorOf`).
     setPen((was) => ({ ...was, tool: name }));
     setPopover(null);
@@ -2239,10 +2229,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** A dock slot tapped: the armed one again opens or closes its sheet;
    * another arms its tool (Proof: what it armed last). */
   const pressSlot = (name: DockTool) => {
-    if (slot === name) {
-      setPopover((open) => (open === "colors" ? null : "colors"));
-      return;
-    }
+    if (slot === name) return toggleColors();
     setPen((was) => armDock(was, name));
     setPopover(null);
     setSelection(null);
@@ -2528,7 +2515,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         {slot === "proof" && !annotating && <div className="markup-proof" role="group" aria-label={t("mobile.markup.tool.proof")}>
           {PROOF_PICKS.map((pick) => <button key={pick} className={proofOf(pen) === pick ? "selected" : ""} aria-pressed={proofOf(pen) === pick}
             onClick={() => setPen((was) => armProof(was, pick))}>
-            <span aria-hidden="true" className={pick === "strike" || pick === "underline" || pick === "highlight" ? `markup-textmark-glyph is-${pick}` : undefined}>{proofGlyph(pick)}</span>
+            <span aria-hidden="true" className={pick === "strike" || pick === "underline" || pick === "highlight" ? `markup-textmark-glyph is-${pick}` : undefined}>{PROOF_GLYPHS[pick]}</span>
             <span>{t(proofKey(pick))}</span>
           </button>)}
         </div>}
@@ -2676,7 +2663,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
           : DOCK_TOOLS.map((name) => <button key={name} aria-pressed={slot === name} aria-expanded={slot === name ? popover === "colors" : undefined}
             className={slot === name ? "selected" : ""} onClick={() => pressSlot(name)}
             aria-label={t(DOCK_LABEL_KEYS[name])} title={t(DOCK_LABEL_KEYS[name])}>
-            <DockGlyph tool={name} />
+            <DockIcon tool={name} size={20} />
           </button>)}
         <span className="markup-toolbar-rule" aria-hidden="true" />
         <button onClick={() => setHistory(undo)} disabled={!history.past.length} aria-label={t("mobile.markup.undo")} title={t("mobile.markup.undo")}><span aria-hidden="true">↶</span></button>

@@ -5,7 +5,7 @@ import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon,
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, getProjectDetail, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, readFlag, writeChoice, writeFlag, type MobileFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -404,7 +404,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
   const load = useCallback(() => {
     if (inFlight.current || moving.current) return Promise.resolve();
     inFlight.current = true;
-    return api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`)
+    return getProjectDetail(id)
       .then((next) => { rememberScopeKind(id, next.project.kind); setDetail(withoutClosed(next, closed.current)); setError(""); })
       // Keep the last good view rather than blanking the tab list: on a poll
       // this fast, one dropped packet used to wipe the screen and flash the
@@ -539,7 +539,7 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
       for (let attempt = 0; attempt < CHAT_START_TRIES && alive.current; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
         if (!alive.current) return;
-        const next = await api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`);
+        const next = await getProjectDetail(id);
         setDetail(withoutClosed(next, closed.current));
         const row = next.tabs.find((candidate) => candidate.id === tab.id);
         if (row?.available) { terminal(row); return; }

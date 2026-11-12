@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { ApiError, api, TAB_CREATE_TIMEOUT, type AgentRow, type AgentStatus, type ProjectDetail, type TabRow } from "../api";
+import { ApiError, api, getProjectDetail, TAB_CREATE_TIMEOUT, type AgentRow, type AgentStatus, type TabRow } from "../api";
 import { startVisiblePoll } from "../visiblePoll";
 import type { AgentSignal } from "./submitState";
 
@@ -23,10 +23,9 @@ export function markupAgent(agents: readonly AgentRow[]): AgentRow | undefined {
  * the caller across a retry, so a Submit that timed out after the desktop
  * created the tab gets that tab back rather than a second one. */
 export async function openMarkupTab(projectId: string, idempotencyKey: string): Promise<TabRow> {
-  const path = `/api/v1/projects/${encodeURIComponent(projectId)}`;
-  const agent = markupAgent((await api<ProjectDetail>(path)).agents);
+  const agent = markupAgent((await getProjectDetail(projectId)).agents);
   if (!agent) throw new ApiError(409, "no_agent");
-  const body = await api<{ tab: TabRow }>(`${path}/tabs`, {
+  const body = await api<{ tab: TabRow }>(`/api/v1/projects/${encodeURIComponent(projectId)}/tabs`, {
     method: "POST",
     body: JSON.stringify({ project_id: projectId, kind: "agent", agent_id: agent.id, idempotency_key: idempotencyKey }),
   }, TAB_CREATE_TIMEOUT);
@@ -49,8 +48,7 @@ export function useOpenedTabAgent(projectId: string, tabId: string | undefined):
   const [model, setModel] = useState<string | undefined>(undefined);
   useEffect(() => {
     if (!tabId) return;
-    const path = `/api/v1/projects/${encodeURIComponent(projectId)}`;
-    return startVisiblePoll((signal) => api<ProjectDetail>(path, { signal }).then(
+    return startVisiblePoll((signal) => getProjectDetail(projectId, signal).then(
       (detail) => {
         if (signal.aborted) return;
         const row = detail.tabs.find((tab) => tab.id === tabId);

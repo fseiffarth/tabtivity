@@ -193,6 +193,54 @@ export function createPickStage<T>(): PickStage<T> {
   };
 }
 
+/** What a send guard that carries a `PickStage` asks of its owner. */
+export interface StagedSendHandlers<T> {
+  /** Whether the draft holds anything to send; a staged pick counts as well. */
+  hasDraft(): boolean;
+  /** The pause passed: play the chime, the window is open. */
+  onWindow(): void;
+  /** The window closed with no stop: `pick` is the staged pick, taken once,
+   * or null when there is none and the draft is to be sent. */
+  onSend(pick: T | null): void;
+  onPhase?(phase: GuardPhase): void;
+}
+
+/**
+ * The send guard with a spoken pick riding it, as both voice owners (the
+ * phone's hands-free, the desktop Reader's) wire it: the pick counts as a
+ * draft, it is handed over only when the window closes — a voice never
+ * answers a dialog at once (gap 80) — and a stop, a cancel or a reset drops
+ * it with the window.
+ */
+export function createStagedSendGuard<T>(
+  pauseMs: number,
+  stage: PickStage<T>,
+  handlers: StagedSendHandlers<T>,
+  clock?: GuardClock,
+  windowMs?: number,
+): SendGuard {
+  const guard = createSendGuard(pauseMs, {
+    hasDraft: () => stage.pending() !== null || handlers.hasDraft(),
+    onWindow: () => handlers.onWindow(),
+    onSend: () => handlers.onSend(stage.take()),
+    onCancel: () => stage.clear(),
+    onPhase: (next) => handlers.onPhase?.(next),
+  }, clock, windowMs);
+  return {
+    ...guard,
+    // Whatever resets or cancels the guard (a typed send, the mic's stop, the
+    // stop key) drops a staged pick with it.
+    reset() {
+      stage.clear();
+      guard.reset();
+    },
+    cancel() {
+      stage.clear();
+      guard.cancel();
+    },
+  };
+}
+
 /** A spoken pick, staged: `key` names the dialog it was heard on (so the
  * window's close answers only that one), `index` the row, `heard` what the
  * "Heard:" line shows ("2. Blue"). */
