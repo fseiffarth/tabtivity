@@ -3,6 +3,7 @@ import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { steeringKeyLabel, steeringKeys } from "../../../src/lib/shortcuts/steeringBindings";
 import { isUntested } from "../../../src/lib/untested";
 import { readFlag, writeFlag } from "../prefs";
+import { onTipsReset } from "../components/HintMessage";
 import {
   isEntryChord,
   isHardwareKeydown,
@@ -98,10 +99,15 @@ function chipsFor(level: PhoneLevel, t: ReturnType<typeof useT>, counts: Record<
  * connected — Shift+Space steers with E S D F", for about 8 s or until the next
  * key. Touch-only users never see it. The flag is set at that first key, so a
  * reload never repeats it; Turn off tips silences it without using it up.
+ * The key listener stays only while the tip is due (`armed`): once used it
+ * goes, and Reset tips (`onTipsReset`) brings it back.
  */
 function useKeyboardTip(): boolean {
   const [shown, setShown] = useState(false);
+  const [armed, setArmed] = useState(() => !readFlag("hintSteering"));
+  useEffect(() => onTipsReset(() => setArmed(true)), []);
   useEffect(() => {
+    if (!armed) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let up = false;
     const hide = () => {
@@ -109,17 +115,25 @@ function useKeyboardTip(): boolean {
       timer = null;
       up = false;
       setShown(false);
+      setArmed(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (up) {
         hide();
         return;
       }
-      if (readFlag("hintSteering") || readFlag("hintsOff")) return;
+      if (readFlag("hintSteering")) {
+        setArmed(false);
+        return;
+      }
+      if (readFlag("hintsOff")) return;
       if (!isHardwareKeydown(e, e.target)) return;
       writeFlag("hintSteering", true);
       // Someone who already presses the chord needs no tip.
-      if (getSteering().active || isEntryChord(e, e.target)) return;
+      if (getSteering().active || isEntryChord(e, e.target)) {
+        setArmed(false);
+        return;
+      }
       up = true;
       setShown(true);
       timer = setTimeout(hide, TIP_MS);
@@ -129,7 +143,7 @@ function useKeyboardTip(): boolean {
       window.removeEventListener("keydown", onKey, true);
       if (timer !== null) clearTimeout(timer);
     };
-  }, []);
+  }, [armed]);
   return shown;
 }
 

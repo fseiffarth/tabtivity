@@ -170,6 +170,14 @@ function readTip(hint: HintKey): void {
   draws.set(hint, false);
 }
 
+/** Called on Reset tips: what keeps a tip of its own (the steering bar's
+ * keyboard tip) makes it due again. */
+const tipsResetListeners = new Set<() => void>();
+export function onTipsReset(listener: () => void): () => void {
+  tipsResetListeners.add(listener);
+  return () => tipsResetListeners.delete(listener);
+}
+
 /** This device → Tips → Reset tips: every tip back at full chance, the old
  * per-tip "never again" flags and Turn off tips included. */
 export function resetTips(): void {
@@ -181,6 +189,7 @@ export function resetTips(): void {
   writeFlag("hintSteering", false);
   draws.clear();
   holder = undefined;
+  for (const listener of tipsResetListeners) listener();
 }
 
 /** × and Skip close for this visit; Read closes too and halves the tip's chance of
