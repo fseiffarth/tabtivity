@@ -1,7 +1,8 @@
 import { DraftSaver } from "../draftSaver";
 import { registerUnsavedWork } from "../../../lib/window/unsavedWork";
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { PaneUnsavedContext } from "../../../lib/tabs/tabCloseGuard";
 import { useSettingsStore } from "../../../stores/settings";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 import { useProjectsStore } from "../../../stores/projects";
@@ -147,6 +148,8 @@ function useEditHistory(initial: string) {
 export function useEditableFile(path: string, enabled = true) {
   const scope = useFileScope();
   const t = useT();
+  // The tab's close guard, when this viewer is a tab's (null elsewhere).
+  const registerPaneUnsaved = useContext(PaneUnsavedContext);
   const loadedIdentity = useRef<string | null>(null);
   const identity = JSON.stringify([path, scope]);
   const [content, setContent] = useState<string | null>(null);
@@ -276,12 +279,19 @@ export function useEditableFile(path: string, enabled = true) {
       dirty: () => saver.dirty,
       flush: () => saver.flushIfAutosave(),
     });
+    // Closing the tab with autosave off would drop the buffer: its × asks.
+    const unguard = registerPaneUnsaved?.({
+      lostOnClose: () => saver.lostOnDispose,
+      save: () => saver.flush(),
+      label: () => basename(path),
+    });
     return () => {
       active = false;
       unregister();
+      unguard?.();
       saver.dispose();
     };
-  }, [saver, path, scope]);
+  }, [saver, path, scope, registerPaneUnsaved]);
   useEffect(() => {
     saver.update(draft, baseline, loaded && enabled, autosave);
   }, [saver, draft, baseline, loaded, enabled, autosave]);

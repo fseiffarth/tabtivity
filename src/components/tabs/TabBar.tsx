@@ -88,7 +88,7 @@ import { newTabTarget, useBoxesStore, type BoxMemberDir } from "../../stores/box
 import { carriesAcrossHosts, switchTabLocation } from "../../stores/agents/agentLocationSwitch";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
-import { closeTabWithConfirm } from "../../lib/remote/closeRemoteTab";
+import { closeTabWithConfirm, closeTabsWithConfirm } from "../../lib/remote/closeRemoteTab";
 import { closedTabSlotHeld, noteTabClose, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
@@ -442,7 +442,7 @@ const TabItem = memo(function TabItem({
         onClick={(e) => {
           e.stopPropagation();
           noteTabClose(e.currentTarget);
-          closeTabWithConfirm(tab.key);
+          void closeTabWithConfirm(tab.key);
         }}
         // The chord closes the ACTIVE tab, so only the active tab's ×
         // claims it — on any other it would name a key that closes a
@@ -1285,17 +1285,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     setTabMenu({ x: event.clientX, y: event.clientY, key, index });
   }
 
-  // Bulk-close helpers built on `closeTabWithConfirm` (`removeTab` plus the
+  // Bulk-close helpers built on `closeTabsWithConfirm` (one close at a time, each
+  // asking first when its tab holds unsaved work; `removeTab` plus the
   // tab's local tmux session) over this group's ordered `tabs`. Each close reads fresh store state and repicks the active
   // tab / collapses empty groups, so looping over a render-time snapshot is safe.
   function closeToLeft(index: number) {
-    tabs.slice(0, index).forEach((tb) => closeTabWithConfirm(tb.key));
+    void closeTabsWithConfirm(tabs.slice(0, index).map((tb) => tb.key));
   }
   function closeToRight(index: number) {
-    tabs.slice(index + 1).forEach((tb) => closeTabWithConfirm(tb.key));
+    void closeTabsWithConfirm(tabs.slice(index + 1).map((tb) => tb.key));
   }
   function closeOthers(key: string) {
-    tabs.filter((tb) => tb.key !== key).forEach((tb) => closeTabWithConfirm(tb.key));
+    void closeTabsWithConfirm(tabs.filter((tb) => tb.key !== key).map((tb) => tb.key));
   }
 
   // Start a pointer-based tab drag once the pointer crosses a 5px threshold.
@@ -2261,7 +2262,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           <button
             className="tab-new-menu-item"
             onClick={() => {
-              closeTabWithConfirm(tabMenu.key);
+              void closeTabWithConfirm(tabMenu.key);
               setTabMenu(null);
             }}
           >
@@ -2359,7 +2360,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             onClick={() => {
               const name = stackMenu.name;
               setStackMenu(null);
-              tabs.filter((tb) => tb.stack === name).forEach((tb) => closeTabWithConfirm(tb.key));
+              void closeTabsWithConfirm(tabs.filter((tb) => tb.stack === name).map((tb) => tb.key));
             }}
           >
             <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>

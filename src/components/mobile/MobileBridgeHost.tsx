@@ -1450,7 +1450,7 @@ async function closeMobileTab(projectId: string, tmuxSession: string): Promise<D
   await restoreScope(scope);
   const tab = mobileTargetTab(scope.id, tmuxSession);
   if (!tab) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
-  closeTabInScope(scope.id, tab.key);
+  await closeTabInScope(scope.id, tab.key);
   // CenterPanel's debounce persists the ACTIVE scope only, and the phone closes
   // a tab in whichever project it is looking at. Without this write the catalog
   // — which reads that same session file — keeps listing the closed tab, and a

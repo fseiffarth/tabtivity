@@ -9,9 +9,9 @@
  * refuses a path that does not exist. So the deck debounces its own writes and
  * goes through `writeFileBytes`, which may create.
  *
- * **Why there is no save button.** Tabtivity has no unsaved-work prompt anywhere —
- * `closeTabWithConfirm` is literally `removeTab` — so a deck must never *hold*
- * unsaved state. It is small, it is text, and it is under git, which is where the
+ * **Why there is no save button.** A tab close asks about unsaved work only for
+ * the text viewers with autosave off (`lib/tabs/tabCloseGuard`); a deck is
+ * not one of them, so it must never *hold* unsaved state. It is small, it is text, and it is under git, which is where the
  * durable undo belongs. Ctrl+Z is the in-session undo; git is the real one.
  *
  * That last paragraph is a promise the code has to keep, and for a while it did

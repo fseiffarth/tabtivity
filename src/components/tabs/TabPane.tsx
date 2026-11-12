@@ -6,6 +6,7 @@ import { EmbedPane } from "../embed/EmbedPane";
 import { FileViewerPane } from "../embed/FileViewerPane";
 import { RemotePaneHold } from "../projects/RemotePaneHold";
 import { HostSessionHold } from "./HostSessionHold";
+import { TabCloseGuard } from "./TabCloseGuard";
 import { tabTerminalSpawn } from "../../lib/terminal/terminalSpawn";
 import { LoginTabPasteBar } from "../projects/CredentialPasteBar";
 
@@ -232,8 +233,11 @@ function TabPaneImpl({
         return <RemotePaneHold host={remoteHost} onConnect={onConnect ?? (() => {})} />;
       }
       return <FileBrowser projectDir={filesProjectDir} projectId={projectId} active={visible} />;
+    // The two kinds that hold an editable file viewer: their close guard asks
+    // before a close drops an unsaved buffer (`lib/tabs/tabCloseGuard`).
     case "projectfiles":
       return (
+        <TabCloseGuard scope={scope} tabKey={tab.key}>
         <ProjectFilesTab
           scope={scope}
           cwd={tab.cwd}
@@ -246,24 +250,29 @@ function TabPaneImpl({
           folder={tab.folder}
           visible={visible}
         />
+        </TabCloseGuard>
       );
     case "embed":
-      return tab.viewer ? (
-        <FileViewerPane
-          viewer={tab.viewer}
-          path={tab.embedPath ?? ""}
-          projectId={projectId}
-          tabKey={tab.key}
-          visible={visible}
-          groupId={groupId}
-        />
-      ) : (
-        <EmbedPane
-          path={tab.embedPath ?? ""}
-          exec={tab.embedExec}
-          projectId={projectId}
-          visible={visible}
-        />
+      return (
+        <TabCloseGuard scope={scope} tabKey={tab.key}>
+          {tab.viewer ? (
+            <FileViewerPane
+              viewer={tab.viewer}
+              path={tab.embedPath ?? ""}
+              projectId={projectId}
+              tabKey={tab.key}
+              visible={visible}
+              groupId={groupId}
+            />
+          ) : (
+            <EmbedPane
+              path={tab.embedPath ?? ""}
+              exec={tab.embedExec}
+              projectId={projectId}
+              visible={visible}
+            />
+          )}
+        </TabCloseGuard>
       );
     default: {
       // Remote terminal pane while the pool is down (main window only): show a
