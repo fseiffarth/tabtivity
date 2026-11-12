@@ -2112,7 +2112,8 @@ fn codex_event_label(event: &str) -> Option<(&'static str, bool)> {
 /// `hooks::engine::discovery::hook_hash` → `config::version_for_toml`). The
 /// timeout is normalized first — `SessionEnd` defaults to 1 s and is clamped
 /// to 1–3, every other event defaults to 600 — so a `SessionEnd` lowered from
-/// 10 to 3 keeps its hash. Reproduced against hashes Codex 0.164.0 wrote.
+/// 10 to 3 keeps its hash. Reproduced against hashes Codex 0.164.0 and 0.166.0
+/// wrote.
 fn codex_hook_hash(label: &str, matcher: Option<&str>, command: &str, timeout: Option<u64>) -> String {
     let timeout = if label == "session_end" {
         timeout.unwrap_or(1).clamp(1, u64::from(CODEX_SESSION_END_TIMEOUT))
@@ -2583,8 +2584,20 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20   exit 0 ;;\n\
          \x20 codex) [ -z \"$CLAUDECODE\" ] || exit 0\n\
          \x20   # Codex mints its own ids, so a start is free-form; every later event\n\
-         \x20   # must come from the session the tab already recorded.\n\
-         \x20   if [ \"$event\" != SessionStart ] && [ -n \"$cur\" ] && [ \"$sid\" != \"$cur\" ]; then exit 0; fi ;;\n\
+         \x20   # must come from the session the tab already recorded, or from a thread\n\
+         \x20   # forked off it: `/fork` and a safety rewrite fire a `fork` start the\n\
+         \x20   # registered matcher leaves out (widening it would change every home's\n\
+         \x20   # trust hash), so the fork's own rollout says whose it is. A subagent or\n\
+         \x20   # review thread can be a fork too; `thread_source` keeps those out. The\n\
+         \x20   # source record goes: none of its words says how a fork came about.\n\
+         \x20   if [ \"$event\" != SessionStart ] && [ -n \"$cur\" ] && [ \"$sid\" != \"$cur\" ]; then\n\
+         \x20     [ -n \"$tpath\" ] || exit 0\n\
+         \x20     meta=$(head -n 1 \"$tpath\" 2>/dev/null)\n\
+         \x20     case \"$meta\" in *\"\\\"forked_from_id\\\":\\\"$cur\\\"\"*) ;; *) exit 0 ;; esac\n\
+         \x20     case \"$meta\" in *'\"thread_source\":\"user\"'*) ;; *) exit 0 ;; esac\n\
+         \x20     rm -f \"$dir/${UPPER}_TAB_UID.src\"\n\
+         \x20     printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"\n\
+         \x20   fi ;;\n\
          \x20 *) if [ \"$sid\" != \"${UPPER}_TAB_UID\" ] && [ \"$sid\" != \"$cur\" ]; then\n\
          \x20      # Claude names the new transcript after its session; a Codex run under\n\
          \x20      # the tab sends null (a /clear, no rollout yet) or a rollout-… file.\n\
@@ -2744,8 +2757,17 @@ fn hook_script_body(live_dir: &str) -> String {
          if ($env:{UPPER}_TAB_AGENT -eq 'codex') {{\r\n\
          \x20 if (-not [string]::IsNullOrEmpty($env:CLAUDECODE)) {{ exit 0 }}\r\n\
          \x20 # Codex mints its own ids, so a start is free-form; every later event\r\n\
-         \x20 # must come from the session the tab already recorded.\r\n\
-         \x20 if (($event -ne 'SessionStart') -and ($cur -ne '') -and ($sid -ne $cur)) {{ exit 0 }}\r\n\
+         \x20 # must come from the session the tab already recorded, or from a thread\r\n\
+         \x20 # forked off it (see the POSIX twin). Get-Content, not ReadLines: it\r\n\
+         \x20 # shares the file with the Codex that is writing it.\r\n\
+         \x20 if (($event -ne 'SessionStart') -and ($cur -ne '') -and ($sid -ne $cur)) {{\r\n\
+         \x20   $mt = [regex]::Match($payload, '\"transcript_path\"\\s*:\\s*\"([^\"]*)\"')\r\n\
+         \x20   if (-not $mt.Success) {{ exit 0 }}\r\n\
+         \x20   $meta = Get-Content -LiteralPath ($mt.Groups[1].Value -replace '\\\\\\\\', '\\') -TotalCount 1\r\n\
+         \x20   if (($meta -notmatch ('\"forked_from_id\":\"' + [regex]::Escape($cur) + '\"')) -or ($meta -notmatch '\"thread_source\":\"user\"')) {{ exit 0 }}\r\n\
+         \x20   Remove-Item -LiteralPath ($rec + '.src') -Force -ErrorAction SilentlyContinue\r\n\
+         \x20   [IO.File]::WriteAllText($rec, $sid)\r\n\
+         \x20 }}\r\n\
          }} elseif (($sid -ne $uid) -and ($sid -ne $cur)) {{\r\n\
          \x20 $src = ''\r\n\
          \x20 if ($ms.Success) {{ $src = $ms.Groups[1].Value }}\r\n\

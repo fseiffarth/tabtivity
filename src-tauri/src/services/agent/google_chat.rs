@@ -3,7 +3,7 @@
 //! folder, created since launch for a fresh tab. Never read the user's home.
 //!
 //! Gemini writes JSON (newer versions JSONL with patches/rewinds) under
-//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.4.5) writes SQLite
+//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.4.11) writes SQLite
 //! trajectories: `steps.step_payload` is a CortexStep protobuf, not plain
 //! text. Its embedded descriptor defines user_input (19).user_response (2),
 //! planner_response (20).response (1), and metadata (5).created_at (1). Only

@@ -835,7 +835,7 @@ const CODEX_HOOKS_TABLE = /^\s*Event\s{2,}Installed\s{2,}Active\b/u;
 const CODEX_HOOKS_FOOTER = /^\s*(?:t (trust all)\s*·\s*)?enter (?:review|details)\s*·\s*esc (close)\s*$/u;
 
 /**
- * Codex's hooks page (0.163.0, 0.164.0): what `Review hooks` on its startup "Hooks need
+ * Codex's hooks page (0.163.0–0.166.0): what `Review hooks` on its startup "Hooks need
  * review" menu opens, and `/hooks`. A table of hook events under its heading,
  * its highlight on an event row, its answers in the footer:
  *

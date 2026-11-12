@@ -2851,6 +2851,7 @@ export const enSource = {
   "agents.checkingUpdates": "Checking…",
   "agents.checkUpdatesTitle": "Ask npm, PyPI or GitHub for the newest release of {label}. One request, only when you click.",
   "agents.updatesNone": "up to date",
+  "agents.updateCheckedAt": "Checked {when}",
   "agents.updateCheckNoBackend": "restart {app} to enable this",
   "agents.updateTitle": "Update {label} from {current} to {latest}: runs its installer again",
   "agents.updateUnreadTitle": "The installed version of {label} couldn't be read. Runs its installer again to get {latest}.",

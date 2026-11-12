@@ -514,13 +514,21 @@ pub(crate) fn local_catalog_json(
     // Codex has the fact rather than only the `-c model_reasoning_effort` order
     // to obey. "Could not tell" leaves the standard levels, matching the rest
     // of the capability rules: absence of an answer never removes a capability.
+    //
+    // `description` is required (`ReasoningEffortPreset`): Codex reads the
+    // catalog as part of its config, so a level without one makes it exit on
+    // "missing field `description`" before the TUI opens.
     let levels: Vec<serde_json::Value> = if thinking == Some(false) {
         Vec::new()
     } else {
-        ["low", "medium", "high"]
-            .iter()
-            .map(|e| serde_json::json!({ "effort": e }))
-            .collect()
+        [
+            ("low", "Fast responses with lighter reasoning"),
+            ("medium", "Balances speed and reasoning depth"),
+            ("high", "Greater reasoning depth for complex problems"),
+        ]
+        .iter()
+        .map(|(effort, description)| serde_json::json!({ "effort": effort, "description": description }))
+        .collect()
     };
     let mut modalities = vec!["text"];
     if vision {

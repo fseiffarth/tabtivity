@@ -68,11 +68,11 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("opencode", &["--version"]),
     // "2.1.284 (Claude Code)"
     ("claude", &["--version"]),
-    // "codex-cli 0.164.0"
+    // "codex-cli 0.166.0"
     ("codex", &["--version"]),
     // "GitHub Copilot CLI 1.0.88." (1.0.88; 0.0.393 printed "0.0.393 Commit: ea52078")
     ("copilot", &["--version"]),
-    // "1.4.5" (1.2.9 through 1.3.3 printed the same bare shape)
+    // "1.4.11" (1.2.9 through 1.4.5 printed the same bare shape)
     ("antigravity", &["--version"]),
     // "Muse Code 1.3.0 (1.3.0-R3057.1)" — only with [`VERSION_ENV`]'s flag.
     ("muse", &["--version"]),
@@ -119,38 +119,38 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "claude",
-        version: "2.1.311",
+        version: "2.1.314",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
         agent: "codex",
-        version: "0.164.0",
+        version: "0.166.0",
         surface: "§1.2 — mobile mode lines and Shift+Tab (agentModes.ts)",
     },
     Verified {
         agent: "codex",
-        version: "0.164.0",
+        version: "0.166.0",
         surface: "§1.2 — decision lamp: title repaints, numbered approval rows",
     },
     Verified {
         agent: "codex",
-        version: "0.164.0",
+        version: "0.166.0",
         surface: "§1.2 — the two-step /model sheet read off the screen",
     },
     Verified {
         agent: "codex",
-        version: "0.164.0",
+        version: "0.166.0",
         surface: "§1.2 — resume writer lock: a second writer refused, a killed one released",
     },
     Verified {
         agent: "antigravity",
-        version: "1.4.5",
+        version: "1.4.11",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
         agent: "copilot",
-        version: "1.0.89",
-        surface: "§1.5 — --continue/-p, session-state store, authTokens login layout",
+        version: "1.0.105",
+        surface: "§1.5 — -p/--session-id/--continue, session-state store, authTokens login layout",
     },
 ];
 
@@ -567,6 +567,9 @@ pub struct VersionReport {
     pub cached: bool,
     /// Whether the user has already dismissed the notice for this version.
     pub dismissed: bool,
+    /// This CLI's last "Check for update", when it has had one
+    /// (`services::agent_latest`).
+    pub update: Option<crate::services::agent_latest::UpdateReport>,
 }
 
 impl VersionReport {
@@ -587,6 +590,7 @@ impl VersionReport {
             checked_at: 0,
             cached: false,
             dismissed: false,
+            update: None,
         }
     }
 
@@ -609,6 +613,7 @@ impl VersionReport {
             error: seen.error.clone(),
             checked_at: seen.checked_at,
             cached,
+            update: None,
         }
     }
 }
@@ -807,13 +812,13 @@ mod tests {
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
-        let (state, stale) = drift("codex", Some("0.164.0"));
+        let (state, stale) = drift("codex", Some("0.166.0"));
         assert_eq!(state, DriftState::Match);
         assert!(stale.is_empty());
-        let (state, stale) = drift("codex", Some("0.164.1"));
+        let (state, stale) = drift("codex", Some("0.166.1"));
         assert_eq!(state, DriftState::Moved);
         assert_eq!(stale.len(), 4);
-        assert!(stale.iter().all(|note| note.version == "0.164.0" && note.direction == Direction::Newer));
+        assert!(stale.iter().all(|note| note.version == "0.166.0" && note.direction == Direction::Newer));
     }
 
     #[test]
@@ -825,7 +830,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.311")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.314")).0, DriftState::Match);
         // `muse` has a recipe but no recorded check — the honest answer is
         // "nobody has verified this", not a tick.
         assert_eq!(drift("muse", Some("1.3.0")).0, DriftState::Unverified);

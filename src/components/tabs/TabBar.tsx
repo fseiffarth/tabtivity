@@ -583,6 +583,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     localModelOffInRoot,
     localDrivers,
     enabledAgents,
+    refreshAgents,
     defaultAgentBin,
     vibeForLocalModel,
     compactAgentBins,
@@ -657,6 +658,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const menuOpen = menuPos !== null;
+  // An install in a terminal tab sends no registry event, so each opening re-reads
+  // the CLIs: a new one is in the menu that was just opened.
+  useEffect(() => {
+    if (menuOpen) refreshAgents();
+  }, [menuOpen, refreshAgents]);
   // The local-model group's GPU gate; probes only while the menu is open
   // (and never on a host-pinned scope, whose menu has no such group).
   const localModelGpu = useLocalModelPlacement(localModel, menuOpen && !hostPinned);

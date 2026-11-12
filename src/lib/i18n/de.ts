@@ -2822,6 +2822,7 @@ export const dict: Dict = {
   "agents.checkingUpdates": "Suche…",
   "agents.checkUpdatesTitle": "Fragt npm, PyPI oder GitHub nach der neuesten Version von {label}. Eine Anfrage, nur auf Klick.",
   "agents.updatesNone": "aktuell",
+  "agents.updateCheckedAt": "Geprüft {when}",
   "agents.updateCheckNoBackend": "{app} neu starten, um das zu aktivieren",
   "agents.updateTitle": "{label} von {current} auf {latest} aktualisieren: führt den Installer erneut aus",
   "agents.updateUnreadTitle": "Die installierte Version von {label} ließ sich nicht lesen. Führt den Installer erneut aus, um {latest} zu holen.",
