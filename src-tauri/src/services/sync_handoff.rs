@@ -28,6 +28,18 @@
 //! What an agent writes back is read the same way ([`load_resolved_in`]),
 //! bounded and only as UTF-8 text.
 //!
+//! **Which export is read.** Every agent tab of the project can write the
+//! hand-over folder, so nothing in it decides what "Load resolved" shows. Each
+//! export folder is created exclusively (a taken name is skipped, never
+//! reused), and the app records the exports it made, with a SHA-256 of both
+//! texts per file, under the state dir (`sync-handoff/<scope>.json`), out of
+//! every agent's reach. Load resolved reads only a recorded export — the one
+//! the window names, else the newest recorded for that file — never falls
+//! back to another export's result (an older one is only offered, by name and
+//! time), and marks the result stale when the texts the resolver shows now
+//! differ from the recorded fingerprints. Pruning removes only recorded
+//! exports, oldest first by their own time.
+//!
 //! No merge base is written: byte-sync records only the size and mtime of the
 //! last synced copy, never its content, and none is invented.
 //!
@@ -116,19 +128,6 @@ pub struct HandoffExport {
     pub file_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolvedFile {
-    pub id: String,
-    pub text: String,
-}
-
-/// Names Windows treats as devices whatever the extension.
-const RESERVED_NAMES: &[&str] = &[
-    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1",
-    "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-];
-
 /// A project-relative path as its components, or `None` when it could name
 /// anything but a plain file below the export's folder: empty, absolute,
 /// `.`/`..`, a backslash or drive colon, a control character, a Windows device
@@ -153,8 +152,7 @@ pub fn safe_rel(rel: &str) -> Option<Vec<&str>> {
         if p.ends_with(' ') || p.ends_with('.') {
             return None;
         }
-        let stem = p.split('.').next().unwrap_or(p).to_ascii_lowercase();
-        if RESERVED_NAMES.contains(&stem.as_str()) {
+        if crate::paths::is_windows_device_name(p) {
             return None;
         }
     }
@@ -324,8 +322,54 @@ fn write_in(dir: &HomeDir, name: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 /// A fresh export id: `conflicts-<UTC stamp>-<4 hex>`; sorts by time.
-fn new_id(now: DateTime<Utc>, nonce: u16) -> String {
-    format!("conflicts-{}-{nonce:04x}", now.format("%Y%m%d-%H%M%S"))
+fn new_id(now: DateTime<Utc>, suffix: u16) -> String {
+    format!("conflicts-{}-{suffix:04x}", now.format("%Y%m%d-%H%M%S"))
+}
+
+/// Names tried for one export before giving up: a name already taken (an
+/// earlier export in the same second, or a folder an agent made) is skipped
+/// for another suffix, never written into.
+const ID_ATTEMPTS: u16 = 4;
+
+/// Where the app records the exports it made, under the state dir: no agent
+/// can reach it, unlike the hand-over folder, which every agent tab of the
+/// project can write. "Load resolved" reads only an export recorded here and
+/// judges staleness against the fingerprints recorded here, so a folder an
+/// agent creates or rewrites can neither become "the newest export" nor make
+/// an old result look current.
+const LEDGER_DIR: &str = "sync-handoff";
+
+fn ledger_path(state_dir: &Path, scope_id: &str) -> PathBuf {
+    state_dir.join(LEDGER_DIR).join(format!("{}.json", storage::project_key(scope_id)))
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Ledger {
+    #[serde(default)]
+    exports: Vec<LedgerExport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LedgerExport {
+    id: String,
+    /// Unix seconds the export was made.
+    at: i64,
+    files: Vec<LedgerFile>,
+}
+
+/// One exported file and the fingerprints of the two texts handed over.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LedgerFile {
+    rel: String,
+    local: String,
+    remote: String,
+}
+
+/// The SHA-256 of `text`'s UTF-8 bytes, as lowercase hex: what the record
+/// holds per side, and what the resolver sends for the texts it shows now
+/// (`src/lib/sha256.ts`).
+pub fn text_sha256(text: &str) -> String {
+    crate::digest::sha256_hex(text.as_bytes())
 }
 
 /// Write the export under the home of `scope_id` below `state_dir`. The scope
@@ -335,7 +379,7 @@ pub fn export_in(
     scope_id: &str,
     files: &[HandoffFileIn],
     now: DateTime<Utc>,
-    nonce: u16,
+    suffix: u16,
 ) -> Result<HandoffExport, String> {
     if storage::is_reserved_scope(scope_id) {
         return Err("this scope has no project files to hand over".into());
@@ -343,10 +387,29 @@ pub fn export_in(
     validate(files)?;
     let home = agent_home::scope_home_in(state_dir, scope_id);
     let root = HomeDir::open(&home, DIR).ok_or("could not open the hand-over folder")?;
-    prune(&root);
-    let id = new_id(now, nonce);
-    let out = root.subdir(&id).ok_or("could not create the export folder")?;
-    let written = (|| -> Result<(), String> {
+    let mut made = None;
+    for attempt in 0..ID_ATTEMPTS {
+        let id = new_id(now, suffix.wrapping_add(attempt.wrapping_mul(0x9e37)));
+        match root.create_subdir(&id) {
+            Ok(dir) => {
+                made = Some((id, dir));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not create the export folder: {e}")),
+        }
+    }
+    let (id, out) = made.ok_or("could not create the export folder: every name tried is taken")?;
+    // Fingerprinted before the record's lock is taken.
+    let entry = LedgerExport {
+        id: id.clone(),
+        at: now.timestamp(),
+        files: files
+            .iter()
+            .map(|f| LedgerFile { rel: f.rel_path.clone(), local: text_sha256(&f.local_text), remote: text_sha256(&f.remote_text) })
+            .collect(),
+    };
+    let written = (|| -> Result<Vec<String>, String> {
         for f in files {
             let parts = safe_rel(&f.rel_path).ok_or("unsafe path")?;
             for (side, text) in [("local", &f.local_text), ("remote", &f.remote_text)] {
@@ -357,47 +420,152 @@ pub fn export_in(
         }
         // The folder the agent writes into, present from the start.
         out.subdir("resolved").ok_or("could not create the resolved folder")?;
-        write_in(&out, "CONFLICTS.md", conflicts_md(files).as_bytes())
+        write_in(&out, "CONFLICTS.md", conflicts_md(files).as_bytes())?;
+        record(state_dir, scope_id, entry)
     })();
-    if let Err(e) = written {
-        // No half-written export left for an agent (or Load resolved) to find.
-        let _ = root.remove_tree(&id);
-        return Err(e);
-    }
-    Ok(HandoffExport { agent_dir: format!("~/{DIR}/{id}"), id, file_count: files.len() })
-}
-
-/// Remove the oldest exports so at most `KEEP - 1` remain before a new one.
-fn prune(root: &HomeDir) {
-    let mut ids: Vec<String> = root.names().into_iter().filter(|n| n.starts_with("conflicts-")).collect();
-    ids.sort();
-    while ids.len() >= KEEP {
-        let oldest = ids.remove(0);
-        let _ = root.remove_tree(&oldest);
-    }
-}
-
-/// The newest export's `resolved/<rel>` for `rel` under `scope_id`, as UTF-8
-/// text within [`MAX_FILE_BYTES`]; `None` when no export holds one.
-pub fn load_resolved_in(state_dir: &Path, scope_id: &str, rel: &str) -> Option<ResolvedFile> {
-    if storage::is_reserved_scope(scope_id) {
-        return None;
-    }
-    let parts = safe_rel(rel)?;
-    let home = agent_home::scope_home_in(state_dir, scope_id);
-    let root = HomeDir::open_existing(&home, DIR)?;
-    let mut ids: Vec<String> = root.names().into_iter().filter(|n| n.starts_with("conflicts-")).collect();
-    ids.sort();
-    for id in ids.into_iter().rev() {
-        let Some(dir) = root.open_subdir(&id).and_then(|d| d.open_subdir("resolved")) else { continue };
-        let Some(file) = open_below(&dir, &parts) else { continue };
-        // Capped while reading: the agent controls this file's size.
-        let Some(bytes) = file.read_capped(MAX_FILE_BYTES as u64) else { continue };
-        if let Ok(text) = String::from_utf8(bytes) {
-            return Some(ResolvedFile { id, text });
+    match written {
+        Ok(dropped) => {
+            prune(&root, &dropped);
+            Ok(HandoffExport { agent_dir: format!("~/{DIR}/{id}"), id, file_count: files.len() })
+        }
+        Err(e) => {
+            // No half-written or unrecorded export left for an agent to find.
+            let _ = root.remove_tree(&id);
+            Err(e)
         }
     }
-    None
+}
+
+/// Add `entry` to the scope's record, keeping the newest [`KEEP`] by their
+/// own time; the ids that fell out are returned for [`prune`].
+fn record(state_dir: &Path, scope_id: &str, entry: LedgerExport) -> Result<Vec<String>, String> {
+    let path = ledger_path(state_dir, scope_id);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("could not record the export: {e}"))?;
+    }
+    storage::patch_json(&path, Ledger::default(), move |ledger: &mut Ledger| {
+        ledger.exports.retain(|e| is_export_id(&e.id) && e.id != entry.id);
+        ledger.exports.push(entry);
+        ledger.exports.sort_by(|a, b| (a.at, &a.id).cmp(&(b.at, &b.id)));
+        let excess = ledger.exports.len().saturating_sub(KEEP);
+        Ok(ledger.exports.drain(..excess).map(|e| e.id).collect())
+    })
+    .map_err(|e| format!("could not record the export: {e}"))
+}
+
+/// Remove the folders of exports that fell out of the record. Only recorded
+/// exports are ever removed: a folder the record does not know (an agent's,
+/// or one an older build made) is neither counted nor deleted.
+fn prune(root: &HomeDir, dropped: &[String]) {
+    for id in dropped.iter().filter(|id| is_export_id(id)) {
+        let _ = root.remove_tree(id);
+    }
+}
+
+fn read_ledger(state_dir: &Path, scope_id: &str) -> Result<Ledger, String> {
+    let path = ledger_path(state_dir, scope_id);
+    match std::fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Ledger::default()),
+        _ => storage::read_json(&path).map_err(|e| format!("the hand-over record is unreadable: {e}")),
+    }
+}
+
+/// An export named in a [`ResolvedLoad`], with the time it was made.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportRef {
+    pub id: String,
+    /// Unix seconds, from the app's own record.
+    pub exported_at: i64,
+}
+
+/// What "Load resolved" found for one file in one recorded export.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedLoad {
+    /// The export read: the one asked for, else the newest recorded export
+    /// of this file.
+    pub id: String,
+    pub exported_at: i64,
+    /// The agent's result in that export; `None` while it has written none
+    /// (another export's result is never put here).
+    pub text: Option<String>,
+    /// The texts the resolver shows now are not the ones handed over in
+    /// this export, so its result may miss later changes.
+    pub stale: bool,
+    /// When `text` is `None`: the newest *older* recorded export of this file
+    /// that holds a result, offered for the user to load explicitly.
+    pub older: Option<ExportRef>,
+    /// A recorded export of this file newer than the one read.
+    pub newer: Option<ExportRef>,
+}
+
+/// "Load resolved" for `rel` under `scope_id`, bound to the exports the app
+/// recorded ([`record`]): `export_id` when given (it must have the export
+/// shape and be recorded for this file), else the newest one recorded for
+/// this file. Its `resolved/<rel>` is read handle by handle, as UTF-8 within
+/// [`MAX_FILE_BYTES`]; `local_hash`/`remote_hash` are the [`text_sha256`] of
+/// the texts the resolver shows now, compared with the recorded ones.
+/// `Ok(None)` when no such export is recorded for this file.
+pub fn load_resolved_in(
+    state_dir: &Path,
+    scope_id: &str,
+    rel: &str,
+    export_id: Option<&str>,
+    local_hash: &str,
+    remote_hash: &str,
+) -> Result<Option<ResolvedLoad>, String> {
+    if export_id.is_some_and(|id| !is_export_id(id)) {
+        return Err("not a hand-over export id".into());
+    }
+    if storage::is_reserved_scope(scope_id) {
+        return Ok(None);
+    }
+    let Some(parts) = safe_rel(rel) else { return Ok(None) };
+    let ledger = read_ledger(state_dir, scope_id)?;
+    // This file's recorded exports, newest first by their own time.
+    let mut mine: Vec<(&LedgerExport, &LedgerFile)> = ledger
+        .exports
+        .iter()
+        .filter(|e| is_export_id(&e.id))
+        .filter_map(|e| e.files.iter().find(|f| f.rel == rel).map(|f| (e, f)))
+        .collect();
+    mine.sort_by(|a, b| (b.0.at, &b.0.id).cmp(&(a.0.at, &a.0.id)));
+    let at = match export_id {
+        Some(id) => mine.iter().position(|(e, _)| e.id == id),
+        None => (!mine.is_empty()).then_some(0),
+    };
+    let Some(at) = at else { return Ok(None) };
+    let (export, file) = mine[at];
+    let home = agent_home::scope_home_in(state_dir, scope_id);
+    let root = HomeDir::open_existing(&home, DIR);
+    let result = |id: &str| root.as_ref().and_then(|r| resolved_file(r, id, &parts));
+    let text = result(&export.id).and_then(|f| f.read_capped(MAX_FILE_BYTES as u64)).and_then(|b| String::from_utf8(b).ok());
+    let reference = |e: &LedgerExport| ExportRef { id: e.id.clone(), exported_at: e.at };
+    // A probe, not a read: the user loads the older result only on purpose.
+    let older = if text.is_none() {
+        mine[at + 1..]
+            .iter()
+            .find(|(e, _)| result(&e.id).and_then(|f| f.metadata()).is_some_and(|m| m.is_file && m.len <= MAX_FILE_BYTES as u64))
+            .map(|(e, _)| reference(e))
+    } else {
+        None
+    };
+    let stale = !file.local.eq_ignore_ascii_case(local_hash) || !file.remote.eq_ignore_ascii_case(remote_hash);
+    Ok(Some(ResolvedLoad {
+        id: export.id.clone(),
+        exported_at: export.at,
+        text,
+        stale,
+        older,
+        newer: (at > 0).then(|| reference(mine[0].0)),
+    }))
+}
+
+/// `resolved/<parts>` of export `id`, opened without following a link.
+fn resolved_file(root: &HomeDir, id: &str, parts: &[&str]) -> Option<HomeFile> {
+    let dir = root.open_subdir(id)?.open_subdir("resolved")?;
+    open_below(&dir, parts)
 }
 
 /// True for an id [`new_id`] could have made: `conflicts-` + stamp + hex,
@@ -551,26 +719,144 @@ mod tests {
         assert_eq!(left, ids[3..].to_vec());
     }
 
+    /// The hashes of `local`/`remote` as the resolver sends them.
+    fn shown(local: &str, remote: &str) -> (String, String) {
+        (text_sha256(local), text_sha256(remote))
+    }
+
+    fn load(state: &Path, rel: &str, id: Option<&str>, now_shows: &(String, String)) -> Option<ResolvedLoad> {
+        load_resolved_in(state, "p", rel, id, &now_shows.0, &now_shows.1).unwrap()
+    }
+
+    fn put_result(state: &Path, id: &str, rel: &str, text: &str) {
+        let dir = rel.split('/').fold(agent_home::scope_home_in(state, "p").join(DIR).join(id).join("resolved"), |p, c| p.join(c));
+        std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+        std::fs::write(dir, text).unwrap();
+    }
+
+    fn at(secs: i64) -> DateTime<Utc> {
+        Utc.timestamp_opt(secs, 0).single().unwrap()
+    }
+
+    /// 108: A has a result, then B is made from changed sources and has none.
+    /// Loading B says "none yet" for B and offers A only as older; A's text is
+    /// never B's answer.
     #[test]
-    fn load_resolved_reads_the_newest_export_that_has_the_file() {
+    fn an_older_exports_result_is_never_presented_as_the_current_ones() {
         let state = tempfile::tempdir().unwrap();
-        let first = export_in(state.path(), "p", &[file("src/a.py", "1", "2")], now(), 1).unwrap();
-        let later = Utc.timestamp_opt(1_762_100_600, 0).single().unwrap();
-        let second = export_in(state.path(), "p", &[file("src/a.py", "1", "2")], later, 2).unwrap();
-        assert_eq!(load_resolved_in(state.path(), "p", "src/a.py"), None);
-        let home = agent_home::scope_home_in(state.path(), "p");
-        let put = |id: &str, text: &str| {
-            let dir = home.join(DIR).join(id).join("resolved").join("src");
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("a.py"), text).unwrap();
-        };
-        put(&first.id, "old merge");
-        assert_eq!(load_resolved_in(state.path(), "p", "src/a.py").unwrap(), ResolvedFile { id: first.id.clone(), text: "old merge".into() });
-        put(&second.id, "new merge");
-        assert_eq!(load_resolved_in(state.path(), "p", "src/a.py").unwrap(), ResolvedFile { id: second.id, text: "new merge".into() });
-        assert_eq!(load_resolved_in(state.path(), "p", "../a.py"), None);
-        assert_eq!(load_resolved_in(state.path(), "p", "other.py"), None);
-        assert_eq!(load_resolved_in(state.path(), storage::ROOT_SCOPE, "src/a.py"), None);
+        let a = export_in(state.path(), "p", &[file("src/a.py", "1", "2")], now(), 1).unwrap();
+        put_result(state.path(), &a.id, "src/a.py", "old merge");
+        let b = export_in(state.path(), "p", &[file("src/a.py", "1 changed", "2")], at(1_762_100_600), 2).unwrap();
+        let shows_b = shown("1 changed", "2");
+
+        let got = load(state.path(), "src/a.py", None, &shows_b).unwrap();
+        assert_eq!(got.id, b.id);
+        assert_eq!(got.exported_at, 1_762_100_600);
+        assert_eq!(got.text, None, "A's result must not stand in for B's");
+        assert!(!got.stale);
+        assert_eq!(got.older, Some(ExportRef { id: a.id.clone(), exported_at: now().timestamp() }));
+        assert_eq!(got.newer, None);
+        // The same when the window names B.
+        let named = load(state.path(), "src/a.py", Some(&b.id), &shows_b).unwrap();
+        assert_eq!((named.id.as_str(), named.text.as_deref()), (b.id.as_str(), None));
+
+        // A loaded on purpose comes back as A's, stale against what is shown
+        // now, with B named as newer.
+        let older = load(state.path(), "src/a.py", Some(&a.id), &shows_b).unwrap();
+        assert_eq!(older.id, a.id);
+        assert_eq!(older.text.as_deref(), Some("old merge"));
+        assert!(older.stale);
+        assert_eq!(older.newer.map(|n| n.id), Some(b.id.clone()));
+
+        put_result(state.path(), &b.id, "src/a.py", "new merge");
+        let got = load(state.path(), "src/a.py", None, &shows_b).unwrap();
+        assert_eq!((got.id.as_str(), got.text.as_deref(), got.older), (b.id.as_str(), Some("new merge"), None));
+
+        assert_eq!(load(state.path(), "../a.py", None, &shows_b), None);
+        assert_eq!(load(state.path(), "other.py", None, &shows_b), None);
+        assert_eq!(load_resolved_in(state.path(), storage::ROOT_SCOPE, "src/a.py", None, &shows_b.0, &shows_b.1).unwrap(), None);
+    }
+
+    /// 108b: a folder an agent made, however high it sorts, is never chosen,
+    /// and never counts towards (or survives into) the newest-ten window.
+    #[test]
+    fn a_planted_export_folder_is_never_chosen_nor_pushes_real_ones_out() {
+        let state = tempfile::tempdir().unwrap();
+        let real = export_in(state.path(), "p", &[file("a.py", "1", "2")], now(), 1).unwrap();
+        for planted in ["conflicts-zzzz", "conflicts-99999999-999999-ffff", "conflicts-fff"] {
+            put_result(state.path(), planted, "a.py", "planted");
+            std::fs::create_dir_all(agent_home::scope_home_in(state.path(), "p").join(DIR).join(planted).join("local")).unwrap();
+            std::fs::write(agent_home::scope_home_in(state.path(), "p").join(DIR).join(planted).join("local").join("a.py"), "1").unwrap();
+        }
+        let shows = shown("1", "2");
+        let got = load(state.path(), "a.py", None, &shows).unwrap();
+        assert_eq!((got.id.as_str(), got.text, got.older), (real.id.as_str(), None, None));
+        // Named, a well-formed but unrecorded id is not read either.
+        assert_eq!(load(state.path(), "a.py", Some("conflicts-99999999-999999-ffff"), &shows), None);
+        // More real exports than KEEP: the planted folders neither push one out
+        // nor are counted; the recorded ten are kept.
+        let mut ids = vec![real.id.clone()];
+        for i in 1..KEEP as i64 {
+            ids.push(export_in(state.path(), "p", &[file("a.py", "1", "2")], at(now().timestamp() + i * 60), i as u16 + 1).unwrap().id);
+        }
+        let root = agent_home::scope_home_in(state.path(), "p").join(DIR);
+        for id in &ids {
+            assert!(root.join(id).is_dir(), "{id} was pushed out");
+        }
+        assert!(root.join("conflicts-zzzz").is_dir(), "an unrecorded folder is not the app's to delete");
+    }
+
+    /// An id with path tricks is refused before anything is read.
+    #[test]
+    fn an_export_id_with_path_tricks_is_refused() {
+        let state = tempfile::tempdir().unwrap();
+        export_in(state.path(), "p", &[file("a.py", "1", "2")], now(), 1).unwrap();
+        let shows = shown("1", "2");
+        for bad in ["../x", "conflicts-..", "conflicts-/etc", "conflicts-1/../../x", "notes", "conflicts-", "conflicts-zz", "conflicts-1\\x"] {
+            assert!(load_resolved_in(state.path(), "p", "a.py", Some(bad), &shows.0, &shows.1).is_err(), "{bad:?}");
+        }
+    }
+
+    /// The fingerprints are the app's, not the folder's: an agent rewriting
+    /// the exported copies cannot make a result fresh, and only the texts the
+    /// resolver shows now decide.
+    #[test]
+    fn a_result_is_stale_when_the_shown_texts_differ_from_the_exported_ones() {
+        let state = tempfile::tempdir().unwrap();
+        let out = export_in(state.path(), "p", &[file("a.py", "mine", "theirs")], now(), 1).unwrap();
+        put_result(state.path(), &out.id, "a.py", "merged");
+        assert!(!load(state.path(), "a.py", None, &shown("mine", "theirs")).unwrap().stale);
+        assert!(load(state.path(), "a.py", None, &shown("mine, edited", "theirs")).unwrap().stale);
+        assert!(load(state.path(), "a.py", None, &shown("mine", "theirs, pulled")).unwrap().stale);
+        let copies = agent_home::scope_home_in(state.path(), "p").join(DIR).join(&out.id);
+        std::fs::write(copies.join("local").join("a.py"), "mine, edited").unwrap();
+        assert!(load(state.path(), "a.py", None, &shown("mine, edited", "theirs")).unwrap().stale);
+        // Upper-case hex from a client compares the same.
+        let upper = (text_sha256("mine").to_uppercase(), text_sha256("theirs").to_uppercase());
+        assert!(!load(state.path(), "a.py", None, &upper).unwrap().stale);
+    }
+
+    /// H3: an export never writes into a folder that already exists; it takes
+    /// another name.
+    #[test]
+    fn an_export_takes_a_fresh_folder_when_its_name_is_taken() {
+        let state = tempfile::tempdir().unwrap();
+        let root = agent_home::scope_home_in(state.path(), "p").join(DIR);
+        let taken = new_id(now(), 7);
+        std::fs::create_dir_all(root.join(&taken)).unwrap();
+        std::fs::write(root.join(&taken).join("CONFLICTS.md"), "an agent's").unwrap();
+        let out = export_in(state.path(), "p", &[file("a.py", "1", "2")], now(), 7).unwrap();
+        assert_ne!(out.id, taken);
+        assert!(is_export_id(&out.id));
+        assert_eq!(std::fs::read_to_string(root.join(&taken).join("CONFLICTS.md")).unwrap(), "an agent's");
+        assert_eq!(std::fs::read_dir(root.join(&taken)).unwrap().count(), 1);
+        // Every name tried taken: refused, nothing written anywhere.
+        for attempt in 0..ID_ATTEMPTS {
+            std::fs::create_dir_all(root.join(new_id(at(1_762_300_000), 3u16.wrapping_add(attempt.wrapping_mul(0x9e37))))).unwrap();
+        }
+        let before = std::fs::read_dir(&root).unwrap().count();
+        assert!(export_in(state.path(), "p", &[file("a.py", "1", "2")], at(1_762_300_000), 3).is_err());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), before);
     }
 
     #[test]
@@ -578,10 +864,11 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let out = export_in(state.path(), "p", &[file("a.bin", "1", "2")], now(), 1).unwrap();
         let resolved = agent_home::scope_home_in(state.path(), "p").join(DIR).join(&out.id).join("resolved");
+        let shows = shown("1", "2");
         std::fs::write(resolved.join("a.bin"), [0xff, 0xfe, 0x00]).unwrap();
-        assert_eq!(load_resolved_in(state.path(), "p", "a.bin"), None);
+        assert_eq!(load(state.path(), "a.bin", None, &shows).unwrap().text, None);
         std::fs::write(resolved.join("a.bin"), vec![b'x'; MAX_FILE_BYTES + 1]).unwrap();
-        assert_eq!(load_resolved_in(state.path(), "p", "a.bin"), None);
+        assert_eq!(load(state.path(), "a.bin", None, &shows).unwrap().text, None);
     }
 
     #[cfg(unix)]
@@ -590,23 +877,22 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let secret = tempfile::tempdir().unwrap();
         std::fs::write(secret.path().join("a.py"), "secret").unwrap();
-        let out = export_in(state.path(), "p", &[file("a.py", "1", "2")], now(), 1).unwrap();
+        let out = export_in(state.path(), "p", &[file("a.py", "1", "2"), file("d/a.py", "1", "2")], now(), 1).unwrap();
         let resolved = agent_home::scope_home_in(state.path(), "p").join(DIR).join(&out.id).join("resolved");
+        let shows = shown("1", "2");
         // A link standing in for the result file, and one for a folder on the way.
         std::os::unix::fs::symlink(secret.path().join("a.py"), resolved.join("a.py")).unwrap();
-        assert_eq!(load_resolved_in(state.path(), "p", "a.py"), None);
-        std::fs::create_dir_all(resolved.join("d")).ok();
-        std::fs::remove_dir_all(resolved.join("d")).unwrap();
+        assert_eq!(load(state.path(), "a.py", None, &shows).unwrap().text, None);
         std::os::unix::fs::symlink(secret.path(), resolved.join("d")).unwrap();
-        assert_eq!(load_resolved_in(state.path(), "p", "d/a.py"), None);
-        // An export into a folder the agent swapped for a link fails instead of writing through it.
-        let home = agent_home::scope_home_in(state.path(), "p");
-        let root = home.join(DIR);
+        assert_eq!(load(state.path(), "d/a.py", None, &shows).unwrap().text, None);
+        // An export whose name the agent took with a link goes to another
+        // name instead of writing through it.
+        let root = agent_home::scope_home_in(state.path(), "p").join(DIR);
         let victim = tempfile::tempdir().unwrap();
-        let next = new_id(Utc.timestamp_opt(1_762_200_000, 0).single().unwrap(), 9);
+        let next = new_id(at(1_762_200_000), 9);
         std::os::unix::fs::symlink(victim.path(), root.join(&next)).unwrap();
-        let again = export_in(state.path(), "p", &[file("a.py", "1", "2")], Utc.timestamp_opt(1_762_200_000, 0).single().unwrap(), 9);
-        assert!(again.is_err());
+        let again = export_in(state.path(), "p", &[file("a.py", "1", "2")], at(1_762_200_000), 9).unwrap();
+        assert_ne!(again.id, next);
         assert_eq!(std::fs::read_dir(victim.path()).unwrap().count(), 0);
     }
 

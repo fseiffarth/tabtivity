@@ -501,6 +501,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     // below the project's agent home, never a project folder.
     ("sync_handoff_export", "files", BodyConfined),
     ("sync_handoff_load_resolved", "relPath", BodyConfined),
+    // A SHA-256 of the text the resolver shows, compared with the record.
+    ("sync_handoff_load_resolved", "localHash", NotAPath),
     // ── On a remote host ────────────────────────────────────────────────
     ("compile_tex_host", "path", Remote), // checked inside the project root (`tex/host.rs`)
     ("hpc_ws_anchor", "mirrorPath", Remote),

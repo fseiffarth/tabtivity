@@ -6,13 +6,34 @@ import { useSyncStore } from "../../stores/remote/sync";
 import { useTabsStore } from "../../stores/tabs";
 import { resolveProjectDirectory, resolveLocalMirror } from "../../types";
 import { relFromAbs } from "../../lib/viewers/fileUtils";
+import { readFileText } from "../../lib/files/fileAccess";
 import { useT } from "../../lib/i18n";
 import { useSyncSideTimes } from "./useSyncSideTimes";
 import { SyncHandoffButton } from "./SyncHandoffButton";
+import { sha256Hex } from "../../lib/sha256";
 import { UntestedTag } from "../common/UntestedTag";
 import { buildHandoffFile } from "../../lib/viewers/syncHandoff";
 import { joinRemote } from "../../lib/viewers/syncHandoffCollect";
 import { sshOf, useRemoteStatusStore } from "../../stores/remote/remoteStatus";
+
+/** One recorded hand-over (`services::sync_handoff::ExportRef`). */
+interface ExportRef {
+  id: string;
+  /** Unix seconds. */
+  exportedAt: number;
+}
+
+/** What Load resolved found (`services::sync_handoff::ResolvedLoad`). */
+interface ResolvedLoad extends ExportRef {
+  /** The agent's result in that hand-over; never another hand-over's. */
+  text: string | null;
+  /** The copies shown now differ from the ones handed over. */
+  stale: boolean;
+  older: ExportRef | null;
+  newer: ExportRef | null;
+}
+
+const exportTime = (secs: number) => new Date(secs * 1000).toLocaleString();
 
 /**
  * Three-way merge for a diverged (amber) file of a remote project — the PyCharm-
@@ -98,8 +119,8 @@ export function SyncMergeView({
     setLocalText(null);
     setHostText(null);
     Promise.all([
-      invoke<string>("read_file_text", { path, projectId }).catch(() => ""),
-      invoke<string>("read_file_text", { path: hostPath, projectId }),
+      readFileText(path, projectId).catch(() => ""),
+      readFileText(hostPath, projectId),
     ])
       .then(([local, host]) => {
         if (cancelled) return;
@@ -120,20 +141,43 @@ export function SyncMergeView({
   const connected = useRemoteStatusStore((s) => (projectId ? sshOf(s, projectId) === "connected" : false));
   // A resolved file the agent wrote, handed to the Result column (never saved).
   const [loadResult, setLoadResult] = useState<{ text: string; nonce: number } | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const loadResolved = () => {
-    if (!projectId || !rel) return;
+  const [note, setNote] = useState<{ text: string; warn?: boolean } | null>(null);
+  // The hand-over this view made; without one (a remount, a restart, a bulk
+  // export from the side panel) the backend reads the newest one it recorded
+  // for this file. An older hand-over's result is only offered, never loaded
+  // in its place.
+  const [exportId, setExportId] = useState<string | null>(null);
+  const [offer, setOffer] = useState<{ older: ExportRef | null; newer: ExportRef | null } | null>(null);
+  const loadResolved = (id: string | null) => {
+    if (!projectId || !rel || localText == null || hostText == null) return;
     setNote(null);
-    invoke<{ id: string; text: string } | null>("sync_handoff_load_resolved", { projectId, relPath: rel })
+    setOffer(null);
+    invoke<ResolvedLoad | null>("sync_handoff_load_resolved", {
+      projectId,
+      relPath: rel,
+      exportId: id,
+      localHash: sha256Hex(localText),
+      remoteHash: sha256Hex(hostText),
+    })
       .then((r) => {
         if (!r) {
-          setNote(t("syncHandoff.noneYet"));
+          setNote({ text: t("syncHandoff.noExport") });
+          return;
+        }
+        if (r.older || r.newer) setOffer({ older: r.older, newer: r.newer });
+        const time = exportTime(r.exportedAt);
+        if (r.text == null) {
+          setNote({ text: t("syncHandoff.noneYetFor", { time }) });
           return;
         }
         setLoadResult({ text: r.text, nonce: Date.now() });
-        setNote(t("syncHandoff.loadedNote"));
+        setNote(
+          r.stale
+            ? { text: t("syncHandoff.loadedStale", { time }), warn: true }
+            : { text: t("syncHandoff.loadedFrom", { time }) },
+        );
       })
-      .catch((e) => setNote(String(e)));
+      .catch((e) => setNote({ text: String(e), warn: true }));
   };
 
   const closeTab = () => {
@@ -191,8 +235,41 @@ export function SyncMergeView({
         <div className="file-viewer-error" style={{ padding: "4px 8px", flex: "0 0 auto" }}>{error}</div>
       )}
       {note != null && (
-        <div className="file-viewer-loading" style={{ flex: "0 0 auto", padding: "4px 10px", fontSize: "11px" }}>
-          {note}
+        <div
+          className={note.warn ? "file-viewer-error" : "file-viewer-loading"}
+          style={{ flex: "0 0 auto", padding: "4px 10px", fontSize: "11px" }}
+        >
+          {note.text}
+          {offer?.older && (
+            <>
+              {" "}
+              {t("syncHandoff.olderOffer", { time: exportTime(offer.older.exportedAt) })}{" "}
+              <button
+                type="button"
+                className="file-viewer-format-btn"
+                onClick={() => offer.older && loadResolved(offer.older.id)}
+              >
+                {t("syncHandoff.loadOlder")}
+              </button>
+            </>
+          )}
+          {offer?.newer && (
+            <>
+              {" "}
+              {t("syncHandoff.newerExists", { time: exportTime(offer.newer.exportedAt) })}{" "}
+              <button
+                type="button"
+                className="file-viewer-format-btn"
+                onClick={() => {
+                  if (!offer.newer) return;
+                  setExportId(offer.newer.id);
+                  loadResolved(offer.newer.id);
+                }}
+              >
+                {t("syncHandoff.readNewer")}
+              </button>
+            </>
+          )}
         </div>
       )}
       {identical && (
@@ -227,7 +304,7 @@ export function SyncMergeView({
             <>
               <button
                 className="file-viewer-format-btn"
-                onClick={loadResolved}
+                onClick={() => loadResolved(exportId)}
                 title={t("syncHandoff.loadResolvedTitle")}
               >
                 {t("syncHandoff.loadResolved")}
@@ -237,6 +314,7 @@ export function SyncMergeView({
                 connected={connected}
                 label={t("syncHandoff.button")}
                 title={t("syncHandoff.buttonTitle")}
+                onExported={(out) => setExportId(out.id)}
                 collect={async () => ({
                   files: rel ? [buildHandoffFile({ relPath: rel, localText: localText ?? "", remoteText: hostText ?? "", times: sideTimes })] : [],
                   skipped: 0,

@@ -16,7 +16,7 @@ import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
 
 /** What the backend answers (`services::sync_handoff::HandoffExport`). */
-interface HandoffExport {
+export interface HandoffExport {
   id: string;
   agentDir: string;
   fileCount: number;
@@ -40,6 +40,7 @@ export function SyncHandoffButton({
   label,
   title,
   className,
+  onExported,
 }: {
   projectId: string | null;
   connected: boolean;
@@ -50,6 +51,8 @@ export function SyncHandoffButton({
   label: string;
   title: string;
   className?: string;
+  /** Told the export just made, so the resolver's Load resolved reads that one. */
+  onExported?: (out: HandoffExport) => void;
 }) {
   const t = useT();
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
@@ -104,6 +107,7 @@ export function SyncHandoffButton({
         setBusy(t("syncHandoff.working"));
         const out = await invoke<HandoffExport>("sync_handoff_export", { projectId, files });
         setResult({ out, skipped });
+        onExported?.(out);
       } catch (e) {
         setError(t("syncHandoff.failed", { reason: e instanceof Error ? e.message : String(e) }));
       } finally {
