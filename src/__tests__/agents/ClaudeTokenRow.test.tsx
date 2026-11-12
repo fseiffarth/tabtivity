@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { ClaudeTokenRow } from "../../components/settings/ClaudeTokenRow";
+import { BRAND } from "../../lib/brand";
 import { enSource as en } from "../../lib/i18n/en";
 
 const invokeMock = vi.mocked(invoke);
@@ -68,6 +69,6 @@ describe("ClaudeTokenRow", () => {
     render(<ClaudeTokenRow heading={false} />);
     await waitFor(() => expect(screen.getByText(en["settings.claudeTokenNone"])).toBeTruthy());
     expect(screen.queryByText(en["settings.claudeToken"])).toBeNull();
-    expect(screen.getByText(en["settings.claudeTokenHelp"].replace("{app}", "Tabtivity"), { exact: false })).toBeTruthy();
+    expect(screen.getByText(en["settings.claudeTokenHelp"].replace("{app}", BRAND.display), { exact: false })).toBeTruthy();
   });
 });
