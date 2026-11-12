@@ -137,6 +137,7 @@ pub enum StepState {
 }
 
 impl StepState {
+    const ALL: [Self; 3] = [Self::Pending, Self::Active, Self::Done];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -144,6 +145,8 @@ impl StepState {
             Self::Done => "done",
         }
     }
+    /// The state [`as_str`](Self::as_str) names `name`; only those strings.
+    fn from_name(name: &str) -> Option<Self> { Self::ALL.into_iter().find(|s| s.as_str() == name) }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -189,6 +192,7 @@ pub enum CheckOutcome {
 }
 
 impl CheckOutcome {
+    const ALL: [Self; 4] = [Self::Passed, Self::Failed, Self::Pending, Self::NotRun];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Passed => "passed",
@@ -197,6 +201,8 @@ impl CheckOutcome {
             Self::NotRun => "not_run",
         }
     }
+    /// The outcome [`as_str`](Self::as_str) names `name`; only those strings.
+    fn from_name(name: &str) -> Option<Self> { Self::ALL.into_iter().find(|o| o.as_str() == name) }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -292,13 +298,19 @@ impl Default for Meta {
 
 /// Whether an activity stamped `set_at` still counts as current at `now`.
 pub fn is_fresh(set_at: u64, now: u64) -> bool {
-    set_at <= now.saturating_add(FUTURE_SLACK_MS) && now.saturating_sub(set_at) < ACTIVITY_TTL_MS
+    stamped_within(set_at, now, ACTIVITY_TTL_MS)
 }
 
 /// Whether an attention question stamped `set_at` is still open at `now`
 /// (24 hours, the same clock-moved-back guard).
 pub fn attention_is_live(set_at: u64, now: u64) -> bool {
-    set_at <= now.saturating_add(FUTURE_SLACK_MS) && now.saturating_sub(set_at) < ATTENTION_TTL_MS
+    stamped_within(set_at, now, ATTENTION_TTL_MS)
+}
+
+/// Whether a stamp `set_at` is under `ttl` old at `now`; one from further than
+/// [`FUTURE_SLACK_MS`] ahead (a clock moved back) is not.
+fn stamped_within(set_at: u64, now: u64, ttl: u64) -> bool {
+    set_at <= now.saturating_add(FUTURE_SLACK_MS) && now.saturating_sub(set_at) < ttl
 }
 
 /// 128 random bits as hex, from `fill`; `None` when `fill` fails. A failed
@@ -327,7 +339,7 @@ pub fn read(tab: &TabEntry) -> Result<Meta, &'static str> {
     match tab.extra.get(KEY) {
         None | Some(Value::Null) => Ok(Meta::default()),
         Some(value) => {
-            let meta: Meta = serde_json::from_value(value.clone()).map_err(|_| CORRUPT)?;
+            let meta = Meta::deserialize(value).map_err(|_| CORRUPT)?;
             if meta.v == SCHEMA_VERSION { Ok(meta) } else { Err(CORRUPT) }
         }
     }
@@ -512,12 +524,7 @@ pub fn clean_progress(list: &[Value]) -> Option<Vec<ProgressStep>> {
             return None;
         }
         let id = fields.get("id")?.as_str()?;
-        let state = match fields.get("state")?.as_str()? {
-            "pending" => StepState::Pending,
-            "active" => StepState::Active,
-            "done" => StepState::Done,
-            _ => return None,
-        };
+        let state = StepState::from_name(fields.get("state")?.as_str()?)?;
         let label = clean_text(fields.get("label")?.as_str()?, PROGRESS_LABEL_MAX_CHARS, false, false)?;
         if !valid_step_id(id) || steps.iter().any(|s| s.id == id) {
             return None;
@@ -540,13 +547,7 @@ pub fn clean_verification(list: &[Value]) -> Option<Vec<VerificationEntry>> {
         if !fields.keys().all(|k| matches!(k.as_str(), "label" | "outcome" | "note")) {
             return None;
         }
-        let outcome = match fields.get("outcome")?.as_str()? {
-            "passed" => CheckOutcome::Passed,
-            "failed" => CheckOutcome::Failed,
-            "pending" => CheckOutcome::Pending,
-            "not_run" => CheckOutcome::NotRun,
-            _ => return None,
-        };
+        let outcome = CheckOutcome::from_name(fields.get("outcome")?.as_str()?)?;
         let label = clean_text(fields.get("label")?.as_str()?, VERIFICATION_LABEL_MAX_CHARS, false, false)?;
         let note = match fields.get("note") {
             None => None,
@@ -683,8 +684,6 @@ pub struct Outcome {
     pub meta: Meta,
 }
 
-const UNCHANGED: &str = "\0unchanged";
-
 fn tab_mut<'a>(session: &'a mut crate::schema::session::TerminalSession, id: &str) -> Result<&'a mut TabEntry, String> {
     // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
     session.tab_layout.iter_mut().find(|t| workspace::tab_id(t) == Some(id)).ok_or_else(|| workspace::TAB_NOT_FOUND.to_string())
@@ -702,7 +701,7 @@ pub fn update_in(
     check: impl FnOnce() -> Result<(), String>,
 ) -> Result<Outcome, String> {
     let mut unchanged: Option<Outcome> = None;
-    let stored = workspace::edit_in(path, scope, |session| {
+    let stored = workspace::edit_in_if(path, scope, |session| {
         check()?;
         let tab = tab_mut(session, id)?;
         let meta = read(tab).map_err(str::to_string)?;
@@ -714,18 +713,17 @@ pub fn update_in(
         match apply(&meta, change, now) {
             None => {
                 unchanged = Some(Outcome { changed: false, label: tab.label.clone(), meta });
-                Err(UNCHANGED.into())
+                Ok(false)
             }
-            Some(next) => store(tab, &next).map_err(str::to_string),
+            Some(next) => store(tab, &next).map(|()| true).map_err(str::to_string),
         }
-    });
+    })?;
     match stored {
-        Ok(mut session) => {
+        Some(mut session) => {
             let tab = tab_mut(&mut session, id)?;
             Ok(Outcome { changed: true, label: tab.label.clone(), meta: read(tab).map_err(str::to_string)? })
         }
-        Err(e) if e == UNCHANGED => unchanged.ok_or_else(|| "storage_error".to_string()),
-        Err(e) => Err(e),
+        None => unchanged.ok_or_else(|| "storage_error".to_string()),
     }
 }
 
@@ -741,20 +739,16 @@ pub fn read_in(path: &Path, id: &str, check: impl FnOnce() -> Result<(), String>
 /// and mark its progress as ended (one write, only when there is something to
 /// change). Returns whether it wrote.
 pub fn clear_other_spawns_in(path: &Path, scope: &str, id: &str, spawn: &str) -> Result<bool, String> {
-    let stored = workspace::edit_in(path, scope, |session| {
+    let stored = workspace::edit_in_if(path, scope, |session| {
         let tab = tab_mut(session, id)?;
         let mut meta = read(tab).map_err(str::to_string)?;
         if !retire_other_spawns(&mut meta, spawn) {
-            return Err(UNCHANGED.into());
+            return Ok(false);
         }
         meta.revision = meta.revision.saturating_add(1);
-        store_host(tab, &meta).map_err(str::to_string)
-    });
-    match stored {
-        Ok(_) => Ok(true),
-        Err(e) if e == UNCHANGED => Ok(false),
-        Err(e) => Err(e),
-    }
+        store_host(tab, &meta).map(|()| true).map_err(str::to_string)
+    })?;
+    Ok(stored.is_some())
 }
 
 /// What the user's dismissal of an attention question came to.
@@ -790,28 +784,24 @@ pub fn dismiss_versioned_in(path: &Path, scope: &str, id: &str, attention_id: &s
         return Ok((Dismissal::Stale, None));
     }
     let mut verdict = Dismissal::Stale;
-    let stored = workspace::edit_in(path, scope, |session| {
+    let stored = workspace::edit_in_if(path, scope, |session| {
         let tab = tab_mut(session, id)?;
         let mut meta = read(tab).map_err(str::to_string)?;
         match meta.attention.as_mut() {
             Some(a) if a.id == attention_id && a.dismissed => {
                 verdict = Dismissal::Unchanged;
-                Err(UNCHANGED.into())
+                Ok(false)
             }
             Some(a) if a.id == attention_id => {
                 a.dismissed = true;
                 meta.revision = meta.revision.saturating_add(1);
                 verdict = Dismissal::Dismissed;
-                store_host(tab, &meta).map_err(str::to_string)
+                store_host(tab, &meta).map(|()| true).map_err(str::to_string)
             }
-            _ => Err(UNCHANGED.into()),
+            _ => Ok(false),
         }
-    });
-    match stored {
-        Ok(session) => Ok((verdict, Some(workspace::version_of(&session)))),
-        Err(e) if e == UNCHANGED => Ok((verdict, None)),
-        Err(e) => Err(e),
-    }
+    })?;
+    Ok((verdict, stored.map(|session| workspace::version_of(&session))))
 }
 
 #[cfg(test)]

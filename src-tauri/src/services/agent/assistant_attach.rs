@@ -50,6 +50,31 @@ struct State {
     words: HashMap<String, PictureRefs>,
 }
 
+/// A per-chat table of [`State`], bounded by [`MAX_CHATS`].
+trait ChatTable {
+    fn len(&self) -> usize;
+    fn has(&self, key: &str) -> bool;
+    fn clear(&mut self);
+}
+impl<V> ChatTable for HashMap<String, V> {
+    fn len(&self) -> usize { HashMap::len(self) }
+    fn has(&self, key: &str) -> bool { self.contains_key(key) }
+    fn clear(&mut self) { HashMap::clear(self) }
+}
+impl ChatTable for HashSet<String> {
+    fn len(&self) -> usize { HashSet::len(self) }
+    fn has(&self, key: &str) -> bool { self.contains(key) }
+    fn clear(&mut self) { HashSet::clear(self) }
+}
+
+/// Before `key` goes into `table`: a full table that does not hold it yet is
+/// cleared, so it never passes [`MAX_CHATS`].
+fn make_room(table: &mut impl ChatTable, key: &str) {
+    if table.len() >= MAX_CHATS && !table.has(key) {
+        table.clear();
+    }
+}
+
 fn state() -> &'static Mutex<State> {
     static STATE: OnceLock<Mutex<State>> = OnceLock::new();
     STATE.get_or_init(Default::default)
@@ -60,13 +85,9 @@ fn state() -> &'static Mutex<State> {
 /// pasted picture path as a picture (`AssistantCli::takes_pasted_pictures`).
 pub fn note_chat(tab: &str, uid: &str, pictures: bool) {
     let mut st = state().lock_ok();
-    if st.chats.len() >= MAX_CHATS && !st.chats.contains_key(tab) {
-        st.chats.clear();
-    }
+    make_room(&mut st.chats, tab);
     st.chats.insert(tab.to_string(), uid.to_string());
-    if st.picture_chats.len() >= MAX_CHATS && !st.picture_chats.contains(uid) {
-        st.picture_chats.clear();
-    }
+    make_room(&mut st.picture_chats, uid);
     if pictures {
         st.picture_chats.insert(uid.to_string());
     } else {
@@ -104,8 +125,9 @@ pub fn note_attachment_in(state_dir: &Path, uid: &str) {
     if let Some(dir) = path.parent() {
         let _ = crate::services::agent_home::create_private_dir(dir);
     }
-    if let Err(e) = crate::storage::write_private_atomic(&path, b"1\n") {
-        eprintln!("assistant_attach: cannot record the attachment: {e}");
+    // The error text would name the marker path, which carries the tab's uid.
+    if crate::storage::write_private_atomic(&path, b"1\n").is_err() {
+        eprintln!("assistant_attach: cannot record the attachment");
     }
 }
 
@@ -148,9 +170,7 @@ pub fn note_input_in(state_dir: &Path, uid: &str, bytes: &[u8]) -> bool {
             }
             prev = b;
         }
-        if st.last_byte.len() >= MAX_CHATS && !st.last_byte.contains_key(uid) {
-            st.last_byte.clear();
-        }
+        make_room(&mut st.last_byte, uid);
         if let Some(last) = bytes.last() {
             st.last_byte.insert(uid.to_string(), *last);
         }
@@ -367,9 +387,7 @@ pub fn picture_pastes_in(state_dir: &Path, uid: &str, bytes: &[u8]) -> Option<Ve
     if !st.picture_chats.contains(uid) {
         return None;
     }
-    if st.words.len() >= MAX_CHATS && !st.words.contains_key(uid) {
-        st.words.clear();
-    }
+    make_room(&mut st.words, uid);
     st.words.entry(uid.to_string()).or_default().feed(bytes, |leaf| chat_picture(state_dir, uid, leaf))
 }
 
@@ -383,9 +401,7 @@ pub fn tab_picture_pastes(tab: &str, bytes: &[u8]) -> Option<Vec<Vec<u8>>> {
 /// bridge, which may run where the spawn did not and reads it off the tab).
 pub fn note_picture_chat(uid: &str) {
     let mut st = state().lock_ok();
-    if st.picture_chats.len() >= MAX_CHATS && !st.picture_chats.contains(uid) {
-        st.picture_chats.clear();
-    }
+    make_room(&mut st.picture_chats, uid);
     st.picture_chats.insert(uid.to_string());
 }
 

@@ -85,23 +85,6 @@ impl InboxError {
     }
 }
 
-/// Whether `head` (a name's part before its first dot) is one of Windows'
-/// reserved device names: `CON PRN AUX NUL`, and `COM`/`LPT` followed by one
-/// of `0`–`9`, `¹`, `²`, `³` (Win32 reads the superscripts as digits). A file
-/// named one (any case, any extension: `CON.txt`, `nul`, `com1.tar.gz`) can be
-/// created handle-relative, but Explorer can neither open nor delete it.
-fn is_device_name(head: &str) -> bool {
-    let upper = head.to_ascii_uppercase();
-    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
-        return true;
-    }
-    let (Some(prefix), Some(port)) = (upper.get(..3), upper.get(3..)) else {
-        return false;
-    };
-    matches!(prefix, "COM" | "LPT")
-        && matches!(port, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
-}
-
 /// A file name rebuilt from the phone's: the last path component only, drawn
 /// from letters, digits, `.`, `-` and `_`, never starting with a dot, bounded
 /// in length with its extension kept. Empty in, `attachment` out. A Windows
@@ -111,7 +94,7 @@ pub fn safe_name(raw: &str) -> String {
     let name = safe_name_unchecked(raw);
     // Windows reads the part before the first dot as the device.
     let head = name.split('.').next().unwrap_or("");
-    if is_device_name(head) {
+    if crate::paths::is_windows_device_name(head) {
         return format!("{head}_{}", &name[head.len()..]);
     }
     name

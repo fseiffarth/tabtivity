@@ -1032,6 +1032,26 @@ pub fn excluded_rel_set(excluded: &[String]) -> std::collections::HashSet<String
         .collect()
 }
 
+/// Whether Windows takes the path segment `segment` for a device, on every OS
+/// (a project synced to Windows must never carry one): its part before the
+/// first dot, trailing spaces dropped, any case, is `CON`, `PRN`, `AUX`,
+/// `NUL`, `CONIN$`, `CONOUT$`, or `COM`/`LPT` followed by one of `0`–`9`,
+/// `¹`, `²`, `³` (Win32 reads the superscripts as digits). `nul`, `CON.txt`,
+/// `com1.tar.gz` and `LPT³` are; `CONSOLE.txt` and `COM10` are not. A file
+/// named one can be created handle-relative, but Explorer can neither open
+/// nor delete it.
+pub fn is_windows_device_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment).trim_end().to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let (Some(prefix), Some(port)) = (stem.get(..3), stem.get(3..)) else {
+        return false;
+    };
+    matches!(prefix, "COM" | "LPT")
+        && matches!(port, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -200,15 +200,12 @@ unsafe fn install_signal_handlers(path: &std::path::Path) {
         };
         libc::sigaltstack(&ss, std::ptr::null_mut());
     }
-    for &sig in &[libc::SIGSEGV, libc::SIGABRT, libc::SIGBUS, libc::SIGFPE] {
+    let crash = signal_crash_handler as *const () as libc::sighandler_t;
+    let quiet = signal_quiet_handler as *const () as libc::sighandler_t;
+    let fatal = [libc::SIGSEGV, libc::SIGABRT, libc::SIGBUS, libc::SIGFPE].map(|sig| (sig, crash));
+    for (sig, handler) in fatal.into_iter().chain(QUIET_FATAL.iter().map(|&(sig, _)| (sig, quiet))) {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = signal_crash_handler as *const () as libc::sighandler_t;
-        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND | libc::SA_ONSTACK;
-        libc::sigaction(sig, &sa, std::ptr::null_mut());
-    }
-    for &(sig, _) in QUIET_FATAL {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = signal_quiet_handler as *const () as libc::sighandler_t;
+        sa.sa_sigaction = handler;
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND | libc::SA_ONSTACK;
         libc::sigaction(sig, &sa, std::ptr::null_mut());
     }

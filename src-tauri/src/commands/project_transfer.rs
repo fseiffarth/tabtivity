@@ -1468,9 +1468,8 @@ fn pack_tar_with(
             Kind::Symlink(target) => links.push((name, target)),
             // The earlier member's bytes are already in the bundle: copied
             // from there, not sent twice.
-            Kind::HardLink(target) => match host_rel(&target).filter(|t| carried.contains_key(t)) {
-                Some(target) => {
-                    let size = carried[&target];
+            Kind::HardLink(target) => match host_rel(&target).and_then(|t| carried.get(&t).map(|&size| (t, size))) {
+                Some((target, size)) => {
                     if written.saturating_add(size) > limits.bytes {
                         return too_large("the files add up to more than the limit");
                     }

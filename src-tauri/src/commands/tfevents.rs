@@ -163,34 +163,66 @@ async fn discover_remote(
     root: &str,
 ) -> Result<Vec<TfFile>, String> {
     use crate::services::sftp::{list_dir_raw_on, SyncKind};
-    let mut out = Vec::new();
-    let mut queue = std::collections::VecDeque::from([(root.to_string(), 0usize)]);
-    let mut visited = 0;
-    while let Some((dir, depth)) = queue.pop_front() {
-        visited += 1;
-        if visited > DISCOVER_DIRS || out.len() >= DISCOVER_FILES {
-            break;
-        }
-        // The top folder's failure is the caller's answer; a deeper one is
-        // just a folder we may not read.
-        let entries = match list_dir_raw_on(sftp, &dir).await {
-            Ok(e) => e,
-            Err(e) if depth == 0 => return Err(e),
-            Err(_) => continue,
-        };
+    let mut walk = Discovery::new(root.to_string());
+    while let Some((dir, depth)) = walk.next_dir() {
+        let Some(entries) = listed(list_dir_raw_on(sftp, &dir).await, depth)? else { continue };
         for e in entries {
             let child = fs::join_remote_dir(&dir, &e.name);
             match e.kind {
-                SyncKind::File if is_event_file(&e.name) && out.len() < DISCOVER_FILES => {
-                    out.push(TfFile { path: child, size: e.size, mtime: e.modified_secs.unwrap_or(0) });
+                SyncKind::File if is_event_file(&e.name) && walk.wants_file() => {
+                    walk.found(TfFile { path: child, size: e.size, mtime: e.modified_secs.unwrap_or(0) });
                 }
-                SyncKind::Dir if depth < DISCOVER_DEPTH => queue.push_back((child, depth + 1)),
+                SyncKind::Dir => walk.descend(child, depth),
                 _ => {}
             }
         }
     }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
+    Ok(walk.finish())
+}
+
+/// One bounded breadth-first walk for event files, local or over SFTP: at
+/// most [`DISCOVER_DIRS`] folders listed, [`DISCOVER_FILES`] files found and
+/// [`DISCOVER_DEPTH`] levels below the start.
+struct Discovery<D> {
+    out: Vec<TfFile>,
+    queue: std::collections::VecDeque<(D, usize)>,
+    visited: usize,
+}
+
+/// A [`Discovery`] folder's listing: the top folder's failure is the
+/// caller's answer; a deeper one is just a folder we may not read (`None`,
+/// skipped).
+fn listed<T, E: ToString>(listing: Result<T, E>, depth: usize) -> Result<Option<T>, String> {
+    match listing {
+        Ok(entries) => Ok(Some(entries)),
+        Err(e) if depth == 0 => Err(e.to_string()),
+        Err(_) => Ok(None),
+    }
+}
+
+impl<D> Discovery<D> {
+    fn new(root: D) -> Self {
+        Self { out: Vec::new(), queue: std::collections::VecDeque::from([(root, 0usize)]), visited: 0 }
+    }
+    /// The next folder to list and its depth; `None` once there is none or a
+    /// bound is reached.
+    fn next_dir(&mut self) -> Option<(D, usize)> {
+        let next = self.queue.pop_front()?;
+        self.visited += 1;
+        (self.visited <= DISCOVER_DIRS && self.out.len() < DISCOVER_FILES).then_some(next)
+    }
+    fn wants_file(&self) -> bool { self.out.len() < DISCOVER_FILES }
+    fn found(&mut self, file: TfFile) { self.out.push(file); }
+    /// Queue the subfolder `dir` of a folder at `depth`, while above the depth bound.
+    fn descend(&mut self, dir: D, depth: usize) {
+        if depth < DISCOVER_DEPTH {
+            self.queue.push_back((dir, depth + 1));
+        }
+    }
+    fn finish(mut self) -> Vec<TfFile> {
+        self.out.sort_by(|a, b| a.path.cmp(&b.path));
+        self.out
+    }
 }
 
 /// Local walk. The start must lie inside the scope's roots; below it only real
@@ -204,27 +236,17 @@ pub fn discover_local(path: &str, scope_id: Option<&str>) -> Result<Vec<TfFile>,
 
 /// [`discover_local`] without the confinement check (the walk itself).
 pub fn discover_walk(root: PathBuf) -> Result<Vec<TfFile>, String> {
-    let mut out = Vec::new();
-    let mut queue = std::collections::VecDeque::from([(root, 0usize)]);
-    let mut visited = 0;
-    while let Some((dir, depth)) = queue.pop_front() {
-        visited += 1;
-        if visited > DISCOVER_DIRS || out.len() >= DISCOVER_FILES {
-            break;
-        }
-        let rd = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(e) if depth == 0 => return Err(e.to_string()),
-            Err(_) => continue,
-        };
+    let mut walk = Discovery::new(root);
+    while let Some((dir, depth)) = walk.next_dir() {
+        let Some(rd) = listed(std::fs::read_dir(&dir), depth)? else { continue };
         for entry in rd.flatten() {
             let Ok(kind) = entry.file_type() else { continue };
             let name = entry.file_name().to_string_lossy().into_owned();
-            if kind.is_dir() && depth < DISCOVER_DEPTH {
-                queue.push_back((entry.path(), depth + 1));
-            } else if kind.is_file() && is_event_file(&name) && out.len() < DISCOVER_FILES {
+            if kind.is_dir() {
+                walk.descend(entry.path(), depth);
+            } else if kind.is_file() && is_event_file(&name) && walk.wants_file() {
                 let Ok(meta) = entry.metadata() else { continue };
-                out.push(TfFile {
+                walk.found(TfFile {
                     path: fs::display_path(&entry.path()),
                     size: meta.len(),
                     mtime: meta.modified().map(crate::clock::unix_secs).unwrap_or(0),
@@ -232,8 +254,7 @@ pub fn discover_walk(root: PathBuf) -> Result<Vec<TfFile>, String> {
             }
         }
     }
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
+    Ok(walk.finish())
 }
 
 #[cfg(test)]

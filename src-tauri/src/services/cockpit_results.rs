@@ -74,21 +74,6 @@ pub fn project_root(state: &Path, scope: &str) -> Option<Root> {
     project_root_in(&list, scope)
 }
 
-const WINDOWS_DEVICES: [&str; 6] = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
-
-/// A segment Windows would take for a device (`NUL`, `com1.txt`, `LPT3`).
-fn is_device_name(segment: &str) -> bool {
-    let stem = segment.split('.').next().unwrap_or(segment).trim_end().to_ascii_uppercase();
-    WINDOWS_DEVICES.contains(&stem.as_str())
-        || ["COM", "LPT"].iter().any(|prefix| {
-            stem.strip_prefix(prefix).is_some_and(|rest| {
-                let mut chars = rest.chars();
-                matches!((chars.next(), chars.next()), (Some(d), None)
-                    if ('1'..='9').contains(&d) || matches!(d, '\u{b9}' | '\u{b2}' | '\u{b3}'))
-            })
-        })
-}
-
 /// A path reference, lexically (decision 11): a forward-slash path of plain
 /// names relative to the project folder, at most [`meta::RESULT_PATH_MAX_CHARS`]
 /// characters, kept exactly as given. Refused: empty; absolute, drive and UNC
@@ -106,7 +91,7 @@ pub fn clean_path(raw: &str) -> Option<String> {
         .all(|segment| {
             !segment.is_empty()
                 && !segment.ends_with(['.', ' '])
-                && !is_device_name(segment)
+                && !crate::paths::is_windows_device_name(segment)
                 && !crate::brand::is_project_dir(segment)
         })
         .then_some(path)

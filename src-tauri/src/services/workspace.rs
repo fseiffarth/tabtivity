@@ -511,6 +511,18 @@ pub fn edit_in(
     scope: &str,
     edit: impl FnOnce(&mut TerminalSession) -> Result<(), String>,
 ) -> Result<TerminalSession, String> {
+    edit_in_if(path, scope, |session| edit(session).map(|()| true))?
+        .ok_or_else(|| "edit: nothing stored".to_string())
+}
+
+/// [`edit_in`] for an edit that may find nothing to do: `edit` answers
+/// whether to write. `Ok(false)` writes nothing, moves no version and
+/// answers `None`; `Ok(true)` is an [`edit_in`] and answers what was stored.
+pub fn edit_in_if(
+    path: &Path,
+    scope: &str,
+    edit: impl FnOnce(&mut TerminalSession) -> Result<bool, String>,
+) -> Result<Option<TerminalSession>, String> {
     let _lock = storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
     let mut session = read_session(path)?;
     adopt(&mut session);
@@ -520,7 +532,9 @@ pub fn edit_in(
         .iter()
         .filter_map(|t| tab_id(t).map(|id| (id.to_string(), comparable_with_meta(t))))
         .collect();
-    edit(&mut session)?;
+    if !edit(&mut session)? {
+        return Ok(None);
+    }
     let mut ids: HashSet<String> = session.tab_layout.iter().filter_map(tab_id).map(str::to_string).collect();
     for tab in session.tab_layout.iter_mut() {
         match tab_id(tab).map(str::to_string) {
@@ -551,7 +565,7 @@ pub fn edit_in(
     set_tombstones(&mut session, stones);
     set_version(&mut session, version + 1);
     write_session(path, &session)?;
-    Ok(session)
+    Ok(Some(session))
 }
 
 /// What the sidecar's headless create answers with: the tab as stored, with
@@ -573,23 +587,21 @@ pub fn create_tab_in(path: &Path, scope: &str, mut tab: TabEntry, request_hash: 
     // A new tab carries no agent metadata, whoever built the record.
     cockpit_meta::strip(&mut tab);
     // The closure runs under the lock, so the check and the append are one
-    // step; a hit aborts the edit (nothing written) and is answered below.
-    const EXISTS: &str = "\u{0}exists";
+    // step; a hit writes nothing and is answered below.
     let mut found: Option<TabEntry> = None;
-    let stored = edit_in(path, scope, |session| {
+    let stored = edit_in_if(path, scope, |session| {
         if let Some(hash) = request_hash {
             if let Some(existing) = session.tab_layout.iter().find(|t| extra_str(t, "mobileRequestHash") == Some(hash)) {
                 found = Some(existing.clone());
-                return Err(EXISTS.to_string());
+                return Ok(false);
             }
         }
         session.tab_layout.push(tab);
-        Ok(())
-    });
-    match (stored, found) {
-        (Err(e), Some(tab)) if e == EXISTS => Ok(CreatedTab { tab, existed: true }),
-        (Err(e), _) => Err(e),
-        (Ok(stored), _) => {
+        Ok(true)
+    })?;
+    match stored {
+        None => found.map(|tab| CreatedTab { tab, existed: true }).ok_or_else(|| "create: tab not stored".to_string()),
+        Some(stored) => {
             let tab = stored.tab_layout.last().cloned().ok_or_else(|| "create: tab not stored".to_string())?;
             Ok(CreatedTab { tab, existed: false })
         }
@@ -655,7 +667,18 @@ fn edit_tab_in(
     tmux: &str,
     edit: impl FnOnce(&mut TerminalSession, usize) -> Result<(), String>,
 ) -> Result<TerminalSession, String> {
-    edit_in(path, scope, |session| {
+    edit_tab_in_if(path, scope, tmux, |session, index| edit(session, index).map(|()| true))?
+        .ok_or_else(|| "edit: nothing stored".to_string())
+}
+
+/// [`edit_tab_in`] through [`edit_in_if`]: `edit` answers whether to write.
+fn edit_tab_in_if(
+    path: &Path,
+    scope: &str,
+    tmux: &str,
+    edit: impl FnOnce(&mut TerminalSession, usize) -> Result<bool, String>,
+) -> Result<Option<TerminalSession>, String> {
+    edit_in_if(path, scope, |session| {
         let index = session
             .tab_layout
             .iter()
@@ -683,24 +706,22 @@ pub fn rename_tab_id_in(
     path: &Path, scope: &str, id: &str, label: &str, expected: Option<&str>,
     check: impl FnOnce() -> Result<(), String>, stamp: impl FnOnce(&mut TabEntry),
 ) -> Result<(bool, u64), String> {
-    const UNCHANGED: &str = "\0unchanged";
     let mut version = 0;
-    let stored = edit_in(path, scope, |session| {
+    let stored = edit_in_if(path, scope, |session| {
         check()?;
         version = version_of(session);
         let tab = session.tab_layout.iter_mut().find(|t| tab_id(t) == Some(id))
             .ok_or_else(|| TAB_NOT_FOUND.to_string())?;
         if expected.is_some_and(|old| old != tab.label) { return Err("conflict".into()); }
-        if tab.label == label { return Err(UNCHANGED.into()); }
+        if tab.label == label { return Ok(false); }
         tab.label = label.to_string();
         stamp(tab);
-        Ok(())
-    });
-    match stored {
-        Ok(session) => Ok((true, version_of(&session))),
-        Err(e) if e == UNCHANGED => Ok((false, version)),
-        Err(e) => Err(e),
-    }
+        Ok(true)
+    })?;
+    Ok(match stored {
+        Some(session) => (true, version_of(&session)),
+        None => (false, version),
+    })
 }
 
 /// One saved tab by stable id, read under the shared lock. `check` runs inside
@@ -771,7 +792,6 @@ fn pane_keys_mut<'a>(node: &'a mut Value, out: &mut Vec<&'a mut Vec<Value>>) {
 /// panes has no slot to land in, as in the window's own reorder, and leaves
 /// everything as it is.
 pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after: bool) -> Result<TerminalSession, String> {
-    const NO_SLOT: &str = "\u{0}no-slot";
     let place = |keys: &mut Vec<Value>, key: &str, anchor_key: &str| {
         let Some(from) = keys.iter().position(|k| k.as_str() == Some(key)) else { return };
         let moved = keys.remove(from);
@@ -779,7 +799,7 @@ pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after:
             keys.insert(if after { at + 1 } else { at }, moved);
         }
     };
-    let edited = edit_tab_in(path, scope, tmux, |session, i| {
+    let edited = edit_tab_in_if(path, scope, tmux, |session, i| {
         let key = session.tab_layout[i].key.clone();
         let anchor_key = session
             .tab_layout
@@ -801,7 +821,7 @@ pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after:
                 let pane_of = |k: &str| panes.iter().position(|p| p.iter().any(|v| v.as_str() == Some(k)));
                 let (from, to) = (pane_of(&key), pane_of(&anchor_key));
                 if from != to {
-                    return Err(NO_SLOT.to_string());
+                    return Ok(false);
                 }
                 if let Some(pane) = from {
                     place(panes[pane], &key, &anchor_key);
@@ -815,11 +835,11 @@ pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after:
             .position(|t| tmux_of(t) == Some(anchor))
             .ok_or_else(|| TAB_NOT_FOUND.to_string())?;
         session.tab_layout.insert(if after { at + 1 } else { at }, tab);
-        Ok(())
-    });
+        Ok(true)
+    })?;
     match edited {
-        Err(e) if e == NO_SLOT => read_session(path),
-        other => other,
+        Some(stored) => Ok(stored),
+        None => read_session(path),
     }
 }
 
@@ -851,15 +871,14 @@ pub fn close_tab_in(path: &Path, scope: &str, tmux: &str, now_ms: u64) -> Result
 /// reopen. The record keeps its `sessionId`, so the launch resumes the
 /// conversation.
 pub fn reopen_tab_in(path: &Path, scope: &str, closed_id: Option<&str>) -> Result<Option<TabEntry>, String> {
-    const NOTHING: &str = "\u{0}nothing";
-    let stored = edit_in(path, scope, |session| {
+    let stored = edit_in_if(path, scope, |session| {
         let mut closed = closed_tabs(session);
         let index = match closed_id {
             Some(id) => closed.iter().position(|c| c.id == id),
             None => (!closed.is_empty()).then_some(0),
         };
         let Some(index) = index else {
-            return Err(NOTHING.to_string());
+            return Ok(false);
         };
         let mut tab = closed.remove(index).tab;
         set_closed_tabs(session, closed);
@@ -872,13 +891,9 @@ pub fn reopen_tab_in(path: &Path, scope: &str, closed_id: Option<&str>) -> Resul
         cockpit_meta::drop_transient(&mut tab);
         tab.key = format!("headless-{}", crate::storage::uuid_v4());
         session.tab_layout.push(tab);
-        Ok(())
-    });
-    match stored {
-        Err(e) if e == NOTHING => Ok(None),
-        Err(e) => Err(e),
-        Ok(stored) => Ok(stored.tab_layout.last().cloned()),
-    }
+        Ok(true)
+    })?;
+    Ok(stored.and_then(|stored| stored.tab_layout.last().cloned()))
 }
 
 /// Bump the version of a session held as raw JSON (the path rewrite keeps

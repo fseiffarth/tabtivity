@@ -145,7 +145,17 @@ fn check_clipboard_text(text: &str) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     check_clipboard_text(&text)?;
+    set_clipboard(move |set| set.text(text)).await
+}
 
+/// Put on the system clipboard what `fill` sets: the one thread-and-handshake
+/// behind [`copy_text_to_clipboard`] and [`copy_files_to_clipboard`]. On Linux
+/// a thread keeps the selection (`.wait()`) and reports back once it has a
+/// clipboard connection, so only a missing clipboard is an error; elsewhere
+/// the set runs on the blocking pool and every error is reported.
+async fn set_clipboard(
+    fill: impl for<'c> FnOnce(arboard::Set<'c>) -> Result<(), arboard::Error> + Send + 'static,
+) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         use arboard::SetExtLinux;
@@ -153,7 +163,7 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
         std::thread::spawn(move || match arboard::Clipboard::new() {
             Ok(mut cb) => {
                 let _ = tx.send(Ok(()));
-                let _ = cb.set().wait().text(text);
+                let _ = fill(cb.set().wait());
             }
             Err(e) => {
                 let _ = tx.send(Err(e.to_string()));
@@ -170,7 +180,7 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     {
         app_core::rt::blocking("clipboard", move || {
             let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-            cb.set_text(text).map_err(|e| e.to_string())
+            fill(cb.set()).map_err(|e| e.to_string())
         })
         .await?
     }
@@ -215,35 +225,7 @@ fn clipboard_paths(paths: &[String]) -> Result<Vec<std::path::PathBuf>, String> 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
     let paths = clipboard_paths(&paths)?;
-
-    #[cfg(target_os = "linux")]
-    {
-        use arboard::SetExtLinux;
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || match arboard::Clipboard::new() {
-            Ok(mut cb) => {
-                let _ = tx.send(Ok(()));
-                let _ = cb.set().wait().file_list(&paths);
-            }
-            Err(e) => {
-                let _ = tx.send(Err(e.to_string()));
-            }
-        });
-        app_core::rt::blocking("clipboard", move || {
-            rx.recv()
-                .unwrap_or_else(|_| Err("the clipboard thread ended early".to_string()))
-        })
-        .await?
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        app_core::rt::blocking("clipboard", move || {
-            let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-            cb.set().file_list(&paths).map_err(|e| e.to_string())
-        })
-        .await?
-    }
+    set_clipboard(move |set| set.file_list(&paths)).await
 }
 
 /// Encode raw RGBA8 pixels as a PNG byte buffer.

@@ -1469,6 +1469,15 @@ fn diagnostic_logs(state_dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Splice `items` into bubblewrap's `args` just before its `--` (at the end
+/// when there is none yet): after every mount made so far, so nothing bound
+/// earlier can re-expose what they hide.
+#[cfg(any(target_os = "linux", test))]
+fn splice_before_command(args: &mut Vec<String>, items: Vec<String>) {
+    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
+    args.splice(separator..separator, items);
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMount]) {
     let mut mask = Vec::new();
@@ -1486,8 +1495,7 @@ fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMo
         let log = log.to_string_lossy().into_owned();
         mask.extend(["--ro-bind".into(), log.clone(), log]);
     }
-    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
-    args.splice(separator..separator, mask);
+    splice_before_command(args, mask);
 }
 
 /// Hide each local-models-only project's folder (`agent_privacy::mask_dirs`)
@@ -1496,8 +1504,7 @@ fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMo
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn mask_local_models_only(args: &mut Vec<String>, dirs: &[PathBuf]) {
     let mask: Vec<String> = dirs.iter().flat_map(|d| ["--tmpfs".to_string(), d.to_string_lossy().into_owned()]).collect();
-    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
-    args.splice(separator..separator, mask);
+    splice_before_command(args, mask);
 }
 
 /// What a host's `/etc/claude-code` is, as far as the fence's mounts are concerned.
@@ -1716,8 +1723,7 @@ pub(crate) fn mask_project_config(args: &mut Vec<String>, masks: &[crate::servic
             if m.dir { vec!["--tmpfs".to_string(), path] } else { vec!["--ro-bind".to_string(), "/dev/null".to_string(), path] }
         })
         .collect();
-    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
-    args.splice(separator..separator, mask);
+    splice_before_command(args, mask);
 }
 
 /// Unset each of `names` inside the fence (bubblewrap's own `--unsetenv`), so a
@@ -1725,8 +1731,7 @@ pub(crate) fn mask_project_config(args: &mut Vec<String>, masks: &[crate::servic
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn unset_env_in_fence(args: &mut Vec<String>, names: &[String]) {
     let unset: Vec<String> = names.iter().flat_map(|n| ["--unsetenv".to_string(), n.clone()]).collect();
-    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
-    args.splice(separator..separator, unset);
+    splice_before_command(args, unset);
 }
 
 /// Open `tab`'s local lane and splice it into `args` ([`insert_local_lane`]).

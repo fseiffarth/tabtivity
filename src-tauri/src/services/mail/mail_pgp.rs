@@ -403,23 +403,7 @@ impl PgpKeyring {
                     .collect(),
             );
             let material = key.to_bytes().map_err(|e| e.to_string())?;
-            let identities = user_ids_of_details(&key.details);
-            let (trust, mut notes) = carried_trust(&file, &fingerprint, &identities);
-            let entry = StoredKey {
-                fingerprint: fingerprint.clone(),
-                identities,
-                secret: true,
-                verified: trust.verified,
-                accounts: trust.accounts,
-                algorithm: algorithm_label(key.algorithm()),
-                origin: trust.origin,
-                material: B64.encode(&material),
-            };
-            file.entries.retain(|e| e.fingerprint != fingerprint);
-            file.entries.push(entry.clone());
-            let mut info = info_of(&entry);
-            info.notes.append(&mut notes);
-            added.push(info);
+            added.push(record_import(&mut file, fingerprint, &key.details, algorithm_label(key.algorithm()), &material, true));
         }
 
         if added.is_empty() {
@@ -448,23 +432,7 @@ impl PgpKeyring {
                         .collect(),
                 );
                 let material = key.to_bytes().map_err(|e| e.to_string())?;
-                let identities = user_ids_of_details(&key.details);
-                let (trust, mut notes) = carried_trust(&file, &fingerprint, &identities);
-                let entry = StoredKey {
-                    fingerprint: fingerprint.clone(),
-                    identities,
-                    secret: false,
-                    verified: trust.verified,
-                    accounts: Vec::new(),
-                    algorithm: algorithm_label(key.algorithm()),
-                    origin: trust.origin,
-                    material: B64.encode(&material),
-                };
-                file.entries.retain(|e| e.fingerprint != fingerprint);
-                file.entries.push(entry.clone());
-                let mut info = info_of(&entry);
-                info.notes.append(&mut notes);
-                added.push(info);
+                added.push(record_import(&mut file, fingerprint, &key.details, algorithm_label(key.algorithm()), &material, false));
             }
         }
 
@@ -909,15 +877,11 @@ impl PgpKeyring {
         // certify-only (`can_sign(false)`), which is the conventional shape and
         // the one every other client expects.
         let now = now_secs();
-        let primary = key_window(&SignedPublicKey::from(key.clone()));
+        let primary = window_of(key.primary_key.created_at().as_secs(), &key.details);
         let signer = key
             .secret_subkeys
             .iter()
-            .find(|s| {
-                s.algorithm().can_sign()
-                    && primary.holds_at(now)
-                    && subkey_window(s.key.created_at().as_secs(), &s.signatures).holds_at(now)
-            })
+            .find(|s| s.algorithm().can_sign() && subkey_usable(&primary, s.key.created_at().as_secs(), &s.signatures, now))
             .ok_or("this key has no signing subkey that is still valid (it has expired or been revoked)")?;
 
         // `sign_text_data` rather than `sign_binary_data`: the signature has to
@@ -984,11 +948,7 @@ impl PgpKeyring {
             let subkey = key
                 .public_subkeys
                 .iter()
-                .find(|s| {
-                    s.algorithm().can_encrypt()
-                        && primary.holds_at(now)
-                        && subkey_window(s.key.created_at().as_secs(), &s.signatures).holds_at(now)
-                })
+                .find(|s| s.algorithm().can_encrypt() && subkey_usable(&primary, s.key.created_at().as_secs(), &s.signatures, now))
                 .ok_or("a recipient's key has no encryption subkey that is still valid (it has expired or been revoked)")?;
             builder
                 .encrypt_to_key(rand::rngs::OsRng, subkey)
@@ -1586,6 +1546,36 @@ fn demote_imported_secrets(file: &mut KeyringFile) {
     file.secret_trust_migrated = true;
 }
 
+/// One imported key into `file` as `fingerprint`, in place of any entry of
+/// that fingerprint, with the trust it carries over ([`carried_trust`]). Only
+/// a secret key keeps the carried account bindings. Answers what to report.
+fn record_import(
+    file: &mut KeyringFile,
+    fingerprint: String,
+    details: &pgp::composed::SignedKeyDetails,
+    algorithm: String,
+    material: &[u8],
+    secret: bool,
+) -> PgpKeyInfo {
+    let identities = user_ids_of_details(details);
+    let (trust, mut notes) = carried_trust(file, &fingerprint, &identities);
+    let entry = StoredKey {
+        fingerprint: fingerprint.clone(),
+        identities,
+        secret,
+        verified: trust.verified,
+        accounts: if secret { trust.accounts } else { Vec::new() },
+        algorithm,
+        origin: trust.origin,
+        material: B64.encode(material),
+    };
+    file.entries.retain(|e| e.fingerprint != fingerprint);
+    file.entries.push(entry.clone());
+    let mut info = info_of(&entry);
+    info.notes.append(&mut notes);
+    info
+}
+
 fn info_of(entry: &StoredKey) -> PgpKeyInfo {
     let (revoked, expired) = parse_public(entry)
         .map(|key| key_status(&key, now_secs()))
@@ -1689,19 +1679,23 @@ fn expiry_after(created: u32, d: pgp::types::Duration) -> Option<u32> {
 /// self-certification of the primary user id (or of the first, with none
 /// marked primary). A user-id revocation does not count as one.
 fn key_window(key: &SignedPublicKey) -> Window {
+    window_of(key.primary_key.created_at().as_secs(), &key.details)
+}
+
+/// [`key_window`] of a primary key created at `created` with `details`: what a
+/// secret key's window is read from too, without making a public copy of it.
+fn window_of(created: u32, details: &pgp::composed::SignedKeyDetails) -> Window {
     use pgp::packet::SignatureType;
 
-    let created = key.primary_key.created_at().as_secs();
     // A key whose every user id its owner revoked has withdrawn all its claims.
-    let revoked = key
-        .details
+    let revoked = details
         .revocation_signatures
         .iter()
         .any(|s| s.typ() == Some(SignatureType::KeyRevocation))
-        || (!key.details.users.is_empty() && user_ids_of_details(&key.details).is_empty());
+        || (!details.users.is_empty() && user_ids_of_details(details).is_empty());
 
     let direct = latest(
-        key.details
+        details
             .direct_signatures
             .iter()
             .filter(|s| s.typ() == Some(SignatureType::Key)),
@@ -1709,7 +1703,7 @@ fn key_window(key: &SignedPublicKey) -> Window {
     .and_then(|s| s.key_expiration_time());
 
     let expiry = direct.or_else(|| {
-        let certs = key.details.users.iter().filter_map(|u| {
+        let certs = details.users.iter().filter_map(|u| {
             latest(
                 u.signatures
                     .iter()
@@ -1728,6 +1722,12 @@ fn key_window(key: &SignedPublicKey) -> Window {
         end: expiry.and_then(|d| expiry_after(created, d)),
         revoked,
     }
+}
+
+/// Whether a subkey created at `created` with binding `signatures` may be used
+/// at `now` under a primary whose window is `primary`: both must hold.
+fn subkey_usable(primary: &Window, created: u32, signatures: &[pgp::packet::Signature], now: u32) -> bool {
+    primary.holds_at(now) && subkey_window(created, signatures).holds_at(now)
 }
 
 /// A subkey's window from its own binding signatures: the newest binding gives

@@ -242,8 +242,9 @@ pub struct NaturalState {
 pub fn state() -> NaturalState {
     let root = voice_root();
     let program = program();
+    let program_ok = program_installed_in(&root);
     let program_missing = match program {
-        Some(p) if !program_installed_in(&root) => p.size,
+        Some(p) if !program_ok => p.size,
         _ => 0,
     };
     NaturalState {
@@ -251,8 +252,9 @@ pub fn state() -> NaturalState {
         voices: VOICES
             .iter()
             .map(|v| {
-                let installed = program_installed_in(&root) && voice_installed_in(&root, v);
-                let voice_missing = if voice_installed_in(&root, v) { 0 } else { v.onnx_size + v.json_size };
+                let voice_ok = voice_installed_in(&root, v);
+                let installed = program_ok && voice_ok;
+                let voice_missing = if voice_ok { 0 } else { v.onnx_size + v.json_size };
                 NaturalVoiceState { lang: v.lang, installed, download_bytes: if installed { 0 } else { program_missing + voice_missing } }
             })
             .collect(),
@@ -294,20 +296,7 @@ fn install_script(lang: &str, program: &Program, root: &Path, windows: bool) -> 
         s += &format!("New-Item -ItemType Directory -Force -Path {} | Out-Null\n", q(&voices));
         s += &format!("Set-Location -LiteralPath {}\n", q(&voices));
         for (file, url, sha, size) in voice.files() {
-            let name = q(&file);
-            let part = q(&format!("{file}.part"));
-            s += &format!(
-                "if (Test-Path -LiteralPath {name}) {{ Write-Output ('── ' + {name} + ' is already here ──') }} else {{\n\
-                 \x20 Write-Output ('── Fetching ' + {name} + ' ({mb} MB) ──')\n\
-                 \x20 Invoke-WebRequest -Uri {url} -OutFile {part}\n\
-                 \x20 $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath {part}).Hash.ToLower()\n\
-                 \x20 if ($actual -ne {hash}) {{ Remove-Item -LiteralPath {part}; throw \"checksum mismatch: $actual\" }}\n\
-                 \x20 Move-Item -Force -LiteralPath {part} -Destination {name}\n\
-                 }}\n",
-                mb = mb(size),
-                url = q(&url),
-                hash = q(sha),
-            );
+            s += &super::models::fetch_powershell(&file, &url, sha, size);
         }
         s += "Write-Output '── Natural voice ready. ──'\n";
         s
@@ -319,7 +308,7 @@ fn install_script(lang: &str, program: &Program, root: &Path, windows: bool) -> 
             "if [ -x piper/piper ] && [ -d piper/espeak-ng-data ]; then echo '── Piper is already here ──'; else\n\
              \x20 echo '── Fetching Piper ({mb} MB) ──'\n\
              \x20 curl -fL --progress-bar -o piper-download.part {url}\n\
-             \x20 echo {check} | sha256sum -c - || {{ rm -f piper-download.part; exit 1; }}\n\
+             \x20 echo {check} | {sha} -c - || {{ rm -f piper-download.part; exit 1; }}\n\
              \x20 rm -rf piper.part && mkdir piper.part\n\
              \x20 tar -xzf piper-download.part -C piper.part\n\
              \x20 rm -f piper-download.part\n\
@@ -328,22 +317,11 @@ fn install_script(lang: &str, program: &Program, root: &Path, windows: bool) -> 
             mb = mb(program.size),
             url = q(&program.url()),
             check = q(&format!("{}  piper-download.part", program.sha256)),
+            sha = super::models::sha256_check(),
         );
         s += &format!("mkdir -p {}\ncd {}\n", q(&voices), q(&voices));
         for (file, url, sha, size) in voice.files() {
-            let name = q(&file);
-            let part = q(&format!("{file}.part"));
-            s += &format!(
-                "if [ -f {name} ]; then echo '── '{name}' is already here ──'; else\n\
-                 \x20 echo '── Fetching '{name}' ({mb} MB) ──'\n\
-                 \x20 curl -fL --progress-bar -o {part} {url}\n\
-                 \x20 echo {check} | sha256sum -c - || {{ rm -f {part}; exit 1; }}\n\
-                 \x20 mv {part} {name}\n\
-                 fi\n",
-                mb = mb(size),
-                url = q(&url),
-                check = q(&format!("{sha}  {file}.part")),
-            );
+            s += &super::models::fetch_posix(&file, &url, sha, size);
         }
         s += "echo '── Natural voice ready. ──'\n";
         s

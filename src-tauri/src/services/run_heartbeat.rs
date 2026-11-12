@@ -137,7 +137,7 @@ fn sample() -> String {
     if let Some(kb) = field(&status, "VmRSS:") {
         parts.push(format!("rss {} MB", kb / 1024));
     }
-    if let Some(n) = field(&status, "Threads:") {
+    if let Some(n) = crate::sysstat::parse_threads(&status) {
         parts.push(format!("threads {n}"));
     }
     match super::fd_limit::usage() {
