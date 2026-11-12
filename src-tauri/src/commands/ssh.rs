@@ -52,9 +52,9 @@ pub fn ssh_tooling_status() -> SshTooling {
 }
 
 /// What the fingerprint-confirmation dialog shows for a host Tabtivity has never
-/// connected to. `scan` is the raw known_hosts text behind `keys` and is handed
-/// straight back to [`ssh_trust_host_key`], so what gets stored is exactly what
-/// was shown — a re-scan at accept time would leave a window for a different key.
+/// connected to. Accepting hands the shown fingerprints back to
+/// [`ssh_trust_host_key`], which re-scans and stores only a key carrying one of
+/// them — so what gets stored is exactly what was shown.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostKeyPreview {
     /// Resolved `host:port` (after `~/.ssh/config`), so the dialog names the
@@ -64,8 +64,6 @@ pub struct HostKeyPreview {
     /// to ask and the caller can proceed straight to connecting.
     pub known: bool,
     pub keys: Vec<crate::services::ssh_common::HostKeyFingerprint>,
-    /// Opaque known_hosts lines to pass back to `ssh_trust_host_key`.
-    pub scan: String,
 }
 
 /// Fetch the SSH host keys a host currently offers, so the user can verify the
@@ -81,12 +79,11 @@ pub async fn ssh_host_key_preview(
         use crate::services::ssh_common as sc;
         let (resolved, resolved_port) = sc::resolve_host_port(&host, port);
         let known = sc::host_key_known(&resolved, resolved_port);
-        let (scan, keys) = sc::scan_host_keys(&host, port)?;
+        let (_, keys) = sc::scan_host_keys(&host, port)?;
         Ok(HostKeyPreview {
             target: format!("{resolved}:{resolved_port}"),
             known,
             keys,
-            scan,
         })
     })
     .await
@@ -96,9 +93,21 @@ pub async fn ssh_host_key_preview(
 /// appending them to `~/.ssh/known_hosts`. This is the *only* thing that clears
 /// the first-contact gate, and it exists solely to be reachable from a click — no
 /// launch or background path may call it.
+///
+/// Takes the host, not known_hosts text: the backend scans `host`/`port` again
+/// and writes only a plain line for that host whose key has one of
+/// `fingerprints` (the ones the dialog showed). Async: the scan talks to the
+/// network.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn ssh_trust_host_key(scan: String) -> Result<(), String> {
-    crate::services::ssh_common::trust_host_key(&scan)
+pub async fn ssh_trust_host_key(
+    host: String,
+    port: Option<u16>,
+    fingerprints: Vec<String>,
+) -> Result<(), String> {
+    app_core::rt::try_blocking("host key trust failed", move || {
+        crate::services::ssh_common::trust_host_key(&host, port, &fingerprints)
+    })
+    .await
 }
 
 /// Most-recently-used SSH addresses to keep. Old entries past this fall off.
