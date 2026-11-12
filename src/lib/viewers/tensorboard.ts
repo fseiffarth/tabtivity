@@ -153,35 +153,175 @@ export function appendSeries(existing: readonly TfPoint[], incoming: readonly Tf
   return merged.length > SERIES_CAP ? downsample(merged, SERIES_KEEP) : merged;
 }
 
+// ── Accumulated state and its budget ─────────────────────────────────────
+//
+// Every tag- or kind-keyed collection below is a `Map`: the names come from the
+// file, so `__proto__`, `constructor` or `toString` must be data, never a
+// property lookup. The read answer itself (`TfReadResult.scalars`,
+// `.skipped.series`) is parsed JSON, where such a name is an own key: it is
+// only ever walked with `Object.entries`, never indexed by a name.
+
+/**
+ * Most distinct scalar tags one view keeps, across all of its files: the
+ * backend's per-scan cap (`services::tfevents::MAX_TAGS`), now held for the
+ * view's lifetime, so successive reads and a folder of many files cannot add
+ * up past it.
+ */
+export const VIEW_MAX_TAGS = 2_000;
+/** Most other-kind series names (`image`/`histogram`/… tag pairs) one view
+ *  lists, across its files: the same 2,000. */
+export const VIEW_MAX_SERIES_NAMES = 2_000;
+/**
+ * Most scalar points one view retains, all series of all files together. A
+ * series stops at [`SERIES_CAP`] on its own; this bounds the sum (a few tens of
+ * MB at worst). Past it a new tag is not kept, and an existing series is
+ * thinned to the length it had, so a live chart still moves to its newest point.
+ */
+export const VIEW_MAX_POINTS = 1_000_000;
+
 /** One event file's accumulated state. */
 export interface FileState {
   cursor: TfCursor | null;
-  scalars: Record<string, TfPoint[]>;
-  /** Other-kind series seen so far: kind → tag names. */
-  series: Record<string, string[]>;
+  scalars: ReadonlyMap<string, TfPoint[]>;
+  /** Other-kind series seen so far: kind → tag names (sorted). */
+  series: ReadonlyMap<string, readonly string[]>;
   nonFinite: number;
   oversized: number;
   malformed: number;
   dropped: number;
   badCrc: boolean;
+  /** Scalar points (with those of tags) the view's budget did not keep. */
+  overBudgetPoints: number;
+  /** Other-kind series names the view's budget did not list. */
+  overBudgetSeries: number;
 }
 
 export function emptyFileState(): FileState {
-  return { cursor: null, scalars: {}, series: {}, nonFinite: 0, oversized: 0, malformed: 0, dropped: 0, badCrc: false };
+  return {
+    cursor: null,
+    scalars: new Map(),
+    series: new Map(),
+    nonFinite: 0,
+    oversized: 0,
+    malformed: 0,
+    dropped: 0,
+    badCrc: false,
+    overBudgetPoints: 0,
+    overBudgetSeries: 0,
+  };
 }
 
-/** Fold one `tfevents_read` answer into the file's state (a new state; no mutation). */
-export function applyRead(state: FileState, read: TfReadResult): FileState {
+/**
+ * What one view holds, all files together, against the `VIEW_MAX_*` limits:
+ * per name, how many files hold it (a tag in two files is one tag), and the
+ * total points. [`applyRead`] keeps it in step; it lives as long as the view's
+ * file states do and goes with them.
+ */
+export interface ViewBudget {
+  tags: Map<string, number>;
+  /** Keyed by `JSON.stringify([kind, tag])`: unambiguous for any two strings. */
+  seriesNames: Map<string, number>;
+  points: number;
+}
+
+export function emptyViewBudget(): ViewBudget {
+  return { tags: new Map(), seriesNames: new Map(), points: 0 };
+}
+
+const seriesNameKey = (kind: string, tag: string) => JSON.stringify([kind, tag]);
+
+/** Count one more file holding `key`; a name new to the view only while under `max`. */
+function claimName(names: Map<string, number>, key: string, max: number): boolean {
+  const held = names.get(key);
+  if (held !== undefined) {
+    names.set(key, held + 1);
+    return true;
+  }
+  if (names.size >= max) return false;
+  names.set(key, 1);
+  return true;
+}
+
+function releaseName(names: Map<string, number>, key: string): void {
+  const held = names.get(key);
+  if (held === undefined) return;
+  if (held <= 1) names.delete(key);
+  else names.set(key, held - 1);
+}
+
+function charge(budget: ViewBudget, state: FileState, sign: 1 | -1): void {
+  for (const [tag, points] of state.scalars) {
+    if (sign > 0) claimName(budget.tags, tag, Infinity);
+    else releaseName(budget.tags, tag);
+    budget.points += sign * points.length;
+  }
+  for (const [kind, tags] of state.series) {
+    for (const tag of tags) {
+      if (sign > 0) claimName(budget.seriesNames, seriesNameKey(kind, tag), Infinity);
+      else releaseName(budget.seriesNames, seriesNameKey(kind, tag));
+    }
+  }
+}
+
+/** The budget `states` use between them (to rebuild one that lost step). */
+export function budgetOf(states: Iterable<FileState>): ViewBudget {
+  const budget = emptyViewBudget();
+  for (const s of states) charge(budget, s, 1);
+  return budget;
+}
+
+/** `points` cut to at most `max`, the newest kept when there is room for too few to thin. */
+function fitSeries(points: TfPoint[], max: number): TfPoint[] {
+  if (points.length <= max) return points;
+  if (max <= 0) return [];
+  return max < 4 ? points.slice(-max) : downsample(points, max);
+}
+
+/**
+ * Fold one `tfevents_read` answer into the file's state (a new state; `state`
+ * is not mutated). `budget` is the view's, shared by all its files, and is
+ * updated in place: a reset gives back what the file held, and nothing is
+ * inserted past [`VIEW_MAX_TAGS`], [`VIEW_MAX_SERIES_NAMES`] or
+ * [`VIEW_MAX_POINTS`] — what is left out is counted in `overBudgetPoints` /
+ * `overBudgetSeries`. Without one, the budget is this file's own.
+ */
+export function applyRead(state: FileState, read: TfReadResult, budget: ViewBudget = budgetOf([state])): FileState {
+  if (read.reset) charge(budget, state, -1);
   const base = read.reset ? emptyFileState() : state;
-  const scalars: Record<string, TfPoint[]> = { ...base.scalars };
+  let overBudgetPoints = base.overBudgetPoints;
+  let overBudgetSeries = base.overBudgetSeries;
+
+  const scalars = new Map(base.scalars);
   for (const [tag, points] of Object.entries(read.scalars)) {
-    scalars[tag] = appendSeries(scalars[tag] ?? [], points);
+    if (!Array.isArray(points)) continue;
+    const old = scalars.get(tag);
+    const held = old?.length ?? 0;
+    const merged = appendSeries(old ?? [], points);
+    // What this series may hold: what it has plus what the view has left.
+    const room = Math.max(held, VIEW_MAX_POINTS - budget.points + held);
+    const next = fitSeries(merged, room);
+    if (old === undefined && (next.length === 0 || !claimName(budget.tags, tag, VIEW_MAX_TAGS))) {
+      overBudgetPoints += points.length;
+      continue;
+    }
+    overBudgetPoints += merged.length - next.length;
+    budget.points += next.length - held;
+    scalars.set(tag, next);
   }
-  const series: Record<string, string[]> = { ...base.series };
+
+  const series = new Map(base.series);
   for (const [kind, tags] of Object.entries(read.skipped.series)) {
-    const merged = new Set([...(series[kind] ?? []), ...tags]);
-    series[kind] = [...merged].sort();
+    if (!Array.isArray(tags)) continue;
+    const have = series.get(kind) ?? [];
+    const set = new Set(have);
+    for (const tag of tags) {
+      if (typeof tag !== "string" || set.has(tag)) continue;
+      if (claimName(budget.seriesNames, seriesNameKey(kind, tag), VIEW_MAX_SERIES_NAMES)) set.add(tag);
+      else overBudgetSeries += 1;
+    }
+    if (set.size > have.length) series.set(kind, [...set].sort());
   }
+
   return {
     cursor: read.cursor,
     scalars,
@@ -192,6 +332,8 @@ export function applyRead(state: FileState, read: TfReadResult): FileState {
     dropped: base.dropped + read.skipped.dropped,
     // A corrupt record stops the file, so the flag follows the latest read.
     badCrc: read.skipped.badCrc,
+    overBudgetPoints,
+    overBudgetSeries,
   };
 }
 
@@ -202,7 +344,7 @@ export function applyRead(state: FileState, read: TfReadResult): FileState {
 export function mergeRunFiles(files: readonly FileState[], tag: string): TfPoint[] {
   let out: TfPoint[] = [];
   for (const f of files) {
-    const s = f.scalars[tag];
+    const s = f.scalars.get(tag);
     if (s && s.length) out = mergeSeries(out, s);
   }
   return out;
@@ -211,7 +353,7 @@ export function mergeRunFiles(files: readonly FileState[], tag: string): TfPoint
 /** Every scalar tag any of the files holds, sorted. */
 export function tagsOf(files: readonly FileState[]): string[] {
   const set = new Set<string>();
-  for (const f of files) for (const t of Object.keys(f.scalars)) set.add(t);
+  for (const f of files) for (const t of f.scalars.keys()) set.add(t);
   return [...set].sort();
 }
 
@@ -219,7 +361,7 @@ export function tagsOf(files: readonly FileState[]): string[] {
 export function newestWall(files: readonly FileState[]): number {
   let newest = 0;
   for (const f of files) {
-    for (const s of Object.values(f.scalars)) {
+    for (const s of f.scalars.values()) {
       const last = s[s.length - 1];
       if (last && last[1] > newest) newest = last[1];
     }
@@ -238,7 +380,7 @@ export function isRecent(newestWallSeconds: number, nowMs: number): boolean {
 export function unshownCounts(files: readonly FileState[]): Array<{ kind: string; count: number }> {
   const byKind = new Map<string, Set<string>>();
   for (const f of files) {
-    for (const [kind, tags] of Object.entries(f.series)) {
+    for (const [kind, tags] of f.series) {
       const set = byKind.get(kind) ?? new Set<string>();
       for (const t of tags) set.add(t);
       byKind.set(kind, set);
@@ -246,7 +388,7 @@ export function unshownCounts(files: readonly FileState[]): Array<{ kind: string
   }
   return [...byKind.entries()]
     .map(([kind, set]) => ({ kind, count: set.size }))
-    .sort((a, b) => (a.kind < b.kind ? -1 : 1));
+    .sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0));
 }
 
 // ── Tags ─────────────────────────────────────────────────────────────────

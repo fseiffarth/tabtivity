@@ -9064,6 +9064,8 @@ export const enSource = {
   "tensorboard.oversized": "{count} records over 16 MiB were skipped.",
   "tensorboard.dropped": "{count} points beyond the per-tag limit were skipped.",
   "tensorboard.malformed": "{count} unreadable records were skipped.",
+  "tensorboard.overBudgetPoints": "{count} points were not kept: this view holds at most {tags} tags and {points} points.",
+  "tensorboard.overBudgetSeries": "{count} other series were not listed: this view lists at most {max}.",
   "tensorboard.badCrc": "Reading stopped at a damaged record; later data in that file is not shown.",
   "mediaView.playbackFailed": "This media couldn't be played in-app. Try opening it externally.",
   "odtView.failedToRender": "Failed to render document: {error}",

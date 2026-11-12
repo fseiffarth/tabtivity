@@ -8682,6 +8682,8 @@ export const dict: Dict = {
   "tensorboard.oversized": "{count} enregistrements de plus de 16 Mio ont été ignorés.",
   "tensorboard.dropped": "{count} points au-delà de la limite par étiquette ont été ignorés.",
   "tensorboard.malformed": "{count} enregistrements illisibles ont été ignorés.",
+  "tensorboard.overBudgetPoints": "{count} points n'ont pas été conservés : cette vue garde au plus {tags} étiquettes et {points} points.",
+  "tensorboard.overBudgetSeries": "{count} autres séries n'ont pas été listées : cette vue en liste au plus {max}.",
   "tensorboard.badCrc": "La lecture s'est arrêtée sur un enregistrement endommagé ; les données suivantes de ce fichier ne sont pas affichées.",
   "mediaView.playbackFailed": "Ce fichier multimédia n'a pas pu être lu dans l'application. Essayez de l'ouvrir en externe.",
   "odtView.failedToRender": "Échec du rendu du document : {error}",

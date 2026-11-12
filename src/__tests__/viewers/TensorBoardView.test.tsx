@@ -161,6 +161,49 @@ describe("TensorBoardView", () => {
     await screen.findByText(/No event files/);
   });
 
+  it("draws tags and kinds named like object properties (the answer is parsed JSON)", async () => {
+    const hostile = JSON.parse(
+      '{"__proto__":[[0,1,1]],"constructor/x":[[0,1,2]],"toString":[[0,1,3]],"hasOwnProperty":[[0,1,4]]}',
+    ) as TfReadResult["scalars"];
+    const kinds = JSON.parse('{"constructor":["a"],"__proto__":["b"]}') as Record<string, string[]>;
+    mockInvoke.mockImplementation((cmd: string) =>
+      cmd === "tfevents_read"
+        ? Promise.resolve(answer({ scalars: hostile, skipped: { ...answer().skipped, series: kinds } }))
+        : Promise.resolve(null),
+    );
+    await act(async () => {
+      show();
+    });
+    for (const tag of ["__proto__", "constructor/x", "toString", "hasOwnProperty"]) {
+      expect(await screen.findByLabelText(`Chart of ${tag}, 1 runs`)).toBeTruthy();
+    }
+    expect(screen.getByText("Not shown: 1 __proto__, 1 constructor series")).toBeTruthy();
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+  });
+
+  it("ends in an error, not a pane loading for good, when an answer cannot be folded", async () => {
+    mockInvoke.mockImplementation((cmd: string) =>
+      cmd === "tfevents_read" ? Promise.resolve({ ...answer(), skipped: null }) : Promise.resolve(null),
+    );
+    await act(async () => {
+      show();
+    });
+    await screen.findByText(/Failed to read the event files/);
+  });
+
+  it("says how much the view's budget left out", async () => {
+    const many: TfReadResult["scalars"] = Object.fromEntries(
+      Array.from({ length: 2003 }, (_, i) => [`t${i}`, [[0, 1, 1] as const]]),
+    );
+    mockInvoke.mockImplementation((cmd: string) =>
+      cmd === "tfevents_read" ? Promise.resolve(answer({ scalars: many })) : Promise.resolve(null),
+    );
+    await act(async () => {
+      show();
+    });
+    await screen.findByText(/^3 points were not kept/);
+  });
+
   it("shows a read failure instead of an empty pane", async () => {
     mockInvoke.mockImplementation((cmd: string) =>
       cmd === "tfevents_read" ? Promise.reject(new Error("no such file or directory")) : Promise.resolve(null),

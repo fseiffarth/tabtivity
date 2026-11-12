@@ -25,7 +25,12 @@ import {
   tagGroup,
   tagsOf,
   unshownCounts,
+  budgetOf,
+  emptyViewBudget,
   SERIES_CAP,
+  VIEW_MAX_POINTS,
+  VIEW_MAX_SERIES_NAMES,
+  VIEW_MAX_TAGS,
   type TfPoint,
   type TfReadResult,
 } from "../../lib/viewers/tensorboard";
@@ -143,21 +148,129 @@ describe("applyRead", () => {
     let st = emptyFileState();
     st = applyRead(st, read({ scalars: { loss: [pt(0, 2), pt(1, 1)] }, skipped: { ...read().skipped, series: { image: ["a"] }, nonFinite: 2 } }));
     st = applyRead(st, read({ scalars: { loss: [pt(2, 0.5)], acc: [pt(2, 0.9)] }, skipped: { ...read().skipped, series: { image: ["a", "b"] }, nonFinite: 1 } }));
-    expect(st.scalars.loss.map((p) => p[0])).toEqual([0, 1, 2]);
-    expect(Object.keys(st.scalars).sort()).toEqual(["acc", "loss"]);
-    expect(st.series.image).toEqual(["a", "b"]);
+    expect(st.scalars.get("loss")?.map((p) => p[0])).toEqual([0, 1, 2]);
+    expect([...st.scalars.keys()].sort()).toEqual(["acc", "loss"]);
+    expect(st.series.get("image")).toEqual(["a", "b"]);
     expect(st.nonFinite).toBe(3);
   });
 
   it("drops what it kept when the file was replaced (reset)", () => {
     let st = applyRead(emptyFileState(), read({ scalars: { loss: [pt(0, 1), pt(1, 1)] } }));
     st = applyRead(st, read({ reset: true, scalars: { other: [pt(0, 5)] } }));
-    expect(Object.keys(st.scalars)).toEqual(["other"]);
+    expect([...st.scalars.keys()]).toEqual(["other"]);
   });
 
   it("keeps the cursor of the latest read", () => {
     const st = applyRead(emptyFileState(), read({ cursor: { offset: 7, size: 9, mtime: 3 } }));
     expect(st.cursor).toEqual({ offset: 7, size: 9, mtime: 3 });
+  });
+});
+
+/** A read answer as the backend's JSON arrives: parsed, so `__proto__` is an
+ *  own key (an object literal would set the prototype instead). */
+function wire(scalars: Record<string, TfPoint[]> | [string, TfPoint[]][], series: [string, string[]][] = []): TfReadResult {
+  const pairs = Array.isArray(scalars) ? scalars : Object.entries(scalars);
+  const json = `{${pairs.map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(",")}}`;
+  const kinds = `{${series.map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(",")}}`;
+  return read({ scalars: JSON.parse(json), skipped: { ...read().skipped, series: JSON.parse(kinds) } });
+}
+
+const SPECIAL = ["__proto__", "constructor", "toString", "hasOwnProperty", "valueOf", "prototype"];
+
+describe("names from the file are data", () => {
+  it("round-trips special property names as tags and kinds, on the first and later reads", () => {
+    const protoBefore = Object.getOwnPropertyNames(Object.prototype).sort();
+    const budget = emptyViewBudget();
+    let st = emptyFileState();
+    const first = wire(SPECIAL.map((t, i) => [t, [pt(0, i + 1)]]), SPECIAL.map((k) => [k, ["__proto__", "x"]]));
+    expect(Object.keys(first.scalars)).toContain("__proto__");
+    st = applyRead(st, first, budget);
+    st = applyRead(st, wire(SPECIAL.map((t, i) => [t, [pt(1, i + 10)]]), SPECIAL.map((k) => [k, ["y"]])), budget);
+    for (const [i, tag] of SPECIAL.entries()) {
+      expect(st.scalars.get(tag)).toEqual([pt(0, i + 1), pt(1, i + 10)]);
+      expect(mergeRunFiles([st], tag)).toEqual([pt(0, i + 1), pt(1, i + 10)]);
+    }
+    expect(tagsOf([st])).toEqual([...SPECIAL].sort());
+    expect(unshownCounts([st])).toEqual([...SPECIAL].sort().map((kind) => ({ kind, count: 3 })));
+    expect(newestWall([st])).toBe(1);
+    expect(mergeRunFiles([st], "missing")).toEqual([]);
+    expect(Object.getOwnPropertyNames(Object.prototype).sort()).toEqual(protoBefore);
+    expect(({} as Record<string, unknown>).loss).toBeUndefined();
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+  });
+
+  it("leaves the ordinary series result as it was", () => {
+    const st = applyRead(emptyFileState(), wire({ loss: [pt(0, 2), pt(1, 1)] }, [["image", ["b", "a"]]]));
+    expect(st.scalars.get("loss")).toEqual([pt(0, 2), pt(1, 1)]);
+    expect(st.series.get("image")).toEqual(["a", "b"]);
+    expect(st.overBudgetPoints).toBe(0);
+    expect(st.overBudgetSeries).toBe(0);
+  });
+});
+
+describe("the view's budget", () => {
+  const batch = (from: number, n: number): TfReadResult =>
+    wire(Array.from({ length: n }, (_, i): [string, TfPoint[]] => [`t${from + i}`, [pt(0, 1)]]));
+
+  it("keeps three disjoint batches of 2,000 tags within one view's limit and counts the rest", () => {
+    const budget = emptyViewBudget();
+    let st = emptyFileState();
+    for (let b = 0; b < 3; b++) st = applyRead(st, batch(b * 2000, 2000), budget);
+    expect(st.scalars.size).toBe(VIEW_MAX_TAGS);
+    expect(budget.tags.size).toBe(VIEW_MAX_TAGS);
+    expect(st.overBudgetPoints).toBe(4000);
+    // Tags it already holds keep following.
+    st = applyRead(st, wire({ t0: [pt(1, 2)] }), budget);
+    expect(st.scalars.get("t0")).toHaveLength(2);
+  });
+
+  it("is shared by every file of the view, and a tag in two files counts once", () => {
+    const budget = emptyViewBudget();
+    const files = Array.from({ length: 6 }, (_, f) => applyRead(emptyFileState(), batch(f * 500, 1000), budget));
+    expect(tagsOf(files)).toHaveLength(VIEW_MAX_TAGS);
+    // Files 0–2 keep all 1,000 each (the third reaches 2,000 tags), file 3
+    // only the 500 tags already held, files 4 and 5 none.
+    expect(files.map((s) => s.scalars.size)).toEqual([1000, 1000, 1000, 500, 0, 0]);
+    expect(files.reduce((n, s) => n + s.overBudgetPoints, 0)).toBe(2500);
+    expect(budgetOf(files).tags.size).toBe(budget.tags.size);
+    expect(budgetOf(files).points).toBe(budget.points);
+  });
+
+  it("bounds other-kind series names across files", () => {
+    const budget = emptyViewBudget();
+    const names = (from: number) => Array.from({ length: 1500 }, (_, i) => `n${from + i}`);
+    const a = applyRead(emptyFileState(), wire({}, [["image", names(0)]]), budget);
+    const b = applyRead(emptyFileState(), wire({}, [["histogram", names(0)], ["image", names(0)]]), budget);
+    expect(unshownCounts([a, b]).reduce((n, u) => n + u.count, 0)).toBe(VIEW_MAX_SERIES_NAMES);
+    expect(a.overBudgetSeries + b.overBudgetSeries).toBe(1000);
+  });
+
+  it("bounds the points of all series together, still moving a full series to its newest point", () => {
+    const budget = emptyViewBudget();
+    budget.points = VIEW_MAX_POINTS - 10;
+    let st = applyRead(emptyFileState(), wire({ a: ramp(8) }), budget);
+    expect(st.scalars.get("a")).toHaveLength(8);
+    st = applyRead(st, wire({ a: ramp(5, 8), b: ramp(3) }), budget);
+    expect(budget.points).toBeLessThanOrEqual(VIEW_MAX_POINTS);
+    const a = st.scalars.get("a")!;
+    expect(a.length).toBe(10);
+    expect(a[a.length - 1][0]).toBe(12);
+    expect(st.scalars.has("b")).toBe(false);
+    expect(st.overBudgetPoints).toBe(3 + 3);
+  });
+
+  it("gives a file's share back on a reset, and survives a fold into the same file again", () => {
+    const budget = emptyViewBudget();
+    let st = applyRead(emptyFileState(), batch(0, 2000), budget);
+    const other = applyRead(emptyFileState(), batch(2000, 10), budget);
+    expect(other.scalars.size).toBe(0);
+    st = applyRead(st, { ...batch(5000, 3), reset: true }, budget);
+    expect([...st.scalars.keys()]).toEqual(["t5000", "t5001", "t5002"]);
+    expect(st.overBudgetPoints).toBe(0);
+    expect(budget.tags.size).toBe(3);
+    expect(budget.points).toBe(3);
+    const again = applyRead(other, batch(2000, 10), budget);
+    expect(again.scalars.size).toBe(10);
   });
 });
 

@@ -15,10 +15,13 @@ import {
   usePaneVisible,
 } from "../../lib/files/fileAccess";
 import { basename } from "../../lib/paths";
+import { usePoll } from "../../lib/usePoll";
 import {
   applyRead,
+  budgetOf,
   compileTagFilter,
   emptyFileState,
+  emptyViewBudget,
   formatValue,
   groupRuns,
   groupTags,
@@ -30,6 +33,9 @@ import {
   runStyle,
   tagsOf,
   unshownCounts,
+  VIEW_MAX_POINTS,
+  VIEW_MAX_SERIES_NAMES,
+  VIEW_MAX_TAGS,
   type FileState,
   type TfFileInfo,
   type TfRun,
@@ -46,13 +52,14 @@ const REDISCOVER_EVERY = 12;
 const GROUP_PAGE = 24;
 const DEFAULT_SMOOTHING = 0.6;
 
-const KIND_KEYS: Record<string, TranslationKey> = {
-  image: "tensorboard.kind.image",
-  histogram: "tensorboard.kind.histogram",
-  audio: "tensorboard.kind.audio",
-  text: "tensorboard.kind.text",
-  hparams: "tensorboard.kind.hparams",
-};
+// A Map, not an object: a kind is a name from the file (`constructor`, …).
+const KIND_KEYS = new Map<string, TranslationKey>([
+  ["image", "tensorboard.kind.image"],
+  ["histogram", "tensorboard.kind.histogram"],
+  ["audio", "tensorboard.kind.audio"],
+  ["text", "tensorboard.kind.text"],
+  ["hparams", "tensorboard.kind.hparams"],
+]);
 
 /**
  * Native TensorBoard viewer (`docs/tensorboard_viewer_plan.md`): an event file
@@ -95,6 +102,9 @@ export function TensorBoardView({
   // Per-file accumulated state lives in a ref (it grows large and changes in
   // place of React's cheap diffing); `rev` is the render signal.
   const statesRef = useRef(new Map<string, FileState>());
+  // What all files of this view hold against its `VIEW_MAX_*` limits; lives
+  // and goes with `statesRef` (a hidden pane keeps both).
+  const budgetRef = useRef(emptyViewBudget());
   const [rev, setRev] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -110,6 +120,7 @@ export function TensorBoardView({
   useEffect(() => {
     generation.current += 1;
     statesRef.current = new Map();
+    budgetRef.current = emptyViewBudget();
     inFlight.current = false;
     setRev((n) => n + 1);
     setLoaded(false);
@@ -165,7 +176,17 @@ export function TensorBoardView({
             Object.keys(read.skipped.series).length > 0 ||
             read.skipped.nonFinite + read.skipped.oversized + read.skipped.malformed + read.skipped.dropped > 0 ||
             read.skipped.badCrc !== prev.badCrc;
-          statesRef.current.set(f.path, changed ? applyRead(prev, read) : { ...prev, cursor: read.cursor });
+          let next: FileState;
+          try {
+            next = changed ? applyRead(prev, read, budgetRef.current) : { ...prev, cursor: read.cursor };
+          } catch (e) {
+            // A read that cannot be folded is this file's error, not a pane
+            // stuck loading: the fold may have half-charged the budget.
+            budgetRef.current = budgetOf(statesRef.current.values());
+            firstError ??= e;
+            break;
+          }
+          statesRef.current.set(f.path, next);
           if (changed) setRev((n) => n + 1);
           setPercent(read.cursor.size > 0 ? Math.min(100, Math.round((read.cursor.offset / read.cursor.size) * 100)) : 100);
           if (!read.truncated) break;
@@ -179,6 +200,14 @@ export function TensorBoardView({
         setErrorKey(null);
       }
       setLoaded(true);
+    } catch (e) {
+      // Anything else that throws still ends the pass in an error, never in a
+      // pane that says "Loading" for good.
+      if (gen === generation.current) {
+        setErrorKey(describeFileErrorKey(e));
+        setErrorDetail(String(e));
+        setLoaded(true);
+      }
     } finally {
       if (gen === generation.current) {
         inFlight.current = false;
@@ -209,16 +238,21 @@ export function TensorBoardView({
   useEffect(() => {
     if (canRead) void pollAll();
   }, [canRead, files, pollAll]);
-  // ... and keep following while Live is on.
-  useEffect(() => {
-    if (!canRead || !live) return;
-    const id = window.setInterval(() => {
-      tick.current += 1;
-      if (!isFile && tick.current % REDISCOVER_EVERY === 0) void discover();
-      void pollAll();
-    }, remote ? LIVE_REMOTE_MS : LIVE_LOCAL_MS);
-    return () => window.clearInterval(id);
-  }, [canRead, live, remote, isFile, pollAll, discover]);
+  // ... and keep following while Live is on: paused while the window is
+  // hidden, slower (not stopped) while it is only blurred, so a TensorBoard on
+  // a second screen still follows the run (`usePoll`, `onBlur: "widen"`).
+  // The pass itself is not awaited: `pollAll` skips a tick that finds the last
+  // pass still reading, and every tick counts towards the rediscovery.
+  const follow = useCallback(() => {
+    tick.current += 1;
+    if (!isFile && tick.current % REDISCOVER_EVERY === 0) void discover();
+    void pollAll();
+  }, [isFile, discover, pollAll]);
+  usePoll(follow, remote ? LIVE_REMOTE_MS : LIVE_LOCAL_MS, {
+    enabled: canRead && live === true,
+    immediate: false,
+    onBlur: "widen",
+  });
 
   // ── View state ──────────────────────────────────────────────────────────
   const [smoothing, setSmoothing] = useState(DEFAULT_SMOOTHING);
@@ -227,7 +261,8 @@ export function TensorBoardView({
   const [filter, setFilter] = useState("");
   const [hiddenRuns, setHiddenRuns] = useState<ReadonlySet<string>>(new Set());
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
-  const [pages, setPages] = useState<Record<string, number>>({});
+  // Keyed by tag group, a name from the file: a Map, never an object.
+  const [pages, setPages] = useState<ReadonlyMap<string, number>>(new Map());
   const [enlarged, setEnlarged] = useState<string | null>(null);
 
   const runs: TfRun[] = useMemo(
@@ -253,24 +288,32 @@ export function TensorBoardView({
       dropped: allStates.reduce((n, s) => n + s.dropped, 0),
       malformed: allStates.reduce((n, s) => n + s.malformed, 0),
       badCrc: allStates.some((s) => s.badCrc),
+      overBudgetPoints: allStates.reduce((n, s) => n + s.overBudgetPoints, 0),
+      overBudgetSeries: allStates.reduce((n, s) => n + s.overBudgetSeries, 0),
     }),
     [allStates],
   );
 
-  const chartRuns = useCallback(
-    (tag: string): ChartRun[] => {
-      const out: ChartRun[] = [];
+  // One array per tag for as long as the data stands: a fresh one on every
+  // render would defeat `memo(ScalarChart)` and reshape every visible chart on
+  // each progress tick, filter keystroke or fold.
+  const chartRuns = useMemo(() => {
+    const byTag = new Map<string, ChartRun[]>();
+    return (tag: string): ChartRun[] => {
+      let out = byTag.get(tag);
+      if (out) return out;
+      out = [];
       runs.forEach((run, i) => {
         if (hiddenRuns.has(run.name)) return;
         const points = mergeRunFiles(runStates[i], tag);
         if (points.length === 0) return;
         const style = runStyle(i);
-        out.push({ name: run.name, slot: style.slot, dash: style.dash, points });
+        out!.push({ name: run.name, slot: style.slot, dash: style.dash, points });
       });
+      byTag.set(tag, out);
       return out;
-    },
-    [runs, runStates, hiddenRuns],
-  );
+    };
+  }, [runs, runStates, hiddenRuns]);
 
   // Escape closes the enlarged chart.
   useEffect(() => {
@@ -440,7 +483,7 @@ export function TensorBoardView({
           groups.map((g) => {
             const key = g.group || "\u0000";
             const isFolded = folded.has(key);
-            const limit = (pages[key] ?? 1) * GROUP_PAGE;
+            const limit = (pages.get(key) ?? 1) * GROUP_PAGE;
             const shown = g.tags.slice(0, limit);
             return (
               <section key={key} className="tb-group">
@@ -473,7 +516,7 @@ export function TensorBoardView({
                       <button
                         type="button"
                         className="file-viewer-zoom-btn file-viewer-zoom-text tb-more"
-                        onClick={() => setPages((p) => ({ ...p, [key]: (p[key] ?? 1) + 1 }))}
+                        onClick={() => setPages((p) => new Map(p).set(key, (p.get(key) ?? 1) + 1))}
                       >
                         {t("tensorboard.showMore", { count: g.tags.length - shown.length })}
                       </button>
@@ -494,7 +537,10 @@ export function TensorBoardView({
           <span className="tb-note">
             {t("tensorboard.unshown", {
               list: unshown
-                .map((u) => `${u.count} ${KIND_KEYS[u.kind] ? t(KIND_KEYS[u.kind]) : u.kind}`)
+                .map((u) => {
+                  const key = KIND_KEYS.get(u.kind);
+                  return `${u.count} ${key ? t(key) : u.kind}`;
+                })
                 .join(", "),
             })}
           </span>
@@ -503,6 +549,23 @@ export function TensorBoardView({
         {totals.oversized > 0 && <span className="tb-note">{t("tensorboard.oversized", { count: totals.oversized })}</span>}
         {totals.dropped > 0 && <span className="tb-note">{t("tensorboard.dropped", { count: totals.dropped })}</span>}
         {totals.malformed > 0 && <span className="tb-note">{t("tensorboard.malformed", { count: totals.malformed })}</span>}
+        {totals.overBudgetPoints > 0 && (
+          <span className="tb-note">
+            {t("tensorboard.overBudgetPoints", {
+              count: totals.overBudgetPoints,
+              tags: VIEW_MAX_TAGS.toLocaleString(),
+              points: VIEW_MAX_POINTS.toLocaleString(),
+            })}
+          </span>
+        )}
+        {totals.overBudgetSeries > 0 && (
+          <span className="tb-note">
+            {t("tensorboard.overBudgetSeries", {
+              count: totals.overBudgetSeries,
+              max: VIEW_MAX_SERIES_NAMES.toLocaleString(),
+            })}
+          </span>
+        )}
         {totals.badCrc && <span className="tb-note tb-note-warn">{t("tensorboard.badCrc")}</span>}
       </div>
 

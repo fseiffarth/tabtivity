@@ -8680,6 +8680,8 @@ export const dict: Dict = {
   "tensorboard.oversized": "Se omitieron {count} registros de más de 16 MiB.",
   "tensorboard.dropped": "Se omitieron {count} puntos por encima del límite por etiqueta.",
   "tensorboard.malformed": "Se omitieron {count} registros ilegibles.",
+  "tensorboard.overBudgetPoints": "No se conservaron {count} puntos: esta vista guarda como máximo {tags} etiquetas y {points} puntos.",
+  "tensorboard.overBudgetSeries": "No se listaron {count} series más: esta vista lista como máximo {max}.",
   "tensorboard.badCrc": "La lectura se detuvo en un registro dañado; los datos posteriores de ese archivo no se muestran.",
   "mediaView.playbackFailed": "No se pudo reproducir este archivo multimedia en la aplicación. Intente abrirlo externamente.",
   "odtView.failedToRender": "No se pudo renderizar el documento: {error}",

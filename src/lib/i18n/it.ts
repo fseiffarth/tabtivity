@@ -8680,6 +8680,8 @@ export const dict: Dict = {
   "tensorboard.oversized": "{count} record oltre 16 MiB sono stati saltati.",
   "tensorboard.dropped": "{count} punti oltre il limite per tag sono stati saltati.",
   "tensorboard.malformed": "{count} record illeggibili sono stati saltati.",
+  "tensorboard.overBudgetPoints": "{count} punti non sono stati conservati: questa vista tiene al massimo {tags} tag e {points} punti.",
+  "tensorboard.overBudgetSeries": "{count} altre serie non sono state elencate: questa vista ne elenca al massimo {max}.",
   "tensorboard.badCrc": "La lettura si è fermata su un record danneggiato; i dati successivi di quel file non vengono mostrati.",
   "mediaView.playbackFailed": "Impossibile riprodurre questo file multimediale nell'app. Prova ad aprirlo esternamente.",
   "odtView.failedToRender": "Impossibile visualizzare il documento: {error}",
