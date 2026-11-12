@@ -2530,7 +2530,8 @@ pub enum TerminalEvent {
         #[serde(default)]
         send_now: bool,
     },
-    /// The answer to `TerminalControl::SendNow`: whether the Esc went in.
+    /// The answer to `TerminalControl::SendNow`: whether the keys went in (Claude's Ctrl+X
+    /// Ctrl+S, the others' Esc).
     /// `false` when the queue hint was not on the screen (not typed in yet,
     /// or already taken up by the turn), for a CLI with no hint to read, or
     /// while the AI switch is off.

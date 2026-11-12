@@ -885,9 +885,9 @@ fn host_tmux_targets_are_exact_where_the_host_tmux_has_it() {
 /// words only in the conversation above, it presses nothing.
 #[cfg(unix)]
 #[test]
-fn host_send_now_presses_esc_only_while_the_queue_hint_shows() {
+fn host_send_now_presses_its_keys_only_while_the_queue_hint_shows() {
     let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
-    let script = host_tmux_send_now_command(name, "❯", "Press up to edit queued messages", "", 1).unwrap();
+    let script = host_tmux_send_now_command(name, "❯", "Press up to edit queued messages", "", &["C-x", "C-s"], 1).unwrap();
     let run = |screen: &str| {
         let body = format!(
             "case \"$1 $2\" in \"-u capture-pane\") printf '%s\\n' '{screen}';; \"send-keys \"*) shift; echo \"pressed $*\";; esac"
@@ -899,17 +899,23 @@ fn host_send_now_presses_esc_only_while_the_queue_hint_shows() {
     };
     let queued = run("✻ Pondering… (9s)\n───\n❯ Press up to edit queued messages\n───");
     assert!(queued.contains("sent"), "{queued}");
-    assert!(queued.contains(&format!("-t ={name}: Escape")), "{queued}");
+    // Claude's own Send now, both keys in one call.
+    assert!(queued.contains(&format!("-t ={name}: C-x C-s")), "{queued}");
+    assert!(!queued.contains("Escape"), "{queued}");
     assert_eq!(run("✻ Pondering… (9s)\n───\n❯ \n───"), "");
     assert_eq!(run("  the box said Press up to edit queued messages\n❯ "), "");
     // A hint that could leave its quotes is refused outright.
-    assert!(host_tmux_send_now_command(name, "❯", "a\"; rm -rf ~; \"", "", 1).is_none());
-    assert!(host_tmux_send_now_command(name, "❯", "words", "$(reboot)", 1).is_none());
-    assert!(host_tmux_send_now_command("bad name", "❯", "words", "", 1).is_none());
-    assert!(host_tmux_send_now_command(name, "❯", "words", "", 0).is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "a\"; rm -rf ~; \"", "", &["Escape"], 1).is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "words", "$(reboot)", &["Escape"], 1).is_none());
+    assert!(host_tmux_send_now_command("bad name", "❯", "words", "", &["Escape"], 1).is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "words", "", &["Escape"], 0).is_none());
+    // Keys are bare tmux key names, nothing a shell would read.
+    assert!(host_tmux_send_now_command(name, "❯", "words", "", &[], 1).is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "words", "", &["Escape; reboot"], 1).is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "words", "", &["$(reboot)"], 1).is_none());
 
     // OpenCode's footer: any row, a count between the words, Esc twice.
-    let script = host_tmux_send_now_command(name, "", " · ctrl+x q ", " pending", 2).unwrap();
+    let script = host_tmux_send_now_command(name, "", " · ctrl+x q ", " pending", &["Escape"], 2).unwrap();
     let run = |screen: &str| {
         let body = format!(
             "case \"$1 $2\" in \"-u capture-pane\") printf '%s\\n' '{screen}';; \"send-keys \"*) shift; echo \"pressed $*\";; esac"

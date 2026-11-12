@@ -182,7 +182,10 @@ struct QueueHint {
     row_start: &'static str,
     words: &'static str,
     row_tail: &'static str,
-    /// Esc presses a stop takes, [`ESC_GAP`] apart.
+    /// The keys of one press, tmux key names in one `send-keys` call (one
+    /// write): Claude's `C-x C-s`, the others' `Escape`.
+    keys: &'static [&'static str],
+    /// Presses Send now takes, [`ESC_GAP`] apart.
     presses: u8,
 }
 
@@ -191,7 +194,11 @@ struct QueueHint {
 const ESC_GAP: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Which CLIs Send now serves (probed 2026-11-02). Claude Code 2.1.310 holds
-/// a mid-turn message until its next tool call and says so in its empty box.
+/// a mid-turn message until its next tool call and says so in its empty box;
+/// 2.1.322's own `chat:sendNow` (Ctrl+X Ctrl+S) sends it at once, moving a
+/// running Bash command to the background instead of killing it, and never
+/// hands an unanswered prompt back into the box as Esc does
+/// (`scripts/verify-cli/claude/send_now.py`).
 /// Codex 0.166 lists what was queued with Tab (how a chat types it,
 /// `agentQueueWrites`) under a heading of its own; Esc drops that list back
 /// into its box, and the phone then presses Enter (`finishSendNow`). OpenCode
@@ -199,11 +206,11 @@ const ESC_GAP: std::time::Duration = std::time::Duration::from_millis(300);
 /// marks a queue nowhere, and neither does Copilot. Any other CLI is unprobed.
 fn queue_hint(family: &str) -> Option<QueueHint> {
     match family {
-        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages", row_tail: "", presses: 1 }),
-        "codex" => Some(QueueHint { row_start: "•", words: "Queued follow-up inputs", row_tail: "", presses: 1 }),
+        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages", row_tail: "", keys: &["C-x", "C-s"], presses: 1 }),
+        "codex" => Some(QueueHint { row_start: "•", words: "Queued follow-up inputs", row_tail: "", keys: &["Escape"], presses: 1 }),
         // The footer's opening words change with the width: `esc interrupt`,
         // `esc stop`.
-        "opencode" => Some(QueueHint { row_start: "", words: " · ctrl+x q ", row_tail: " pending", presses: 2 }),
+        "opencode" => Some(QueueHint { row_start: "", words: " · ctrl+x q ", row_tail: " pending", keys: &["Escape"], presses: 2 }),
         _ => None,
     }
 }
@@ -280,12 +287,12 @@ impl AttachTarget {
                         std::thread::sleep(ESC_GAP);
                     }
                     let mut key = crate::services::tmux_local::tmux_command();
-                    key.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
+                    key.args(["send-keys", "-t", &format!("={name}:")]).args(hint.keys);
                     key.status().is_ok_and(|status| status.success())
                 })
             }
             Self::Host { name, ssh } => {
-                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words, hint.row_tail, hint.presses) else {
+                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words, hint.row_tail, hint.keys, hint.presses) else {
                     return false;
                 };
                 let Ok(args) = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script) else {
@@ -1300,7 +1307,7 @@ pub async fn attach(
                                 }
                                 _ => false,
                             };
-                            // An Esc the pane got, told as the phone's own is.
+                            // Keys the pane got, told as the phone's own are.
                             if sent {
                                 last_input_report = Some(std::time::Instant::now());
                                 on_input(true);
@@ -1789,6 +1796,9 @@ mod tests {
     #[test]
     fn send_now_reads_the_queue_hint_off_the_input_box_only() {
         let hint = queue_hint("claude").expect("claude has a hint");
+        // Claude's own send-now chord, never Esc: 2.1.322 hands an
+        // unanswered prompt back into its box on an Esc.
+        assert_eq!((hint.keys, hint.presses), (&["C-x", "C-s"][..], 1));
         // Claude Code 2.1.310, a message waiting behind the turn.
         assert!(queue_hint_shown("✻ Pondering… (9s · thinking)\n───\n❯ Press up to edit queued messages\n───\n", &hint));
         // 2.1.310 draws the box's space after `❯` as a no-break space.
@@ -1807,7 +1817,7 @@ mod tests {
     #[test]
     fn send_now_reads_codex_and_opencode_queues_off_their_own_rows() {
         let codex = queue_hint("codex").expect("codex has a hint");
-        assert_eq!(codex.presses, 1);
+        assert_eq!((codex.keys, codex.presses), (&["Escape"][..], 1));
         assert!(queue_hint_shown("• Working (5s • esc to interrupt)\n\n• Queued follow-up inputs\n  ↳ second\n    shift+← edit last queued message\n\n› Ask Codex", &codex));
         // Prompts sent with Enter: Tabtivity's chat never leaves them there.
         assert!(!queue_hint_shown("• Messages to be submitted after next tool call\n  ↳ second\n\n› Ask Codex", &codex));
@@ -1815,7 +1825,7 @@ mod tests {
         assert!(!queue_hint_shown("  it said • Queued follow-up inputs\n› Ask Codex", &codex));
 
         let opencode = queue_hint("opencode").expect("opencode has a hint");
-        assert_eq!(opencode.presses, 2);
+        assert_eq!((opencode.keys, opencode.presses), (&["Escape"][..], 2));
         assert!(queue_hint_shown("› first\n┃\n🯦 esc interrupt · ctrl+x q 2 pending · Build · stub · Ollama · ctrl+p menu", &opencode));
         // A phone-wide pane shortens the footer's opening words.
         assert!(queue_hint_shown("🯦 esc stop · ctrl+x q 1 pending · Build · stub", &opencode));
@@ -1944,11 +1954,12 @@ mod tests {
     }
 
     /// The local check and press against the real tmux (run with
-    /// `--ignored`): the pane echoes the keys it gets, so the Esc shows as `^[`.
+    /// `--ignored`): the pane echoes the keys it gets, so Claude's Ctrl+X
+    /// Ctrl+S shows as `^X^S` and an Esc as `^[`.
     #[cfg(unix)]
     #[test]
     #[ignore = "runs the real tmux"]
-    fn local_send_now_presses_esc_into_the_pane_only_while_the_hint_shows() {
+    fn local_send_now_presses_its_keys_into_the_pane_only_while_the_hint_shows() {
         let name = format!("send-now-test-{}", std::process::id());
         let tmux = |args: &[&str]| crate::services::tmux_local::tmux_command().args(args).output().expect("tmux runs");
         let screen = |name: &str| {
@@ -1962,7 +1973,7 @@ mod tests {
         wait();
         assert!(!target.send_now(hint));
         wait();
-        assert!(!screen(&name).contains("^["));
+        assert!(!screen(&name).contains("^X"));
 
         tmux(&["kill-session", "-t", &format!("={name}")]);
         tmux(&["new-session", "-d", "-s", &name, "-x", "80", "-y", "10", "printf '❯ Press up to edit queued messages\\n'; stty raw -echo; cat -v"]);
@@ -1971,7 +1982,8 @@ mod tests {
         wait();
         let after = screen(&name);
         tmux(&["kill-session", "-t", &format!("={name}")]);
-        assert!(after.contains("^["), "{after}");
+        assert!(after.contains("^X^S"), "{after}");
+        assert!(!after.contains("^["), "{after}");
     }
 
     #[test]

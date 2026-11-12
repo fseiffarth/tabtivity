@@ -1274,8 +1274,8 @@ pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
     })
 }
 
-/// The host-side Send now (`pty_bridge::QueueHint`): Esc into the session's
-/// pane, only while a row of its screen starts with `row_start` and holds
+/// The host-side Send now (`pty_bridge::QueueHint`): `keys` (tmux key names,
+/// one `send-keys` call per press) into the session's pane, only while a row of its screen starts with `row_start` and holds
 /// `words` — the CLI saying a message still waits in its queue. Check and
 /// press are one script on the host, so no ssh round trip falls between
 /// them; shell builtins, `sleep` between the presses of a stop that takes
@@ -1284,11 +1284,14 @@ pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
 /// `❯`) against a pattern in a UTF-8 locale. Its case pattern opens with `(`:
 /// bash 3.2 otherwise takes the pattern's `)` for the end of the `$(…)`.
 /// Prints `sent` when it pressed. `None`
-/// for an invalid name, or a hint that could break out of its quotes.
-pub fn host_tmux_send_now_command(session: &str, row_start: &str, words: &str, row_tail: &str, presses: u8) -> Option<String> {
+/// for an invalid name, a hint that could break out of its quotes, or a key
+/// that is not a plain tmux key name.
+pub fn host_tmux_send_now_command(session: &str, row_start: &str, words: &str, row_tail: &str, keys: &[&str], presses: u8) -> Option<String> {
     let quotable = |text: &str| !text.chars().any(|c| matches!(c, '\'' | '"' | '\\' | '$' | '`') || c.is_control());
-    (valid_tmux_session_name(session) && quotable(row_start) && quotable(words) && quotable(row_tail) && presses > 0).then(|| {
-        let press = "tmux send-keys -t \"$t\" Escape";
+    let key_name = |key: &&str| !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let valid_keys = !keys.is_empty() && keys.iter().all(key_name);
+    (valid_tmux_session_name(session) && quotable(row_start) && quotable(words) && quotable(row_tail) && valid_keys && presses > 0).then(|| {
+        let press = format!("tmux send-keys -t \"$t\" {}", keys.join(" "));
         let keys = vec![press; usize::from(presses)].join(" && sleep 1 && ");
         host_sh(&format!(
             "{HOST_TMUX_EXACT}t=\"$e\"{session}\"$c\"; \
