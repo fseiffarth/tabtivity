@@ -65,6 +65,11 @@ fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {
             write_script(dir, cli, shim_script(cli, exe, dir).as_bytes())?;
         }
         for (alias, cli) in VENDOR_ALIASES.iter().filter(|(_, cli)| clis.contains(cli)) {
+            // Not on Windows either, for the reason above.
+            if cfg!(windows) {
+                let _ = fs::remove_file(dir.join(alias));
+                continue;
+            }
             write_script(dir, alias, shim_script(cli, exe, dir).as_bytes())?;
         }
     }
@@ -199,16 +204,19 @@ mod tests {
         assert!(lines.iter().any(|l| l.ends_with(" -n NAME")));
     }
 
-    /// Windows runs no `sh` shim: none is written, and one an earlier build
-    /// left is removed, so a bare `claude` in a PTY cannot resolve to it.
+    /// Windows runs no `sh` shim, a vendor alias's included: none is written,
+    /// and one an earlier build left is removed, so a bare `claude` in a PTY
+    /// cannot resolve to it.
     #[cfg(windows)]
     #[test]
     fn no_cli_shim_is_written_on_windows_and_a_stale_one_is_removed() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
-        install_in(dir.path(), Some(Path::new(concat!(crate::app_slug!(), ".exe"))), &["claude", "agy"]).unwrap();
+        fs::write(dir.path().join("opencode2"), "#!/bin/sh\n").unwrap();
+        install_in(dir.path(), Some(Path::new(concat!(crate::app_slug!(), ".exe"))), &["claude", "agy", "opencode"]).unwrap();
         assert!(!dir.path().join("claude").exists());
         assert!(!dir.path().join("agy").exists());
+        assert!(!dir.path().join("opencode2").exists(), "nor a vendor alias's");
     }
 
     #[cfg(unix)]
@@ -228,6 +236,7 @@ mod tests {
 
     /// `opencode2` is the same shim as `opencode`, so typing it reaches the
     /// same fence; it is the registry CLI that is fenced, never the alias.
+    #[cfg(unix)]
     #[test]
     fn a_vendor_alias_gets_its_clis_shim() {
         let exe = Path::new("/opt/app/bin");
