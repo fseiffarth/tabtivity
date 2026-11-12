@@ -1749,11 +1749,8 @@ svg.alerts-toggle-icon {
   /* A fixed-width column set commonly exceeds the overlay's width (5 seeded
      columns + the add-column tile run past ~1600px), so a right-hand column
      like Archived routinely sits off screen and the board has to SHOW that.
-     This once forced a classic native bar, because WebKitGTK's own is an
-     invisible overlay that appears only on hover. The app's thumbs replaced
-     both: `lib/theme/customScrollbar.ts` paints this scroller's horizontal thumb
-     whenever it overflows and keeps it visible, so the affordance is back
-     without a native bar to double up with. */
+     The bar the baseline in `base.css` styles does: it is drawn whenever this
+     scroller overflows and stays visible. */
 }
 /* While a card is in flight the cards stop answering `elementFromPoint`, so the
    hit-test reaches the `.todo-column` underneath — the same trick

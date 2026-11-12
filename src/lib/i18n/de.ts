@@ -1687,7 +1687,7 @@ export const dict: Dict = {
   "theme.var.activity-4": "Aktivitäts-Heatmap – die vollsten Tage",
   "theme.var.logo-color": "Das Sternzeichen in der oberen Leiste und in Popout-Titelleisten",
   "theme.var.helix-orange": "Der Projektname auf einer Pill in der oberen Leiste",
-  "theme.var.scrollbar-thumb": "Der Scrollbalken-Griff, den {app} selbst malt",
+  "theme.var.scrollbar-thumb": "Der Scrollbalken-Griff",
   "theme.var.scrollbar-thumb-hover": "Der Scrollbalken-Griff unter dem Zeiger",
   "theme.var.glass-panel": "Milchglas-Füllung der Chrome-Flächen – nur die beiden Glas-Themes",
   "theme.var.glass-subheader": "Milchglas-Tab-Leisten – nur die beiden Glas-Themes",

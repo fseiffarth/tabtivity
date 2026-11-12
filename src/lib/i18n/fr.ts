@@ -1687,7 +1687,7 @@ export const dict: Dict = {
   "theme.var.activity-4": "Carte d’activité — les journées les plus chargées",
   "theme.var.logo-color": "L’étoile de la barre supérieure et des bandeaux de fenêtres détachées",
   "theme.var.helix-orange": "Le nom du projet sur une pastille de la barre du haut",
-  "theme.var.scrollbar-thumb": "Le curseur de défilement que {app} peint lui-même",
+  "theme.var.scrollbar-thumb": "Le curseur de défilement",
   "theme.var.scrollbar-thumb-hover": "Le curseur de défilement sous le pointeur",
   "theme.var.glass-panel": "Remplissage dépoli du chrome — les deux thèmes de verre seulement",
   "theme.var.glass-subheader": "Barres d’onglets dépolies — les deux thèmes de verre seulement",

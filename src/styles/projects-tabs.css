@@ -1767,9 +1767,12 @@
   flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
-  /* Scrolls, shows nothing — not even one of the app's own thumbs; overflow is
-     conveyed by the chevrons that flank the strip. */
-  --app-scrollbar: none;
+  /* Scrolls, shows no bar; overflow is conveyed by the chevrons that flank the
+     strip. */
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar {
+  display: none;
 }
 
 /* lib/tabs/closedTabSlot: the width a closed tab took from a scrolled strip,
@@ -3091,21 +3094,9 @@ button.tab-todo-link {
   flex-direction: column;
   gap: 1px;
 }
-/* …and a gutter on the right for the thumb to sit in. The app's scrollbars are
-   OVERLAY thumbs painted over the container's last 8px (`lib/theme/customScrollbar.ts`
-   — the engine's own bar is hidden everywhere, so nothing reserves space the way
-   a classic scrollbar would), which in a menu means the thumb lands directly on
-   the row content: a model name, a machine's lamp cluster, a chip at the end of
-   a line. `SIZE` there is 8px, so 8px is exactly what has to be kept clear.
-
-   Gated on the takeover attribute — the module sets it on registration and only
-   ever drops it when the element leaves the DOM — so the gutter is paid only by
-   a menu that actually scrolls; one whose content fits keeps the symmetric
-   padding its parent gives it, rather than sitting 8px off-centre for a thumb
-   that was never drawn. */
-.menu-scroll-region[data-app-scrollbar] {
-  padding-right: var(--space-2);
-}
+/* The bar takes its own 8px on the right while the region overflows, so the
+   rows never sit under it; a menu whose content fits keeps the symmetric
+   padding its parent gives it. */
 /* Keep the pinned title from shrinking when the menu hits its max-height — only
    the scroll region below it should give. Direct-child + first, so a group
    label INSIDE the scroll region (e.g. the machines menu's "Add a machine")

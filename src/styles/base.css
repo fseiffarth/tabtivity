@@ -1,5 +1,5 @@
 /* base.css — split from the old monolithic themes.css (order-preserving).
-   Base reset, launch splash, global + custom scrollbars, shared activity color levels.
+   Base reset, launch splash, scrollbars, shared activity color levels.
    IMPORT ORDER IS LOAD-BEARING: these files are @imported in sequence from
    styles/index.css; equal-specificity rules rely on source order exactly as
    they did in the monolith, so never reorder the imports or move rules
@@ -441,75 +441,82 @@ body {
   outline-offset: -2px;
 }
 
-/* ── Global scrollbar baseline ───────────────────────────────────────────
-   Every native scrollbar is turned off here, statically, for the whole app;
-   `lib/theme/customScrollbar.ts` paints a square themed thumb over each scroll
-   container instead. That module's header says why the app draws its own bars
-   at all. What matters HERE is why the hiding half cannot live in JS.
+/* ── Scrollbars ──────────────────────────────────────────────────────────
+   The engine draws every scrollbar; these rules are all there is to it. No
+   script measures, positions or hit-tests anything.
 
-   WebKitGTK 2.52 builds a scrollable area's bar once and never rebuilds it when
-   `scrollbar-width` changes afterwards (measured, not assumed). Set statically
-   the property works — 0px gutter. Set from JS on an element that already has a
-   bar it does nothing at all: the 21px native bar stays while `getComputedStyle`
-   reports `none`. So a takeover that hid the bar as it adopted a container could
-   never work; it painted our thumb beside a native bar that had never left,
-   which is exactly the two-scrollbars bug. Elements must be BORN bar-less, and
-   only a rule matching before their first layout does that.
+   The look is a square 4px thumb in an 8px bar with no visible track (the
+   transparent border plus padding-box clipping insets the thumb, so it stays
+   easy to grab without reading as a slab). Measured on WebKitGTK 2.52.6: the
+   pseudo-elements below give exactly that, the bar takes 8px of the container's
+   width or height while it overflows, and a theme switch recolours a live bar.
 
-   Two consequences to know before editing anything below:
-     - `scrollbar-width: thin` is parsed but NOT honored on this engine — auto
-       and thin both measure 21px. Asking for a thin native bar gets a fat one.
-     - Any per-surface `scrollbar-width` or `::-webkit-scrollbar` SIZE rule below
-       re-creates a real native bar on that surface and brings the second
-       scrollbar back with it. Don't add one. To suppress the app's own thumb on
-       a strip, set `--app-scrollbar: none` (see below) instead.
-
-   The ::-webkit-scrollbar half is inert on WebKitGTK whenever `scrollbar-width`
-   is non-auto; it is kept so engines that do implement the pseudo-elements
-   (Chromium/WebView2, older Safari) hide their bars too. */
-* {
-  scrollbar-width: none;
-}
-
+   Rules to keep, each one measured on that engine:
+     - Never set `scrollbar-width` (other than `none`) or `scrollbar-color`.
+       WebKitGTK consults these pseudo-elements only while `scrollbar-width` is
+       `auto`; naming a width switches the container to the native GTK bar,
+       21px wide whatever is asked for (`thin` is parsed and ignored).
+     - Never set `scrollbar-gutter`. It reserves the native 21px, not these 8.
+       A container that must not reflow when it starts to overflow uses
+       `overflow-y: scroll`: the 8px is then always kept, and with no track
+       painted an idle bar shows nothing.
+     - No per-surface `::-webkit-scrollbar` size. One look everywhere.
+     - A strip that scrolls and shows no bar (the tab strip, the address line)
+       says `scrollbar-width: none` and `::-webkit-scrollbar { display: none }`
+       in its own base rule. It must hold from the element's first layout: the
+       engine builds a container's bar once and never rebuilds it, so a class
+       added later does not take a bar away.
+     - The bar sits inside the container's border box. A container with rounded
+       corners must not be the one that scrolls (`.menu-scroll-region`,
+       `.dialog-scroll`), or the bar runs over the corners. */
 *::-webkit-scrollbar {
-  width: 0;
-  height: 0;
+  width: 8px;
+  height: 8px;
+  background: transparent;
 }
 
-/* How the stylesheet tells `lib/theme/customScrollbar.ts` "this strip scrolls and
-   shows nothing at all" — the tab strip, the project pill row, the address
-   display. It replaces the old signal, `scrollbar-width: none`, which stopped
-   distinguishing anything the moment the rule above made that the value
-   everywhere. Registered rather than used raw so it does NOT inherit: an
-   opted-out strip must not silently mute the thumb of a scroll container that
-   happens to sit inside it. */
-@property --app-scrollbar {
-  syntax: "*";
-  inherits: false;
-  initial-value: auto;
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
-/* xterm hardcodes `overflow-y: scroll` on its viewport, which on an engine that
-   reserves space for a bar pins one there even with no scrollback — the thumb
-   fills the whole track and reads as a solid bar down the right edge. Forcing
-   `auto` keeps the element scroll-capable only when there is something to
-   scroll, which is also what decides whether our own thumb appears. No
-   `scrollbar-width` here on purpose: naming one would re-create the native bar
-   this element is the worst place to have (see the baseline above). */
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 0;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+/* However long the content, the thumb stays long enough to grab. */
+*::-webkit-scrollbar-thumb:vertical {
+  min-height: 24px;
+}
+
+*::-webkit-scrollbar-thumb:horizontal {
+  min-width: 24px;
+}
+
+*::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* xterm hardcodes `overflow-y: scroll` on its viewport, which reserves room for
+   a bar there even with no scrollback. `auto` keeps the element scroll-capable
+   only when there is something to scroll. */
 .xterm-viewport {
   overflow-y: auto !important;
 }
 
 /* xterm 6 no longer scrolls `.xterm-viewport` natively: it draws VS Code's
-   scrollable element instead, its own bar in the 14px gutter FitAddon reserves,
-   so `customScrollbar.ts` finds nothing to paint a thumb on. Its slider gets
-   that module's look here — a 4px accent bar 2px in from the right edge (the
-   transparent borders inset it within the inline 14px width). One class more
-   than the rules xterm injects at runtime, hover/active included, so these win
-   regardless of order. xterm's hover/active rules set the `background`
-   shorthand, which resets the clip, and tie with the resting rule here — so
-   the state rule restates the clip, or the hovered or dragged thumb would
-   paint under the borders, the whole 14px wide. */
+   scrollable element instead, its own bar in the 14px gutter FitAddon reserves.
+   Its slider gets the look of the bars above here — a 4px bar 2px in from the
+   right edge (the transparent borders inset it within the inline 14px width).
+   One class more than the rules xterm injects at runtime, hover/active
+   included, so these win regardless of order. xterm's hover/active rules set
+   the `background` shorthand, which resets the clip, and tie with the resting
+   rule here — so the state rule restates the clip, or the hovered or dragged
+   thumb would paint under the borders, the whole 14px wide. */
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
   box-sizing: border-box;
   border: 2px solid transparent;
@@ -522,76 +529,6 @@ body {
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider.active {
   background-color: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
-}
-
-/* ── Custom (square) scrollbars ─────────────────────────────────────────
-   The thumbs `lib/theme/customScrollbar.ts` paints. Read that module's header for
-   why the app draws its own bars at all; the short of it is that WebKitGTK
-   honors only `scrollbar-width`/`scrollbar-color`, and neither can square a
-   corner. Everything here is positioning and colour — the module owns when a
-   thumb exists, how long it is and where it sits.
-
-   The layer spans the window and never eats a click; individual thumbs turn
-   `pointer-events` back on only while they are actually shown, so a hidden
-   thumb can't swallow a press meant for the content under it. */
-.app-scrollbar-layer {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-scrollbar, 9990);
-  pointer-events: none;
-}
-
-.app-scrollbar-thumb {
-  position: fixed;
-  top: 0;
-  left: 0;
-  box-sizing: border-box;
-  /* Same inset trick the native bar used: a transparent border plus
-     padding-box clipping paints a 4px bar inside an 8px hit target, so the
-     thumb stays easy to grab without reading as a heavy slab. */
-  border: 2px solid transparent;
-  background-color: var(--scrollbar-thumb);
-  background-clip: padding-box;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.app-scrollbar-vertical {
-  width: 8px;
-}
-
-.app-scrollbar-horizontal {
-  height: 8px;
-}
-
-.app-scrollbar-thumb:hover,
-.app-scrollbar-thumb.dragging {
-  background-color: var(--scrollbar-thumb-hover);
-}
-
-/* A drag that starts on the thumb must not select the text it passes over. */
-body.app-scrollbar-dragging {
-  user-select: none;
-}
-
-/* Set by the module on every container it has taken over. Belt and braces: the
-   baseline above already hides every native bar, so this changes nothing in the
-   normal case. It earns its place as the one rule that cannot be beaten — a
-   later rule of equal specificity wins over an earlier one, and that is how a
-   per-surface `::-webkit-scrollbar { width: 8px }` thousands of lines down used
-   to resurrect a bar under our thumb. `!important` closes that door for good,
-   on the containers we are actually painting.
-
-   It is not a substitute for the static baseline: by the time this attribute is
-   set the element already exists, and on WebKitGTK a scrollbar that exists is
-   never rebuilt. It hides nothing that was not already hidden. */
-[data-app-scrollbar] {
-  scrollbar-width: none !important;
-}
-
-[data-app-scrollbar]::-webkit-scrollbar {
-  width: 0 !important;
-  height: 0 !important;
 }
 
 /* ── Activity calendar color levels (shared across themes) ──────────── */

@@ -4339,7 +4339,7 @@ select.file-viewer-run-args-input {
 /* pdf.js viewer: a zoom toolbar above a scrolling stack of page canvases. The
    host and scroll surround use theme variables, so the viewer is dark in dark
    themes; the page canvases stay white sheets (rendered as authored). The scroll
-   area shows the app's own thumb, like every other scroll surface. */
+   area's bar is the baseline one, like every other scroll surface. */
 .file-viewer-pdf-host {
   display: flex;
   flex-direction: column;

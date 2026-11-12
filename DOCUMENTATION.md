@@ -1993,8 +1993,10 @@ Ollama integration test skips itself when no local server or model is available.
   with DMABUF off. DMABUF stays disabled — a 2026-08-05 re-test on WebKitGTK
   2.52.3 was faster but produced flicker, missing PDF images, and a renderer
   crash.
-- A native scrollbar's shape is unreachable from CSS on WebKitGTK, so Tabtivity
-  hides the engine's bar and draws its own (`lib/theme/customScrollbar.ts`).
+- Scrollbars are the engine's, styled once in `styles/base.css` through the
+  `::-webkit-scrollbar` pseudo-elements. Setting `scrollbar-width`,
+  `scrollbar-color` or `scrollbar-gutter` on a surface switches WebKitGTK to
+  its native 21px bar there.
 
 ## Practical Development Notes
 
