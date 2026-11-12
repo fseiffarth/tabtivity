@@ -227,7 +227,7 @@ export function ProjectHoverCard({
               key={t.key}
               className="pill-popup-tag"
               title={t.title}
-              style={{ color: t.color, borderColor: t.color, background: `${t.color}22` }}
+              style={{ "--tag-color": t.color } as React.CSSProperties}
             >
               {t.label}
             </span>

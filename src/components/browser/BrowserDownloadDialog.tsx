@@ -4,7 +4,7 @@ import { formatDownloadSize, stripControls } from "../../lib/browser";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import type { DownloadRequest } from "../../types/browser";
-import { WarningIcon } from "../common/icons/Icon";
+import { CloseIcon, WarningIcon } from "../common/icons/Icon";
 
 /**
  * The download consent dialog.
@@ -51,8 +51,8 @@ export function BrowserDownloadDialog({
           <h2>
             {t("browser.downloadTitle")} <UntestedTag id="browser.downloadTitle" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={() => onDecide(false)}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={() => onDecide(false)}>
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll">

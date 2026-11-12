@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inputBoxLines, pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
+import { claudeBoxWords, codexBoxLines, inputBoxLines, openCodePanelRows, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts } from "../../../mobile-web/src/terminal/queuePull";
 
 const FAST = { waitMs: 30, pollMs: 2 };
 const RULE = "────────────────────────────────────────";
@@ -96,5 +96,227 @@ describe("queuePull", () => {
     };
     const result = await pullQueuedPrompts(driver, ["queued"], FAST);
     expect(result).toMatchObject({ ok: true, text: "older prompt", pulled: 0, cleared: true });
+  });
+});
+
+/**
+ * Codex 0.166.0's screen under a busy turn, as probed: Tab queues under a
+ * heading; `shift+←` (under tmux) moves the newest one into the box, replacing
+ * what the box held; Ctrl+U deletes to the line's start, or the break there;
+ * Esc drops the whole list into the box, Enter then sends it.
+ */
+function fakeCodex(queue: string[], options: { editKey?: string } = {}) {
+  const editKey = options.editKey ?? "shift+←";
+  const state = { queue: [...queue], box: "", sent: [] as string[], keys: [] as string[] };
+  const rows = () => [
+    "• Working (5s • esc to interrupt) · 1 background terminal running",
+    "",
+    ...(state.queue.length ? [
+      "• Queued follow-up inputs",
+      ...state.queue.flatMap((line) => line.split("\n").map((part, index) => `${index ? "    " : "  ↳ "}${part}`)),
+      `    ${editKey} edit last queued message`,
+      "",
+    ] : []),
+    "",
+    ...(state.box ? state.box.split("\n").map((line, index) => `${index ? "  " : "› "}${line}`) : ["› Ask Codex to do anything"]),
+    "",
+    "  gpt default · ~/work",
+    "  ? for shortcuts",
+  ];
+  const key = async (pressed: string) => {
+    state.keys.push(pressed);
+    if (pressed === "\u001b[1;2D" || pressed === "\u001b[1;3A") state.box = state.queue.pop() ?? state.box;
+    else if (pressed === "\u0015") {
+      const start = state.box.lastIndexOf("\n") + 1;
+      state.box = start === state.box.length && start > 0 ? state.box.slice(0, -1) : state.box.slice(0, start);
+    } else if (pressed === "\u001b") {
+      state.box = state.queue.splice(0).join("\n");
+    } else if (pressed === "\r" && state.box) {
+      state.sent.push(state.box);
+      state.box = "";
+    }
+    return true;
+  };
+  return { state, driver: { rows, key } };
+}
+
+describe("queuePull on Codex", () => {
+  it("reads its queue and its box off the screen", () => {
+    expect(queuedHintShown(fakeCodex(["one"]).driver.rows(), "codex")).toBe(true);
+    expect(queuedHintShown(fakeCodex([]).driver.rows(), "codex")).toBe(false);
+    expect(codexBoxLines(["› one", "  two", "", "  footer"])).toEqual(["one", "two"]);
+    // The conversation's echoes are not the box.
+    expect(codexBoxLines(["› asked", "• answer", "", "› Ask Codex to do anything", "", "  footer"])).toEqual(["Ask Codex to do anything"]);
+    expect(codexBoxLines(["›⠀Ask Codex"])).toEqual(["Ask Codex"]);
+  });
+
+  it("takes every queued prompt back, oldest first, and leaves the box empty", async () => {
+    const { state, driver } = fakeCodex(["first", "line A\nline B"]);
+    const result = await pullQueuedPrompts(driver, ["first", "line A\nline B"], FAST, "codex");
+    expect(result).toEqual({ ok: true, text: "first\nline A\nline B", pulled: 2, cleared: true });
+    expect(state).toMatchObject({ queue: [], box: "", sent: [] });
+  });
+
+  it("presses the key its hint names", async () => {
+    const { state, driver } = fakeCodex(["only"], { editKey: "⌥ + ↑" });
+    await pullQueuedPrompts(driver, ["only"], FAST, "codex");
+    expect(state.keys[0]).toBe("\u001b[1;3A");
+  });
+
+  it("comes back as sent when the box wrapped a long word", async () => {
+    const long = "P".repeat(120);
+    const { driver } = fakeCodex([`${long.slice(0, 80)}\n${long.slice(80)}`]);
+    const result = await pullQueuedPrompts(driver, [long], FAST, "codex");
+    expect(result).toMatchObject({ ok: true, text: long, pulled: 1 });
+  });
+
+  it("keeps what it cannot match, without dropping a bubble", async () => {
+    const { driver } = fakeCodex(["typed in the terminal"]);
+    expect(await pullQueuedPrompts(driver, ["sent from the chat"], FAST, "codex"))
+      .toMatchObject({ ok: true, text: "typed in the terminal", pulled: 0 });
+  });
+
+  it("presses nothing when no queue shows", async () => {
+    const { state, driver } = fakeCodex([]);
+    expect(await pullQueuedPrompts(driver, ["gone"], FAST, "codex")).toEqual({ ok: false, reason: "not_queued" });
+    expect(state.keys).toEqual([]);
+  });
+
+  it("sends the queue on: Esc, then Enter once the list has gone", async () => {
+    const { state, driver } = fakeCodex(["one", "two"]);
+    expect(await sendQueuedNow(driver, "codex")).toBe(true);
+    expect(state.sent).toEqual(["one\ntwo"]);
+    expect(state.keys).toEqual(["\u001b", "\r"]);
+  });
+
+  it("does not press Esc on a turn that took the queue", async () => {
+    const { state, driver } = fakeCodex([]);
+    expect(await sendQueuedNow(driver, "codex")).toBe(false);
+    expect(state.keys).toEqual([]);
+  });
+});
+
+/**
+ * OpenCode 2.2.5 mini, as probed: the footer counts what waits; `ctrl+x q`
+ * opens a panel listing it, oldest on top, where ctrl+d deletes the top row
+ * and esc closes. Esc twice, apart, stops the turn.
+ */
+function fakeOpenCode(queue: string[], options: { full?: boolean; refuse?: boolean } = {}) {
+  const state = { queue: [...queue], panel: false, leader: false, keys: [] as string[] };
+  const rows = () => state.panel
+    ? ["› first", `  Pending prompts ${state.queue.length}                      esc`, "  Search", ...state.queue.map((line) => `  ${line}          steering`), "▀▀▀▀▀▀▀▀▀▀"]
+    : ["› first", "┃", options.full
+      ? "   ■⬝⬝⬝⬝ esc interrupt      ctrl+p commands"
+      : `🯦 esc stop${state.queue.length ? ` · ctrl+x q ${state.queue.length} pending` : ""} · Build · stub`];
+  const key = async (pressed: string) => {
+    state.keys.push(pressed);
+    if (pressed === "\u0018") state.leader = true;
+    else if (pressed === "q" && state.leader) state.panel = true;
+    else if (pressed === "\u0004" && state.panel && !options.refuse) state.queue.shift();
+    else if (pressed === "\u001b") state.panel = false;
+    return true;
+  };
+  return { state, driver: { rows, key } };
+}
+
+describe("queuePull on OpenCode", () => {
+  it("reads the mini footer's count and the panel's rows", () => {
+    expect(queuedHintShown(fakeOpenCode(["one"]).driver.rows(), "opencode")).toBe(true);
+    expect(queuedHintShown(fakeOpenCode([]).driver.rows(), "opencode")).toBe(false);
+    expect(openCodePanelRows(fakeOpenCode([]).driver.rows())).toBeNull();
+    expect(openCodePanelRows(["  Pending prompts 2   esc", "  Search", "  one two     steering", "  three     queue", "▀▀▀▀"])).toEqual(["one two", "three"]);
+  });
+
+  it("never opens the panel on the full TUI, where ctrl+x q quits", async () => {
+    const { state, driver } = fakeOpenCode(["one"], { full: true });
+    expect(queuedHintShown(driver.rows(), "opencode")).toBe(false);
+    expect(await pullQueuedPrompts(driver, ["one"], FAST, "opencode")).toEqual({ ok: false, reason: "not_queued" });
+    expect(await sendQueuedNow(driver, "opencode")).toBe(false);
+    expect(state.keys).toEqual([]);
+  });
+
+  it("deletes every prompt from the panel into the composer and closes it", async () => {
+    const { state, driver } = fakeOpenCode(["one", "two"]);
+    const result = await pullQueuedPrompts(driver, ["older", "one", "two"], FAST, "opencode");
+    expect(result).toMatchObject({ ok: true, text: "one\ntwo", pulled: 2, oldest: false, cleared: true });
+    expect(state).toMatchObject({ queue: [], panel: false });
+  });
+
+  it("touches nothing when a row is not a prompt it sent", async () => {
+    const { state, driver } = fakeOpenCode(["typed in the terminal"]);
+    expect(await pullQueuedPrompts(driver, ["sent from the chat"], FAST, "opencode")).toEqual({ ok: false, reason: "not_pulled" });
+    expect(state).toMatchObject({ queue: ["typed in the terminal"], panel: false });
+    expect(state.keys).not.toContain("\u0004");
+  });
+
+  it("says which prompts left when the panel stops deleting", async () => {
+    const { driver } = fakeOpenCode(["one", "two"], { refuse: true });
+    expect(await pullQueuedPrompts(driver, ["one", "two"], FAST, "opencode")).toEqual({ ok: false, reason: "not_pulled" });
+    expect(takenPrompts(["a", "b", "c"], { pulled: 1, oldest: true })).toEqual(["a"]);
+    expect(takenPrompts(["a", "b", "c"], { pulled: 2 })).toEqual(["b", "c"]);
+  });
+
+  it("presses Esc twice, apart, for Send now", async () => {
+    const { state, driver } = fakeOpenCode(["one"]);
+    expect(await sendQueuedNow(driver, "opencode")).toBe(true);
+    expect(state.keys).toEqual(["\u001b", "\u001b"]);
+  });
+});
+
+describe("queueFamily", () => {
+  it("names only the CLIs whose queue the screen shows", () => {
+    expect(["claude", "codex", "opencode"].map(queueFamily)).toEqual(["claude", "codex", "opencode"]);
+    for (const family of ["copilot", "gemini", "qwen", "agent"]) expect(queueFamily(family)).toBeNull();
+  });
+
+  describe("a stop Claude answers by handing the prompt back (2.1.318)", () => {
+    /** Esc before the turn answered: the queue goes, the stopped prompt
+     * comes back into the box a moment later, unsent. */
+    function stopped(back: string, queue: string[] = []) {
+      const fake = fakeClaude(queue);
+      const key = fake.driver.key;
+      fake.driver.key = async (pressed: string) => {
+        if (pressed === "\u001b") {
+          fake.state.queue = [];
+          setTimeout(() => { fake.state.box = back; }, 5);
+          return true;
+        }
+        return key(pressed);
+      };
+      return fake;
+    }
+
+    it("takes a prompt the chat sent back out of Claude's box", async () => {
+      const { state, driver } = stopped("fix the menu style", ["improve the design"]);
+      const before = claudeBoxWords(driver.rows());
+      expect(before).toBe(HINT);
+      await driver.key("\u001b");
+      const back = await takeBackStopped(driver, ["fix the menu style", "improve the design"], before, FAST);
+      expect(back).toEqual({ index: 0, cleared: true });
+      expect(state.box).toBe("");
+    });
+
+    it("knows a long prompt by the end the box shows", async () => {
+      const long = `${"word ".repeat(40)}and the end of it`;
+      const { driver } = stopped(long.slice(-60));
+      await driver.key("\u001b");
+      expect(await takeBackStopped(driver, [long], "", FAST)).toMatchObject({ index: 0 });
+    });
+
+    it("leaves the user's own words in the box", async () => {
+      const { state, driver } = stopped("typed in the terminal");
+      await driver.key("\u001b");
+      expect(await takeBackStopped(driver, ["sent from the chat"], "", FAST)).toBeNull();
+      expect(state.box).toBe("typed in the terminal");
+      expect(state.keys).not.toContain("\u0015");
+    });
+
+    it("presses nothing when the box held the words already", async () => {
+      const { state, driver } = fakeClaude([]);
+      state.box = "sent from the chat";
+      const before = claudeBoxWords(driver.rows());
+      expect(await takeBackStopped(driver, ["sent from the chat"], before, FAST)).toBeNull();
+      expect(state.keys).toEqual([]);
+    });
   });
 });

@@ -33,6 +33,7 @@ import {
   splitByDeleteSide,
   splitByNewerSide,
   withoutChangedOnBoth,
+  bothChangedPaths,
 } from "../../lib/remote/divergedRows";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { openLinkedFile, viewerForPath } from "../embed/fileViewer/openLinked";
@@ -42,6 +43,8 @@ import { IS_LINUX } from "../../lib/platform";
 import { useGitDirtyStore, gitDirtyState, GIT_WATCH_COALESCE_MS, type GitDirtyState } from "../../stores/gitDirty";
 import { coalescedRun, type CoalescedRun } from "../../lib/coalescedRun";
 import { usePoll, type PollRun } from "../../lib/usePoll";
+import { SyncHandoffButton } from "../embed/SyncHandoffButton";
+import { collectHandoffFiles } from "../../lib/viewers/syncHandoffCollect";
 import { resolveLocalMirror, type FilesPanelView, type GitReleasePreview, type ProjectEntry } from "../../types";
 import type { SortKey } from "../../lib/viewers/fileUtils";
 import {
@@ -105,7 +108,8 @@ import { useProjectRemarksStore } from "../../stores/projectRemarks";
 import { RemarksPane } from "./RemarksPane";
 import { DevTodoView, useDevTodoAvailable } from "./DevTodoView";
 import { availableSidePanelViews, sidePanelViewAvailable, type SidePanelViewGates } from "./sidePanelViews";
-import { ArrowDownIcon, ArrowUpIcon, ArrowsHorizontalIcon, CheckIcon, GearIcon, HexagonIcon, InboxIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
+import { SideViewKey } from "./SideViewKey";
+import { ArrowDownIcon, ArrowsHorizontalIcon, ArrowUpIcon, CheckIcon, CloseIcon, DotIcon, GearIcon, HexagonIcon, InboxIcon, RefreshIcon, RingIcon, SearchIcon, TagIcon, TrashIcon, WindowIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 import { MobileAccessPicker, HOST_REACH_KEY, phoneReachHost, phoneReachLabel } from "../mobile/MobileAccessPicker";
@@ -698,6 +702,8 @@ export function ProjectFilesView({
   );
   const newerSplit = useMemo(() => splitByNewerSide(syncMap, bulkFiles), [syncMap, bulkFiles]);
   const deleteSplit = useMemo(() => splitByDeleteSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
+  // The true conflicts (both sides changed since the last sync), for "Hand to an agent".
+  const conflictFiles = useMemo(() => bothChangedPaths(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // NEW local-only files (never synced — the host has no copy). A separate list
   // from the amber one on purpose: these have nothing to merge and no remote
   // side to take, so their whole vocabulary is "upload" or "leave local".
@@ -1576,7 +1582,8 @@ export function ProjectFilesView({
         )}
         {/* Static project type tags (git / provider / SSH / scaffold). These are
             labels only — no interactivity — so they deliberately look nothing
-            like the source switch below. */}
+            like the source switch below: a neutral chip whose kind colour is
+            only its lamp (`--tag-color`). */}
         {!activeBox && typeTags.length > 0 && (
           <span className="side-panel-type-tags">
             {typeTags.map((tag) => {
@@ -1593,11 +1600,9 @@ export function ProjectFilesView({
                       : tag.title
                   }
                   style={{
-                    color: tag.color,
-                    borderColor: tag.color,
-                    background: `${tag.color}22`,
+                    "--tag-color": tag.color,
                     cursor: isSsh ? "context-menu" : undefined,
-                  }}
+                  } as React.CSSProperties}
                   onContextMenu={
                     isSsh
                       ? (e) => {
@@ -1774,8 +1779,13 @@ export function ProjectFilesView({
           host has never seen is invisible in the remote tree, so this count is
           where its existence first shows up), the live tmux sessions, the
           queued jobs. */}
+      {/* The two rows share one container: on a narrow panel (a container query
+          in files-panel.css) the tabs drop to their glyph and the actions join
+          their row, so the head is one row shorter. */}
+      <div className="side-panel-toolbars">
+      <div className="side-panel-toolbars-row">
       <div className="side-panel-toolbar side-panel-views">
-        {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }) => {
+        {availableSidePanelViews(viewGates).map(({ view: v, labelKey, Icon }, i) => {
           const count =
             v === "orange"
               ? orangeFiles.length + newLocalFiles.length
@@ -1797,11 +1807,14 @@ export function ProjectFilesView({
               key={v}
               className={`toolbar-btn toolbar-btn--sm toolbar-btn--tab${view === v ? " active" : ""}${v === "git" && gitPendingColor ? " toolbar-btn--flagged" : ""}`}
               aria-pressed={view === v}
+              data-view={v}
               onClick={() => setView(v)}
-              title={title}
+              title={title ?? t(labelKey)}
+              aria-label={title ?? t(labelKey)}
             >
               <Icon />
-              {t(labelKey)}
+              <span className="toolbar-btn-label">{t(labelKey)}</span>
+              <SideViewKey n={i} />
               {count > 0 && <span className="side-panel-orange-count">{count}</span>}
               {v === "git" && gitPendingColor && (
                 <span
@@ -1841,7 +1854,7 @@ export function ProjectFilesView({
             title={t("fileTree.refreshTitle")}
             aria-label={t("common.refresh")}
           >
-            ↻
+            <RefreshIcon />
           </button>
         )}
         {importDrop.canImport && (
@@ -1913,6 +1926,8 @@ export function ProjectFilesView({
           </button>
         )}
       </div>
+      </div>
+      </div>
 
       {/* The workspace clock. A workspace expiry does not merely delete "some
           data" — for a project whose root lives in one it deletes the host tree,
@@ -1937,7 +1952,7 @@ export function ProjectFilesView({
               title={t("projectFilesView.dismissExpiryTitle")}
               onClick={() => setExpiryDismissed(`${projectWs.id}:${projectWs.remaining_days}`)}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         </div>
@@ -2086,7 +2101,7 @@ export function ProjectFilesView({
                 title={t("common.close")}
                 aria-label={t("common.close")}
               >
-                ×
+                <CloseIcon />
               </button>
             </div>
           )}
@@ -2215,6 +2230,25 @@ export function ProjectFilesView({
                     <ArrowsHorizontalIcon />
                   </button>
                   <UntestedTag id="projectFilesView.takeNewerAll" />
+                  <SyncHandoffButton
+                    projectId={projectId}
+                    connected={!remoteBlocked}
+                    disabled={conflictFiles.length === 0 || !mirrorRoot}
+                    className="orange-file-act"
+                    label={t("syncHandoff.buttonCount", { count: conflictFiles.length })}
+                    title={t("syncHandoff.bulkTitle")}
+                    collect={(progress) =>
+                      collectHandoffFiles({
+                        projectId: projectId ?? "",
+                        rels: conflictFiles,
+                        mirrorRoot: mirrorRoot ?? "",
+                        remotePath: project?.remote?.remote_path ?? "",
+                        byPath: syncMap,
+                        progress,
+                      })
+                    }
+                  />
+                  <UntestedTag id="syncHandoff.panel" />
                   <button
                     type="button"
                     className="orange-file-act orange-file-act--icon orange-file-act--delete"
@@ -2642,7 +2676,7 @@ export function ProjectFilesView({
                             onClick={() => void openSession(hostId, s.name)}
                           >
                             <span className="orange-file-dot" aria-hidden="true">
-                              {s.attached ? "●" : "○"}
+                              {s.attached ? <DotIcon /> : <RingIcon />}
                             </span>
                             {s.working && (
                               <span className="tmux-work-dot" aria-hidden="true" title={t("projectFilesView.workingTitle")} />
@@ -2666,7 +2700,7 @@ export function ProjectFilesView({
                               aria-label={t("projectFilesView.killSessionAria", { name: s.name })}
                               onClick={() => void killSession(hostId, s.name)}
                             >
-                              ×
+                              <CloseIcon />
                             </button>
                           </div>
                         </div>
@@ -2764,7 +2798,7 @@ export function ProjectFilesView({
                 return (
                   <div key={`${ws.filesystem ?? ""}/${ws.id}`} className="orange-file-row" title={ws.path}>
                     <span className="orange-file-name" style={{ cursor: "var(--cur-default, default)" }}>
-                      <span className="orange-file-dot" aria-hidden="true">{here ? "●" : "○"}</span>
+                      <span className="orange-file-dot" aria-hidden="true">{here ? <DotIcon /> : <RingIcon />}</span>
                       {ws.id}
                       <span className={`tmux-session-meta hpc-ws-remaining tone-${expiryTone(ws)}`}>
                         {[
@@ -2820,7 +2854,7 @@ export function ProjectFilesView({
                   onClick={() => void watchJob(j.id, j.name)}
                 >
                   <span className="orange-file-dot" aria-hidden="true">
-                    {j.state === "RUNNING" ? "●" : "○"}
+                    {j.state === "RUNNING" ? <DotIcon /> : <RingIcon />}
                   </span>
                   {j.name || j.id}
                   <span className="tmux-session-meta">
@@ -2846,7 +2880,7 @@ export function ProjectFilesView({
                     aria-label={t("projectFilesView.cancelJobAria", { id: j.id })}
                     onClick={() => void cancelJob(j.id, j.name)}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               </div>
@@ -2942,7 +2976,7 @@ export function ProjectFilesView({
                     onClick={() => closeApp(w.id)}
                     title={t(w.pid > 0 ? "projectFilesView.closeAppTitle" : "projectFilesView.untrackTitle")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
                 {rowStaysVisible(workspaceCaps, w.window_id) === "wayland" && (

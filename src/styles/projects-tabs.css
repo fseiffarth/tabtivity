@@ -43,7 +43,7 @@
   border-radius: 0;
   border: none;
   border-top: 3px solid transparent;
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 500;
   color: var(--text-secondary);
   background-color: transparent;
@@ -60,7 +60,7 @@
 .project-pill .pill-main:focus-visible,
 .tab:focus-visible,
 .tab-new-btn:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -178,21 +178,18 @@
      already reserved, transparent, on the base rule). Activation recolors that
      top border to accent/bluish (same color as the add-project button): a
      straight, un-rounded line across the top of the current project's pill.
-     The current pill is ALSO the only one with a side 3D shadow — a soft edge
-     on each side (vertical offset 0) so it reads as a raised chip lifted off
-     the flat, shadowless neighbours. */
+     One signal per state: the line and the wash, nothing else lifts it. */
   color: var(--text-primary);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   font-weight: 600;
   border-top-color: var(--accent);
-  box-shadow: 3px 0 4.5px -2px rgba(0, 0, 0, 0.4), -3px 0 4.5px -2px rgba(0, 0, 0, 0.4);
 }
 
 /* Category-tinted top bar: the project's primary category color replaces the
    default status stripe so projects sharing a category read as a group. The
    active pill keeps the accent stripe (its current-scope signal wins). */
 .project-pill.has-category:not(.active):not(.timer-paused) {
-  box-shadow: inset 0 -4px 0 var(--cat-color), 0 3px 6px -2px rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 -4px 0 var(--cat-color);
 }
 /* Small per-category swatches inside the pill (one dot per category). */
 .pill-category-dots {
@@ -222,7 +219,7 @@
   gap: 5px;
   padding: 3px 9px;
   border-radius: var(--radius-full);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
   color: var(--text-secondary);
   background: var(--control-bg);
@@ -248,7 +245,7 @@
 .category-chip-x {
   margin-left: 1px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
 }
 .category-add-row {
@@ -264,7 +261,7 @@
   display: flex;
   align-items: center;
   gap: inherit;
-  padding: 0 8px 0 12px;
+  padding: 0 var(--space-2) 0 var(--space-3);
   height: 100%;
   background: none;
   border: none;
@@ -285,7 +282,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   border-radius: var(--radius-sm);
@@ -315,7 +312,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   border-radius: var(--radius-sm);
@@ -357,7 +354,7 @@
   color: var(--danger);
 }
 .pill-tab-marks-count {
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0;
   color: var(--text-muted);
@@ -400,7 +397,7 @@
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -436,7 +433,7 @@
 /* The logo is the window's move handle (BoxScopeChip's onLogoMouseDown); a
    click on it is still "All projects", so the grab cursor shows only while
    pressed. */
-.box-chip:not(.box-scope-pill) .box-chip-main:active {
+.box-chip:not(.box-scope-pill):not(.box-ghost-pill) .box-chip-main:active {
   cursor: var(--cur-grabbing, grabbing);
 }
 
@@ -459,9 +456,10 @@
   opacity: 1;
 }
 
-/* "+N": the boxes past MAX_BOX_PILLS, which only the chip's list reaches. */
+/* "+N": the boxes past the width budget (or hidden from the row), counted on
+   the caret; only the list it opens reaches them. */
 .box-chip-overflow {
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1;
   color: var(--text-secondary);
@@ -481,7 +479,6 @@
 .box-chip.active {
   color: var(--text-primary);
   border-top-color: var(--accent);
-  box-shadow: 3px 0 4.5px -2px rgba(0, 0, 0, 0.4), -3px 0 4.5px -2px rgba(0, 0, 0, 0.4);
 }
 
 /* Only the selected box's pill wears a strip here — the picker chip itself
@@ -526,7 +523,7 @@
 .box-scope-pill {
   /* The project pill's own inset (`.pill-main`: 12px lead, 8px trail), so a
      box pill and a project pill sit on the same rhythm. */
-  padding: 0 8px 0 12px;
+  padding: 0 var(--space-2) 0 var(--space-3);
 }
 
 .box-scope-pill .box-chip-main {
@@ -557,6 +554,70 @@
   box-shadow: inset 0 0 0 1px var(--box-color, var(--accent));
 }
 
+/* The way out: an ✕ that stays on the SELECTED box pill (never hover-only),
+   "Show all projects". Muted until pointed at, so it reads as part of the pill
+   and not as a second label. */
+.box-pill-leave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
+}
+.box-pill-leave:hover {
+  background-color: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+
+/* A slice tints the whole strip in its box's colour (`--slice-color`, set inline
+   by ProjectSwitcher): the lit pill, its members and the line under them read
+   as one place. Static background and inset line only, nothing animated. */
+.project-pills-region.is-sliced {
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in srgb, var(--slice-color, var(--accent)) 9%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--slice-color, var(--accent)) 55%, transparent);
+}
+
+/* The ghost "+ Box" pill, while there is no box: dashed, quiet, solid on hover. */
+.box-ghost-pill {
+  padding: 0 var(--space-2);
+}
+.box-ghost-pill .box-chip-main {
+  height: 26px;
+  gap: 4px;
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+.box-ghost-pill .box-chip-main:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.box-ghost-plus {
+  width: 12px;
+  height: 12px;
+}
+
+/* Narrow header: the pills give up label width before they give up count
+   (the budget itself is `boxPillBudget`, passed to BoxScopeChip). */
+.app-header[data-width-tier="2"] .box-scope-pill .box-chip-main {
+  max-width: 96px;
+}
+.app-header[data-width-tier="3"] .box-scope-pill .box-chip-main {
+  max-width: 80px;
+}
+
 /* The hairline after the leading segment (★ · 🗑 · ⬡ chip), before the scrolling
    project pills — the visible edge between the fixed zone and the strip that
    moves under it. It was literally white, which is a divider that only exists on
@@ -580,7 +641,7 @@
   display: flex;
   flex-direction: column;
   min-width: 170px;
-  padding: 4px;
+  padding: var(--space-1);
   color: var(--text-primary);
 }
 
@@ -588,12 +649,12 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   border: none;
   background: transparent;
   color: var(--text-primary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
   text-align: left;
   cursor: var(--cur-pointer, pointer);
 }
@@ -605,6 +666,18 @@
 .box-chip-menu button.is-current {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* The sliced box in the list: bold. The scope box wears a ✓ as well (the two
+   differ while a member is being visited: slice without scope). */
+.box-chip-menu button.is-slice {
+  font-weight: 700;
+}
+.box-chip-menu-scope {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
 }
 
 /* The row a dragged pill is currently over — dropping adds it to that box. */
@@ -634,8 +707,8 @@
 }
 
 .box-chip-menu-label {
-  padding: 3px 8px 1px;
-  font-size: 10px;
+  padding: 3px var(--space-2) 1px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
@@ -647,7 +720,7 @@
 }
 
 .box-chip-menu-count {
-  font-size: 10px;
+  font-size: var(--text-xs);
   color: var(--text-secondary);
 }
 
@@ -683,12 +756,12 @@
 .project-box-rename-input {
   width: 90px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
   background: var(--control-bg);
   color: var(--text-primary);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
 }
 
 /* The box swatches on a MEMBER pill (overlay model: member pills always
@@ -703,6 +776,22 @@
   gap: 3px;
   margin-left: 5px;
   flex-shrink: 0;
+}
+
+/* The swatches are also a button (a click opens the box, or lists a member's
+   boxes): padded out to a >= 16 px hit area, the padding cancelled by a
+   negative margin so the pill is no wider or taller than before. The pointer
+   cursor comes from `[role="button"]` (reset.css), so no cursor rule here. */
+.project-pill-boxdot.is-link {
+  box-sizing: content-box;
+  min-width: 10px;
+  min-height: 9px;
+  padding: 4px 3px;
+  margin: -4px -3px -4px 2px;
+  border-radius: var(--radius-sm);
+}
+.project-pill-boxdot.is-link:hover {
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
 }
 
 /* The hexagon's rim (`BoxSwatch`), the half-tone ring the square swatch wore
@@ -760,9 +849,129 @@
   color: var(--accent);
 }
 
-/* Box editor dialog (canonical dialog chrome; see BoxEditorDialog). */
+/* The shared membership checklist (BoxMemberChecklist): the projects of a box in
+   the box pill's menu, the boxes of a project in the project pill's Boxes group.
+   It scrolls in its own region (no row cap) and a filter field sits above it
+   once the list is long. The rows are the checkbox rows above; the name takes
+   the room and ellipsises, the "closed" label stays at the right edge. */
+.box-member-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+}
+
+.box-member-filter {
+  box-sizing: border-box;
+  width: calc(100% - 2 * var(--space-1));
+  margin: 2px var(--space-1);
+  padding: 4px var(--space-2);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-md);
+  outline: none;
+}
+
+.box-member-filter:focus {
+  border-color: var(--accent);
+}
+
+.box-member-list {
+  display: flex;
+  flex-direction: column;
+  max-height: min(240px, 40vh);
+  overflow-y: auto;
+}
+
+.context-menu button.box-member-row {
+  display: flex;
+  align-items: center;
+}
+
+.box-member-row .box-member-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.box-member-row .box-member-closed {
+  flex: 0 0 auto;
+  margin-left: var(--space-2);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+
+/* A rename the name check refused: the field stays open, marked. */
+.project-box-rename-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* Box sheet (canonical dialog chrome; see BoxEditorDialog). */
 .box-editor {
-  width: min(440px, 92vw);
+  width: min(520px, 92vw);
+}
+
+/* A labelled block of the sheet: the caption above, its control(s) below. */
+.box-editor .box-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.box-editor .box-editor-field-label {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+}
+
+.box-editor .box-editor-help {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
+}
+
+.box-editor .box-editor-name-error {
+  font-size: var(--text-sm);
+}
+
+.box-editor input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* The palette chips sit on the sheet's own left edge and wrap on its width, not
+   the context menu's 172px column. */
+.box-editor .tab-color-swatches {
+  max-width: none;
+  padding: 2px 0;
+}
+
+/* `.project-dialog label` / `.project-dialog input` (a stacked field, a 34px text
+   box) must not reach the custom-colour chip: it is a swatch over a hidden input. */
+.box-editor label.box-color-custom {
+  display: inline-block;
+}
+
+.box-editor .box-color-custom input {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+}
+
+.box-editor .box-editor-members-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.box-editor .box-editor-count {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
 }
 
 /* The member list reads as one inset field: the control surface and border of
@@ -771,13 +980,12 @@
    centered dialog with every keystroke. */
 .box-editor .box-editor-members {
   flex: 0 0 auto;
-  height: 40vh;
+  height: min(30vh, 240px);
   overflow-y: auto;
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
-  padding: 4px;
-  margin-top: -6px;
+  padding: var(--space-1);
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -790,9 +998,9 @@
   align-items: center;
   gap: 8px;
   min-height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-base);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -818,18 +1026,107 @@
 
 .box-editor .box-editor-empty {
   opacity: 0.7;
-  padding: 6px 4px;
+  padding: 6px var(--space-1);
 }
 
 .box-editor .box-editor-trust-note {
-  font-size: 12px;
+  font-size: var(--text-md);
   opacity: 0.85;
   border-left: 2px solid var(--accent);
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
+}
+
+/* One row's kind badges (closed, container, VM, remote) and the swatches of the
+   other boxes that hold the project; both trail the name. */
+.box-editor .box-editor-badge {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-sm);
+  line-height: 16px;
+}
+
+.box-editor .box-editor-badge.is-closed {
+  font-style: italic;
+}
+
+.box-editor .box-editor-also {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.box-editor .box-editor-also-swatch {
+  width: 12px;
+  height: 11px;
+}
+
+.box-editor .box-editor-folder {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+}
+
+.box-editor .box-editor-folder-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+
+.box-editor .box-editor-folder-none {
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-md);
+}
+
+.box-editor .box-editor-open {
+  flex: 0 0 auto;
 }
 
 .box-editor .box-editor-dissolve {
   margin-right: auto;
+}
+
+/* The empty-box line: in the slice strip (inline, after the logo chip) and in the
+   box's side panel (centred in `.file-tree-empty`). */
+.box-empty-line {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted, var(--text-secondary));
+  font-size: var(--text-md);
+  white-space: nowrap;
+}
+
+.box-empty-line.box-empty-strip {
+  padding: 0 var(--space-2);
+}
+
+.box-empty-line .box-empty-add {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.box-empty-line .box-empty-add:hover {
+  background: var(--control-hover-bg);
+}
+
+/* A narrow side panel wraps the line rather than clipping the button. */
+.box-empty-panel .box-empty-line {
+  flex-wrap: wrap;
+  white-space: normal;
 }
 
 /* Multi-root file view (box scope): one collapsible section per root, each set
@@ -841,14 +1138,19 @@
   border: 1px solid var(--border-color);
   border-left: 3px solid var(--file-root-accent);
   background: var(--bg-panel);
+  /* The shared panel radius. No overflow clip: the header band sticks to the
+     scroller, and a clipping ancestor would stop it, so the band rounds its
+     own corners instead. */
+  border-radius: var(--radius);
 }
 
 .file-root:last-child {
   margin-bottom: 0;
 }
 
-/* The box's own folder leads the list and is accent-tinted; member project
-   roots use a calmer neutral rail. */
+/* The box's own folder leads the list and is accent-tinted; a member project's
+   rail wears the member's colour (set inline as --file-root-accent, the same
+   colour as its tab chip and "+" fly-out dot). */
 .file-root--box {
   --file-root-accent: var(--accent);
 }
@@ -865,10 +1167,25 @@
   position: sticky;
   top: 0;
   z-index: 1;
+  border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
 }
 
 .file-root.is-collapsed .file-root-headrow {
   border-bottom: none;
+  border-radius: calc(var(--radius) - 1px);
+}
+
+/* A file dragged over a collapsed section: it opens after the dwell. Static
+   outline, no animation. */
+.file-root.is-spring-armed {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.file-root-headrow.move-drop-target {
+  background-color: var(--accent-soft);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .file-root-headrow:hover {
@@ -886,7 +1203,7 @@
   color: var(--text-primary);
   border: none;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
   cursor: var(--cur-pointer, pointer);
   white-space: nowrap;
@@ -909,7 +1226,7 @@
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1;
   opacity: 0.5;
   cursor: var(--cur-grab, grab);
@@ -953,6 +1270,72 @@
   flex-shrink: 0;
 }
 
+/* The member's colour dot: always round (boxes are rounded squares). */
+.file-root-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+/* Pending git state, in the project pill's colours (apps.css). Drawn only for
+   a reading that says something is pending; no reading draws nothing. */
+.file-root-dirty {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.file-root-dirty.git-dirty {
+  background: var(--danger);
+}
+
+.file-root-dirty.git-staged {
+  background: var(--warning);
+}
+
+.file-root-dirty.git-unpushed {
+  background: var(--success);
+}
+
+.file-root-dirty.git-broken {
+  border: 1px dashed var(--text-muted);
+}
+
+/* The ⋯ button of a member header, a sibling of the header button (a button
+   inside a button is not markup). */
+.file-root-more {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.file-root-more:hover,
+.file-root-more:focus-visible,
+.file-root-more[aria-expanded="true"] {
+  color: var(--text-primary);
+}
+
+/* The one search field above the member sections (box scope). */
+.box-shared-search {
+  margin-bottom: 6px;
+}
+
+/* Agent tabs working in this member. */
+.file-root-agents {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--file-root-accent);
+}
+
 .file-root--box .file-root-icon {
   color: var(--accent);
 }
@@ -966,7 +1349,7 @@
 /* Small role tag (box / project) on the right of each header. */
 .file-root-kind {
   flex-shrink: 0;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -980,7 +1363,7 @@
 /* Indent the file list under its header so nested entries don't line up with
    the section rails. */
 .file-root-body {
-  padding-left: 4px;
+  padding-left: var(--space-1);
 }
 
 /* Box rows in the search popover: distinct from project rows. */
@@ -989,8 +1372,37 @@
   background: color-mix(in srgb, var(--accent) 8%, var(--control-bg));
 }
 
-.project-search-row.is-box .project-box-badge {
-  margin-right: 2px;
+/* The box's own colour mark (`BoxSwatch`) before its name, and the swatches a
+   project row wears for the boxes it belongs to. */
+.project-search-box-swatch {
+  width: 12px;
+  height: 11px;
+}
+
+.project-search-box-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-search-boxes {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+
+/* "All projects": the way out of a slice, plain (no box rail). */
+.project-search-row.is-all {
+  border-left: 2px solid var(--text-muted);
+}
+
+/* "Boxes" over the box rows of an empty-field list. */
+.project-search-group {
+  padding: var(--space-1) var(--space-2) 2px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 /* ── Project pill popup ─────────────────────────────────────────────── */
@@ -1000,9 +1412,8 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-sm);
+  border: 0;
+  border-radius: var(--radius);
   padding: 6px 10px;
   white-space: nowrap;
   pointer-events: none;
@@ -1011,7 +1422,7 @@
 }
 
 .pill-popup-path {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-style: italic;
   color: var(--text-secondary);
   max-width: 300px;
@@ -1019,6 +1430,16 @@
   text-overflow: ellipsis;
   direction: rtl;
   text-align: left;
+}
+
+/* `direction: rtl` is only there so a long path loses its head, not its tail.
+   Left alone it also throws the path's edge slashes to the far side
+   (`/home/me/proj` reads `home/me/proj/`): a neutral at the end of an RTL line
+   takes the line's direction. A left-to-right mark at each end makes them
+   resolve with the text beside them. Generated, so copying takes none of it. */
+.pill-popup-path::before,
+.pill-popup-path::after {
+  content: "\200E";
 }
 
 .pill-popup-path-row {
@@ -1036,7 +1457,7 @@
 
 .pill-popup-path-label {
   flex: 0 0 auto;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1046,7 +1467,7 @@
 
 .pill-popup-description {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.35;
   max-width: 320px;
   white-space: normal;
@@ -1069,20 +1490,34 @@
   margin-left: 8px;
 }
 
+/* A project type tag (git, a provider, SSH…): one neutral chip, its kind's
+   colour (`--tag-color`, set inline) only on the lamp. Until 2026-11-04 each
+   tag was an outline in its own colour, so two tags side by side were a green
+   and a purple frame competing with the accent. */
 .pill-popup-tag {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-sm);
+  font-weight: 500;
   line-height: 1;
-  padding: 2px 6px;
+  padding: 3px 8px;
   border-radius: var(--radius-full);
-  border: 1px solid currentColor;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
   white-space: nowrap;
+}
+.pill-popup-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--tag-color, var(--text-muted));
 }
 
 .pill-popup-status {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
@@ -1096,39 +1531,39 @@
 
 /* Pending git state, in the pill folder icon's colours (apps.css). */
 .pill-popup-git {
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 
 .pill-popup-git.git-dirty {
-  color: #f85149;
+  color: var(--danger);
 }
 
 .pill-popup-git.git-staged {
-  color: #d29922;
+  color: var(--warning);
 }
 
 .pill-popup-git.git-unpushed {
-  color: #3fb950;
+  color: var(--success);
 }
 
 .pill-popup-git.git-broken {
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 .pill-popup-git.git-unknown {
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 .pill-popup-time {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   display: flex;
   align-items: center;
 }
 
 .pill-popup-cpu {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 
@@ -1149,7 +1584,7 @@
 
 .tab-popup-label {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
   max-width: 320px;
   overflow: hidden;
@@ -1158,7 +1593,7 @@
 }
 
 .tab-popup-kind {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   opacity: 0.8;
 }
@@ -1166,7 +1601,7 @@
 /* Muted meta rows (activity / restart) — like .pill-popup-path but plain LTR
    text, so it never gets the path row's RTL ellipsis treatment. */
 .tab-popup-meta {
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1179,7 +1614,7 @@
   flex: 1 1 auto;
   min-width: 0;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1191,6 +1626,24 @@
 
 .tab-popup-meta.working {
   color: var(--success);
+}
+/* An agent waiting on you: the status bars' own decision colour. */
+.tab-popup-meta.asking {
+  color: var(--status-decision);
+}
+
+/* An agent's last prompt: wrapped prose, three lines at most — the card says
+   what the turn is about, the tab itself holds the whole prompt. */
+.tab-popup-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
 }
 
 /* The hover card's MCP row: a server the CLI starts, one switched off. */
@@ -1270,7 +1723,7 @@
   height: 26px;
   padding: 0 1px;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
   user-select: none;
   opacity: 0.6;
@@ -1282,6 +1735,22 @@
   color: var(--text-primary);
 }
 .tab-drag-grip:active { cursor: var(--cur-grabbing, grabbing); }
+
+/* A subwindow's name, beside its grip. Pinned like the grip, so it stays put
+   while the tabs scroll, and capped so it never takes the strip's room. */
+.subwindow-name {
+  flex: 0 1 auto;
+  align-self: center;
+  min-width: 2em;
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--space-1);
+  color: var(--text-primary);
+  font-weight: 600;
+  user-select: none;
+}
 
 /* The horizontally-scrolling tab container, holding the tabs and nothing else;
    its scrollbar is hidden (chevrons + wheel drive the scroll instead).
@@ -1325,7 +1794,7 @@
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 16px;
+  font-size: var(--text-xl);
   line-height: 1;
   z-index: 12;
   transition: background-color var(--transition), color var(--transition);
@@ -1339,23 +1808,26 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   height: 30px;
   cursor: var(--cur-pointer, pointer);
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--text-muted);
   white-space: nowrap;
   flex-shrink: 0;
   /* Tabs melt into the tab-bar behind them — transparent, no side/top border,
      no card shadow — exactly as project pills melt into the header bar. Only
      the tab text, and (for the current tab) its straight bottom accent line
-     plus side 3D shadow, tell a tab from the bar. The 3px BOTTOM border is
-     reserved transparent here and recoloured on .active; border-radius:0 keeps
-     that line a straight, un-rounded rule corner-to-corner. */
+     tell a tab from the bar. The 3px BOTTOM border is
+     reserved transparent here and recoloured on .active. Only the TOP corners
+     take the theme radius: that matches the rounded status ring (`::after`
+     below, same `--radius-sm`) and the rest of the rounded theme, while the
+     square bottom corners keep the line a straight rule corner-to-corner (a
+     bottom radius would curl it up at both ends). */
   box-sizing: border-box;
   border: none;
   border-bottom: 3px solid transparent;
-  border-radius: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   background: transparent;
   margin-bottom: 0;
   margin-top: 0;
@@ -1391,8 +1863,7 @@
      --tab-accent, falling back to the theme accent): a straight line across
      the bottom edge, mirroring the active project pill's top line. A wash of
      that colour rising from the line fills the tab, so the current one reads
-     at a glance among many; and it is the only tab with a side 3D shadow, a
-     raised chip lifted off the flat, shadowless neighbours. */
+     at a glance among many. One signal per state: line and wash, no lift. */
   color: var(--text-primary);
   font-weight: 600;
   border-bottom-color: var(--tab-accent, var(--subwindow-tab-active));
@@ -1401,7 +1872,6 @@
     color-mix(in srgb, var(--tab-accent, var(--subwindow-tab-active)) 24%, transparent),
     color-mix(in srgb, var(--tab-accent, var(--subwindow-tab-active)) 8%, transparent)
   );
-  box-shadow: 2px 0 3px -2px rgba(0, 0, 0, 0.4), -2px 0 3px -2px rgba(0, 0, 0, 0.4);
 }
 
 .tab-label {
@@ -1418,6 +1888,51 @@
   opacity: 0.7;
 }
 
+/* Member chip (TabMemberChip): which member of a box the tab works in. A round
+   dot in the member's colour (a rounded square for the whole box: members are
+   dots, boxes are squares, never swapped) and a short name. Quiet by design:
+   the kind stripe keeps its meaning, the chip only carries ownership. No
+   shadow, no animation. */
+.tab-member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  line-height: 1;
+  color: var(--text-muted);
+}
+.tab-member-mark {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.tab-member-chip.box .tab-member-mark,
+.tab-member-mark.box {
+  border-radius: 2px;
+}
+.tab-member-name {
+  max-width: 10ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab:not(.active):not(:hover) .tab-member-chip {
+  opacity: 0.7;
+}
+/* A narrow bar (TabMemberChip sets the attribute on `.tab-bar`): the dot or
+   square alone, the name stays in the tab's hover card. */
+.tab-bar[data-narrow-chips] .tab-member-name {
+  display: none;
+}
+/* The hover card's member row: the same mark, beside the name. */
+.tab-popup-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* A tab held in a narrower closed tab's slot (lib/tabs/closedTabSlot). */
 .tab[data-slot-held] .tab-label {
   overflow: hidden;
@@ -1431,7 +1946,7 @@
   min-width: 0;
   font: inherit;
   color: inherit;
-  background: var(--bg-main, rgba(0, 0, 0, 0.25));
+  background: var(--bg-main);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   padding: 0 2px;
@@ -1451,7 +1966,7 @@
   max-width: 14em;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   border-radius: 999px;
   background: color-mix(in srgb, var(--tab-accent, var(--accent)) 24%, transparent);
   color: var(--text-primary);
@@ -1465,10 +1980,10 @@
 .tab-stack-count {
   flex-shrink: 0;
   min-width: 16px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--text-xs);
   line-height: 14px;
   text-align: center;
   color: var(--text-muted);
@@ -1503,7 +2018,7 @@
 /* ── Tab status ring ─────────────────────────────────────────────────────
    A tab shows agent state as a RING, drawn on an `::after` overlay so it never
    changes the tab's width and the text stays crisp. Three states from two
-   colours and a stroke style, nothing animated (`--status-*`):
+   colours and a stroke style, read at rest (`--status-*`; an agent's ▶ breathes on top):
    - working        (green, DOTTED): PTY producing sustained output.
    - finished       (green, solid): agent rang the bell having simply finished —
      the same work as above, now complete, hence the same colour with the dots
@@ -1571,12 +2086,12 @@
 .tab-status-mark {
   flex-shrink: 0;
   color: var(--tab-status-color);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 700;
   line-height: 1;
 }
 .tab-status-mark.working {
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 /* A mark for a COMMAND rather than an agent turn, in the shell colour the ring
    uses for the same thing (`--status-shell-working`). It is the tab's only mark
@@ -1586,6 +2101,26 @@
    once". */
 .tab-status-mark.working.shell {
   color: var(--status-shell-working);
+}
+
+/* An agent's ▶ breathes while its turn runs: motion ON TOP of the dotted ring
+   and the glyph, which still say "working" at rest, so nothing has to be watched
+   to be read (the pulse this vocabulary dropped was the only working/done cue).
+   Agent turns only — a shell command's ▶ holds still. Opacity alone, so on the
+   GPU path the compositor runs it without a repaint; `.pill-status-bar.working`
+   shares the keyframes. Off on the CPU paint path, under Energy Saver (which
+   also covers a blurred window, where a paused loop would freeze mid-dim) and
+   under reduced motion (`base.css`), where the mark stands at full strength. */
+.tab-status-mark.working:not(.shell) {
+  animation: agent-working-breathe 1.6s ease-in-out infinite;
+}
+@keyframes agent-working-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+:root[data-software-paint] .tab-status-mark.working,
+:root[data-energy-saver="on"] .tab-status-mark.working {
+  animation: none;
 }
 /* The marks' fixed cells in a tab strip (`TabStatusMark`'s `slots`): an agent
    tab keeps two, a shell tab one, laid out empty while the tab is idle. A mark
@@ -1630,17 +2165,12 @@
   0%, 100% { opacity: 0.25; }
   50% { opacity: 1; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .tab.install-pending::before {
-    animation: none;
-  }
-}
 
 /* ── Project pill status bars ────────────────────────────────────────────
    A strip of little bars along the pill's bottom edge — ONE PER NON-IDLE TAB of
    that project, so the switcher shows both what a project's tabs are doing and
    how many are doing it. Same three states, and the same reading, as the tab
-   status ring (`--status-*`), none of them animated:
+   status ring (`--status-*`), all read at rest (an agent's working bar breathes on top):
    - working        (green, BROKEN into dots): PTY producing sustained output.
    - finished       (green, unbroken): agent finished, tab not yet seen.
    - needs-decision (amber, unbroken): agent waiting on a decision.
@@ -1685,7 +2215,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1;
   color: var(--bg-main);
@@ -1726,7 +2256,7 @@
 }
 
 .pill-status-bar:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1754,6 +2284,16 @@
   --pill-status-dot: var(--status-shell-working);
 }
 
+/* An agent's working bar breathes with its tab's ▶ (`agent-working-breathe`,
+   same gates); the dots still say "working" when it holds still. */
+.pill-status-bar.working:not(.shell) {
+  animation: agent-working-breathe 1.6s ease-in-out infinite;
+}
+:root[data-software-paint] .pill-status-bar.working,
+:root[data-energy-saver="on"] .pill-status-bar.working {
+  animation: none;
+}
+
 .pill-status-bar.needs-decision {
   background-color: var(--status-decision);
 }
@@ -1766,12 +2306,11 @@
   background-color: var(--status-interrupted);
 }
 
-/* Nothing in the agent-status vocabulary animates any more (see the
-   `--status-*` block): the three states are three colours, at rest, so the
-   reduced-motion and Energy Saver collapses that used to exist here have
-   nothing left to switch off. Both settings still govern the rest of the app;
-   this is simply one fewer thing they have to. */
-:root[data-energy-saver="on"] .tab-new-btn.empty-hint {
+/* The agent-status vocabulary reads at rest (see the `--status-*` block); the
+   one motion in it, an agent's working ▶ and bar breathing, is decoration with
+   its own gates beside its rules above. */
+:root[data-energy-saver="on"] .tab-new-btn.empty-hint,
+:root[data-software-paint] .tab-new-btn.empty-hint {
   animation: none;
 }
 
@@ -1815,6 +2354,29 @@
   animation-play-state: running !important;
 }
 
+/* The same reasoning for the floating surfaces' entrance (apps.css): each opens
+   from `opacity: 0`, and a hover card or menu can open in a window without
+   focus. Paused at 0% it would stay invisible; it is one short shot, not a loop. */
+:root[data-blurred] .modal-backdrop,
+:root[data-blurred] .project-dialog,
+:root[data-blurred] .settings-dialog,
+:root[data-blurred] .stats-dialog,
+:root[data-blurred] .file-delete-dialog,
+:root[data-blurred] .context-menu,
+:root[data-blurred] .tab-new-menu,
+:root[data-blurred] .project-switcher-add-menu,
+:root[data-blurred] .box-chip-menu,
+:root[data-blurred] .project-search-popover,
+:root[data-blurred] .file-run-args,
+:root[data-blurred] .file-viewer-run-args,
+:root[data-blurred] .git-change-tree,
+:root[data-blurred] .presentation-settings,
+:root[data-blurred] .cal-alarm-popup,
+:root[data-blurred] .project-switch-toast,
+:root[data-blurred] .hint-bubble {
+  animation-play-state: running !important;
+}
+
 /* Fast mode: no animation, and no transition either — the deliberate
    difference from the blur rule above, which only *pauses* what is running.
    That is right for a window nobody is looking at, where the mid-state visual
@@ -1848,7 +2410,7 @@
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
   flex-shrink: 0;
   opacity: 0;
@@ -1878,7 +2440,7 @@
   border-radius: var(--radius-sm);
   border: none;
   background: transparent;
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   flex-shrink: 0;
   transition: background-color var(--transition), color var(--transition);
@@ -1894,7 +2456,7 @@
   border-radius: var(--radius-sm);
   background: var(--danger);
   color: var(--bg);
-  font-size: 9px;
+  font-size: var(--text-sm);
   font-weight: 700;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -1903,7 +2465,7 @@
    and colours — and its to-do card link. */
 .tab-mark-glyph {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.06em;
@@ -1918,7 +2480,7 @@
   background: none;
   border: none;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 button.tab-todo-link {
@@ -1946,12 +2508,12 @@ button.tab-todo-link {
 .tab-mode-mark {
   display: inline-flex;
   align-items: center;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   height: 14px;
   border-radius: var(--radius-sm);
   border: 1px solid currentColor;
   background: color-mix(in srgb, currentColor 14%, transparent);
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -1964,14 +2526,14 @@ button.tab-todo-link {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   height: 14px;
   border-radius: var(--radius-sm);
   border: 1px solid currentColor;
   background: color-mix(in srgb, currentColor 14%, transparent);
   color: var(--status-interrupted);
   font: inherit;
-  font-size: 9px;
+  font-size: var(--text-sm);
   font-weight: 700;
   letter-spacing: 0.04em;
   flex-shrink: 0;
@@ -2011,7 +2573,7 @@ button.tab-todo-link {
   border: none;
   background: transparent;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   flex-shrink: 0;
   cursor: var(--cur-pointer, pointer);
@@ -2043,7 +2605,7 @@ button.tab-todo-link {
   background: var(--bg-panel);
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 15px;
+  font-size: var(--text-lg);
 }
 .subwindow-close:hover {
   background: var(--pill-hover-bg);
@@ -2069,7 +2631,7 @@ button.tab-todo-link {
   background: var(--bg-panel);
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 17px;
+  font-size: var(--text-xl);
   line-height: 1;
 }
 /* When both render, the close button owns the far-right slot; hide sits snug to
@@ -2100,7 +2662,7 @@ button.tab-todo-link {
   background: var(--bg-panel);
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1;
 }
 .subwindow-files-toggle + .subwindow-hide {
@@ -2157,7 +2719,7 @@ button.tab-todo-link {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   background: var(--bg-panel);
 }
 
@@ -2172,7 +2734,7 @@ button.tab-todo-link {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: 0 2px 0 8px;
+  padding: 0 2px 0 var(--space-2);
   background: var(--bg-panel);
 }
 /* Without the actions cluster the controls keep the right edge themselves. */
@@ -2193,7 +2755,7 @@ button.tab-todo-link {
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1;
   border-radius: var(--radius-sm, 4px);
 }
@@ -2211,12 +2773,12 @@ button.tab-todo-link {
 }
 .detached-close-title {
   margin: 0 0 10px;
-  font-size: 15px;
+  font-size: var(--text-lg);
   color: var(--text-primary);
 }
 .detached-close-body {
   margin: 0 0 18px;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--text-muted);
 }
@@ -2262,9 +2824,9 @@ button.tab-todo-link {
 
 .tab-drop-placeholder-label {
   display: block;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   line-height: 30px;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: var(--accent);
   white-space: nowrap;
   overflow: hidden;
@@ -2385,7 +2947,7 @@ button.tab-todo-link {
   background: transparent;
   color: var(--text-muted);
   cursor: var(--cur-pointer, pointer);
-  font-size: 18px;
+  font-size: var(--text-xl);
   line-height: 1;
   display: flex;
   align-items: center;
@@ -2421,12 +2983,6 @@ button.tab-todo-link {
   50% { opacity: 1; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tab-new-btn.empty-hint {
-    animation: none;
-  }
-}
-
 /* One popover/menu surface for the whole app: context menus, the generic
    dropdown (via .context-menu), the tab "+" menu, the project-switcher add
    menu, and the one-off popovers (box chip list, project search results, the
@@ -2448,16 +3004,15 @@ button.tab-todo-link {
 .git-change-tree,
 .presentation-settings,
 .cal-alarm-popup {
-  background: var(--bg-elevated);
-  /* No boxed outline: a 1px frame around a tinted popover reads as a stray
-     hairline ring drawn around the accent wash below, not as an edge. The
-     elevation shadow is what separates the menu from what it floats over; the
-     accent top rail — matching the header bar and the dialog chrome above — is
-     the only edge that carries meaning. */
+  /* No hairline outline: the elevation shadow separates the menu from what
+     it floats over, and the accent ring — matching the header bar and the
+     dialog chrome — is the only edge that carries meaning. Fill and ring come
+     from the floating recipe in apps.css, whose ring rule outranks this
+     border (the change tree, rail-less, keeps it). */
   border: 0;
-  border-top: 2px solid var(--accent);
+  border-top: 2px solid transparent;
   border-radius: var(--radius);
-  box-shadow: var(--shadow-3);
+  box-shadow: var(--shadow-2);
 }
 
 /* The accent wash these three carry (same as .app-header::before, layered as an
@@ -2469,7 +3024,7 @@ button.tab-todo-link {
   top: calc(100% + 4px);
   left: 0;
   z-index: 100;
-  padding: 4px;
+  padding: var(--space-1);
   min-width: 132px;
   display: flex;
   flex-direction: column;
@@ -2496,6 +3051,25 @@ button.tab-todo-link {
 }
 .tab-add-menu > .tab-new-menu-search {
   flex-shrink: 0;
+}
+/* A box's "+" menu names where a plain pick starts (decision 3): the member's
+   round dot or the box's rounded square, then "New tab in api". Pinned above the
+   search box like the unified menus' title strip; no shadow, no animation. */
+.tab-new-menu-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: var(--space-1) 10px 2px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  user-select: none;
+}
+.tab-new-menu-target-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Unified scrolling-menu shape ───────────────────────────────────────────
@@ -2530,7 +3104,7 @@ button.tab-todo-link {
    padding its parent gives it, rather than sitting 8px off-centre for a thumb
    that was never drawn. */
 .menu-scroll-region[data-app-scrollbar] {
-  padding-right: 8px;
+  padding-right: var(--space-2);
 }
 /* Keep the pinned title from shrinking when the menu hits its max-height — only
    the scroll region below it should give. Direct-child + first, so a group
@@ -2540,7 +3114,7 @@ button.tab-todo-link {
    from reading as a band of its own above the rows. */
 .tab-new-menu > .tab-new-menu-group-label:first-child {
   flex-shrink: 0;
-  padding-top: 4px;
+  padding-top: var(--space-1);
   padding-bottom: 1px;
 }
 
@@ -2548,12 +3122,12 @@ button.tab-todo-link {
    entries immediately. Enter picks the highlighted first match. */
 .tab-new-menu-search {
   margin: 2px 2px 4px;
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   background: var(--control-bg);
   border: 1px solid var(--border-color);
   border-radius: calc(var(--radius) / 2);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   outline: none;
 }
 
@@ -2580,10 +3154,10 @@ button.tab-todo-link {
   padding: 7px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--control-bg);
+  background: transparent;
   color: var(--text-primary);
   cursor: var(--cur-pointer, pointer);
-  font-size: 12px;
+  font-size: var(--text-md);
   text-align: left;
   transition: background-color var(--transition);
 }
@@ -2598,7 +3172,7 @@ button.tab-todo-link {
 }
 
 .tab-new-menu-item:disabled:hover {
-  background: var(--control-bg);
+  background: transparent;
   border-color: transparent;
 }
 
@@ -2616,7 +3190,7 @@ button.tab-todo-link {
 .tab-new-menu-split-caret {
   flex: 0 0 auto;
   justify-content: center;
-  padding: 7px 8px;
+  padding: 7px var(--space-2);
   color: var(--text-muted);
 }
 .tab-new-menu-split-caret:hover,
@@ -2627,7 +3201,7 @@ button.tab-todo-link {
   background-color: var(--control-hover-bg);
 }
 
-.tab-new-menu-dot { font-size: var(--text-xs); flex-shrink: 0; }
+.tab-new-menu-dot { font-size: var(--text-sm); flex-shrink: 0; }
 /* The only two colours these glyphs take: accent for an action, danger for a
    close. Modifiers, so the call sites stop repeating an inline style object. */
 .tab-new-menu-dot--accent { color: var(--accent); }
@@ -2639,8 +3213,8 @@ button.tab-todo-link {
    disabling it — the sentence is the title/aria-label. */
 .tab-new-menu-caution {
   margin-left: auto;
-  padding-left: 12px;
-  font-size: 11px;
+  padding-left: var(--space-3);
+  font-size: var(--text-sm);
   line-height: 1;
   color: var(--warning);
   flex-shrink: 0;
@@ -2651,8 +3225,8 @@ button.tab-todo-link {
    Remote drill-in, "sync off" on a worker that can't run scripts. */
 .tab-menu-hint {
   margin-left: auto;
-  padding-left: 12px;
-  font-size: 10px;
+  padding-left: var(--space-3);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   white-space: nowrap;
 }
@@ -2665,7 +3239,7 @@ button.tab-todo-link {
 .menu-shortcut {
   margin-left: auto;
   padding-left: 18px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 400;
   color: var(--text-muted);
   -webkit-text-fill-color: var(--text-muted);
@@ -2680,11 +3254,11 @@ button:has(> .menu-shortcut) {
 /* The "‹ Run on machine" header row of the machine sub-picker: reads as a title,
    not a target, and hosts the untested tag. */
 .tab-new-menu-item.tab-menu-back { color: var(--text-secondary); }
-.tab-new-menu-item.tab-menu-back .tab-new-menu-dot { font-size: 12px; }
+.tab-new-menu-item.tab-menu-back .tab-new-menu-dot { font-size: var(--text-md); }
 
 .tab-new-menu-group-label {
   padding: 6px 10px 2px;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2717,7 +3291,7 @@ button:has(> .menu-shortcut) {
   border-radius: 50%;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   /* The ring below is drawn with box-shadow; keep the transition off the shadow
@@ -2783,8 +3357,8 @@ button:has(> .menu-shortcut) {
 }
 
 .tab-new-menu-hint {
-  padding: 4px 10px;
-  font-size: 11px;
+  padding: var(--space-1) 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   font-style: italic;
 }
@@ -2809,11 +3383,11 @@ button:has(> .menu-shortcut) {
      inside its field instead of pushing the popover off-screen. */
   width: min(420px, calc(100vw - 16px));
   box-sizing: border-box;
-  padding: 8px;
+  padding: var(--space-2);
   color: var(--text-primary);
 }
 .file-run-args-label {
-  font-size: 10px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2824,9 +3398,9 @@ button:has(> .menu-shortcut) {
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
+  padding: var(--space-1) 6px;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 /* The interpreter picker: a long venv path must not stretch the popover. */
 select.file-run-args-input {
@@ -2857,8 +3431,8 @@ select.file-run-args-input {
   color: var(--text-muted);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  font-size: 11px;
+  padding: 3px var(--space-2);
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
 }
 .file-run-args-btn:hover {
@@ -2871,7 +3445,7 @@ select.file-run-args-input {
   position: fixed;
   z-index: var(--z-menu);
   min-width: 150px;
-  padding: 4px;
+  padding: var(--space-1);
 }
 
 /* ContextMenuPortal's two layers: the full-viewport dismiss catcher and the
@@ -2968,10 +3542,11 @@ select.file-run-args-input {
   min-height: 28px;
   padding: 5px 9px;
   border: 1px solid transparent;
-  background: var(--control-bg);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-primary);
   text-align: left;
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -2991,7 +3566,7 @@ select.file-run-args-input {
   cursor: var(--cur-default, default);
 }
 .context-menu button:disabled:hover {
-  background: var(--control-bg);
+  background: transparent;
 }
 
 .context-menu hr {
@@ -3008,8 +3583,8 @@ select.file-run-args-input {
 }
 
 .context-menu-group-label {
-  padding: 4px 9px 2px;
-  font-size: 10px;
+  padding: var(--space-1) 9px 2px;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3027,7 +3602,7 @@ select.file-run-args-input {
   max-width: 240px;
   text-transform: none;
   letter-spacing: normal;
-  font-size: 11px;
+  font-size: var(--text-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3039,8 +3614,8 @@ select.file-run-args-input {
    it is a sentence. */
 .context-menu-note {
   max-width: 240px;
-  padding: 4px 9px 2px;
-  font-size: 10px;
+  padding: var(--space-1) 9px 2px;
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--text-muted, var(--text-secondary));
   white-space: normal;
@@ -3050,7 +3625,7 @@ select.file-run-args-input {
 /* Danger zone: destructive actions fenced off in a red-tinted box. */
 .context-menu-danger-zone {
   margin-top: 8px;
-  padding: 4px;
+  padding: var(--space-1);
   border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--danger) 8%, transparent);
@@ -3084,7 +3659,7 @@ select.file-run-args-input {
   flex: 0 0 auto;
   padding: 1px 5px;
   border-radius: var(--radius-full);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -3111,12 +3686,12 @@ html:not(.show-untested-tags) .untested-tag {
   align-items: center;
   gap: 6px;
   min-height: 24px;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   border: 1px solid var(--control-border);
   border-radius: var(--radius-sm);
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -3179,7 +3754,7 @@ html:not(.show-untested-tags) .untested-tag {
   border-radius: var(--radius-sm);
   background: var(--control-bg);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .dropdown .dropdown-menu button:hover {
@@ -3237,12 +3812,12 @@ html:not(.show-untested-tags) .untested-tag {
 }
 
 .agent-schedule-notice {
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-panel);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .agent-schedule-notice p { margin: 6px 0 0; }
@@ -3259,7 +3834,7 @@ html:not(.show-untested-tags) .untested-tag {
   flex-direction: column;
   gap: 8px;
   align-items: stretch;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
@@ -3288,7 +3863,7 @@ html:not(.show-untested-tags) .untested-tag {
   flex-wrap: wrap;
   gap: 4px 16px;
   align-items: baseline;
-  padding: 7px 12px;
+  padding: 7px var(--space-3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
@@ -3299,11 +3874,11 @@ html:not(.show-untested-tags) .untested-tag {
   gap: 6px;
   align-items: baseline;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .agent-schedule-summary-counts strong {
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1;
   color: var(--accent);
 }
@@ -3316,10 +3891,10 @@ html:not(.show-untested-tags) .untested-tag {
   min-width: 0;
 }
 
-.agent-schedule-summary-when { font-size: 13px; font-weight: 600; }
+.agent-schedule-summary-when { font-size: var(--text-base); font-weight: 600; }
 .agent-schedule-summary-when.muted { color: var(--text-muted); font-weight: 400; }
 .agent-schedule-summary-next small { color: var(--text-muted); }
-.agent-schedule-summary-zone { color: var(--text-muted); font-size: 11px; }
+.agent-schedule-summary-zone { color: var(--text-muted); font-size: var(--text-sm); }
 
 .agent-schedule-row-head {
   display: flex;
@@ -3332,10 +3907,10 @@ html:not(.show-untested-tags) .untested-tag {
    three states plus neutral: armed/delivered read as fine, due draws the eye,
    missed warns, failed is the error color. */
 .agent-schedule-pill {
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-full);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -3384,8 +3959,8 @@ html:not(.show-untested-tags) .untested-tag {
 .git-push-proposals { display: flex; flex-direction: column; gap: 6px; width: 100%; margin: 4px 0; }
 .git-push-proposal {
   display: flex; flex-direction: column; gap: 4px;
-  padding: 6px 8px; border: 1px dashed var(--accent); border-radius: var(--radius-sm, 6px);
-  font-size: var(--text-xs); color: var(--text-primary);
+  padding: 6px var(--space-2); border: 1px dashed var(--accent); border-radius: var(--radius-sm, 6px);
+  font-size: var(--text-sm); color: var(--text-primary);
 }
 .git-push-proposal[data-status="pushed"] { border-style: solid; border-color: color-mix(in srgb, var(--success, var(--accent)) 60%, transparent); }
 .git-push-proposal[data-status="failed"] { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
@@ -3394,12 +3969,12 @@ html:not(.show-untested-tags) .untested-tag {
 .git-push-proposal-sha, .git-push-proposal-url { font-family: var(--font-mono); overflow-wrap: anywhere; color: var(--text-secondary); }
 .git-push-proposal-confirm { color: var(--warning, var(--accent)); }
 .git-push-proposal-note, .git-push-proposal-message { margin: 0; overflow-wrap: anywhere; }
-.git-push-proposal-commits { margin: 0; padding-left: 16px; }
-.git-push-proposal-commits code { font-size: var(--text-xs); }
-.git-push-proposal-output { max-height: 200px; overflow: auto; margin: 0; padding: 4px 6px; font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-elevated, transparent); }
+.git-push-proposal-commits { margin: 0; padding-left: var(--space-4); }
+.git-push-proposal-commits code { font-size: var(--text-sm); }
+.git-push-proposal-output { max-height: 200px; overflow: auto; margin: 0; padding: var(--space-1) 6px; font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-elevated, transparent); }
 .git-push-proposal-actions { display: flex; gap: 6px; }
 .git-push-mcp-level { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
-.git-push-mcp-protected { font-size: var(--text-xs); min-width: 14em; }
+.git-push-mcp-protected { font-size: var(--text-sm); min-width: 14em; }
 
 /* ── Agent-tab state, painted on the row ─────────────────────────────────
    What an AGENT TAB is doing, in the tab ring's own palette (`--status-*`, see
@@ -3448,7 +4023,7 @@ html:not(.show-untested-tags) .untested-tag {
   border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
   border-radius: var(--radius);
   color: var(--warning);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* The row's own last line, not a column beside it: at this width a button
@@ -3460,7 +4035,7 @@ html:not(.show-untested-tags) .untested-tag {
   align-items: center;
   justify-content: flex-end;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .agent-schedule-row-actions > label {
@@ -3484,7 +4059,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-schedule-form > label > span:first-child,
 .agent-schedule-form > .agent-schedule-field > span:first-child {
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 600;
 }
 
@@ -3526,12 +4101,12 @@ html:not(.show-untested-tags) .untested-tag {
   align-items: center;
   gap: 6px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .tab-schedule-indicator {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1;
 }
 
@@ -3544,7 +4119,7 @@ html:not(.show-untested-tags) .untested-tag {
     max-height: none;
     overflow-y: visible;
     padding-left: 0;
-    padding-top: 12px;
+    padding-top: var(--space-3);
     border-left: none;
     border-top: 1px solid var(--border-subtle);
   }
@@ -3553,14 +4128,14 @@ html:not(.show-untested-tags) .untested-tag {
 /* ── Agents view (Files / Git / Apps / Agents row) ──────────────────────── */
 .agent-prompts-view { display: flex; flex-direction: column; gap: 12px; }
 .agent-prompts-section { display: flex; flex-direction: column; gap: 8px; }
-.agent-prompts-section h3 { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.agent-prompts-section h3 { margin: 0; font-size: var(--text-md); color: var(--text-secondary); }
 .agent-prompts-section .settings-help { margin: 0; }
 .agent-prompts-tab {
   display: flex;
   gap: 10px;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   background: var(--control-bg);
@@ -3597,7 +4172,7 @@ html:not(.show-untested-tags) .untested-tag {
    the same line: a one-tab list has nothing to sort and no control for it. */
 .agent-prompts-tabs-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .agent-prompts-tabs-head .settings-section-title { margin: 0; }
-.agent-prompts-sort { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+.agent-prompts-sort { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); }
 
 /* The model tag: the model the session itself is showing, in the same pill the
    state uses so the two read as one row of facts about the tab. */
@@ -3605,7 +4180,7 @@ html:not(.show-untested-tags) .untested-tag {
   padding: 1px 7px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-full);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-secondary);
@@ -3627,7 +4202,7 @@ html:not(.show-untested-tags) .untested-tag {
 }
 .agent-prompts-tab-name:hover { color: var(--accent); text-decoration: underline; }
 .agent-prompts-tab-head small,
-.agent-prompts-tab-when { color: var(--text-muted); font-size: 11px; }
+.agent-prompts-tab-when { color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompts-tab-head .danger-text { color: var(--danger); }
 /* The last prompt the tab was given, from its transcript — one line, cut with
    an ellipsis; the whole of it is in the title and in the tab itself. */
@@ -3641,12 +4216,12 @@ html:not(.show-untested-tags) .untested-tag {
 }
 
 .agent-prompts-notice {
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
   background: var(--accent-soft);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 /* The section headers use the settings design system's own header
@@ -3661,15 +4236,15 @@ html:not(.show-untested-tags) .untested-tag {
 /* CLI overview (side panel → CLIs): the Agents view's cards, one per CLI. */
 .cli-overview-head { display: flex; align-items: baseline; gap: 8px; }
 .cli-overview-head strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.cli-overview-plan { padding: 1px 7px; border: 1px solid var(--border-color); border-radius: 999px; font-size: 11px; color: var(--text-secondary); }
-.cli-overview-facts { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.cli-overview-plan { padding: 1px 7px; border: 1px solid var(--border-color); border-radius: 999px; font-size: var(--text-sm); color: var(--text-secondary); }
+.cli-overview-facts { color: var(--text-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .cli-overview-meter { display: flex; flex-direction: column; gap: 3px; }
-.cli-overview-meter > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.cli-overview-meter > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: var(--text-md); }
 .cli-overview-meter > div:first-child span:last-child { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-.cli-overview-meter small { color: var(--text-muted); font-size: 11px; }
+.cli-overview-meter small { color: var(--text-muted); font-size: var(--text-sm); }
 .cli-overview-bar { height: 6px; overflow: hidden; background: var(--bg-hover); border-radius: 3px; }
 .cli-overview-bar > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
-.cli-overview-bar.high > span { background: var(--warning, #f0a35e); }
+.cli-overview-bar.high > span { background: var(--warning); }
 
 /* Prompt chart: one horizontal time axis, drafts on a strip above it. The
    card treatment follows `.todo-card` (solid surface plus a static shadow
@@ -3677,7 +4252,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chart-section { min-height: 0; }
 /* The chart's own tab (`agents/PromptChartTab`): the section fills the pane and
    scrolls as one, with the side panel's 6px gutter widened to a tab's. */
-.prompt-chart-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
+.prompt-chart-tab { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding: var(--space-2) var(--space-3); }
 .prompt-chart-tab .settings-section-title { margin-top: 0; padding-top: 0; border-top: none; display: flex; align-items: center; gap: 8px; }
 .agent-prompt-chart-toolbar,
 .agent-prompt-chart-facets,
@@ -3693,11 +4268,11 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chart-timeline-bar { display: flex; flex-direction: column; gap: 5px; padding: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: color-mix(in srgb, var(--bg-panel) 92%, transparent); }
 .agent-prompt-chart-timeline-bar > header .agent-composer-chip { margin-left: auto; }
 .agent-prompt-drafts-strip > .agent-prompt-chart-filter { padding: 6px 3px 0; }
-.agent-prompt-chart-range { font-size: 11px; margin-left: 4px; }
-.agent-prompt-link-kind > span { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-chart-range { font-size: var(--text-sm); margin-left: 4px; }
+.agent-prompt-link-kind > span { color: var(--text-muted); font-size: var(--text-sm); }
 /* The toolbar's "New agent tab" picks: two compact dropdowns beside their label. */
 .agent-prompt-new-tab .dropdown { min-width: 92px; }
-.agent-prompt-new { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
+.agent-prompt-new { display: grid; gap: 6px; padding: var(--space-2); border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
 .agent-prompt-new textarea,
 .agent-prompt-new input { width: 100%; box-sizing: border-box; }
 .agent-prompt-chart { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 360px; }
@@ -3712,14 +4287,14 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-chart-timeline-bar > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 2px 3px 6px; border-bottom: 1px solid var(--border-color); }
 .agent-prompt-drafts-strip > header span,
 .agent-prompt-chart-timeline-bar > header span,
-.agent-prompt-drafts-strip > header small { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-drafts-strip > header small { color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompt-drafts-strip > header small { margin-left: auto; }
-.agent-prompt-drafts-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding-top: 8px; min-height: 40px; }
+.agent-prompt-drafts-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding-top: var(--space-2); min-height: 40px; }
 .agent-prompt-drafts-row > .agent-prompt-card { width: 168px; }
 /* Editing needs the Markdown toolbar's width, not a strip card's. */
 .agent-prompt-drafts-row > .agent-prompt-card.is-editing { width: min(460px, 100%); }
-.agent-prompt-draft-layout-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 3px 4px; }
-.agent-prompt-draft-layout-bar small, .agent-prompt-completion-hint { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-draft-layout-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: var(--space-2) 3px var(--space-1); }
+.agent-prompt-draft-layout-bar small, .agent-prompt-completion-hint { color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompt-completion-hint { display: block; padding: 0 3px 6px; }
 .agent-prompt-draft-viewport { overflow: auto; max-height: 55vh; min-height: 220px; }
 .agent-prompt-draft-canvas { position: relative; min-width: 100%; background-image: radial-gradient(var(--border-color) 1px, transparent 1px); background-size: 16px 16px; }
@@ -3735,7 +4310,7 @@ html:not(.show-untested-tags) .untested-tag {
    460px inside the body (TIMELINE_EDIT_WIDTH). */
 .agent-prompt-timeline-item.is-edit-flip > .agent-prompt-card.is-editing { margin-left: var(--edit-shift, 0px); }
 /* The composer a double click on an empty spot opens, where it was opened. */
-.agent-prompt-draft-composer { display: flex; flex-direction: column; gap: 6px; width: min(460px, 100%); padding: 8px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--bg-panel); color: var(--text-primary); }
+.agent-prompt-draft-composer { display: flex; flex-direction: column; gap: 6px; width: min(460px, 100%); padding: var(--space-2); border: 1px solid var(--accent); border-radius: var(--radius); background: var(--bg-panel); color: var(--text-primary); }
 .agent-prompt-draft-position.agent-prompt-draft-composer { width: 460px; z-index: 5; }
 
 /* The axis and the lanes. `overflow: clip`, not `hidden`: a hidden box is a
@@ -3745,7 +4320,7 @@ html:not(.show-untested-tags) .untested-tag {
 /* Sticky, and above every card layer: scrolling the tab keeps the clock and
    the NOW label in view over the lanes. */
 .agent-prompt-timeline-axis { position: sticky; top: 0; z-index: 7; height: 18px; border-bottom: 1px solid var(--border-color); background: var(--bg-panel); overflow: clip; }
-.agent-prompt-timeline-tick { position: absolute; top: 2px; padding-left: 3px; border-left: 1px solid var(--border-color); color: var(--text-muted); font-size: 9px; line-height: 14px; white-space: nowrap; }
+.agent-prompt-timeline-tick { position: absolute; top: 2px; padding-left: 3px; border-left: 1px solid var(--border-color); color: var(--text-muted); font-size: var(--text-sm); line-height: 14px; white-space: nowrap; }
 .agent-prompt-timeline-tick.is-major { color: var(--text-secondary); border-left-color: var(--text-muted); }
 /* The body is sized for its lanes and its queue; whatever outgrows that (an
    expanded card) scrolls within it rather than being clipped away. */
@@ -3777,37 +4352,37 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-timeline-now::before { content: ""; position: absolute; top: -1px; left: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
 .agent-prompt-timeline-now-band { position: absolute; top: 0; bottom: 0; z-index: 2; border-radius: var(--radius-sm); }
 .agent-prompt-timeline-now-band.is-drop-over { background: color-mix(in srgb, var(--danger) 18%, transparent); outline: 1px dashed var(--danger); }
-.agent-prompt-timeline-now-label { position: absolute; top: 2px; z-index: 1; transform: translateX(-50%); padding: 0 3px; background: var(--bg-panel); color: var(--danger); font-size: 9px; line-height: 14px; text-transform: uppercase; }
+.agent-prompt-timeline-now-label { position: absolute; top: 2px; z-index: 1; transform: translateX(-50%); padding: 0 3px; background: var(--bg-panel); color: var(--danger); font-size: var(--text-sm); line-height: 14px; text-transform: uppercase; }
 .agent-prompt-timeline-now-label.is-outside { opacity: .5; }
 /* An agent's own rate-limit rollover: a dashed line under the cards (it marks
    time, like the grid) and a coloured label in the axis carrying the tooltip.
    Session (5 h) and weekly windows differ by colour. */
 .agent-prompt-timeline-reset { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--reset-color); opacity: .8; pointer-events: none; }
-.agent-prompt-timeline-reset-label { position: absolute; top: 2px; padding: 0 3px; border-left: 1px dashed var(--reset-color); background: var(--bg-panel); color: var(--reset-color); font-size: 9px; line-height: 14px; white-space: nowrap; }
+.agent-prompt-timeline-reset-label { position: absolute; top: 2px; padding: 0 3px; border-left: 1px dashed var(--reset-color); background: var(--bg-panel); color: var(--reset-color); font-size: var(--text-sm); line-height: 14px; white-space: nowrap; }
 .agent-prompt-timeline-reset.is-session,
 .agent-prompt-timeline-reset-label.is-session { --reset-color: var(--warning); }
 .agent-prompt-timeline-reset.is-week,
 .agent-prompt-timeline-reset-label.is-week { --reset-color: var(--accent); }
 .agent-prompt-timeline-queue { position: absolute; top: 8px; z-index: 4; display: flex; flex-direction: column; gap: 5px; }
-.agent-prompt-timeline-queue > small { color: var(--warning); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
+.agent-prompt-timeline-queue > small { color: var(--warning); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: .04em; }
 /* Month view: one column per day, the cards as lamps; the whole day is the
    way into it. */
-.agent-prompt-timeline-day { position: absolute; top: 4px; bottom: 4px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 3px; padding: 4px 2px; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
+.agent-prompt-timeline-day { position: absolute; top: 4px; bottom: 4px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 3px; padding: var(--space-1) 2px; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
 .agent-prompt-timeline-day:hover { background: var(--pill-hover-bg); }
 .agent-prompt-timeline-day.is-empty { opacity: .6; }
-.agent-prompt-timeline-day > small { width: 100%; color: var(--text-muted); font-size: 9px; text-align: left; }
+.agent-prompt-timeline-day > small { width: 100%; color: var(--text-muted); font-size: var(--text-sm); text-align: left; }
 /* The drag decorations, all drawn from the hook's state. */
 .agent-prompt-timeline-indicator { position: absolute; top: 0; bottom: 0; z-index: 5; border-left: 2px dashed var(--accent); pointer-events: none; }
-.agent-prompt-timeline-badge { position: absolute; top: 4px; left: 4px; z-index: 6; padding: 1px 6px; border-radius: var(--radius-full); background: var(--accent); color: var(--bg-panel); font-size: 10px; font-weight: 600; white-space: nowrap; pointer-events: none; }
+.agent-prompt-timeline-badge { position: absolute; top: 4px; left: 4px; z-index: 6; padding: 1px 6px; border-radius: var(--radius-full); background: var(--accent); color: var(--bg-panel); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; pointer-events: none; }
 .agent-prompt-timeline-badge.is-blocked { background: var(--danger); text-decoration: line-through; }
-.agent-prompt-timeline-ghost { position: fixed; top: 0; left: 0; z-index: 40; display: flex; flex-direction: column; gap: 4px; padding: 7px 8px 7px 10px; border: 1px solid var(--accent); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--control-bg); color: var(--text-primary); opacity: .92; pointer-events: none; }
-.agent-prompt-timeline-ghost::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: 0 6px 18px rgb(0 0 0 / .28); pointer-events: none; }
+.agent-prompt-timeline-ghost { position: fixed; top: 0; left: 0; z-index: 40; display: flex; flex-direction: column; gap: 4px; padding: 7px var(--space-2) 7px 10px; border: 1px solid var(--accent); border-left: 3px solid var(--accent); border-radius: var(--radius); background: var(--control-bg); color: var(--text-primary); opacity: .92; pointer-events: none; }
+.agent-prompt-timeline-ghost::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: var(--shadow-2); pointer-events: none; }
 .agent-prompt-timeline-ghost > .agent-prompt-timeline-badge { position: static; align-self: flex-start; }
 /* The selection: a rubber band over the lanes, and a ring on each selected card. */
 .agent-prompt-timeline-marquee { position: fixed; z-index: 40; border: 1px dashed var(--accent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 12%, transparent); pointer-events: none; }
 .agent-prompt-card.is-multi-selected { outline: 2px solid var(--accent); outline-offset: 1px; }
-.agent-prompt-chart-selection { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; }
-.agent-prompt-chart-select-hint { color: var(--text-muted); font-size: 10px; }
+.agent-prompt-chart-selection { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: var(--text-sm); }
+.agent-prompt-chart-select-hint { color: var(--text-muted); font-size: var(--text-sm); }
 /* The chart's error line and its Dismiss: `.mail-error-strip`'s row layout. */
 .agent-prompt-chart-error { display: flex; align-items: center; gap: 10px; }
 .agent-prompt-chart-error > span { flex: 1; word-break: break-word; }
@@ -3819,7 +4394,7 @@ html:not(.show-untested-tags) .untested-tag {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  padding: 9px 8px 10px 10px;
+  padding: 9px var(--space-2) 10px 10px;
   border: 1px solid var(--border-color);
   border-left: 3px solid var(--prompt-strand, var(--accent));
   border-radius: var(--radius);
@@ -3828,12 +4403,12 @@ html:not(.show-untested-tags) .untested-tag {
   cursor: var(--cur-pointer, pointer);
   transition: opacity var(--transition), border-color var(--transition);
 }
-.agent-prompt-card::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: 0 3px 10px rgb(0 0 0 / .18); opacity: 0; transition: opacity var(--transition); pointer-events: none; }
+.agent-prompt-card::after { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; box-shadow: var(--shadow-1); opacity: 0; transition: opacity var(--transition); pointer-events: none; }
 .agent-prompt-card:hover::after,
 .agent-prompt-card.is-selected::after { opacity: 1; }
 .agent-prompt-card.is-selected { border-color: var(--accent); }
 /* A card reached with Tab: `.pill-status-bar`'s focus ring. */
-.agent-prompt-card:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.agent-prompt-card:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: 2px; }
 .agent-prompt-card.is-dimmed { opacity: .28; }
 .agent-prompt-card.is-dragging { opacity: .35; }
 .agent-prompt-card.is-chained { border-style: dashed; }
@@ -3863,7 +4438,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-session-list > li { display: flex; flex-direction: column; gap: 3px; padding-top: 5px; border-top: 1px solid var(--border-color); }
 .agent-prompt-session-list > li:first-child { padding-top: 0; border-top: none; }
 .agent-prompt-session-list > li.is-dimmed { opacity: .4; }
-.agent-prompt-session-row-head { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 9px; }
+.agent-prompt-session-row-head { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompt-session-row-head .agent-prompt-lamp { margin-top: 0; }
 .agent-prompt-card.is-occurrence { opacity: .7; border-style: dotted; cursor: var(--cur-default, default); }
 .agent-prompt-card.is-link-target { outline: 1px dashed var(--accent); outline-offset: 2px; }
@@ -3876,7 +4451,7 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-card-port.is-out:hover { background: var(--accent); }
 .agent-prompt-card-head { display: grid; grid-template-columns: minmax(0, 1fr) 7px; align-items: start; gap: 5px; }
 .agent-prompt-card-head.has-delete { grid-template-columns: minmax(0, 1fr) auto 7px; }
-.agent-prompt-card-delete { width: 14px; height: 14px; margin: 0; padding: 0; border: none; border-radius: 3px; background: transparent; color: var(--text-muted); font-size: 12px; line-height: 14px; opacity: .55; }
+.agent-prompt-card-delete { width: 14px; height: 14px; margin: 0; padding: 0; border: none; border-radius: 3px; background: transparent; color: var(--text-muted); font-size: var(--text-md); line-height: 14px; opacity: .55; }
 .agent-prompt-card:hover .agent-prompt-card-delete { opacity: 1; }
 .agent-prompt-card-delete:hover { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 .agent-prompt-lamp { width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--text-muted); }
@@ -3885,26 +4460,26 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-lamp.is-missed { background: var(--danger); }
 .agent-prompt-lamp.is-scheduled { background: var(--accent); }
 .agent-prompt-lamp.is-queued { background: var(--warning); }
-.agent-prompt-card-message { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; font-weight: 600; }
-.agent-prompt-card-agent { display: flex; align-items: center; min-height: 16px; color: var(--text-muted); font-size: 10px; }
+.agent-prompt-card-message { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); font-weight: 600; }
+.agent-prompt-card-agent { display: flex; align-items: center; min-height: 16px; color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompt-card-agent .dropdown { min-width: 0; max-width: 100%; }
-.agent-prompt-card-agent .dropdown-trigger { padding: 0 4px; height: 16px; font-size: 10px; }
+.agent-prompt-card-agent .dropdown-trigger { padding: 0 var(--space-1); height: 16px; font-size: var(--text-sm); }
 .agent-prompt-card-tags { display: flex; flex-wrap: wrap; gap: 3px; }
-.agent-prompt-tag { padding: 0 4px; border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); font-size: 8px; }
+.agent-prompt-tag { padding: 0 var(--space-1); border-radius: var(--radius-full); background: var(--accent-soft); color: var(--accent); font-size: 8px; }
 .agent-prompt-tag.is-auto,
 .agent-prompts-tag.is-auto { border: 1px solid currentColor; background: transparent; }
-.agent-prompt-card-fact { color: var(--text-muted); font-size: 9px; }
+.agent-prompt-card-fact { color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompt-card-expanded { display: flex; flex-direction: column; gap: 6px; padding-top: 5px; border-top: 1px solid var(--border-color); cursor: var(--cur-default, default); }
 .agent-prompt-card-expanded textarea,
 .agent-prompt-card-expanded input,
 .agent-prompt-card-expanded select { width: 100%; box-sizing: border-box; }
-.agent-prompt-card-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.agent-prompt-card-full { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .agent-prompt-card-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .agent-prompt-session,
-.agent-prompt-link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 10px; overflow-wrap: anywhere; }
+.agent-prompt-link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; color: var(--text-secondary); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .agent-prompt-link-row > span { flex: 1 1 120px; min-width: 0; }
 .agent-prompt-link-row em { color: var(--accent); font-style: normal; }
-.agent-prompt-files { margin: 0; padding-left: 16px; color: var(--text-muted); font-size: 9px; }
+.agent-prompt-files { margin: 0; padding-left: var(--space-4); color: var(--text-muted); font-size: var(--text-sm); }
 .agent-prompt-links { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .agent-prompt-links path { fill: none; stroke: var(--text-muted); stroke-width: 1; opacity: .45; }
 .agent-prompt-links path.is-selected { stroke: var(--accent); stroke-width: 2; opacity: 1; }
@@ -3916,9 +4491,9 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-link-handle circle { fill: var(--bg-panel); stroke: var(--text-muted); stroke-width: 1; }
 .agent-prompt-link-handle:hover circle,
 .agent-prompt-link-handle.has-commands circle { stroke: var(--accent); stroke-width: 1.5; }
-.agent-prompt-link-handle text { fill: var(--accent); font-size: 9px; paint-order: stroke; stroke: var(--bg-panel); stroke-width: 3px; }
+.agent-prompt-link-handle text { fill: var(--accent); font-size: var(--text-sm); paint-order: stroke; stroke: var(--bg-panel); stroke-width: 3px; }
 .agent-prompt-link-editor { display: flex; flex-direction: column; gap: 4px; max-width: 280px; color: var(--text-primary); }
-.agent-prompt-link-editor-ends { margin: 0; padding: 0 9px; font-size: 11px; overflow-wrap: anywhere; }
+.agent-prompt-link-editor-ends { margin: 0; padding: 0 9px; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .agent-prompt-link-editor-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 9px; }
 
 .agent-prompts-tab { flex-direction: row; }
@@ -3933,12 +4508,12 @@ html:not(.show-untested-tags) .untested-tag {
   box-sizing: border-box;
   resize: vertical;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 .agent-composer-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.agent-composer-chips-label { font-size: 10px; color: var(--text-muted); margin-right: 2px; }
+.agent-composer-chips-label { font-size: var(--text-sm); color: var(--text-muted); margin-right: 2px; }
 .agent-composer-chip {
-  font-size: 10px;
+  font-size: var(--text-sm);
   padding: 1px 7px;
   height: 18px;
   background: transparent;
@@ -3949,10 +4524,10 @@ html:not(.show-untested-tags) .untested-tag {
 }
 .agent-composer-chip:hover { background-color: var(--pill-hover-bg); }
 .agent-composer-chip.active { color: var(--accent); border-color: var(--accent); }
-.agent-composer-model { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.agent-composer-model { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
 .agent-composer-model > span { color: var(--text-muted); }
 .agent-composer-model .dropdown { flex: 1; min-width: 0; }
-.agent-composer-preview { color: var(--text-muted); font-size: 10px; overflow-wrap: anywhere; }
+.agent-composer-preview { color: var(--text-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 
 /* Tags: the same chip the composer's prefix commands wear, so a row reads as
    one vocabulary — text, then what it is for. The count on a library chip is
@@ -3969,12 +4544,12 @@ html:not(.show-untested-tags) .untested-tag {
   min-width: 0;
   font: inherit;
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--text-md);
   color: inherit;
-  background: var(--bg-main, rgba(0, 0, 0, 0.25));
+  background: var(--bg-main);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   margin: 0;
   outline: none;
 }
@@ -4000,7 +4575,7 @@ html:not(.show-untested-tags) .untested-tag {
   box-sizing: border-box;
   resize: vertical;
   font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.45;
   tab-size: 2;
 }
@@ -4009,13 +4584,13 @@ html:not(.show-untested-tags) .untested-tag {
 .md-prompt .md-prompt-preview {
   max-height: 320px;
   overflow: auto;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-main, transparent);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
-.md-prompt .md-prompt-preview.file-tree-empty { padding: 8px; }
+.md-prompt .md-prompt-preview.file-tree-empty { padding: var(--space-2); }
 
 /* Phone mark (components/mobile/PhoneHereMark): a paired phone is in this
    project or holds this tab. Faded while its screen is away. */
@@ -4027,4 +4602,61 @@ html:not(.show-untested-tags) .untested-tag {
 }
 .phone-here-mark.is-away {
   opacity: 0.45;
+}
+
+/* The strip while the project list loads: three pill-sized blocks in a row. */
+.project-pills-skeleton {
+  flex-direction: row;
+  align-items: center;
+  height: 100%;
+  padding: 0 var(--space-2);
+}
+
+.project-pills-skeleton > .skeleton-row {
+  width: 84px;
+}
+
+/* The logo dropdown's "N hidden" entry (BarHiddenList): unfolds, in place,
+   the projects kept off the All projects row — a name opens one, the eye
+   shows it (or a hidden box's members) on the row again. */
+.box-chip-menu button.bar-hidden-toggle {
+  color: var(--text-secondary);
+}
+.box-chip-menu button.bar-hidden-toggle:hover,
+.box-chip-menu button.bar-hidden-toggle[aria-expanded="true"] {
+  color: var(--text-primary);
+}
+.bar-hidden-caret {
+  width: 10px;
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+}
+.bar-hidden-list {
+  display: flex;
+  flex-direction: column;
+  padding-left: 16px;
+}
+.bar-hidden-group {
+  display: flex;
+  flex-direction: column;
+}
+.bar-hidden-row {
+  display: flex;
+  align-items: stretch;
+}
+.bar-hidden-row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.bar-hidden-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.box-chip-menu button.bar-hidden-show {
+  flex: 0 0 auto;
+  width: 22px;
+  justify-content: center;
+  padding: 5px 0;
+  color: var(--accent);
 }

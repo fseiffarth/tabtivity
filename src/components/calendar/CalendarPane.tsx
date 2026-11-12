@@ -49,6 +49,7 @@ import type { CalDavAccount } from "../../types/caldav";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
 import { BRAND } from "../../lib/brand";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon } from "../common/icons/Icon";
 
 interface Props {
   /** Whether this pane's tab is the visible one in its group. */
@@ -674,11 +675,11 @@ export function CalendarPane({ visible }: Props) {
     >
       <div className="cal-toolbar">
         <div className="cal-toolbar-nav">
-          <button className="cal-nav-btn" onClick={() => shift(-1)} title={t("calendarPane.previousTitle")}>‹</button>
+          <button className="cal-nav-btn" onClick={() => shift(-1)} title={t("calendarPane.previousTitle")}><ChevronLeftIcon /></button>
           <button className="cal-btn" onClick={() => setAnchor(todayStr())} title={t("calendarPane.todayTitle")}>
             {t("calendar.today")}
           </button>
-          <button className="cal-nav-btn" onClick={() => shift(1)} title={t("calendarPane.nextTitle")}>›</button>
+          <button className="cal-nav-btn" onClick={() => shift(1)} title={t("calendarPane.nextTitle")}><ChevronRightIcon /></button>
         </div>
 
         <div className="cal-toolbar-title">{title}</div>
@@ -739,7 +740,7 @@ export function CalendarPane({ visible }: Props) {
             onClick={() => setUndoDelete(null)}
             title={t("calendarPane.dismissNoticeTitle")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       ) : null}

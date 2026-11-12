@@ -12,18 +12,7 @@
 import type { MouseEvent, ReactNode } from "react";
 import { useT } from "../../../lib/i18n";
 import { useUse24h } from "../../../lib/timeFormat";
-import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  LaserIcon,
-  NextScreenIcon,
-  PauseIcon,
-  PlayIcon,
-  SkipBackIcon,
-  SkipForwardIcon,
-  TimerIcon,
-  WindowIcon,
-} from "../../common/icons/Icon";
+import { ArrowLeftIcon, ArrowRightIcon, CloseIcon, LaserIcon, NextScreenIcon, PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon, TimerIcon, WindowIcon } from "../../common/icons/Icon";
 import { UntestedTag } from "../../common/UntestedTag";
 import { type TalkClock, clockElapsed, clockTone, formatClock } from "../../../lib/viewers/pdfPresent";
 
@@ -218,7 +207,7 @@ export function PdfPresentBar(p: PdfPresentBarProps) {
           H
         </BarButton>
         <BarButton title={t("pdfPresent.closeTitle")} onClick={p.onClose}>
-          ✕
+          <CloseIcon />
         </BarButton>
       </div>
     </div>

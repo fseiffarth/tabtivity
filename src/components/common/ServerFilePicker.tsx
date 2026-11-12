@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useT } from "../../lib/i18n";
 import { fmtSize } from "../../lib/viewers/fileUtils";
-import { ArrowUpIcon, FolderIcon } from "./icons/Icon";
+import { ArrowUpIcon, CloseIcon, FolderIcon } from "./icons/Icon";
 import { FileIcon } from "./icons/FileIcon";
 import { UntestedTag } from "./UntestedTag";
 
@@ -125,7 +125,7 @@ export function ServerFilePicker({ mode, title, directory = false, multiple = fa
       >
         <div className="settings-title-row">
           <h2>{dialogTitle} <UntestedTag id="filePicker.title" /></h2>
-          <button type="button" className="dialog-close-btn" onClick={onCancel}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onCancel}><CloseIcon /></button>
         </div>
         <p className="settings-help">{t("filePicker.serverNote")}</p>
 

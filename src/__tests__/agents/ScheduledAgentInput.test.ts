@@ -43,6 +43,32 @@ describe("scheduled agent input", () => {
     ]);
   });
 
+  it("holds a long prompt's Enter back until Claude has drawn the last piece", async () => {
+    // At the 24 ms write gap a two-piece prompt's Enter reached Claude Code
+    // 2.1.317 in the same read as the last piece: the words stayed in the
+    // composer and the chat said "Sending…" for good.
+    vi.useFakeTimers();
+    try {
+      registerScheduledAgentInput("target", {
+        ptyId: "project:agent",
+        ready: () => true,
+        bracketedPaste: () => false,
+        agent: "claude",
+        recordAuthorizedInput: vi.fn(),
+      });
+      const sent = submitScheduledAgentMessage("target", "word ".repeat(80));
+      await vi.advanceTimersByTimeAsync(100);
+      const typed = writeMock.mock.calls.map(([, bytes]) => decode(bytes));
+      expect(typed).toHaveLength(3);
+      expect(typed).not.toContain("\r");
+      await vi.advanceTimersByTimeAsync(200);
+      await sent;
+      expect(decode(writeMock.mock.calls[writeMock.mock.calls.length - 1][1])).toBe("\r");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes a dialog the CLI has up over its composer before typing", async () => {
     // OpenCode's dialogs take typed words instead of the agent: a "yes" from
     // the Reader landed in a model picker left up, and its Ctrl+A opened
@@ -223,5 +249,19 @@ describe("scheduled agent input", () => {
     expect(scheduledAgentInput("target")?.ready()).toBe(true);
     await expect(submitScheduledAgentMessage("target", "hello")).resolves.toBe("project:agent");
     expect(writeMock).toHaveBeenCalled();
+  });
+
+  it("types a chat's Codex prompt with Tab while it may be working, so it can be taken back", async () => {
+    registerScheduledAgentInput("codex-target", {
+      ptyId: "pty-1",
+      ready: () => false,
+      started: () => true,
+      bracketedPaste: () => true,
+      agent: "codex --no-daemon",
+      recordAuthorizedInput: vi.fn(),
+    });
+    await submitScheduledAgentMessage("codex-target", "hello", { whileBusy: true });
+    const typed = writeMock.mock.calls.map(([, bytes]) => new TextDecoder().decode(bytes as Uint8Array));
+    expect(typed.slice(-2)).toEqual(["\t", "\r"]);
   });
 });

@@ -4,6 +4,7 @@ import { datePart, formatLongDate, formatTime, timePart, toStamp } from "../../l
 import { calendarColor } from "../../stores/calendar/calendar";
 import { useI18nStore, useT, type TranslationKey } from "../../lib/i18n";
 import { useArrivedMarks } from "../../stores/calendar/arrivals";
+import { DotIcon } from "../common/icons/Icon";
 
 interface Props {
   tasks: CalendarTask[];
@@ -206,7 +207,7 @@ export function TasksView({
                   className="cal-task-swatch"
                   style={{ color: calendarColor(calendars, task.calendar_id) }}
                 >
-                  ●
+                  <DotIcon />
                 </span>
 
                 <span className="cal-task-title">{task.title}</span>

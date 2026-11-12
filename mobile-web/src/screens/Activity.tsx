@@ -10,8 +10,10 @@ import { classifyUnavailable, describeUnavailable, type UnavailableReason } from
 import { readChoice, writeChoice } from "../prefs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { ListSkeleton } from "../components/ListSkeleton";
 import { ageLabel } from "../terminal/fileLabels";
 import { useVisiblePoll } from "../visiblePoll";
+import { listScrollKey, useRestoreListScroll } from "../listScroll";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -68,6 +70,9 @@ export function Activity({ open, onConnection }: {
   const [tabs, setTabs] = useState<ActivityTab[]>([]);
   /** Until the first answer, an empty list is "still loading", not "nothing". */
   const [loaded, setLoaded] = useState(false);
+  /** Back from a tab opened here lands where the list stood: `App` keeps the
+   * offset under Home's key, and only these rows make the page tall enough. */
+  useRestoreListScroll(listScrollKey(null), loaded);
   const [desktop, setDesktop] = useState(true);
   const [aiOff, setAiOff] = useState(false);
   const [offline, setOffline] = useState<UnavailableReason | null>(null);
@@ -88,6 +93,7 @@ export function Activity({ open, onConnection }: {
   }, [tabs]);
   const sorted = useMemo(() => sortAgentTabs(tabs, sort, (tab) => ({
     decision: tab.agent_status === "question",
+    ready: tab.agent_status === "done",
     working: tab.agent_status === "working",
     drafted: tab.id in drafts,
     workingAt: tab.working_at,
@@ -120,7 +126,7 @@ export function Activity({ open, onConnection }: {
       <span>{describeUnavailable(offline).hint}</span>
       <span>{tabs.length ? t("mobile.home.showingLast") : t("mobile.activity.neverCached")}</span>
     </p>}
-    {!loaded && !offline && <p className="projects-empty" role="status">{t("mobile.activity.loading")}</p>}
+    {!loaded && !offline && <ListSkeleton label={t("mobile.activity.loading")} />}
     {loaded && !desktop && <p className="notice">{t("mobile.activity.desktopUnavailable")}</p>}
     {loaded && aiOff && <p className="notice" role="status">{t("mobile.aiOff")}{isUntested("mobile.aiOff") && <em> · {t("mobile.focus.untested")}</em>}</p>}
     {loaded && desktop && tabs.length === 0 && <p className="projects-empty">{t("mobile.activity.empty")}</p>}
@@ -136,7 +142,7 @@ export function Activity({ open, onConnection }: {
       // worked 3m ago" says everything about that except the thing it was
       // asked. Two lines at most, then ellipsized — the card stays a card.
       // An unsent draft is what the reader was about to say there, so it
-      // takes the line — with no time, having gone nowhere yet.
+      // takes the line — marked "Not sent", having gone nowhere yet.
       const asked = drafts[tab.id] ? { text: drafts[tab.id] } : lastPrompt(tab);
       return <button
         // The tab's colour (#264) carries onto this list too, and this is the
@@ -144,11 +150,12 @@ export function Activity({ open, onConnection }: {
         // sessions is the case the colour is assigned for.
         className={`card activity-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}`}
         key={tab.id}
+        data-steer-row={tab.id}
         disabled={!tab.available}
         style={tabColorCss(tab.color) ? { ["--tab-color" as string]: tabColorCss(tab.color) } : undefined}
         onClick={() => open(tab.project_id, tab)}
       >
-        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? ` · ${t("mobile.activity.openElsewhere")}` : tab.available ? "" : ` · ${t("mobile.activity.gone")}`}</small>{asked && <small className="activity-prompt" title={asked.text}>{asked.text}{drafts[tab.id] && isUntested("mobile.project.draftLine") && <em> · {t("mobile.focus.untested")}</em>}</small>}</span>
+        <span><strong>{tab.label}</strong><small>{tab.project_label}{tab.agent_model ? ` · ${tab.agent_model}` : ""}{when ? ` · ${when}` : ""}{tab.viewer_busy ? ` · ${t("mobile.activity.openElsewhere")}` : tab.available ? "" : ` · ${t("mobile.activity.gone")}`}</small>{asked && <small className={drafts[tab.id] ? "activity-prompt draft" : "activity-prompt"} title={asked.text}>{drafts[tab.id] && <span className="activity-draft-mark">{t("mobile.project.draftMark")}</span>}{asked.text}{drafts[tab.id] && isUntested("mobile.project.draftLine") && <em> · {t("mobile.focus.untested")}</em>}</small>}</span>
         <span className="card-trailing"><AgentModeMarks tab={tab} /><SubagentCount tab={tab} /><TurnDuration tab={tab} finished={false} />{tab.agent_status && <AgentStatusPill status={tab.agent_status} />}<span>›</span></span>
       </button>;
     })}</section>

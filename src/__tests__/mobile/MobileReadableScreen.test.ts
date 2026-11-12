@@ -441,6 +441,58 @@ describe(`${BRAND.display} Mobile side panel`, () => {
     ]);
   });
 
+  it("cuts the 2.1.318 diff panel, whose divider stops above the full-width input box", () => {
+    // Captured off Claude Code 2.1.318 (172 columns, narrowed): the `│` runs
+    // from the top row down to the row above the box's top edge; the box, the
+    // footer and the panel's headline row are what was left glued before.
+    const pane = (left: string, right = "") => `${left.padEnd(30)}│${right.padEnd(20)}`;
+    const rows = [
+      pane("", "                   ✕"),
+      pane("● Ran the tests."),
+      pane(""),
+      pane("  Ran 1 shell command"),
+      pane("", "  No changes this"),
+      pane(""),
+      pane("✻ Brewed for 12s"),
+      pane(""),
+      pane("", "+4 files edited"),
+      "─".repeat(51),
+      "❯ ",
+      "─".repeat(51),
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines).toEqual(["● Ran the tests.", "", "  Ran 1 shell command", "", "✻ Brewed for 12s", "", "❯", "  ⏵⏵ auto mode on (shift+tab to cycle)"]);
+  });
+
+  it("cuts the 2.1.318 diff panel above a dialog drawn across the whole screen", () => {
+    const pane = (left: string, right = "") => `${left.padEnd(30)}│${right.padEnd(20)}`;
+    const rows = [
+      ...Array.from({ length: 8 }, (_, index) => pane(`     ${index + 1}`, index === 4 ? "  No changes this" : "")),
+      pane("✻ Sautéed for 6s"),
+      "▔".repeat(51),
+      "   Select login method:   (a row that runs past the divider column)",
+      "   ❯ 1. Claude account with subscription",
+      "   Esc to cancel",
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines.join("\n")).not.toMatch(/No changes|│/u);
+    expect(lines.slice(-3)).toEqual(["   Select login method:   (a row that runs past the divider column)", "   ❯ 1. Claude account with subscription", "   Esc to cancel"]);
+  });
+
+  it("leaves a table's columns whole above the input box: its bottom is a junction, not the box's rule", () => {
+    const rows = [
+      "┌──────────────────────────┬──────────┐",
+      ...Array.from({ length: 8 }, (_, index) => `│ row ${index}                    │ value    │`),
+      "└──────────────────────────┴──────────┘",
+      "─".repeat(60),
+      "❯ ",
+      "─".repeat(60),
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines[0]).toBe("row 0                    │ value");
+  });
+
   it("leaves a table's columns whole: they never run through every row", () => {
     const rows = [
       "┌──────────────────────────┬──────────┐",

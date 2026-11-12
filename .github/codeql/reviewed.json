@@ -16,22 +16,6 @@
     "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated chat uid when the uuid-shape assertion fails; a uid is not a credential."
   },
   {
-    "path": "src-tauri/src/commands/projects/tests.rs",
-    "line": 46,
-    "source": "assert!(crate::services::agent_session::is_uuid_shaped(&a), \"{a}\");",
-    "rule": "rust/cleartext-logging",
-    "sha256": "2c9f8fd6ea4bcb36207b201d8b43325e8b746f546dfcf2616c5b50e8058b2769",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its shape assertion fails."
-  },
-  {
-    "path": "src-tauri/src/commands/projects/tests.rs",
-    "line": 48,
-    "source": "assert!(matches!(&a[19..20], \"8\" | \"9\" | \"a\" | \"b\"), \"{a}\");",
-    "rule": "rust/cleartext-logging",
-    "sha256": "2c9f8fd6ea4bcb36207b201d8b43325e8b746f546dfcf2616c5b50e8058b2769",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints a freshly generated uuid when its shape assertion fails."
-  },
-  {
     "path": "src-tauri/src/services/agent/agent_tasks.rs",
     "line": 63,
     "source": "if !path.exists() {",
@@ -134,14 +118,6 @@
     "rule": "rust/cleartext-logging",
     "sha256": "8254db5f8c3dee96f21af927c966ead40175d7a8d02e5b964f9fea5725e51a60",
     "reason": "#[cfg(all(test, unix))] helper: the mkfifo assertion prints the temp path of the FIFO it plants; no credential is involved."
-  },
-  {
-    "path": "src-tauri/src/services/launch_prep.rs",
-    "line": 2007,
-    "source": "assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), \"{uid:?}\");",
-    "rule": "rust/cleartext-logging",
-    "sha256": "5ef7dc43e78fbe5ffda50f1c5c7aed324fb677576dc1d098bb33bcc7034441fd",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the malformed fixture uid being refused."
   },
   {
     "path": "src-tauri/src/services/mail/mail_authres.rs",
@@ -297,34 +273,42 @@
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 951,
+    "line": 1053,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
+    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_open reads only the fixed settings.json leaf to check the assistant opt-in."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 990,
+    "line": 1092,
     "source": "let Some(settings) = fs::read(state_dir.join(\"settings.json\"))",
     "rule": "rust/path-injection",
-    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
+    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. assistant_devices reads only the fixed settings.json leaf for the assistant's per-phone list."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 1220,
+    "line": 1345,
     "source": "let projects: Vec<ProjectRecord> = match fs::read(state_dir.join(\"projects.json\")) {",
     "rule": "rust/path-injection",
-    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
+    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. launch_place reads only the fixed projects.json registry, never a project-folder file."
   },
   {
     "path": "src-tauri/src/services/mobile_control/discovery.rs",
-    "line": 1456,
+    "line": 1486,
+    "source": "fs::read(state_dir.join(\"settings.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input: shells_open is called with state.config.state_dir (host.rs) or the headless state_dir. It reads only the fixed settings.json leaf for the shells switch."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/discovery.rs",
+    "line": 1609,
     "source": "fs::read(&path)",
     "rule": "rust/path-injection",
-    "sha256": "270d81c047ad228f8b7a93b8196155d3f8513a0e631989902e3b92b6acd5e0d2",
+    "sha256": "07d40f159b833c07b2e2d69c4f8f2418c51db4923432d28064397409c7b7c000",
     "reason": "state_dir comes from HostConfig at startup, not from HTTP input. read_session reads <state_dir>/sessions/<key>/terminals.json, where project_key maps every character outside [A-Za-z0-9_-] to '_' (and empty to 'x'), so no id can climb out of sessions/."
   },
   {
@@ -512,14 +496,6 @@
     "reason": "load receives the startup-selected state directory (storage::state_dir) joined with the fixed root_mcp/proposals.json leaf; no agent- or phone-supplied part."
   },
   {
-    "path": "src-tauri/src/services/root_mcp/tests.rs",
-    "line": 1889,
-    "source": "let [change] = changes.as_slice() else { panic!(\"one row: {changes:?}\") };",
-    "rule": "rust/cleartext-logging",
-    "sha256": "f7eef0c5114b2a5b291396a07adb2e226b629614e02891bf50d070eff5af5109",
-    "reason": "Test-only code: a fixture literal or an assertion message inside #[cfg(test)], never compiled into a shipped build. Prints the calendar change rows of a fixture; the account names are fixture strings."
-  },
-  {
     "path": "src-tauri/src/services/terminal_service.rs",
     "line": 690,
     "source": "eprintln!(\"terminal_service: persisted tab '{}' set {keys} in its env — dropped\", tab.label);",
@@ -529,18 +505,18 @@
   },
   {
     "path": "src-tauri/src/services/tmux_local.rs",
-    "line": 819,
+    "line": 825,
     "source": "eprintln!(\"tmux_local: could not write launcher for '{session}': {e}\");",
     "rule": "rust/cleartext-logging",
-    "sha256": "5164286b51689bfab9025d03f7dd1f0aa15a11fd31a9595edf58d7d0384d0d49",
+    "sha256": "fa77f48d4fd548660ce28a1f0b578f1a505dbf197f7cfe241c390fc2950e75d2",
     "reason": "Logs the tmux session name and an io::Error from writing the launcher script. The session name is a tab-derived identifier, not a credential; the script (which may hold env values) is never logged."
   },
   {
     "path": "src-tauri/src/services/tmux_local.rs",
-    "line": 838,
+    "line": 844,
     "source": "args.insert(at + 1, \"-d\".into());",
     "rule": "rust/cleartext-logging",
-    "sha256": "5164286b51689bfab9025d03f7dd1f0aa15a11fd31a9595edf58d7d0384d0d49",
+    "sha256": "fa77f48d4fd548660ce28a1f0b578f1a505dbf197f7cfe241c390fc2950e75d2",
     "reason": "Vec::insert of the literal \"-d\" into the tmux argv; nothing here is logged. The argv carries injected API-key env to the spawned tmux client only, and no caller prints PtyOptions, its args or env."
   },
   {
@@ -558,5 +534,29 @@
     "rule": "js/bad-tag-filter",
     "sha256": "f820ff88cc5363395394e30b0ae1f133859f429769ee496ed05815550a5248e8",
     "reason": "Test-only: extracts the inline script from the app's own built index.html, which it wrote itself with a lowercase tag. Not a sanitizer and never runs on untrusted HTML."
+  },
+  {
+    "path": "src-tauri/src/services/mobile_control/diverged.rs",
+    "line": 39,
+    "source": "&& fs::read(state_dir.join(\"settings.json\"))",
+    "rule": "rust/path-injection",
+    "sha256": "9913cd7491da3f4fd3be7a53cdb0d997c66d3ea6ff1b96fc27d481542208ab13",
+    "reason": "state_dir comes from HostConfig at startup, not from HTTP input: all four sync_open callers pass state.config.state_dir. This reads only the fixed settings.json leaf for the project_sync switch."
+  },
+  {
+    "path": "src-tauri/src/storage.rs",
+    "line": 14,
+    "source": "let content = fs::read_to_string(path)?;",
+    "rule": "rust/path-injection",
+    "sha256": "6adb41ce04af406ae0a9808e9ced111fc611a2d567a41df40a72852dbad963b5",
+    "reason": "Generic sink: read_json opens the path its caller built. Every non-test caller was audited: a fixed file under the startup state dir; sessions/<project_key(id)>/ (project_key allows only [A-Za-z0-9_-]); an archive folder after validate_project_id; remote-projects/<id>/ through remote_project_dir_in, which keeps an id to one path component; a projects.json record's local_file; or a listing inside the state dir. CodeQL's flow source was not visible for this review, so a new caller needs its own check."
+  },
+  {
+    "path": "src/__tests__/terminal/ChatLinks.test.ts",
+    "line": 18,
+    "source": "const [link] = chatLinksOf([answer(\"[x](https://www.example.com/a/b?q=1#frag)\")]);",
+    "rule": "js/incomplete-hostname-regexp",
+    "sha256": "d8ff900540b43beba2f661572f63c28b2d8c8db629ebd3d9c60d76db7d9dd109",
+    "reason": "A test input: a Markdown link whose address is parsed by chatLinksOf as a URL. The string is never compiled into a regular expression; the www. in it is the case under test."
   }
 ]

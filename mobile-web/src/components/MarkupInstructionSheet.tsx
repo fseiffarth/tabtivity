@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import {
@@ -53,7 +54,7 @@ export function MarkupInstructionSheet({ onChange, onClose }: {
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
     <section className="option-sheet schedule-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.markup.instruction.title")} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
-      <header><button className="sheet-close" onClick={onClose} aria-label={t("mobile.newTab.close")}>✕</button><h2>{t("mobile.markup.instruction.title")} {isUntested("mobile.markup.instruction") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
+      <header><button className="sheet-close" onClick={onClose} aria-label={t("mobile.newTab.close")}><CloseIcon size="1em" /></button><h2>{t("mobile.markup.instruction.title")} {isUntested("mobile.markup.instruction") && <small>{t("mobile.newTab.untested")}</small>}</h2><span className="sheet-close" aria-hidden="true" /></header>
       <p className="sheet-note">{t("mobile.markup.instruction.note")}</p>
       <div className="mobile-schedule-form">
         <div className="mobile-schedule-weekdays"><label><input type="checkbox" checked={direct} onChange={(event) => toggleDirect(event.target.checked)} />

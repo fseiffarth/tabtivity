@@ -7,6 +7,7 @@ import { useI18nStore, useT, dateLocale } from "../../lib/i18n";
 import { usePoll } from "../../lib/usePoll";
 import { useTabsStore } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
+import { RefreshIcon } from "../common/icons/Icon";
 
 /** The phone's pacing for a usage panel: often enough to watch a window fill,
  *  rare enough that the CLI is not spawned for nothing (its read is cached
@@ -29,13 +30,21 @@ function useOpenTabs(): Record<string, number> {
   }, [tabsByScope]);
 }
 
+/** The side panel's CLIs view: `CliOverviewBody` in the panel's scroll box. */
+export function CliOverviewView({ active }: { active: boolean }) {
+  return <div className="side-panel-scroll cli-overview-view" style={{ flex: 1, overflowY: "auto", padding: 6 }}>
+    <CliOverviewBody active={active} />
+  </div>;
+}
+
 /**
- * The side panel's CLIs view: per agent CLI in use, its plan, the account it
+ * The CLIs overview's body — one component for its two hosts, the side
+ * panel's CLIs view and the Agents view's Usage section: per agent CLI in use, its plan, the account it
  * is signed in as, its usage windows with when each rolls over, and how many
  * of its tabs are open (`docs/cli_overview_plan.md`). Account-wide, so the
  * same in every scope. Read while shown, every few minutes; ⟳ asks again.
  */
-export function CliOverviewView({ active }: { active: boolean }) {
+export function CliOverviewBody({ active }: { active: boolean }) {
   const t = useT();
   const lang = useI18nStore((state) => state.lang);
   const openTabs = useOpenTabs();
@@ -80,8 +89,7 @@ export function CliOverviewView({ active }: { active: boolean }) {
   const dateFormat = new Intl.DateTimeFormat(dateLocale(lang), { month: "short", day: "numeric" });
   const timeFormat = new Intl.DateTimeFormat(dateLocale(lang), { hour: "numeric", minute: "2-digit" });
 
-  return <div className="side-panel-scroll cli-overview-view" style={{ flex: 1, overflowY: "auto", padding: 6 }}>
-    <section className="agent-prompts-section">
+  return <section className="agent-prompts-section">
       <div className="agent-prompts-tabs-head">
         <h3 className="settings-section-title">{t("cliOverview.title")} <UntestedTag id="clis.overview" /></h3>
         <button
@@ -91,7 +99,7 @@ export function CliOverviewView({ active }: { active: boolean }) {
           onClick={() => void load(true)}
           title={t("common.refresh")}
           aria-label={t("common.refresh")}
-        >↻</button>
+        ><RefreshIcon /></button>
       </div>
       {failed && <p className="settings-help">{t("cliOverview.failed")}</p>}
       {rows && shown.length === 0 && <p className="settings-help">{t("cliOverview.empty")}</p>}
@@ -133,6 +141,5 @@ export function CliOverviewView({ active }: { active: boolean }) {
           </div>
         </article>;
       })}
-    </section>
-  </div>;
+    </section>;
 }

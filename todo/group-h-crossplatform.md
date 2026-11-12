@@ -9,15 +9,28 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
 *Intentional gaps (decided, not forgotten — do not re-open without new facts):*
 - *Windows:* `make_sticky` (no public show-on-all-desktops API), window
   **embedding** (no safe cross-process reparenting), ControlMaster and with it
-  the ssh-link monitor + `net_usage` sampler (Win32-OpenSSH has no mux support).
+  the ssh-link monitor + `net_usage` sampler, port forwards and the terminal
+  sign-in hand-off (Win32-OpenSSH has no mux support). No **agent fence** (no
+  unprivileged filesystem sandbox): local agents run with the user's rights
+  after a one-time acceptance, so Cut network is refused too. No **tmux**: no
+  session persistence, and the phone cannot attach to, create, schedule or
+  send to terminals on a Windows host.
 - *macOS:* window **embedding** (impossible), **per-window** parking of foreign
   apps (only app-granularity `NSRunningApplication hide/unhide`; per-window needs
   private CGS/SkyLight APIs — rejected as build-fragile), popout self-parking
   (hiding our own app would hide the MAIN window — deferred), `make_sticky`
-  (no public Spaces API), system-monitor process table limited to the calling
-  user's processes when unprivileged (`proc_pidinfo` visibility).
-- *Both:* the network pane's per-connection table (interfaces only; an
-  explanatory warning is shown in the pane).
+  (no public Spaces API), `position_window`, renderer-memory attribution
+  (WebContent processes are XPC services, not children), system-monitor
+  process table limited to the calling user's processes when unprivileged
+  (`proc_pidinfo` visibility). The fence is `sandbox-exec`, filesystem only.
+  Under Local models only, Cut network and a verified Claude tab are refused.
+  Piper voices are not offered (the OS voice is used).
+- *Both:* Copilot inline completion (Linux builds only), the hosted server,
+  sharing and the key keeper (Linux-only; other hosts run them in a Linux VM),
+  the loopback-listener ownership check and the phone OAuth callback relay,
+  the `state_gc` WebKitCache trim (WebKitGTK-only).
+
+Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
 
 - [ ] 🖐️ **Cross-platform install/model smoke test:** run the reusable
   [cross-platform testing checklist](../docs/cross-platform-testing.md), starting
@@ -482,14 +495,13 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
-    - [ ] **31f — macOS ssh-link traffic via nettop** (design note, no code).
-      ControlMaster exists on macOS, so remote projects mux fine; what's
-      missing is per-socket byte counters for the ssh-link monitor +
-      `net_usage` sampler (`ss -ti` is Linux-only). Design: resolve the master
-      pid from `ssh -O check` (as on Linux), then sample
-      `nettop -P -x -L 1 -p <master-pid>` and parse its CSV (`bytes_in`/
-      `bytes_out` columns) into the existing `SshLinkSnapshot`. Needs a mac to
-      verify nettop's CSV shape/permissions before writing the parser.
+    - [ ] **31f — macOS ssh-link traffic via nettop.** Built (2026-09 parity
+      sweep; `commands/network.rs`, "macOS: the master's cumulative socket
+      counters from `nettop`"), ⚠️ never run on a Mac. ControlMaster exists on
+      macOS, so remote projects mux fine; the ssh-link monitor + `net_usage`
+      sampler resolve the master pid from `ssh -O check` (as on Linux) and
+      sample `nettop` per master pid where Linux reads `ss -ti`. Open: verify
+      nettop's CSV shape and permissions on a real Mac.
 
 32. **OS parity sweep (2026-09-16).** ✅ Code-complete, ⚠️ **none of it
     verified live** — deferred items are listed under 32z below. Every item below
@@ -913,6 +925,114 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
         decisions; breaks international Option input.
       - `NSLocalNetworkUsageDescription`, richer macOS crash log — low value
         vs. signal-handler risk.
+
+2442. **OS parity audit (2026-11-12).** A reading audit of Windows and macOS
+    against Linux at `214933ab5`; nothing was run on either OS. Evidence,
+    `file:line` and fix directions for every sub-item:
+    [docs/cross_os_parity_2026_11_12.md](../docs/cross_os_parity_2026_11_12.md).
+    *(likely)* = also rests on OS or third-party behaviour; confirm live first.
+    Items already deferred in 32z are marked so — they need the product call
+    recorded there, not a rediscovery.
+
+    *Windows*
+    - [ ] **2442a — Windows CI is red; no installer since v0.2.64.** The
+      `muse_session` test fixture writes a raw temp path into JSON
+      (`muse_session.rs:357`); backslashes make it invalid. JSON-escape `root`
+      in that test module. Blocks every other push.
+    - [ ] **2442b — Codex ignores its scope home** *(likely)*. Nothing sets
+      `CODEX_HOME`, and Codex takes its home from the profile Known Folder, not
+      `USERPROFILE`. Add a per-CLI home-override table beside `fence_env`.
+    - [ ] **2442c — live tabs do not redirect `APPDATA` / `LOCALAPPDATA` /
+      `HOMEDRIVE` / `HOMEPATH`.** The installer and probe redirect `APPDATA`;
+      `home_env` does not. Goose is the visible case.
+    - [ ] **2442d — a CLI typed into a shell tab is not shimmed.** The per-CLI
+      shims are extensionless POSIX scripts; write `.cmd` shims that apply the
+      home env.
+    - [ ] **2442e — Grok's Windows row installs the stale third-party client.**
+      Switch to xAI's PowerShell installer (verify the URL first).
+    - [ ] **2442f — Windows install commands for Muse, Cursor, Kiro, Goose,
+      Vibe.** All `None` today; the CLIs reportedly ship for Windows. Verify
+      each vendor command, then fill the rows. Plandex: confirm it has none.
+    - [ ] **2442g — agent `git_push` refuses a repo with a pre-push hook.**
+      Run the hook under `exec_trust` through `hardened_git_command_in`.
+    - [ ] **2442h — PowerShell session hook lacks the stray-`--resume`
+      check.** Port the "no Claude above this one" test from the POSIX hook.
+    - [ ] **2442i — TeX builds carry `\\?\` paths** *(likely)*. Run cwd,
+      `-outdir` and the returned `pdf_path` through `paths::display_path`.
+    - [ ] **2442j — sync mirror accepts Windows-hostile names** *(likely)*.
+      Reuse `mail_attach::windows_part_refusal` in `rel_components`; decide the
+      case-only collision policy.
+    - [ ] **2442k — tab close is a hard kill, no job object.** Deferred in
+      32z ("Job Object for ConPTY children").
+    - [ ] **2442l — background-job lamp never lights.** Needs a reader of
+      another process's environment (PEB walk) or a different tab marker.
+    - [ ] **2442m — small Windows items.** MiKTeX `latexmk` without Perl has
+      no check and no engine fallback; shell tab is always `COMSPEC`; system
+      monitor shows 0 for unreadable processes; env deny-list lacks
+      `HOMEDRIVE`/`HOMEPATH`; `C:\Windows\Fonts` literal; login keeper has no
+      file identity; no-op `prefetch_release`, `run_heartbeat`,
+      `sweep_stale_askpass`, launch-family tracking. (`restart_renderer`:
+      deferred in 32z.)
+
+    *macOS*
+    - [ ] **2442n — the Seatbelt fence leaves the ssh-agent, shared temp dirs
+      and `open` / `osascript` reachable** (security). Build
+      `docs/agent_fence_cross_os_plan.md` §5, or at least unset
+      `SSH_AUTH_SOCK`, give each scope a private `TMPDIR` and deny `lsopen` /
+      `appleevent-send`. Until then the threat model must say so (2442ac).
+    - [ ] **2442o — launched apps are mostly untracked.** `open -a` is not the
+      app's parent and the family marker is Linux-only: no row, no parking, no
+      close unless a window shows within ~2 s; "Open in IDE" always
+      relaunches; pid-0 rows never prune. Resolve the real pid by bundle id.
+    - [ ] **2442p — Keychain logins are invisible to `agent_auth`**
+      *(likely)*. Claude's sign-in state and the `claude_token` fallback
+      condition read a file a Keychain login never writes. Related 32z entry:
+      "Keychain file read for fenced Claude on macOS".
+    - [ ] **2442q — webview data does not follow the rename (macOS and
+      Windows).** `state_gc::webview_data_root` is `None` off Linux. Add the
+      WKWebView and WebView2 data dirs.
+    - [ ] **2442r — a Mac without tmux gets non-persistent tabs and no phone
+      terminals, silently.** Probe and say so on the persist toggle and in
+      phone setup; add a one-click install tab; re-probe instead of the
+      `OnceLock`.
+    - [ ] **2442s — the Tailscale setup button types a bare `tailscale`.**
+      Use the bundle path the backend already resolves.
+    - [ ] **2442t — install hints assume Homebrew.** Check for `brew` and
+      offer its bootstrap; for git, `xcode-select --install`.
+    - [ ] **2442u — the main window is forced fullscreen at every launch.**
+      Deferred in 32z ("fullscreen restore") as a product decision.
+    - [ ] **2442v — the phone sidecar is the bundle's executable copied out**
+      *(likely)*. May fail signature validation on arm64. Check on a Mac; if
+      it fails, point the launchd plist into the bundle.
+    - [ ] **2442w — Seatbelt rules use un-canonicalised roots** *(likely)*.
+      Add the canonical spelling beside the lexical one.
+    - [ ] **2442x — keyboard.** Alt+letter defaults match on `e.key` (match
+      `e.code` when Alt is held); keyboard-select ignores ⌘C/⌘X; "Ctrl" in
+      static strings; Ctrl-drag file export collides with Ctrl-click; native
+      menu titles are English literals.
+    - [ ] **2442y — fixed PATH list misses version managers; Homebrew rsync 3
+      is never used.** Login-shell PATH import is deferred in 32z (runs user
+      rc files); extending the list is the cheap half.
+    - [ ] **2442z — small macOS items.** Background-job detection lacks the
+      task-output and start-time checks; no `PR_SET_PDEATHSIG` / `RLIMIT_AS`
+      twins; fenced agents cannot read `crash.log`; byte-sync has no case-fold
+      or NFC/NFD handling; `AGENT_FENCE_DEFAULT_PATHS` lists Linux dirs only.
+
+    *Both*
+    - [ ] **2442aa — print: grayscale, two-sided and paper are ignored off
+      Linux** while the preview offers them and an approved `print_request`
+      drops them. Apply them natively, or disable the controls and say so.
+    - [ ] **2442ab — platform clippy is still `continue-on-error`.** Fix what
+      the Windows and macOS runners print, then make both steps blocking.
+    - [ ] **2442ac — docs.** `threat_model.md`: the macOS fence escapes
+      (2442n). `docs/context/openvpn.md`: the Windows service path.
+      `docs/context/print_mcp.md`: the platform note (2442aa).
+    - [ ] **2442ad — verify where each agent CLI keeps its login and sessions
+      on Windows and macOS** (table in the audit doc). Known wrong or
+      doubtful: Cursor's `.config/cursor/auth.json`, Droid's `auth.v2.json`,
+      Antigravity's token file, Muse's store. Add a file-storage switch to
+      `fence_env` wherever the CLI offers one (Cursor:
+      `AGENT_CLI_CREDENTIAL_STORE=file`).
 
 254. **The bare Super key belongs to the desktop, not to the OS.** ✅ Fixed
     2026-09-07, ⚠️ untested live. `useKeyboard` gated its lone Meta/Super panel
@@ -3348,8 +3468,10 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
   corner — and one send of several files is one album bubble (2 side by
   side, 3 as one wide over two, 4+ as a 2×2 whose last tile reads "+N").
   Non-picture files are slim cards in the same bubble. The 🖼 gallery stays.
-  - Placement (`mobile-web/src/terminal/outboxPosts.ts`): after the last
-    record written at or before the file's mtime; files ≤ 10 s apart with no
+  - Placement (`mobile-web/src/terminal/outboxPosts.ts`): at the end of the
+    turn of the last record written at or before the file's mtime (after the
+    turn's last answer, before the next prompt — 2026-11-10, the user asked
+    for files last, not between the output); files ≤ 10 s apart with no
     record between them are one post. Files older than the first shown record
     (earlier sessions, truncated turns) stay gallery-only; the screen chat has
     no times, so it shows none. The outbox is per project, so another tab of
@@ -3578,6 +3700,16 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     Needs your answer" within seconds; tap → unlock → that tab. With the tab
     open on the phone, the next question does not notify. Switch to "Also when
     one finishes a turn" → a finished turn notifies. Revoke → nothing.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+  - [ ] 🖐️ Manual phone QA — an agent notice leads with its time (2026-11-02; `push.rs` `at`, `sw.js`; ⚠️ never run on a phone; sidecar + PWA rebuild first): let an agent ask or finish with the phone locked → the body reads "14:32 · Needs your answer" / "14:32 · Finished “…”" in the phone's clock format; with a long prompt the time is still visible in the collapsed notice. With "Only that something wants you" the body is the time alone. A calendar reminder is unchanged.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3872,6 +4004,52 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     - [ ] ❌ Doesn't work on Android
     - [ ] ✅ Works on iOS (Safari tab; a home-screen app has no Back)
     - [ ] ❌ Doesn't work on iOS
+- [~] **31cr — Keyboard steering on the phone** (2026-11-09; ✅ code-complete,
+  `MobileSteering*.test.*` and `MobileKeydownGuards.test.ts` passing; ⚠️ never
+  run on a phone; plan `docs/mobile_steering_plan.md`, rationale
+  `docs/context/phone_steering.md`). With a Bluetooth keyboard, Shift+Space or
+  Alt+Space turns on the desktop's navigation mode on the phone: a bottom bar,
+  a cursor (real focus) over Home's rows, a project's tab cards, a sheet's
+  controls and the Mail / Calendar / To-do screens, Q R X jumps across
+  projects, digits answering an agent's question, I for the message box.
+  Untested pills: `mobile.steering.*` (six rows in `src/lib/untested.ts`).
+  - Needs the PWA rebuilt (`npm run mobile:bundle`).
+  - [ ] 🖐️ Manual QA, phone with a Bluetooth keyboard — (1) Touch only: nothing
+    new shows; typing in the composer with the on-screen keyboard, a capital, a
+    leading and a mid-sentence Shift+Space, an IME word: nothing is eaten.
+    (2) Connect the keyboard and press any key on Home: the tip shows once,
+    never after a reload. (3) Home: Shift+Space shows "Steering · Projects" and
+    an outline on the first row; E/D and the arrows move it and the list
+    scrolls; 3 opens project 3; Shift+Space or Alt+Space leaves. (4) Project:
+    Enter opens a tab, W asks "Close …?" (Y closes, Esc keeps), . opens the ⋯
+    sheet (↑/↓ walk, Esc closes), N opens the + sheet, S goes back with the
+    cursor on the project just left. (5) Inside an agent tab: ↑/↓ scroll, Shift
+    a page, F jumps to the latest; with a question on screen 1 answers it and a
+    number with no option says so; a "Type something" row opens its field and
+    Esc returns; I puts the caret in the composer, Enter sends and steering
+    resumes, Esc keeps the draft; I while a question blocks the box says so.
+    (6) Q/R/X open the next waiting / working / done tab in another project,
+    Backspace returns, Shift+Q goes back, nothing waiting says so. (7) M C T open
+    the sections; ↑/↓ walk their controls; / goes to Home's search. (8) A file
+    viewer or Mark up: the bar says "This view has its own keys". (9) A tap on
+    the screen leaves the mode; leaving it for longer than the idle lock does
+    not lock while keys are pressed. (10) Hold E: the cursor keeps moving;
+    hold Enter on a project: it opens once.
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS (Safari tab and home-screen app)
+    - [ ] ❌ Doesn't work on iOS
+  - [ ] 🖐️ Platform checks, record in the pairs: Shift+Space on a Samsung
+    keyboard with the language switch on (Alt+Space still enters); does a
+    hardware Esc reach the page on iOS and does Android treat it as system
+    Back; Shift+Space with nothing focused on iOS; Alt+Space on a macOS-layout
+    iPad keyboard (types a no-break space); Ctrl+Space and Cmd combos stay the
+    OS's.
+    - [ ] ✅ Works on Android
+    - [ ] ❌ Doesn't work on Android
+    - [ ] ✅ Works on iOS
+    - [ ] ❌ Doesn't work on iOS
+
 - [~] **31bp — The phone's host updates itself at launch** (2026-09-28;
   ✅ code-complete, unit test `a_launch_updates_a_host_that_is_behind_…`;
   ⚠️ never seen live). `start_host_on_launch` reinstalls the sidecar copy
@@ -3885,6 +4063,309 @@ not a from-scratch port. Builds on / supersedes the OS half of #19 (Group C).*
     launch, Settings → Mobile no longer offers Update host, and a new route
     (e.g. 31bo's project files) works without clicking anything. Relaunch again with no new
     build → no restart.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31cn — Find files on the phone: Open from Diffs, 🔍, Favorites page** (2026-11-02;
+  ✅ code-complete, `MobileChatDiffs`, `MobileFavoritesPage`, `MobileHostTabs`,
+  `MobileForgetFiles` tests and `chat_changes` Rust tests passing; ⚠️ never seen on
+  a phone). Needs a dev build: the backend half (`file` on a change, `files_off`)
+  and the PWA are both in the binary. An unpaired phone now also forgets the
+  library's favorites, recents, colours, file cards and folder trail.
+  - [ ] 🖐️ Chat → view pill → Diffs: a row per file over the changes, with its
+    count and +/−. Tapping a row narrows the changes, tapping again shows all. Open
+    shows the file, with Mark up. A deleted file and a worktree's have no Open.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Project screen → 🔍: the library opens with the keyboard up and recent
+    files showing; Back returns to the project. The box stays put while the list
+    scrolls. A search that finds nothing says git-ignored files are skipped.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Desktop switch "Project files on the phone" off: ☰ and 🔍 stay on a
+    project and the drawer names the switch. A remote project with no local copy
+    names it too, rather than saying files appear once synced.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Home → Favorites: the four segments fit one line on a narrow phone, in
+    every language. Favorites from several projects are grouped, a coloured folder
+    wears its colour, a file opens and Back returns to the page, a folder opens in
+    the library, ⋯ offers Show in folder and Unfavorite, and a moved file dims and
+    offers Remove.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31co — Files a phone chat names and changes** (2026-11-02; ✅ code-complete,
+  `MobileChatNamedFiles.test.tsx` and `named_files` tests; ⚠️ never seen live).
+  Like the desktop Chat: an answer naming a picture or PDF of the project is
+  followed by a message showing it, its path (or a Markdown link to it) opens
+  the file, and Files (N) also lists what the agent changed and named. Needs
+  Project files on the phone. The phone's bundle and the sidecar route ship
+  together: rebuild first.
+  - [ ] 🖐️ iPad and phone, Focus chat of a local agent tab: ask the agent to name
+    a PDF and a picture of the project. Each follows the answer as its own
+    message, the answer's bubble unchanged; a tap opens it in the app, Mark up
+    included. The path in the answer's words opens it too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Files (N) in the strip over the chat: Changed by the agent and Mentioned
+    in its answers list the right files, each once; a tap opens the file; a deleted
+    file brings the note that Diffs holds more. After a /clear (or Clear from the
+    phone) the list holds only the new chat's files, none of the earlier one's
+    (2026-11-10); each group has its colour dot, hint line and tinted tiles.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [ ] **31cp — Phone / iPad file browsing: bugs and small items** (2026-11-03;
+  `docs/phone_files_browsing_plan.md`). Phase 3: the user picked L2–L7, L10, L12
+  (batches D–F); L1, L8, L9, L11 stay parked (L1 and L11 reverse decisions 4 and 2
+  of the files-library plan).
+  - [x] Batch A (phone): B1 Esc runs Back (keeps an open markup note), B2 no-preview
+    card, B3 refusal sentences, B4 library stays mounted under the viewer + scroll
+    kept, B6 Favorites order, B7 sheet focus. (2026-11-03, uncommitted; ⚠️ never
+    seen on a phone; `MobileFilesLibraryViewer.test.tsx`)
+    - [ ] 🖐️ iPad with a keyboard: open a PDF from the library, Mark up, type a note,
+      press Esc — the note is kept (as Done would) and the view closes; Esc over a
+      picture closes it; same from the Favorites page and a chat's Files list.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Scroll a long folder, open a file, close it: the list is where it was, no
+      slide-in, covers stay. Go into a folder and back with ‹: the parent is where it
+      was. A .docx/.zip opens to the "cannot show" card with Save; a picture or PDF
+      over 24 MB says it is too large.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ VoiceOver or a keyboard: an item's ⋯ menu takes the focus, Tab stays in
+      it, closing it returns to ⋯; the list behind is not reachable. A sheet opened
+      while typing in a search box keeps the keyboard up. Favorites groups do not
+      jump while project names load.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch B (backend + phone): B9 host read re-checked, S1 stable tokens, S2
+    one-file lookup route with re-list fallback. (2026-11-03, uncommitted; needs a
+    dev build — the route is backend; ⚠️ never seen on a phone)
+    - [ ] 🖐️ A favorite file and a recent open from the library and the Favorites
+      page; a PDF's Mark up → Reload picks up a changed file; a remote project's
+      host-side favorite opens too. Thumbnails of an unchanged folder do not redo.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch C (phone): B5 truncation note, S3 Refresh, S4 path bar, S5 wide-screen
+    sheets/tiles, S6 44 px targets + long-press, S7 search chips, S8
+    content-visibility, S9 collator language. (2026-11-03; needs a dev build —
+    the search chips are half backend; ⚠️ never seen on a phone)
+    - [ ] 🖐️ In a subfolder: the folder bar under the head, a tap goes up there.
+      ⋯ → Refresh shows a file an agent just wrote; so does closing a file or
+      coming back to the app. Long-press a tile or row: its menu, no text callout.
+      At the root, Recent files (n) shows recents with the keyboard down.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Search in a subfolder: Only in <folder> keeps hits inside it; Include
+      ignored files finds a PDF under build/ or out/. On an iPad: sheets centred,
+      bigger tiles in landscape; a long folder scrolls smoothly.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [ ] B8: check on an iPhone whether the edge swipe goes up two folders (Safari tab
+    and installed PWA) before changing anything.
+  - [x] Batch D (backend + phone): L12 a 20 s deadline on local files calls
+    (`deadline.rs`), L2 streamed raw route with one Range, ETag and 304
+    (`serve.rs`; ranges on the remote side and in the drop boxes too), L3 films,
+    sounds, HEIC/AVIF by their bytes and played in the viewer. (2026-11-04,
+    uncommitted; needs a dev build; ⚠️ never seen on a phone)
+    - [ ] 🖐️ From the files library on an iPhone and an Android phone: an mp4/mov
+      plays and seeks at once (also one over 24 MB, and one on a remote project's
+      host side); an mp3/m4a plays; a picture or PDF of 30 MB opens on this
+      computer's side; a HEIC shows on the iPhone and is a Save card on Android;
+      a film sent to the chat plays from the chat.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ A folder on a stalled network mount (e.g. an sshfs with the server gone)
+      answers "timed out" after about 20 s instead of spinning; other folders still open.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch E (phone, iPad): L4 split view (900 px+ landscape: the file beside the
+    folder), L5 keyboard (/ and Cmd-F search, arrows walk items, Cmd-↑/Backspace up,
+    focus and hover styles). (2026-11-04, uncommitted; ⚠️ never seen on an iPad)
+    - [ ] 🖐️ iPad in landscape: open a picture, a PDF and a text from the library — each
+      stands on the right with the folder still usable on the left; another tap swaps
+      it; Back/Esc closes it; Mark up goes full screen; turned upright the file is over
+      the folder again. With a keyboard: /, arrows (grid keeps the column), Enter,
+      Cmd-↑.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+  - [x] Batch F (backend + phone): L6 drop files from Files/Finder to upload, L7
+    Select files (Share together, ☆ Favorite), L10 New folder (+ Undo while empty),
+    Download as zip, uploads up to 1 GB (staged on disk). Mark up of several files
+    was not built. (2026-11-04, uncommitted; needs a dev build; ⚠️ never seen on a
+    phone)
+    - [ ] 🖐️ iPad: drag two files from the Files app onto a folder with Upload here —
+      outline, both land, Undo works. ⋯ → New folder… makes one; a taken name says so;
+      Undo takes it back. ⋯ → Download this folder as a zip saves a zip that opens;
+      a huge folder says it is too large. Select files → tick three → Share opens the
+      share sheet with all three; ☆ stars them. Upload a 100 MB video: it lands whole.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+- [ ] **31cq — Root off the phone's project list: logo door, per-phone opt-in** (2026-11-04;
+  ✅ code-complete, `the_root_scope_is_off_for_every_phone_until_the_list_names_it`,
+  `MobileHome`, `MobilePairedDeviceAccess`, `MobileRootPhonePicker` tests; ⚠️ never seen
+  on a phone). Needs a dev build (sidecar + PWA). `root_devices` is opt-in: a root switch
+  already on loses root on every phone until phones are ticked.
+  - [ ] 🖐️ Settings → Mobile → Root console on the phone (switch on): the row shows
+    No phones ▾; pick the phone. Its start page then has no root row, and the logo
+    top left opens the root console (back returns). A dot on the logo while root's
+    proposals wait at the desk.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ A second phone not ticked: no logo door, root unreachable (an old link answers
+    project not found). Pairing a new phone leaves it off root. Unticking the phone
+    closes its open root terminal within seconds.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Paired phone's panel in Settings → Mobile: Root console is listed with Disconnect
+    once ticked, and Add project ▾ offers it (greyed while the root switch is off).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31cm — Send now and Cancel and edit on Codex and OpenCode mini** (2026-11-02;
+  ✅ code-complete, `MobileQueuePull.test.ts` and the walks run against the real
+  Codex 0.166.0 and OpenCode 2.2.5 on a stub model; ⚠️ never seen in the app).
+  A chat's Codex prompt now goes in with Tab, so it waits for the turn's end
+  unless Send now is pressed.
+  - [ ] 🖐️ Phone and desktop Chat, Codex, agent working: send two prompts. Both
+    bubbles carry the pair; Send now stops the turn and both go as one prompt,
+    each bubble staying where it was. Stop and holding Send keep them too.
+    Cancel and edit brings them back into the composer.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ `opencode --mini`, agent working: the pair shows once the footer
+    counts `pending`; Send now and Cancel and edit both work. A full `opencode`
+    tab shows no pair and never quits.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

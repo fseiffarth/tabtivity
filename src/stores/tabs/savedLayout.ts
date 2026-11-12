@@ -10,14 +10,31 @@ import type {
   WindowBounds,
 } from "./types";
 import { nextGroupId, nextSplitId } from "./ids";
+import { cleanSubwindowName } from "./layoutTree";
 import { FILES_TAB_CMD, cmdToKind, isRestorableTab } from "./tabKinds";
 
 // ── Tree (de)serialization ──────────────────────────────────────────────────
 
-export function serializeTree(node: LayoutNode | null): SavedLayoutTree | null {
+export function serializeTree(
+  node: LayoutNode | null,
+  pending?: readonly RespawnTarget[],
+): SavedLayoutTree | null {
   if (!node) return null;
+  // A popout restored docked and not yet re-opened (its scope has not been the
+  // workspace's since the load) is still a popout: a save in that gap keeps its
+  // tag, or the next launch would dock it for good.
+  const target = pending?.find((t) => t.id === node.id);
+  const tag = target
+    ? {
+        detached: true as const,
+        bounds: target.bounds,
+        zoom: target.zoom,
+        ...(target.name ? { detachedName: target.name } : {}),
+      }
+    : {};
   if (node.type === "group") {
     return {
+      ...tag,
       type: "group",
       tabKeys: [...node.tabKeys],
       activeKey: node.activeKey,
@@ -26,14 +43,16 @@ export function serializeTree(node: LayoutNode | null): SavedLayoutTree | null {
       ...(node.filesOpen ? { filesOpen: true } : {}),
       ...(node.filesWidth != null ? { filesWidth: node.filesWidth } : {}),
       ...(node.filesFolder ? { filesFolder: node.filesFolder } : {}),
+      ...(node.name ? { name: node.name } : {}),
     };
   }
   return {
+    ...tag,
     type: "split",
     dir: node.dir,
     sizes: [...node.sizes],
     children: node.children
-      .map(serializeTree)
+      .map((c) => serializeTree(c, pending))
       .filter((c): c is SavedLayoutTree => c != null),
   };
 }
@@ -73,6 +92,8 @@ export interface RespawnTarget {
   // The popout's persisted per-window zoom (see DetachedGroup.zoom), carried so
   // the respawn re-detaches it at the zoom it was left at. Undefined = 100%.
   zoom?: number;
+  // A multi-pane popout's own name (see DetachedGroup.name).
+  name?: string;
 }
 
 /**
@@ -105,6 +126,11 @@ function hiddenTarget(id: string, saved: SavedLayoutTree): HiddenTarget {
   return name ? { id, name } : { id };
 }
 
+function respawnTarget(id: string, saved: SavedLayoutTree): RespawnTarget {
+  const name = cleanSubwindowName(saved.detachedName);
+  return { id, bounds: saved.bounds, zoom: saved.zoom, ...(name ? { name } : {}) };
+}
+
 export function deserializeTree(
   saved: SavedLayoutTree,
   keyMap: Map<string, string>,
@@ -123,11 +149,12 @@ export function deserializeTree(
       null;
     const id = nextGroupId();
     if (saved.detached && detachedOut) {
-      detachedOut.push({ id, bounds: saved.bounds, zoom: saved.zoom });
+      detachedOut.push(respawnTarget(id, saved));
     }
     if (saved.hidden && hiddenOut) {
       hiddenOut.push(hiddenTarget(id, saved));
     }
+    const name = cleanSubwindowName(saved.name);
     return {
       type: "group",
       id,
@@ -138,6 +165,7 @@ export function deserializeTree(
         ? { filesWidth: saved.filesWidth }
         : {}),
       ...(typeof saved.filesFolder === "string" && saved.filesFolder ? { filesFolder: saved.filesFolder } : {}),
+      ...(name ? { name } : {}),
     };
   }
   const children = saved.children
@@ -148,7 +176,7 @@ export function deserializeTree(
     // Collapsed to a single child. If this split was a detached (multi-pane)
     // popout, the survivor inherits the respawn so the popout still re-opens.
     if (saved.detached && detachedOut) {
-      detachedOut.push({ id: children[0].id, bounds: saved.bounds, zoom: saved.zoom });
+      detachedOut.push(respawnTarget(children[0].id, saved));
     }
     // Likewise inherit a hidden tag so the survivor is parked, not docked live.
     if (saved.hidden && hiddenOut) {
@@ -172,7 +200,7 @@ export function deserializeTree(
   // the whole subtree (its children aren't individually tagged) so the respawn
   // path re-detaches the entire split as a single floating window.
   if (saved.detached && detachedOut) {
-    detachedOut.push({ id, bounds: saved.bounds, zoom: saved.zoom });
+    detachedOut.push(respawnTarget(id, saved));
   }
   // A hidden split is parked whole by its root id (same one-target logic).
   if (saved.hidden && hiddenOut) {
@@ -242,6 +270,17 @@ export function savedLayoutTreeOf(raw: unknown): SavedLayoutTree | undefined {
  * groups/splits that empty out. Returns null when nothing survives. Used when
  * persisting so the on-disk tree never references tabs we won't restore.
  */
+/** Everything `withDetachedDocked` tags a popout's root with, for a prune to carry. */
+function detachedTag(tree: SavedLayoutTree) {
+  if (!tree.detached) return {};
+  return {
+    detached: true as const,
+    bounds: tree.bounds,
+    ...(tree.zoom != null ? { zoom: tree.zoom } : {}),
+    ...(tree.detachedName ? { detachedName: tree.detachedName } : {}),
+  };
+}
+
 export function pruneSavedTree(
   tree: SavedLayoutTree | null,
   keep: Set<string>,
@@ -262,7 +301,7 @@ export function pruneSavedTree(
       type: "group",
       tabKeys,
       activeKey,
-      ...(tree.detached ? { detached: true, bounds: tree.bounds } : {}),
+      ...detachedTag(tree),
       // Carry the hidden tag through pruning so a hidden group stays parked on
       // restore rather than docking live (mirrors the detached tag).
       ...(tree.hidden ? { hidden: true, ...(tree.hiddenName ? { hiddenName: tree.hiddenName } : {}) } : {}),
@@ -270,6 +309,7 @@ export function pruneSavedTree(
       ...(tree.filesOpen ? { filesOpen: true } : {}),
       ...(tree.filesWidth != null ? { filesWidth: tree.filesWidth } : {}),
       ...(tree.filesFolder ? { filesFolder: tree.filesFolder } : {}),
+      ...(tree.name ? { name: tree.name } : {}),
     };
   }
   const kept = tree.children
@@ -280,7 +320,7 @@ export function pruneSavedTree(
   // like the group branch — else the split would persist as a plain docked node
   // and the popout would restore inside the main panel.
   const tag = tree.detached
-    ? { detached: true as const, bounds: tree.bounds }
+    ? detachedTag(tree)
     : tree.hidden
       ? { hidden: true as const, ...(tree.hiddenName ? { hiddenName: tree.hiddenName } : {}) }
       : {};
@@ -324,7 +364,13 @@ export function withDetachedDocked(
     // popout) so restore respawns the WHOLE subtree as one floating window rather
     // than docking it into the main panel. `detachGroup` re-detaches either shape
     // by the tagged node's id (see deserializeTree → pendingRespawn).
-    docked.push({ ...t, detached: true, bounds: d.bounds, zoom: d.zoom });
+    docked.push({
+      ...t,
+      detached: true,
+      bounds: d.bounds,
+      zoom: d.zoom,
+      ...(d.name ? { detachedName: d.name } : {}),
+    });
   }
   if (docked.length === 0) return inWindow;
   const all = inWindow ? [inWindow, ...docked] : docked;

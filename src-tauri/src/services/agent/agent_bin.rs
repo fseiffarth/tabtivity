@@ -10,6 +10,12 @@
 use crate::brand::{DISPLAY, UPPER};
 use std::{fs, io, path::{Path, PathBuf}};
 
+/// A second name a vendor's installer writes beside its CLI, and the registry
+/// CLI it runs. `opencode.ai/v2/install` leaves an `opencode2` that execs the
+/// real `opencode` next to it, in a folder on every tab's PATH: unshadowed,
+/// typing it in a shell tab skips the fence. It gets its CLI's own shim.
+const VENDOR_ALIASES: &[(&str, &str)] = &[("opencode2", "opencode")];
+
 pub fn bin_dir() -> PathBuf { crate::storage::state_dir().join("bin") }
 
 pub fn install() -> io::Result<()> {
@@ -57,6 +63,9 @@ fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {
                 continue;
             }
             write_script(dir, cli, shim_script(cli, exe, dir).as_bytes())?;
+        }
+        for (alias, cli) in VENDOR_ALIASES.iter().filter(|(_, cli)| clis.contains(cli)) {
+            write_script(dir, alias, shim_script(cli, exe, dir).as_bytes())?;
         }
     }
     Ok(())
@@ -215,6 +224,21 @@ mod tests {
         assert!(shim.contains(&format!("grep -vx -- '{}'", dir.path().to_string_lossy())));
         assert!(!shim.contains("--unfenced"));
         assert!(dir.path().join("claude").is_file());
+    }
+
+    /// `opencode2` is the same shim as `opencode`, so typing it reaches the
+    /// same fence; it is the registry CLI that is fenced, never the alias.
+    #[test]
+    fn a_vendor_alias_gets_its_clis_shim() {
+        let exe = Path::new("/opt/app/bin");
+        let dir = tempfile::tempdir().unwrap();
+        install_in(dir.path(), Some(exe), &["opencode"]).unwrap();
+        let alias = fs::read_to_string(dir.path().join("opencode2")).unwrap();
+        assert_eq!(alias, fs::read_to_string(dir.path().join("opencode")).unwrap());
+        assert!(alias.contains("--agent-shim 'opencode' \"$@\""));
+        let other = tempfile::tempdir().unwrap();
+        install_in(other.path(), Some(exe), &["claude"]).unwrap();
+        assert!(!other.path().join("opencode2").exists());
     }
 
     /// Inside a fence the shim runs the real CLI, which still sees this

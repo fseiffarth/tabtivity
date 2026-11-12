@@ -291,11 +291,20 @@ pub struct Settings {
     /// it and makes `/mcp/help` refuse the tabs that already hold a token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_mcp: Option<bool>,
+    /// Self-only workspace presentation tools. Absent means on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cockpit_mcp: Option<bool>,
     /// The markup questions server (`services::markup_mcp`) handed to every
     /// local project-agent tab. **Absent means on**; a stored `false` stops
     /// new tabs getting it and makes `markup_ask` answer `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub markup_mcp: Option<bool>,
+    /// The print requests server (`services::print_mcp`) handed to every
+    /// local project-agent tab the window spawns. **Absent means on** (every
+    /// print waits for the user's Approve); a stored `false` stops new tabs
+    /// getting it and makes `print_request` answer `off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_mcp: Option<bool>,
     /// Root-agent write review: absent/unknown = all, or destructive / off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_mcp_review: Option<String>,
@@ -671,6 +680,18 @@ pub struct Settings {
     /// Settings — it stops the popup, it does not stop the counting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daily_stats_recap: Option<bool>,
+    /// When true (the default, absent counts as on), the app asks the CLIs'
+    /// registries and Ollama's releases for their newest version once a day by
+    /// itself (`commands::agents::start_daily_update_check`). Off: no request
+    /// leaves for it, and a release is looked up only on a click in Manage
+    /// CLIs / the Ollama row. Read at every tick, so a change applies at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_release_check: Option<bool>,
+    /// Absent counts as on: remote Claude tabs are sent the saved long-lived
+    /// token too (`services::claude_token`), which the host uses only when it
+    /// keeps no login of its own. Off: it never leaves this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_token_remote: Option<bool>,
     /// UTC date ("YYYY-MM-DD") the recap was last auto-shown, so it opens once a
     /// day rather than on every window. Written by the recap host itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1037,6 +1058,10 @@ pub struct Settings {
     /// itself either way (see `stores/headerStatus`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_status_expanded: Option<bool>,
+    /// Keep the top bar in the layout in the window's fullscreen mode instead of
+    /// auto-hiding it at the screen edge. Unset means auto-hide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_fullscreen_pinned: Option<bool>,
     /// Top-bar placement overrides by item id: `true` keeps the item in the bar
     /// while the chevron is collapsed, `false` folds it behind the chevron. An
     /// absent id follows the frontend's default (`lib/headerPins`).
@@ -1050,6 +1075,17 @@ pub struct Settings {
     /// keeps its built-in place after the listed ones (`lib/headerPins`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header_order: Option<Vec<String>>,
+    /// Project ids kept off the "All projects" strip (a view choice only:
+    /// the project stays open; `src/lib/projects/barHidden.ts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_hidden_projects: Option<Vec<String>>,
+    /// Box ids whose members are kept off the "All projects" strip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_hidden_boxes: Option<Vec<String>>,
+    /// Hide mode: the "All projects" strip shows only the project in scope.
+    /// Absent = off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar_solo: Option<bool>,
     /// Default printer per network, keyed by the network key the frontend
     /// derives (`wlan:<ssid>`, `lan:<hashed gateway mac>`, `lan`). When the machine
     /// joins a keyed network, the print manager's host makes that printer the
@@ -1112,6 +1148,9 @@ pub struct ChordDescriptor {
     pub alt: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub meta: bool,
+    /// The AltGr (right Alt) key, told apart from Alt (`altGr` in the JSON).
+    #[serde(rename = "altGr", default, skip_serializing_if = "is_false")]
+    pub alt_gr: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1231,6 +1270,16 @@ impl Settings {
         self.daily_stats_recap.unwrap_or(true)
     }
 
+    /// Whether the background daily release check runs. Defaults ON when unset.
+    pub fn daily_release_check(&self) -> bool {
+        self.daily_release_check.unwrap_or(true)
+    }
+
+    /// Whether remote Claude tabs get the saved long-lived token. Defaults ON.
+    pub fn claude_token_remote(&self) -> bool {
+        self.claude_token_remote.unwrap_or(true)
+    }
+
     /// The rule every experimental flag follows (mirrors `src/lib/experimental.ts`):
     /// an explicit value wins, in both directions, and an unset flag is **off**.
     ///
@@ -1295,6 +1344,9 @@ impl Settings {
         self.root_mcp.unwrap_or(true)
     }
 
+    /// Whether self-only workspace tools are handed to eligible agent tabs.
+    pub fn cockpit_mcp(&self) -> bool { self.cockpit_mcp.unwrap_or(true) }
+
     /// Whether the help MCP is handed to agent tabs. On unless switched off.
     pub fn help_mcp(&self) -> bool {
         self.help_mcp.unwrap_or(true)
@@ -1304,6 +1356,12 @@ impl Settings {
     /// switched off.
     pub fn markup_mcp(&self) -> bool {
         self.markup_mcp.unwrap_or(true)
+    }
+
+    /// Whether the print requests MCP is handed to agent tabs. On unless
+    /// switched off.
+    pub fn print_mcp(&self) -> bool {
+        self.print_mcp.unwrap_or(true)
     }
 
     /// The agent CLIs [`Self::root_mcp_agents`] names, with its `root_agents`
@@ -1535,6 +1593,17 @@ mod tests {
         assert!(!back.web_browser());
     }
 
+    /// The cockpit graduated out of the experiments: a profile that still carries
+    /// its old `cockpit` key must load, and the key rides in `extra` untouched
+    /// (nothing reads it any more).
+    #[test]
+    fn a_stored_cockpit_experiment_key_still_loads() {
+        let s: Settings = serde_json::from_str(r#"{"cockpit":true,"experimental_explicit":true}"#)
+            .expect("parse a profile that still has the cockpit key");
+        assert_eq!(s.experimental_explicit, Some(true));
+        assert_eq!(s.extra.get("cockpit"), Some(&serde_json::json!(true)));
+    }
+
     /// The browser's settings must be **named fields**, not `extra` passengers.
     /// A key that only exists in the `#[serde(flatten)]` catch-all round-trips
     /// perfectly and is invisible to `Settings::experimental()` and to every
@@ -1751,17 +1820,20 @@ mod default_rule_tests {
         assert!(absent.connections_headless());
         assert!(absent.agent_remote_control());
         assert!(absent.daily_stats_recap());
+        assert!(absent.daily_release_check());
         assert_eq!(absent.color_scheme(), "light_lavender");
 
         let off: Settings = serde_json::from_str(
             r#"{"persist_local_sessions":false,"connections_headless":false,
-                "agent_remote_control":false,"daily_stats_recap":false,"color_scheme":"soft_dark"}"#,
+                "agent_remote_control":false,"daily_stats_recap":false,"daily_release_check":false,
+                "color_scheme":"soft_dark"}"#,
         )
         .unwrap();
         assert!(!off.persist_local_sessions());
         assert!(!off.connections_headless());
         assert!(!off.agent_remote_control());
         assert!(!off.daily_stats_recap());
+        assert!(!off.daily_release_check());
         assert_eq!(off.color_scheme(), "soft_dark");
         assert!(off.extra.is_empty(), "{:?}", off.extra.keys().collect::<Vec<_>>());
     }
@@ -1841,6 +1913,10 @@ mod default_rule_tests {
             ..Default::default()
         };
         assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!({"key":"F9"}));
+        // AltGr round-trips under its frontend name.
+        let gr: ChordDescriptor = serde_json::from_str(r#"{"key":"Tab","altGr":true}"#).unwrap();
+        assert!(gr.alt_gr && !gr.alt);
+        assert_eq!(serde_json::to_value(&gr).unwrap(), serde_json::json!({"key":"Tab","altGr":true}));
     }
 
     /// The per-type viewer prefs and the alert sources are all tri-state and

@@ -52,6 +52,9 @@ pub async fn skills_install(
     app_core::rt::try_blocking("skills", move || skills::install_skill(&target, &source_id, &rel_path)).await
 }
 
+/// `name` carries the skill's *folder* (`InstalledSkill::folder`); the key
+/// keeps its old spelling so the web client's confinement table
+/// (`core_dispatch`) and older clients stay unchanged.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn skills_uninstall(target: SkillTarget, name: String) -> Result<(), String> {
     app_core::rt::try_blocking("skills", move || skills::uninstall_skill(&target, &name)).await

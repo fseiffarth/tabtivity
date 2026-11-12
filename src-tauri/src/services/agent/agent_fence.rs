@@ -312,10 +312,13 @@ pub fn compute_fence_roots(
     } else {
         entry_directory(project)?
     };
+    // A local-models-only project's tabs get its own folder and no box root:
+    // a box's other members are read by cloud agents (`agent_privacy`).
+    let locked = crate::services::agent_privacy::is_locked(project);
     let mut roots = vec![own.clone()];
     for b in boxes
         .iter()
-        .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
+        .filter(|b| !locked && b.member_ids.iter().any(|id| id == scope_id))
     {
         if let Some(box_roots) =
             crate::services::box_store::compute_box_allowed_roots(boxes, projects, &b.id)
@@ -519,6 +522,11 @@ pub fn root_project_read_only_paths(
     }
     let mut paths: Vec<PathBuf> = Vec::new();
     for p in projects {
+        // A local-models-only project is not readable by a cloud agent
+        // (`agent_privacy`); the root fence masks it as well.
+        if crate::services::agent_privacy::is_locked(p) {
+            continue;
+        }
         if p.extra.contains_key("remote") {
             paths.extend(crate::services::remote::local_copy_in(p, state_dir));
         } else if let Some(dir) = entry_directory(p) {
@@ -588,9 +596,10 @@ pub fn roots_for_scope(scope_id: Option<&str>, local_only: bool) -> Option<Vec<P
         if local_only && project.extra.contains_key("remote") {
             roots[0] = crate::services::remote::local_copy_in(project, &storage::state_dir())?;
         }
+        let locked = crate::services::agent_privacy::is_locked(project);
         for b in boxes
             .iter()
-            .filter(|b| b.member_ids.iter().any(|id| id == scope_id))
+            .filter(|b| !locked && b.member_ids.iter().any(|id| id == scope_id))
         {
             roots.extend(crate::services::box_store::box_allowed_roots(&b.id)?);
         }
@@ -1449,6 +1458,32 @@ pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
+/// The app's own diagnostic logs, shown read-only through the state mask so an
+/// agent asked "why did it crash" can read them: `crash.log` (crash, panic,
+/// webview and frontend-error entries) and the frozen dev build's
+/// `<dev-bin>.log` (the launcher's stdout/stderr). Only regular files are
+/// listed — never a symlink, which would expose wherever it points. Each is
+/// rewritten in place (`state_gc::cap_crash_log` trims without a rename; the
+/// launcher rotates its log before the app starts), so the bind stays live
+/// for the tab's lifetime.
+#[cfg(any(target_os = "linux", test))]
+fn diagnostic_logs(state_dir: &Path) -> Vec<PathBuf> {
+    ["crash.log".to_string(), format!("{}.log", crate::brand::DEV_BIN_NAME)]
+        .into_iter()
+        .map(|name| state_dir.join(name))
+        .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file()))
+        .collect()
+}
+
+/// Splice `items` into bubblewrap's `args` just before its `--` (at the end
+/// when there is none yet): after every mount made so far, so nothing bound
+/// earlier can re-expose what they hide.
+#[cfg(any(target_os = "linux", test))]
+fn splice_before_command(args: &mut Vec<String>, items: Vec<String>) {
+    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
+    args.splice(separator..separator, items);
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMount]) {
     let mut mask = Vec::new();
@@ -1456,13 +1491,267 @@ fn mask_private_state(args: &mut Vec<String>, state_dir: &Path, mounts: &[BindMo
         if path.is_dir() { mask.extend(["--tmpfs".into(), path.to_string_lossy().into_owned()]); }
         else if path.exists() { mask.extend(["--ro-bind".into(), "/dev/null".into(), path.to_string_lossy().into_owned()]); }
     }
-    // Only Tabtivity's explicit agent support mounts may pierce the state mask.
-    // Project roots and user allowlists are intentionally never restored here.
+    // Only Tabtivity's explicit agent support mounts and its diagnostic logs
+    // (read-only) may pierce the state mask. Project roots and user allowlists
+    // are intentionally never restored here.
     for m in mounts.iter().filter(|m| Path::new(&m.dst).starts_with(state_dir)) {
         mask.extend([if m.read_only { "--ro-bind" } else { "--bind" }.into(), m.src.clone(), m.dst.clone()]);
     }
-    let separator = args.iter().position(|s| s == "--").unwrap_or(args.len());
-    args.splice(separator..separator, mask);
+    for log in diagnostic_logs(state_dir) {
+        let log = log.to_string_lossy().into_owned();
+        mask.extend(["--ro-bind".into(), log.clone(), log]);
+    }
+    splice_before_command(args, mask);
+}
+
+/// Hide each local-models-only project's folder (`agent_privacy::mask_dirs`)
+/// under an empty tmpfs, spliced in last like [`mask_private_state`]'s masks:
+/// no allowlist, parent project or box root bound before can re-expose it.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn mask_local_models_only(args: &mut Vec<String>, dirs: &[PathBuf]) {
+    let mask: Vec<String> = dirs.iter().flat_map(|d| ["--tmpfs".to_string(), d.to_string_lossy().into_owned()]).collect();
+    splice_before_command(args, mask);
+}
+
+/// What a host's `/etc/claude-code` is, as far as the fence's mounts are concerned.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostClaudeDir {
+    /// A folder: it can be covered with an empty tmpfs in place.
+    Folder,
+    /// Nothing there: the fence root is read-only, so the folder is added by an
+    /// overlay of `/etc`.
+    Missing,
+}
+
+/// Where Claude Code reads its machine-wide managed settings on Linux. It reads
+/// `managed-settings.json` and the drop-in folder `managed-settings.d/` here
+/// (strace of 2.1.319), and nowhere else on this platform; the environment override
+/// of the path is compiled out of the release build.
+#[cfg(any(target_os = "linux", test))]
+const CLAUDE_MANAGED_DIR: &str = "/etc/claude-code";
+
+/// The bubblewrap arguments that put `file` at `/etc/claude-code/managed-settings.json`
+/// read-only, with no `managed-settings.d/` beside it and nothing writable in the
+/// folder, so a drop-in the agent adds cannot be merged over it. `layer` is the
+/// folder that holds `claude-code/managed-settings.json` (the overlay source used
+/// when the host has no `/etc/claude-code`).
+///
+/// A folder on the host is covered with a tmpfs (hiding an administrator's own
+/// policy and drop-ins inside this fence), the file bound into it and the tmpfs
+/// remounted read-only. Without one bubblewrap cannot create a mount point in the
+/// read-only `/etc` of the root bind, so `/etc` is overlaid read-only with `layer`
+/// as a second source. Built, not run, here (the sandbox of this session forbids a
+/// nested namespace): the argv shape is a unit test.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn managed_claude_args(host: HostClaudeDir, file: &Path, layer: &Path) -> Vec<String> {
+    let s = |p: &Path| p.to_string_lossy().into_owned();
+    let dest = format!("{CLAUDE_MANAGED_DIR}/managed-settings.json");
+    match host {
+        HostClaudeDir::Folder => vec![
+            "--tmpfs".into(),
+            CLAUDE_MANAGED_DIR.into(),
+            "--ro-bind".into(),
+            s(file),
+            dest,
+            "--remount-ro".into(),
+            CLAUDE_MANAGED_DIR.into(),
+        ],
+        HostClaudeDir::Missing => vec![
+            "--overlay-src".into(),
+            "/etc".into(),
+            "--overlay-src".into(),
+            s(layer),
+            "--ro-overlay".into(),
+            "/etc".into(),
+        ],
+    }
+}
+
+/// Write `settings` where only Tabtivity can (`<state>/claude_managed/<digest>/claude-code/
+/// managed-settings.json`, content-addressed so tabs of different models never share
+/// a name) through the guarded file helpers, and say what [`managed_claude_args`] and
+/// [`verify_control_pins`] need: the file, its layer folder and its pin. The file is
+/// outside the project and the agent homes; the fence binds it read-only.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn write_managed_claude(state_dir: &Path, settings: &str) -> Result<(PathBuf, PathBuf, ControlPin), String> {
+    let refuse = |why: &dyn std::fmt::Display| {
+        format!("Agent sandbox: could not prepare the Claude Code settings the fence pins ({why}), so this agent was not started.")
+    };
+    let digest = crate::digest::sha256_hex(settings.as_bytes());
+    let root = state_dir.join("claude_managed");
+    let rel = format!("{digest}/claude-code/managed-settings.json");
+    let file = crate::services::home_io::HomeFile::open(&root, &rel).ok_or_else(|| refuse(&"a link or file is in the way"))?;
+    if file.read().as_deref() != Some(settings.as_bytes()) {
+        file.write(settings.as_bytes()).map_err(|e| refuse(&e))?;
+    }
+    let meta = file.ensure(false).map_err(|e| refuse(&e))?;
+    let path = file.path();
+    Ok((path, root.join(&digest), ControlPin { path: file.path(), ino: meta.ino }))
+}
+
+/// [`HostClaudeDir`] of this machine; an `/etc/claude-code` that is not a folder (a
+/// file, a link) refuses, since no mount can be placed over it safely.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn host_claude_dir(path: &Path) -> Result<HostClaudeDir, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => Ok(HostClaudeDir::Folder),
+        Ok(_) => Err(format!(
+            "Agent sandbox: {} is not a folder, so the sandbox cannot pin Claude Code's settings there and this agent was not started.",
+            path.display()
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(HostClaudeDir::Missing),
+        Err(e) => Err(format!("Agent sandbox: {} could not be looked at ({e}), so this agent was not started.", path.display())),
+    }
+}
+
+/// A bubblewrap version as `--version` prints it: `(major, minor, patch)`.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) type BwrapVersion = (u32, u32, u32);
+
+/// The first bubblewrap with `--overlay-src` / `--ro-overlay`, which the pinned Claude
+/// settings need on a host with no `/etc/claude-code` ([`managed_claude_args`]).
+#[cfg(any(target_os = "linux", test))]
+const OVERLAY_MIN_BWRAP: (u32, u32) = (0, 8);
+
+/// The version in bubblewrap's `--version` output (`bubblewrap 0.11.1`): the first line
+/// must start with `bubblewrap`; major and minor are required, a missing patch is 0
+/// and a suffix after the digits (`0.9.0-rc1`) is dropped. Anything else is `None`.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn parse_bwrap_version(out: &str) -> Option<BwrapVersion> {
+    let rest = out.lines().next()?.trim().strip_prefix("bubblewrap")?;
+    // A separator, not a longer program name.
+    let rest = rest.strip_prefix(char::is_whitespace)?.trim();
+    let num = |s: &str| s.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<u32>().ok();
+    let mut parts = rest.split('.');
+    let major = num(parts.next()?)?;
+    let minor = num(parts.next()?)?;
+    let patch = parts.next().and_then(num).unwrap_or(0);
+    Some((major, minor, patch))
+}
+
+/// Whether the bubblewrap found can build the mounts [`managed_claude_args`] chose for
+/// `host`: the overlay form (no `/etc/claude-code` on the host) needs
+/// [`OVERLAY_MIN_BWRAP`]. An older one, or one whose version could not be read, is
+/// refused here by name, because bubblewrap's own answer is a bare "unknown option".
+/// The tmpfs form uses options bubblewrap has had for years and is not checked.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn overlay_bwrap_check(host: HostClaudeDir, version: Option<BwrapVersion>) -> Result<(), String> {
+    if host != HostClaudeDir::Missing {
+        return Ok(());
+    }
+    let (major, minor) = OVERLAY_MIN_BWRAP;
+    let need = format!("Agent sandbox: pinning Claude Code to the local model needs bubblewrap {major}.{minor} or newer on this machine");
+    match version {
+        Some(v) if (v.0, v.1) >= OVERLAY_MIN_BWRAP => Ok(()),
+        Some((a, b, c)) => Err(format!(
+            "{need}, and the installed bubblewrap is {a}.{b}.{c}, so this agent was not started. Update the bubblewrap package, or use another local agent."
+        )),
+        None => Err(format!(
+            "{need}, and the installed version could not be read, so this agent was not started. Update the bubblewrap package, or use another local agent."
+        )),
+    }
+}
+
+/// The version of the bubblewrap at `bwrap` (`--version`), asked once per binary file:
+/// the answer is kept until the file's modification time or size changes (an upgrade).
+/// `None` when it cannot be run or its output is not a version, which
+/// [`overlay_bwrap_check`] treats as too old.
+#[cfg(target_os = "linux")]
+fn bwrap_version(bwrap: &Path) -> Option<BwrapVersion> {
+    type Key = (Option<std::time::SystemTime>, u64);
+    static CACHE: Mutex<Option<(Key, BwrapVersion)>> = Mutex::new(None);
+    let meta = std::fs::metadata(bwrap).ok()?;
+    let key: Key = (meta.modified().ok(), meta.len());
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached, version)) = cache.as_ref() {
+        if *cached == key {
+            return Some(*version);
+        }
+    }
+    let out = paths::command_no_window(bwrap).arg("--version").output().ok().filter(|o| o.status.success())?;
+    let version = parse_bwrap_version(&String::from_utf8_lossy(&out.stdout))?;
+    *cache = Some((key, version));
+    Some(version)
+}
+
+/// Put the pinned Claude settings into a fence argv: right after the root bind, before
+/// any mount under `/etc`.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn insert_managed_claude(args: &mut Vec<String>, managed: Vec<String>) {
+    let at = args
+        .windows(3)
+        .position(|w| w[0] == "--ro-bind" && w[1] == "/" && w[2] == "/")
+        .map_or(0, |i| i + 3);
+    args.splice(at..at, managed);
+}
+
+/// Put a cut fence's local lane into the argv (`services::local_lane`): the relay
+/// binary and the sockets bound under the fence's private `/run` (right after the
+/// `--tmpfs /run`, so they are not covered by it, and before the home is replaced,
+/// since their sources live under the user's real state dir), `--unshare-net`, and
+/// the relay in front of the CLI's own command. Unix only; built, not run, here
+/// (the sandbox of this session forbids a nested namespace): the argv shape is a
+/// unit test.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn insert_local_lane(args: &mut Vec<String>, binds: Vec<String>, prefix: Vec<String>) -> Result<(), String> {
+    let run = args
+        .windows(2)
+        .position(|w| w[0] == "--tmpfs" && w[1] == "/run")
+        .ok_or("Agent sandbox: the fence has no private /run to bind the local model lane into, so this agent was not started.")?;
+    args.splice(run + 2..run + 2, binds);
+    // systemd-resolved's varlink socket (mode 0666) answers `ResolveHostname` for any
+    // local user, from any network namespace: left in the fence it is a DNS channel out.
+    // A fence with no network has no use for the resolver's folder, so it is not shown.
+    while let Some(at) = args.windows(3).position(|w| w[0] == "--ro-bind-try" && w[1] == "/run/systemd/resolve" && w[2] == "/run/systemd/resolve") {
+        args.drain(at..at + 3);
+    }
+    let pid = args
+        .iter()
+        .position(|a| a == "--unshare-pid")
+        .ok_or("Agent sandbox: the fence argv has no pid namespace to put the network namespace beside, so this agent was not started.")?;
+    args.insert(pid + 1, "--unshare-net".into());
+    let separator = args.iter().position(|s| s == "--").ok_or("Agent sandbox: the fence argv has no command.")?;
+    args.splice(separator + 1..separator + 1, prefix);
+    Ok(())
+}
+
+/// Hide the project config a local-model CLI would load from a verified tab's own
+/// folder (`agent_privacy::project_config_masks`): a file is bound over with
+/// `/dev/null`, a folder covered with an empty tmpfs, spliced in last like the
+/// other masks so nothing bound before can re-expose it.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn mask_project_config(args: &mut Vec<String>, masks: &[crate::services::agent_privacy::ConfigMask]) {
+    let mask: Vec<String> = masks
+        .iter()
+        .flat_map(|m| {
+            let path = m.path.to_string_lossy().into_owned();
+            if m.dir { vec!["--tmpfs".to_string(), path] } else { vec!["--ro-bind".to_string(), "/dev/null".to_string(), path] }
+        })
+        .collect();
+    splice_before_command(args, mask);
+}
+
+/// Unset each of `names` inside the fence (bubblewrap's own `--unsetenv`), so a
+/// provider key the app itself inherited never reaches a verified local tab.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn unset_env_in_fence(args: &mut Vec<String>, names: &[String]) {
+    let unset: Vec<String> = names.iter().flat_map(|n| ["--unsetenv".to_string(), n.clone()]).collect();
+    splice_before_command(args, unset);
+}
+
+/// Open `tab`'s local lane and splice it into `args` ([`insert_local_lane`]).
+/// The endpoint is the one the gate verified for the tab; the tools socket is
+/// there when this process serves an MCP listener.
+#[cfg(target_os = "linux")]
+fn add_local_lane(args: &mut Vec<String>, tab: &str) -> Result<(), String> {
+    let verified = crate::services::agent_privacy::verified_launch(tab)
+        .ok_or("Agent sandbox: the local model lane has no verified endpoint for this tab, so it was not started. Open it again.")?;
+    let mcp_port = crate::services::root_mcp::runtime().map(|r| r.port);
+    let lane = crate::services::local_lane::open(tab, &storage::state_dir(), &verified.endpoint, mcp_port)?;
+    let exe = crate::services::fence_scope::running_binary();
+    crate::services::local_lane::relay_exe_check(Path::new(&exe), std::env::var("APPIMAGE").ok().as_deref())?;
+    insert_local_lane(args, lane.binds(Path::new(&exe)), lane.command_prefix())
 }
 
 /// Rewrite a local agent spawn into its outer bubblewrap boundary.
@@ -1490,6 +1779,10 @@ pub fn wrap_pty_options_bwrap(
     // §6.5 gate 2); a no-op everywhere else.
     crate::services::server::share::spawn_gate(roots)?;
     check_assistant_spawn(scope_id, roots, scope_home, &opts.cwd, &storage::state_dir())?;
+    // A local-models-only project: only a spawn `agent_privacy::gate` verified
+    // (it left its stamp) runs in, or from, its folder — and then without any
+    // key. The shell-tab shim never passed the gate and is refused here.
+    let locked_project = crate::services::agent_privacy::fence_gate(opts, scope_id)?;
     // Before `opts.cmd` and `opts.args` become bwrap's below.
     let agent_cmd = opts.cmd.clone();
     let copilot = basename(&agent_cmd) == "copilot";
@@ -1518,10 +1811,17 @@ pub fn wrap_pty_options_bwrap(
     // (plan §5.4): checked against the keeper's offer here (a withdrawn key
     // fails the spawn), delivered below as a proxy grant like the user's own
     // key (#2389); a no-op everywhere else.
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    if locked_project.is_none() {
+        let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+        let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+        let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+        crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+        // Claude's long-lived token where no shared login holds one (not on
+        // a server administrator's key).
+        if admin.is_none() {
+            crate::services::claude_token::inject_launch(opts);
+        }
+    }
     let mut args = bwrap_args(
         &paths::home_dir_string(),
         Some(&scope_home.to_string_lossy()),
@@ -1532,6 +1832,21 @@ pub fn wrap_pty_options_bwrap(
         &extra_ro,
         &mounts,
     );
+    // A verified local Claude Code tab: Claude Code re-reads the project's and the
+    // user's settings while it runs, so a file the agent writes mid-session would move
+    // the next request. The managed-settings file outranks both; it holds the endpoint
+    // and the model the gate checked and is bound read-only where Claude reads it.
+    let mut managed_pins = Vec::new();
+    if locked_project.is_some() {
+        if let Some(settings) = crate::services::agent_privacy::claude_managed_for(opts)? {
+            let host = host_claude_dir(Path::new(CLAUDE_MANAGED_DIR))?;
+            // The overlay form needs bubblewrap 0.8: say so, not "unknown option".
+            overlay_bwrap_check(host, bwrap_version(&bwrap))?;
+            let (file, layer, pin) = write_managed_claude(&storage::state_dir(), &settings)?;
+            insert_managed_claude(&mut args, managed_claude_args(host, &file, &layer));
+            managed_pins.push(pin);
+        }
+    }
     // Final masks follow every allowlist/project bind, so none re-exposes a
     // token. Missing files need no mask (their parent is read-only/hidden).
     mask_cargo_credentials(&mut args, hidden_cargo_credentials(opts));
@@ -1541,10 +1856,49 @@ pub fn wrap_pty_options_bwrap(
     );
     // Last: overlapping roots and allowlists must not reopen private stores.
     mask_private_state(&mut args, &storage::state_dir(), &support_mounts);
+    // Every local-models-only project's folder but this scope's own, hidden
+    // in whatever way it was bound (a parent project, the allowlist).
+    let locked_masks = crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?;
+    mask_local_models_only(&mut args, &locked_masks);
+    note_fence_view(
+        &opts.id,
+        crate::services::agent_privacy::FenceView {
+            visible: roots.iter().cloned().chain(extra_ro.iter().map(PathBuf::from)).collect(),
+            masked: locked_masks,
+        },
+    );
+    if locked_project.is_some() {
+        // The CLI reads config from the folder it works in, and the folder is
+        // attacker-controlled: a project `.claude/settings.json` `env` beats the
+        // environment `ollama launch` set, and would re-aim the tab at a cloud
+        // provider.
+        mask_project_config(&mut args, &crate::services::agent_privacy::project_config_masks(roots, Path::new(&opts.cwd))?);
+        unset_env_in_fence(&mut args, &crate::services::agent_privacy::unset_names(opts.env.keys()));
+    }
     // A hosted server's shared hubs: all hidden but this scope's own
     // project's, read-only (plan §6.3); a no-op everywhere else.
     crate::services::server::share::apply_fence(&mut args, roots);
-    let filter = write_keyring_filter()?;
+    // Cut network (phase 2): the verified tab's fence has no network. Its only way
+    // out is the local lane: sockets served by this process, bound in beside the
+    // relay binary that is the fence's command and listens on the ports the CLI was
+    // configured with. The lane is opened last, so a refusal above leaves none.
+    let lane_tab = match &locked_project {
+        Some(project) if crate::services::agent_privacy::fence_cut(project, &opts.id)? => Some(opts.id.clone()),
+        _ => None,
+    };
+    if let Some(tab) = &lane_tab {
+        if let Err(e) = add_local_lane(&mut args, tab) {
+            crate::services::local_lane::close(tab);
+            return Err(e);
+        }
+    }
+    let close_lane = |e: String| {
+        if let Some(tab) = &lane_tab {
+            crate::services::local_lane::close(tab);
+        }
+        e
+    };
+    let filter = write_keyring_filter().map_err(close_lane)?;
     opts.env
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
     // Keep the CLI's login in its file: the keyring is not reachable here.
@@ -1568,7 +1922,8 @@ pub fn wrap_pty_options_bwrap(
     );
     // Last before the argv: the local model's control paths still hold the
     // inodes set up above (gap 30).
-    verify_control_pins(&control_pins)?;
+    verify_control_pins(&control_pins).map_err(close_lane)?;
+    verify_control_pins(&managed_pins).map_err(close_lane)?;
     (opts.cmd, opts.args) = seccomp_launcher(
         &bwrap.to_string_lossy(),
         step.as_ref().map(|(helper, mode)| (helper.as_str(), *mode)),
@@ -1869,6 +2224,16 @@ fn sandbox_exec_inputs(
         &mut inputs,
         crate::services::git_guard::guard_paths(roots, Some(Path::new(&opts.cwd))),
     );
+    // Every local-models-only project's folder but this scope's own.
+    let locked_masks = crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?;
+    inputs.hidden.extend(locked_masks.iter().map(|p| p.to_string_lossy().into_owned()));
+    note_fence_view(
+        &opts.id,
+        crate::services::agent_privacy::FenceView {
+            visible: inputs.roots.iter().chain(&inputs.readable).chain(&inputs.writable).map(PathBuf::from).collect(),
+            masked: locked_masks,
+        },
+    );
     Ok((inputs, control_pins))
 }
 
@@ -1889,7 +2254,31 @@ pub fn wrap_pty_options_sandbox_exec(
                 .to_string(),
         );
     }
-    let (inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
+    // See the Linux wrapper: only a verified spawn runs in a local-models-only
+    // project, and then without any key.
+    let locked_project = crate::services::agent_privacy::fence_gate(opts, scope_id)?;
+    // Seatbelt cannot bind a file to Claude Code's managed-settings path, so a verified
+    // Claude tab (which re-reads its settings mid-session) is not started here.
+    if locked_project.is_some() && crate::services::agent_privacy::claude_managed_for(opts)?.is_some() {
+        return Err(crate::services::agent_privacy::CLAUDE_NOT_PINNABLE.to_string());
+    }
+    // Seatbelt's network denial and the local lane are phase 3: a project with Cut
+    // network on starts nothing here (the gate refused already; this repeats it).
+    if let Some(project) = &locked_project {
+        if crate::services::agent_privacy::fence_cut(project, &opts.id)? {
+            return Err(format!("{}: {}", crate::services::agent_privacy::REFUSAL, crate::services::agent_privacy::CUT_NETWORK_UNAVAILABLE));
+        }
+    }
+    let (mut inputs, control_pins) = sandbox_exec_inputs(opts, roots, scope_id, scope_home)?;
+    if locked_project.is_some() {
+        // As on Linux: the folder's own CLI config is denied (Seatbelt has no
+        // empty mount, so the CLI meets a denied read where Linux shows an empty file).
+        inputs.hidden.extend(
+            crate::services::agent_privacy::project_config_masks(roots, Path::new(&opts.cwd))?
+                .into_iter()
+                .map(|m| m.path.to_string_lossy().into_owned()),
+        );
+    }
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
@@ -1904,10 +2293,17 @@ pub fn wrap_pty_options_sandbox_exec(
     // inodes set up above (gap 30).
     verify_control_pins(&control_pins)?;
     let agent_cmd = opts.cmd.clone();
-    let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
-    let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
-    let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
-    crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    if locked_project.is_none() {
+        let admin = crate::services::server::agent_keys::admin_for_spawn(&agent_cmd)?;
+        let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
+        let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
+        crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+        // Claude's long-lived token where no shared login holds one (not on
+        // a server administrator's key).
+        if admin.is_none() {
+            crate::services::claude_token::inject_launch(opts);
+        }
+    }
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),
@@ -2087,6 +2483,12 @@ struct LiveSpawn {
     /// The `VIBE_HOME` it was spawned with ([`note_vibe_home`]): a local
     /// model's conversations are not cleared while a tab of it runs.
     vibe_home: Option<PathBuf>,
+    /// What its fence showed ([`note_live_fence_view`]): which live tabs a newly
+    /// locked project's folder must be taken from.
+    view: Option<crate::services::agent_privacy::FenceView>,
+    /// The local tmux session the spawn runs in ([`note_live_tmux`]): a tab the phone
+    /// started headless has no PTY in the registry, only this session.
+    tmux: Option<String>,
 }
 
 fn tab_spawns() -> &'static Mutex<HashMap<String, TabSpawns>> {
@@ -2124,7 +2526,7 @@ pub fn begin_spawn(tab_id: &str) -> u64 {
 pub fn register_tab(tab_id: &str, scope_id: Option<&str>, seq: u64) -> bool {
     match tab_spawns().lock_ok().get_mut(tab_id) {
         Some(spawns) if spawns.latest == seq => {
-            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None });
+            spawns.live = Some(LiveSpawn { seq, scope_id: scope_id.map(str::to_string), vibe_home: None, view: None, tmux: None });
             true
         }
         _ => false,
@@ -2139,6 +2541,68 @@ pub fn note_vibe_home(tab_id: &str, seq: u64, home: &Path) {
     if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
         live.vibe_home = Some(home.to_path_buf());
     }
+}
+
+fn pending_fence_views() -> &'static Mutex<HashMap<String, crate::services::agent_privacy::FenceView>> {
+    static VIEWS: OnceLock<Mutex<HashMap<String, crate::services::agent_privacy::FenceView>>> = OnceLock::new();
+    VIEWS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The fence just built for `tab` shows `view` (called by the wrappers; the
+/// spawn path takes it with [`take_fence_view`] and attaches it to the live
+/// spawn once the process exists).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn note_fence_view(tab: &str, view: crate::services::agent_privacy::FenceView) {
+    pending_fence_views().lock_ok().insert(tab.to_string(), view);
+}
+
+/// The view [`note_fence_view`] recorded for `tab`'s spawn, consumed once.
+pub fn take_fence_view(tab: &str) -> Option<crate::services::agent_privacy::FenceView> {
+    pending_fence_views().lock_ok().remove(tab)
+}
+
+/// Attach `view` to the live spawn `seq` of `tab_id`. Nothing when `seq` is not
+/// the live spawn.
+pub fn note_live_fence_view(tab_id: &str, seq: u64, view: crate::services::agent_privacy::FenceView) {
+    let mut map = tab_spawns().lock_ok();
+    if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
+        live.view = Some(view);
+    }
+}
+
+/// Record the tmux session the live spawn `seq` of `tab_id` runs in. Nothing when
+/// `seq` is not the live spawn.
+pub fn note_live_tmux(tab_id: &str, seq: u64, session: &str) {
+    let mut map = tab_spawns().lock_ok();
+    if let Some(live) = map.get_mut(tab_id).and_then(|s| s.live.as_mut()).filter(|l| l.seq == seq) {
+        live.tmux = Some(session.to_string());
+    }
+}
+
+/// Every live spawn that runs in a tmux session: the tab, the session and what its
+/// fence showed (`None` for an unfenced one or a spawn whose view was not recorded).
+/// The switch reads this to find agents no PTY of the registry holds (a headless
+/// phone-started tab).
+pub fn live_tmux_tabs() -> Vec<crate::services::agent_privacy::KnownSession> {
+    tab_spawns()
+        .lock_ok()
+        .iter()
+        .filter_map(|(tab, s)| {
+            let live = s.live.as_ref()?;
+            Some(crate::services::agent_privacy::KnownSession {
+                tab: tab.clone(),
+                tmux: live.tmux.clone()?,
+                view: live.view.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Every live fenced tab and what its fence shows, for
+/// `agent_privacy::tabs_seeing`.
+pub fn live_fence_views() -> Vec<(String, crate::services::agent_privacy::FenceView)> {
+    let map = tab_spawns().lock_ok();
+    map.iter().filter_map(|(id, s)| Some((id.clone(), s.live.as_ref()?.view.clone()?))).collect()
 }
 
 /// The tabs whose live process was spawned with `VIBE_HOME` = `home`: a
@@ -2184,6 +2648,10 @@ pub fn abandon_spawn(tab_id: &str, seq: u64) -> bool {
     map.remove(tab_id);
     drop(map);
     untrack_host_agent_tab(tab_id);
+    crate::services::agent_privacy::forget(tab_id);
+    // A cut tab's lane sockets go with it (a respawn of the id opens its own).
+    #[cfg(unix)]
+    crate::services::local_lane::close(tab_id);
     crate::services::api_proxy::on_tab_gone(tab_id);
     true
 }
@@ -2236,6 +2704,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         settings().agent_fence_cargo_credentials.unwrap_or(false)));
     guard_git_control(&mut argv, crate::services::git_guard::guard_paths(&roots, Some(cwd)));
     mask_private_state(&mut argv, &storage::state_dir(), &[]);
+    mask_local_models_only(&mut argv, &crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?);
     crate::services::server::share::apply_fence(&mut argv, &roots);
     let filter = write_keyring_filter()?;
     let scope = crate::services::fence_scope::helper_for(&bwrap);
@@ -2263,7 +2732,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     let roots = roots_for_scope((scope_id != ROOT_SCOPE).then_some(scope_id), false)
         .ok_or_else(|| format!("Agent sandbox: unknown project or box scope '{scope_id}'"))?;
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
-    let inputs = one_shot_seatbelt_inputs(
+    let mut inputs = one_shot_seatbelt_inputs(
         &paths::home_dir_string(),
         &storage::state_dir(),
         &roots,
@@ -2272,6 +2741,11 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         cargo_credential_paths(&paths::home_dir(), cargo_home.as_deref(), cwd,
             settings().agent_fence_cargo_credentials.unwrap_or(false)),
         std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
+    );
+    inputs.hidden.extend(
+        crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned()),
     );
     let stage = crate::services::sandbox::stage_dir(scope_id);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
@@ -2315,6 +2789,10 @@ pub fn on_tab_gone(tab_id: &str, seq: u64) -> bool {
     };
     let was_fenced = removed.is_some_and(|l| l.scope_id.is_some());
     untrack_host_agent_tab(tab_id);
+    crate::services::agent_privacy::forget(tab_id);
+    // A cut tab's lane sockets go with it (a respawn of the id opens its own).
+    #[cfg(unix)]
+    crate::services::local_lane::close(tab_id);
     // Its API proxy tokens go with it (those of a tmux-held agent once the
     // session is gone too).
     crate::services::api_proxy::on_tab_gone(tab_id);

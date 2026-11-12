@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSendGuard, type GuardClock, type GuardPhase } from "../../../shared/handsFree";
+import { createPickStage, createSendGuard, type GuardClock, type GuardPhase, type VoicePick } from "../../../shared/handsFree";
 
 /** A clock the test moves by hand. */
 function fakeClock() {
@@ -166,5 +166,85 @@ describe("the hands-free send guard", () => {
     s.setDraft("");
     s.advance(1500);
     expect(s.log).toEqual(["chime"]);
+  });
+});
+
+describe("a spoken pick rides the same guard (gap 80)", () => {
+  /** A composer as ReaderVoice/useHandsFree wire it: a staged pick counts as
+   * the draft, and is applied only when the window closes. */
+  function picking() {
+    const { clock, advance } = fakeClock();
+    const stage = createPickStage<VoicePick>();
+    const log: string[] = [];
+    const guard = createSendGuard(1000, {
+      hasDraft: () => stage.pending() !== null,
+      onWindow: () => log.push("chime"),
+      onSend: () => {
+        const pick = stage.take();
+        if (pick) log.push(`answer:${pick.index}`);
+      },
+      onCancel: () => stage.clear(),
+    }, clock, 1500);
+    const pick: VoicePick = { key: "dialog-1", index: 1, heard: "2. Blue" };
+    /** What a settled utterance does: the pick path, as the callers run it. */
+    const hear = (text: string, picks: boolean) => {
+      guard.speechStarted();
+      stage.heard();
+      if (picks) {
+        stage.stage(pick);
+        guard.settled(text);
+        return;
+      }
+      guard.settled(text);
+    };
+    return { guard, advance, log, stage, hear };
+  }
+
+  it("answers nothing at once: the chime comes first, the answer when the window closes", () => {
+    const { advance, log, stage, hear } = picking();
+    hear("two", true);
+    expect(log).toEqual([]);
+    expect(stage.pending()?.heard).toBe("2. Blue");
+    advance(1000);
+    expect(log).toEqual(["chime"]);
+    advance(1499);
+    expect(log).toEqual(["chime"]);
+    advance(1);
+    expect(log).toEqual(["chime", "answer:1"]);
+    expect(stage.pending()).toBeNull();
+  });
+
+  it("keeps the dialog unanswered when the user says stop in the window", () => {
+    const { advance, log, stage, hear } = picking();
+    hear("two", true);
+    advance(1000);
+    hear("stop", false);
+    advance(5000);
+    expect(log).toEqual(["chime"]);
+    expect(stage.pending()).toBeNull();
+  });
+
+  it("a stop heard before the chime cancels it, and the stop key does too", () => {
+    const a = picking();
+    a.hear("two", true);
+    a.hear("stop", false);
+    a.advance(5000);
+    expect(a.log).toEqual([]);
+    const b = picking();
+    b.hear("two", true);
+    b.advance(1000);
+    b.stage.clear();
+    b.guard.cancel();
+    b.advance(5000);
+    expect(b.log).toEqual(["chime"]);
+  });
+
+  it("other words supersede the pick: nothing is answered", () => {
+    const { advance, log, stage, hear } = picking();
+    hear("two", true);
+    hear("actually something else", false);
+    advance(5000);
+    expect(log).toEqual([]);
+    expect(stage.pending()).toBeNull();
   });
 });

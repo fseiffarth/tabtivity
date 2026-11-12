@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useSettingsStore } from "./settings";
-import { HINTS, type HintId } from "../lib/shortcuts/hints";
+import { HINTS, isPacedHint, type HintId } from "../lib/shortcuts/hints";
 import { rollHint } from "../lib/hintChance";
 
 /**
@@ -9,7 +9,7 @@ import { rollHint } from "../lib/hintChance";
  * shown* hint plus thin actions that persist the seen-set, the read counts and
  * the master toggle through `useSettingsStore` — the single writer of
  * `settings.json`. Mirrors the session-only pattern of `vpnPrompt.ts`/`drag.ts`,
- * except retirements and reads persist.
+ * except retirements, reads and when each hint last came up persist.
  *
  * Mounted only by `AppShell` (not the detached-window `DetachedApp` branch), so
  * hints never appear in popped-out subwindows.
@@ -17,9 +17,10 @@ import { rollHint } from "../lib/hintChance";
 interface HintsStore {
   /** The hint currently on screen, or null when nothing is shown. */
   active: HintId | null;
-  /** Feature-tier hints surfaced since the app started, and when the last hint
-   *  of any kind closed (ms epoch, 0 = none yet). Session-only on purpose: the
-   *  cap and gap in `HintHost` pace one sitting, not the user's whole history. */
+  /** Paced hints (`isPacedHint`) surfaced since the app started, and when the
+   *  last hint of any kind closed (ms epoch, 0 = none yet). Session-only on
+   *  purpose: the cap and gap in `HintHost` pace one sitting, not the user's
+   *  whole history. */
   featureShown: number;
   lastClosedAt: number;
   show: (id: HintId) => void;
@@ -34,8 +35,8 @@ interface HintsStore {
   /** Turn the whole hint system off (the "Turn off hints" button); Settings
    *  turns it on again. */
   disableAll: () => void;
-  /** Settings → clear the seen-set and the read counts and re-enable, so every
-   *  hint replays at full chance. */
+  /** Settings → clear the seen-set, the read counts and the turns and re-enable,
+   *  so every hint replays at full chance, in catalogue order. */
   reset: () => void;
 }
 
@@ -63,6 +64,13 @@ function persistSeen(id: HintId) {
   void useSettingsStore.getState().updateSettings({ hints_seen: [...prev, id] });
 }
 
+/** When each hint last came up (`pickHint`'s `shownAt`); a stored shape that is
+ *  not a map reads as none yet. */
+export function hintsShownAt(): Record<string, number> {
+  const shown = useSettingsStore.getState().settings?.hints_shown;
+  return shown && typeof shown === "object" ? shown : {};
+}
+
 function persistRead(id: HintId) {
   const prev = useSettingsStore.getState().settings?.hints_read;
   const counts = prev && typeof prev === "object" ? prev : {};
@@ -81,11 +89,13 @@ export const useHintsStore = create<HintsStore>((set, get) => {
     featureShown: 0,
     lastClosedAt: 0,
 
-    show: (id) =>
-      set((s) => ({
-        active: id,
-        featureShown: HINTS.find((h) => h.id === id)?.tier === "feature" ? s.featureShown + 1 : s.featureShown,
-      })),
+    show: (id) => {
+      const shownAt = hintsShownAt();
+      const def = HINTS.find((h) => h.id === id);
+      const paced = def !== undefined && isPacedHint(def, shownAt);
+      void useSettingsStore.getState().updateSettings({ hints_shown: { ...shownAt, [id]: Date.now() } });
+      set((s) => ({ active: id, featureShown: paced ? s.featureShown + 1 : s.featureShown }));
+    },
 
     dismiss: close,
 
@@ -106,7 +116,7 @@ export const useHintsStore = create<HintsStore>((set, get) => {
 
     reset: () => {
       sittingDraws.clear();
-      void useSettingsStore.getState().updateSettings({ hints_seen: [], hints_read: {}, hints_enabled: true });
+      void useSettingsStore.getState().updateSettings({ hints_seen: [], hints_read: {}, hints_shown: {}, hints_enabled: true });
       set({ active: null });
     },
   };

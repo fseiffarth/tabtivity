@@ -7,6 +7,7 @@ import {
   layoutMdGraph,
   type MdGraph,
 } from "../../lib/viewers/mdGraph";
+import { RefreshIcon } from "../common/icons/Icon";
 
 /**
  * The markdown relationship graph (opt-in behind the `md_graph` experimental
@@ -160,7 +161,7 @@ export function MdGraphView({
           title={t("mdGraph.refresh")}
           disabled={building}
         >
-          ↻
+          <RefreshIcon />
         </button>
         {graph.nodes.length > 1 && (
           <div className="md-graph-zoom" role="group" aria-label={t("imageZoom.controlsLabel")}>

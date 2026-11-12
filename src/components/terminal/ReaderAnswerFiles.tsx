@@ -17,8 +17,8 @@ import { usePictureUrls, type PictureRef } from "./ReaderInbox";
  * in-app viewer shows), at most `MAX_FILES` per answer; a picture past
  * `MAX_PICTURE`, or one whose bytes cannot be read, is a file card.
  *
- * Nothing is copied anywhere: the desktop shows the project file itself
- * (`tabtivity-send` is the phone's way).
+ * Nothing is copied anywhere: the desktop shows the project file itself. The
+ * phone's chat draws the same album as a message of its own (`AnswerAlbum`).
  */
 
 /** Files one answer previews; the album's fourth tile reads "+N" past that. */

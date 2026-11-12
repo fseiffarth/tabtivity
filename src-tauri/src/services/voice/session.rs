@@ -90,6 +90,13 @@ pub struct MuteGate {
 /// probe may raise it).
 pub const MUTE_TAIL: Duration = Duration::from_millis(300);
 
+/// How long a segment that began while the voice spoke (Headset mode) must
+/// have gone on after it opened — the voice is stopped at once, so its echo
+/// dies within [`MUTE_TAIL`] — to count as the user talking over it. Shorter,
+/// it is the voice's own words (an agent's text, attacker-influenced, heard
+/// back on speakers: a lone "One.") and is dropped, not transcribed.
+pub const BARGE_IN_MIN_MS: usize = 600;
+
 impl MuteGate {
     pub const fn new() -> Self {
         Self {
@@ -285,7 +292,8 @@ const DRAIN_LIMIT: Duration = Duration::from_secs(30);
 
 enum Job {
     Partial { segment: u64, audio: Vec<f32> },
-    Final { segment: u64, audio: Vec<f32> },
+    /// `echo`: the voice's own words heard back; answered empty, not transcribed.
+    Final { segment: u64, audio: Vec<f32>, echo: bool },
 }
 
 enum Done {
@@ -313,9 +321,9 @@ fn worker<F: TranscriberFactory>(
     };
     while let Ok(job) = jobs.recv() {
         match job {
-            Job::Final { segment, audio } => {
+            Job::Final { segment, audio, echo } => {
                 cancel.store(false, Ordering::SeqCst);
-                let outcome = if transcriber.confirm_speech(&audio) {
+                let outcome = if !echo && transcriber.confirm_speech(&audio) {
                     transcriber.transcribe(&audio, false)
                 } else {
                     Ok(Transcript { text: String::new(), no_speech: 1.0 })
@@ -356,6 +364,9 @@ struct Listener {
     /// Samples in a row at digital silence, and whether the user was told.
     silent: usize,
     silent_told: bool,
+    /// Samples taken in since the open segment began while the voice spoke
+    /// in Headset mode (`None` for any other segment): see [`BARGE_IN_MIN_MS`].
+    over_voice: Option<usize>,
 }
 
 impl Listener {
@@ -372,7 +383,13 @@ impl Listener {
         self.to_owner(EV_VAD, VadEventPayload { session: self.config.session, segment: self.segment, state: "end" });
         // Cancel a partial in flight: the final must not wait for it.
         self.cancel.store(true, Ordering::SeqCst);
-        if self.jobs.send(Job::Final { segment: self.segment, audio }).is_ok() {
+        // A segment that began over the voice and ended with it was the
+        // voice's own echo, not a barge-in: Headset mode drops it (gap 80).
+        let echo = self.over_voice.take().is_some_and(|taken| {
+            let silence = (self.config.end_silence_ms as usize).div_ceil(20) * (RATE as usize / 50);
+            taken.saturating_sub(silence) < BARGE_IN_MIN_MS * RATE as usize / 1000
+        });
+        if self.jobs.send(Job::Final { segment: self.segment, audio, echo }).is_ok() {
             self.pending_finals += 1;
         }
     }
@@ -401,6 +418,7 @@ impl Listener {
                 self.was_paused = true;
                 // An open segment is dropped, not sent: pausing means "not now".
                 self.vad.reset();
+                self.over_voice = None;
                 self.state("paused", None);
             }
             return;
@@ -417,6 +435,7 @@ impl Listener {
                 self.queue_final(audio);
             }
             self.vad.reset();
+            self.over_voice = None;
         }
         self.level_sum += samples.iter().map(|s| s * s).sum::<f32>();
         self.level_n += samples.len();
@@ -433,6 +452,7 @@ impl Listener {
                     // Talking over the voice, with a headset: it stops.
                     if self.config.headset && GATE.speaking() {
                         (self.config.barge_in)();
+                        self.over_voice = Some(0);
                     }
                     self.segment += 1;
                     self.last_partial = Instant::now();
@@ -443,6 +463,9 @@ impl Listener {
                 }
                 VadEvent::End(audio) => self.queue_final(audio),
             }
+        }
+        if let Some(taken) = self.over_voice.as_mut() {
+            *taken += samples.len();
         }
         if !self.partial_running && self.last_partial.elapsed() >= PARTIAL_EVERY {
             if let Some(open) = self.vad.open_audio() {
@@ -540,6 +563,7 @@ pub fn run<S: AudioSource, F: TranscriberFactory>(
         was_paused: false,
         silent: 0,
         silent_told: false,
+        over_voice: None,
     };
     listener.state("preparing", None);
 
@@ -792,6 +816,41 @@ mod tests {
         assert!(GATE.muted(Instant::now()), "the ended session closed the gate again");
         GATE.set_speaking(false, Instant::now());
         BARGED.load(Ordering::SeqCst)
+    }
+
+    /// Runs `audio` through a Headset session while the voice speaks (the
+    /// fake barge-in does not stop it): the final's text and the number of
+    /// transcriptions run.
+    fn headset_final(audio: Vec<f32>) -> (String, usize) {
+        let _serial = GATE_SERIAL.lock_ok();
+        GATE.set_speaking(true, Instant::now());
+        let events = RecordingEvents::new();
+        let (factory, calls) = factory();
+        let cfg = SessionConfig { headset: true, barge_in: count_barge_in, ..config(9) };
+        let (control, thread) = spawn(&events, cfg, FakeSource { audio, gap_at: None, fail_start: None }, factory);
+        wait_for(&events, EV_FINAL, 1);
+        control.stop();
+        thread.join().unwrap();
+        GATE.set_speaking(false, Instant::now());
+        let text = events.payloads(EV_FINAL)[0]["text"].as_str().unwrap().to_string();
+        let ran = calls.lock().unwrap().iter().filter(|(_, partial)| !partial).count();
+        (text, ran)
+    }
+
+    #[test]
+    fn headset_mode_drops_a_segment_that_began_over_the_voice_and_ended_with_it() {
+        // 300 ms of tone opens a segment (260 ms of speech) and is over as
+        // the voice's echo would be: the user did not talk over it.
+        let mut echo = hiss(500);
+        echo.extend(tone(330, 220.0, 0.2));
+        echo.extend(hiss(1000));
+        assert_eq!(headset_final(echo), (String::new(), 0), "the voice's own words are not transcribed");
+        // Speech that goes on well past the voice's stop is a barge-in: kept.
+        let mut spoken = hiss(500);
+        spoken.extend(tone(1600, 220.0, 0.2));
+        spoken.extend(hiss(1000));
+        let (text, ran) = headset_final(spoken);
+        assert_eq!((text.as_str(), ran), ("words 1", 1));
     }
 
     #[test]

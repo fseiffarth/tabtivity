@@ -21,6 +21,19 @@ describe("looksLikeDecisionPrompt", () => {
     expect(looksLikeDecisionPrompt("↑↓ select  enter confirm")).toBe(false);
   });
 
+  it("detects OpenCode's permission chips and mini's question form (2.2.4)", () => {
+    expect(looksLikeDecisionPrompt(" Allow once   Always allow   Reject    ctrl+f fullscreen  ⇆ select  enter confirm")).toBe(true);
+    expect(looksLikeDecisionPrompt(" Allow once   Always allow   Reject\n ctrl+f fullscreen  ⇆ select  enter confirm")).toBe(true);
+    expect(looksLikeDecisionPrompt(" Allow once   Always allow   Reject\npgup/pgdn scroll")).toBe(true);
+    expect(looksLikeDecisionPrompt(" Confirm   Cancel        ⇆ select  enter confirm  esc cancel")).toBe(true);
+    expect(looksLikeDecisionPrompt("AllowonceAlwaysallowReject\x1b[39m⇆selectenterconfirm")).toBe(true);
+    expect(looksLikeDecisionPrompt("  ↑↓ select   enter choose   tab next   esc dismiss")).toBe(true);
+    expect(looksLikeDecisionPrompt("enter choose esc dismiss pgup/pgdn scroll")).toBe(true);
+    expect(looksLikeDecisionPrompt("  ◆ Questions Review\n  Colour: Blue\n  enter submit   esc dismiss")).toBe(true);
+    expect(looksLikeDecisionPrompt("Allow once, Always allow or Reject: the three chips")).toBe(false);
+    expect(looksLikeDecisionPrompt("enter submit   esc dismiss")).toBe(false);
+  });
+
   it("detects a pointer + numbered choice (Claude/Codex approval menu)", () => {
     const screen = [
       "Do you want to make this edit to activity.ts?",
@@ -193,6 +206,27 @@ describe("looksLikeDecisionPrompt", () => {
     expect(looksLikeDecisionPrompt("Hooksneedreview\r\n› 1.Review hooks2.Trustall")).toBe(true);
     // A numbered "Trust" item in an answer is not that menu.
     expect(looksLikeDecisionPrompt("• Steps:\n  1. Trust the proxy\n  2. Continue the rollout")).toBe(false);
+  });
+
+  it("detects Meta Muse Code's menu, numbered without a stop behind a ⟩", () => {
+    // Captured from Muse 1.4.15's workspace-trust question (120 columns).
+    const screen = [
+      "Do you trust this workspace?",
+      "Workspace: /work",
+      "Trusting allows project-local skills, rules, hooks, and plugin config to load before the model runs.",
+      "Only trust this workspace when you trust its contents.",
+      "",
+      "⟩ 1  Trust and continue",
+      "  2  Quit",
+      "",
+      "Use Up/Down or 1/2, then Enter. Esc quits.",
+    ].join("\n");
+    expect(looksLikeDecisionPrompt(screen)).toBe(true);
+    // The pointer on the second row.
+    expect(looksLikeDecisionPrompt("  1  Trust and continue\n⟩ 2  Quit")).toBe(true);
+    // A pointer row alone, and two-space numbers inside a line, are not a menu.
+    expect(looksLikeDecisionPrompt("⟩ 1  Trust and continue\n\nDone.")).toBe(false);
+    expect(looksLikeDecisionPrompt("⟩ 1  item and 2  more on one line")).toBe(false);
   });
 });
 

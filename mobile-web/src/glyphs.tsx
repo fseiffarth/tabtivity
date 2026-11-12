@@ -1,6 +1,14 @@
 import type { ComponentType } from "react";
 import { CalendarIcon, CheckboxIcon, FolderIcon, MailIcon, type IconProps } from "../../src/components/common/icons/Icon";
 
+/** The chrome glyphs the phone used to spell as text, drawn from the desktop's
+ * icon set so they weigh the same on every phone. Text stays only inside
+ * content — a chat line, a hint sentence, a git row a test reads. */
+export {
+  BranchIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, DiamondIcon, DiffIcon,
+  FolderIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, MeterIcon, StarIcon, MoreIcon, NewChatIcon, PencilIcon, PlayMark, PlusIcon, QuestionIcon, SearchIcon, StopIcon, UndoIcon, WindowIcon,
+} from "../../src/components/common/icons/Icon";
+
 /**
  * The section icons the tab bar and the Home alert list share.
  *

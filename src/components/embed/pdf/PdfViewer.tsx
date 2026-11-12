@@ -122,8 +122,11 @@ import { readViewerSelection, type ViewerSelection } from "./selection";
 import { scrollIntoPdfBox } from "./scrollBox";
 import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { PdfMarkupLayer } from "./PdfMarkupLayer";
-import { markupStripKey, PdfMarkupBar } from "./PdfMarkupBar";
-import { PdfMarkupQuestions, PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
+import { markupStripKey, markupStripKeyUp, PdfMarkupBar, PdfMarkupUndoConfirm } from "./PdfMarkupBar";
+import { PdfMarkupDock } from "./PdfMarkupDock";
+import { PdfMarkupPageRail } from "./PdfMarkupPageRail";
+import { PdfMarkupAgentPanel } from "./PdfMarkupAgentPanel";
+import { PdfQuestionPins, pinKey, useQuestionPins } from "./PdfMarkupQuestions";
 import { PdfTickBadges, tickBadgesByPage, type TickBadge } from "./PdfMarkupTicks";
 import { usePdfMarkup, type MarkupEdit, type QuestionFocus } from "./usePdfMarkup";
 import type { QuestionPin } from "../../../lib/viewers/markupQuestions";
@@ -184,7 +187,7 @@ import { usePaneSleepHold, useSleepWhenHidden } from "../../../lib/sleepWhenHidd
 import { isTabInPopout, useTabsStore } from "../../../stores/tabs";
 import { splitSubPaneKey } from "../../../stores/tabs/viewerState";
 import { useUnsavedWork } from "../../../lib/window/unsavedWork";
-import { ArrowUpRightIcon, CommentIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
+import { ArrowUpRightIcon, CloseIcon, CommentIcon, PencilIcon, PlayIcon, SearchIcon, TagIcon } from "../../common/icons/Icon";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 
 /** A recompile rewrites the PDF in place, so a reload can catch the file
@@ -3115,7 +3118,11 @@ function PdfCanvas({
           stripMetadata: stripMeta,
         });
         const laidOut = await layoutPrintPdf(bytes, sequence, opts);
-        return printPdfNative(laidOut, title, { paper: opts.paper, grayscale: opts.grayscale });
+        return printPdfNative(laidOut, title, {
+          paper: opts.paper,
+          grayscale: opts.grayscale,
+          duplex: opts.duplex,
+        });
       };
       await printHtmlBody(body, PDF_PRINT_CSS, title, native);
     } catch (e) {
@@ -3735,7 +3742,7 @@ function PdfCanvas({
 
   /** The markup strip's bare keys, while marking (`markupStripKey`). */
   const markupKey = useCallback(
-    (e: { key: string; code: string; shiftKey: boolean }): boolean => markupStripKey(markupRef.current, e),
+    (e: { key: string; code: string; shiftKey: boolean; repeat?: boolean }): boolean => markupStripKey(markupRef.current, e),
     [],
   );
 
@@ -3805,6 +3812,11 @@ function PdfCanvas({
         // find bar is up would leave the bar with nothing to close it.
         e.preventDefault();
         setRedacting(false);
+      } else if (e.key === "Escape" && marking && markupRef.current.panel && !isTextEntry(e.target)) {
+        // The agent panel closes first, then the selection lets go, then the
+        // mode is left.
+        e.preventDefault();
+        markupRef.current.setPanel(false);
       } else if (e.key === "Escape" && marking && markupRef.current.edit.selection && !isTextEntry(e.target)) {
         // Selected marks let go first; the next Escape leaves the mode.
         e.preventDefault();
@@ -4696,7 +4708,13 @@ function PdfCanvas({
   }, [doc, updateVisiblePage]);
 
   return (
-    <div className="file-viewer-pdf-host" onKeyDown={onHostKeyDown}>
+    <div
+      className="file-viewer-pdf-host"
+      onKeyDown={onHostKeyDown}
+      onKeyUp={(e) => {
+        if (marking && !e.ctrlKey && !e.metaKey && !e.altKey && !isTextEntry(e.target) && markupStripKeyUp(markupRef.current, e)) e.preventDefault();
+      }}
+    >
       <div className="file-viewer-pdf-toolbar" role="group" aria-label={t("pdfViewer.zoomControlsLabel")}>
         {/* Contents (chapters) sits at the far left — it opens the navigation
             column on the same side, so the button lines up over it. */}
@@ -4849,7 +4867,7 @@ function PdfCanvas({
               )}
               aria-pressed={marking}
             >
-              ✎ {t("pdfMarkup.toggle")}
+              <PencilIcon /> {t("pdfMarkup.toggle")}
             </button>
             <UntestedTag id="desktop.markup" />
           </>
@@ -5055,10 +5073,8 @@ function PdfCanvas({
           <span className="file-viewer-pdf-redact-warn">{t("pdfRedact.flattenWarning")}</span>
         </div>
       )}
-      {marking && (
-        <PdfMarkupBar markup={markup} page={visiblePage} onReload={reloadUnderMarks} onDone={leaveMarkup} />
-      )}
-      {marking && <PdfMarkupQuestions questions={markup.questions} pinned={pinnedQuestions} />}
+      {marking && <PdfMarkupBar markup={markup} onDone={leaveMarkup} />}
+      {marking && <PdfMarkupUndoConfirm markup={markup} onReload={reloadUnderMarks} />}
       {metaOpen && doc && (
         // The metadata panel — the blackout tool's strip, wearing the same class so
         // the two read as the pair they are. It shows the fields BEFORE it offers to
@@ -5164,7 +5180,7 @@ function PdfCanvas({
               title={t("pdfViewer.closeFindTitle")}
               aria-label={t("pdfViewer.closeFindLabel")}
             >
-              ✕
+              <CloseIcon />
             </button>
           </div>
         </div>
@@ -5274,6 +5290,15 @@ function PdfCanvas({
               if (ref) deletePdfNote(p.entryId, p.note.id, fileNotes.get(noteKey(ref)) ?? []);
             }}
             onClose={() => setNotesOpen(false)}
+          />
+        )}
+        {marking && doc && (
+          <PdfMarkupPageRail
+            pages={pages}
+            marked={(page) => !!markup.edit.base.pages[page]}
+            visiblePage={visiblePage}
+            onJump={jumpToPage}
+            thumb={(ref) => <PdfThumb doc={doc} page={ref.page} rot={ref.rot} />}
           />
         )}
         {railOpen && doc && !marking && (
@@ -5405,12 +5430,12 @@ function PdfCanvas({
                     onRedactRemove={(markId) => removeRedactMark(ref.id, markId)}
                     markup={marking ? markup.edit : null}
                     questionPins={
-                      marking && ref.src === SELF && questionPins.has(i + 1)
+                      marking && markup.panel && ref.src === SELF && questionPins.has(i + 1)
                         ? { pins: questionPins.get(i + 1)!, focus: markup.questions.focus, onPick: pickQuestionPin }
                         : null
                     }
                     tickBadges={
-                      marking && ref.src === SELF && tickBadges.has(i + 1)
+                      marking && markup.panel && ref.src === SELF && tickBadges.has(i + 1)
                         ? { badges: tickBadges.get(i + 1)!, disabled: markup.sending, onApprove: (marks) => approveTick(i + 1, marks) }
                         : null
                     }
@@ -5430,6 +5455,12 @@ function PdfCanvas({
               />
             ))}
           </div>
+        )}
+        {marking && markup.panel && (
+          <PdfMarkupAgentPanel markup={markup} pinned={pinnedQuestions} onReload={reloadUnderMarks} />
+        )}
+        {marking && doc && (
+          <PdfMarkupDock markup={markup} page={visiblePage} area={scrollRef} />
         )}
       </div>
       {linkConfirm && (

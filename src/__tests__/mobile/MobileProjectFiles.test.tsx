@@ -9,7 +9,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MAX_INBOX_FILE } from "../../../mobile-web/src/api";
+import { MAX_UPLOAD_FILE } from "../../../mobile-web/src/api";
 import { FilesLibrary } from "../../../mobile-web/src/components/FilesLibrary";
 import { Project } from "../../../mobile-web/src/screens/Project";
 import { storageKey } from "../../../src/lib/brand";
@@ -68,6 +68,15 @@ function hostWith(files: boolean, tickets = true) {
       hits: [{ ...ROOT.entries[1], trail: [] }], truncated: false,
     }), { status: 200 });
     if (url.startsWith("/api/v1/projects/p1/files/search")) return new Response(JSON.stringify({ hits: [], truncated: false }), { status: 200 });
+    if (url.startsWith("/api/v1/projects/p1/files/entry?")) {
+      // One row of a folder, as the desktop's `files/entry` answers it.
+      const asked = new URL(url, "http://phone").searchParams;
+      const folder = ({ "": ROOT, "tok-src": SRC, "tok-deep": DEEP } as Record<string, typeof ROOT>)[asked.get("dir") ?? ""];
+      const entry = folder?.entries.find((row) => row.name === asked.get("name"));
+      return entry
+        ? new Response(JSON.stringify({ entry }), { status: 200 })
+        : new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
+    }
     if (url.startsWith("/api/v1/projects/p1/files")) return new Response(JSON.stringify({ error: "file_not_found" }), { status: 404 });
     return new Response(JSON.stringify({
       project: { id: "p1", label: "Alpha", status: "active" },
@@ -334,7 +343,7 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "main" } });
     fireEvent.click(await screen.findByRole("button", { name: "More for main.rs" }));
     const menu = screen.getByRole("dialog", { name: "main.rs" });
-    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== "✕"))
+    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== ""))
       .toEqual(["Open", "Favorite", "Show in folder"]);
     fireEvent.click(within(menu).getByRole("button", { name: "Show in folder" }));
     await screen.findByRole("button", { name: "Open the folder deep" });
@@ -343,7 +352,7 @@ describe("Mobile project — read-only file browser", () => {
 
     // Nothing named so: one line says it.
     fireEvent.change(screen.getByRole("searchbox", { name: "Search the project's files" }), { target: { value: "zzz" } });
-    await screen.findByText("No file or folder has that in its name.");
+    await screen.findByText(/^No file or folder has that in its name\. Search skips what git ignores/);
   });
 
   it("walks folders by token, back by ‹, and opens files by token", async () => {
@@ -513,7 +522,7 @@ describe("Mobile project — read-only file browser", () => {
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const sheet = await openDrawer();
     const menu = within(sheet).getByRole("menu", { name: "Project menu" });
-    expect(within(menu).getAllByRole("menuitem").map((row) => row.textContent)).toEqual([expect.stringMatching(/^⎇Git/)]);
+    expect(within(menu).getAllByRole("menuitem").map((row) => row.textContent)).toEqual([expect.stringMatching(/^Git/)]);
     expect(within(sheet).getByRole("button", { name: "Open the project's files" })).toBeTruthy();
     // A row puts the drawer away for the sheet it opens.
     fireEvent.click(within(menu).getByRole("menuitem", { name: /^Git/ }));
@@ -564,6 +573,29 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.click(within(sheet).getByRole("button", { name: "Up to Alpha" }));
     await within(sheet).findByRole("button", { name: "Open notes.md" });
     expect(localStorage.getItem(storageKey("mobile.filesPlace"))).toBeNull();
+  });
+
+  it("closes from inside a folder by ×, and opens again in that folder", async () => {
+    vi.stubGlobal("fetch", hostWith(true));
+    render(<Project id="p1" back={() => {}} terminal={() => {}} />);
+    let library = await openLibrary();
+    await within(library).findByRole("button", { name: "Open the folder src" });
+    // At the root ‹ Back closes, so there is no × beside it.
+    expect(within(library).getAllByRole("button", { name: "Close the files" })).toHaveLength(1);
+    fireEvent.click(within(library).getByRole("button", { name: "Open the folder src" }));
+    fireEvent.click(await within(library).findByRole("button", { name: "Open the folder deep" }));
+    await within(library).findByRole("button", { name: "Open leaf.txt" });
+
+    // ‹ still goes up one; × leaves from here, back to the drawer.
+    expect(within(library).getByRole("button", { name: "Up to src" })).toBeTruthy();
+    fireEvent.click(within(library).getByRole("button", { name: "Close the files" }));
+    expect(screen.queryByRole("dialog", { name: "Files" })).toBeNull();
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Alpha" })).getByRole("button", { name: "Close the files" }));
+    expect(screen.queryByRole("dialog", { name: "Alpha" })).toBeNull();
+
+    library = await openLibrary();
+    expect(pathOf(library).names).toEqual(["Alpha", "src", "deep"]);
+    await within(library).findByRole("button", { name: "Open leaf.txt" });
   });
 
   it("steps back from a remembered folder that is gone", async () => {
@@ -732,16 +764,16 @@ describe("Mobile project — Upload here", () => {
     ]);
   });
 
-  it("refuses a file past 24 MB before anything is sent", async () => {
+  it("refuses a file past 1 GB before anything is sent (the desktop stages smaller ones)", async () => {
     const fetch = uploadHost(() => new Response(null, { status: 500 }));
     vi.stubGlobal("fetch", fetch);
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const sheet = await openSrc();
     const big = new File(["x"], "movie.mp4");
-    Object.defineProperty(big, "size", { value: MAX_INBOX_FILE + 1 });
+    Object.defineProperty(big, "size", { value: MAX_UPLOAD_FILE + 1 });
     fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
     pick([big]);
-    expect((await within(sheet).findByRole("alert")).textContent).toContain("is larger than 24 MB.");
+    expect((await within(sheet).findByRole("alert")).textContent).toContain("larger than 1 GB");
     expect(posts(fetch)).toEqual([]);
   });
 
@@ -770,14 +802,15 @@ describe("Mobile project — Upload here", () => {
 
     fireEvent.click(within(sheet).getByRole("button", { name: /^Upload here/ }));
     pick([new File(["a"], "a.txt")]);
-    await within(sheet).findByText("The folder could not be read.");
+    // Said as what happened (`failureKey`), not as a bare error.
+    await within(sheet).findByText("This project's files cannot be browsed from the phone.");
     expect(within(sheet).queryByRole("button", { name: /^Upload here/ })).toBeNull();
 
     // The picker's input stays (still stamped with `src`): the next landing
     // lists the folder again, and that answer replaces the refusal.
     pick([new File(["b"], "b.txt")]);
     await within(sheet).findByRole("button", { name: "Open b.txt" });
-    expect(within(sheet).queryByText("The folder could not be read.")).toBeNull();
+    expect(within(sheet).queryByText("This project's files cannot be browsed from the phone.")).toBeNull();
     expect(within(sheet).getByRole("button", { name: /^Upload here/ })).toBeTruthy();
   });
 });
@@ -845,7 +878,7 @@ describe("Mobile project — favorites, recent files, folder colours, thumbnails
     await within(library).findByRole("button", { name: "Open notes.md" });
     fireEvent.click(within(strip(library)!).getByRole("button", { name: "More for main.rs" }));
     const menu = screen.getByRole("dialog", { name: "main.rs" });
-    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== "✕"))
+    expect(within(menu).getAllByRole("button").map((button) => button.textContent).filter((text) => text !== ""))
       .toEqual(["Open", "Unfavorite", "Show in folder"]);
     fireEvent.click(within(menu).getByRole("button", { name: "Show in folder" }));
     await within(library).findByRole("button", { name: "Open the folder deep" });

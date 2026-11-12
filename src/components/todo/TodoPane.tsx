@@ -119,7 +119,7 @@ export function TodoPane() {
 
   const openMail = async (task: CalendarTask) => {
     if (!task.mail || !mailClient) return;
-    useTodoStore.getState().closeOverlay();
+    // The board stays up until the Mail view replaces it (`openInbox`).
     const mail = useMailStore.getState();
     if (task.mail.folder_id) await mail.openFolder(task.mail.folder_id).catch(() => {});
     mail.openInbox();

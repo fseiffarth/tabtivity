@@ -40,6 +40,7 @@ import { useDragStore } from "../../stores/drag/drag";
 import { useSettingsStore } from "../../stores/settings";
 import { useCalendarStore } from "../../stores/calendar/calendar";
 import { useTodoStore } from "../../stores/todo";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 
 function shell(key: string, over: Partial<TabEntry> = {}): TabEntry {
   return { key, label: key, cmd: "", cwd: "/p", kind: "shell", scope: "p1", ...over };
@@ -65,7 +66,8 @@ beforeEach(() => {
   });
   useSettingsStore.setState({ settings: null } as never);
   useCalendarStore.setState({ loaded: false, calendars: [], tasks: [], taskColumns: [] });
-  useTodoStore.setState({ overlayOpen: false, focusTaskId: null });
+  useRootOverlayStore.setState({ open: false, view: "root" });
+  useTodoStore.setState({ focusTaskId: null });
 });
 
 describe("markedTabs", () => {
@@ -219,7 +221,8 @@ describe("the tab's right-click menu", () => {
       task: Record<string, unknown>;
     };
     expect(created.task).toMatchObject({ title: "shell", calendar_id: "cal1", project_id: "p1" });
-    expect(useTodoStore.getState()).toMatchObject({ overlayOpen: true, focusTaskId: "card-1" });
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "todo" });
+    expect(useTodoStore.getState().focusTaskId).toBe("card-1");
     // The tab now carries the link glyph, and the menu offers Open / Unlink.
     expect(tab().querySelector(".tab-todo-link")).toBeTruthy();
     fireEvent.contextMenu(tab());

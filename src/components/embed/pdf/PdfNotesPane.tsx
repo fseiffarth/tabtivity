@@ -33,6 +33,7 @@ import { formatPdfDate } from "./pdfDoc";
 import { HIGHLIGHT_DEFAULT_COLOR } from "./notes";
 import { swatchCss } from "./PdfSelectionBar";
 import { isHighlight, type PlacedNote } from "../../../lib/viewers/pdfNotes";
+import { CloseIcon, PencilIcon } from "../../common/icons/Icon";
 
 export function PdfNotesPane({
   placed,
@@ -79,7 +80,7 @@ export function PdfNotesPane({
           title={t("common.close")}
           aria-label={t("common.close")}
         >
-          ✕
+          <CloseIcon />
         </button>
       </div>
       <div className="file-viewer-pdf-notes-walk" role="group" aria-label={t("pdfNotes.walkLabel")}>
@@ -171,7 +172,7 @@ export function PdfNotesPane({
                     title={t(hl ? "pdfNotes.editHighlight" : "pdfNotes.edit")}
                     aria-label={t(hl ? "pdfNotes.editHighlight" : "pdfNotes.edit")}
                   >
-                    ✎
+                    <PencilIcon />
                   </button>
                   <button
                     className="file-viewer-zoom-btn file-viewer-pdf-note-del"
@@ -179,7 +180,7 @@ export function PdfNotesPane({
                     title={t(hl ? "pdfNotes.deleteHighlight" : "pdfNotes.delete")}
                     aria-label={t(hl ? "pdfNotes.deleteHighlight" : "pdfNotes.delete")}
                   >
-                    ✕
+                    <CloseIcon />
                   </button>
                 </div>
               </div>

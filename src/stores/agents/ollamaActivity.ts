@@ -7,7 +7,7 @@ import type { OllamaModelUpdate, OllamaVersionStatus } from "../../lib/agents/lo
 /**
  * The session's local-model facts that must outlive either surface showing
  * them — the header's hover dropdown (`layout/LocalModelMenu`) and the Models &
- * agents overlay (`models/ModelsOverlay`). Both render through the same
+ * agents views (`models/ModelsView`). Both render through the same
  * `useModelsHub`, and before this store each of them would have kept its own
  * copy: a download started from the dropdown then never showed in the overlay,
  * and — the one that mattered — an unload done in the overlay never reached the
@@ -170,8 +170,10 @@ export const useOllamaActivityStore = create<OllamaActivityState>((set, get) => 
   setCheckResult: (checkResult) => set({ checkResult }),
   setVersion: (version) => set({ version }),
 
-  // Re-run on every open so an upgrade performed outside Tabtivity shows up,
-  // instead of the version frozen at whenever it was first read. The earlier
+  // Re-run on every open so an upgrade performed outside the app shows up,
+  // instead of the version frozen at whenever it was first read. A read that
+  // carries a stored check (the daily one or a click) wins: the backend
+  // compared it against the version installed now. Without one, the earlier
   // check's `latest` is carried over, but its verdict is **dropped the moment
   // the installed version changes**: that is exactly the case where the user
   // just upgraded, and a notice still offering the upgrade they performed is
@@ -179,20 +181,23 @@ export const useOllamaActivityStore = create<OllamaActivityState>((set, get) => 
   mergeInstalledVersion: (v) =>
     set((s) => {
       const prev = s.version;
-      if (!prev?.latest) return { version: v };
+      if (v.latest || !prev?.latest) return { version: v };
       const stale = prev.current !== v.current;
       return { version: { ...v, latest: prev.latest, update_available: !stale && prev.update_available } };
     }),
 }));
 
+/** Backend `OLLAMA_RELEASE_CHECKED_EVENT`. */
+export const OLLAMA_RELEASE_CHECKED_EVENT = "ollama-release-checked";
+
 let listenerRefs = 0;
 let registered: Promise<UnlistenFn[]> | null = null;
 
 /**
- * Subscribe the store to the two global progress events. Ref-counted: the first
- * caller registers both `listen()`s, later callers share them, and the disposer
- * that brings the count back to zero waits for the registrations and removes
- * both. Returns that disposer, so `useEffect(() => initLocalModelEvents(), [])`
+ * Subscribe the store to the global progress events and the daily release
+ * check's. Ref-counted: the first caller registers the `listen()`s, later
+ * callers share them, and the disposer that brings the count back to zero waits
+ * for the registrations and removes them. Returns that disposer, so `useEffect(() => initLocalModelEvents(), [])`
  * is the whole call site (StrictMode's mount → unmount → mount included).
  */
 export function initLocalModelEvents(): () => void {
@@ -243,6 +248,14 @@ export function initLocalModelEvents(): () => void {
         // Once a model becomes resident, re-read the list so it moves into the
         // selectable (loaded) section.
         if (status === "success") void useOllamaActivityStore.getState().fetchModels();
+      }),
+      // The daily release check stored a new answer for Ollama itself
+      // (`commands::agents::run_daily_update_check`): re-read it, locally.
+      listen(OLLAMA_RELEASE_CHECKED_EVENT, () => {
+        if (!useOllamaActivityStore.getState().installed) return;
+        void invoke<OllamaVersionStatus>("ollama_version_status", { checkRemote: false })
+          .then((v) => useOllamaActivityStore.getState().mergeInstalledVersion(v))
+          .catch(() => {});
       }),
     ]);
   }

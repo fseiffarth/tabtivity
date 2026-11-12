@@ -8,6 +8,8 @@
 //!   `fs::import_external_file`, the OS-drop route.
 //! - **Out:** [`copy_text_to_clipboard`] puts terminal text on the clipboard:
 //!   OSC 52 requests and the user's own copies out of a pane.
+//!   [`copy_files_to_clipboard`] puts the file tree's Copy there as files, so
+//!   another app (a chat, mail, a file manager) can paste them.
 
 
 use crate::commands::fs::{canonical_or_new, enforce_confinement};
@@ -143,7 +145,17 @@ fn check_clipboard_text(text: &str) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     check_clipboard_text(&text)?;
+    set_clipboard(move |set| set.text(text)).await
+}
 
+/// Put on the system clipboard what `fill` sets: the one thread-and-handshake
+/// behind [`copy_text_to_clipboard`] and [`copy_files_to_clipboard`]. On Linux
+/// a thread keeps the selection (`.wait()`) and reports back once it has a
+/// clipboard connection, so only a missing clipboard is an error; elsewhere
+/// the set runs on the blocking pool and every error is reported.
+async fn set_clipboard(
+    fill: impl for<'c> FnOnce(arboard::Set<'c>) -> Result<(), arboard::Error> + Send + 'static,
+) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         use arboard::SetExtLinux;
@@ -151,7 +163,7 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
         std::thread::spawn(move || match arboard::Clipboard::new() {
             Ok(mut cb) => {
                 let _ = tx.send(Ok(()));
-                let _ = cb.set().wait().text(text);
+                let _ = fill(cb.set().wait());
             }
             Err(e) => {
                 let _ = tx.send(Err(e.to_string()));
@@ -168,10 +180,52 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     {
         app_core::rt::blocking("clipboard", move || {
             let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-            cb.set_text(text).map_err(|e| e.to_string())
+            fill(cb.set()).map_err(|e| e.to_string())
         })
         .await?
     }
+}
+
+/// The paths [`copy_files_to_clipboard`] puts on the clipboard: every one
+/// absolute and existing, at most [`MAX_CLIPBOARD_FILES`] and at least one,
+/// duplicates dropped. Unlike [`existing_files`] a bad entry is an error, not
+/// skipped: the user copied exactly these.
+fn clipboard_paths(paths: &[String]) -> Result<Vec<std::path::PathBuf>, String> {
+    if paths.is_empty() {
+        return Err("nothing to copy".to_string());
+    }
+    if paths.len() > MAX_CLIPBOARD_FILES {
+        return Err(format!("at most {MAX_CLIPBOARD_FILES} items can be copied at once"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for raw in paths {
+        let path = std::path::PathBuf::from(raw);
+        if !path.is_absolute() {
+            return Err(format!("not an absolute path: {raw}"));
+        }
+        if std::fs::symlink_metadata(&path).is_err() {
+            return Err(format!("no such file: {raw}"));
+        }
+        if seen.insert(path.clone()) {
+            out.push(path);
+        }
+    }
+    Ok(out)
+}
+
+/// Put files on the system clipboard as files (`text/uri-list` on Linux,
+/// `CF_HDROP` on Windows, file URLs on macOS): the file tree's Copy, so a
+/// paste in another app (Teams, mail, a browser upload, a file manager)
+/// receives the files themselves. Only local paths: the tree never sends a
+/// host (SFTP) listing's paths here.
+///
+/// Linux keeps the selection the way [`copy_text_to_clipboard`] does: a
+/// thread owns it (`.wait()`) until another app takes the clipboard over.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn copy_files_to_clipboard(paths: Vec<String>) -> Result<(), String> {
+    let paths = clipboard_paths(&paths)?;
+    set_clipboard(move |set| set.file_list(&paths)).await
 }
 
 /// Encode raw RGBA8 pixels as a PNG byte buffer.
@@ -232,6 +286,25 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn clipboard_paths_takes_existing_absolute_paths_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("report.pdf");
+        std::fs::write(&file, "x").unwrap();
+        let sub = dir.path().join("figures");
+        std::fs::create_dir(&sub).unwrap();
+        let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
+
+        let got = clipboard_paths(&[s(&file), s(&sub), s(&file)]).unwrap();
+        assert_eq!(got, vec![file.clone(), sub]);
+
+        assert!(clipboard_paths(&[]).is_err());
+        assert!(clipboard_paths(&["report.pdf".to_string()]).is_err());
+        assert!(clipboard_paths(&[s(&dir.path().join("gone.pdf"))]).is_err());
+        let too_many = vec![s(&file); MAX_CLIPBOARD_FILES + 1];
+        assert!(clipboard_paths(&too_many).is_err());
     }
 
     #[test]

@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { DotIcon } from "../common/icons/Icon";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { UntestedTag } from "../common/UntestedTag";
 import { MenuShortcut } from "../common/MenuShortcut";
 import type { ChordDescriptor, ShortcutAction } from "../../lib/shortcuts/shortcuts";
@@ -11,7 +12,7 @@ export interface AddMenuEntry {
   /** React key — unique within the entry's group. */
   key: string;
   label: string;
-  /** Dot glyph in front of the label (defaults to "●"). A shared line icon
+  /** Dot glyph in front of the label (defaults to a drawn dot). A shared line icon
    *  where the glyph would be an emoji-capable symbol (☁ ⚠): a font fallback
    *  hands those to the colour-emoji font, which ignores `color`. */
   dot?: ReactNode;
@@ -42,7 +43,22 @@ export interface AddMenuEntry {
   machineEntries?: AddMenuEntry[];
   /** The ▾ button's tooltip and the machine fly-out's heading. */
   machineTitle?: string;
+  /** On an entry of a `machineEntries` list: a typed search also lists this
+   *  entry on its own (flat, in its row's group), matched on its full `label`
+   *  ("Claude in api") — a box member is found by typing its name without
+   *  opening the ▾. Off for a remote project's machine names ("Local"). */
+  searchable?: boolean;
   onPick: () => void;
+}
+
+/** The line above the search box naming where a plain pick starts (a box's
+ *  "New tab in api"): a mark in the member's (round) or box's (square) colour. */
+export interface AddMenuHeading {
+  text: string;
+  color: string;
+  /** The whole box rather than one member: a rounded square, not a dot. */
+  box?: boolean;
+  untested?: UntestedId;
 }
 
 /** A fly-out beside the menu: its heading, rows and the control it hangs off. */
@@ -50,6 +66,15 @@ interface Flyout {
   label: string;
   entries: AddMenuEntry[];
   anchor: DOMRect;
+  trigger: HTMLButtonElement;
+}
+
+function escapeFlyout(e: KeyboardEvent<HTMLDivElement>, flyout: Flyout, close: () => void) {
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  e.stopPropagation();
+  close();
+  flyout.trigger.focus();
 }
 
 /** Place a fly-out against its anchor, flipping to the left when there is no
@@ -96,7 +121,7 @@ function flyoutRow(e: AddMenuEntry) {
       onClick={e.onPick}
     >
       <span className="tab-new-menu-dot" style={{ color: e.color }}>
-        {e.dot ?? "●"}
+        {e.dot ?? <DotIcon />}
       </span>
       {e.label}
       {e.caution && (
@@ -126,7 +151,7 @@ function flyoutRow(e: AddMenuEntry) {
  * pointer fires enter events, which would drag the cursor back and make ↓
  * appear to stick.
  */
-export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
+export function AddTabMenuList({ groups, heading }: { groups: AddMenuGroup[]; heading?: AddMenuHeading }) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [moreMenu, setMoreMenu] = useState<Flyout | null>(null);
@@ -153,19 +178,24 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
   // one (Agents has "More agents…" and "Cloud session").
   const openMoreMenu = (label: string, entries: AddMenuEntry[], anchor?: HTMLButtonElement | null) => {
     if (!anchor) return;
+    clearHover();
     setMorePos(null);
     setMachineMenu(null);
-    setMoreMenu({ label, entries, anchor: anchor.getBoundingClientRect() });
+    setMoreMenu({ label, entries, anchor: anchor.getBoundingClientRect(), trigger: anchor });
   };
   const openMachineMenu = (entry: AddMenuEntry, anchor?: HTMLButtonElement | null, hover = false) => {
     clearHover();
     if (!anchor || !entry.machineEntries) return;
+    // The flyouts are DOM siblings. More is the parent only when its own
+    // caret opened this picker.
+    if (!hover && !moreMenuRef.current?.contains(anchor)) setMoreMenu(null);
     setMachinePos(null);
     setMachineMenu({
       key: entry.key,
       label: entry.machineTitle ?? entry.label,
       entries: entry.machineEntries,
       anchor: anchor.getBoundingClientRect(),
+      trigger: anchor,
       hover,
     });
   };
@@ -195,7 +225,13 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
           hint: undefined,
           entries: g.label.toLowerCase().includes(q)
             ? g.entries
-            : g.entries.filter((e) => e.label.toLowerCase().includes(q)),
+            : g.entries.flatMap((e) => [
+                ...(e.label.toLowerCase().includes(q) ? [e] : []),
+                // A row's `searchable` fly-out entries are results of their own.
+                ...(e.machineEntries ?? []).filter(
+                  (m) => m.searchable && m.label.toLowerCase().includes(q),
+                ),
+              ]),
         }))
         .filter((g) => g.entries.length > 0)
     : groups.map((g) => {
@@ -341,6 +377,17 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
 
   return (
     <>
+      {heading && (
+        <div className="tab-new-menu-target">
+          <span
+            className={`tab-member-mark${heading.box ? " box" : ""}`}
+            style={{ background: heading.color }}
+            aria-hidden="true"
+          />
+          <span className="tab-new-menu-target-text">{heading.text}</span>
+          {heading.untested && <UntestedTag id={heading.untested} />}
+        </div>
+      )}
       <input
         ref={searchRef}
         className="tab-new-menu-search"
@@ -426,7 +473,7 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
               }}
             >
               <span className="tab-new-menu-dot" style={{ color: e.color }}>
-                {e.dot ?? "●"}
+                {e.dot ?? <DotIcon />}
               </span>
               {e.label}
               {e.caution && (
@@ -448,6 +495,12 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
         <div
           ref={moreMenuRef}
           className="tab-new-menu tab-new-menu-more"
+          data-steer-add-tab-submenu=""
+          onKeyDown={(e) => escapeFlyout(e, moreMenu, () => {
+            clearHover();
+            setMachineMenu(null);
+            setMoreMenu(null);
+          })}
           style={{
             position: "fixed",
             left: morePos?.left ?? -10000,
@@ -464,6 +517,11 @@ export function AddTabMenuList({ groups }: { groups: AddMenuGroup[] }) {
         <div
           ref={machineMenuRef}
           className="tab-new-menu tab-new-menu-more"
+          data-steer-add-tab-submenu={machineMenu.hover ? "hover" : ""}
+          onKeyDown={(e) => escapeFlyout(e, machineMenu, () => {
+            clearHover();
+            setMachineMenu(null);
+          })}
           style={{
             position: "fixed",
             left: machinePos?.left ?? -10000,

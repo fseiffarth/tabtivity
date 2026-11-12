@@ -92,11 +92,41 @@ fn install_crash_logger() {
         install_signal_handlers(&path)
     };
 
+    // An `exit()` that does not come through the quit teardown (a library
+    // giving up, a stray `process::exit`) runs no Rust hook and leaves the
+    // children running; atexit handlers still run, so say who called it.
+    #[cfg(unix)]
+    // SAFETY: registers a plain `extern "C" fn()`; called once at startup.
+    unsafe {
+        libc::atexit(exit_outside_quit);
+    }
+
     #[cfg(windows)]
     // SAFETY: called once at startup before any thread can crash.
     unsafe {
         install_seh_filter(&path)
     };
+}
+
+/// Set when `RunEvent::Exit` starts the quit teardown: from then on an
+/// `exit()` is the ordinary end (tao ends its loop in `process::exit`).
+static QUIT_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The atexit hook: an `exit()` before any quit teardown is logged with the
+/// calling thread's stack. (`_exit`, which GDK uses when it loses the display,
+/// runs no hook: the launcher's `=== EXITED` status line covers that.)
+#[cfg(unix)]
+extern "C" fn exit_outside_quit() {
+    if QUIT_STARTED.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let bt = std::backtrace::Backtrace::force_capture();
+    let thread = std::thread::current().name().unwrap_or("?").to_string();
+    crash_log_append(&format!(
+        "=== EXIT via exit() before any quit teardown {} thread={thread} commit={} ===\nbacktrace:\n{bt}",
+        storage::iso_now(),
+        BUILD_COMMIT
+    ));
 }
 
 /// Append one entry to crash.log in the state dir.
@@ -170,12 +200,95 @@ unsafe fn install_signal_handlers(path: &std::path::Path) {
         };
         libc::sigaltstack(&ss, std::ptr::null_mut());
     }
-    for &sig in &[libc::SIGSEGV, libc::SIGABRT, libc::SIGBUS, libc::SIGFPE] {
+    let crash = signal_crash_handler as *const () as libc::sighandler_t;
+    let quiet = signal_quiet_handler as *const () as libc::sighandler_t;
+    let fatal = [libc::SIGSEGV, libc::SIGABRT, libc::SIGBUS, libc::SIGFPE].map(|sig| (sig, crash));
+    for (sig, handler) in fatal.into_iter().chain(QUIET_FATAL.iter().map(|&(sig, _)| (sig, quiet))) {
         let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = signal_crash_handler as *const () as libc::sighandler_t;
+        sa.sa_sigaction = handler;
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND | libc::SA_ONSTACK;
         libc::sigaction(sig, &sa, std::ptr::null_mut());
     }
+}
+
+/// Signals whose default action ends the process without a word: no core, no
+/// handler of ours, the children left running — the shape of the unexplained
+/// deaths since 2026-11-05. SIGTERM/SIGINT are routed into the quit (`run`),
+/// SIGKILL cannot be caught, and SIGALRM keeps its default because the crash
+/// handler's `alarm(5)` guard relies on it.
+#[cfg(unix)]
+const QUIET_FATAL: &[(libc::c_int, &[u8])] = &[
+    (libc::SIGHUP, b"SIGHUP"),
+    (libc::SIGUSR1, b"SIGUSR1"),
+    (libc::SIGUSR2, b"SIGUSR2"),
+    (libc::SIGXCPU, b"SIGXCPU"),
+    (libc::SIGXFSZ, b"SIGXFSZ"),
+    (libc::SIGSYS, b"SIGSYS"),
+];
+
+/// Log who sent a [`QUIET_FATAL`] signal, then die of it as before. Same
+/// shape and async-signal-safety as `signal_crash_handler`, minus the stack:
+/// the sender is another process, so this thread's stack says nothing.
+#[cfg(unix)]
+extern "C" fn signal_quiet_handler(sig: libc::c_int, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
+    // SAFETY: `sigaction` is async-signal-safe; the struct is fully initialised.
+    unsafe {
+        let mut dfl: libc::sigaction = std::mem::zeroed();
+        dfl.sa_sigaction = libc::SIG_DFL;
+        libc::sigaction(sig, &dfl, std::ptr::null_mut());
+    }
+    let fd = CRASH_LOG_FD.load(std::sync::atomic::Ordering::Relaxed);
+    if fd >= 0 {
+        let name = QUIET_FATAL.iter().find(|(s, _)| *s == sig).map_or(&b"SIGNAL"[..], |(_, n)| *n);
+        // SAFETY: the kernel hands a valid `siginfo_t`; null-checked first.
+        let (code, pid, uid) = unsafe {
+            if info.is_null() {
+                (0, 0, 0)
+            } else {
+                let (pid, uid) = siginfo_sender(&*info);
+                ((*info).si_code, pid, uid)
+            }
+        };
+        let mut buf = [0u8; 512];
+        let len = format_kill_line(name, code, pid, uid, &mut buf);
+        sig_write(fd, &buf[..len]);
+        let len = format_crash_context(0, &mut buf);
+        sig_write(fd, &buf[..len]);
+    }
+    // SAFETY: `raise` is async-signal-safe per POSIX.
+    unsafe {
+        libc::raise(sig);
+    }
+}
+
+/// The sending process and its uid, as a signal's siginfo reports them.
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+fn siginfo_sender(info: &libc::siginfo_t) -> (u32, u32) {
+    // SAFETY: read only for the signals in `QUIET_FATAL`, sent by `kill`-like
+    // calls whose siginfo carries the sender; a kernel-sent one reads as 0.
+    unsafe { (info.si_pid().max(0) as u32, info.si_uid()) }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn siginfo_sender(info: &libc::siginfo_t) -> (u32, u32) {
+    (info.si_pid.max(0) as u32, info.si_uid)
+}
+
+/// Format `=== KILLED: <name> from pid=<n> uid=<n> code=0x… ===\n` without
+/// allocating. `code` is `si_code`: 0 (`SI_USER`) for a `kill`, 0x80
+/// (`SI_KERNEL`) for one the kernel raised (SIGXCPU at a CPU limit).
+#[cfg(any(unix, test))]
+pub fn format_kill_line(name: &[u8], code: i32, pid: u32, uid: u32, buf: &mut [u8]) -> usize {
+    let mut pos = 0;
+    pos = crash_push(buf, pos, b"=== KILLED: ");
+    pos = crash_push(buf, pos, name);
+    pos = crash_push(buf, pos, b" from pid=");
+    pos = crash_push_dec(buf, pos, pid as u64, 1);
+    pos = crash_push(buf, pos, b" uid=");
+    pos = crash_push_dec(buf, pos, uid as u64, 1);
+    pos = crash_push(buf, pos, b" code=0x");
+    pos = crash_push_hex(buf, pos, code as u32 as u64, 1);
+    crash_push(buf, pos, b" ===\n")
 }
 
 /// Async-signal-safe crash handler. Order matters:
@@ -752,11 +865,24 @@ pub(crate) fn hook_webview_crash_reporter(window: &tauri::WebviewWindow) {
                 if reason == WebProcessTerminationReason::TerminatedByApi {
                     return;
                 }
-                if renderer_reload_allowed(
+                if !renderer_reload_allowed(
                     crashes.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 ) {
-                    view.reload();
+                    return;
                 }
+                // A reload spawns a new web process; out of descriptors, GLib
+                // asserts inside that spawn and aborts the whole app
+                // (2026-11-09). A dead page is the lesser loss.
+                if let Err(why) = services::fd_limit::spawn_headroom() {
+                    let msg = format!(
+                        "=== WEBVIEW '{label}' NOT RELOADED {}: {why} ===",
+                        storage::iso_now()
+                    );
+                    crash_log_append(&msg);
+                    eprintln!("{msg}");
+                    return;
+                }
+                view.reload();
             });
     });
 }
@@ -1365,6 +1491,13 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     services::ui_priority::install();
 
+    // The session's 1024 open files ran out under many agent tabs, and a
+    // renderer reload then aborted inside GLib (2026-11-09). See
+    // `services::fd_limit`.
+    if let Some((old, new)) = services::fd_limit::raise_soft_limit() {
+        eprintln!("fd_limit: open-file soft limit {old} -> {new}");
+    }
+
     services::brand_migration::hits::install();
     // Before anything creates or opens the state dir, and before the webview
     // context exists: what an older build wrote under the app's old name moves
@@ -1379,6 +1512,8 @@ pub fn run() {
     // is enforced against what previous runs left rather than a moment later.
     services::state_gc::cap_crash_log();
     install_crash_logger();
+    // Reports runs that died with nothing logged, then keeps this one's beat.
+    services::run_heartbeat::start(storage::state_dir(), BUILD_COMMIT, crash_log_append);
 
     // The webview's data directory is `<data dir>/<identifier>` on Linux, and
     // the identifier is the Tauri config's — asked for rather than hardcoded, so
@@ -1481,6 +1616,10 @@ pub fn run() {
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
             commands::root_mcp::start(core.clone());
+            // Once a day per installed agent CLI, its registry's newest release
+            // (`commands::agents::start_daily_update_check`): the Models & agents
+            // menu and a new tab of the CLI say when one is out.
+            commands::agents::start_daily_update_check(core.clone());
             // The provider API proxy (`services::api_proxy`): loopback, holds
             // the stored API keys so a keyed agent tab gets only a token.
             services::api_proxy::start();
@@ -1508,10 +1647,11 @@ pub fn run() {
                     ) else {
                         return;
                     };
-                    tokio::select! {
-                        _ = term.recv() => {}
-                        _ = int.recv() => {}
-                    }
+                    let name = tokio::select! {
+                        _ = term.recv() => "SIGTERM",
+                        _ = int.recv() => "SIGINT",
+                    };
+                    crash_log_append(&format!("=== {name} received {}: quitting ===", storage::iso_now()));
                     handle.exit(0);
                 });
             }
@@ -1587,6 +1727,9 @@ pub fn run() {
             // external monitor otherwise leaves a borderless popout larger than
             // the laptop panel, with its title bar and resize edges off-screen.
             commands::subwindow::spawn_monitor_watcher(_app.handle().clone());
+            // Native Wayland: each popout's screen is kept current as it
+            // settles or the user moves it, for a restart after a signal.
+            commands::subwindow::spawn_screen_tracker(_app.handle().clone());
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
@@ -1732,6 +1875,7 @@ pub fn run() {
             commands::agent_tasks::agent_schedules_cleanup_orphans,
             // Project-scoped prompt collection (agent_prompts.json): text with no
             // tab binding until the user aims it at an agent tab.
+            commands::agent_privacy::set_project_agent_privacy,
             commands::agent_prompts::agent_prompts_list,
             commands::agent_prompts::agent_prompt_links_list,
             commands::agent_prompts::agent_prompt_link_upsert,
@@ -1796,6 +1940,7 @@ pub fn run() {
             commands::voice::voice_status,
             commands::voice::voice_gpu_retry,
             commands::voice::voice_model_install_script,
+            commands::voice::voice_natural_install_script,
             commands::voice::voice_listen_start,
             commands::voice::voice_listen_pause,
             commands::voice::voice_listen_stop,
@@ -1854,6 +1999,8 @@ pub fn run() {
             commands::projects::workspace_sync,
             commands::projects::adopt_folder_tab_layout,
             commands::projects::root_work_dir,
+            commands::cockpit_results::cockpit_result_target,
+            commands::cockpit_results::cockpit_attention_dismiss,
             commands::root_mcp::root_mcp_status,
             commands::root_mcp::help_search,
             commands::root_mcp::help_read,
@@ -1904,6 +2051,8 @@ pub fn run() {
             commands::project_transfer::export_project,
             commands::project_transfer::inspect_project_export,
             commands::project_transfer::import_project_export,
+            commands::project_transfer::export_project_set,
+            commands::project_transfer::inspect_project_bundle,
             // Project boxes (meta-project grouping)
             commands::boxes::get_boxes,
             commands::boxes::save_boxes,
@@ -2090,6 +2239,10 @@ pub fn run() {
             commands::ssh::ssh_default_dir,
             commands::ssh::ssh_list_dir,
             commands::ssh::ssh_mkdir,
+            // Local port forwards for a remote tab's servers (docs/context/port_forwards.md)
+            commands::port_forward::port_forward_open,
+            commands::port_forward::port_forward_list,
+            commands::port_forward::port_forward_close,
             // Pooled SSH/SFTP connection lifecycle (mount-free remote, Phase 0)
             commands::remote::remote_connect,
             commands::remote::remote_disconnect,
@@ -2146,6 +2299,9 @@ pub fn run() {
             commands::sync::sync_scan_host_new,
             commands::sync::sync_file_meta,
             commands::sync::sync_resolve_if_identical,
+            commands::sync_handoff::sync_handoff_export,
+            commands::sync_handoff::sync_handoff_load_resolved,
+            commands::sync_handoff::sync_handoff_reveal,
             commands::sync::sync_apply_delete,
             commands::sync::sync_diff,
             commands::ssh::ssh_tooling_status,
@@ -2213,6 +2369,7 @@ pub fn run() {
             commands::clipboard::save_clipboard_image,
             commands::clipboard::clipboard_file_paths,
             commands::clipboard::copy_text_to_clipboard,
+            commands::clipboard::copy_files_to_clipboard,
             commands::connect::connect_status,
             commands::connect::connect_pair,
             commands::connect::connect_forget,
@@ -2255,6 +2412,9 @@ pub fn run() {
             commands::printing::print_set_enabled,
             commands::printing::print_test_page,
             commands::print_native::print_pdf_native,
+            commands::print_mcp::print_mcp_requests,
+            commands::print_mcp::print_mcp_pdf,
+            commands::print_mcp::print_mcp_decide,
             // Disk usage analyzer (commands::disk_usage)
             commands::disk_usage::disk_usage_scan,
             commands::disk_usage::disk_usage_cancel,
@@ -2262,11 +2422,14 @@ pub fn run() {
             // LaTeX view / compile (gated on a TeX engine being on PATH)
             commands::tex::tex_capability,
             commands::tex::compile_tex,
+            commands::tex::compile_tex_host,
             commands::tex::tex_preview_snippet,
             commands::synctex::synctex_edit,
             commands::synctex::synctex_status,
             commands::synctex::synctex_view,
             commands::synctex::synctex_page_lines,
+            commands::tfevents::tfevents_read,
+            commands::tfevents::tfevents_discover,
             commands::tex::list_fonts,
             commands::tex::resolve_tex_root,
             commands::tex::tex_auto_engine,
@@ -2331,6 +2494,7 @@ pub fn run() {
             commands::subwindow::desktop_coordinates_supported,
             commands::subwindow::snap_detached_window,
             commands::subwindow::focus_detached_window,
+            commands::subwindow::set_detached_title,
             commands::subwindow::sync_detached_scope,
             commands::subwindow::detached_window_is_parked,
             commands::subwindow::detached_window_screens,
@@ -2477,6 +2641,9 @@ pub fn run() {
             commands::agents::agent_logins,
             commands::agents::agent_login_import,
             commands::agents::agent_login_sign_out,
+            commands::agents::claude_token_status,
+            commands::agents::claude_token_save,
+            commands::agents::claude_token_clear,
             commands::agents::agent_login_scope_sign_out,
             commands::agents::agent_login_use_admin_key,
             commands::share::share_list,
@@ -2547,6 +2714,7 @@ pub fn run() {
             commands::ollama::ollama_check_updates,
             commands::ollama::ollama_version_status,
             commands::ollama::search_ollama_registry,
+            commands::ollama::search_huggingface_models,
             // Local code/text autocomplete (opt-in, local-only)
             commands::ollama::complete_text,
             commands::ollama::prepare_text_completion,
@@ -2671,8 +2839,18 @@ pub fn run() {
                     }
                 }
             }
+            // The popouts are still on screen when an exit is asked for (a
+            // SIGTERM, `pkill`, `app.exit`, the last window closing): the one
+            // moment their screens can still be read. The window's own quit
+            // has saved them through `detached_window_screens` by now.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                commands::subwindow::remember_screens_at_exit(_app);
+            }
             if let tauri::RunEvent::Exit = event {
                 use tauri::Manager;
+                QUIT_STARTED.store(true, std::sync::atomic::Ordering::SeqCst);
+                crash_log_append(&format!("=== QUIT {} ===", storage::iso_now()));
+                services::run_heartbeat::quitting();
                 // Saves the window sent on its way out are still queued on the
                 // ordered worker; let them land before anything is torn down.
                 commands::persist_lane::drain_at_exit();
@@ -2708,6 +2886,10 @@ pub fn run() {
                 // streams in flight briefly. Before the PTY teardown below, so
                 // its tab-gone hooks find nothing left to sweep.
                 services::api_proxy::stop_for_exit();
+                // The local lane of every tab with Cut network on: close and
+                // remove its sockets, so none outlives the quit.
+                #[cfg(unix)]
+                services::local_lane::stop_for_exit();
                 // The microphone, whisper and any speech: nothing of the
                 // voice outlives the quit (bounded at half a second).
                 services::voice::stop_for_exit();
@@ -2718,6 +2900,11 @@ pub fn run() {
                 // container. Dropping the registry alone would kill only the
                 // shell leaders and orphan everything they spawned.
                 _app.state::<RegistryState>().lock_ok().kill_all();
+                // Every port forward a remote tab's server link opened
+                // (`ssh -O cancel`): a master kept alive by ControlPersist
+                // must not keep a local port bound once the app is gone.
+                // Before the pooled connections below, which the cancel needs.
+                services::port_forward::close_all();
                 // The local tmux servers those PTYs were clients of survive the
                 // clients by design (that is what makes a crash resumable), so a
                 // clean quit ends Tabtivity's own sessions explicitly. The window's
@@ -2788,6 +2975,8 @@ pub fn run() {
                     .inner()
                     .clone();
                 tauri::async_runtime::block_on(services::remote::disconnect_all(&pool));
+                // Last: the teardown finished, so this run ended cleanly.
+                services::run_heartbeat::clear();
             }
         });
 }
@@ -2913,6 +3102,18 @@ mod tests {
         let mut small = [0u8; 6];
         assert_eq!(crash_push_dec(&mut small, 0, u64::MAX, 1), 6);
         assert_eq!(&small, b"184467");
+    }
+
+    #[test]
+    fn format_kill_line_names_the_sender() {
+        let mut buf = [0u8; 96];
+        let len = format_kill_line(b"SIGHUP", 0, 4242, 1000, &mut buf);
+        assert_eq!(
+            std::str::from_utf8(&buf[..len]).unwrap(),
+            "=== KILLED: SIGHUP from pid=4242 uid=1000 code=0x0 ===\n"
+        );
+        let mut small = [0u8; 10];
+        assert_eq!(format_kill_line(b"SIGUSR1", 0, 1, 1, &mut small), 10);
     }
 
     #[test]

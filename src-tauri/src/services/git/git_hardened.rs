@@ -128,8 +128,10 @@ pub(crate) const DIFF_DRIVER_CMDS: &[&str] = &["diff", "log", "show", "blame"];
 ///   Reword, Push, Publish, Pull's merge and the merge commit — and each is
 ///   gated by `services::exec_trust` first (`TrustKind::GitHooks`, see
 ///   [`require_hook_trust`]): the hook files and the repo-scope keys that name
-///   programs (`core.hooksPath`, `core.sshCommand`, `credential*.helper`) are
-///   fingerprinted and approved once, and any change asks again.
+///   programs (`core.hooksPath`, `core.sshCommand`, `credential*.helper`,
+///   `remote.*.uploadpack`, `url.*.insteadOf`, …) are fingerprinted and
+///   approved once, and any change asks again. Fetch runs no hook but honours
+///   those keys, so the local fetch passes the same gate.
 ///   `services::git_guard` additionally mounts `.git/config` and `.git/hooks`
 ///   read-only for fenced and contained agents; the one redirect it cannot
 ///   cover — an agent *creating* a `commondir` in a main `.git`, so git reads

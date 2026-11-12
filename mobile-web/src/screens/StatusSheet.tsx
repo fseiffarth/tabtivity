@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useI18nStore, useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { getAgentStatus, type AgentStatusReport, type TabRow } from "../api";
@@ -91,8 +92,8 @@ export function StatusSheet({ tab, live, onLimits, onClose, signIn }: {
     <section className="option-sheet status-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.status.of", { name: tab.label })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
-        <h2>{t("terminal.reader.status.button")} {isUntested("mobile.sheet.status") && <small>{t("mobile.newTab.untested")}</small>}</h2>
+        <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
+        <h2>{t("terminal.reader.status.button")} {(isUntested("mobile.sheet.status") || isUntested("mobile.design.sheets")) && <small>{t("mobile.newTab.untested")}</small>}</h2>
         <div className="terminal-view-switch" aria-label={t("mobile.status.view")}>
           <button className={view === "formatted" ? "selected" : ""} aria-pressed={view === "formatted"} onClick={() => setView("formatted")}>{t("mobile.status.formatted")}</button>
           <button className={view === "terminal" ? "selected" : ""} aria-pressed={view === "terminal"} onClick={() => setView("terminal")}>{t("mobile.focus.terminal")}</button>

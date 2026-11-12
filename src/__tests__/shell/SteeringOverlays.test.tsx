@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 import { useKeyboard } from "../../hooks/useKeyboard";
+import { useModalFocus } from "../../hooks/useModalFocus";
 import { ContextMenuPortal } from "../../components/common/ContextMenuPortal";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
@@ -42,7 +43,18 @@ function Keyboard() {
 
 /** A plain dialog in the shared frame: closes on its own Escape (a window
  *  listener, as most do) unless `noEscape`, then only by its ×. */
-function Dialog({ id, onClose, noEscape }: { id: string; onClose: () => void; noEscape?: boolean }) {
+function Dialog({
+  id,
+  onClose,
+  noEscape,
+  autoFocus,
+}: {
+  id: string;
+  onClose: () => void;
+  noEscape?: boolean;
+  /** Puts the caret in its name field, as New Folder does. */
+  autoFocus?: boolean;
+}) {
   useEffect(() => {
     if (noEscape) return;
     const onKey = (e: KeyboardEvent) => {
@@ -58,7 +70,14 @@ function Dialog({ id, onClose, noEscape }: { id: string; onClose: () => void; no
           ×
         </button>
         <div data-y="10">
-          <input id={`${id}-name`} type="text" />
+          <input
+            id={`${id}-name`}
+            type="text"
+            autoFocus={autoFocus}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onClose();
+            }}
+          />
         </div>
         <div data-y="20">
           <button type="button" id={`${id}-cancel`} onClick={onClose}>
@@ -111,8 +130,10 @@ function Stack() {
 }
 
 /** A tab bar's active tab with its right-click menu. */
-function Tab() {
+function Tab({ inlineRename }: { inlineRename?: boolean } = {}) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [label, setLabel] = useState("tab");
+  const [editing, setEditing] = useState(false);
   return (
     <div className="subwindow focused">
       <div
@@ -122,12 +143,32 @@ function Tab() {
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        tab
+        {editing ? (
+          <input
+            id="tab-rename"
+            type="text"
+            autoFocus
+            defaultValue={label}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") setLabel(e.currentTarget.value);
+              if (e.key === "Enter" || e.key === "Escape") setEditing(false);
+            }}
+          />
+        ) : (
+          label
+        )}
       </div>
       {menu && (
         <ContextMenuPortal x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <div data-y="10">
-            <button type="button" id="rename" onClick={() => setMenu(null)}>
+            <button
+              type="button"
+              id="rename"
+              onClick={() => {
+                setMenu(null);
+                if (inlineRename) setEditing(true);
+              }}
+            >
               rename
             </button>
           </div>
@@ -286,7 +327,7 @@ describe("steering over dialogs", () => {
     expect(steering()).toMatchObject({ level: "region", region: "overlay" });
     await settle();
     press({ key: "Enter" });
-    expect(steering().active).toBe(false);
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
     expect(document.activeElement?.id).toBe("d-name");
 
     on();
@@ -297,6 +338,50 @@ describe("steering over dialogs", () => {
     await settle();
     expect(document.getElementById("d")).toBeNull();
     expect(steering()).toMatchObject({ active: true, level: "tabs", region: null });
+  });
+
+  it("a dialog that focuses its own field gets the keys; Esc steers it, its closing brings steering back", async () => {
+    function App() {
+      const [open, setOpen] = useState(false);
+      useEffect(() => {
+        const show = () => setOpen(true);
+        window.addEventListener("test:open", show);
+        return () => window.removeEventListener("test:open", show);
+      }, []);
+      return <>{open && <Dialog id="d" autoFocus onClose={() => setOpen(false)} />}</>;
+    }
+    render(
+      <>
+        <Keyboard />
+        <App />
+      </>,
+    );
+    on();
+    act(() => void window.dispatchEvent(new Event("test:open")));
+    await settle();
+    expect(document.activeElement?.id).toBe("d-name");
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+    expect(steering().handoffReturn).toMatchObject({ level: "region", region: "overlay" });
+    // A steering key is typed into the field, not swallowed.
+    const typed = new KeyboardEvent("keydown", { key: "d", bubbles: true, cancelable: true });
+    act(() => void document.activeElement!.dispatchEvent(typed));
+    expect(typed.defaultPrevented).toBe(false);
+
+    // Esc: steering walks the dialog again, the dialog stays up.
+    act(() => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await settle();
+    expect(document.getElementById("d")).not.toBeNull();
+    expect(steering()).toMatchObject({ active: true, level: "region", region: "overlay", handedTo: null });
+    expect(regionCursor()?.id).toBe("d-name");
+
+    // Enter on the field hands it the keyboard again; Enter in it submits,
+    // and steering comes back where the dialog was raised from.
+    press({ key: "Enter" });
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+    act(() => void document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await settle();
+    expect(document.getElementById("d")).toBeNull();
+    expect(steering()).toMatchObject({ active: true, level: "tabs", region: null, handedTo: null });
   });
 
   it("a dialog that ignores Escape is closed by its ×", async () => {
@@ -358,6 +443,45 @@ describe("steering over dialogs", () => {
 });
 
 describe("right-click menus", () => {
+  it("Escape closes a picker over a modal and restores the picker trigger", async () => {
+    function Modal({ onClose }: { onClose: () => void }) {
+      const modalRef = useModalFocus(onClose);
+      const [pickerOpen, setPickerOpen] = useState(false);
+      return (
+        <div className="modal-backdrop">
+          <div ref={modalRef} id="parent-modal" role="dialog" aria-modal="true">
+            <button type="button" id="picker-trigger" onClick={() => setPickerOpen(true)}>Open picker</button>
+            {pickerOpen && (
+              <ContextMenuPortal x={10} y={10} onClose={() => setPickerOpen(false)}>
+                <button type="button" id="picker-option">Picker choice</button>
+              </ContextMenuPortal>
+            )}
+          </div>
+        </div>
+      );
+    }
+    function App() {
+      const [open, setOpen] = useState(true);
+      return open && <Modal onClose={() => setOpen(false)} />;
+    }
+    render(<><Keyboard /><App /></>);
+    on();
+    expect(regionCursor()?.id).toBe("picker-trigger");
+    press({ key: "Enter" });
+    await settle();
+    expect(regionCursor()?.id).toBe("picker-option");
+
+    press({ key: "Escape" });
+    await settle();
+    expect(document.getElementById("picker-option")).toBeNull();
+    expect(document.getElementById("parent-modal")).not.toBeNull();
+    expect(regionCursor()?.id).toBe("picker-trigger");
+
+    press({ key: "Escape" });
+    await settle();
+    expect(document.getElementById("parent-modal")).toBeNull();
+  });
+
   it(". opens the active tab's menu, walked as the overlay; Escape closes it back to the tabs", async () => {
     render(
       <>
@@ -386,6 +510,67 @@ describe("right-click menus", () => {
     await settle();
     expect(document.querySelector(".context-menu-portal")).toBeNull();
     expect(steering()).toMatchObject({ active: true, level: "tabs" });
+  });
+});
+
+describe("an inline field a steering key opened", () => {
+  it("Rename from the tab's menu takes the keys; Enter commits and Esc cancels, steering back on the tabs", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Tab inlineRename />
+      </>,
+    );
+    on();
+    press({ key: "." });
+    await settle();
+    expect(regionCursor()?.id).toBe("rename");
+    press({ key: "Enter" });
+    await settle();
+    expect(document.activeElement?.id).toBe("tab-rename");
+    expect(steering()).toMatchObject({ active: false, handedTo: "field" });
+    expect(steering().handoffReturn).toMatchObject({ level: "tabs", region: null });
+    const field = () => document.getElementById("tab-rename") as HTMLInputElement;
+    const typed = new KeyboardEvent("keydown", { key: "d", bubbles: true, cancelable: true });
+    act(() => void field().dispatchEvent(typed));
+    expect(typed.defaultPrevented).toBe(false);
+    act(() => {
+      field().value = "named";
+    });
+    act(() => void field().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await settle();
+    expect(field()).toBeNull();
+    expect(document.querySelector(".tab.active")?.textContent).toBe("named");
+    expect(steering()).toMatchObject({ active: true, level: "tabs", handedTo: null });
+
+    // Esc is the rename's own: it cancels, and steering comes back.
+    press({ key: "." });
+    await settle();
+    press({ key: "Enter" });
+    await settle();
+    expect(steering().handedTo).toBe("field");
+    act(() => void field().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await settle();
+    expect(field()).toBeNull();
+    expect(document.querySelector(".tab.active")?.textContent).toBe("named");
+    expect(steering()).toMatchObject({ active: true, level: "tabs", handedTo: null });
+  });
+
+  it("a press elsewhere drops the field's handoff; steering stays off", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Tab inlineRename />
+      </>,
+    );
+    on();
+    press({ key: "." });
+    await settle();
+    press({ key: "Enter" });
+    await settle();
+    expect(steering().handedTo).toBe("field");
+    act(() => void document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
+    expect(steering()).toMatchObject({ active: false, handedTo: null });
   });
 });
 
@@ -431,6 +616,130 @@ describe("the active tab's card", () => {
     await settle();
     expect(document.getElementById("undo")).toBeNull();
     expect(steering()).toMatchObject({ active: true, level: "tabs", region: null });
+  });
+});
+
+describe("the agent tab's subagents", () => {
+  /** An agent tab's pane, as `TerminalView` draws it: the prompt strip's top
+   *  bar holding the Subagents list (portaled there by the Chat), then the
+   *  Chat, which shows an open subagent's bar. */
+  beforeEach(() => {
+    useTabsStore.getState().addTab({ label: "agent", cmd: "bash", cwd: "/p", kind: "shell" });
+  });
+
+  function Pane({ agents = 2 }: { agents?: number }) {
+    const [listOpen, setListOpen] = useState(false);
+    const [opened, setOpened] = useState<number | null>(null);
+    return (
+      <>
+        <div className="subwindow focused" />
+        <div className="center-pane" data-scope-key="p" data-tab-key={useTabsStore.getState().activeKey}>
+          <div className="pane-host">
+            <div className="terminal-prompt-strip">
+              <button type="button" id="other">other</button>
+              <span className="reader-topbar-navigation">
+                {agents > 0 && (
+                  <nav className="terminal-reader-subagent-index">
+                    <button type="button" id="toggle" className="terminal-reader-subagent-toggle" aria-expanded={listOpen} onClick={() => setListOpen((was) => !was)}>
+                      Subagents
+                    </button>
+                    {listOpen && (
+                      <div className="terminal-reader-subagent-list">
+                        {Array.from({ length: agents }, (_, i) => (
+                          <button type="button" key={i} id={`agent-${i}`} onClick={() => { setOpened(i); setListOpen(false); }}>
+                            agent {i}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </nav>
+                )}
+              </span>
+            </div>
+            <div className="terminal-reader">
+              {opened !== null && (
+                <nav className="terminal-reader-subagent-bar">
+                  <button type="button" id="sub-back" className="terminal-reader-subagent-nav" onClick={() => setOpened(null)}>‹</button>
+                  <strong id="sub-title">agent {opened}</strong>
+                </nav>
+              )}
+              <button type="button" id="chat-link">a link in the chat</button>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  it("G opens the list on its first subagent; Enter opens it and the cursor moves to its bar", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    expect(steering()).toMatchObject({ level: "region", region: "subagents", regionReturn: "tabs" });
+    await settle();
+    expect(regionCursor()?.id).toBe("agent-0");
+    press({ key: "ArrowDown" });
+    expect(regionCursor()?.id).toBe("agent-1");
+    // The walk keeps to the subagent controls: on round to the toggle.
+    press({ key: "ArrowDown" });
+    expect(regionCursor()?.id).toBe("toggle");
+    press({ key: "ArrowUp" });
+    press({ key: "Enter" });
+    await settle();
+    expect(document.getElementById("sub-title")?.textContent).toBe("agent 1");
+    expect(steering()).toMatchObject({ level: "region", region: "subagents" });
+    expect(regionCursor()?.id).toBe("sub-back");
+
+    // Back out, then G again with a subagent open: straight onto its bar.
+    press({ key: "Escape" });
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+    press({ key: "g" });
+    await settle();
+    expect(document.querySelector(".terminal-reader-subagent-list")).toBeNull();
+    expect(regionCursor()?.id).toBe("sub-back");
+  });
+
+  it("Escape closes the list it opened", async () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    await settle();
+    expect(document.querySelector(".terminal-reader-subagent-list")).not.toBeNull();
+    press({ key: "Escape" });
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+    expect(document.querySelector(".terminal-reader-subagent-list")).toBeNull();
+  });
+
+  it("G does nothing on a tab without subagents, and the legend lists it only with them", () => {
+    render(
+      <>
+        <Keyboard />
+        <Pane agents={0} />
+      </>,
+    );
+    on();
+    press({ key: "g" });
+    expect(steering()).toMatchObject({ level: "tabs", region: null });
+    const base: SteeringLegendState = {
+      level: "tabs",
+      sideRegion: false,
+      multiPane: false,
+      apps: { mail: false, calendar: false, todo: false },
+      statusCounts: { decision: 0, working: 0, done: 0 },
+    };
+    const listed = (s: SteeringLegendState) => steeringKeysFor(s).some((row) => row.actions.includes("subagents"));
+    expect(listed(base)).toBe(false);
+    expect(listed({ ...base, subagents: true })).toBe(true);
   });
 });
 

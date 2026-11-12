@@ -130,6 +130,11 @@ way around the pinned tool set: the help tools read no file and run nothing.
 Pinned against Claude Code 2.1.300, Codex 0.162.1, OpenCode 1.19.1 and
 Ollama 0.40.3 (A0). All four are offered and listed (cloud Claude was
 unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
+OpenCode (local) was re-checked on 2.2.5 (2026-10-31): the lane's tools are
+offered and every built-in is off, but `skill` stays listed and refuses each
+call, with no config that hides it. 2.2.5 runs a call to a missing `bash` as
+`shell`; the pin turns `shell` off, so that is refused as well, forced through
+a stub model (`docs/third_party_update_checklist.md`).
 
 | Profile | What `launch_line` sets | Web |
 |---|---|---|
@@ -170,6 +175,46 @@ unlisted on 2026-10-26 and listed again on 2026-10-27, the user's call).
   forged: probed 2026-10-30 on 2.1.311, Haiku refused 6 of 6 text files and
   Sonnet 0 of 6 (pictures were read by both). With the exception, 8 of 8 text
   reads on Haiku, and it still refuses `~/.ssh/config` and a home listing.
+- **Pictures go in as a paste (2026-11-10, Claude 2.1.322).** Claude no longer
+  reads an `@` *picture* itself: it leaves the reference for the model's `Read`,
+  which the chat lacks, so the model saw only the path (text files still
+  arrive). What it takes as a picture is a bracketed paste of the file's
+  absolute path, alone; a relative path or `@path` stays text. So
+  `assistant_attach::picture_pastes_in` follows the user's own bytes into a
+  Claude chat (`AssistantCli::takes_pasted_pictures`; `pty_write`, the phone's
+  bridge) and, after the blank that ends an `@<inbox>/<leaf>` picture
+  reference, adds that paste: a png/jpg/gif/webp, a plain file reached through
+  no link below the chat folder, no blank in the path. The reference stays (the
+  chat draws its picture from it). An Enter in the same write as the paste is
+  lost, so one right after a reference is held back `PICTURE_SUBMIT_HOLD` (1 s;
+  an 11.5 MB photo took ~200 ms); `pty_write` queues a chat's writes behind
+  that. Claude records `[Image #N]` wherever the cursor stood when it took the
+  picture; `agent_session::drop_inbox_picture_chips` takes it out of a prompt
+  that names an inbox file, so the sending bubble settles. Not covered: a
+  scheduled prompt (`scheduler`, tmux `send-keys`). Codex and OpenCode get
+  nothing added.
+- **After an attachment the lane narrows (gap 78).** A chat that has had an `@`
+  attachment can hold file text next to `web_fetch`/`web_search`, so
+  `services::assistant_attach` keeps a backend-decided flag per chat: set when
+  the user's own bytes into the chat's PTY carry an `@` mention (`pty_write`;
+  the phone's `pty_bridge::attach`, off the tmux session name) or when a file
+  lands in the chat (`pty_drop_files`, the pasted image, the phone's inbox and
+  desktop-picture routes). It is the marker `<state>/assistant/attached/<uid>`,
+  outside the chat folder (which the fence mounts rw), never cleared; the lane
+  finds the chat by its token's tab id, tied to the uid in `assistant_gate`.
+  Then `web_fetch` drops query string, fragment and refuses user info, keeps
+  64 bytes of path; `web_search` keeps 128 characters. Residual: host-name
+  labels and those bytes still carry a little per call. The renderer is never
+  asked; an `@` typed into a tab this process did not spawn is not seen.
+- **The home denies `Read` of the login files.** `agent_home::deny_login_reads`
+  writes `permissions.deny` (`Read(~/<rel>)`, `Read(~/<dir>/**)`, generated from
+  `agent_registry::auth_registry`) into the assistant home's Claude
+  `settings.json` at every spawn, local-model home included. Does `@` honour
+  it? Tried 2026-11-05 outside the app, Claude 2.1.318, `-p`, Haiku, `--tools
+  WebSearch --strict-mcp-config`, `--settings` with `Read(~/<canary>)`, a canary
+  file under `$HOME` named `@/abs/path` (and `@~/path`): no deny, the model
+  quoted the word; deny, it answered "cannot see it". So yes there; the TUI and
+  other builds are untried, and Codex/OpenCode have no such rule.
 - The home is trusted up front: `.claude.json` gets the folder-trust entry and
   `hasCompletedOnboarding`, Codex's `config.toml` a `[projects."<dir>"]
   trust_level`, so a fresh home shows no dialog (Claude live-checked; Codex's
@@ -184,7 +229,7 @@ and `is_root_agent`, `roots_for_scope(None)` and the Host-session rule key on it
 A `Some` id that is in no list is otherwise an unknown project, so every such
 site was handled (the call-site list is in the plan).
 
-`storage::is_reserved_scope(id)` (root or assistant; trims, reduces through
+`storage::is_reserved_scope(id)` (root, assistant or the Host session's `host` home key; trims, reduces through
 `project_key`, compares case-insensitively) is the one funnel. It refuses or
 drops the id in `projects.json` and `boxes.json` reads and writes,
 `validate_project_id`, `discovery::scope_sources`, `sandbox::project_dir_for`,
@@ -314,7 +359,8 @@ same picker (`setAssistantReach`); turning the switch off drops the list.
   the phone's file or desktop image lands in the chat's folder
   (`host::drop_box`: `chat_dir` by the chat's uid, refused when missing or a
   link) and goes in as an `@.tabtivity/inbox/…` reference, which the CLI reads
-  itself, not through a tool. Codex has `view_image` off, so it gets the
+  itself, not through a tool (a picture for Claude also as a paste of its path,
+  above). Codex has `view_image` off, so it gets the
   reference and cannot see the picture. Nothing else reaches that folder: the
   state dir is masked in every fence and `assistant_chat_mount` binds one
   chat's, so a chat's files are its own, and `drop_sweep` prunes them at 90

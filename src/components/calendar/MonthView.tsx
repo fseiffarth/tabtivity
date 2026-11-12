@@ -14,6 +14,7 @@ import { calendarColor } from "../../stores/calendar/calendar";
 import { useI18nStore, useT } from "../../lib/i18n";
 import type { CalendarMenuTarget } from "./CalendarContextMenu";
 import { useArrivedMarks } from "../../stores/calendar/arrivals";
+import { DotIcon } from "../common/icons/Icon";
 
 /** Rows of chips a cell shows before collapsing the rest into "+N more". */
 const MAX_ROWS = 4;
@@ -351,7 +352,7 @@ export function MonthView({
                       }}
                       title={`${occ.title}${occ.location ? ` — ${occ.location}` : ""}`}
                     >
-                      {!spanning ? <span className="cal-month-bar-dot">●</span> : null}
+                      {!spanning ? <span className="cal-month-bar-dot"><DotIcon /></span> : null}
                       {!occ.allDay ? (
                         <span className="cal-month-bar-time">
                           {formatTime(occ.start.split("T")[1] ?? "", use24h)}

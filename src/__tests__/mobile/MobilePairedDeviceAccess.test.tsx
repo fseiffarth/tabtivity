@@ -8,8 +8,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import { PairedDeviceAccess, scopeReaches, withDevice, withoutDevice } from "../../components/mobile/PairedDeviceAccess";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
+import { useSettingsStore } from "../../stores/settings";
 import type { ProjectBox, ProjectEntry } from "../../types";
-import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../../lib/brand";
+import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../../lib/brand";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -144,5 +145,52 @@ describe("Settings → Mobile, a paired phone's access", () => {
     await user.click(await screen.findByRole("button", { name: /Off project/ }));
     expect(invokeMock).toHaveBeenCalledWith("set_project_mobile_access", { projectId: "off", enabled: true, devices: [PIXEL] });
     await waitFor(() => expect(screen.getByText("Off project")).toBeTruthy());
+  });
+  describe("the root console", () => {
+    const updateSettings = vi.fn(() => Promise.resolve());
+    const withRoot = (host: Record<string, unknown>) =>
+      useSettingsStore.setState({
+        settings: { [MOBILE_HOST_KEY]: { enabled: true, ...host } } as never,
+        updateSettings: updateSettings as never,
+      });
+    afterEach(() => updateSettings.mockClear());
+
+    it("is off for a phone nobody ticked, even with the root switch on", () => {
+      withRoot({ root_access: true });
+      renderPixel();
+      expect(screen.queryByText("Root console")).toBeNull();
+    });
+
+    it("lists root for a ticked phone and disconnects it by leaving the list", async () => {
+      const user = userEvent.setup();
+      withRoot({ root_access: true, root_devices: [PIXEL, IPAD], assistant_access: false });
+      renderPixel();
+      expect(screen.getByText("Root console")).toBeTruthy();
+      // Root is the first row; Disconnect keeps the other phone and every other key of the block.
+      await user.click(screen.getAllByRole("button", { name: "Disconnect" })[0]);
+      expect(updateSettings).toHaveBeenCalledWith({
+        [MOBILE_HOST_KEY]: { enabled: true, root_access: true, root_devices: [IPAD], assistant_access: false },
+      });
+    });
+
+    it("adds a phone to root, and cannot while the root switch is off", async () => {
+      const user = userEvent.setup();
+      withRoot({ root_access: true });
+      renderPixel();
+      await user.click(screen.getByRole("button", { name: /Add project/ }));
+      await user.click(await screen.findByRole("button", { name: /Root console/ }));
+      expect(updateSettings).toHaveBeenCalledWith({
+        [MOBILE_HOST_KEY]: { enabled: true, root_access: true, root_devices: [PIXEL] },
+      });
+      cleanup();
+      updateSettings.mockClear();
+
+      withRoot({ root_devices: [PIXEL] });
+      renderPixel();
+      // Switched off: not listed for the phone, and the menu entry is disabled.
+      expect(screen.queryByText("Root console")).toBeNull();
+      await user.click(screen.getByRole("button", { name: /Add project/ }));
+      expect((await screen.findByRole("button", { name: /Root console/ }) as HTMLButtonElement).disabled).toBe(true);
+    });
   });
 });

@@ -287,6 +287,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("disk_usage_scan", "root", LocalUnlessRemote("projectId")),
     ("exec_trust_approve", "dir", UserPath),
     ("export_project", "req.destPath", UserPath),
+    ("export_project_set", "req.destPath", UserPath),
     ("git_clone", "dest", UserPath),
     ("git_folder_origin", "sourceDir", UserPath),
     ("git_fork_clone", "dest", UserPath),
@@ -295,6 +296,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("import_project_export", "req.bundlePath", UserPath),
     ("import_project_export", "req.targetParent", UserPathOpt),
     ("import_project_export", "req.mirrorParent", UserPathOpt),
+    ("inspect_project_bundle", "bundlePath", UserPath),
     ("inspect_project_export", "bundlePath", UserPath),
     ("move_remote_mirror", "parentDir", UserPath),
     ("preview_project_scaffold", "sourceDir", UserPath),
@@ -443,6 +445,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("read_spreadsheet", "path", BodyConfined),
     ("sqlite_page", "path", BodyConfined),
     ("sqlite_tables", "path", BodyConfined),
+    ("tfevents_discover", "path", BodyConfined), // `fs::byte_route` + `confine_abs`
+    ("tfevents_read", "path", BodyConfined), // `fs::read_range_routed` (`open_confined`)
     ("write_file_text", "path", BodyConfined),
     // Relative paths inside a held `ProjectDir` (`enforce_confinement`, or a
     // pathspec git resolves inside the repo).
@@ -492,7 +496,15 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("git_worktree_lock", "path", BodyConfined),
     ("git_worktree_remove", "path", BodyConfined),
     ("git_worktree_unlock", "path", BodyConfined),
+    // The resolver hand-over: the relative paths are vetted by
+    // `sync_handoff::safe_rel` and written/read only through `home_io` handles
+    // below the project's agent home, never a project folder.
+    ("sync_handoff_export", "files", BodyConfined),
+    ("sync_handoff_load_resolved", "relPath", BodyConfined),
+    // A SHA-256 of the text the resolver shows, compared with the record.
+    ("sync_handoff_load_resolved", "localHash", NotAPath),
     // ── On a remote host ────────────────────────────────────────────────
+    ("compile_tex_host", "path", Remote), // checked inside the project root (`tex/host.rs`)
     ("hpc_ws_anchor", "mirrorPath", Remote),
     ("hpc_ws_anchor", "workspacePath", Remote),
     ("hpc_ws_link", "workspacePath", Remote),

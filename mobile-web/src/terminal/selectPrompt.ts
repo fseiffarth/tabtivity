@@ -28,9 +28,13 @@ export interface SelectOption {
    * number: a dialog may renumber, but the rows are always in screen order. */
   index: number;
   /** The number the dialog printed beside the row — `UNNUMBERED` for the one
-   * row a multi-select question prints none for (`ACTION_ROW`). */
+   * row a multi-select question prints none for (`ACTION_ROW`), and half way
+   * between its neighbours' for an `expander`, which keeps it in place among
+   * them wherever rows are put in order by number. */
   number: number;
   label: string;
+  /** A row that opens more rows instead of answering (`EXPANDER_ROW`). */
+  expander?: true;
   /** The note the dialog printed in the row's second column, if any. */
   description?: string;
   /** The keys that answer this row, sent as they are, on a page whose rows
@@ -54,10 +58,12 @@ export interface SelectPrompt {
    * with a model list and then a reasoning-level list for the model picked —
    * and the heading is what says which step is on screen. */
   title?: string;
-  /** Rows the dialog has but is not drawing. Claude Code shows only as many
-   * rows as its pane has room for — three at 24 lines — scrolls that window
-   * with the highlight and says `… +2 models` under it, so the rows on screen
-   * are a slice: `options` then need not start at 1. */
+  /** Rows the dialog has but is not drawing, above and below the rows on
+   * screen. Claude Code shows only as many rows as its pane has room for —
+   * three at 24 lines — scrolls that window with the highlight and says
+   * `… +8 models` under it, so the rows on screen are a slice: `options` then
+   * need not start at 1. Its note counts only the rows *below* the window
+   * (2.1.317: rows 3–5 of 13 say `+8`); the rows above it are added here. */
   hidden?: number;
   /** Index, in the lines read, of the dialog's first row. What sits above it
    * is what the rows answer — the question and whatever the agent printed to
@@ -114,6 +120,19 @@ const EDGE = /^[↑↓]$/u;
  * under the run, and nothing but the count and one word. */
 const HIDDEN_ROWS = /^\s*(?:…|\.\.\.)\s*\+(\d{1,2})\s+\p{L}+$/u;
 const RADIO_AGENT = /gemini|qwen/iu;
+/** GitHub Copilot CLI (1.0.106 to 1.0.109) draws a row whose label wraps with
+ * no hanging indent: the row and its next line both start under the `1.` of
+ * the rows that fit, inside the dialog's box —
+ *
+ *     ❯ 1. Yes
+ *      2. Yes, and don't ask again for file operations when in this repo (/home/…/
+ *      myproject)
+ *       3. No, and tell Copilot what to do differently (Esc to stop)
+ *
+ * Read as ordinary text the wrap ended the run, and row 3 — the one way to
+ * say no and tell Copilot why — never reached the chat. The box is narrower
+ * than the pane, so the width can't tell the wrap (`wrapsLabel`). */
+const HANGLESS_WRAP_AGENT = /copilot/iu;
 /** Claude Code's multi-select question (AskUserQuestion with `multiSelect`,
  * 2.1.286) ends its checkbox rows with one it prints no number for — `Next`,
  * or `Submit` on the last question — at the labels' column, with `❯` in the
@@ -150,6 +169,33 @@ const CHECKBOX_ROW = /^\s*[❯▸▶›>→]?\s*\d{1,2}[.)]\s+\[[^\]]\]\s/u;
 const CHAT_ROW = /^\s*([❯▸▶›>→])?\s*(?:(\d{1,2})[.)]\s+)?Chat about this$/u;
 /** `SelectOption.number` of a row the dialog printed no number beside. */
 export const UNNUMBERED = 0;
+/** Claude Code's `/model` (2.1.321) folds its older models under a row with
+ * no number, at the numbers' column, and goes on numbering under it once it
+ * is open — `▸` folded, `▾` open, `❯` before either while highlighted:
+ *
+ *       5.  Haiku 5.5              Fastest for quick answers
+ *     ❯ ▾   More models
+ *       6.  Fable 5.1              Most capable for your hardest …
+ *
+ * Its footer then reads `Enter to expand` (`Enter to collapse`). The highlight
+ * stops on it like on any row, so read as text it ended the run: the phone
+ * listed only the five rows above it, or only the slice under it, and a walk
+ * by number across it landed one model short. */
+const EXPANDER_ROW = /^\s*([❯▸▶›>→↑↓])?\s*[▸▾]\s+(More \p{L}+)\s*$/u;
+
+/** An `EXPANDER_ROW`: its marker, label and the column its `▸`/`▾` sits at. */
+function readExpander(text: string): { marker?: string; label: string; column: number } | null {
+  const match = EXPANDER_ROW.exec(text);
+  if (!match) return null;
+  const [whole, marker, label] = match;
+  const glyph = whole.slice((marker ? whole.indexOf(marker) + marker.length : 0)).search(/[▸▾]/u);
+  return { marker, label, column: (marker ? whole.indexOf(marker) + marker.length : 0) + glyph };
+}
+
+/** Whether `option` was printed with a number of its own. */
+function numberedRow(option: SelectOption): boolean {
+  return option.number !== UNNUMBERED && Number.isInteger(option.number);
+}
 
 /** Whether `lines[index]` is a multi-select question's `Submit`/`Next` row
  * (`ACTION_ROW`). Highlighted, it opens with the input line's `❯`, and taken
@@ -227,6 +273,8 @@ interface ReadRow {
   option: Omit<SelectOption, "index">;
   /** Screen column the label starts at. */
   labelColumn: number;
+  /** Screen column the row's number starts at. */
+  numberColumn: number;
   /** Screen column the row's note starts at: beside the label when the row
    * carries it in a second column, else the label's own column, under which
    * the note is printed on rows of its own. */
@@ -456,6 +504,7 @@ function readRow(text: string, option: RegExp): ReadRow | null {
       description: description ? description.slice(0, MAX_DESCRIPTION) : undefined,
     },
     labelColumn: text.length - rest.length,
+    numberColumn: match[0].indexOf(digits, marker?.length ?? 0),
     descriptionColumn: text.length - rest.length + (split ? split.index + split[0].length : 0),
   };
 }
@@ -476,12 +525,14 @@ export function readSelectPrompt(
     if (question) return question;
   }
   const option = radioMarkerAgent(agentLabel) ? RADIO_OPTION : OPTION;
+  const hanglessWrap = HANGLESS_WRAP_AGENT.test(agentLabel ?? "");
   const first = Math.max(0, lines.length - SEARCH_WINDOW);
   type Run = {
     start: number;
     options: SelectOption[];
     marked: number[];
     labelColumn: number;
+    numberColumn: number;
     column: number;
     edge: boolean;
     /** The `… +N` note right under the run, if any. */
@@ -518,6 +569,25 @@ export function readSelectPrompt(
       run.options.push({ index: run.options.length, number: UNNUMBERED, label: action[2] });
       continue;
     }
+    const expander = readExpander(text);
+    if (expander) {
+      const { column } = expander;
+      // Only the top of a windowed slice starts a run with one, and that row
+      // always carries the window's `↑`: a highlight never sits on the top
+      // row while rows lie above it.
+      if (run ? column === run.numberColumn : expander.marker === "↑") {
+        if (!run) {
+          // Its number is the next row's, less half.
+          run = { start: index, options: [], marked: [], labelColumn: column, numberColumn: column, column, edge: false };
+          runs.push(run);
+        }
+        const above = [...run.options].reverse().find(numberedRow);
+        if (expander.marker && EDGE.test(expander.marker)) run.edge = true;
+        else if (expander.marker) run.marked.push(run.options.length);
+        run.options.push({ index: run.options.length, number: above ? above.number + 0.5 : Number.NaN, label: expander.label, expander: true });
+        continue;
+      }
+    }
     const row = readRow(text, option);
     if (!run && bridged && row && row.labelColumn === bridged.labelColumn
       && row.option.number === bridged.options[bridged.options.length - 1].number + 1) run = bridged;
@@ -534,8 +604,11 @@ export function readSelectPrompt(
         last.label = `${last.label} ${panelWrap}`.slice(0, MAX_LABEL);
         continue;
       }
-      const labelWrap = last !== undefined && !last.description && wrapsLabel(lines[index - 1].text, text, columns);
-      const more = run ? readContinuation(text, run.labelColumn, run.column, labelWrap) : null;
+      const indent = text.length - text.trimStart().length;
+      const hangless = hanglessWrap && run !== undefined && last !== undefined && !last.description
+        && indent >= run.numberColumn && indent < run.labelColumn;
+      const labelWrap = hangless || (last !== undefined && !last.description && wrapsLabel(lines[index - 1].text, text, columns));
+      const more = run ? readContinuation(text, hangless ? run.numberColumn : run.labelColumn, run.column, labelWrap) : null;
       if (more && last) {
         if (more.label && !PANEL_COLUMN.test(more.label)) last.label = `${last.label} ${more.label}`.slice(0, MAX_LABEL);
         if (more.description && !PANEL_COLUMN.test(more.description)) {
@@ -548,21 +621,24 @@ export function readSelectPrompt(
       continue;
     }
     // Counted on from the last row that printed a number: `Submit` prints none.
-    const numbered = run ? [...run.options].reverse().find((entry) => entry.number !== UNNUMBERED) : undefined;
+    const numbered = run ? [...run.options].reverse().find(numberedRow) : undefined;
+    // A slice whose top row is an expander learns its number from the row under it.
+    const opened = run?.options.length === 1 && run.options[0].expander && Number.isNaN(run.options[0].number) ? run.options[0] : undefined;
+    if (opened) opened.number = row.option.number - 0.5;
     const continues = run !== undefined
-      && numbered !== undefined
-      && run.options.length < MAX_OPTIONS
-      && row.option.number === numbered.number + 1;
+      && (opened !== undefined || (numbered !== undefined && row.option.number === numbered.number + 1))
+      && run.options.length < MAX_OPTIONS;
     if (!continues || !run) {
       // A run starts at 1 — or wherever a windowed dialog's slice starts,
       // which the final check holds to the window's own marks.
-      run = { start: index, options: [], marked: [], labelColumn: row.labelColumn, column: row.descriptionColumn, edge: false };
+      run = { start: index, options: [], marked: [], labelColumn: row.labelColumn, numberColumn: row.numberColumn, column: row.descriptionColumn, edge: false };
       runs.push(run);
     }
     if (row.marked) run.marked.push(run.options.length);
     if (row.edge) run.edge = true;
     run.options.push({ index: run.options.length, ...row.option });
     run.labelColumn = row.labelColumn;
+    run.numberColumn = row.numberColumn;
     run.column = row.descriptionColumn;
   }
 
@@ -576,6 +652,7 @@ export function readSelectPrompt(
     // edge marker. Its heading and the caller's agent identify that slice.
     const codexModelSlice = /codex/iu.test(agentLabel ?? "") && title?.startsWith("Select Model") === true;
     if (candidate.options[0].number !== 1 && !windowed && !codexModelSlice) continue;
+    if (candidate.options.some((entry) => Number.isNaN(entry.number))) continue;
     // Read once: a dialog that draws it in the run has it among the rows.
     const chat = candidate.options.some((entry) => CHAT_ROW.test(entry.label)) ? null : readChatRow(lines, candidate.start);
     // Highlighted, it may be the one row marked.
@@ -590,7 +667,9 @@ export function readSelectPrompt(
         title,
         start: candidate.start,
         ...readContext(lines, candidate.start),
-        ...(candidate.hidden ? { hidden: candidate.hidden } : {}),
+        // Rows above the slice, as far as it can tell: the numbered ones. An
+        // expander above it is not drawn, so `selectRowPosition` adds it.
+        ...(candidate.hidden ? { hidden: candidate.hidden + Math.ceil(candidate.options[0].number) - 1 } : {}),
       };
     }
   }
@@ -600,7 +679,7 @@ export function readSelectPrompt(
 /** The key hints a select dialog prints under its rows: Claude Code's
  * `Enter to select · ↑/↓ to navigate`, its `Enter to confirm`, Codex's
  * `Press enter to confirm`. The input box's own hints name none of these. */
-const DIALOG_FOOTER = /(?:↑↓\s+select|⇆\s+tab)\s+enter\s+(?:submit|confirm|toggle)\s+esc\s+dismiss|\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
+const DIALOG_FOOTER = /(?:↑↓\s+select|⇆\s+tab)\s+enter\s+(?:submit|confirm|toggle)\s+esc\s+dismiss|enter\s+choose\s+(?:tab\s+next\s+)?esc\s+dismiss|⇆\s+select\s+enter\s+confirm|\benter to (?:select|confirm|submit)\b|↑\s*\/?\s*↓\s+to\s+(?:navigate|move|select)\b/iu;
 /** Non-blank lines from the bottom the footer may sit above: a status line or
  * two the CLI keeps drawing under a dialog. */
 const FOOTER_REACH = 4;
@@ -865,6 +944,21 @@ export function readCodexHooksPage(lines: readonly SelectLineLike[], agentLabel?
   if (!/codex/iu.test(agentLabel ?? "")) return null;
   let footer = lines.length - 1;
   while (footer >= 0 && !lines[footer].text.trim()) footer -= 1;
+  // A hook's detail page offers trust for its config path rather than
+  // the overview's trust-all action. Only accept Codex's own footer and a
+  // hook heading; prose mentioning these keys is never an approval prompt.
+  const detail = footer >= 0 ? /^\s*t (trust (?:this )?path)\s*·\s*esc (back|close)\s*$/iu.exec(lines[footer].text) : null;
+  if (detail) {
+    const heading = lines.findIndex((line) => /^\s*(?:Hooks?|(?:SessionStart|PreToolUse|PostToolUse|Stop)\b.*)\s*$/u.test(line.text));
+    if (heading < 0 || footer - heading > DIALOG_LINES) return null;
+    return {
+      options: [
+        { index: 0, number: 1, label: detail[1], keys: ["t"] },
+        { index: 1, number: 2, label: detail[2], keys: ["\u001b"] },
+      ],
+      current: 0, title: lines[heading].text.trim(), start: footer, question: heading, context: heading,
+    };
+  }
   const keys = footer >= 0 ? CODEX_HOOKS_FOOTER.exec(lines[footer].text) : null;
   if (!keys) return null;
   let heading = -1;
@@ -899,8 +993,12 @@ export function selectSignature(prompt: SelectPrompt): string {
 
 /** Whether the list on screen is a slice of `step` — the same heading, and
  * every row they both hold carries the same label — rather than the next step
- * of a multi-step dialog drawn in the same place. */
-export function sameSelectStep(step: SelectStep, prompt: SelectPrompt): boolean {
+ * of a multi-step dialog drawn in the same place.
+ *
+ * `walking`: only arrow keys went since `step` was read, and arrows move a
+ * highlight without leaving the list, so a slice sharing no row with it is
+ * still the same list — the window just moved further than one frame shows. */
+export function sameSelectStep(step: SelectStep, prompt: SelectPrompt, walking = false): boolean {
   if ((step.title ?? "") !== (prompt.title ?? "")) return false;
   const known = new Map(step.options.map((option) => [option.number, option.label]));
   let shared = 0;
@@ -910,15 +1008,15 @@ export function sameSelectStep(step: SelectStep, prompt: SelectPrompt): boolean 
     if (label !== option.label) return false;
     shared += 1;
   }
-  return shared > 0;
+  return shared > 0 || walking;
 }
 
 /** `step` with the rows `prompt` adds — or, when the list on screen is not a
  * slice of it (`sameSelectStep`), the step `prompt` starts. Returns `step`
  * itself when the screen shows nothing it did not hold, so a caller keeping it
  * in state does not re-render on every repaint. */
-export function mergeSelectRows(step: SelectStep | null, prompt: SelectPrompt): SelectStep {
-  if (!step || !sameSelectStep(step, prompt)) {
+export function mergeSelectRows(step: SelectStep | null, prompt: SelectPrompt, walking = false): SelectStep {
+  if (!step || !sameSelectStep(step, prompt, walking)) {
     return { title: prompt.title, options: prompt.options.map((option, index) => ({ ...option, index })) };
   }
   const rows = new Map(step.options.map((option) => [option.number, option]));
@@ -935,40 +1033,71 @@ export function mergeSelectRows(step: SelectStep | null, prompt: SelectPrompt): 
   return { title: step.title, options };
 }
 
+/** Where the row printed `number` sits in its dialog, counted from 1 — what
+ * the arrow keys walk: its number, plus one for each expander above it
+ * (`EXPANDER_ROW`) among `expanders`' numbers. Without one, the number. */
+function rowPosition(expanders: ReadonlySet<number>, number: number): number {
+  let above = 0;
+  for (const at of expanders) if (at < number) above += 1;
+  return Math.ceil(number) + above;
+}
+
+function expandersOf(...lists: (readonly SelectOption[])[]): Set<number> {
+  return new Set(lists.flat().filter((option) => option.expander).map((option) => option.number));
+}
+
+/** Where `step`'s row printed `number` sits for the arrow keys (`rowPosition`),
+ * counting the expanders `step` has seen. Walks go by this, not by number. */
+export function selectRowPosition(step: SelectStep, number: number): number {
+  return rowPosition(expandersOf(step.options), number);
+}
+
+/** How many rows the windowed dialog `prompt` has, positions the walk can reach. */
+function selectRowCount(expanders: ReadonlySet<number>, prompt: SelectPrompt): number {
+  const first = prompt.options[0].number;
+  const below = (prompt.hidden ?? 0) - (Math.ceil(first) - 1);
+  return rowPosition(expanders, first) - 1 + prompt.options.length + below;
+}
+
 /** The first row a windowed dialog has that `step` has not seen, by its
- * printed number — where to walk the highlight next to make the dialog draw
- * it — or `undefined` once every row is known. */
+ * position (`selectRowPosition`) — where to walk the highlight next to make
+ * the dialog draw it — or `undefined` once every row is known. */
 export function missingSelectRow(step: SelectStep, prompt: SelectPrompt): number | undefined {
-  const seen = new Set(step.options.map((option) => option.number));
+  const expanders = expandersOf(step.options, prompt.options);
+  const seen = new Set(step.options.map((option) => rowPosition(expanders, option.number)));
   // A clipped first row already tells us its printed number, even when the
   // picker gives no count of hidden rows. Walk up to collect it for the sheet.
-  for (let number = 1; number < prompt.options[0].number; number += 1) {
-    if (!seen.has(number)) return number;
+  for (let at = 1; at < rowPosition(expanders, prompt.options[0].number); at += 1) {
+    if (!seen.has(at)) return at;
   }
   if (!prompt.hidden) return undefined;
-  const total = prompt.options.length + prompt.hidden;
-  for (let number = 1; number <= total; number += 1) if (!seen.has(number)) return number;
+  const total = selectRowCount(expanders, prompt);
+  for (let at = 1; at <= total; at += 1) if (!seen.has(at)) return at;
   return undefined;
 }
 
-/** Where to walk the highlight to reveal what `step` has not seen, half a
- * window at a time rather than one row per round trip — Cursor draws
- * thirty-nine models in a ten-row window, and a row-by-row reveal held the
- * sheet for most of a minute.
+/** Where to walk the highlight to reveal what `step` has not seen, by
+ * position: all the way to the farthest unseen row on one side, in one run of
+ * arrows — the rows between are drawn on the way. Walked half a window per
+ * round trip instead, Claude Code's three-row window (2.1.317, thirteen
+ * models) took a dozen trips across the phone's link before the sheet listed
+ * every model.
  *
- * Half, not whole: the frame the walk lands on must still show a row the step
- * already holds, whether the window scrolls just far enough to keep the
- * highlight in view or centres it. A frame sharing no row with the step is
- * read as the next step of a multi-step dialog (`sameSelectStep`), and what
- * was revealed so far would be thrown away. */
+ * Above the window first, then below it. The frames the walk lands on need
+ * not share a row with `step`: the caller merges them as one list while it
+ * walks (`mergeSelectRows`'s `walking`). A row a coalesced frame skipped is
+ * still unseen afterwards, and the next walk goes back for it. */
 export function revealSelectRow(step: SelectStep, prompt: SelectPrompt): number | undefined {
   const missing = missingSelectRow(step, prompt);
   if (missing === undefined) return undefined;
-  const size = prompt.options.length;
-  const first = prompt.options[0].number;
-  if (missing < first) return Math.max(missing, first + 1 - Math.ceil(size / 2));
-  const total = size + (prompt.hidden ?? 0);
-  return Math.min(total, Math.max(missing, missing - 1 + Math.floor(size / 2)));
+  const expanders = expandersOf(step.options, prompt.options);
+  const first = rowPosition(expanders, prompt.options[0].number);
+  if (missing < first) return missing;
+  const seen = new Set(step.options.map((option) => rowPosition(expanders, option.number)));
+  const last = rowPosition(expanders, prompt.options[prompt.options.length - 1].number);
+  const total = Math.max(last, selectRowCount(expanders, prompt));
+  for (let at = total; at > missing; at -= 1) if (!seen.has(at)) return at;
+  return missing;
 }
 
 /** The keystrokes that move a dialog's highlight from `current` to `target` and
@@ -994,6 +1123,16 @@ const FREE_TEXT = /^(?:\[[^\]]\]\s+)?Type something\.?$/u;
 /** Whether `option` is the question's free-text row (`FREE_TEXT`). */
 export function freeTextRow(option: SelectOption): boolean {
   return option.input === "opencode" || FREE_TEXT.test(option.label);
+}
+
+/** The row a digit answers on a question: the option the dialog printed with
+ * number `n`, else the nth row when the dialog numbers none. Null when there is
+ * none (the legend then says so). A keyboard's 1-9, like the desktop's. */
+export function optionForDigit(prompt: SelectPrompt, n: number): SelectOption | null {
+  if (prompt.options.some((option) => option.number !== UNNUMBERED)) {
+    return prompt.options.find((option) => option.number === n) ?? null;
+  }
+  return prompt.options[n - 1] ?? null;
 }
 
 /** The writes that answer a question's free-text row with `text`: walk the

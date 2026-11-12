@@ -18,6 +18,7 @@ import { sshOf, useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { confirmedArg, hpcGuardRefusal, withHpcConfirm } from "../../lib/remote/hpc/hpcGuard";
 import { resolveProjectDirectory } from "../../types";
 import "../files/QuickOpen.css";
+import { CheckIcon } from "../common/icons/Icon";
 
 interface PathEntry {
   path: string;
@@ -240,7 +241,7 @@ export function ContextFilePicker({
                 onMouseEnter={() => setSelected(idx)}
               >
                 <span>
-                  {attachedSet.has(rel) ? "✓ " : ""}
+                  {attachedSet.has(rel) ? <><CheckIcon />{" "}</> : ""}
                   <HighlightedPath text={rel} query={query} />
                 </span>
               </div>

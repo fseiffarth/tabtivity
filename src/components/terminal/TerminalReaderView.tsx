@@ -1,7 +1,8 @@
 import { Fragment, createContext, memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type MutableRefObject, type ReactNode, type RefObject } from "react";
+import { wrapStep } from "../../lib/wrapStep";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { useT, type TranslationKey } from "../../lib/i18n";
+import { useI18nStore, useT, type Language, type TranslationKey } from "../../lib/i18n";
 import {
   READER_STEP,
   composerHistory,
@@ -12,29 +13,35 @@ import {
   type SessionTranscript,
 } from "../../lib/agents/agentReader";
 import { watchedReads } from "../../lib/agents/transcriptWatch";
-import { NO_LIVE, STOP_KEY, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
+import { NO_LIVE, answerKeys, answerTextKeys, freeTextRow, readReaderLive, sameReaderLive, tabStepKeys, UNNUMBERED, type ReaderLive } from "../../lib/agents/readerLive";
 import { isAiOffRefusal } from "../../lib/aiSwitch";
 import { forgetSentPrompts, onSentPrompt, useSentPrompts, type SentPrompt } from "../../lib/agents/sentPrompts";
 import { readerDraft, setReaderDraft } from "../../lib/agents/readerDrafts";
 import { DraftUndo, caretAfterSwap } from "../../lib/agents/draftUndo";
 import { actionMatches } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
-import { clearAgentTab, sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
+import { clearAgentTab, ledDraft, sendSteeringPrompt, type SteeringAgentCommand } from "../../lib/shortcuts/steeringAgent";
 import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { SessionPickerOpenError, submitScheduledAgentMessage } from "../../lib/agents/scheduledAgentInput";
 import { agentFamily, agentInputWrites } from "../../../shared/agentComposer";
 import { writePtyInput } from "../../lib/terminal/terminalInput";
+import { copyText } from "../../lib/terminal/copyText";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
 import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry";
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
+import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
+import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
-import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
-import { type TabEntry } from "../../stores/tabs";
+import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import { AGENT_ITEMS, buildSignInTabSpec } from "../../lib/tabs/newTabItems";
+import { signInLaunch } from "../../lib/agents/signInLaunch";
+import { readSignedOut, signInCommand } from "../../../mobile-web/src/terminal/signIn";
 import { hostTabCwd, hostTabId } from "../../stores/tabs/tabLocation";
 import { useProjectsStore } from "../../stores/projects";
 import { usePaneTab } from "../tabs/paneTabContext";
@@ -45,48 +52,61 @@ import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
-import { ReaderToolbarNavigation, type ReaderToolbarFile } from "./ReaderToolbarNavigation";
+import { TerminalReaderFiles, type ReaderFile } from "./TerminalReaderFiles";
+import { inboxLeaves } from "../../../mobile-web/src/terminal/inboxRefs";
+import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
 import { UntestedTag } from "../common/UntestedTag";
 import { ReaderAnswerAlbum, ReaderAnswerFilesContext, useReaderAnswerFiles } from "./ReaderAnswerFiles";
-import { ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
+import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useReaderInbox } from "./ReaderInbox";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
-import type { FileEntry } from "../../lib/viewers/fileUtils";
+import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
-import { answerHtml, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
+import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
-import { bufferRows, sendToSubagent, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
-import { pullQueuedPrompts, queuedHintShown } from "../../../mobile-web/src/terminal/queuePull";
-import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
+import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
+import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
+import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, leadDraft, readSlashCommands, rememberSlashCommand, slashSuggestions, toggleDraftPrefix, type SlashSuggestion } from "../../../mobile-web/src/slashCommands";
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
-import { ReaderSlashMenu } from "./ReaderSlashMenu";
+import { ReaderSlashMenu, slashMenuKey } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
 import { useReaderVoice } from "./ReaderVoice";
+import { matchDraftEdit } from "../../lib/voice/voiceCommands";
+import { DraftVoiceHistory, type DraftEditNote } from "../../lib/voice/draftEdit";
 import { useReaderReadAloud } from "./ReaderReadAloud";
 import { useAgentTurn } from "../../lib/voice/agentTurn";
 import { useExperimental } from "../../lib/experimental";
 import { useSettingsStore } from "../../stores/settings";
-import { questionSpeech, voicePick } from "../../../mobile-web/src/handsFree";
+import { questionSpeech, voicePick, voicePickable } from "../../../mobile-web/src/handsFree";
+import { isStopWord } from "../../../shared/voice";
+import type { VoicePick, VoicePickResult } from "../../../shared/handsFree";
 import { sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
-import { insertIntoReader, onReaderInsert, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
+import { insertIntoReader, onReaderInsert, pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../../../mobile-web/src/terminal/subagents";
+import { chatLinksOf, type ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type TranscriptTurn } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { afterClear, clearMark } from "../../../mobile-web/src/terminal/clearedSession";
-import { recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
+import { recordedRun, recordsPrompt } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { limitWarnings } from "../../../mobile-web/src/terminal/sessionUsage";
 import type { AskedQuestion, RunningShell, TranscriptEntry } from "../../../mobile-web/src/api";
 import type { UntestedId } from "../../lib/untested";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
+
+/** How long a spoken edit's note ("Removed …") stays on the voice line. */
+const EDIT_NOTE_MS = 4_000;
 
 /** How long a sent prompt shows as sending while the transcript has not
  * recorded it yet — counted from the send, or from the last moment the agent
  * was seen working (a prompt queued behind a long turn is recorded only once
  * the CLI takes it up). */
 const PENDING_MS = 60_000;
+/** How long the agent's question must stay gone before a prompt that waited
+ * on it is typed: a question with several steps redraws between them. */
+const QUESTION_GONE_MS = 1_500;
 /** How soon after the pane's output the live screen is read again, and how
  * often regardless (the busy row's timer, a pane not created yet). */
 const LIVE_SETTLE_MS = 250;
@@ -186,8 +206,11 @@ function walkQuestionOptions(event: KeyboardEvent<HTMLElement>) {
  * headers as steps: ←/→ and a click on one walk the dialog's tabs, so an
  * answer can be changed before Submit. Claude Code's "Type something." row
  * opens a field under it instead: its answer is words, sent as the phone's
- * are (`answerTextKeys`). */
-function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep }: {
+ * are (`answerTextKeys`). Files pasted into that field go to the tab
+ * folder's inbox and in as `@` references, as the composer takes them. */
+function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, onStep }: {
+  /** The agent's pane: where a file pasted into the typed answer is stored. */
+  ptyId: string;
   live: ReaderLive;
   /** A row was clicked and the session has not redrawn yet. */
   answered: boolean;
@@ -206,10 +229,30 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
    * belongs to the dialog step it was opened on. */
   const [typing, setTyping] = useState<number | null>(null);
   const [typed, setTyped] = useState("");
+  const typedBox = useRef<HTMLInputElement>(null);
+  /** Why a file pasted into the field did not make it. */
+  const [pasteError, setPasteError] = useState<TranslationKey | null>(null);
   useEffect(() => {
     setTyping(null);
     setTyped("");
+    setPasteError(null);
   }, [live.signature]);
+  // Keyboard steering's digit on the free-text row opens this field (the
+  // terminal behind the Chat view cannot take the words).
+  useEffect(() => registerQuestionField(ptyId, (index) => setTyping(index)), [ptyId]);
+  /** Files copied in the file manager, or a screenshot, pasted into the
+   * field: stored in the inbox, their `@` references typed at the caret. */
+  const onTypedPaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    setPasteError(null);
+    pasteIntoAgentBox(event, ptyId, ({ text, error }) => {
+      if (error) setPasteError(error);
+      if (!text) return;
+      const box = typedBox.current;
+      setTyped((current) =>
+        spliceSpaced(current, box ? Math.min(box.selectionEnd ?? current.length, current.length) : current.length, text));
+      box?.focus();
+    });
+  };
   const question = live.question;
   if (!question) return null;
   const sendTyped = (index: number) => {
@@ -223,7 +266,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
     [answeredTab && "answered", index === focus && "current"].filter(Boolean).join(" ") || undefined;
   return (
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
-      <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /></small>
+      <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /> <UntestedTag id="terminal.reader.trustPath" /></small>
       {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
@@ -307,6 +350,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
                   }}
                 >
                   <input
+                    ref={typedBox}
                     autoFocus
                     type="text"
                     value={typed}
@@ -314,6 +358,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
                     placeholder={t("mobile.question.typePlaceholder")}
                     aria-label={t("mobile.question.typePlaceholder")}
                     onChange={(event) => setTyped(event.target.value)}
+                    onPaste={onTypedPaste}
                     onKeyDown={(event) => {
                       if (event.key !== "Escape") return;
                       event.preventDefault();
@@ -325,6 +370,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
                     {t("mobile.question.typeSend")}
                   </button>
                   <UntestedTag id="terminal.reader.freeText" />
+                  <UntestedTag id="terminal.reader.freeTextPaste" />
                 </form>
               )}
             </Fragment>
@@ -334,6 +380,7 @@ function LiveQuestion({ live, answered, failure, busy, onAnswer, onType, onStep 
       {question.options.some((option) => option.keys) && <UntestedTag id="terminal.reader.codexHooksPage" />}
       {!!question.hidden && <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small>}
       {answered && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
+      {pasteError && typing !== null && <small className="terminal-reader-question-more" role="alert">{t(pasteError)}</small>}
       {failure && <small className="terminal-reader-question-more" role="alert">{t(failure === "aiOff" ? "terminal.reader.answerAiOff" : "terminal.reader.answerFailed")}</small>}
     </div>
   );
@@ -392,6 +439,44 @@ function AskedQuestions({ questions, time }: { questions: readonly AskedQuestion
  * once looked up keeps its answer, so a shown bubble never gains or loses a
  * link afterwards. */
 const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(new Map());
+const NO_PATH_LINKS: ReadonlyMap<string, FileEntry | null> = new Map();
+const NO_LINKS: readonly ChatLink[] = [];
+/** The chat's web links are dressed like its file links (`linkPathsInHtml`). */
+const WEB_LINKS = { webLinks: true } as const;
+
+function CopyCodeButton({ block }: { block: HTMLElement }) {
+  const t = useT();
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+  return <div className="terminal-reader-code-actions">
+    <button type="button" onClick={async (event) => {
+      event.stopPropagation();
+      const code = block.querySelector("pre code") ?? block.querySelector("pre");
+      if (!code) return;
+      try {
+        await copyText(code.textContent ?? "");
+        setStatus("copied");
+      } catch {
+        setStatus("failed");
+      }
+    }}>{t(status === "copied" ? "fileViewer.copied" : "common.copy")}</button>
+    <UntestedTag id="terminal.reader.copyCode" />
+    {status === "failed" && <span role="alert">{t("terminal.copyFailed")}</span>}
+  </div>;
+}
+
+function AnswerMarkdown({ html }: { html: string }) {
+  const root = useRef<HTMLDivElement>(null);
+  const [blocks, setBlocks] = useState<HTMLElement[]>([]);
+  const withControls = useMemo(() => html.replace(/<pre(\s[^>]*)?>/g, '<div class="terminal-reader-code-block"><pre$1>')
+    .replace(/<\/pre>/g, "</pre></div>"), [html]);
+  useLayoutEffect(() => {
+    setBlocks(Array.from(root.current?.querySelectorAll<HTMLElement>(".terminal-reader-code-block") ?? []));
+  }, [withControls]);
+  return <>
+    <div ref={root} className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: withControls }} />
+    {blocks.map((block, index) => createPortal(<CopyCodeButton block={block} />, block, String(index)))}
+  </>;
+}
 
 /** One answer as formatted text (`answerHtml`, the phone's: formatting only,
  * nothing in it opens or loads), its file paths made links and the pictures
@@ -400,10 +485,10 @@ const PathLinksContext = createContext<ReadonlyMap<string, FileEntry | null>>(ne
  * above it. */
 const AnswerText = memo(function AnswerText({ text }: { text: string }) {
   const links = useContext(PathLinksContext);
-  const html = useMemo(() => linkPathsInHtml(answerHtml(text), links), [text, links]);
+  const html = useMemo(() => linkPathsInHtml(answerHtml(text), links, WEB_LINKS), [text, links]);
   return (
     <>
-      <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />
+      <AnswerMarkdown html={html} />
       <ReaderAnswerAlbum text={text} />
     </>
   );
@@ -415,14 +500,16 @@ const AnswerText = memo(function AnswerText({ text }: { text: string }) {
  * the record, and its bubble must not restyle when that arrives. */
 const PromptText = memo(function PromptText({ text, unlinked = false }: { text: string; unlinked?: boolean }) {
   const links = useContext(PathLinksContext);
-  const html = useMemo(() => (unlinked ? promptHtml(text) : linkPathsInHtml(promptHtml(text), links)), [text, links, unlinked]);
+  // Web links need no lookup, so even a prompt still sending has them dressed.
+  const html = useMemo(() => linkPathsInHtml(promptHtml(text), unlinked ? NO_PATH_LINKS : links, WEB_LINKS), [text, links, unlinked]);
   return <div className="markdown-body terminal-reader-md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 /** What a subagent's card or list row opens: its handle and what it says. */
 type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
-function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent }: {
+function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action }: {
+  action?: ReactNode;
   turn: TranscriptTurn;
   cutLabel: string;
   planLabel: string;
@@ -484,6 +571,7 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
     <div className={turn.plan ? "terminal-reader-turn agent plan" : "terminal-reader-turn agent"}>
       {turn.plan && <small className="terminal-reader-plan-head">{planLabel}</small>}
       <AnswerText text={turn.text} />
+      {action}
       {cut}
       {time}
     </div>
@@ -495,7 +583,9 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
  * box, never the conversation above it — with a long chat that was every turn
  * and the facts row per key, on the one renderer thread typing waits for.
  * Mounted while steering holds the keyboard (drawn as nothing), so a draft
- * survives steering; an unsent draft is kept per tab (`readerDrafts`), so
+ * survives steering; steering's Prompt key shows it again with the keyboard
+ * (`registerReaderComposer`), and sending or Esc hides it, steering back on
+ * the level the key was pressed on. An unsent draft is kept per tab (`readerDrafts`), so
  * it survives the Reader unmounting too — another tab shown, the switch
  * flipped. Sends through the prompt box's path (`sendSteeringPrompt`); ↑/↓
  * walk `history`; Esc is `onEscape`. ↑ in the empty box while Claude shows
@@ -508,6 +598,9 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
  * and nothing goes anywhere when that subagent cannot be reached.
  */
 /** Why a message to a subagent did not go, said in the composer. */
+/** Claude's TUI stayed on a subagent: words for the session were not sent. */
+class SubagentViewedError extends Error {}
+
 const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   not_listed: "terminal.reader.subagentNotListed",
   ambiguous: "terminal.reader.subagentAmbiguous",
@@ -525,7 +618,8 @@ interface ReaderVoiceLoop {
   /** The newest answer's key in the conversation. */
   lastAnswer: string | null;
   /** Answers the question on screen when an utterance picks one of its rows. */
-  pick: (utterance: string) => boolean;
+  pick: (utterance: string) => VoicePickResult;
+  commitPick: (pick: VoicePick) => void;
   stopReading: () => void;
   /** Why read-aloud could not speak, if it could not. */
   readProblem: TranslationKey | null;
@@ -535,7 +629,21 @@ interface ReaderVoiceLoop {
   chips: ReactNode;
 }
 
-function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef }: {
+/** `entries` without the prompt Claude handed back on a stop, while it is
+ * still the newest one and nothing answered it; the same array when that no
+ * longer holds, which is what lets the mark go. */
+function withoutTakenBack(entries: TranscriptEntry[], text: string | null): TranscriptEntry[] {
+  if (text === null) return entries;
+  let at = entries.length - 1;
+  while (at >= 0 && entries[at].kind !== "prompt") {
+    if (entries[at].kind === "answer") return entries;
+    at -= 1;
+  }
+  if (at < 0 || entries[at].text.trim() !== text.trim()) return entries;
+  return [...entries.slice(0, at), ...entries.slice(at + 1)];
+}
+
+function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, queued, focused, visible, acceptInserts = visible, onReveal, steering, questionOpen, inputBlocked, suggestion, chipSlot, actionSlot, voiceLoop, onEscape, onStatus, onPulled, pullRef, takeBackRef }: {
   scope: string;
   tabKey: string;
   tabRef: RefObject<TabEntry | undefined>;
@@ -555,10 +663,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   steering: boolean;
   /** A dialog waits on an answer: ↑/↓ in an empty composer walk its rows. */
   questionOpen: boolean;
+  /** Startup and CLI dialogs must finish before composing a message. */
+  inputBlocked: boolean;
   /** Claude's own suggestion for the next message, read off its empty box. */
   suggestion: string;
   /** The facts row's end, where the chip row goes; in the text box without it. */
   chipSlot: HTMLElement | null;
+  /** The top bar's right end: a send error shows there while the composer is hidden. */
   actionSlot?: HTMLElement | null;
   voiceLoop: ReaderVoiceLoop;
   onEscape: () => void;
@@ -567,6 +678,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   onPulled: (ids: number[]) => void;
   /** Set to what takes `queued` back into the box, whatever it holds. */
   pullRef: MutableRefObject<(() => void) | null>;
+  /** Set to what puts a prompt Claude handed back on a stop into the box,
+   * before what it holds (`takeBackStopped`). */
+  takeBackRef: MutableRefObject<((text: string, cleared: boolean) => void) | null>;
 }) {
   const t = useT();
   const assistantChat = scope === ASSISTANT_SCOPE;
@@ -574,6 +688,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   useEffect(() => setReaderDraft(scope, tabKey, draft), [scope, tabKey, draft]);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
+  /** Send was pressed while the agent asked something: typed into the pane,
+   * the words would be the question's keys — a row picked, or the question
+   * cancelled. They stay in the box until the question has gone. */
+  const [waitingOnQuestion, setWaitingOnQuestion] = useState(false);
   const pulling = useRef(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const revealRef = useRef(onReveal);
@@ -643,11 +761,95 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setSlashAt(null);
   };
 
-  // The keyboard goes to the composer whenever this pane is the focused one,
-  // and back to it when steering lets go.
+  /** Steering's Prompt key showed the composer under steering: the level
+   * steering comes back on once the prompt is sent or Esc pressed. */
+  const [steerOpen, setSteerOpen] = useState<SteeringBaseLevel | null>(null);
+  const steerOpenRef = useRef(steerOpen);
+  steerOpenRef.current = steerOpen;
+  const openForSteering = useRef<(level: SteeringBaseLevel, lead?: SteeringAgentCommand) => boolean>(() => false);
+  openForSteering.current = (level, lead) => {
+    if (lead) {
+      const next = ledDraft(draftRef.current, lead);
+      editDraft(next);
+      caretAt.current = next.length;
+    }
+    setSteerOpen(level);
+    return true;
+  };
+  // Only a composer on show that takes text answers the key; else the prompt
+  // box over the window does.
+  const steerable = visible && !inputBlocked;
+  useEffect(
+    () => steerable ? registerReaderComposer(ptyId, (level, lead) => openForSteering.current(level, lead)) : undefined,
+    [ptyId, steerable],
+  );
+  // Shown with the keyboard, caret at the end of the text.
+  useLayoutEffect(() => {
+    const box = composerRef.current;
+    if (steerOpen === null || !box) return;
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }, [steerOpen]);
+  // Steering went on again, or its handoff was dropped: the composer is the
+  // Prompt key's no more.
   useEffect(() => {
-    if (focused && visible && !steering) composerRef.current?.focus();
-  }, [focused, visible, steering]);
+    if (steerOpen === null) return;
+    const check = (handedTo: string | null) => {
+      if (handedTo !== "prompt") setSteerOpen(null);
+    };
+    check(useKeyboardSteeringStore.getState().handedTo);
+    return useKeyboardSteeringStore.subscribe((state) => check(state.handedTo));
+  }, [steerOpen]);
+  // A dialog came up, or the Chat went out of view: steering takes it from here.
+  useEffect(() => {
+    if (steerOpen === null || steerable) return;
+    setSteerOpen(null);
+    const steeringState = useKeyboardSteeringStore.getState();
+    if (steeringState.handedTo === "prompt") steeringState.enter(steerOpen);
+  }, [steerOpen, steerable]);
+  // A press outside the composer and its chips: the pointer has taken over,
+  // nothing waits to come back (the composer stays, as without steering).
+  useEffect(() => {
+    if (steerOpen === null) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target instanceof Node ? e.target : null;
+      const within = !!target && (!!composerRef.current?.closest(".terminal-reader-composer")?.contains(target) || !!chipSlot?.contains(target));
+      if (!within && useKeyboardSteeringStore.getState().handedTo === "prompt") useKeyboardSteeringStore.getState().dropHandoff();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [steerOpen, chipSlot]);
+  /** Hide the composer the Prompt key showed: steering back on its level. */
+  const backToSteering = () => {
+    const level = steerOpenRef.current;
+    if (level === null) return;
+    setSteerOpen(null);
+    composerRef.current?.blur();
+    if (useKeyboardSteeringStore.getState().handedTo === "prompt") useKeyboardSteeringStore.getState().enter(level);
+  };
+
+  // The keyboard goes to the composer whenever this pane is the focused one,
+  // and back to it when steering lets go. A new tab's box is `disabled` until
+  // its CLI is up (`inputBlocked`), and a disabled box ignores `focus()`, so
+  // it is taken again when the box unlocks — then only from nowhere (the body),
+  // this pane's own chat (a question's answer rows) or its own xterm under the
+  // Reader, never from a field the user moved to meanwhile.
+  const wasBlocked = useRef(inputBlocked);
+  useEffect(() => {
+    const unlocked = wasBlocked.current && !inputBlocked;
+    wasBlocked.current = inputBlocked;
+    if (!focused || !visible || steering || inputBlocked) return;
+    const box = composerRef.current;
+    if (!box) return;
+    if (unlocked) {
+      const active = document.activeElement;
+      const fromNowhere = !active || active === document.body;
+      const fromThisPane = !!box.closest(".terminal-reader")?.contains(active)
+        || !!terminalFor(ptyId)?.element?.contains(active);
+      if (!fromNowhere && !fromThisPane) return;
+    }
+    box.focus();
+  }, [focused, visible, steering, inputBlocked, ptyId]);
 
   // Files dropped onto the pane (`lib/terminal/terminalDrop`) land here while
   // the Reader is up: at the cursor when the box has focus, else at the end.
@@ -656,9 +858,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const box = composerRef.current;
     const focusedBox = box !== null && document.activeElement === box;
     const current = draftRef.current;
-    const at = focusedBox ? box.selectionEnd : current.length;
-    const before = current.slice(0, at);
-    const next = `${before}${before && !/\s$/.test(before) ? " " : ""}${text}${current.slice(at)}`;
+    const next = spliceSpaced(current, focusedBox ? box.selectionEnd : current.length, text);
     undo.current.record(current, next, false);
     draftRef.current = next;
     setDraft(next);
@@ -666,16 +866,14 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     box?.focus();
   }) : undefined, [ptyId, acceptInserts]);
 
-  // A paste that finds no text on the clipboard may be an image (a
-  // screenshot): it lands like a dropped file, an inbox `@` reference typed at
-  // the caret through the insert above. `pastedImage` is that reference, for
-  // the pill while the draft still holds it.
+  // Files copied in the file manager, or an image with no text on the
+  // clipboard (a screenshot), land like a dropped file: an inbox `@`
+  // reference typed at the caret through the insert above. `pastedImage` is
+  // a pasted image's reference, for the pill while the draft still holds it.
   const [pastedImage, setPastedImage] = useState("");
   const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (event.clipboardData.getData("text/plain")) return;
-    event.preventDefault();
-    void pasteClipboardImage(ptyId, true).then(({ text, error }) => {
-      if (text && insertIntoReader(ptyId, text)) setPastedImage(text.trim());
+    pasteIntoAgentBox(event, ptyId, ({ text, error, image }) => {
+      if (text && insertIntoReader(ptyId, text) && image) setPastedImage(text.trim());
       if (error) setSendError(t(error));
     });
   };
@@ -689,16 +887,46 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     noteUserInput(ptyId);
     return writePtyInput(ptyId, ENCODER.encode(key)).then(() => true, () => false);
   };
+  /** Claude's TUI on the session again before words meant for it go in: left
+   * on a subagent (by hand in the terminal), its box sends there instead, and
+   * the session never records them — their bubbles stood as queued for good. */
+  const backToSession = async () => {
+    if (cli === "claude" && !(await viewSession({ rows: paneRows, key: paneKey }))) throw new SubagentViewedError();
+  };
 
+  /** What voice did to the draft, for "Tabby scratch that" (`draftEdit.ts`),
+   * and the note an edit leaves on the voice line for a moment. */
+  const [voiceEdits] = useState(() => new DraftVoiceHistory());
+  const [editNote, setEditNote] = useState<DraftEditNote | null>(null);
+  useEffect(() => {
+    if (!editNote) return;
+    const timer = window.setTimeout(() => setEditNote(null), EDIT_NOTE_MS);
+    return () => window.clearTimeout(timer);
+  }, [editNote]);
+  /** Spoken edits are matched in the language listened in; with the
+   * recognizer left to detect it, in the app's. */
+  const uiLanguage = useI18nStore((s) => s.lang);
+  const voiceLangChoice = useSettingsStore((s) => s.settings?.voice_lang);
+  const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
   /** A dictated segment (`useReaderVoice`) joins the draft as typed text
    * would, undoable; one that ends in the spoken send ("go on" / "los")
-   * sends the draft without those words. */
+   * sends the draft without those words. "Tabby scratch that", "Tabby
+   * replace X by Y", "Tabby plan" … edit the draft instead. */
   const dictated = (heard: string) => {
     const clean = sanitizeVoiceTranscript(heard);
     if (!clean) return;
+    const edit = matchDraftEdit(clean, editLanguage);
+    if (edit) {
+      const outcome = voiceEdits.apply(edit, draftRef.current, (draft, command) => leadDraft(draft, command, prefixCommands));
+      if (outcome.draft !== null) editDraft(outcome.draft);
+      setEditNote(outcome.note);
+      if (edit.send) void send();
+      return;
+    }
     const current = draftRef.current;
-    const next = `${current}${current && !/\s$/.test(current) ? " " : ""}${clean}`;
+    const next = spliceSpaced(current, current.length, clean);
     const spoken = spokenSend(next);
+    if (spoken === null) voiceEdits.piece(current, next, clean);
     editDraft(spoken ?? next);
     if (spoken !== null) void send();
   };
@@ -706,7 +934,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     tabKey,
     ptyId,
     visible,
-    disabled: sending,
+    disabled: sending || inputBlocked,
     handsFree: voiceLoop.handsFree,
     reading: voiceLoop.reading,
     questionOpen,
@@ -715,7 +943,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onSend: () => void send(),
     hasDraft: () => draftRef.current.trim() !== "",
     pick: voiceLoop.pick,
+    commitPick: voiceLoop.commitPick,
     readProblem: voiceLoop.readProblem,
+    note: editNote ? t(editNote.key, editNote.params) : "",
   });
   const { onListening } = voiceLoop;
   useEffect(() => onListening(voice.listening, voice.speakOver), [onListening, voice.listening, voice.speakOver]);
@@ -725,7 +955,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // The ref, not the state: a spoken send calls this in the same tick the
     // dictated words went into the draft.
     const text = draftRef.current.trim();
-    if (!current || !text || sending) return;
+    if (!current || !text || sending || inputBlocked) return;
     // Any send stops the voice reading the last answer.
     voiceLoop.stopReading();
     // A Tabby chat has no facts row to open the panel in: the CLI answers.
@@ -740,6 +970,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       historyAt.current = null;
       return;
     }
+    if (questionOpen) {
+      setWaitingOnQuestion(true);
+      setSendError("");
+      return;
+    }
+    setWaitingOnQuestion(false);
     setSending(true);
     setSendError("");
     noteInputFrom(ptyId, "desktop");
@@ -749,6 +985,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       // A new conversation goes in as the Clear key's does, so the window
       // knows of it at once: Codex's hook says so only with the next prompt.
       if (isNewConversationCommand(command)) {
+        await backToSession();
         if (!(await startNewConversation(current))) return;
       } else if (subagent && !/^\s*\//u.test(text)) {
         // Words go to the open subagent; a command stays the session's.
@@ -766,6 +1003,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           return;
         }
       } else {
+        await backToSession();
         // Shown as sending by the Reader's `onSentPrompt` listener.
         await sendSteeringPrompt(current, text);
       }
@@ -777,12 +1015,28 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       setDraft("");
       undo.current.clear();
       historyAt.current = null;
+      backToSteering();
     } catch (error) {
       setSendError(sendFailure(error));
     } finally {
       setSending(false);
     }
   };
+
+  // The question answered (and no next one up after a moment: a question with
+  // several steps redraws between them), the waiting words go in.
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const holding = waitingOnQuestion && draft.trim() !== "";
+  // Emptied by hand, nothing waits: the next words typed are not sent by themselves.
+  useEffect(() => {
+    if (waitingOnQuestion && !draft.trim()) setWaitingOnQuestion(false);
+  }, [waitingOnQuestion, draft]);
+  useEffect(() => {
+    if (!holding || questionOpen) return;
+    const timer = setTimeout(() => void sendRef.current(), QUESTION_GONE_MS);
+    return () => clearTimeout(timer);
+  }, [holding, questionOpen]);
 
   /** `/clear` into the tab; false, with the reason said, when it did not go in. */
   const startNewConversation = async (current: TabEntry): Promise<boolean> => {
@@ -809,7 +1063,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     return false;
   };
   const sendFailure = (error: unknown) =>
-    t(error instanceof SessionPickerOpenError ? "terminal.reader.sendPickerOpen" : "terminal.reader.sendFailed");
+    t(error instanceof SessionPickerOpenError ? "terminal.reader.sendPickerOpen"
+      : error instanceof SubagentViewedError ? "terminal.reader.subagentViewed" : "terminal.reader.sendFailed");
 
   /** The chip row (`ReaderComposerChips`): Plan / Goal only lead the draft,
    * as the phone's do; Clear and Commit act at once and leave the draft alone. */
@@ -822,9 +1077,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const runChip = async (action: (current: TabEntry) => Promise<unknown>) => {
     const current = tabRef.current;
     if (!current || sending) return;
+    // Clear and Commit type into the pane too: never into an open question.
+    if (questionOpen) {
+      setSendError(t("terminal.reader.answerQuestionFirst"));
+      return;
+    }
     setSending(true);
     setSendError("");
     try {
+      await backToSession();
       await action(current);
     } catch (error) {
       setSendError(sendFailure(error));
@@ -859,18 +1120,19 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   };
 
   /** The queued prompts come back into the composer, after what it holds,
-   * out of Claude's queue — so they are never sent as they were — and their
+   * out of the CLI's queue — so they are never sent as they were — and their
    * bubbles go. */
   const pullQueued = () => {
-    if (pulling.current || queued.length === 0 || subagent || sending) return;
+    const family = queueFamily(cli);
+    if (!family || pulling.current || queued.length === 0 || subagent || sending) return;
     pulling.current = true;
     const taken = [...queued];
-    void pullQueuedPrompts({ rows: paneRows, key: paneKey }, taken.map((item) => item.text)).then((result) => {
+    void pullQueuedPrompts({ rows: paneRows, key: paneKey }, taken.map((item) => item.text), undefined, family).then((result) => {
       if (!result.ok) {
         setSendError(t("terminal.reader.pullFailed"));
         return;
       }
-      if (result.pulled > 0) onPulled(taken.slice(taken.length - result.pulled).map((item) => item.id));
+      if (result.pulled > 0) onPulled(takenPrompts(taken, result).map((item) => item.id));
       const current = draftRef.current;
       const next = current ? `${current}\n${result.text}` : result.text;
       historyAt.current = null;
@@ -881,12 +1143,22 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     }).finally(() => { pulling.current = false; });
   };
   pullRef.current = pullQueued;
-  /** ↑ in the empty box while Claude says messages wait in its queue. */
+  takeBackRef.current = (text, cleared) => {
+    const current = draftRef.current;
+    const next = current ? `${text}\n${current}` : text;
+    historyAt.current = null;
+    editDraft(next);
+    caretAt.current = text.length;
+    setSendError(t(cleared ? "terminal.reader.takenBack" : "terminal.reader.pullLeftover"));
+    composerRef.current?.focus();
+  };
+  /** ↑ in the empty box while the CLI says messages wait in its queue. */
   const pullKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
     if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
     if (draft || historyAt.current !== null || queued.length === 0 || subagent || sending) return false;
     if (pulling.current) return true;
-    if (!queuedHintShown(paneRows())) return false;
+    const family = queueFamily(cli);
+    if (!family || !queuedHintShown(paneRows(), family)) return false;
     pullQueued();
     return true;
   };
@@ -895,24 +1167,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
    * the arrows picked a row — fills the box with it, Esc closes it. Enter
    * with no row picked still sends what was typed. */
   const slashKey = (e: KeyboardEvent<HTMLTextAreaElement>): boolean => {
-    if (slashMenu.length === 0 || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing) return false;
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      if (e.shiftKey) return false;
-      const step = e.key === "ArrowUp" ? -1 : 1;
-      const from = slashAt ?? (step > 0 ? -1 : slashMenu.length);
-      setSlashAt((from + step + slashMenu.length) % slashMenu.length);
-      return true;
-    }
-    if ((e.key === "Tab" && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey && slashAt !== null)) {
-      pickSlash(slashMenu[slashAt ?? 0]);
-      return true;
-    }
-    if (e.key === "Escape") {
+    if (e.nativeEvent.isComposing) return false;
+    const action = slashMenuKey(e, slashMenu.length, slashAt);
+    if (action === null) return false;
+    if (action === "close") {
       setSlashClosed(true);
       setSlashAt(null);
-      return true;
-    }
-    return false;
+    } else if ("move" in action) setSlashAt(action.move);
+    else pickSlash(slashMenu[action.pick]);
+    return true;
   };
 
   /** Undo (or redo) the composer's last change, the caret after it. */
@@ -953,19 +1216,19 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       void send();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      onEscape();
+      if (steerOpenRef.current !== null) backToSteering();
+      else onEscape();
     }
   };
 
-  if (steering) return null;
+  if (steering && steerOpen === null) return null;
   const chips = <ReaderComposerChips
     prefixes={prefixCommands}
     active={draftPrefix(draft, prefixCommands)}
-    disabled={sending}
+    disabled={sending || inputBlocked}
     onPrefix={togglePrefix}
     onClear={clearChat}
     onCommit={assistantChat ? undefined : commit}
-    actionSlot={actionSlot}
     extra={voice.button ? voiceLoop.chips : null}
   />;
   return <>
@@ -977,6 +1240,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <textarea
           ref={composerRef}
           value={draft}
+          disabled={inputBlocked}
           rows={3}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
@@ -993,7 +1257,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <button
           type="button"
           className="terminal-reader-send"
-          disabled={!draft.trim() || sending}
+          disabled={!draft.trim() || sending || inputBlocked}
           onClick={() => void send()}
           aria-label={t("terminal.reader.send")}
           title={t("terminal.reader.send")}
@@ -1010,10 +1274,19 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       {undo.current.canUndo() && <UntestedTag id="terminal.reader.undo" />}
       {subagent && <UntestedTag id="terminal.reader.subagentInput" />}
       {assistantChat && <UntestedTag id="assistant.clear" />}
+      {steerOpen !== null && <UntestedTag id="steering.promptComposer" />}
     </div>
+    {holding && !sendError && (
+      <div className="terminal-reader-waiting" role="status">
+        {t("terminal.reader.waitsForQuestion")} <UntestedTag id="terminal.reader.waitsForQuestion" />
+      </div>
+    )}
     {sendError && (actionSlot && !visible
       ? createPortal(<span className="reader-toolbar-error" role="alert">{sendError}</span>, actionSlot)
-      : <div className="terminal-reader-error" role="alert">{sendError}</div>)}
+      : <div className="terminal-reader-error" role="alert">
+        {sendError}
+        {sendError === t("terminal.reader.takenBack") && <UntestedTag id="terminal.reader.takenBack" />}
+      </div>)}
   </>;
 }
 
@@ -1044,7 +1317,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
  * open as the session's do; nothing live — the screen's dialogs, the working
  * row, sending prompts — is drawn under it, since none of that is its.
  */
-export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, probeChanges = false, onChangesKnown, onShowChat, navigationSlot, actionSlot }: {
+export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly = false, visible, focused, shown = true, changesOpen = false, filesOpen = false, probeChanges = false, onChangesKnown, onShowChat, onShowFiles, onFilesKnown, onOpenUrl, navigationSlot, actionSlot }: {
   host: HTMLElement;
   /** The pane's PTY: its live screen is read, answers and Stop typed into it. */
   ptyId: string;
@@ -1064,8 +1337,21 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * Diffs tab to grey out when it has nothing to show. */
   probeChanges?: boolean;
   onChangesKnown?: (has: boolean) => void;
-  /** Select this pane's Chat tab — leaving Diffs, or the terminal. */
+  /** Select this pane's Chat tab — leaving Diffs, Files, or the terminal. */
   onShowChat?: () => void;
+  /** This pane's Files tab is selected: the conversation's named files, one
+   * in its viewer. The chat stays mounted under it, hidden. */
+  filesOpen?: boolean;
+  /** Select this pane's Files tab. Given only where the pane has one (its top
+   * bar): a click on a file in the chat then shows it there instead of in a
+   * viewer tab. */
+  onShowFiles?: () => void;
+  /** Whether the conversation on screen names any file, for the Files tab to
+   * grey out when it has nothing to show. */
+  onFilesKnown?: (has: boolean) => void;
+  /** Open a web link clicked in the chat — after asking (`TerminalView`'s
+   * link confirmation). Without it, web links are only drawn. */
+  onOpenUrl?: (url: string) => void;
   navigationSlot?: HTMLElement | null;
   actionSlot?: HTMLElement | null;
 }) {
@@ -1160,8 +1446,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const requestStatus = (panel: ReaderPanel) => { setStatusOpen(panel); setStatusRequest((request) => request + 1); };
   const closeStatus = () => setStatusOpen(null);
   /** Steering holds the keyboard (or its prompt box does): a composer on show
-   * would take typing that goes to steering, so it stands aside — the Prompt
-   * key (I) is how a prompt goes in then. */
+   * would take typing that goes to steering, so it stands aside — steering's
+   * Prompt key shows it again with the keyboard (`registerReaderComposer`). */
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
   const agentLabel = tab ? agentTabLabel(tab) : "";
   const use24h = useUse24h();
@@ -1173,11 +1459,76 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
   const workingLine = workingModel ? t("terminal.reader.workingModel", { model: workingModel }) : t("terminal.reader.working");
   const typeIntoPane = useCallback((keys: string[]) => typePaneKeys(ptyId, keys), [ptyId]);
+  const signInItem = AGENT_ITEMS.find((item) => item.cmd === tab?.cmd);
+  const loginCommand = signInItem ? signInCommand(agentFamily(signInItem.cmd)) : null;
+  const canLogIn = scope !== ASSISTANT_SCOPE && !!signInItem && (!!loginCommand || (localOnly && !!cwd));
+  const [loggingIn, setLoggingIn] = useState(false);
+  const logIn = () => {
+    if (loggingIn || !canLogIn || !signInItem) return;
+    if (!loginCommand) {
+      if (cwd) useTabsStore.getState().addTabToScope(scope, {
+        ...buildSignInTabSpec(signInItem, signInLaunch(signInItem.cmd), cwd, t),
+        location: "local",
+      });
+      return;
+    }
+    setLoggingIn(true);
+    void typeIntoPane(agentInputWrites(loginCommand))
+      .catch(() => useProjectsStore.setState({ switchToast: t("terminal.reader.answerFailed") }))
+      .finally(() => setLoggingIn(false));
+  };
+
   /** Esc in the composer, once no status panel or subagent is open: the key
    * the terminal would get — it stops the turn, closes the CLI's own menus —
    * typed into the session, the chat staying shown (the prompt strip's switch
    * is the way back to the terminal). */
-  const pressEscape = useCallback(() => { void typeIntoPane(["\u001b"]).catch(() => {}); }, [typeIntoPane]);
+  /** The pane as `queuePull` drives it. */
+  const paneDriver = useCallback((): QueuePullDriver => ({
+    rows: () => {
+      const term = terminalFor(ptyId);
+      return term ? bufferRows(term.buffer.active) : [];
+    },
+    key: (key) => typeIntoPane([key]).then(() => true, () => false),
+  }), [ptyId, typeIntoPane]);
+  const tabFamily = queueFamily(agentFamily(tab?.cmd ?? ""));
+  const workingRef = useRef(false);
+  workingRef.current = !!live.working;
+  const sendTargetRef = useRef(sendTarget);
+  sendTargetRef.current = sendTarget;
+  /** The prompts a stop may hand back, oldest first: the newest recorded
+   * ones (Claude records a prompt before it answers), then those still
+   * sending, which carry their `sentPrompts` id. Set once the entries are. */
+  const stoppableRef = useRef<() => { text: string; id?: number }[]>(() => []);
+  /** What a stop put back into the composer, see `takeBackStopped`. */
+  const takeBackRef = useRef<((text: string, cleared: boolean) => void) | null>(null);
+  /** A recorded prompt Claude handed back on a stop: its bubble goes while
+   * it is still the newest prompt — the next one Claude records hangs from
+   * where it hung, and the transcript read drops it then (`claude_rewound`). */
+  const [takenBack, setTakenBack] = useState<string | null>(null);
+  /** Esc, the working row's Stop. With a queue on screen it is Send now where
+   * a lone Esc would not send it: Codex would drop it into a box the chat
+   * does not show, OpenCode asks for a second press. */
+  const pressEscape = useCallback(() => {
+    const driver = paneDriver();
+    if (tabFamily && tabFamily !== "claude" && queuedHintShown(driver.rows(), tabFamily)) {
+      void sendQueuedNow(driver, tabFamily);
+      return;
+    }
+    // Claude hands a prompt back, unsent, when the stop lands before the
+    // turn answered: it comes back into the composer, not left in a box the
+    // next send empties.
+    const sent = tabFamily === "claude" && workingRef.current ? stoppableRef.current() : [];
+    const before = sent.length > 0 ? claudeBoxWords(driver.rows()) : "";
+    void typeIntoPane(["\u001b"]).then(async () => {
+      if (sent.length === 0) return;
+      const back = await takeBackStopped(driver, sent.map((item) => item.text), before);
+      if (!back) return;
+      const item = sent[back.index];
+      if (item.id !== undefined && sendTargetRef.current) forgetSentPrompts(sendTargetRef.current, [item.id]);
+      else setTakenBack(item.text);
+      takeBackRef.current?.(item.text, back.cleared);
+    }).catch(() => {});
+  }, [paneDriver, tabFamily, typeIntoPane]);
   /** The reasoning effort last seen: Claude Code prints it only on its busy
    * row, so the facts row also takes the one its transcript records (every
    * answer, and a `/effort`'s confirmation) and the one just picked there —
@@ -1267,7 +1618,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnswerFailure(null);
     setAnsweredBy("row");
     stuck.current = true;
-    void typePaneKeys(ptyId, keys).catch(answerFailed);
+    void typePaneKeys(ptyId, keys, () => dialogOnScreen(ptyId, agentLabel)).catch(answerFailed);
   };
   /** Answers the free-text row with the words typed under it. */
   const answerText = (index: number, text: string) => {
@@ -1280,7 +1631,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnswerFailure(null);
     setAnsweredBy("row");
     stuck.current = true;
-    void typePaneKeys(ptyId, keys).catch(answerFailed);
+    void typePaneKeys(ptyId, keys, () => dialogOnScreen(ptyId, agentLabel)).catch(answerFailed);
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
@@ -1290,7 +1641,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     setAnsweredBy("step");
     void typePaneKeys(ptyId, keys).catch(answerFailed);
   };
-  const stop = () => void typePaneKeys(ptyId, [STOP_KEY]).catch(() => {});
+  const stop = pressEscape;
   const shownLive = picking ? NO_LIVE : live;
   /** The terminal has shown something the chat cannot draw for `STRAY_MS`:
    * the chat says so and offers the way to it. Not while a picker the facts
@@ -1332,6 +1683,16 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [pathLinks, setPathLinks] = useState<ReadonlyMap<string, FileEntry | null>>(() => new Map());
   const pathLinksRef = useRef(pathLinks);
   const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+  /** The file the Files tab shows: the last one clicked in the chat or picked there. */
+  const [filePicked, setFilePicked] = useState<FileEntry | null>(null);
+  /** Show a file in the Files tab, at the line a link named. */
+  const showInFiles = (entry: FileEntry, at: { line?: number; column?: number } = {}) => {
+    setFilePicked(entry);
+    onShowFiles?.();
+    if (at.line) useEditorJumpStore.getState().requestJump(entry.path, at.line, at.column ?? 0);
+  };
+  const filesTabRef = useRef(!!onShowFiles);
+  filesTabRef.current = !!onShowFiles;
   const learnPaths = useCallback(async (entries: readonly { text: string }[]) => {
     const ask = unknownPaths(entries.map((entry) => entry.text), pathLinksRef.current);
     if (!ask.length) return;
@@ -1340,7 +1701,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     const next = new Map(pathLinksRef.current);
     for (const path of ask) {
       const entry = found.get(path);
-      next.set(path, entry && isLinkable(entry, ctx.projectDir, ctx.disabled) ? entry : null);
+      // A file no in-app viewer shows (an STL, a .blend) is still a link
+      // while the Files tab is offered: a click shows it there, where it can be
+      // opened outside the app on the user's word — `tabtivity-send` points the
+      // desktop at any project file. Without that tab it stays plain text.
+      const shown = entry && (isLinkable(entry, ctx.projectDir, ctx.disabled) || (filesTabRef.current && !entry.is_dir));
+      next.set(path, shown ? entry : null);
     }
     pathLinksRef.current = next;
     setPathLinks(next);
@@ -1353,19 +1719,40 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     if (!entry) return;
     const ctx = pathContextRef.current;
     setPathHover(null);
-    openPathLink(
-      entry,
-      { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined },
-      { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow },
-    );
+    const at = { line: Number(el.dataset.line) || undefined, column: Number(el.dataset.column) || undefined };
+    // A file opens in the Files tab; a folder, or Ctrl+click, still as a tab —
+    // except a file no in-app viewer shows, which has no tab to open.
+    if (onShowFiles && !entry.is_dir && (!newSubwindow || !internalViewerFor(entry, ctx.disabled))) {
+      showInFiles(entry, at);
+      return;
+    }
+    openPathLink(entry, at, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow, fromTab: tabKey });
+  };
+  // A web link (`dressWebLink`) never opens straight away: `onOpenUrl` asks
+  // first, naming the address, as a link the terminal printed does.
+  const openWebAt = (target: EventTarget | null): boolean => {
+    const el = onOpenUrl && target instanceof Element ? target.closest<HTMLElement>(".web-link[data-href]") : null;
+    const url = el ? chatLinkUrl(el.getAttribute("data-href")) : null;
+    if (!url) return false;
+    setPathHover(null);
+    onOpenUrl?.(url);
+    return true;
   };
   const onPathClick = (event: ReactMouseEvent) => {
+    if (openWebAt(event.target)) {
+      event.preventDefault();
+      return;
+    }
     const el = pathLinkAt(event.target);
     if (!el) return;
     event.preventDefault();
     openPathAt(el, event.ctrlKey || event.metaKey);
   };
   const onPathKey = (event: KeyboardEvent) => {
+    if (event.key === "Enter" && openWebAt(event.target)) {
+      event.preventDefault();
+      return;
+    }
     const el = event.key === "Enter" ? pathLinkAt(event.target) : null;
     if (!el) return;
     event.preventDefault();
@@ -1382,6 +1769,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       name: relativePathWithin(pathContextRef.current.projectDir || tabDir, entry.path) || entry.path,
       line: Number(el.dataset.line) || undefined,
       isDir: entry.is_dir,
+      viewless: !entry.is_dir && !internalViewerFor(entry, pathContextRef.current.disabled),
     });
   };
   const onPathOut = (event: ReactMouseEvent) => {
@@ -1509,7 +1897,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     () => (chatId ? null : afterClear(storedEntries, clearedAt ?? null)),
     [storedEntries, clearedAt, chatId],
   );
-  const entries = sinceClear ?? storedEntries;
+  const entries = useMemo(() => withoutTakenBack(sinceClear ?? storedEntries, takenBack), [sinceClear, storedEntries, takenBack]);
+  useEffect(() => {
+    if (takenBack !== null && entries === (sinceClear ?? storedEntries)) setTakenBack(null);
+  }, [takenBack, entries, sinceClear, storedEntries]);
   /** Codex's own "less than N% of your limit left" heads-up, off the limits
    * its rollout records (no other CLI's transcript carries them). */
   const lowLimits = transcript?.available && !sinceClear && !chatId ? limitWarnings(transcript.usage, new Date()) : [];
@@ -1531,14 +1922,53 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const cutPromptTime = cutPromptMoment ? chatTime(cutPromptMoment, use24h) : undefined;
   const levelEntriesRef = useRef(levelEntries);
   levelEntriesRef.current = levelEntries;
+  // The chat follows the terminal: a subagent viewed in Claude's own agent
+  // list (Terminal mode) is the one the chat opens when it is shown, so what
+  // is read and typed here is that subagent's, as it is there. Read once per
+  // show, off the screen; opened once the session's records hold it.
+  const [following, setFollowing] = useState<{ task: string; role: string } | null>(null);
+  const claudeTab = isClaudeCommand(tab?.cmd);
+  useEffect(() => {
+    if (!visible || !claudeTab) {
+      setFollowing(null);
+      return;
+    }
+    const term = terminalFor(ptyId);
+    setFollowing(term ? viewedSubagent(bufferRows(term.buffer.active)) : null);
+  }, [visible, claudeTab, ptyId]);
+  useEffect(() => {
+    if (!following || !transcript?.available || browsed) return;
+    setFollowing(null);
+    // A Workflow run is no subagent the agent list views; a description
+    // shared by two leaves the chat where it was.
+    const found = entries.filter((entry) => entry.kind === "agent" && entry.subagent && !entry.workflow
+      && isViewedSubagent(following, { task: entry.text, role: entry.role }));
+    const token = found.length === 1 ? found[0].subagent : undefined;
+    if (!token) return;
+    const entry = found[0];
+    setSubagentPath((path) => (path.length === 1 && path[0].token === token ? path
+      : openSubagent([], { token, task: entry.text, role: entry.role }, entries, -1)));
+    setSubagentListOpen(false);
+    setSubLimit(READER_STEP);
+    keepFromBottom.current = null;
+    stuck.current = true;
+  }, [following, transcript, entries, browsed]);
   const turns = useMemo(() => transcriptTurns(levelEntries), [levelEntries]);
   // The files the phone sent into the project inbox, drawn in their prompts'
   // bubbles as on the phone (`ReaderInbox`).
   const promptTexts = useMemo(() => turns.filter((turn) => turn.kind === "prompt").map((turn) => turn.text), [turns]);
   const openInboxRef = useRef<(entry: FileEntry) => void>(() => undefined);
   openInboxRef.current = (entry) => {
+    if (onShowFiles && !entry.is_dir) {
+      showInFiles(entry);
+      return;
+    }
+    openFileAsTab(entry, false);
+  };
+  /** A file as its viewer tab (Files' ↗, Ctrl+click: a new subwindow). */
+  const openFileAsTab = (entry: FileEntry, newSubwindow: boolean) => {
     const ctx = pathContextRef.current;
-    openPathLink(entry, {}, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t });
+    openPathLink(entry, {}, { scope, projectId, projectDir: ctx.projectDir, cwd: tabDir, disabled: ctx.disabled, t, newSubwindow, fromTab: tabKey });
   };
   const openInboxEntry = useCallback((entry: FileEntry) => openInboxRef.current(entry), []);
   const settleInbox = useCallback(() => {
@@ -1586,19 +2016,34 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     turnStart: agentTurn.startKey,
     workingLine,
   });
-  /** Hands-free: a settled utterance that picks a row of the dialog on screen
-   * answers it as a click would. */
-  const pickByVoice = (utterance: string) => {
+  /** Hands-free: a settled utterance that picks a row of a question on screen
+   * is *staged* — "Heard: 2", then the send guard's chime and cancel window —
+   * and answers it as a click would only when the window closes
+   * (`commitVoicePick`). Voice never answers a dialog that is not positively a
+   * question (`voicePickable`: a permission dialog, a picker, an unrecognised
+   * shape): such a segment is dropped, never typed as a prompt (a digit sent
+   * while the dialog is up would answer it). "refused" drops; null is dictation. */
+  const pickByVoice = (utterance: string): VoicePickResult => {
     const question = live.question;
-    if (!question || answered || held || picking) return false;
+    if (!question || answered || held || picking) return null;
+    if (!voicePickable(question)) return isStopWord(utterance) ? null : "refused";
     const option = voicePick(utterance, question);
-    if (!option) return false;
-    answer(option.index);
-    return true;
+    if (!option) return null;
+    return { key: live.signature, index: option.index, heard: `${option.number}. ${option.label.trim()}` };
   };
   const pickRef = useRef(pickByVoice);
   pickRef.current = pickByVoice;
   const pickVoice = useCallback((utterance: string) => pickRef.current(utterance), []);
+  /** The window closed on a staged pick: it answers only the dialog it was
+   * heard on, and only if that is still a question nothing else answered. */
+  const commitVoicePick = (pick: VoicePick) => {
+    const question = live.question;
+    if (!question || live.signature !== pick.key || !voicePickable(question)) return;
+    answer(pick.index);
+  };
+  const commitPickRef = useRef(commitVoicePick);
+  commitPickRef.current = commitVoicePick;
+  const commitVoice = useCallback((pick: VoicePick) => commitPickRef.current(pick), []);
   // Hands-free with read-aloud: a dialog waiting on the user is read out, its
   // rows by number, once per dialog, so it can be answered by voice.
   const spokenQuestion = useRef("");
@@ -1607,7 +2052,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       spokenQuestion.current = "";
       return;
     }
-    if (!handsFreeOn || !readAloudOn || !visible || held || spokenQuestion.current === live.signature) return;
+    if (!handsFreeOn || !readAloudOn || !visible || held || spokenQuestion.current === live.signature || !voicePickable(live.question)) return;
     spokenQuestion.current = live.signature;
     readAloud.say(`question:${live.signature}`, questionSpeech(live.ask, live.question));
   }, [live.question, live.signature, live.ask, picking, handsFreeOn, readAloudOn, visible, held, readAloud]);
@@ -1643,18 +2088,28 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     reading: readAloud.owed,
     lastAnswer,
     pick: pickVoice,
+    commitPick: commitVoice,
     stopReading: readAloud.stop,
     readProblem: readAloud.problem,
     onListening: onVoiceListening,
     chips: voiceChips,
   };
   const sessionAgents = useMemo(() => entries.filter((entry) => entry.kind === "agent"), [entries]);
-  /** What ↑ in the composer can take back out of Claude's queue: the prompts
+  /** The CLI whose queue the moves on it can read, the turn running: Claude,
+   * Codex, and OpenCode while its mini footer counts one. */
+  const queueCli = live.working && (tabFamily !== "opencode" || live.openCodeQueued) ? tabFamily : null;
+  /** What ↑ in the composer can take back out of the CLI's queue: the prompts
    * still sending while its turn runs. */
-  const queuedPrompts = useMemo(
-    () => (live.working && isClaudeCommand(tab?.cmd) ? pending : []),
-    [live.working, tab?.cmd, pending],
-  );
+  const queuedPrompts = useMemo(() => (queueCli ? pending : []), [queueCli, pending]);
+  /** A queued bubble's Send now. Claude's stop sends its queue by itself. */
+  const sendQueued = () => {
+    if (queueCli === "claude") pressEscape();
+    else if (queueCli) void sendQueuedNow(paneDriver(), queueCli);
+  };
+  stoppableRef.current = () => [
+    ...entries.filter((entry) => entry.kind === "prompt").slice(-3).map((entry) => ({ text: entry.text })),
+    ...pending.map((item) => ({ text: item.text, id: item.id })),
+  ];
   const dropPending = useCallback((ids: number[]) => {
     if (sendTarget) forgetSentPrompts(sendTarget, ids);
   }, [sendTarget]);
@@ -1662,6 +2117,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const pullQueued = useRef<(() => void) | null>(null);
   /** What ↑ in the composer walks: the session's prompts, as the CLI's box. */
   const history = useMemo(() => composerHistory(entries, pending.map((item) => item.text)), [entries, pending]);
+  // Keyboard steering's Send now / Cancel and edit act on the same queue the
+  // bubbles' buttons do, and only while those buttons are drawn.
+  const queueMovesLatest = useRef({ shown: false, send: sendQueued });
+  queueMovesLatest.current = { shown: !!queueCli && !openStep && !browsed && pending.length > 0, send: sendQueued };
+  useEffect(() => registerQueueMoves(ptyId, {
+    available: () => queueMovesLatest.current.shown,
+    send: () => queueMovesLatest.current.send(),
+    pull: () => pullQueued.current?.(),
+  }), [ptyId]);
 
   // A prompt sent while the chat shows scrolls it to the bottom.
   useEffect(() => {
@@ -1691,7 +2155,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       const prefix = /^\/[\w-]+$/u.test(sent) ? sent : null;
       return entries.some((entry) =>
         entry.kind === "prompt"
-        && (recordsPrompt(entry, sent) || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix)))
+        && (recordsPrompt(entry, sent) || (!!prefix && !!slashCommand(entry.text)?.name.startsWith(prefix))
+          || recordedRun(entry, pending.map((other) => other.text.trim())).includes(pending.indexOf(item)))
         && (!entry.at || Date.parse(entry.at) >= item.sentAt - 5_000));
     };
     const left = pending.filter((item) => now - waitingSince(item) < PENDING_MS && !recorded(item));
@@ -1922,7 +2387,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
           if (!buttons.length) return;
           const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : wrapStep(at, event.key === "ArrowDown" ? 1 : -1, buttons.length);
           buttons[next]?.focus();
         }}>
           {([["running", "mobile.subagent.running"], ["finished", "mobile.subagent.finished"]] as const).map(([group, heading]) => {
@@ -1968,32 +2433,47 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     label: t("terminal.reader.workspaces", { count: workflowRuns.length }), region: t("terminal.reader.workspacesRegion"),
     untestedId: "terminal.reader.topbar", open: workflowListOpen, setOpen: setWorkflowListOpen, listId: workflowListId,
   }) : null;
-  // Scanned once per conversation or link change, not on every live-screen
-  // render (each settled write of the pane re-renders the Reader).
-  const toolbarFiles = useMemo(() => {
-    if (!navigationSlot) return [];
-    const found = new Map<string, ReaderToolbarFile>();
-    for (const entry of levelEntries) for (const candidate of findPathCandidates(entry.text)) {
-      const file = pathLinks.get(candidate.path);
-      if (file && !file.is_dir) found.set(file.path, {
-        path: file.path, label: relativePathWithin(tabDir, file.path) || file.path,
-        open: () => openInboxEntry(file),
-      });
-    }
-    if (readerInbox) for (const file of readerInbox.files.values()) if (file) {
-      const path = `inbox:${file.name}`;
-      if (![...found.values()].some((entry) => entry.path.endsWith(file.name))) {
-        found.set(path, { path, label: file.name, open: () => readerInbox.open(file) });
+  // The Files tab's list, newest mention first. Scanned once per conversation
+  // or link change, not on every live-screen render (each settled write of
+  // the pane re-renders the Reader).
+  const filesOffered = !!onShowFiles;
+  const readerFiles = useMemo(() => {
+    if (!filesOffered) return [];
+    const found = new Map<string, ReaderFile>();
+    const add = (entry: FileEntry) => {
+      if (!found.has(entry.path)) found.set(entry.path, { entry, label: relativePathWithin(tabDir, entry.path) || entry.path });
+    };
+    for (let index = levelEntries.length - 1; index >= 0; index -= 1) {
+      const text = levelEntries[index].text;
+      const named: FileEntry[] = [];
+      for (const candidate of findPathCandidates(text)) {
+        const file = pathLinks.get(candidate.path);
+        if (file && !file.is_dir) named.push(file);
       }
+      if (readerInbox) for (const leaf of inboxLeaves(text)) {
+        const file = readerInbox.files.get(leaf);
+        if (file) named.push(inboxEntry(pathContext.projectDir, file));
+      }
+      // Within one message, first mention first.
+      for (const entry of named) add(entry);
     }
     return [...found.values()];
-  }, [navigationSlot, levelEntries, pathLinks, tabDir, openInboxEntry, readerInbox]);
+  }, [filesOffered, levelEntries, pathLinks, tabDir, readerInbox, pathContext.projectDir]);
+  const onFilesKnownRef = useRef(onFilesKnown);
+  onFilesKnownRef.current = onFilesKnown;
+  // The web links the Chat makes clickable, listed under the files; they open
+  // through `onOpenUrl` (the Chat's own ask-then-open), so no handler, no list.
+  const linksOffered = !!onOpenUrl;
+  const readerLinks = useMemo(() => (linksOffered ? chatLinksOf(turns) : NO_LINKS), [turns, linksOffered]);
+  const hasItems = readerFiles.length > 0 || readerLinks.length > 0;
+  useEffect(() => { onFilesKnownRef.current?.(hasItems); }, [hasItems]);
+  const shownFile = filePicked ?? readerFiles[0]?.entry ?? null;
 
   return createPortal(<>
     <div
       ref={regionRef}
       className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}`}
-      hidden={!shown || changesOpen}
+      hidden={!shown || changesOpen || filesOpen}
       role="region"
       aria-label={t("terminal.reader.title")}
       tabIndex={browsed ? -1 : undefined}
@@ -2050,6 +2530,9 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
           onMouseOver={onPathOver}
           onMouseOut={onPathOut}
         >
+          {/* The column inside the scroller, never the scroller itself: see
+              `.terminal-reader-turns` (a scrolled flex box mis-hit-tests). */}
+          <div className="terminal-reader-turns">
           {levelTruncated && (
             <button
               type="button"
@@ -2086,38 +2569,49 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} />
+                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} action={
+                  !browsed && !openStep && canLogIn
+                  && index === turns.length - 1 && turn.kind === "answer"
+                  && readSignedOut(turn.text.split(/\r?\n/u).map((text) => ({ text }))) ? (
+                    <button type="button" className="terminal-reader-stop" disabled={loggingIn || !!live.working || !!live.question || pending.length > 0} onClick={logIn}>
+                      {t("mobile.signIn.open")} <UntestedTag id="terminal.reader.loginExpired" />
+                    </button>
+                  ) : undefined
+                } />
               </Fragment>
             );
           })}
           {!openStep && !browsed && pending.map((item) => (
             <div key={item.id} className="terminal-reader-turn user pending" data-prompt={item.text}>
               <PromptText text={item.text} unlinked />
-              {/* Queued behind a busy turn: Esc stops it and Claude sends the
-                  queue at once; ↑ in the empty composer takes it back. Both
-                  act on the whole queue; every queued bubble carries them. */}
-              {live.working && isClaudeCommand(tab?.cmd) && (
+              {/* Queued behind a busy turn: Esc stops it and the queue goes
+                  at once; ↑ in the empty composer takes it back. Both act on
+                  the whole queue; every queued bubble carries them. */}
+              {queueCli && (
                 <small className="terminal-reader-pending-hint">
                   {t("terminal.reader.sendNowHint")}
                   <UntestedTag id="terminal.reader.sendNowHint" />
                   <UntestedTag id="terminal.reader.queuePull" />
                 </small>
               )}
-              {live.working && isClaudeCommand(tab?.cmd) && (
+              {queueCli && (
                 <div className="terminal-reader-queued-actions">
-                  <button type="button" className="terminal-reader-stop" onClick={pressEscape} title={t("terminal.reader.sendNowTitle")}>
+                  <button type="button" className="terminal-reader-stop" onClick={sendQueued} title={t("terminal.reader.sendNowTitle")}>
                     {t("terminal.reader.sendNow")}
                   </button>
                   <button type="button" className="terminal-reader-stop" onClick={() => pullQueued.current?.()} title={t("terminal.reader.cancelEditTitle")}>
                     {t("terminal.reader.cancelEdit")}
                   </button>
-                  <UntestedTag id="terminal.reader.queuedActions" />
+                  {queueCli === "claude"
+                    ? <UntestedTag id="terminal.reader.queuedActions" />
+                    : <UntestedTag id="terminal.reader.queuedActionsOther" />}
                 </div>
               )}
               <small className="terminal-reader-time">{t("terminal.reader.sending")}</small>
             </div>
           ))}
           <LiveQuestion
+            ptyId={ptyId}
             live={browsed ? NO_LIVE : shownLive}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             failure={answerFailure}
@@ -2153,7 +2647,10 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             </div>
           )}
           {strayShown && !browsed && !openStep && live.screen.length > 0 && (
-            <pre className="terminal-reader-question-context terminal-reader-stray-screen">{live.screen.join("\n")}</pre>
+            <details className="terminal-reader-stray-output">
+              <summary>{t("terminal.reader.strayOutput")}</summary>
+              <pre className="terminal-reader-question-context terminal-reader-stray-screen">{live.screen.join("\n")}</pre>
+            </details>
           )}
           {(strayShown || unrecorded) && !browsed && !openStep && (
             <div className="terminal-reader-working terminal-reader-stray" role="status">
@@ -2182,6 +2679,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             // open when a shell before it returns.
             <RunningShellLine key={`${shell.at ?? ""}:${shell.command}:${runningShells.slice(0, index).filter((other) => other.at === shell.at && other.command === shell.command).length}`} shell={shell} />
           ))}
+          </div>
         </div>
         </ReaderAnswerFilesContext.Provider>
         </ReaderInboxContext.Provider>
@@ -2242,11 +2740,12 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         history={history}
         queued={queuedPrompts}
         focused={focused}
-        visible={visible && shown && !changesOpen}
+        visible={visible && shown && !changesOpen && !filesOpen}
         acceptInserts={visible && shown}
         onReveal={onShowChat}
         steering={steering}
         questionOpen={!!shownLive.question}
+        inputBlocked={!!shownLive.question || (!!terminalFor(ptyId) && !shownLive.status && !shownLive.working)}
         suggestion={shownLive.suggestion}
         chipSlot={actionSlot || scope === ASSISTANT_SCOPE ? null : chipSlot}
         actionSlot={actionSlot}
@@ -2255,6 +2754,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         onStatus={requestStatus}
         onPulled={dropPending}
         pullRef={pullQueued}
+        takeBackRef={takeBackRef}
       />}
     </div>
     {/* The conversation's menus only over Chat or Diffs: in Terminal the
@@ -2262,7 +2762,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     {navigationSlot && shown && createPortal(<>
       {subagentsMenu}
       {workspacesMenu}
-      <ReaderToolbarNavigation files={toolbarFiles} />
     </>, navigationSlot)}
     {changesOpen && shown && tab && (
       <TerminalReaderChanges
@@ -2274,6 +2773,26 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         subagentTitle={openStep ? openStep.task || openStep.role : undefined}
         chat={chatId}
         chatTitle={browsed?.chat.title}
+        steerId={ptyId}
+        onClose={() => onShowChat?.()}
+      />
+    )}
+    {filesOpen && shown && (
+      <TerminalReaderFiles
+        tabKey={tabKey}
+        files={readerFiles}
+        links={readerLinks}
+        onOpenLink={onOpenUrl}
+        use24h={use24h}
+        picked={shownFile}
+        projectId={projectId}
+        disabled={pathContext.disabled}
+        visible={visible}
+        scopeNote={openStep ? t("terminal.changes.subagent", { name: openStep.task || openStep.role || "" })
+          : browsed ? t("terminal.changes.chat", { name: browsed.chat.title ?? "" }) : undefined}
+        onPick={setFilePicked}
+        onOpenTab={openFileAsTab}
+        steerId={ptyId}
         onClose={() => onShowChat?.()}
       />
     )}

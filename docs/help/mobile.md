@@ -139,14 +139,16 @@ is refused. Works with the desktop window closed.
 
 ## Using it
 
-- The start page opens on **Active**. **Needs you** at the top lists the agent
-  tabs asking you something or cut off, the finished tabs you have not opened
-  on this phone yet, then your mail, to-do and calendar alerts (✓ resolves
-  one); **Show all** opens the rest in place, and **n working · see Agents**
-  switches to the **Agents** view. The badge on **Agents** counts the tabs
-  asking something. Your active projects follow — drag ⠿ to arrange them —
-  and **Search** finds any project with Mobile access. **Desktop** at the
-  bottom sends a file to the desktop and manages local models. The phone's own
+- At the top of the start page, three tiles count your agent tabs: **Waiting**
+  (asking you something or cut off), **Working**, and **Done** (finished, not
+  yet opened on this phone). Any tile opens the **Agents** view, every agent
+  tab in one list. **Needs you** below lists the waiting and finished tabs,
+  then your mail, to-do and calendar alerts (✓ resolves one); **Show all**
+  opens the rest in place. Your active projects follow — drag ⠿ to arrange
+  them; the button beside **Projects** switches between a list, a grid and
+  boxes. In the header, 🔍 finds any project with Mobile access and ☆ opens
+  your Favorites; ‹ or the phone's back comes home. **Desktop** at the bottom
+  sends a file to the desktop and manages local models. The phone's own
   settings, and the version of the phone app, are behind ⚙ (**This device**).
 - In a project, **＋ New tab** floats above the bottom bar. Tap a tab card to
   open it; its model opens the model picker, ◷ (shown once the tab has
@@ -170,10 +172,14 @@ is refused. Works with the desktop window closed.
   tab has no conversation, so its pill offers **Reader** (the screen as text)
   and **Terminal**. The desktop offers the same chat on its agent tabs (help
   topic `agent-clis`).
-- Over the chat, **Files (n)** lists every file the conversation carried —
-  what the agent sent from this tab and what you sent with your prompts —
-  newest first, with who sent it; tap one to open it. It sits beside
-  **Subagents (n)**; one list opens at a time.
+- Over the chat, **Files (n)** lists every file this conversation carried, in
+  groups: **Sent by the agent**, **Changed by the agent** and **Mentioned in
+  its answers** (with Project files on the phone on), then **Sent by you** —
+  each with a line saying what it holds, newest first; tap one to open it.
+  Files from an earlier conversation of the same tab are not listed. It sits
+  beside **Subagents (n)**; one list opens at a time.
+- A file the agent sends shows in the chat at the end of the turn it was sent
+  in, after the agent's last answer, not between its steps.
 - A PDF or picture in an agent tab's viewer has **Mark up**: draw on it and
   **Submit** sends the marks to that tab. Marked from the project screen's
   files, Submit opens a new tab of your default agent; its **Open tab** shows
@@ -224,6 +230,44 @@ is refused. Works with the desktop window closed.
   disconnects within seconds, and **＋** offers no shell. Switch it off to
   see and open shells from the phone — they run as you, with no agent's
   permission prompts in between.
+
+## Steering with a keyboard
+
+With a Bluetooth keyboard on the phone or iPad, the same navigation mode as on
+the desktop works without touching the glass. A phone with no keyboard shows
+nothing new. The first time a hardware key is pressed, a small tip names the
+chord once.
+
+Press **Shift+Space** to turn it on, or **Alt+Space** from anywhere, text fields
+included (some Android keyboards use Shift+Space to switch language). A bar at
+the bottom reads *Steering* with the level ladder
+Projects › Tabs › Inside the tab, the keys of the level you are on, and a
+single line for messages such as "No tab waits on you". **H** folds the bar to
+one line. The cursor is an outline on a row of the list. Shift+Space or Alt+Space
+again, **Space**, **Esc** (outside a sheet) or a tap on the screen leaves the
+mode. **E S D F** work as the arrow keys throughout.
+
+| Level | Keys |
+|---|---|
+| Projects, Tabs, Mail, Calendar, To-do | **E / ↑**, **D / ↓** move the cursor; **S / ←** goes back; **F / →** or **Enter** opens the row; **H** folds the bar |
+| Projects, Tabs, Inside, Mail, Calendar, To-do | **Q / R / X** open the next tab that waits for an answer / is working / is done, in any project (Shift: previous); **Backspace** returns to where you were; **M C T** open Mail, Calendar and To-do; **/** goes to Home's search |
+| Projects (Home) | **N** a new project; **1-9** open project N |
+| Tabs (a project) | **N** or **+** the new-tab button; **W** closes the tab after asking (**Y** or Enter confirms); **.** the card's menu |
+| Inside a tab | **E / D** scroll the chat or terminal (Shift: a page); **F** jumps to the latest; **S / ←** back to the tab list; **H** folds the bar; **1-9** answer the agent's question on screen; **K** Send now / **L** Cancel and edit for prompts still queued in the chat; **I** puts the caret in the message box |
+| A sheet or menu on top | **E / D** walk its controls, **Enter** presses one, **S / ← / Esc** close it, **Y** confirms a confirm |
+
+Typing is never taken from you. While the caret is in a text field, every key
+types, except **Esc** (back to steering) and the two chords. In the message
+box, **Enter** sends as usual and steering resumes. A free-text answer
+(Claude Code's "Type something" row) works the same: the digit opens its
+field and the keyboard is yours until Esc.
+
+Some views keep their own keys, so steering steps aside: the file library and
+the viewers (including Mark up). While one is open the steering bar hides, so
+the view's own bottom bars stay in reach, and it comes back when you close the view. The Mail,
+Calendar, To-do and Tabby screens are walked control by control. The favourites
+page has no rows for the cursor yet. The phone uses the default keys; rebinding
+in the desktop's settings does not reach it.
 
 ## The agent's questions about your marks
 
@@ -441,10 +485,11 @@ and choose what reaches you, even with Tabtivity Mobile closed:
 - **Agents** — *When one needs your answer* (an agent tab waiting on a
   question or approval), or *Also when one finishes a turn*. A tap opens that
   tab. A tab you have open on the phone right then does not notify, and one
-  tab notifies at most every 30 seconds.
+  tab notifies at most every 30 seconds. Each one starts with the time it
+  happened, on your phone's clock.
 - **What a notification shows** — *Names and details* (event title, time and
   place; project and tab), or *Only that something wants you*, for a lock
-  screen others can see.
+  screen others can see; an agent notification still shows its time.
 
 Tabtivity must be running on the desktop: it is what notices the reminder or the
 agent's turn.

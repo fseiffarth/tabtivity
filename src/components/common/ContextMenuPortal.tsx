@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
+import { surfaceExitMs } from "../../lib/motion";
 
 /**
  * The one context-menu/popover portal. Every right-click menu and click-opened
@@ -28,6 +29,10 @@ import { useClampToViewport } from "../../hooks/useClampToViewport";
  * up to fit — a tall one slid up lands ON the bar it dropped from and no longer
  * reads as belonging to that button — and is capped to the room below it, so
  * the overflow scrolls inside the menu (`.menu-scroll-region`) instead.
+ *
+ * A click away or Escape fades the menu for `--motion-exit` before `onClose`
+ * (`.is-leaving`, and at once under reduced motion). A pick inside it closes it
+ * outright: the row's action is the answer, there is nothing left to watch.
  *
  * `dismiss={false}` suspends both halves (no catcher, no Escape) for a stretch
  * where the menu must NOT close itself — while a dialog it opened is up and
@@ -63,20 +68,36 @@ export function ContextMenuPortal({
     setPos({ x, y });
   }, [x, y]);
   useClampToViewport(ref, pos, setPos, keepBelow ? { margin: MARGIN, axis: "x" } : undefined);
-  // Escape is the other half of "click away": the menu is not focus-trapped, so
-  // the key is taken on the document. An Escape some other handler already
-  // claimed (an editor cancelling its own mode) is left alone, and the one this
-  // menu eats is marked handled so it doesn't also back out of what's behind it.
+  const [leaving, setLeaving] = useState(false);
+  const leaveTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
+  const leave = () => {
+    if (leaving) return;
+    const ms = ref.current ? surfaceExitMs(ref.current) : 0;
+    if (ms <= 0) {
+      onClose();
+      return;
+    }
+    setLeaving(true);
+    leaveTimer.current = window.setTimeout(onClose, ms);
+  };
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
+  const dismissOnEscape = useCallback((e: Pick<KeyboardEvent, "key" | "defaultPrevented" | "preventDefault">) => {
+    if (!dismiss || e.key !== "Escape" || e.defaultPrevented) return;
+    // Portals share a z-index, so the last in the document paints on top.
+    const menus = document.querySelectorAll(".context-menu-portal");
+    if (menus[menus.length - 1] !== ref.current) return;
+    e.preventDefault();
+    leaveRef.current();
+  }, [dismiss]);
+  // Focus can stay outside a popup, so listen on the document too. Escape
+  // dispatched inside the menu is handled before the parent modal can take it.
   useEffect(() => {
     if (!dismiss) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      e.preventDefault();
-      onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, dismiss]);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => document.removeEventListener("keydown", dismissOnEscape);
+  }, [dismiss, dismissOnEscape]);
   const left = pos?.x ?? x;
   const top = pos?.y ?? y;
   // Anchored menus give up height, not position: whatever is left between the
@@ -87,20 +108,21 @@ export function ContextMenuPortal({
     : undefined;
   return createPortal(
     <>
-      {dismiss && (
+      {dismiss && !leaving && (
         <div
           className="context-menu-catcher"
-          onPointerDown={onClose}
+          onPointerDown={leave}
           onContextMenu={(e) => {
             e.preventDefault();
-            onClose();
+            leave();
           }}
         />
       )}
       <div
         ref={ref}
-        className={`${className} context-menu-portal`}
+        className={`${className} context-menu-portal${leaving ? " is-leaving" : ""}`}
         style={{ left, top, ...fit, ...style }}
+        onKeyDown={dismissOnEscape}
         onPointerDown={(e) => e.stopPropagation()}
       >
         {children}

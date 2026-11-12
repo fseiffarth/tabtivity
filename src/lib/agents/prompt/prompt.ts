@@ -77,9 +77,22 @@ const DENY_WORD =
 const CODEX_HOOK_TRUST_HEADING = /Hooks\s*need\s*review/;
 const TRUST_OPTION = /(\D|^)\d{1,2}[.)][ \t]*Trust/;
 
+// Meta Muse Code (1.4.15) numbers its menu rows with no `.` or `)`: the number,
+// two spaces, the label, behind a `⟩` pointer — "⟩ 1  Trust and continue" over
+// "  2  Quit". `NUMBERED_ROW` needs the stop, so these get their own pair: the
+// glyph is Muse's alone, and a sibling must start its own line, so prose that
+// happens to hold "2  x" mid-line is not a menu. (1.3.0 drew a plain `>`, too
+// common to anchor on.)
+const MUSE_POINTER_ROW = /⟩[ \t]*(\d{1,2})[ \t]{2,}[^\s\d]/gu;
+const MUSE_MENU_ROW = /(?:^|[\r\n])[ \t]*(\d{1,2})[ \t]{2,}[^\s\d]/g;
+
 // OpenCode questions have no pointer or yes/no pair. Their footer identifies
 // the choice/toggle page and the final review. Cursor moves can omit spaces.
-const OPENCODE_QUESTION_KEYS = /(?:↑\s*↓\s*select|⇆\s*tab)\s*enter\s*(?:submit|confirm|toggle)\s*esc\s*dismiss/u;
+const OPENCODE_QUESTION_KEYS = /(?:↑\s*↓\s*select|⇆\s*tab)\s*enter\s*(?:submit|confirm|toggle)\s*esc\s*dismiss|enter\s*choose\s*(?:tab\s*next\s*)?esc\s*dismiss|◆\s*Questions\s*Review[\s\S]{0,1000}?enter\s*submit\s*esc\s*dismiss/u;
+// Its permission request draws chips on one row, not a menu: the row and the
+// hints it names, which a wide pane puts far right and a narrow one under it
+// (`mini` under 56 columns keeps only `pgup/pgdn scroll`).
+const OPENCODE_PERMISSION_ROW = /(?:Allow\s*once\s*Always\s*allow\s*Reject|Confirm\s*Cancel)[\s\S]{0,300}?(?:⇆\s*select\s*enter\s*confirm|pgup\/pgdn\s*scroll)/u;
 
 /**
  * True when the text holds a numbered menu offering both an affirmative and a
@@ -115,6 +128,21 @@ function hasPointerChoice(plain: string): boolean {
     NUMBERED_ROW.lastIndex = 0;
     let row: RegExpExecArray | null;
     while ((row = NUMBERED_ROW.exec(near)) !== null) {
+      if (Number(row[1]) !== Number(m[1])) return true;
+    }
+  }
+  return false;
+}
+
+/** Muse's `⟩ N  Label` row with another `N  Label` row of a different number. */
+function hasMuseMenu(plain: string): boolean {
+  MUSE_POINTER_ROW.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = MUSE_POINTER_ROW.exec(plain)) !== null) {
+    const near = aroundMatch(plain, m);
+    MUSE_MENU_ROW.lastIndex = 0;
+    let row: RegExpExecArray | null;
+    while ((row = MUSE_MENU_ROW.exec(near)) !== null) {
       if (Number(row[1]) !== Number(m[1])) return true;
     }
   }
@@ -172,9 +200,10 @@ export function stripAnsi(text: string): string {
  * agent tab, to delete escapes that were never there.
  */
 export function looksLikeDecisionPromptStripped(plain: string): boolean {
-  if (OPENCODE_QUESTION_KEYS.test(plain)) return true;
+  if (OPENCODE_QUESTION_KEYS.test(plain) || OPENCODE_PERMISSION_ROW.test(plain)) return true;
   if (hasPointerChoice(plain)) return true;
   if (hasPointerWordMenu(plain)) return true;
+  if (hasMuseMenu(plain)) return true;
   if (CODEX_HOOK_TRUST_HEADING.test(plain) && TRUST_OPTION.test(plain)) return true;
   return hasYesNoMenu(plain);
 }

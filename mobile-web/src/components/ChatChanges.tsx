@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { parseUnifiedDiff } from "../../../src/lib/viewers/diff";
-import { getChanges, type ChatChange, type ChatChanges as ChatChangesRead } from "../api";
+import { getChanges, type ChatChange, type ChatChanges as ChatChangesRead, type PhoneMarkupFile } from "../api";
 import { chatMoment, chatTime } from "../terminal/chatTimes";
 import { startVisiblePoll } from "../visiblePoll";
 
@@ -38,6 +38,33 @@ function changeKeys(list: readonly ChatChange[]): string[] {
 
 function fileOf(change: ChatChange): string {
   return change.worktree ? `${change.worktree.label}: ${change.path}` : change.path;
+}
+
+/** A changed file with what all its changes came to, newest changed first. */
+interface FileRow {
+  key: string;
+  change: ChatChange;
+  edits: number;
+  added: number;
+  removed: number;
+  /** Its newest change's row: a file renamed since opens under its new name. */
+  file?: PhoneMarkupFile;
+  fresh: boolean;
+}
+
+function fileRows(cards: readonly { change: ChatChange; key: string }[], isFresh: (key: string) => boolean): FileRow[] {
+  const rows = new Map<string, FileRow>();
+  for (const { change, key } of cards) {
+    const name = fileOf(change);
+    const row = rows.get(name) ?? { key: name, change, edits: 0, added: 0, removed: 0, fresh: false };
+    row.edits += 1;
+    row.added += change.added;
+    row.removed += change.removed;
+    row.file ??= change.file;
+    row.fresh ||= isFresh(key);
+    rows.set(name, row);
+  }
+  return [...rows.values()];
 }
 
 /** One change: its file, kind and time over its diff, folded until tapped. */
@@ -83,13 +110,18 @@ function ChangeCard({ change, open, fresh, onToggle }: { change: ChatChange; ope
  * subagent's) changed, newest first, one unified diff per change
  * (`GET /api/v1/tabs/{id}/changes`). Read while shown; a change arriving
  * while it is shown stays folded and is marked new until opened.
+ *
+ * Over the changes, a row per file: tapping one narrows the list to it, and
+ * **Open** (`onOpenFile`) shows the file itself, where the library would list it.
  */
-export function ChatChanges({ tabId, subagent, subagentTitle, visible, onClose }: {
+export function ChatChanges({ tabId, subagent, subagentTitle, visible, onOpenFile, onClose }: {
   tabId: string;
   /** The open subagent's handle: its changes are read instead. */
   subagent?: string;
   subagentTitle?: string;
   visible: boolean;
+  /** Shows a changed file; without it the rows offer no Open. */
+  onOpenFile?: (file: PhoneMarkupFile) => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -123,14 +155,13 @@ export function ChatChanges({ tabId, subagent, subagentTitle, visible, onClose }
   const list = useMemo(() => changes?.changes ?? [], [changes]);
   const keys = useMemo(() => changeKeys(list), [list]);
   if (changes?.available && firstKeys.current?.key !== readKey) firstKeys.current = { key: readKey, keys: new Set(keys) };
-  const files = useMemo(() => [...new Set(list.map(fileOf))].sort(), [list]);
-  const filter = files.includes(picked) ? picked : "";
-  /** Newest first, narrowed to the picked file. */
-  const cards = useMemo(
-    () => list.map((change, index) => ({ change, key: keys[index] })).reverse().filter(({ change }) => !filter || fileOf(change) === filter),
-    [list, keys, filter],
-  );
+  /** Newest first. */
+  const all = useMemo(() => list.map((change, index) => ({ change, key: keys[index] })).reverse(), [list, keys]);
   const known = firstKeys.current?.key === readKey ? firstKeys.current.keys : null;
+  const isFresh = (key: string) => !!known && !known.has(key) && !toggled.has(key);
+  const files = fileRows(all, isFresh);
+  const filter = files.some((file) => file.key === picked) ? picked : "";
+  const cards = useMemo(() => all.filter(({ change }) => !filter || fileOf(change) === filter), [all, filter]);
   /** The newest change of the first read starts open; a later one folded. */
   const startsOpen = (key: string, index: number) => index === 0 && !!known?.has(key);
   const toggle = (key: string) => setToggled((previous) => {
@@ -139,7 +170,7 @@ export function ChatChanges({ tabId, subagent, subagentTitle, visible, onClose }
     else next.add(key);
     return next;
   });
-  const untested = isUntested("mobile.focus.diffs");
+  const untested = isUntested("mobile.focus.diffs") || isUntested("mobile.focus.diffsOpen");
 
   const body = !changes
     ? <div className="readable-empty"><strong>{t(failed ? "terminal.changes.unreadable" : "terminal.changes.loading")}</strong></div>
@@ -148,11 +179,29 @@ export function ChatChanges({ tabId, subagent, subagentTitle, visible, onClose }
     : list.length === 0
     ? <div className="readable-empty"><strong>{t("terminal.changes.empty")}</strong>{!!changes.outside && <span>{t("mobile.changes.outside", { count: changes.outside })}</span>}</div>
     : <>
+      <ul className="chat-changes-files" aria-label={t("terminal.changes.files")}>
+        {files.map((file) => <li key={file.key} className={file.key === filter ? "picked" : undefined}>
+          <button className="chat-changes-file" aria-pressed={file.key === filter} onClick={() => setPicked(file.key === filter ? "" : file.key)}>
+            <span className="chat-change-path">
+              {file.change.worktree && <em>{file.change.worktree.label}</em>}
+              <strong>{file.change.path}</strong>
+            </span>
+            <small>
+              {file.edits > 1 && <>{t("mobile.changes.edits", { count: file.edits })} ·</>}
+              {file.added > 0 && <b className="add"> +{file.added}</b>}
+              {file.removed > 0 && <b className="del"> −{file.removed}</b>}
+              {file.fresh && <i> · {t("terminal.changes.new")}</i>}
+            </small>
+          </button>
+          {file.file && onOpenFile && <button className="chat-changes-open" onClick={() => file.file && onOpenFile(file.file)}
+            aria-label={t("mobile.changes.open", { name: file.file.name })}>{t("mobile.files.item.open")}</button>}
+        </li>)}
+      </ul>
       <ol className="chat-changes-list">
         {cards.map(({ change, key }, index) => {
           const open = startsOpen(key, index) !== toggled.has(key);
           return <ChangeCard key={key} change={change} open={open}
-            fresh={!!known && !known.has(key) && !toggled.has(key)} onToggle={() => toggle(key)} />;
+            fresh={isFresh(key)} onToggle={() => toggle(key)} />;
         })}
       </ol>
       {changes.truncated && <small className="chat-change-note">{t("terminal.changes.truncated")}</small>}
@@ -165,10 +214,6 @@ export function ChatChanges({ tabId, subagent, subagentTitle, visible, onClose }
         <strong>{t("terminal.changes.title")}{untested && <em> · {t("mobile.focus.untested")}</em>}</strong>
         {list.length > 0 && <small>{t("terminal.changes.summary", { files: files.length, edits: list.length })}</small>}
       </span>
-      {files.length > 1 && <select value={filter} onChange={(event) => setPicked(event.target.value)} aria-label={t("terminal.changes.files")}>
-        <option value="">{t("terminal.changes.allFiles")}</option>
-        {files.map((file) => <option key={file} value={file}>{file}</option>)}
-      </select>}
       <button className="chat-changes-close" onClick={onClose} aria-label={t("terminal.changes.close")} title={t("terminal.changes.close")}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
       </button>

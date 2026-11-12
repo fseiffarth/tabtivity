@@ -46,6 +46,9 @@ describe("reading a session's login state", () => {
   it("lets go once the sign-in went through, and ignores what scrolled away", () => {
     expect(readSignedOut(rows("Not logged in · Please run /login", "Login successful. Press Enter to continue"))).toBe(false);
     expect(readSignedOut(rows("Not logged in", ...Array.from({ length: 20 }, (_, i) => `line ${i}`)))).toBe(false);
+    expect(readSignedOut(rows("Login expired · Please run /login"))).toBe(true);
+    expect(readSignedOut(rows("Session has expired. Sign in again."))).toBe(true);
+    expect(readSignedOut(rows("OAuth token has expired"))).toBe(true);
     expect(readSignedOut(rows("All tests pass."))).toBe(false);
   });
 

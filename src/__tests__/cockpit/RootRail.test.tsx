@@ -1,0 +1,302 @@
+/**
+ * Root's Needs-you rail (`docs/cockpit_root_merge_plan.md`, M8): a 40 px icon rail of the live-store groups beside the
+ * console; a click opens the real rail (with the groups that need a read),
+ * scrolled to that group; the fold is remembered per machine; a mouse press
+ * never moves the focus off a terminal; a picked row goes to its tab.
+ */
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const invokeDefault = (cmd: string, _args?: unknown): Promise<unknown> => {
+  if (cmd === "root_mcp_status") return Promise.resolve({ running: true, tools: [] });
+  if (cmd === "list_agents") return Promise.resolve([]);
+  return Promise.resolve([]);
+};
+const invokeMock = vi.fn(invokeDefault);
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})), emit: vi.fn() }));
+vi.mock("../../components/tabs/TabPane", () => ({ TabPane: () => null }));
+// Which view mounts is the question here, not what a cockpit view draws.
+vi.mock("../../components/cockpit/CockpitViews", () => ({
+  CockpitViewBody: () => <div data-testid="cockpit-body" />,
+}));
+vi.mock("../../components/cockpit/CockpitRoster", () => ({ jumpToRow: vi.fn() }));
+
+import { RootOverlayHost } from "../../components/layout/RootOverlay";
+import { jumpToRow } from "../../components/cockpit/CockpitRoster";
+import { storageKey } from "../../lib/brand";
+import { useActivityStore } from "../../stores/activity";
+import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
+import { useBoxesStore } from "../../stores/boxes";
+import { useProjectsStore } from "../../stores/projects";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useRootReviewStore } from "../../stores/rootReview";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
+import type { ProjectEntry } from "../../types";
+
+const agent = (key: string, label = key): TabEntry => ({ key, label, cmd: "claude", cwd: "/p", kind: "agent" });
+const project = (id: string): ProjectEntry =>
+  ({ id, name: id.toUpperCase(), status: "active", position: 1, local_file: `/${id}/project.json` }) as ProjectEntry;
+const FOLD = storageKey("cockpitRootRail");
+
+const icons = () => document.querySelector(".cockpit-rail-icons");
+const groupIcons = () => Array.from(document.querySelectorAll<HTMLElement>(".cockpit-rail-icon[data-group]"));
+
+async function openRoot() {
+  render(<RootOverlayHost />);
+  await act(async () => useRootOverlayStore.getState().show());
+  await act(async () => {});
+}
+
+beforeEach(() => {
+  cleanup();
+  invokeMock.mockClear();
+  invokeMock.mockImplementation(invokeDefault);
+  localStorage.clear();
+  useProjectsStore.setState({ projects: [project("p1")], activeId: "p1", rootDir: "/r" });
+  useBoxesStore.setState({ boxes: [] });
+  useTabsStore.setState({
+    scope: "p1",
+    tabsByScope: { p1: [{ ...agent("a", "alpha"), scheduleTargetId: "t-a" }, agent("b", "beta")], root: [agent("r", "rooty")] },
+    layoutByScope: {},
+    focusedGroupByScope: {},
+    detachedGroupsByScope: {},
+  });
+  useActivityStore.setState({
+    busyByTab: {},
+    attentionByTab: { "p1:a": "decision", "root:r": "interrupted" },
+    lastDoneByTab: {},
+    lastWorkingByTab: {},
+  });
+  useRootReviewStore.setState({ proposals: [], imports: [], refresh: vi.fn(() => Promise.resolve()) });
+  useAgentSchedulesStore.setState({ byTarget: {} });
+  useRootOverlayStore.setState({ open: false, view: "root", installTabs: {} });
+});
+afterEach(() => cleanup());
+
+describe("the icon rail", () => {
+  it("is collapsed by default: one icon per non-empty live-store group, with its count", async () => {
+    await openRoot();
+    expect(icons()).toBeTruthy();
+    expect(groupIcons().map((el) => el.dataset.group)).toEqual(["asking", "interrupted"]);
+    expect(groupIcons().map((el) => el.getAttribute("aria-label"))).toEqual(["Asking: 1", "Interrupted: 1"]);
+    expect(document.querySelector(".cockpit-rail")).toBeNull();
+  });
+
+  it("is amber for asking and red for interrupted, by class", async () => {
+    await openRoot();
+    expect(groupIcons()[0].classList.contains("group-asking")).toBe(true);
+    expect(groupIcons()[1].classList.contains("group-interrupted")).toBe(true);
+  });
+
+  it("follows the stores live", async () => {
+    await openRoot();
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    expect(groupIcons()).toHaveLength(0);
+    act(() => useActivityStore.setState({ attentionByTab: { "p1:b": "decision" } }));
+    expect(groupIcons().map((el) => el.dataset.group)).toEqual(["asking"]);
+  });
+
+  it("is not there on a cockpit view", async () => {
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().openView("tonight"));
+    expect(await screen.findByTestId("cockpit-body")).toBeTruthy();
+    expect(icons()).toBeNull();
+  });
+
+  it("reads nothing from the backend while collapsed", async () => {
+    await openRoot();
+    const reads = invokeMock.mock.calls.map(([cmd]) => cmd);
+    for (const cmd of ["git_push_mcp_proposals", "agent_schedules_list", "markup_mcp_list"]) {
+      expect(reads).not.toContain(cmd);
+    }
+  });
+
+  it("a mouse press does not take the focus from where it was", async () => {
+    await openRoot();
+    const press = fireEvent.mouseDown(groupIcons()[0]);
+    // fireEvent returns false when the event was default-prevented.
+    expect(press).toBe(false);
+  });
+});
+
+describe("opening the rail", () => {
+  it("a group icon opens the real rail scrolled to that group, and remembers the fold", async () => {
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push((this as HTMLElement).dataset.group ?? "");
+    };
+    try {
+      await openRoot();
+      await act(async () => fireEvent.click(groupIcons()[1]));
+      expect(icons()).toBeNull();
+      expect(document.querySelector(".cockpit-rail")).toBeTruthy();
+      expect(scrolled).toContain("interrupted");
+      expect(localStorage.getItem(FOLD)).toBe("open");
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("the open rail reads the groups that need a read (push, schedules, markup)", async () => {
+    await openRoot();
+    await act(async () => fireEvent.click(screen.getByLabelText("Open the Needs-you rail")));
+    const reads = invokeMock.mock.calls.map(([cmd]) => cmd);
+    for (const cmd of ["git_push_mcp_proposals", "agent_schedules_list", "markup_mcp_list"]) {
+      expect(reads).toContain(cmd);
+    }
+  });
+
+  it("starts open when it was left open, and folds again with its button", async () => {
+    localStorage.setItem(FOLD, "open");
+    await openRoot();
+    expect(document.querySelector(".cockpit-rail")).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByLabelText("Fold the Needs-you rail")));
+    expect(icons()).toBeTruthy();
+    expect(localStorage.getItem(FOLD)).toBe("closed");
+  });
+
+  it("every picked row goes through jumpToRow (it knows a root row stays in this view)", async () => {
+    localStorage.setItem(FOLD, "open");
+    await openRoot();
+    const pick = (label: string) =>
+      fireEvent.click(screen.getAllByText(label).find((el) => el.closest(".cockpit-rail-pick"))!);
+    await act(async () => pick("rooty"));
+    expect(jumpToRow).toHaveBeenCalledWith("root:r");
+    await act(async () => pick("alpha"));
+    expect(jumpToRow).toHaveBeenCalledWith("p1:a");
+  });
+});
+
+describe("an empty rail", () => {
+  const chip = () => document.querySelector<HTMLElement>(".root-overlay-subbar .cockpit-needs-chip");
+
+  it("is not drawn at all while nothing waits, and comes back when something does", async () => {
+    await openRoot();
+    expect(icons()).toBeTruthy();
+    expect(chip()).toBeNull();
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    // No 40 px column: neither the icons nor their nav element.
+    expect(icons()).toBeNull();
+    expect(document.querySelector(".cockpit-rail-expand")).toBeNull();
+    expect(document.querySelector(".subwindow-body > .cockpit-grip")).toBeNull();
+    expect(document.querySelector(".subwindow-body .root-overlay-region")).toBeTruthy();
+    act(() => useActivityStore.setState({ attentionByTab: { "p1:b": "decision" } }));
+    expect(icons()).toBeTruthy();
+    expect(chip()).toBeNull();
+  });
+
+  it("an open rail stays open (its extra groups need it) even with nothing in the live stores", async () => {
+    localStorage.setItem(FOLD, "open");
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    await openRoot();
+    expect(document.querySelector(".cockpit-rail")).toBeTruthy();
+    // Folding it then leaves nothing to draw in the column (the chip takes over).
+    await act(async () => fireEvent.click(screen.getByLabelText("Fold the Needs-you rail")));
+    expect(icons()).toBeNull();
+    expect(chip()).toBeTruthy();
+  });
+
+  it("leaves the way to the unloaded groups: the chip in the bar, whose popover makes the reads", async () => {
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    await openRoot();
+    expect(icons()).toBeNull();
+    expect(chip()?.textContent).toBe("Needs you 0");
+    // Nothing is read until it is opened.
+    const reads = () => invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(reads()).not.toContain("git_push_mcp_proposals");
+    await act(async () => fireEvent.click(chip()!));
+    expect(document.querySelector(".cockpit-needs-popover .cockpit-rail")).toBeTruthy();
+    for (const cmd of ["git_push_mcp_proposals", "agent_schedules_list", "markup_mcp_list"]) {
+      expect(reads()).toContain(cmd);
+    }
+  });
+
+  it("a push request found by that popover is listed there", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "git_push_mcp_proposals") {
+        return Promise.resolve([{ id: "q1", kind: "push", status: "pending", branch: "develop", summary: "ship it", created: 1, commits: [] }]);
+      }
+      if (cmd === "root_mcp_status") return Promise.resolve({ running: true, tools: [] });
+      return Promise.resolve([]);
+    });
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    await openRoot();
+    await act(async () => fireEvent.click(chip()!));
+    await act(async () => {});
+    expect(document.querySelector('.cockpit-needs-popover [data-group="push"]')).toBeTruthy();
+  });
+
+  it("a schedule proposal the stores already hold counts for the column, as it does for the header badge", async () => {
+    act(() => useActivityStore.setState({ attentionByTab: {} }));
+    useAgentSchedulesStore.setState({
+      byTarget: { [scheduleCacheKey("p1", "t-a")]: [{ id: "s1", enabled: false, origin: { by: "agent", session: "x" } } as never] },
+    });
+    await openRoot();
+    expect(groupIcons().map((el) => el.dataset.group)).toEqual(["schedule"]);
+    expect(chip()).toBeNull();
+    useAgentSchedulesStore.setState({ byTarget: {} });
+  });
+});
+
+describe("the open rail's width", () => {
+  const WIDTH = storageKey("cockpitRootRailWidth");
+  const column = () => document.querySelector<HTMLElement>(".cockpit-root-rail-full")!;
+  const grip = () => document.querySelector<HTMLElement>(".subwindow-body > .cockpit-grip")!;
+  const drag = (by: number) => {
+    fireEvent.pointerDown(grip(), { clientX: 300, pointerId: 1 });
+    fireEvent(window, new MouseEvent("pointermove", { clientX: 300 + by }));
+    fireEvent(window, new MouseEvent("pointerup"));
+  };
+
+  beforeEach(() => localStorage.setItem(FOLD, "open"));
+
+  it("is 280 px with a grip beside it, as before", async () => {
+    await openRoot();
+    expect(grip().getAttribute("role")).toBe("separator");
+    expect(column().style.flexBasis).toBe("280px");
+  });
+
+  it("follows the grip, is written on release under its own key and is back after a remount", async () => {
+    localStorage.setItem(storageKey("cockpitRailWidth"), "333");
+    await openRoot();
+    await act(async () => drag(60));
+    expect(column().style.flexBasis).toBe("340px");
+    expect(localStorage.getItem(WIDTH)).toBe("340");
+    // Now's rail keeps its own width.
+    expect(localStorage.getItem(storageKey("cockpitRailWidth"))).toBe("333");
+    cleanup();
+    await openRoot();
+    expect(column().style.flexBasis).toBe("340px");
+  });
+
+  it("clamps a drag to the column's bounds", async () => {
+    await openRoot();
+    await act(async () => drag(-900));
+    expect(column().style.flexBasis).toBe("220px");
+    expect(localStorage.getItem(WIDTH)).toBe("220");
+  });
+
+  it.each([["garbage", "280px"], ["", "280px"], ["-40", "280px"], ["0", "280px"], ["NaN", "280px"], ["5", "220px"], ["99999", "1100px"], ["412.6", "413px"]])(
+    "reads a stored %j tolerantly (%s)",
+    async (stored, shown) => {
+      localStorage.setItem(WIDTH, stored);
+      await openRoot();
+      expect(column().style.flexBasis).toBe(shown);
+    },
+  );
+
+  it("still opens at 280 px when storage cannot be read", async () => {
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation((key: string) => {
+      if (key === WIDTH) throw new Error("denied");
+      return key === FOLD ? "open" : null;
+    });
+    try {
+      await openRoot();
+      expect(column().style.flexBasis).toBe("280px");
+    } finally {
+      get.mockRestore();
+    }
+  });
+});

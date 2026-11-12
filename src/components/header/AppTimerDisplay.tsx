@@ -7,6 +7,7 @@ import { useQuiesce, saverInterval } from "../../stores/power";
 import { ActivityCalendar } from "../projects/ActivityCalendar";
 import { useT } from "../../lib/i18n";
 import { formatWorkedTime } from "../../lib/formatWorkedTime";
+import { CloseIcon } from "../common/icons/Icon";
 
 function GlobalActivityWindow({ onClose }: { onClose: () => void }) {
   const t = useT();
@@ -26,7 +27,7 @@ function GlobalActivityWindow({ onClose }: { onClose: () => void }) {
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="activity-window" onMouseDown={(e) => e.stopPropagation()}>
         <div className="activity-window-header">
           <span className="activity-window-title">{t("appTimer.globalActivityTitle")}</span>
-          <button className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="activity-window-body">
           {loading ? (

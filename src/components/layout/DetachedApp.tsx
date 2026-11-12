@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRendererWatchdog } from "../../lib/window/rendererWatchdog";
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { detachedWindowVisible } from "../../lib/window/detachedVisibility";
 import { answerRetireRequests } from "../../lib/window/unsavedWork";
@@ -46,6 +47,7 @@ import {
   type DetachedWindowContext,
 } from "../../stores/detachedContext";
 import { applyDetachedStatus } from "../../stores/activity";
+import { usePopoutViewStore } from "../../stores/popoutView";
 import {
   allGroups,
   orderedTabKeys,
@@ -53,15 +55,19 @@ import {
   type TabEntry,
   type TabKind,
 } from "../../stores/tabs";
-import { allNodeIds as nodeIdsOf } from "../../stores/tabs/layoutTree";
+import {
+  allNodeIds as nodeIdsOf,
+  nameSubtree,
+  subtreeName,
+} from "../../stores/tabs/layoutTree";
 import { setDetachedViewerState } from "../../stores/tabs/viewerState";
 import { withdrawnTabKinds } from "../../lib/experimental";
-import { PLATFORM } from "../../lib/platform";
 import { useTabLandStore } from "../../stores/drag/tabLand";
 import { startFocusTracking, useQuiesce } from "../../stores/power";
-import { clearStrayFullscreen } from "../../lib/window/strayFullscreen";
-import { useFullscreenMode } from "../../lib/window/fullscreenMode";
+import { startStrayFullscreenGuard } from "../../lib/window/strayFullscreen";
+import { startBoundsStream } from "../../lib/window/boundsStream";
 import { applyFastModeAttribute, useFastMode } from "../../lib/agents/fastMode";
+import { useSoftwarePaintAttribute } from "../../lib/window/softwarePaint";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
@@ -70,7 +76,12 @@ import { listenPdfReveal } from "../../stores/viewers/pdfSync";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
 import { listenTexCenter } from "../../stores/viewers/texCenter";
 import { chordMatches, resolveChord, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
+import { useSteering } from "../../hooks/useSteering";
 import { DetachedCenterPanel } from "./DetachedCenterPanel";
+import { SteeringLegend } from "./SteeringLegend";
+import { SteeringPromptOverlay } from "./SteeringPromptOverlay";
+import { SteeringConfirmOverlay } from "./SteeringConfirmOverlay";
+import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
 import { OpenExternalHost } from "../common/OpenExternalHost";
@@ -111,6 +122,9 @@ export function DetachedApp({ param }: Props) {
   // The popout's content tree. Usually a single group; can become a SplitNode
   // once split-in-popout (multi-pane) lands in the renderer (Phase 2).
   const [group, setGroup] = useState<LayoutNode | null>(null);
+  // A multi-pane popout's own name (`DetachedGroup.name`); `windowName` below is
+  // what the window actually goes by.
+  const [ownName, setOwnName] = useState<string | undefined>();
   const [tabs, setTabs] = useState<TabEntry[]>([]);
   // Group B #237: the WM × asks rather than discarding. `null` = not asking.
   const [closeChoice, setCloseChoice] = useState<null | { resolveDefault: boolean }>(null);
@@ -179,6 +193,7 @@ export function DetachedApp({ param }: Props) {
   // window's (see the focus tracker above for the same reason).
   const fastMode = useFastMode();
   useEffect(() => applyFastModeAttribute(fastMode), [fastMode]);
+  useSoftwarePaintAttribute();
 
   // Clear a stray OS fullscreen, exactly as `restore_main_window` does for the
   // main window and for its reason: a `_NET_WM_STATE_FULLSCREEN` window loses
@@ -220,40 +235,11 @@ export function DetachedApp({ param }: Props) {
   // which is why the backend clears the main window's the same read-free way.
   // What is deliberately NOT cleared — a talk in progress, the page's own DOM
   // fullscreen — is the pure `mayClearStrayFullscreen`; see `lib/window/strayFullscreen`.
-  useEffect(() => {
-    if (PLATFORM === "macos") return;
-    const win = getCurrentWindow();
-    let disposed = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    // Every path in here is wrapped, and that is not defensive habit: this effect
-    // runs in a window whose ONLY content is one React root, so a throw out of it
-    // unmounts the tree and leaves a grey OS window with nothing on it and no
-    // message — observed, from a broken intermediate module during an HMR update.
-    // A guard whose failure mode is worse than the state it guards against is not
-    // worth having, so it can only ever decline to run.
-    const check = () => {
-      try {
-        if (disposed) return;
-        void clearStrayFullscreen();
-      } catch {
-        /* never take the window down over a fullscreen check */
-      }
-    };
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(check, 250);
-    };
-    check();
-    const unlisteners = [
-      subscribeTauri(() => win.onResized(schedule)),
-      subscribeTauri(() => win.onFocusChanged(({ payload }) => payload && schedule())),
-    ];
-    return () => {
-      disposed = true;
-      if (timer) clearTimeout(timer);
-      for (const fn of unlisteners) fn();
-    };
-  }, []);
+  //
+  // NOT on native Wayland (`strayGuardMayAutoArm`): there the backend fullscreens
+  // a popout on purpose to place it on its screen, and this guard cannot tell
+  // that from a stray one.
+  useEffect(() => startStrayFullscreenGuard(getCurrentWindow()), []);
 
   // Per-window zoom via Ctrl +/- / Ctrl+0, handled before any editable-target
   // guard (like F11) so it works from a focused terminal too — the browser-zoom
@@ -298,6 +284,11 @@ export function DetachedApp({ param }: Props) {
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [param.scope, param.groupId]);
+
+  // Keyboard steering, in this window: the main window's handler on this
+  // popout's own subwindows and tabs (`useSteering`, `steeringScope`). Its
+  // bar, prompt box, confirm and cheat sheet are mounted below.
+  useSteering({ surface: "popout" });
 
   // Theme, accent/corners/cursor and language follow the main window's
   // Settings live (this popout is its own runtime; see the hook).
@@ -363,65 +354,13 @@ export function DetachedApp({ param }: Props) {
   // persistence owner) so it reopens at the same place/size after a restart. We
   // read position/size straight from the move/resize event payloads (no extra
   // window-getter permissions) and debounce so a drag doesn't flood the channel.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let pos: { x: number; y: number } | null = null;
-    // Group B #236: seeded from the window's ACTUAL physical size, not from the
-    // builder's LOGICAL default. `onMoved`/`onResized` payloads are physical, so
-    // a popout that was moved but never resized used to flush the literal
-    // 900×640 as a physical rect — and respawned at half size on a 2× display.
-    // Until the read lands, a flush is refused rather than guessed at.
-    let size: { w: number; h: number } | null = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelled = false;
-    win
-      .innerSize()
-      .then((s) => {
-        if (!cancelled && !size) size = { w: s.width, h: s.height };
-      })
-      .catch(() => {});
-    const flush = () => {
-      if (!pos || !size) return;
-      // A fullscreen popout's rect is its monitor, not a place to reopen at.
-      if (useFullscreenMode.getState().on) return;
-      // #238: a park (`hide()`) / unpark (`show()`) can fire Moved/Resized with
-      // whatever geometry the WM used while the window was off screen. Persisting
-      // that would move the popout on the next launch, so a flush is only taken
-      // while the window is actually visible.
-      void detachedWindowVisible(win)
-        .then((visible) => {
-          if (!visible || cancelled || !pos || !size) return;
-          void emit(DETACHED_BOUNDS, {
-            scope: param.scope,
-            groupId: param.groupId,
-            bounds: { x: pos.x, y: pos.y, w: size.w, h: size.h },
-          });
-        })
-        .catch(() => {});
-    };
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(flush, 300);
-    };
-    const unMoved = subscribeTauri(() =>
-      win.onMoved(({ payload }) => {
-        pos = { x: payload.x, y: payload.y };
-        schedule();
+  useEffect(
+    () =>
+      startBoundsStream(getCurrentWindow(), (bounds) => {
+        void emit(DETACHED_BOUNDS, { scope: param.scope, groupId: param.groupId, bounds });
       }),
-    );
-    const unResized = subscribeTauri(() =>
-      win.onResized(({ payload }) => {
-        size = { w: payload.width, h: payload.height };
-        schedule();
-      }),
-    );
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      unMoved();
-      unResized();
-    };
-  }, [param.scope, param.groupId]);
+    [param.scope, param.groupId],
+  );
 
   // #239: track whether this window is on screen (parked by a project switch,
   // or minimised), so the panes below can stop streaming and polling for a
@@ -454,6 +393,13 @@ export function DetachedApp({ param }: Props) {
   // keeps the window alive (minimized) instead. Attaching the listener also
   // announces this popout as able to answer (`detached_retire_ready`).
   useTauriListener(() => answerRetireRequests(label), [label]);
+
+  // Which window this is, for the popout view (`stores/popoutView`): steering
+  // and the cross-window handover address this popout by its label. The tree,
+  // tabs and focus are written by `DetachedCenterPanel`, which renders them.
+  useLayoutEffect(() => {
+    usePopoutViewStore.getState().setView({ label, scope: param.scope, popoutId: param.groupId });
+  }, [label, param.scope, param.groupId]);
 
   // Seed + edit listeners. The main window owns the source of truth and ships
   // the group's tabs + subtree; subsequent main-side edits re-seed.
@@ -488,6 +434,7 @@ export function DetachedApp({ param }: Props) {
       // hooks normally read them). Must precede setGroup/setTabs.
       for (const t of ev.payload.tabs) setDetachedViewerState(t.key, t.viewerState);
       setGroup(ev.payload.subtree);
+      setOwnName(ev.payload.name);
       setTabs(ev.payload.tabs);
       setRemoteInfo(ev.payload.remote);
       // Seed THIS window's otherwise-empty remoteStatus store with every host's
@@ -586,7 +533,9 @@ export function DetachedApp({ param }: Props) {
   // store seam installed below (which binds once) always reaches the current one.
   const pushEdit = (edit: DetachedEdit) => {
     setGroup((g) => (g ? applyEditToSubtree(g, edit) : g));
-    if (edit.kind === "rename") {
+    if (edit.kind === "name") {
+      if (!edit.groupId && group) setOwnName(nameSubtree(group, edit.name).name);
+    } else if (edit.kind === "rename") {
       setTabs((ts) => applyRenameToTabs(ts, edit.key, edit.label));
     } else if (edit.kind === "setColor") {
       // Optimistic, like the two beside it: the picker stays open after a pick,
@@ -617,6 +566,16 @@ export function DetachedApp({ param }: Props) {
       }),
     [label],
   );
+
+  // The OS title follows the name, which is how a popout is told apart in the
+  // taskbar and in Alt+Tab. An unnamed window never asks: it keeps its "win-N".
+  const windowName = group ? subtreeName(group, ownName) : undefined;
+  const titledName = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (windowName === titledName.current) return;
+    titledName.current = windowName;
+    void invoke("set_detached_title", { label, name: windowName ?? null }).catch(() => {});
+  }, [label, windowName]);
 
   // Closing the LAST tab closes the whole popout window — an empty detached
   // window has nothing to render (it would strand on "Loading subwindow…").
@@ -652,7 +611,6 @@ export function DetachedApp({ param }: Props) {
   // used to silently vanish. Installed once, reading the live callbacks through
   // refs so it never needs re-binding; removed on unmount so a test (or a
   // future in-main mount) cannot inherit it.
-  const focusedGroupRef = useRef<string | null>(null);
   const seamRef = useRef({ group, pushEdit, handleClose });
   seamRef.current = { group, pushEdit, handleClose };
   // Installed during RENDER, not in an effect: child effects run before the
@@ -672,7 +630,7 @@ export function DetachedApp({ param }: Props) {
       targetGroupId: () => {
         const tree = seamRef.current.group;
         const groups = tree ? allGroups(tree) : [];
-        const focused = focusedGroupRef.current;
+        const focused = usePopoutViewStore.getState().focusedGroupId;
         if (focused && groups.some((g) => g.id === focused)) return focused;
         return groups[0]?.id ?? param.groupId;
       },
@@ -797,9 +755,6 @@ export function DetachedApp({ param }: Props) {
       tabs={tabs}
       remoteInfo={remoteInfo}
       windowVisible={windowVisible}
-      onFocusedGroup={(id) => {
-        focusedGroupRef.current = id;
-      }}
       onActivate={(key) => pushEdit({ kind: "activate", key })}
       onClose={handleClose}
       onDockWindow={handleDock}
@@ -830,11 +785,20 @@ export function DetachedApp({ param }: Props) {
       onMove={(key, targetGroupId, index) =>
         pushEdit({ kind: "move", key, targetGroupId, index })
       }
-      onAddTab={(tab, targetGroupId, edge) =>
-        pushEdit({ kind: "add", tab, targetGroupId, edge })
+      onAddTab={(tab, targetGroupId, edge, opts) =>
+        pushEdit({ kind: "add", tab, targetGroupId, edge, ...(opts?.besideActive ? { besideActive: true } : {}) })
       }
       onFiles={(groupId, patch) => pushEdit({ kind: "files", groupId, ...patch })}
+      windowName={windowName}
+      onName={(groupId, name) => pushEdit({ kind: "name", groupId, name })}
       />
+      {/* Keyboard steering in this window (`useSteering` above): the bar sets
+          `html[data-steer]`, which every marker rule keys on. The project jump
+          box is the main window's (its key hands over). */}
+      <ShortcutHelpOverlay />
+      <SteeringLegend />
+      <SteeringPromptOverlay />
+      <SteeringConfirmOverlay />
     </>
   );
 }

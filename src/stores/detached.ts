@@ -33,6 +33,8 @@ import {
   removeKeyFromTree,
   splitSubtree,
   applyResize,
+  nameSubtree,
+  withGroupName,
   moveKeyInTree,
 } from "./tabs/layoutTree";
 import { normalizeTodoId } from "./tabs/tabEntries";
@@ -49,8 +51,8 @@ import {
   type ConnState,
   type HostConnState,
 } from "./remote/remoteStatus";
-import { BOX_SCOPE_PREFIX, boxFolderOfScope, useBoxesStore } from "./boxes";
-import { useActivityStore, noteAgentResting, notePtyResize, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
+import { BOX_SCOPE_PREFIX, boxFolderOfScope, newTabTarget, useBoxesStore, type NewTabTarget } from "./boxes";
+import { useActivityStore, noteAgentResting, noteLiveTurn, notePtyResize, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
 import { bumpUsage } from "./usage";
 import { useRemoteMachinesStore } from "./remote/remoteMachines";
 import { useBigFoldersStore } from "./bigFolders";
@@ -58,6 +60,9 @@ import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../
 import { isTabColor, type TabColor } from "../lib/theme/tabColors";
 import { normalizeStackName } from "../lib/tabStacks";
 import { isTabMark, type TabMark } from "../lib/tabMarks";
+import { STEER_FROM_POPOUT } from "../lib/shortcuts/steeringChord";
+import type { SteeringAction } from "../lib/shortcuts/steeringBindings";
+import type { StatusTab } from "../lib/shortcuts/statusJump";
 
 /** Parsed `?detached=<scope>:<groupId>` query. */
 export interface DetachedParam {
@@ -129,6 +134,53 @@ export const DETACHED_HIDE = "detached-hide";
  * into that popout. Same envelope shape as the dock.
  */
 export const DETACHED_REOPEN = "detached-reopen";
+/**
+ * Keyboard steering between windows (`useSteering`; one window steers at a
+ * time and steering follows the keyboard). What a window asks of another:
+ *  - `enter`: take steering, landing on the tabs level;
+ *  - `tab`: take steering on this tab (a status jump's target);
+ *  - `action`: run this steering key here (a popout's main-only key, J, a
+ *    status jump or Back), `shift` as pressed. `auto`: a Back the popout sent
+ *    by itself after a digit answered its tab — only taken while the jump's
+ *    record still names that tab as where it landed.
+ */
+export type SteerAct =
+  | { kind: "enter" }
+  | { kind: "tab"; key: string }
+  | { kind: "action"; action: SteeringAction; shift: boolean; auto?: boolean };
+
+/**
+ * Detached → main: a popout hands steering (or a key) to the main window —
+ * Up from its title bar, a main-only key, J, a status jump. `shown` is the
+ * popout's active tab, for the status jumps and Back. The main window's host
+ * passes it on as `STEER_FROM_POPOUT`; `useSteering` answers it.
+ */
+export const DETACHED_STEER = "detached-steer";
+export interface DetachedSteerPayload {
+  scope: string;
+  groupId: string;
+  label: string;
+  act: SteerAct;
+  shown?: StatusTab | null;
+}
+/** Main → one popout (namespaced like the seed): take steering. */
+export const detachedSteerEvent = (label: string) => `detached-steer-${label}`;
+export interface DetachedSteerRequest {
+  act: SteerAct;
+}
+/**
+ * Any window → all: "I am steering now" (`label`: the window's, `"main"` for
+ * the main window). Every other window that steers, or waits on a box it lent
+ * the keyboard to, leaves quietly. A handover never ends steering in the
+ * sender by itself: a target that did not get the keyboard never announces.
+ */
+export const STEERING_OWNER = "steering-owner";
+export const MAIN_STEERING_LABEL = "main";
+/**
+ * Main → all popouts: the main window's status counts and whether Back has a
+ * tab to go to, for a popout's steering bar (it cannot count them itself).
+ */
+export const STEERING_STATUS = "steering-status";
 /** Detached → main: the popout's OS geometry changed (persisted for respawn). */
 export const DETACHED_BOUNDS = "detached-bounds";
 /**
@@ -175,8 +227,9 @@ export interface DetachedActivityEnvelope {
    *  `activity.noteUserInput`). `cutoff` is a spawn that found the tab's
    *  previous process died mid-turn (`activity.noteTurnCutOff`), `resting`
    *  one whose previous process finished its turn (`activity.noteAgentResting`),
-   *  `resize` a pane resize (`activity.notePtyResize`). */
-  kind: "input" | "interrupt" | "seen" | "bell" | "cutoff" | "resting" | "resize";
+   *  `resize` a pane resize (`activity.notePtyResize`), `live-working` /
+   *  `live-decision` a reattach to an agent mid-turn (`activity.noteLiveTurn`). */
+  kind: "input" | "interrupt" | "seen" | "bell" | "cutoff" | "resting" | "resize" | "live-working" | "live-decision";
 }
 
 /**
@@ -374,6 +427,8 @@ export interface DetachedSeed {
    * up-to-date value but the popout ignores it — it owns its zoom once open.
    */
   zoom?: number;
+  /** A multi-pane popout's own name (`DetachedGroup.name`). */
+  name?: string;
   /**
    * The owning project's identity, captured at seed time — the detached window
    * is inert to the projects store, so this is how its tab strip renders the
@@ -435,11 +490,12 @@ export function buildSeed(
   subtree: LayoutNode,
   zoom?: number,
   remote?: DetachedRemoteInfo,
+  name?: string,
 ): DetachedSeed {
   const keys = new Set(orderedTabKeys(subtree));
   // Ship only the popout's own tabs (it renders just this subtree).
   const tabs = allScopeTabs.filter((t) => keys.has(t.key));
-  return { scope, groupId, tabs, subtree, zoom, remote };
+  return { scope, groupId, tabs, subtree, zoom, remote, ...(name ? { name } : {}) };
 }
 
 /**
@@ -478,7 +534,9 @@ export type DetachedEdit =
   // (left/right/top/bottom) the tab carves a NEW pane at that edge of the target
   // group (a file dropped on a body edge); omitted or "center" appends it to the
   // target group (the "+" menu, or a drop on a tab bar / pane centre).
-  | { kind: "add"; tab: Omit<TabEntry, "key">; targetGroupId: string; edge?: DropEdge }
+  // `besideActive`: right of the target group's active tab, not at its end —
+  // steering's new tabs (N, O, 1–9, the + menu it opened), as in the main window.
+  | { kind: "add"; tab: Omit<TabEntry, "key">; targetGroupId: string; edge?: DropEdge; besideActive?: boolean }
   // Multi-pane popouts: split `key` into a new pane at `edge` of `targetGroupId`.
   // The popout mints the new pane's ids (`mintDetachedSplitIds`) and ships them,
   // so the main store's copy of the tree names the pane exactly as the popout
@@ -502,6 +560,9 @@ export type DetachedEdit =
   // popout-side, mirrored by the main window into its detached record so the
   // state persists + survives a dock.
   | { kind: "files"; groupId: string; open?: boolean; width?: number; folder?: string }
+  // Name one pane (`groupId`), or the whole popout without it. An empty name
+  // removes it. Same split as the file viewer: optimistic here, recorded by main.
+  | { kind: "name"; groupId?: string; name: string }
   // Group B #231 — pane writes forwarded by the popout's store seam
   // (`stores/detachedContext`): viewer state (scroll/zoom/breakpoints…), a tmux
   // session rename, a Files tab's browsed folder. Payload-only; no node change.
@@ -637,6 +698,12 @@ export function applyEditToSubtree(
         ...(edit.width != null ? { filesWidth: edit.width } : {}),
         ...(edit.folder != null ? { filesFolder: edit.folder } : {}),
       }));
+    case "name": {
+      const { groupId, name } = edit;
+      return groupId
+        ? mapGroup(subtree, groupId, (grp) => withGroupName(grp, name))
+        : nameSubtree(subtree, name).subtree;
+    }
     case "add":
     case "addToScope":
       // The detached window can't mint the tab key — it leaves the subtree as-is
@@ -913,13 +980,30 @@ export function projectInfoForScope(scope: string): DetachedRemoteInfo | undefin
 }
 
 /**
+ * Where a tab opened from a box popout's "+" menu starts (decision 3): the root of
+ * the member the group's ACTIVE tab belongs to, else the box folder — the main
+ * window's `newTabTarget`, over the popout's seed (`remoteInfo.box` and
+ * `boxMembers`; its stores are inert). `groupTabCwds[0]` is the active tab's cwd,
+ * as the add-menu block passes it; an empty group has none, so the box folder.
+ * `null` outside a box popout.
+ */
+export function detachedNewTabTarget(
+  scope: string,
+  info: DetachedRemoteInfo | undefined,
+  groupTabCwds: (string | undefined)[],
+): NewTabTarget | null {
+  if (!info?.box) return null;
+  return newTabTarget(scope, groupTabCwds[0], [info.box], info.boxMembers ?? []);
+}
+
+/**
  * The folder a tab opened from a popout's "+" menu starts in — the same one the
- * main window's `CenterPanel` `newTabCwd` resolves: the box folder, else the
- * project directory, both from the streamed project context. A tab's own cwd
- * (the active tab's, then any) is only the fallback when the seed has none: a
- * viewer tab's cwd is its FILE's folder, so a Claude tab opened beside
- * `talk/main.pdf` used to start in `talk/` from a popout and in the project root
- * from the main window.
+ * main window's new-tab target resolves: in a box the active tab's member root
+ * (`detachedNewTabTarget`), else the box folder; otherwise the project directory,
+ * both from the streamed project context. A tab's own cwd (the active tab's,
+ * then any) is only the fallback when the seed has none: a viewer tab's cwd is
+ * its FILE's folder, so a Claude tab opened beside `talk/main.pdf` used to start
+ * in `talk/` from a popout and in the project root from the main window.
  */
 export function detachedNewTabCwd(
   scope: string,
@@ -927,6 +1011,7 @@ export function detachedNewTabCwd(
   groupTabCwds: (string | undefined)[],
 ): string {
   return (
+    detachedNewTabTarget(scope, info, groupTabCwds)?.cwd ||
     (info?.box ? boxFolderOfScope(scope, [info.box]) : "") ||
     resolveProjectDirectory(info?.project) ||
     groupTabCwds.find(Boolean) ||
@@ -956,6 +1041,7 @@ export function reseedDetached(scope: string, groupId: string, landedKey?: strin
     entry.subtree,
     entry.zoom,
     projectInfoForScope(scope),
+    entry.name,
   );
   void emit(detachedSeedEvent(entry.label), landedKey ? { ...seed, landedKey } : seed);
 }
@@ -1076,6 +1162,12 @@ export async function listenDetachedHost(): Promise<() => void> {
     }
   };
   let hostReady = false;
+  // The popout whose own edit is being applied right now (see the edit handler):
+  // the sweep that edit triggers records the new signature and sends nothing.
+  // A reseed is a full copy of the group's tab payloads, and every pane of the
+  // popout re-renders from it, so answering each tab switch with one made a
+  // steering key cost a round trip through the main window.
+  let echoedGroupId: string | null = null;
   const queuedSeeds: DetachedSeedRequest[] = [];
   let publishStatus = (_force = false) => {};
   const answerSeed = ({ label, scope, groupId }: DetachedSeedRequest) => {
@@ -1092,6 +1184,7 @@ export async function listenDetachedHost(): Promise<() => void> {
       entry.subtree,
       entry.zoom,
       projectInfoForScope(scope),
+      entry.name,
     );
     void emit(detachedSeedEvent(label), seed);
     publishStatus(true);
@@ -1119,7 +1212,9 @@ export async function listenDetachedHost(): Promise<() => void> {
       const key =
         edit.edge && edit.edge !== "center"
           ? store.addDetachedTabSplit(scope, groupId, edit.tab, edit.targetGroupId, edit.edge)
-          : store.addDetachedTab(scope, groupId, edit.tab, edit.targetGroupId);
+          : store.addDetachedTab(scope, groupId, edit.tab, edit.targetGroupId, {
+              besideActive: edit.besideActive === true,
+            });
       if (!key) return;
       reseedDetached(scope, groupId, key);
       return;
@@ -1142,7 +1237,14 @@ export async function listenDetachedHost(): Promise<() => void> {
       }
     }
     if (edit.kind === "close" && edit.user) noteClosedPopoutTabs(scope, groupId, [edit.key]);
-    store.applyDetachedEdit(scope, groupId, edit);
+    // An `activate` is already on screen in the popout (it applied it before
+    // sending), so the sweep below must not answer it with a whole reseed.
+    if (edit.kind === "activate") echoedGroupId = groupId;
+    try {
+      store.applyDetachedEdit(scope, groupId, edit);
+    } finally {
+      echoedGroupId = null;
+    }
   });
 
   await on<DetachedBoundsEnvelope>(DETACHED_BOUNDS, (ev) => {
@@ -1197,6 +1299,12 @@ export async function listenDetachedHost(): Promise<() => void> {
     if (reopenClosedAgentTab(scope, undefined, groupId)) void persistScopeNow(scope);
   });
 
+  // A popout hands steering or a key over: `useSteering` decides whether this
+  // window takes the keyboard (J may go on to another popout instead).
+  await on<DetachedSteerPayload>(DETACHED_STEER, (ev) => {
+    window.dispatchEvent(new CustomEvent<DetachedSteerPayload>(STEER_FROM_POPOUT, { detail: ev.payload }));
+  });
+
   await on<DetachedDockEnvelope>(DETACHED_HIDE, (ev) => {
     const { scope, groupId } = ev.payload;
     const store = useTabsStore.getState();
@@ -1219,6 +1327,8 @@ export async function listenDetachedHost(): Promise<() => void> {
     else if (kind === "cutoff") noteTurnCutOff(ptyId);
     else if (kind === "resting") noteAgentResting(ptyId);
     else if (kind === "resize") notePtyResize(ptyId);
+    else if (kind === "live-working") noteLiveTurn(ptyId, "working");
+    else if (kind === "live-decision") noteLiveTurn(ptyId, "decision");
   });
 
   // #234: a popout's usage counters land in the one accumulator that is flushed.
@@ -1380,6 +1490,10 @@ export async function listenDetachedHost(): Promise<() => void> {
         if (!lastSig.has(entry.label)) {
           // First sighting: the popout's own seed request covers it. Record the
           // signature so only a LATER change reseeds.
+          lastSig.set(entry.label, sig);
+          continue;
+        }
+        if (entry.id === echoedGroupId) {
           lastSig.set(entry.label, sig);
           continue;
         }

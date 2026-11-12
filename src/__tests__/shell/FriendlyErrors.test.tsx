@@ -23,6 +23,7 @@ describe("friendlyError", () => {
     ["No such file or directory (os error 2)", "errors.notFound"],
     ["File exists (os error 17)", "errors.exists"],
     ["No space left on device (os error 28)", "errors.diskFull"],
+    ["Not enough free space for this pull: it needs 1.0 GiB and the disk holding the local copy has 3.0 MiB free (sync_pull_needs_space)", "errors.pullNeedsSpace"],
     ["fatal: not a git repository (or any of the parent directories): .git", "errors.notGitRepo"],
     [" ! [rejected]        develop -> develop (fetch first)", "errors.pushRejected"],
     ["error: Your local changes to the following files would be overwritten by merge:", "errors.localChanges"],

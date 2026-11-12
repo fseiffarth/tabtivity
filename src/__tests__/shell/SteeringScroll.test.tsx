@@ -23,7 +23,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../../lib/terminal/terminalScroll";
 import { steeringKeysFor, type SteeringLegendState } from "../../lib/shortcuts/shortcuts";
-import { documentScroller, scrollDocument } from "../../lib/shortcuts/documentScroll";
+import { documentScroller, largestScroller, scrollBox as scrollBoxBy, scrollDocument } from "../../lib/shortcuts/documentScroll";
 
 function Harness() {
   useKeyboard({ onTogglePanels: () => {} });
@@ -212,7 +212,7 @@ describe("steering scroll level", () => {
     expect(sum(wheels)).toBe(0);
   });
 
-  it("D inside goes back to the live end and stays; Space leaves live", () => {
+  it("D inside goes back to the live end and stays; Escape leaves live", () => {
     const { wheels } = oneTerminalTab();
     render(<Harness />);
     press({ key: " ", shiftKey: true });
@@ -225,7 +225,7 @@ describe("steering scroll level", () => {
 
     press({ key: "ArrowLeft" });
     expect(sum(wheels)).toBe(-4);
-    press({ key: " " });
+    press({ key: "Escape" });
     expect(steering().active).toBe(false);
     expect(sum(wheels)).toBe(0);
   });
@@ -332,11 +332,72 @@ describe("documentScroll", () => {
   });
 });
 
+describe("largestScroller", () => {
+  it("scopes the search to one element, however big another box elsewhere is", () => {
+    const root = document.createElement("div");
+    const list = scrollBox(root, { w: 200, h: 100, content: 900 });
+    const viewer = document.createElement("div");
+    root.appendChild(viewer);
+    const doc = scrollBox(viewer, { w: 500, h: 400, content: 4000 });
+    const elsewhere = document.createElement("div");
+    scrollBox(elsewhere, { w: 900, h: 900, content: 9000 });
+    expect(largestScroller(viewer)).toBe(doc);
+    expect(largestScroller(root)).toBe(doc);
+    expect(largestScroller(list)).toBe(list);
+  });
+
+  it("returns the root itself when only it scrolls, and null when nothing does", () => {
+    const root = document.createElement("div");
+    root.style.overflowY = "auto";
+    Object.defineProperty(root, "clientHeight", { value: 300 });
+    Object.defineProperty(root, "scrollHeight", { value: 1200 });
+    expect(largestScroller(root)).toBe(root);
+    const fits = document.createElement("div");
+    scrollBox(fits, { w: 100, h: 100, content: 100 });
+    expect(largestScroller(fits)).toBeNull();
+  });
+
+  it("scrollBox moves a box by pages, a little under a screen each", () => {
+    const box = scrollBox(document.createElement("div"), { w: 500, h: 400, content: 4000 });
+    expect(scrollBoxBy(box, 0.5)).toBe(true);
+    expect(box.scrollTop).toBe(180);
+    scrollBoxBy(box, -0.5);
+    expect(box.scrollTop).toBe(0);
+    expect(scrollBoxBy(box, 0)).toBe(false);
+  });
+});
+
 describe("steering scroll level in a document", () => {
   function oneDocumentTab() {
     const tab = useTabsStore.getState().addTab({ label: "notes.md", cmd: "", cwd: "/p", kind: "files" });
     return scrollBox(documentPane(tab.key), { w: 600, h: 400, content: 4000 });
   }
+
+  it.each([false, true])("Work here focuses the selected text editor (scrolling: %s)", (scrolling) => {
+    const tab = useTabsStore.getState().addTab({ label: "notes.txt", cmd: "", cwd: "/p", kind: "files" });
+    const hiddenPane = documentPane(tab.key, "other");
+    hiddenPane.innerHTML = '<textarea class="file-viewer-editor">other scope</textarea>';
+    const pane = documentPane(tab.key);
+    const doc = scrollBox(pane, { w: 600, h: 400, content: scrolling ? 4000 : 400 });
+    const editor = document.createElement("textarea");
+    editor.className = "file-viewer-editor";
+    editor.value = "keep this caret";
+    editor.setSelectionRange(5, 9);
+    doc.appendChild(editor);
+    const previous = document.createElement("button");
+    document.body.appendChild(previous);
+    previous.focus();
+    render(<Harness />);
+    press({ key: " ", shiftKey: true });
+    if (scrolling) {
+      press({ key: "d" });
+      expect(steering().level).toBe("scroll");
+    }
+    press({ key: "Enter" });
+    expect(steering().active).toBe(false);
+    expect(document.activeElement).toBe(editor);
+    expect([editor.selectionStart, editor.selectionEnd]).toEqual([5, 9]);
+  });
 
   it("D steps into the document, S/F scroll it, D jumps to its end, E keeps the place", () => {
     const doc = oneDocumentTab();

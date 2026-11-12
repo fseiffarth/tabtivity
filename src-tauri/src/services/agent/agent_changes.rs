@@ -155,7 +155,7 @@ pub fn agent_session_changes(
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_changes(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
+        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -194,7 +194,7 @@ pub fn stored_chat_changes(
             return AgentChanges::unavailable("no_transcript");
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_changes(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+        return opencode_changes(&db, agent_transcript::runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
     }
     let kind = match cmd {
         "claude" => Store::Claude,
@@ -217,6 +217,7 @@ pub fn local_opencode_changes(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
     since: Option<i64>,
+    launch_id: Option<&str>,
     subagent: Option<&str>,
     version: Option<&str>,
     limit: usize,
@@ -225,7 +226,9 @@ pub fn local_opencode_changes(
         return AgentChanges::unavailable("no_subagent");
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
-    opencode_changes(&db, project_id, tab_dir, since, None, subagent, version, limit)
+    let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
+    // A local-model tab runs here even in a remote project (`local_only`).
+    opencode_changes(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit)
 }
 
 /// Every file a tab's conversation changed, by the path its CLI named — the
@@ -246,7 +249,7 @@ pub fn changed_paths(
 ) -> Option<Vec<String>> {
     if cmd == "opencode" {
         let read = if local_model {
-            local_opencode_changes(project_id, tab_dir, since, None, None, MAX_LIMIT)
+            local_opencode_changes(project_id, tab_dir, since, launch_id, None, None, MAX_LIMIT)
         } else {
             agent_session_changes(cmd, project_id, tab_dir, since, launch_id.unwrap_or(""), None, None, MAX_LIMIT)
         };
@@ -395,7 +398,7 @@ fn claude_subagent_files(folder: &Path) -> Vec<std::path::PathBuf> {
 #[allow(clippy::too_many_arguments)]
 fn opencode_changes(
     db: &Path,
-    project_id: Option<&str>,
+    remote: bool,
     tab_dir: Option<&str>,
     since: Option<i64>,
     own: Option<&str>,
@@ -406,7 +409,7 @@ fn opencode_changes(
     let Some(dir) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
         return AgentChanges::unavailable("no_session");
     };
-    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+    if remote {
         return AgentChanges::unavailable("unsupported");
     }
     if !db.is_file() {
@@ -591,8 +594,8 @@ fn copilot_sections(detailed: &str) -> Vec<&str> {
 
 /// V2's public tool content carries FileDiff records directly. Reuse the
 /// renderer's bounded diff format without reconstructing V1 tool envelopes.
-/// A tool without them (OpenCode 2.1.3's `edit`, `write`, …) keeps V1's
-/// `state` shape under its `name`, and is read as V1's are.
+/// A session migrated from V1 keeps V1's `state` shape under its `name`, and
+/// is read as V1's are.
 pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileChange> {
     if tool.pointer("/state/status").and_then(Value::as_str) != Some("completed") {
         return Vec::new();
@@ -612,6 +615,17 @@ pub(crate) fn opencode_v2_tool_changes(created: i64, tool: &Value) -> Vec<FileCh
             Some(change(path, kind, diff.to_string(), at.clone()))
         }).collect();
     if !changes.is_empty() { return changes; }
+    // A completed V2 `write` keeps no diff (only its running state had one),
+    // and says what it did in its result: read off a 2.2.4 store, 2.1.2 the same.
+    if let ("write", Some(path), Some(content)) = (
+        tool["name"].as_str().unwrap_or_default(),
+        tool.pointer("/state/input/path").and_then(Value::as_str),
+        tool.pointer("/state/input/content").and_then(Value::as_str),
+    ) {
+        let created = tool.pointer("/state/content/0/text").and_then(Value::as_str)
+            .is_some_and(|text| text.starts_with("Created file"));
+        return vec![whole_file(path, if created { "add" } else { "write" }, content, at)];
+    }
     tool_state_changes(tool["name"].as_str(), &tool["state"], ended)
 }
 

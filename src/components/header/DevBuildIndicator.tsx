@@ -10,7 +10,7 @@ import { useT } from "../../lib/i18n";
 import { IS_WINDOWS } from "../../lib/platform";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
-import { PauseIcon } from "../common/icons/Icon";
+import { CloseIcon, PauseIcon } from "../common/icons/Icon";
 
 /**
  * The background "Tabtivity (dev)" freeze that every commit queues
@@ -334,7 +334,7 @@ export function DevBuildIndicator() {
               title={t("common.close")}
               onClick={() => closeMenu(MENU_ID)}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
           <div className="mobile-indicator-body">

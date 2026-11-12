@@ -23,6 +23,7 @@ import {
   isSavedWhileLive,
   hydrateScopeFromDisk,
   pruneSavedTree,
+  resumeArgsOf,
   useTabsStore,
   type SavedLayoutTree,
 } from "../../stores/tabs";
@@ -194,6 +195,73 @@ describe("a relaunchable local-model tab (#31bl)", () => {
     useTabsStore.getState().loadFromLayout(saved.tabs, "/tmp", "p", saved.tabGroups ?? undefined);
     const restored = useTabsStore.getState().tabs.find((t) => t.kind === "local_agent");
     expect(restored).toMatchObject({ cmd: "ollama", args: launch.args, localLaunch: launch, tmuxSession: tab.tmuxSession });
+  });
+});
+
+describe("a local-model OpenCode tab", () => {
+  const launch = { driver: "opencode", model: "qwen3:8b", args: ["--model", "ollama/qwen3:8b"] };
+  const line = [...launch.args, "--continue"];
+  const reset = () =>
+    useTabsStore.setState({
+      scope: "p",
+      tabsByScope: {},
+      layoutByScope: {},
+      focusedGroupByScope: {},
+      detachedGroupsByScope: {},
+      hiddenGroupsByScope: {},
+    });
+
+  it("resumes on its launch line, so it keeps its model and its interface", () => {
+    expect(resumeArgsOf({ kind: "local_agent", cmd: "opencode", sessionId: "s", localLaunch: launch })).toEqual(line);
+    // A relaunch's args never alias the saved line.
+    expect(resumeArgsOf({ kind: "local_agent", cmd: "ollama", localLaunch: launch })).not.toBe(launch.args);
+    expect(resumeArgsOf({ kind: "agent", cmd: "opencode", sessionId: "s" })).toEqual(["--continue"]);
+    expect(resumeArgsOf({ kind: "agent", cmd: "claude", sessionId: "s" })).toEqual(["--resume", "s"]);
+    expect(resumeArgsOf({ kind: "shell", cmd: "bash" })).toEqual([]);
+  });
+
+  it("round-trips save → load under its key", () => {
+    reset();
+    const uid = "0b9f6a52-3c1d-4e8a-9f00-1a2b3c4d5e6f";
+    const tab = useTabsStore.getState().addTab({
+      label: "qwen3:8b · OpenCode",
+      cmd: "opencode",
+      args: launch.args,
+      env: { [envName("TAB_UID")]: uid },
+      cwd: "/tmp",
+      kind: "local_agent",
+      sessionId: uid,
+      localLaunch: launch,
+    });
+    const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
+    expect(saved.tabs.find((t) => t.key === tab.key)?.sessionId).toBe(uid);
+    useTabsStore.getState().loadFromLayout(saved.tabs, "/tmp", "p", saved.tabGroups ?? undefined);
+    const restored = useTabsStore.getState().tabs.find((t) => t.kind === "local_agent");
+    expect(restored).toMatchObject({ args: line, sessionId: uid, localLaunch: launch });
+    expect(restored?.env?.[envName("TAB_UID")]).toBe(uid);
+  });
+
+  it("saved before it had a key, gets one and continues its folder's newest session", () => {
+    reset();
+    useTabsStore.getState().addTab({ label: "m", cmd: "opencode", args: launch.args, cwd: "/tmp", kind: "local_agent", localLaunch: launch });
+    const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
+    expect(saved.tabs[0].sessionId).toBeUndefined();
+    useTabsStore.getState().loadFromLayout(saved.tabs, "/tmp", "p", saved.tabGroups ?? undefined);
+    const restored = useTabsStore.getState().tabs.find((t) => t.kind === "local_agent");
+    expect(restored?.args).toEqual(line);
+    expect(restored?.sessionId).toBeTruthy();
+    expect(restored?.env?.[envName("TAB_UID")]).toBe(restored?.sessionId);
+  });
+
+  it("leaves the other local drivers on their launch line", () => {
+    reset();
+    const other = { driver: "pi", model: "m", args: ["--model", "m"] };
+    useTabsStore.getState().addTab({ label: "m", cmd: "pi", args: other.args, cwd: "/tmp", kind: "local_agent", localLaunch: other });
+    const saved = useTabsStore.getState().snapshotScopeForSwitch("p");
+    useTabsStore.getState().loadFromLayout(saved.tabs, "/tmp", "p", saved.tabGroups ?? undefined);
+    const restored = useTabsStore.getState().tabs.find((t) => t.kind === "local_agent");
+    expect(restored).toMatchObject({ args: other.args });
+    expect(restored?.sessionId).toBeUndefined();
   });
 });
 

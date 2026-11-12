@@ -34,7 +34,7 @@ use tokio::sync::Mutex;
 
 use crate::services::sftp::{self, SyncKind};
 
-/// Largest single file the sync moves whole in RAM (64 MiB). `read_file_on` buffers a
+/// Largest single file the sync moves whole in RAM (64 MiB). A read through `read_file_up_to` buffers the
 /// whole file and holds the SFTP channel (G8), so auto-sync and every push refuse a
 /// giant artifact with an error rather than stalling the connection / OOMing. A
 /// manual pull streams a larger file instead ([`pull_file_any_size`]).
@@ -145,9 +145,7 @@ pub fn new_manifest_state() -> SyncManifestState {
 /// `commands::projects::remote_project_state_dir`, kept here to stay
 /// command-layer-free).
 fn state_dir(project_id: &str) -> PathBuf {
-    crate::storage::state_dir()
-        .join("remote-projects")
-        .join(project_id)
+    crate::storage::remote_project_dir_in(&crate::storage::state_dir(), project_id)
 }
 
 /// The DEFAULT local mirror root for a remote project when it carries no explicit
@@ -160,7 +158,7 @@ fn default_mirror_dir(project_id: &str) -> PathBuf {
 /// [`default_mirror_dir`] under an explicit state dir — for the pure fence
 /// planners (`agent_fence`, `mail_attach`), which tests point at a tempdir.
 pub fn default_mirror_dir_in(state_dir: &Path, project_id: &str) -> PathBuf {
-    state_dir.join("remote-projects").join(project_id).join("mirror")
+    crate::storage::remote_project_dir_in(state_dir, project_id).join("mirror")
 }
 
 /// A remote project's explicitly-chosen mirror root, read from the always-local
@@ -203,10 +201,7 @@ pub fn manifest_path(project_id: &str) -> PathBuf {
 
 /// [`manifest_path`] under an explicit state dir — see `local_loss::log_path_in`.
 pub fn manifest_path_in(state_dir: &Path, project_id: &str) -> PathBuf {
-    state_dir
-        .join("remote-projects")
-        .join(project_id)
-        .join("sync.json")
+    crate::storage::remote_project_dir_in(state_dir, project_id).join("sync.json")
 }
 
 /// Whether `abs_path` lies inside the project's local mirror. Used by the file
@@ -803,6 +798,26 @@ pub fn local_new_candidates(
     out
 }
 
+/// The lockstep-owned files the manifest holds no record of: tracked files that
+/// arrived after pairing seeded the manifest (a new commit on either side).
+/// `sync_status` reports them green like the manifest'd tracked files, because
+/// with no row at all the tree read them as "not synced" and offered a byte-push
+/// that `drop_lockstep_tracked` then had to withhold — a ⬆ whose dialog could only
+/// be cancelled. Whether they reached the peer is lockstep's to say (the Git
+/// view), not byte-sync's. `tracked` is empty when lockstep is off. Sorted and
+/// capped like [`local_new_candidates`]; a file past the cap keeps the old
+/// rowless look, and the push dialog says why it has nothing to send.
+pub fn lockstep_unrecorded(manifest: &Manifest, tracked: &HashSet<String>, cap: usize) -> Vec<String> {
+    let mut out: Vec<String> = tracked
+        .iter()
+        .filter(|rel| !rel.is_empty() && !manifest.contains_key(*rel))
+        .cloned()
+        .collect();
+    out.sort();
+    out.truncate(cap);
+    out
+}
+
 /// The host-side counterpart of [`local_new_candidates`]: of the files an
 /// explicit host scan found, the ones the host holds alone — no manifest entry
 /// and no mirror copy (`in_mirror`; a file on both sides with no record is
@@ -1015,7 +1030,13 @@ pub async fn pull_file(
     mirror_root: &Path,
     rel: &str,
 ) -> Result<(u64, Option<u64>), String> {
-    pull_file_with(host_abs, host_size, host_mode, mirror_root, rel, || sftp::read_file_on(sftp, host_abs)).await
+    // Bounded by the cap, not by `host_size` (the listing's word, stale by the read).
+    pull_file_with(host_abs, host_size, host_mode, mirror_root, rel, || async move {
+        sftp::read_file_up_to(sftp, host_abs, MAX_SYNC_FILE_BYTES)
+            .await?
+            .ok_or_else(|| format!("'{host_abs}' is too large to sync (limit {MAX_SYNC_FILE_BYTES} bytes)"))
+    })
+    .await
 }
 
 /// [`pull_file`] with the host read passed in (`read`, called at most once and
@@ -2039,6 +2060,55 @@ fn walk_mirror_inner(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(
         }
     }
     Ok(())
+}
+
+/// What a pull of `files` (`(rel, host size)`) adds to the disk holding `mirror_root`:
+/// a file already in the mirror is replaced, so only its growth counts (the transfer
+/// stages a copy beside it, but that is transient and the write fails visibly if the
+/// disk really is that full). A re-pull of a mirror that is already on the disk must
+/// not be refused for the room its own files take. A path that cannot be confined or
+/// is not a regular file counts in full.
+pub fn pull_bytes_needed(mirror_root: &Path, files: &[(String, u64)]) -> u64 {
+    files
+        .iter()
+        .map(|(rel, size)| {
+            let held = confined_mirror_path(mirror_root, rel)
+                .ok()
+                .and_then(|local| std::fs::symlink_metadata(local).ok())
+                .filter(|meta| meta.is_file())
+                .map_or(0, |meta| meta.len());
+            size.saturating_sub(held)
+        })
+        .fold(0u64, u64::saturating_add)
+}
+
+/// Why a manual pull of `bytes` into `mirror_root` is refused for want of room:
+/// the preview's total (the sizes the host listed, which it chose) against the free
+/// space of the disk holding the mirror (`duscan::capacity_of`, the read the disk
+/// pane and the VM doctor use; the nearest existing ancestor when the mirror is not
+/// created yet). `None` when it fits, or when the platform gives no answer — an
+/// unknown is not a refusal. The message carries `sync_pull_needs_space`, which
+/// `src/lib/errors.ts` words in the UI language.
+pub fn pull_space_refusal(mirror_root: &Path, bytes: u64) -> Option<String> {
+    let probe = mirror_root.ancestors().find(|dir| dir.is_dir())?;
+    let (_, free) = crate::duscan::capacity_of(probe)?;
+    (bytes > free).then(|| {
+        format!(
+            "Not enough free space for this pull: it needs {} and the disk holding the local copy has {} free (sync_pull_needs_space)",
+            human_bytes(bytes),
+            human_bytes(free)
+        )
+    })
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let (mut value, mut unit) = (n as f64, 0);
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{n} B") } else { format!("{value:.1} {}", UNITS[unit]) }
 }
 
 /// The forward-slash path of `path` relative to `root`, or `None` if not inside.

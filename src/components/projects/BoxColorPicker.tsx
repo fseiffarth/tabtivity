@@ -26,53 +26,74 @@ export function BoxColorPicker({
   onPick: (color: string | undefined) => void;
 }) {
   const t = useT();
-  const current = isBoxColor(box.color) ? box.color.toLowerCase() : undefined;
-  const paletteHit = TAB_COLOR_IDS.find((id) => TAB_COLORS[id] === current);
-  const custom = current && !paletteHit ? current : undefined;
   return (
     <div className="context-menu-group">
       <div className="context-menu-group-label">
         {t("boxPill.colorGroup")} <UntestedTag id="boxPill.colorGroup" />
       </div>
-      <div
-        className="tab-color-swatches"
-        role="group"
-        aria-label={t("boxPill.colorGroup")}
-      >
+      <BoxColorSwatches boxId={box.id} color={box.color} onPick={onPick} />
+    </div>
+  );
+}
+
+/**
+ * The swatch grid alone — automatic, the app palette, a custom chip — for a
+ * box of id `boxId` wearing `color`. The pill menu's Colour row and the box
+ * sheet's colour row are both this, so the two can never offer different
+ * palettes.
+ */
+export function BoxColorSwatches({
+  boxId,
+  color,
+  onPick,
+}: {
+  boxId: string;
+  color: string | undefined;
+  onPick: (color: string | undefined) => void;
+}) {
+  const t = useT();
+  const current = isBoxColor(color) ? color.toLowerCase() : undefined;
+  const paletteHit = TAB_COLOR_IDS.find((id) => TAB_COLORS[id] === current);
+  const custom = current && !paletteHit ? current : undefined;
+  return (
+    <div
+      className="tab-color-swatches"
+      role="group"
+      aria-label={t("boxPill.colorGroup")}
+    >
+      <button
+        type="button"
+        className={`tab-color-swatch${current ? "" : " is-current"}`}
+        style={{ background: autoBoxColor(boxId) }}
+        title={t("boxPill.colorAuto")}
+        aria-label={t("boxPill.colorAuto")}
+        aria-pressed={!current}
+        onClick={() => onPick(undefined)}
+      />
+      {TAB_COLOR_IDS.map((id) => (
         <button
+          key={id}
           type="button"
-          className={`tab-color-swatch${current ? "" : " is-current"}`}
-          style={{ background: autoBoxColor(box.id) }}
-          title={t("boxPill.colorAuto")}
-          aria-label={t("boxPill.colorAuto")}
-          aria-pressed={!current}
-          onClick={() => onPick(undefined)}
+          className={`tab-color-swatch${paletteHit === id ? " is-current" : ""}`}
+          style={{ background: TAB_COLORS[id] }}
+          title={t(`tabColor.${id}`)}
+          aria-label={t(`tabColor.${id}`)}
+          aria-pressed={paletteHit === id}
+          onClick={() => onPick(TAB_COLORS[id])}
         />
-        {TAB_COLOR_IDS.map((id) => (
-          <button
-            key={id}
-            type="button"
-            className={`tab-color-swatch${paletteHit === id ? " is-current" : ""}`}
-            style={{ background: TAB_COLORS[id] }}
-            title={t(`tabColor.${id}`)}
-            aria-label={t(`tabColor.${id}`)}
-            aria-pressed={paletteHit === id}
-            onClick={() => onPick(TAB_COLORS[id])}
-          />
-        ))}
-        <label
-          className={`tab-color-swatch box-color-custom${custom ? " is-current" : ""}`}
-          style={custom ? { background: custom } : undefined}
-          title={t("boxPill.colorCustom")}
-        >
-          <input
-            type="color"
-            aria-label={t("boxPill.colorCustom")}
-            value={current ?? "#4aa3df"}
-            onChange={(e) => onPick(e.currentTarget.value)}
-          />
-        </label>
-      </div>
+      ))}
+      <label
+        className={`tab-color-swatch box-color-custom${custom ? " is-current" : ""}`}
+        style={custom ? { background: custom } : undefined}
+        title={t("boxPill.colorCustom")}
+      >
+        <input
+          type="color"
+          aria-label={t("boxPill.colorCustom")}
+          value={current ?? "#4aa3df"}
+          onChange={(e) => onPick(e.currentTarget.value)}
+        />
+      </label>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { StartHere } from "./StartHere";
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { usePaneRects, type PaneRegionRect } from "./usePaneRects";
@@ -37,11 +38,13 @@ import {
 import { dividerFraction } from "../../stores/tabs/layoutTree";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
 import { useSettingsStore } from "../../stores/settings";
-import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { rootViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
 import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useDragStore } from "../../stores/drag/drag";
 import { useSubwindowNavStore } from "../../stores/subwindowNav";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { usePopoutViewStore } from "../../stores/popoutView";
+import { useSteeringTabs } from "../../lib/shortcuts/steeringScope";
 import { useWindowFocused } from "../../hooks/useWindowFocused";
 import { useScrollSyncStore } from "../../stores/viewers/scrollSync";
 import { useWindowMoveStore } from "../../stores/drag/windowMove";
@@ -76,7 +79,6 @@ import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { resolveProjectDirectory } from "../../types";
 import { useT } from "../../lib/i18n";
-import { requestNewTab } from "../../lib/shortcuts/newTabChord";
 import { UntestedTag } from "../common/UntestedTag";
 import { openProjectDialog } from "../../lib/projects/projectDialogEvent";
 import { sleepTabsAfterMs } from "../../lib/sleepWhenHidden";
@@ -90,13 +92,22 @@ function CenterPanelImpl() {
   const scope = useTabsStore((s) => s.scope);
   const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
   const windowFocused = useWindowFocused();
+  // The window is up (any view): root's slot stands down and the keyboard is
+  // the window's. Not "root is drawn": see `rootDrawn`.
   const rootConsoleOpen = useRootOverlayStore((st) => st.open);
+  // The window shows root's layout (the Root view). Only then is every root
+  // terminal drawn elsewhere; on Now or Projects just the tabs in
+  // `overlayAgentShown` are, so the sleeping rest stays asleep.
+  const rootDrawn = useRootOverlayStore((st) => rootViewShown(st));
   // Root tab keys an app overlay's docked agent column is drawing right now
   // (`OverlayAgentColumn`); their copy here stands down, like the root console.
   const overlayAgentShown = useOverlayAgentStore((st) => st.shownKeys);
   // The same for Tabby chat keys (assistant scope): the overlay draws them
   // attach-only; this panel never shows that scope at all (below).
   const assistantShown = useOverlayAgentStore((st) => st.assistantShownKeys);
+  // Every other scope's tabs an attach-only view draws (the cockpit's detail
+  // pane), by PTY id: their owner stands down too, with a placeholder.
+  const scopeShown = useOverlayAgentStore((st) => st.scopeShownKeys);
   // A restored Tabby chat spawns its CLI only once it was shown or made
   // (`startAssistantChat`); until then it has no pane here at all.
   const assistantStarted = useOverlayAgentStore((st) => st.assistantStartedKeys);
@@ -365,7 +376,7 @@ function CenterPanelImpl() {
       // allowLastGroup: a restored popout may be the scope's only group (its
       // in-window siblings held only non-restorable tabs and were dropped); it
       // must still re-detach into its own window rather than stay docked.
-      detachGroup(t.id, { bounds: t.bounds, zoom: t.zoom, allowLastGroup: true });
+      detachGroup(t.id, { bounds: t.bounds, zoom: t.zoom, name: t.name, allowLastGroup: true });
     }
   }, [scope, pendingRespawn, consumePendingRespawn, detachGroup]);
 
@@ -1065,6 +1076,8 @@ function CenterPanelImpl() {
   // fullscreened group's pane is sized to the whole panel and all others hidden.
   const fsActive = fullscreenGroupId != null && groupRects[fullscreenGroupId] != null;
   const panelRect = panelRef.current?.getBoundingClientRect();
+  // Filled by the pane layer's map below: the stand-down placeholders.
+  const standDowns: { id: string; rect: Rect }[] = [];
   const fullRect: Rect | undefined = panelRect
     ? { left: 0, top: 0, width: panelRect.width, height: panelRect.height }
     : undefined;
@@ -1120,19 +1133,7 @@ function CenterPanelImpl() {
                 </button>
               </div>
             ) : (
-              <div className="center-placeholder-card">
-                <h2 className="center-placeholder-title">{t("centerPanel.noTabsOpen")}</h2>
-                <div className="center-placeholder-hint">
-                  {t("centerPanel.noTabsGuidance")}
-                </div>
-                <button
-                  className="center-placeholder-action"
-                  aria-label={t("centerPanel.openTab")}
-                  onClick={() => requestNewTab({ kind: "menu" }, { groupId: EMPTY_GROUP_ID })}
-                >
-                  {t("centerPanel.openTab")} <UntestedTag id="centerPanel.openTab" />
-                </button>
-              </div>
+              <StartHere scope={scope} groupId={EMPTY_GROUP_ID} />
             )}
           </div>
         </Subwindow>
@@ -1149,7 +1150,7 @@ function CenterPanelImpl() {
           const isCurrentScope = scopeKey === scope && scopeKey !== ASSISTANT_SCOPE;
           const groupId = isCurrentScope ? groupOfKey.get(tab.key) : undefined;
           // While a group is fullscreen, only that group's active pane shows.
-          const visible =
+          const slotShown =
             isCurrentScope &&
             // The root console shows the root scope's tabs itself (attach-only
             // views of these panes), and an app overlay's docked agent column
@@ -1163,6 +1164,11 @@ function CenterPanelImpl() {
             groupId != null &&
             activeKeyOfGroup.get(groupId) === tab.key &&
             (!fsActive || groupId === fullscreenGroupId);
+          // A project's or box's tab the cockpit's detail pane draws stands
+          // its owner down the same way, one visible view per PTY; unlike
+          // root's, its slot is not left blank (below).
+          const shownAway = scopeShown.has(`${scopeKey}:${tab.key}`);
+          const visible = slotShown && !shownAway;
           // The fullscreened group's pane is stretched over the whole panel; all
           // others keep their measured rect (but are hidden by `visible` above).
           const rect =
@@ -1188,6 +1194,7 @@ function CenterPanelImpl() {
           const paneBox = scopeKey.startsWith(BOX_SCOPE_PREFIX)
             ? boxes.find((b) => `${BOX_SCOPE_PREFIX}${b.id}` === scopeKey)
             : undefined;
+          if (slotShown && shownAway && rect) standDowns.push({ id: `${scopeKey}/${tab.key}`, rect });
           return (
             <div
               key={`${scopeKey}/${tab.key}`}
@@ -1232,13 +1239,19 @@ function CenterPanelImpl() {
                 // The root console / a docked agent column draws this PTY:
                 // its owning pane here stays mounted (§5.3, terminal kinds).
                 drawnElsewhere={
-                  (scopeKey === ROOT_SCOPE && (rootConsoleOpen || overlayAgentShown.has(tab.key))) ||
-                  (scopeKey === ASSISTANT_SCOPE && assistantShown.has(tab.key))
+                  (scopeKey === ROOT_SCOPE && (rootDrawn || overlayAgentShown.has(tab.key))) ||
+                  (scopeKey === ASSISTANT_SCOPE && assistantShown.has(tab.key)) ||
+                  shownAway
                 }
               />
             </div>
           );
         })}
+        {/* The slots whose tab the cockpit draws: one line saying where it
+            went, so a project on screen behind the overlay is not a blank. */}
+        {standDowns.map(({ id, rect }) => (
+          <PaneStandDown key={`standdown-${id}`} rect={rect} />
+        ))}
       </div>
 
       {/* Split preview: darkens the half (or whole, for center) a drop would
@@ -1261,6 +1274,27 @@ function CenterPanelImpl() {
 
       {/* One-shot send-off when a tab/subwindow is dropped out to its own window. */}
       <DetachFlourish />
+    </div>
+  );
+}
+
+/**
+ * The slot of a tab another view draws — the cockpit's detail pane — while its
+ * project is on screen: one line saying so, and Show here, which closes the
+ * cockpit and with it that view, so the owner takes the PTY back.
+ */
+function PaneStandDown({ rect }: { rect: Rect }) {
+  const t = useT();
+  return (
+    <div
+      className="center-pane center-pane-standdown"
+      style={{ display: "flex", left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
+    >
+      <span>{t("cockpit.standDown")}</span>
+      <button type="button" className="settings-btn sm" onClick={() => useRootOverlayStore.getState().close()}>
+        {t("cockpit.showHere")}
+      </button>
+      <UntestedTag id="cockpit.standDown" />
     </div>
   );
 }
@@ -1352,7 +1386,11 @@ export function FocusFrameOverlay({
   frameRects: Record<string, Rect>;
   orderedIds: string[];
 }) {
-  const focusedGroupId = useTabsStore((s) => s.focusedGroupId);
+  // The workspace's focus — or, in a popout window, the popout's own
+  // (`steeringScope`), whose tabs store is empty.
+  const walked = useSteeringTabs();
+  const workspaceFocus = useTabsStore((s) => s.focusedGroupId);
+  const focusedGroupId = walked.popout ? walked.focusedGroupId : workspaceFocus;
   const navActive = useSubwindowNavStore((s) => s.active);
   const previewGroupId = useSubwindowNavStore((s) => s.previewGroupId);
   const steeringActive = useKeyboardSteeringStore((s) => s.active);
@@ -1373,8 +1411,11 @@ export function FocusFrameOverlay({
   // (the same TAB_ACCENT that paints that tab's stripe), so the frame and the
   // current tab read as one continuous accent. Falls back to the CSS default
   // (var(--accent)) when the kind can't be resolved.
-  const layout = useTabsStore((s) => s.layoutByScope[s.scope] ?? null);
-  const tabEntries = useTabsStore((s) => s.tabsByScope[s.scope]);
+  const workspaceLayout = useTabsStore((s) => s.layoutByScope[s.scope] ?? null);
+  const workspaceTabs = useTabsStore((s) => s.tabsByScope[s.scope]);
+  const popoutTabs = usePopoutViewStore((s) => s.tabs);
+  const layout = walked.popout ? walked.layout : workspaceLayout;
+  const tabEntries = walked.popout ? popoutTabs : workspaceTabs;
   const activeTabKey = frameId ? findGroup(layout, frameId)?.activeKey : null;
   const activeKind = activeTabKey
     ? tabEntries?.find((t) => t.key === activeTabKey)?.kind
@@ -1451,16 +1492,17 @@ export function DragGhost() {
   // During a file drag (pointer-based drag-to-tab) the ghost lists the available
   // drop options so the user can see what each release will do.
   const isFileDrag = useDragStore((s) => s.drag?.kind === "file");
+  const copyOut = useDragStore((s) => s.drag?.copyOut === true);
   const node = useDragStore((s) => s.drag?.previewNode ?? null);
   const srcW = useDragStore((s) => s.drag?.previewW ?? 0);
   const srcH = useDragStore((s) => s.drag?.previewH ?? 0);
   const thumbRef = useRef<HTMLDivElement>(null);
 
-  // Track Shift/Ctrl live so the options legend can highlight "force new
-  // window" / "copy out to another app" while the file drag is in flight (a
-  // modifier can toggle without a pointer move, which wouldn't otherwise
-  // re-render the ghost). Ctrl only marks the option here — FileTree's own
-  // drag gesture decides when to actually hand off to the native OS drag.
+  // Track Shift/Ctrl live so the options legend can highlight "into another
+  // app" / "keep it in the app" while the file drag is in flight (a modifier
+  // can toggle without a pointer move, which wouldn't otherwise re-render the
+  // ghost). The legend only marks the option — fileTreeDrag's gesture decides
+  // when to actually hand off to the native OS drag.
   const [shiftHeld, setShiftHeld] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   useEffect(() => {
@@ -1499,22 +1541,34 @@ export function DragGhost() {
   return createPortal(
     <div className="tab-drag-ghost" style={{ left: pointerX, top: pointerY }}>
       <div className="tab-drag-ghost-label">{label}</div>
-      {isFileDrag ? (
+      {isFileDrag && copyOut ? (
         <div className="tab-drag-ghost-opts">
-          {/* Exactly ONE option is marked at a time — it is what THIS release
-              would do. Ctrl (copy out) wins over Shift (force a new window),
-              matching the drag itself: once the cursor leaves the window with
-              Ctrl held, the OS drag owns the drop and the in-app targets are
-              out of the picture. */}
+          {/* A local file: leaving the window hands it to the OS drag (the app
+              under the cursor), unless Shift keeps it in the app — the
+              rule fileTreeDrag's `exportOnLeave` applies. Ctrl still forces
+              the export, so it wins over Shift here too. The marked line is
+              what leaving the window would do now. */}
           <div className="tab-drag-ghost-opt">{t("tabDrag.dropFolder")}</div>
-          <div className={`tab-drag-ghost-opt${!shiftHeld && !ctrlHeld ? " active" : ""}`}>
-            {t("tabDrag.dropOpen")}
+          <div className="tab-drag-ghost-opt">{t("tabDrag.dropPane")}</div>
+          <div className={`tab-drag-ghost-opt${!shiftHeld || ctrlHeld ? " active" : ""}`}>
+            {t("tabDrag.dragOutToApp")}
+            <UntestedTag id="tabDrag.dragOutToApp" />
           </div>
           <div className={`tab-drag-ghost-opt${shiftHeld && !ctrlHeld ? " active" : ""}`}>
-            {t("tabDrag.shiftNewWindow")}
+            {t("tabDrag.shiftKeepInApp")}
           </div>
-          <div className={`tab-drag-ghost-opt${ctrlHeld ? " active" : ""}`}>
-            {t("tabDrag.ctrlCopyOut")}
+        </div>
+      ) : isFileDrag ? (
+        <div className="tab-drag-ghost-opts">
+          {/* A host (SFTP) listing never leaves for another app: a release
+              outside opens a window or docks into a popout, Shift forcing a
+              new window. Exactly one modifier line is marked. */}
+          <div className="tab-drag-ghost-opt">{t("tabDrag.dropFolder")}</div>
+          <div className={`tab-drag-ghost-opt${!shiftHeld ? " active" : ""}`}>
+            {t("tabDrag.dropOpen")}
+          </div>
+          <div className={`tab-drag-ghost-opt${shiftHeld ? " active" : ""}`}>
+            {t("tabDrag.shiftNewWindow")}
           </div>
         </div>
       ) : null}

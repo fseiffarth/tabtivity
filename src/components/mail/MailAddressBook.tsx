@@ -32,6 +32,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useDialogs } from "../common/PromptDialogs";
 import { MailRecipientField } from "./MailRecipientField";
 import { parseRecipients } from "./MailComposeDialog";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The Address Book — the mail window's Thunderbird-style contacts tab.
@@ -778,7 +779,7 @@ function ContactEditor({
               aria-label={t("mail.contacts.remove")}
               onClick={() => setD((x) => ({ ...x, emails: x.emails.filter((_, j) => j !== i) }))}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         ))}
@@ -819,7 +820,7 @@ function ContactEditor({
               aria-label={t("mail.contacts.remove")}
               onClick={() => setD((x) => ({ ...x, phones: x.phones.filter((_, j) => j !== i) }))}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
         ))}

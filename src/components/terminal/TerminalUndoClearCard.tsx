@@ -6,6 +6,7 @@ import { undoAgentClear, useAgentClearUndoStore } from "../../stores/agents/agen
 import { usePaneTab } from "../tabs/paneTabContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The card an agent pane shows right after its session was cleared — from this
@@ -39,7 +40,7 @@ export function TerminalUndoClearCard({ host, ptyId }: { host: HTMLElement; ptyI
         title={t("terminal.undoClear.dismiss")}
         onClick={() => useAgentClearUndoStore.getState().dismiss(ptyId)}
       >
-        ×
+        <CloseIcon />
       </button>
       <div className="hint-bubble-title">
         {t("terminal.undoClear.title")} <UntestedTag id="terminal.undoClear" />

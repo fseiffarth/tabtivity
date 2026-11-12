@@ -1,12 +1,12 @@
 import { create } from "zustand";
 import { reseedDetached } from "../detached";
-import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import {
   allGroups,
   findGroup,
   findGroupOfTab,
   isRelaunchableLocalTab,
   isResumableAgentTab,
+  resumeArgsOf,
   useTabsStore,
   type TabEntry,
 } from "../tabs";
@@ -139,14 +139,6 @@ export function noteClosedPopoutTabs(scope: string, detachedGroupId: string, key
     const tab = tabs.find((t) => t.key === key);
     if (tab) noteClosedAgentTab(scope, tab, false);
   }
-}
-
-/** The args a restore would respawn this tab with (see `loadFromLayout`). */
-export function resumeArgsOf(tab: TabEntry): string[] {
-  if (isResumableAgentTab(tab) && tab.sessionId) {
-    return tab.cmd in RESUMABLE_AGENTS ? RESUMABLE_AGENTS[tab.cmd](tab.sessionId) : [...(tab.resumeArgs ?? [])];
-  }
-  return tab.localLaunch ? [...tab.localLaunch.args] : [];
 }
 
 /** The new tab a closed one comes back as: the same conversation binding

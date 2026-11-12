@@ -138,6 +138,8 @@ impl Fixture {
                 "id": RAW_PROJECT,
                 "name": "Aurora",
                 "status": "active",
+                "position": 0,
+                "local_file": "",
                 "directory": fixture.root.to_string_lossy(),
                 concat!(crate::app_slug!(), "_mobile_access"): true,
             }]))
@@ -371,6 +373,7 @@ const AUTHENTICATED_GETS: &[&str] = &[
     "/api/v1/tabs/anything/transcript",
     "/api/v1/tabs/anything/uncommitted",
     "/api/v1/tabs/anything/changes",
+    "/api/v1/tabs/anything/named-files",
     "/api/v1/projects/anything/prompts",
     "/api/v1/tabs/anything/desktop-images",
     "/api/v1/tabs/anything/markup/questions",
@@ -595,6 +598,41 @@ async fn the_git_overview_answers_projects_only_and_from_its_cache() {
     assert_eq!(json(&body)["error"], "not_a_project");
 }
 
+/// A box row names its members by the ids the list gives them, and only the
+/// members this phone may list itself: a member with Mobile off never
+/// crosses, not even as an id, and the box's own screen carries none.
+#[tokio::test]
+async fn a_box_row_lists_only_the_members_the_phone_may_see() {
+    let host = Fixture::with_box();
+    let cookie = host.pair_device(&signing_key(63)).await.0;
+    let box_row = |body: &str| {
+        json(body)["projects"].as_array().expect("rows").iter().find(|row| row["kind"] == "box").cloned().expect("box row")
+    };
+    let (status, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(box_row(&body)["members"], json!([]), "the member's own switch is off: {body}");
+
+    let path = host.state.config.state_dir.join("projects.json");
+    let mut projects: Value = serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+    projects[0][crate::brand::MOBILE_ACCESS_KEY] = json!(true);
+    projects[0]["status"] = json!("active");
+    std::fs::write(&path, serde_json::to_vec(&projects).expect("bytes")).expect("write");
+    catalog_stale(&host.state);
+
+    let (status, _, body) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    let rows = json(&body)["projects"].as_array().expect("rows").clone();
+    let member = rows.iter().find(|row| row["kind"] == "project").expect("member row");
+    assert_eq!(box_row(&body)["members"], json!([member["id"]]), "{body}");
+    assert!(member.get("members").is_none(), "a project row has none: {body}");
+    assert!(!body.contains(RAW_PROJECT) && !body.contains(RAW_BOX), "{body}");
+
+    let box_id = box_row(&body)["id"].as_str().expect("box id").to_string();
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/projects/{box_id}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert!(json(&body)["project"].get("members").is_none(), "the detail sends none: {body}");
+}
+
 #[tokio::test]
 async fn mutating_routes_refuse_an_unauthenticated_request() {
     let host = Fixture::with_project();
@@ -814,71 +852,59 @@ async fn a_phone_creates_a_project_by_name_only() {
     assert_eq!(json(&body)["error"], "invalid_name");
 }
 
+/// The phone's model sheet acts on the live tab only (threat model gap 81):
+/// saved launch defaults are a host-wide write that reaches every later launch
+/// of the CLI, so they are set on the desktop alone. The routes are gone, and
+/// an older phone calling them is refused without anything written.
+#[tokio::test]
+async fn the_phone_has_no_route_to_the_saved_launch_defaults() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(63)).await.0;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let settings_file = host.state.config.state_dir.join("settings.json");
+    let before = std::fs::read(&settings_file).ok();
+    let uri = format!("/api/v1/tabs/{tab_id}/launch-defaults");
+
+    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "opus", "effort": "high" })))).await;
+    assert!(matches!(status, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED), "answered {status}: {body}");
+    let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "answered: {body}");
+    assert!(!body.contains("saved"), "{body}");
+    assert_eq!(std::fs::read(&settings_file).ok(), before, "nothing was written");
+    if let Some(bytes) = before {
+        let stored: Value = serde_json::from_slice(&bytes).expect("json");
+        assert!(stored.get("agent_launch_defaults").is_none(), "{stored}");
+    }
+}
+
+/// The phone's chat shows the running shells like the desktop's, but the
+/// command line never crosses the browser API (threat model gap 79): what the
+/// agent said the shell does and whether it runs in the background do.
+#[tokio::test]
+async fn a_phone_transcript_keeps_the_running_shells_without_their_command_lines() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell};
+    let host = Fixture::with_project();
+    let transcript = AgentTranscript {
+        shells: vec![
+            RunningShell { command: "cat ~/.ssh/config".into(), description: Some("Check the config".into()), cut: true, ..Default::default() },
+            RunningShell { command: "npm run dev".into(), background: true, ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone("d1".into()), "t1", transcript).await;
+    assert_eq!(wire["shells"][0]["description"], "Check the config");
+    assert_eq!(wire["shells"][1]["background"], true);
+    assert!(!wire.to_string().contains("ssh"), "{wire}");
+    assert!(!wire.to_string().contains("npm run dev"), "{wire}");
+    assert!(wire["shells"][0].get("cut").is_none());
+}
+
 /// H3 (headless owner plan §3): with no window open, the phone's tab
 /// edits — rename, colour, close, reopen — are the owner's: they land in
 /// the session file through the workspace service, answered as stored
 /// and flagged; a close ends the tab's session and remembers an agent
 /// tab; a reopen brings it back as a new tab started detached on its
 /// resume args. Nothing raw crosses.
-/// The model sheet's launch defaults: read and saved for the tab's CLI only,
-/// refused as the desktop form refuses them, never by a stranger.
-#[tokio::test]
-async fn launch_defaults_are_the_tabs_cli_and_keep_every_other_setting() {
-    let host = Fixture::with_project();
-    let cookie = host.pair_device(&signing_key(63)).await.0;
-    let (_, tab_id) = project_and_tab(&host, &cookie).await;
-    let settings_file = host.state.config.state_dir.join("settings.json");
-    let mut seeded: Value = std::fs::read(&settings_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| json!({}));
-    seeded["a_later_key"] = json!(7);
-    seeded["agent_launch_defaults"] = json!({ "codex": { "model": "gpt", "effort": "" } });
-    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
-    let uri = format!("/api/v1/tabs/{tab_id}/launch-defaults");
-
-    let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(status, StatusCode::OK, "answered: {body}");
-    assert_eq!(json(&body)["saved"], json!({ "model": "", "effort": "" }));
-    assert_eq!(json(&body)["cli"], "claude");
-    assert!(json(&body)["models"].is_null(), "{body}");
-    seeded["agent_models"] = json!({ "claude": ["opus", "haiku"], "codex": ["gpt"] });
-    std::fs::write(&settings_file, seeded.to_string()).expect("settings");
-    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(json(&body)["models"], json!(["opus", "haiku"]));
-    assert_eq!(json(&body)["capabilities"]["model"], true);
-    assert!(json(&body)["capabilities"]["efforts"].as_array().expect("efforts").contains(&json!("high")));
-
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": " opus ", "effort": "high" })))).await;
-    assert_eq!(status, StatusCode::OK, "answered: {body}");
-    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
-    assert_eq!(stored["agent_launch_defaults"]["claude"], json!({ "model": "opus", "effort": "high" }));
-    assert_eq!(stored["agent_launch_defaults"]["codex"]["model"], "gpt");
-    assert_eq!(stored["a_later_key"], 7);
-    let (_, _, body) = host.send(get_as(&uri, &cookie)).await;
-    assert_eq!(json(&body)["saved"], json!({ "model": "opus", "effort": "high" }));
-
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "", "effort": "ultra" })))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(json(&body)["error"], "invalid_effort");
-    let (status, _, body) = host.send(request_as("PUT", &uri, &cookie, Some(json!({ "model": "--x", "cmd": "codex" })))).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(json(&body)["error"], "invalid_request");
-    let (status, _, _) = host.send(request_as("PUT", "/api/v1/tabs/nope/launch-defaults", &cookie, Some(json!({})))).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
-    let (status, _, _) = host.send(request_as("PUT", &uri, &cookie, Some(json!({})))).await;
-    assert_eq!(status, StatusCode::OK);
-    let stored: Value = serde_json::from_slice(&std::fs::read(&settings_file).expect("read")).expect("json");
-    assert!(stored["agent_launch_defaults"].get("claude").is_none(), "{stored}");
-
-    let stranger = Request::builder()
-        .method("PUT")
-        .uri(&uri)
-        .header(header::ORIGIN, ORIGIN)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"model":"opus"}"#))
-        .expect("request");
-    assert_eq!(host.send(stranger).await.0, StatusCode::UNAUTHORIZED);
-}
-
 #[tokio::test]
 async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
     let recorded: Arc<Mutex<Vec<PtyOptions>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1793,9 +1819,11 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         ("GET", format!("/api/v1/projects/{p}/git"), Value::Null, &["not_a_project"]),
         ("GET", format!("/api/v1/tabs/{t}/uncommitted"), Value::Null, &["not_a_project"]),
         ("GET", format!("/api/v1/tabs/{t}/changes"), Value::Null, &["not_a_project", "files_off"]),
+        ("GET", format!("/api/v1/tabs/{t}/named-files"), Value::Null, &["not_a_project", "files_off"]),
         // Files drawer and uploads.
         ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
         ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+        ("GET", format!("/api/v1/projects/{p}/files/entry?name=a.txt"), Value::Null, &["files_unavailable"]),
         ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
         ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
         ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable", "files_off"]),
@@ -2227,6 +2255,7 @@ async fn a_folder_less_project_is_no_project_to_any_folder_route() {
             ("GET", format!("/api/v1/projects/{p}/git"), Value::Null, &["not_a_project"]),
             ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),
+            ("GET", format!("/api/v1/projects/{p}/files/entry?name=a.txt"), Value::Null, &["files_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
             ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
             ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable"]),
@@ -2385,15 +2414,17 @@ async fn mcp_status(port: u16, path: &str, token: &str) -> u16 {
     String::from_utf8_lossy(&answer).get(9..12).and_then(|code| code.parse().ok()).expect("status line")
 }
 
-/// #2339 (`docs/headless_mcp_plan.md`), end to end in this process:
+/// #2339 (`docs/headless_mcp_plan.md`, phases 1 and 1b), end to end in this
+/// process:
 /// a) the Mobile host's `start_headless` binds a listener and publishes it
 ///    as the process's `runtime()`, with no root lane;
 /// b) a Claude tab the phone creates with no window goes through the spawn
 ///    seam into `root_mcp::grant_lanes` — the call `launch_prep::prepare`
 ///    makes — against the fixture's state dir, passes the real gates
 ///    (agent, `schedule_mcp` and the project's level, `git_push_mcp`,
-///    `help_mcp`) and records `PtyOptions` naming the schedule, git and
-///    help servers; the listener admits each token on its own route over
+///    `help_mcp`, `markup_mcp`) and records `PtyOptions` naming the
+///    schedule, git, help and markup servers; the listener admits each
+///    token on its own route over
 ///    HTTP, and a fresh store (the window, or this host after a restart)
 ///    refuses them;
 /// c) the same grant with this runtime withholds the root and reader
@@ -2464,18 +2495,25 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     assert_eq!(opts.cmd, "claude");
     let token = |key: &str| opts.env.get(key).unwrap_or_else(|| panic!("{key} missing: {:?}", opts.env.keys())).clone();
     let (schedule, git, help) = (token(root_mcp::SCHEDULE_TOKEN_ENV), token(root_mcp::GIT_TOKEN_ENV), token(root_mcp::HELP_TOKEN_ENV));
+    // Phase 1b: the markup lane too — its asks live in this process.
+    let markup = token(root_mcp::MARKUP_TOKEN_ENV);
+    assert_eq!(opts.env[root_mcp::MARKUP_URL_ENV], format!("http://127.0.0.1:{port}/mcp/markup"));
     assert_eq!(opts.env[root_mcp::SCHEDULE_URL_ENV], format!("http://127.0.0.1:{port}/mcp/schedule"));
     assert_eq!(opts.env[root_mcp::HELP_URL_ENV], format!("http://127.0.0.1:{port}/mcp/help"));
     assert!(!opts.env.contains_key(root_mcp::TOKEN_ENV), "never the root lane");
-    assert!(!opts.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "never the markup lane: its asks live in the window");
     let argv = opts.args.join(" ");
     assert_eq!(opts.args.iter().filter(|a| *a == "--mcp-config").count(), 1, "{argv}");
-    for server in [crate::services::schedule_mcp::SERVER_NAME, crate::services::git_push_mcp::SERVER_NAME, crate::services::help_mcp::SERVER_NAME] {
+    for server in [crate::services::schedule_mcp::SERVER_NAME, crate::services::git_push_mcp::SERVER_NAME, crate::services::help_mcp::SERVER_NAME, crate::services::markup_mcp::SERVER_NAME] {
         assert!(argv.contains(&format!("\"{server}\":")), "{server} missing: {argv}");
     }
-    for token in [&schedule, &git, &help] {
+    for token in [&schedule, &git, &help, &markup] {
         assert!(!argv.contains(token.as_str()), "a token is never in argv");
     }
+    let marker = root_mcp::tokens().authenticate(Some(&format!("Bearer {markup}"))).expect("the host knows its markup token");
+    assert_eq!(marker.identity.caller, root_mcp::Caller::Marker);
+    assert_eq!(marker.identity.tab, opts.id);
+    assert_eq!(marker.identity.project.as_deref(), Some(RAW_PROJECT));
+    assert_eq!(marker.identity.schedule_target.as_ref().map(|b| b.target.as_str()), opts.schedule_target_id.as_deref());
     let session = root_mcp::tokens().authenticate(Some(&format!("Bearer {schedule}"))).expect("the host knows its token");
     assert_eq!(session.identity.tab, opts.id);
     assert_eq!(session.identity.project.as_deref(), Some(RAW_PROJECT));
@@ -2483,18 +2521,20 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
 
     // The bound listener admits each token on its own route, over HTTP
     // (past admission: whatever the handler then answers, never 401) …
-    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help), ("/mcp/markup", &markup)] {
         assert_ne!(mcp_status(port, path, token).await, 401, "{path}");
     }
     assert_eq!(mcp_status(port, "/mcp/help", &schedule).await, 401, "a token is good on its own route only");
+    assert_eq!(mcp_status(port, "/mcp/markup", &schedule).await, 401, "the markup route takes the markup token only");
+    assert_eq!(mcp_status(port, "/mcp/schedule", &markup).await, 401);
     assert_eq!(mcp_status(port, "/mcp", &schedule).await, 404, "no root route on the host");
-    assert_eq!(mcp_status(port, "/mcp/markup", &schedule).await, 404, "no markup route on the host");
+    assert_eq!(mcp_status(port, "/mcp", &markup).await, 404, "the markup token does not open the root route");
     // … and no other process's listener does: the window's, or this host's
     // after a restart (a fresh store).
     let admission = crate::commands::root_mcp::admission;
     assert_eq!(admission(root_mcp::tokens(), "/mcp/schedule", &schedule).await, Ok(()));
     let other: &'static TokenStore = Box::leak(Box::default());
-    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help)] {
+    for (path, token) in [("/mcp/schedule", &schedule), ("/mcp/git", &git), ("/mcp/help", &help), ("/mcp/markup", &markup)] {
         assert_eq!(admission(other, path, token).await, Err(StatusCode::UNAUTHORIZED), "{path}");
     }
 
@@ -2516,17 +2556,27 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
         root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
         assert!(window.env.contains_key(root_mcp::TOKEN_ENV), "{project:?}: the settings do grant it");
     }
-    // The markup lane likewise: a project tab with a schedule target gets
-    // it from the window's runtime (or a server daemon's), never from a
-    // desktop's Mobile host.
+    // The markup lane is the host's too (phase 1b): a project tab with a
+    // schedule target gets it from this runtime as from the window's — and
+    // none without a target, or from a runtime that does not hold the asks.
     let mut here = spawn("headless:m", Some(RAW_PROJECT));
     here.schedule_target_id = Some("target-m".into());
     let mut window = here.clone();
     window.id = "window:m".into();
+    let mut targetless = here.clone();
+    targetless.id = "headless:m-none".into();
+    targetless.schedule_target_id = None;
+    let mut unserved = here.clone();
+    unserved.id = "headless:m-unserved".into();
     root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
     root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
-    assert!(!here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
+    root_mcp::grant_lanes(&mut targetless, true, root_mcp::runtime(), other, &state_dir);
+    let not_markup = crate::services::root_mcp::Runtime { port: 9, serves_root: false, serves_markup: false, serves_web: true };
+    root_mcp::grant_lanes(&mut unserved, true, Some(&not_markup), other, &state_dir);
+    assert!(here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
     assert!(window.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", window.env.keys());
+    assert!(!targetless.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "no schedule target to key the asks by");
+    assert!(!unserved.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "a runtime that holds no asks grants no lane");
 
     // The assistant's web and help lanes: a phone-made chat with no window
     // gets them from this host's listener (the `assistant` flag on, a
@@ -2578,10 +2628,11 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     let (status, _, body) = host.send(request_as("DELETE", &format!("/api/v1/tabs/{tab_id}"), &cookie, None)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(host.runner.killed.lock().unwrap().len(), 1, "the session was ended");
-    for token in [&schedule, &git, &help] {
+    for token in [&schedule, &git, &help, &markup] {
         assert!(root_mcp::tokens().authenticate(Some(&format!("Bearer {token}"))).is_none(), "revoked on close");
     }
     assert_eq!(mcp_status(port, "/mcp/help", &help).await, 401);
+    assert_eq!(mcp_status(port, "/mcp/markup", &markup).await, 401);
     let _ = stop.send(true);
 }
 
@@ -4354,10 +4405,94 @@ async fn the_file_browser_is_off_by_default_and_reads_by_sealed_token_only() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{refused} answered: {body}");
         assert_eq!(json(&body)["error"], "file_not_found");
     }
+
+    // One row by its folder's token and its name, as the listing rows it and
+    // under the same token: a file, a folder at the root, nothing hidden,
+    // nothing gone, no path for a name.
+    let (status, _, body) = host.send(get_as(&format!("{base}/entry?dir={src}&name=main.rs"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!(json(&body)["entry"], file, "the listing's row, token included");
+    let (status, _, body) = host.send(get_as(&format!("{base}/entry?name=src"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "answered: {body}");
+    assert_eq!((json(&body)["entry"]["kind"].as_str(), json(&body)["entry"]["token"].as_str()), (Some("dir"), Some(src.as_str())));
+    for (name, error) in [("gone.rs", "file_not_found"), (".env", "invalid_request"), ("src%2Fmain.rs", "invalid_request"), ("..", "invalid_request")] {
+        let (_, _, body) = host.send(get_as(&format!("{base}/entry?name={name}"), &cookie)).await;
+        assert_eq!(json(&body)["error"], error, "{name}: {body}");
+    }
+    let (_, _, body) = host.send(get_as(&format!("{base}/entry?dir=AAAA&name=main.rs"), &cookie)).await;
+    assert_eq!(json(&body)["error"], "file_not_found", "a forged folder token: {body}");
+    let (_, _, body) = host.send(get_as(&format!("{base}/entry?dir={src}"), &cookie)).await;
+    assert_eq!(json(&body)["error"], "invalid_request", "no name: {body}");
+
     let (status, _, _) = host.send(get_as(&base, "not-a-session")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, _, _) = host.send(get_as("/api/v1/projects/not-a-project/files", &cookie)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// This computer's files stream from the proven descriptor: a film past the
+/// drop boxes' 24 MiB cap answers whole, by one range (206) and by its
+/// validator (304), typed by its bytes; a range past its end is a 416.
+#[tokio::test]
+async fn a_local_film_streams_by_range_and_revalidates_by_its_etag() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(37)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    let base = format!("/api/v1/projects/{project_id}/files");
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        serde_json::json!({ concat!(crate::app_slug!(), "_mobile_host"): { "enabled": true, "project_files": true } }).to_string(),
+    )
+    .unwrap();
+    let size = outbox::MAX_OUTBOX_FILE + 4096;
+    {
+        use std::io::Write;
+        let mut film = std::fs::File::create(host.root.join("film.mp4")).unwrap();
+        film.write_all(b"\0\0\0\x18ftypisom\0\0\x02\0isomavc1").unwrap();
+        film.set_len(size).unwrap();
+    }
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let entry = json(&body)["entries"].as_array().unwrap().iter().find(|e| e["name"] == "film.mp4").cloned().expect("film listed");
+    assert_eq!(entry["kind"], "video/mp4");
+    let raw = format!("{base}/raw?f={}", entry["token"].as_str().unwrap());
+
+    let (status, headers, body) = host.send(get_as(&raw, &cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.len() as u64, size, "the whole film, past the drop boxes' cap");
+    assert_eq!(headers[header::CONTENT_TYPE], "video/mp4");
+    assert_eq!(headers[header::ACCEPT_RANGES], "bytes");
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
+    let etag = headers[header::ETAG].to_str().unwrap().to_string();
+
+    let ranged = |range: &str| {
+        let mut request = get_as(&raw, &cookie);
+        request.headers_mut().insert(header::RANGE, range.parse().unwrap());
+        request
+    };
+    let (status, headers, body) = host.send(ranged("bytes=4-11")).await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes 4-11/{size}").as_str());
+    assert_eq!(body, "ftypisom");
+    let (status, headers, _) = host.send(ranged(&format!("bytes={size}-"))).await;
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(headers[header::CONTENT_RANGE], format!("bytes */{size}").as_str());
+
+    let mut again = get_as(&raw, &cookie);
+    again.headers_mut().insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+    let (status, _, body) = host.send(again).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+
+    // The file changed under the phone: its old validator no longer matches,
+    // and an If-Range naming it gets the whole, not a piece of the new one.
+    // `write`, not `append`: Windows refuses `set_len` on an append-only handle.
+    std::fs::OpenOptions::new().write(true).open(host.root.join("film.mp4")).unwrap().set_len(size + 1).unwrap();
+    let mut stale = ranged("bytes=0-3");
+    stale.headers_mut().insert(header::IF_RANGE, etag.parse().unwrap());
+    let (status, headers, _) = host.send(stale).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(headers[header::ETAG].to_str().unwrap(), etag);
 }
 
 #[tokio::test]
@@ -4452,7 +4587,7 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
 
     let socket = host.state.config.control_dir.join("desktop-control.sock");
     let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
-    type Resolved = Vec<(SyncOp, Vec<String>)>;
+    type Resolved = Vec<(SyncOp, Vec<String>, Option<String>)>;
     let resolved: Arc<Mutex<Resolved>> = Arc::default();
     let seen = resolved.clone();
     let desktop = tokio::spawn(async move {
@@ -4475,12 +4610,15 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
                     assert_eq!(project_id, RAW_PROJECT);
                     DesktopResponse::Diverged { connected: true, files: vec![row("src/a.txt", "amber"), row(".env", "amber"), row("new.txt", "localnew")] }
                 }
-                DesktopRequest::SyncPreview { direction, paths, .. } => {
-                    assert_eq!((direction, paths.as_slice()), (SyncDirection::Pull, ["src/a.txt".to_string()].as_slice()));
-                    DesktopResponse::SyncPreview { preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() } }
+                DesktopRequest::SyncPreview { op, paths, .. } => {
+                    assert_eq!((op, paths.as_slice()), (SyncOp::Pull, ["src/a.txt".to_string()].as_slice()));
+                    DesktopResponse::SyncPreview {
+                        preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() },
+                        fingerprint: "abc123".into(),
+                    }
                 }
-                DesktopRequest::SyncResolve { op, paths, .. } => {
-                    seen.lock().unwrap().push((op, paths));
+                DesktopRequest::SyncResolve { op, paths, expect, .. } => {
+                    seen.lock().unwrap().push((op, paths, expect));
                     DesktopResponse::SyncResolved { done: 1, failed: 0, skipped: 0 }
                 }
                 DesktopRequest::SyncDiff { path, .. } => DesktopResponse::SyncDiff { diff: format!("diff of {path}"), cut: false },
@@ -4508,6 +4646,7 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
     let token = rows[0]["id"].as_str().expect("token").to_string();
     let act = json!({ "op": "pull", "files": [token] });
     assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
+    // `direction` is what an older phone says for `op`.
     let price = json!({ "direction": "pull", "files": [token] });
     assert_eq!(refused(host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price.clone()))).await), (StatusCode::FORBIDDEN, json!("sync_off")));
     let (status, _, body) = host.send(get_as(&format!("{base}/diff?file={token}"), &cookie)).await;
@@ -4517,9 +4656,14 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
     switches(true, true);
     let (status, _, body) = host.send(request_as("POST", &format!("{base}/preview"), &cookie, Some(price))).await;
     assert_eq!((status, json(&body)["preview"]["files"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
+    let receipt = json(&body)["token"].as_str().expect("a preview hands back its token").to_string();
+    // A resolve without the receipt moves nothing, whatever else is right.
+    assert_eq!(refused(host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await), (StatusCode::CONFLICT, json!("preview_required")));
+    assert!(resolved.lock().unwrap().is_empty(), "nothing reached the window");
+    let act = json!({ "op": "pull", "files": [token], "token": receipt });
     let (status, _, body) = host.send(request_as("POST", &format!("{base}/resolve"), &cookie, Some(act.clone()))).await;
     assert_eq!((status, json(&body)["done"].as_u64()), (StatusCode::OK, Some(1)), "{body}");
-    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::Pull, vec!["src/a.txt".to_string()])]);
+    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::Pull, vec!["src/a.txt".to_string()], Some("abc123".to_string()))], "the window gets the fingerprint to hold the rows to");
 
     // Not this list's token, not a shape it knows, not this origin: nothing reaches the window.
     let browser = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "src/a.txt").unwrap();
@@ -4537,6 +4681,147 @@ async fn the_diverged_list_goes_through_the_window_behind_its_switches() {
         .expect("request");
     assert_eq!(refused(host.send(foreign_origin).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
     assert_eq!(resolved.lock().unwrap().len(), 1, "only the good request got through");
+    desktop.abort();
+}
+
+/// Gap 97: every Diverged act but forgetting is authorised by a receipt the
+/// preview hands out (an HMAC of the window's fingerprint of the rows it read,
+/// bound to the op and exactly those files, good for ten minutes). Without one,
+/// or with one for another op or other files, nothing reaches the window; with
+/// one, the window gets the fingerprint to hold the rows to. The window's own
+/// refusals (an HPC host, rows that moved) keep their names.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_destructive_resolve_needs_the_receipt_of_a_preview_of_exactly_that() {
+    let host = host_tab_fixture(true);
+    let state_dir = host.state.config.state_dir.clone();
+    let mirror = state_dir.join("mirrors").join(RAW_PROJECT);
+    std::fs::create_dir_all(&mirror).unwrap();
+    std::fs::write(
+        state_dir.join("projects.json"),
+        serde_json::to_vec(&json!([{
+            "id": RAW_PROJECT,
+            "name": "Aurora",
+            "status": "active",
+            "directory": state_dir.join("remote-projects").join(RAW_PROJECT).to_string_lossy(),
+            "mirror": mirror.to_string_lossy(),
+            concat!(crate::app_slug!(), "_mobile_access"): true,
+            "remote": { "user": "alice", "host": "primary.example", "remote_path": "/srv/aurora" },
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_sync": true } }).to_string(),
+    )
+    .unwrap();
+    let cookie = host.pair_device(&signing_key(74)).await.0;
+    let (_, _, projects) = host.send(get_as("/api/v1/projects", &cookie)).await;
+    let p = json(&projects)["projects"][0]["id"].as_str().expect("project id").to_string();
+    let base = format!("/api/v1/projects/{p}/diverged");
+
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    type Resolved = Vec<(SyncOp, Vec<String>, Option<String>)>;
+    let resolved: Arc<Mutex<Resolved>> = Arc::default();
+    let seen = resolved.clone();
+    // What the window answers to the next preview or resolve instead of its
+    // usual answer: an error code, or a fingerprint it should have sent.
+    let forced: Arc<Mutex<Option<DesktopResponse>>> = Arc::default();
+    let override_with = forced.clone();
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else {
+                continue;
+            };
+            let row = |rel: &str| crate::services::mobile_control::protocol::DivergedFile {
+                rel: rel.into(),
+                state: "amber".into(),
+                host_mtime: Some(20),
+                local_mtime: None,
+                host_diverged: true,
+                local_diverged: false,
+                host_checked: true,
+            };
+            let forced = override_with.lock().unwrap().take();
+            let answer = match request {
+                DesktopRequest::SyncDiverged { .. } => DesktopResponse::Diverged { connected: true, files: vec![row("src/a.txt"), row("src/b.txt")] },
+                DesktopRequest::SyncPreview { .. } => forced.unwrap_or(DesktopResponse::SyncPreview {
+                    preview: crate::services::mobile_control::protocol::SyncPreviewFacts { files: 1, exact: true, ..Default::default() },
+                    fingerprint: "00ff".into(),
+                }),
+                DesktopRequest::SyncResolve { op, paths, expect, .. } => {
+                    seen.lock().unwrap().push((op, paths, expect));
+                    forced.unwrap_or(DesktopResponse::SyncResolved { done: 1, failed: 0, skipped: 0 })
+                }
+                _ => DesktopResponse::Seen,
+            };
+            admin::write_frame(&mut stream, &answer).await.expect("answer");
+        }
+    });
+
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let rows = json(&body)["rows"].clone();
+    let (a, b) = (rows[0]["id"].as_str().expect("a").to_string(), rows[1]["id"].as_str().expect("b").to_string());
+    let post = |what: &str, body: serde_json::Value| request_as("POST", &format!("{base}/{what}"), &cookie, Some(body));
+    let answer = |reply: (StatusCode, HeaderMap, String)| (reply.0, json(&reply.2));
+    let code = |reply: (StatusCode, serde_json::Value)| (reply.0, reply.1["error"].clone());
+    let receipt = |reply: &(StatusCode, serde_json::Value)| reply.1["token"].as_str().expect("a receipt").to_string();
+
+    // A preview prices every op but forgetting, and hands back a receipt.
+    let delete_a = answer(host.send(post("preview", json!({ "op": "delete_host", "files": [a] }))).await);
+    assert_eq!(delete_a.0, StatusCode::OK, "{delete_a:?}");
+    let delete_a_token = receipt(&delete_a);
+    let pull_a = answer(host.send(post("preview", json!({ "op": "pull", "files": [a] }))).await);
+    let pull_a_token = receipt(&pull_a);
+    for wrong in [json!({ "op": "forget", "files": [a] }), json!({ "files": [a] }), json!({ "op": "pull", "direction": "pull", "files": [a] })] {
+        assert_eq!(code(answer(host.send(post("preview", wrong)).await)), (StatusCode::BAD_REQUEST, json!("invalid_request")));
+    }
+
+    // No receipt, a malformed one, one for another op or other files: refused here.
+    let refusals = [
+        (json!({ "op": "delete_host", "files": [a] }), json!("preview_required")),
+        (json!({ "op": "delete_host", "files": [a], "token": "" }), json!("preview_required")),
+        (json!({ "op": "delete_local", "files": [a] }), json!("preview_required")),
+        (json!({ "op": "push", "files": [a] }), json!("preview_required")),
+        (json!({ "op": "delete_host", "files": [a], "token": "nonsense" }), json!("preview_stale")),
+        (json!({ "op": "delete_host", "files": [a], "token": pull_a_token }), json!("preview_stale")),
+        (json!({ "op": "delete_local", "files": [a], "token": delete_a_token }), json!("preview_stale")),
+        (json!({ "op": "delete_host", "files": [a, b], "token": delete_a_token }), json!("preview_stale")),
+        (json!({ "op": "delete_host", "files": [b], "token": delete_a_token }), json!("preview_stale")),
+    ];
+    for (act, expected) in refusals {
+        assert_eq!(code(answer(host.send(post("resolve", act.clone())).await)), (StatusCode::CONFLICT, expected), "{act}");
+    }
+    assert!(resolved.lock().unwrap().is_empty(), "none of those reached the window");
+
+    // Its own receipt: through, with the fingerprint for the window to hold the rows to.
+    let (status, done) = answer(host.send(post("resolve", json!({ "op": "delete_host", "files": [a], "token": delete_a_token }))).await);
+    assert_eq!((status, done["done"].as_u64()), (StatusCode::OK, Some(1)), "{done}");
+    assert_eq!(resolved.lock().unwrap().as_slice(), [(SyncOp::DeleteHost, vec!["src/a.txt".to_string()], Some("00ff".to_string()))]);
+    // Forgetting a record destroys nothing and takes none.
+    let (status, _) = answer(host.send(post("resolve", json!({ "op": "forget", "files": [a] }))).await);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resolved.lock().unwrap().last(), Some(&(SyncOp::Forget, vec!["src/a.txt".to_string()], None)));
+
+    // The window repeats the checks and says which one stopped it.
+    let window_says = |code: &str| Some(DesktopResponse::Error { code: code.into(), message: "words that may name a path".into() });
+    *forced.lock().unwrap() = window_says("hpc_host");
+    assert_eq!(code(answer(host.send(post("preview", json!({ "op": "delete_local", "files": [a] }))).await)), (StatusCode::FORBIDDEN, json!("hpc_host")));
+    *forced.lock().unwrap() = window_says("preview_stale");
+    assert_eq!(code(answer(host.send(post("resolve", json!({ "op": "delete_host", "files": [a], "token": delete_a_token }))).await)), (StatusCode::CONFLICT, json!("preview_stale")));
+    *forced.lock().unwrap() = window_says("sync_off");
+    assert_eq!(code(answer(host.send(post("resolve", json!({ "op": "forget", "files": [a] }))).await)), (StatusCode::FORBIDDEN, json!("sync_off")));
+    *forced.lock().unwrap() = window_says("something with /srv/aurora in it");
+    let (status, other) = answer(host.send(post("resolve", json!({ "op": "forget", "files": [a] }))).await);
+    assert_eq!((status, other["error"].clone()), (StatusCode::CONFLICT, json!("sync_failed")));
+    assert!(!other.to_string().contains("/srv"), "{other}");
+
+    // A window that sends no usable fingerprint gets no receipt minted for it.
+    *forced.lock().unwrap() = Some(DesktopResponse::SyncPreview { preview: Default::default(), fingerprint: String::new() });
+    assert_eq!(code(answer(host.send(post("preview", json!({ "op": "delete_host", "files": [a] }))).await)), (StatusCode::SERVICE_UNAVAILABLE, json!("desktop_unavailable")));
     desktop.abort();
 }
 
@@ -4570,7 +4855,7 @@ async fn the_remote_side_of_the_files_rides_the_desktops_master_or_says_host_off
     }
     // The refresher's socket is not there: offline, without `ssh -G` or a dial.
     let local_token = files::seal(host.state.auth.lock_ok().host_key(), RAW_PROJECT, "a.txt").unwrap();
-    for uri in [format!("{base}?on=host"), format!("{base}/search?q=notes&on=host")] {
+    for uri in [format!("{base}?on=host"), format!("{base}/search?q=notes&on=host"), format!("{base}/entry?name=a.txt&on=host")] {
         let (status, _, body) = host.send(get_as(&uri, &cookie)).await;
         assert_eq!((status, json(&body)["error"].clone()), (StatusCode::CONFLICT, json!("host_offline")), "{uri}: {body}");
     }
@@ -4771,7 +5056,7 @@ async fn annotate_appends_remarks_to_a_project_pdf_behind_its_own_switch() {
 /// a file past `MAX_CONTROL_MESSAGE` lands, one past `MAX_INBOX_FILE` is
 /// refused before the handler runs.
 #[tokio::test]
-async fn upload_here_takes_a_whole_file_up_to_the_inbox_limit() {
+async fn upload_here_streams_a_file_past_the_inbox_limit_and_refuses_past_its_own() {
     let host = Fixture::with_project();
     let cookie = host.pair_device(&signing_key(39)).await.0;
     let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
@@ -4793,9 +5078,136 @@ async fn upload_here_takes_a_whole_file_up_to_the_inbox_limit() {
     let (status, _, body) = host.send(upload("big.bin", vec![7; MAX_CONTROL_MESSAGE + 1])).await;
     assert_eq!(status, StatusCode::CREATED, "answered: {body}");
     assert_eq!(std::fs::metadata(host.root.join("big.bin")).unwrap().len(), (MAX_CONTROL_MESSAGE + 1) as u64);
-    let (status, ..) = host.send(upload("huge.bin", vec![7; inbox::MAX_INBOX_FILE + 1])).await;
-    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
-    assert!(!host.root.join("huge.bin").exists());
+    // Past the 24 MiB a whole body is held to, the body is staged on disk
+    // and lands whole.
+    let (status, _, body) = host.send(upload("huge.bin", vec![7; inbox::MAX_INBOX_FILE + 1])).await;
+    assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+    assert_eq!(std::fs::metadata(host.root.join("huge.bin")).unwrap().len(), (inbox::MAX_INBOX_FILE + 1) as u64);
+    // One that says it is past the cap is refused before a byte is staged.
+    let mut declared = upload("past.bin", vec![1]);
+    declared.headers_mut().insert(header::CONTENT_LENGTH, (uploads::MAX_UPLOAD_FILE + 1).to_string().parse().unwrap());
+    let (status, _, body) = host.send(declared).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "answered: {body}");
+    assert!(!host.root.join("past.bin").exists());
+    let (status, ..) = host.send(upload("empty.bin", Vec::new())).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Nothing is left in the staging folder, landed or refused.
+    let staging = host.state.config.state_dir.join("mobile-control").join("upload-staging");
+    assert_eq!(std::fs::read_dir(&staging).map(|dir| dir.count()).unwrap_or(0), 0);
+}
+
+/// An upload claims its room (`uploads::reserve`) under the log lock, which a
+/// copy into a project holds for its whole length: the claim is made off the
+/// connection executor, so a copy in progress does not stall every other
+/// request on it (on a current-thread runtime, the clock stops if it does).
+#[tokio::test]
+async fn an_upload_waiting_for_the_log_lock_does_not_stall_the_connection_executor() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(77)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+    )
+    .unwrap();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        uploads::while_log_locked(|| {
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+        });
+    });
+    locked_rx.recv().unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/projects/{project_id}/files/upload?name=late.bin"))
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::COOKIE, cookie_pair(&cookie))
+        .body(Body::from(vec![1u8; 16]))
+        .expect("request");
+    let send = host.send(request);
+    tokio::pin!(send);
+    let mut ticks = 0;
+    let (status, _, answer) = loop {
+        tokio::select! {
+            reply = &mut send => break reply,
+            () = tokio::time::sleep(Duration::from_millis(10)) => ticks += 1,
+        }
+    };
+    holder.join().unwrap();
+    assert_eq!(status, StatusCode::CREATED, "answered: {answer}");
+    assert!(ticks >= 5, "the executor was stalled while the upload waited for the log lock: {ticks} ticks");
+}
+
+/// **New folder** makes an empty folder in a folder that takes uploads, never
+/// over a name and never a dot one, and takes back only what it made while it
+/// is empty; **Download as zip** streams the folder's files.
+#[tokio::test]
+async fn new_folder_is_add_only_and_a_folder_downloads_as_a_zip() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(41)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": true, "project_uploads": true } }).to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(host.root.join("data")).unwrap();
+    std::fs::create_dir_all(host.root.join(".github")).unwrap();
+    std::fs::write(host.root.join("data").join("a.csv"), "x,y\n1,2\n").unwrap();
+    let request = |method: &str, uri: String| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::ORIGIN, ORIGIN)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::empty())
+            .expect("request")
+    };
+    let base = format!("/api/v1/projects/{project_id}/files");
+    let (status, _, body) = host.send(request("POST", format!("{base}/folder?name=figures"))).await;
+    assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+    let made = json(&body)["entry"].clone();
+    assert_eq!((made["name"].as_str(), made["kind"].as_str()), (Some("figures"), Some("dir")));
+    assert!(host.root.join("figures").is_dir());
+    for name in ["figures", "data"] {
+        let (_, _, body) = host.send(request("POST", format!("{base}/folder?name={name}"))).await;
+        assert_eq!(json(&body)["error"], "already_exists", "{name}: {body}");
+    }
+    // A dot name is cleaned of its dot; inside a dot folder nothing is made.
+    let (_, _, listed) = host.send(get_as(&base, &cookie)).await;
+    let token_of = |name: &str| json(&listed)["entries"].as_array().unwrap().iter().find(|e| e["name"] == name).unwrap()["token"].as_str().unwrap().to_string();
+    let (_, _, body) = host.send(request("POST", format!("{base}/folder?name=x&dir={}", token_of(".github")))).await;
+    assert_eq!(json(&body)["error"], "upload_refused", "{body}");
+    assert!(!host.root.join(".github").join("x").exists());
+
+    // Undo: not a folder it did not make, not one with something in it.
+    let data = token_of("data");
+    let (status, ..) = host.send(request("DELETE", format!("{base}/folder?f={data}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(host.root.join("data").join("a.csv").exists());
+    let figures = made["token"].as_str().unwrap();
+    std::fs::write(host.root.join("figures").join("plot.png"), "x").unwrap();
+    let (status, ..) = host.send(request("DELETE", format!("{base}/folder?f={figures}"))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    std::fs::remove_file(host.root.join("figures").join("plot.png")).unwrap();
+    let (status, ..) = host.send(request("DELETE", format!("{base}/folder?f={figures}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!host.root.join("figures").exists());
+
+    // The folder as a zip, by its token; the remote side has none. A file named
+    // with a leading dash is left out and counted (gap 98).
+    std::fs::write(host.root.join("data").join("-flag.csv"), "x").unwrap();
+    let (_, _, body) = host.send(get_as(&format!("{base}/zip?dir={data}&check=1"), &cookie)).await;
+    assert_eq!(json(&body), json!({ "files": 1, "bytes": 8, "skipped": 1 }));
+    let (status, headers, _) = host.send(get_as(&format!("{base}/zip?dir={data}"), &cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/zip");
+    assert!(headers[header::CONTENT_DISPOSITION].to_str().unwrap().contains("data.zip"));
+    let (status, ..) = host.send(get_as(&format!("{base}/zip?dir={data}&on=host"), &cookie)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -5198,10 +5610,16 @@ async fn a_server_daemon_answers_markup_from_its_own_asks() {
     let question = &asks[0].questions[0];
     assert_eq!((question.header.as_deref(), question.page, question.quote.as_deref()), (Some("Word"), Some(2), Some("the lede")));
     assert_eq!(question.options[1].description.as_deref(), Some("as written"));
-    // Without the server link the same request goes to a window, and
-    // there is none: the desktop's quiet `desktop_unavailable`.
+    // Without the server link the same request goes to a window first, and
+    // there is none: a desktop's Mobile host answers from the asks it holds
+    // for the tab itself, and a tab it holds nothing for is the desktop's
+    // quiet `desktop_unavailable`.
     let desktop = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
-    let refused = markup_call(&host.state, desktop, &tab).await.expect_err("no window");
+    let Ok(DesktopResponse::MarkupQuestions { asks, .. }) = markup_call(&host.state, desktop.clone(), &tab).await else { panic!("the host answers") };
+    assert_eq!(asks.len(), 1);
+    let mut quiet = tab.clone();
+    quiet.schedule_target_id = Some("t-server-markup-quiet".into());
+    let refused = markup_call(&host.state, desktop, &quiet).await.expect_err("no window, nothing asked");
     assert_eq!(refused.0, StatusCode::SERVICE_UNAVAILABLE);
 
     let answer = DesktopRequest::MarkupAnswer {
@@ -5244,6 +5662,99 @@ async fn a_server_daemon_answers_markup_from_its_own_asks() {
     let list = DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
     let none = markup_call(&state, list, &tab).await.expect_err("no target");
     assert_eq!(refused_code(&none), "tab_not_found");
+}
+
+/// A tab the Mobile host spawned asks of the host (`docs/headless_mcp_plan.md`
+/// phase 1b), so its asks and ticks live in this process: with no window open
+/// the phone's markup routes answer from them (the answer held for the tab
+/// as a phone prompt is with no window); a tab with nothing asked stays the
+/// quiet `desktop_unavailable`. With a window open the request goes to the
+/// window — whose commands read this store over the admin socket — and this
+/// process holds nothing; a window that does not know the tab is no answer
+/// either, so the host answers.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_tab_the_host_spawned_gets_its_markup_answered_by_the_host_without_a_window() {
+    use crate::services::markup_mcp::{test_open_ask, test_tick};
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(67)).await.0;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let mut tab = catalog_unfiltered(&host.state).expect("catalog").tab(&tab_id).expect("the tab").1.clone();
+    let target = "t-host-markup";
+    tab.schedule_target_id = Some(target.into());
+    let questions = || json!([{ "question": "Which word?", "options": [{ "label": "lead" }, { "label": "lede" }] }]);
+    let ask = test_open_ask("host-markup", RAW_PROJECT, target, questions());
+    std::fs::write(host.root.join("draft.pdf"), b"%PDF-1.4\n%%EOF\n").unwrap();
+    let ticked = test_tick("host-markup-ticks", RAW_PROJECT, target, &host.root, "draft.pdf", "k3x9a0b1", &[(1, 1), (2, 3)]);
+    assert_eq!(ticked["count"], 2, "{ticked}");
+    let rid = || "r".to_string();
+    let list = || DesktopRequest::MarkupQuestions { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), path: None };
+    let answer = |ask_id: &str| DesktopRequest::MarkupAnswer {
+        request_id: rid(),
+        project_id: RAW_PROJECT.into(),
+        tmux_session: tab.tmux_name.clone(),
+        ask_id: ask_id.into(),
+        answers: vec![super::super::protocol::MobileMarkupAnswer { options: vec![1], other: None }],
+        device_id: Some("phone-1".into()),
+    };
+
+    // No window: the host's own ask and ticks.
+    let Ok(DesktopResponse::MarkupQuestions { asks, ticks }) = markup_call(&host.state, list(), &tab).await else { panic!("the host answers") };
+    assert_eq!(asks.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [ask.as_str()]);
+    assert_eq!(ticks.len(), 2);
+    // A tab that asked nothing is the quiet `desktop_unavailable`, for a
+    // list, an answer and a dismissal alike.
+    let mut quiet = tab.clone();
+    quiet.schedule_target_id = Some("t-host-markup-quiet".into());
+    let dismiss = |ask_id: &str| DesktopRequest::MarkupDismiss { request_id: rid(), project_id: RAW_PROJECT.into(), tmux_session: tab.tmux_name.clone(), ask_id: ask_id.into() };
+    for request in [list(), answer(&ask), dismiss(&ask)] {
+        let refused = markup_call(&host.state, request, &quiet).await.expect_err("nothing asked by that tab");
+        assert_eq!((refused.0, refused_code(&refused)), (StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable".to_string()));
+    }
+    // The answer is held for the tab, typed at once, and the ask is closed.
+    assert!(matches!(markup_call(&host.state, answer(&ask), &tab).await, Ok(DesktopResponse::Seen)));
+    let held = crate::services::agent_tasks::list_at(&host.state.config.state_dir, RAW_PROJECT, target).expect("the tab's rules");
+    assert_eq!(held.len(), 1, "the answer's prompt is held for the tab");
+    assert!(held[0].message.contains("lede"), "{}", held[0].message);
+    assert_eq!(held[0].phone_device.as_deref(), Some("phone-1"));
+    assert!(host.state.holds.due(&held[0].id));
+    let Ok(DesktopResponse::MarkupQuestions { asks, ticks }) = markup_call(&host.state, list(), &tab).await else { panic!("ticks stay") };
+    assert!(asks.is_empty());
+    assert_eq!(ticks.len(), 2, "answering an ask does not clear the ticks");
+
+    // A window open: the request goes there, and the host holds nothing more.
+    let second = test_open_ask("host-markup", RAW_PROJECT, target, questions());
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let seen: Arc<Mutex<Vec<DesktopRequest>>> = Arc::default();
+    let log = seen.clone();
+    let desktop = tokio::spawn(async move {
+        for turn in 0..3 {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let Ok(request) = admin::read_frame::<DesktopRequest>(&mut stream).await else { continue };
+            let response = match (&request, turn) {
+                // A window that has not met the tab yet.
+                (DesktopRequest::MarkupQuestions { .. }, 2) => DesktopResponse::Error { code: "tab_not_found".into(), message: "unknown".into() },
+                (DesktopRequest::MarkupQuestions { .. }, _) => DesktopResponse::MarkupQuestions { asks: Vec::new(), ticks: Vec::new() },
+                (DesktopRequest::MarkupAnswer { .. }, _) => DesktopResponse::Seen,
+                (other, _) => panic!("unexpected request {other:?}"),
+            };
+            log.lock().unwrap().push(request);
+            admin::write_frame(&mut stream, &response).await.expect("answer");
+        }
+    });
+    assert!(matches!(markup_call(&host.state, answer(&second), &tab).await, Ok(DesktopResponse::Seen)));
+    let Ok(DesktopResponse::MarkupQuestions { asks, .. }) = markup_call(&host.state, list(), &tab).await else { panic!("the window answers") };
+    assert!(asks.is_empty(), "the window's answer stands: it reads the host's asks itself");
+    let held = crate::services::agent_tasks::list_at(&host.state.config.state_dir, RAW_PROJECT, target).expect("the tab's rules");
+    assert_eq!(held.len(), 1, "the window queued it, not the host");
+    // The window does not know the tab: the host's own ask is the answer.
+    let Ok(DesktopResponse::MarkupQuestions { asks, .. }) = markup_call(&host.state, list(), &tab).await else { panic!("the host answers") };
+    assert_eq!(asks.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), [second.as_str()]);
+    desktop.await.expect("fake window");
+    let seen = seen.lock().unwrap();
+    assert!(matches!(&seen[0], DesktopRequest::MarkupAnswer { ask_id, .. } if *ask_id == second));
+    assert!(matches!(&seen[1], DesktopRequest::MarkupQuestions { .. }));
 }
 
 #[cfg(unix)]
@@ -5980,6 +6491,7 @@ async fn a_project_open_to_one_phone_is_an_unknown_id_to_the_other() {
             ("GET", format!("/api/v1/projects/{project}/files"), None),
             ("GET", format!("/api/v1/projects/{project}/files/raw?f={token}"), None),
             ("GET", format!("/api/v1/projects/{project}/files/search?q=paper"), None),
+            ("GET", format!("/api/v1/projects/{project}/files/entry?name=paper.pdf"), None),
             ("POST", format!("/api/v1/projects/{project}/files/upload?name=paper.pdf"), None),
             ("DELETE", format!("/api/v1/projects/{project}/files/upload?f={token}"), None),
             ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),

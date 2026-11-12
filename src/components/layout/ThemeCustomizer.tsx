@@ -33,6 +33,7 @@ import {
 import { Dropdown } from "../common/Dropdown";
 import { SettingsCard, SettingsHeader, SettingsSection, SettingRow } from "./settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The Theme Customizer: a window of its own for recoloring the active theme
@@ -706,7 +707,7 @@ export function ThemeCustomizerDialog({
                         }
                       }}
                     >
-                      {pendingDelete === preset.id ? t("theme.presets.confirm") : "×"}
+                      {pendingDelete === preset.id ? t("theme.presets.confirm") : <CloseIcon />}
                     </button>
                   </div>
                 ))

@@ -28,6 +28,7 @@ import { ProjectsPage } from "./intro/ProjectsPage";
 import { AgentsPage } from "./intro/AgentsPage";
 import { LocalModelsPage } from "./intro/LocalModelsPage";
 import { AskAppPage } from "./intro/AskAppPage";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 /**
  * The first-run intro: a paged wizard shown once on the first launch of an
@@ -189,7 +190,7 @@ export function HowToStart({ onClose, firstRun = false }: {
           </div>
           <div className="dialog-fixed-footer settings-link-row intro-footer">
             <button type="button" className="settings-btn" disabled={index === 0} onClick={() => step(-1)}>
-              ‹ {t("common.back")}
+              <ChevronLeftIcon /> {t("common.back")}
             </button>
             <span className="settings-help intro-progress">
               {t("intro.progress", { n: index + 1, total: route.length })}
@@ -206,7 +207,7 @@ export function HowToStart({ onClose, firstRun = false }: {
               </button>
             ) : (
               <button type="button" autoFocus className="settings-btn primary how-to-start-got-it" onClick={() => step(1)}>
-                {t("common.next")} ›
+                {t("common.next")} <ChevronRightIcon />
               </button>
             )}
           </div>

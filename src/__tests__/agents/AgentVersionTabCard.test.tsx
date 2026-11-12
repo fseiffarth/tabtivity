@@ -65,14 +65,14 @@ describe("agent tab version card", () => {
   it("hides the checked Codex release while the running backend still has its old table", async () => {
     const oldBackend = report({
       agent: "codex",
-      version: "0.162.1",
+      version: "0.167.1",
       stale: [
         { version: "0.157.0", surface: "mode lines", direction: "newer" },
         { version: "0.159.2", surface: "model sheet", direction: "newer" },
       ],
     });
     expect(newerNotice(oldBackend)).toBeNull();
-    expect(newerNotice({ ...oldBackend, version: "0.162.2" })?.installed).toBe("0.162.2");
+    expect(newerNotice({ ...oldBackend, version: "0.167.2" })?.installed).toBe("0.167.2");
     mockVersions([oldBackend]);
     const pane = host();
     render(<TerminalVersionCard host={pane} cmd="codex" />);

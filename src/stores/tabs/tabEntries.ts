@@ -6,13 +6,14 @@ import { isTabColor } from "../../lib/theme/tabColors";
 import { normalizeStackName } from "../../lib/tabStacks";
 import { isTabMark } from "../../lib/tabMarks";
 import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
-import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import { newTmuxSessionName } from "../../lib/terminal/tmuxSession";
 import { envName } from "../../lib/brand";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../../lib/assistant";
+import { restoredTaskName } from "../../lib/agents/autoTabName";
+import { readCockpitMeta } from "../../lib/cockpit/agentNotes";
 import type { SavedTabEntry, TabEntry, TabKind } from "./types";
 import { nextKey } from "./ids";
-import { FILES_TAB_CMD, cmdToKind, isRelaunchableLocalTab, isResumableAgentTab } from "./tabKinds";
+import { FILES_TAB_CMD, cmdToKind, isRelaunchableLocalTab, isResumableAgentTab, resumeArgsOf } from "./tabKinds";
 
 /** A shell tab, or a remote agent tab (Claude/Codex/…), gets a stable persisted
  *  tmux session name at creation (TODO #85), so a persistent remote run reattaches
@@ -76,6 +77,10 @@ export function normalizeTodoId(value: unknown): string | undefined {
  *   project's container, which is the safe direction (`lib/remote/hostBound.ts`).
  * - `mark` and `todoId` are dropped: the card is the original's, and a copied
  *   Urgent would double what the project pill says needs attention.
+ * - `autoLabel`/`autoNamed`/`taskName` are dropped: the copy is a conversation of its
+ *   own, armed afresh for the name of its own first prompt (`withAutoLabel`).
+ * - `cockpitMeta` is dropped: the notes are the original agent's, and the
+ *   host strips them from a created tab anyway.
  */
 export function duplicateSpec(tab: TabEntry): Omit<TabEntry, "key"> {
   const {
@@ -87,6 +92,10 @@ export function duplicateSpec(tab: TabEntry): Omit<TabEntry, "key"> {
     scheduleTargetId: _scheduleTarget,
     mark: _mark,
     todoId: _todo,
+    autoLabel: _autoLabel,
+    autoNamed: _autoNamed,
+    taskName: _taskName,
+    cockpitMeta: _cockpitMeta,
     ...rest
   } = tab;
   if (!sessionId) return rest;
@@ -138,16 +147,27 @@ export function restoreSavedTab(
   // (`restoredAgentCwd`).
   const isAgent = kind === "agent" || kind === "local_agent";
   const freshKey = nextKey(kind);
+  // A relaunchable local-model tab runs its launch line again: the backend
+  // re-validated it against the driver table on load (`localLaunch`).
+  const localLaunch =
+    kind === "local_agent" && isRelaunchableLocalTab({ kind, localLaunch: t.localLaunch })
+      ? t.localLaunch
+      : undefined;
+  // A local-model OpenCode tab saved before it had a key gets one now, and
+  // the `--continue` that gives it takes it back to its folder's newest
+  // session once (`opencode_session::resolve`), until a prompt records its own.
+  const sessionId = t.sessionId ?? (localLaunch && t.cmd === "opencode" ? crypto.randomUUID() : undefined);
   // Resumable agent tabs (Claude with a sessionId) respawn with their
   // resume flag so the prior conversation comes back; everyone else starts
   // fresh with no args.
   const tabShape = {
     kind,
     cmd: t.cmd,
-    sessionId: t.sessionId,
+    sessionId,
     // A Tabby chat takes no schedule (the backend refuses one for the scope).
     scheduleTargetId: isAgent && ctx.scope !== ASSISTANT_SCOPE ? (t.scheduleTargetId ?? crypto.randomUUID()) : undefined,
     resumeArgs: t.resumeArgs,
+    localLaunch,
   };
   // A built-in looks its cmd up in the static table; only a custom agent
   // falls back to the resume flag carried on the tab.
@@ -161,20 +181,7 @@ export function restoreSavedTab(
   // the table produces the same args anyway, so preferring it costs nothing.
   // A custom agent's flag is re-derived from `settings.json` by the backend
   // sanitizer (`terminal_service::sanitize_tab_layout`) before it reaches here.
-  // A relaunchable local-model tab runs its launch line again: the backend
-  // re-validated it against the driver table on load (`localLaunch`).
-  const localLaunch =
-    kind === "local_agent" && isRelaunchableLocalTab({ kind, localLaunch: t.localLaunch })
-      ? t.localLaunch
-      : undefined;
-  const base =
-    isResumableAgentTab(tabShape) && t.sessionId
-      ? t.cmd in RESUMABLE_AGENTS
-        ? RESUMABLE_AGENTS[t.cmd](t.sessionId)
-        : (t.resumeArgs ?? [])
-      : localLaunch
-        ? [...localLaunch.args]
-        : [];
+  const base = resumeArgsOf(tabShape);
   // No permission-mode flag is folded in here, and a layout written before
   // that toggle was removed carries an `agentMode` this ignores. An agent
   // restores on the plain resume command and picks its mode up where it
@@ -193,8 +200,8 @@ export function restoreSavedTab(
   // would otherwise lose the binding. It is not a user-configurable
   // environment override.
   const env = { ...(t.env ?? {}) };
-  if (isResumableAgentTab(tabShape) && t.sessionId) {
-    env[envName("TAB_UID")] = t.sessionId;
+  if (isResumableAgentTab(tabShape) && sessionId) {
+    env[envName("TAB_UID")] = sessionId;
   }
   return {
     key: freshKey,
@@ -212,7 +219,7 @@ export function restoreSavedTab(
         ? restoredAgentCwd(t.cwd, ctx.defaultCwd, ctx.agentRoots)
         : t.cwd || ctx.defaultCwd,
     kind,
-    sessionId: t.sessionId,
+    sessionId,
     // The binding into agent_tasks.json. Kept from the layout when it has one,
     // minted here otherwise (a layout written before schedules existed) — it
     // used to be computed on `tabShape` only and never reach the entry, so a
@@ -285,6 +292,12 @@ export function restoreSavedTab(
     stack: normalizeStackName(t.stack),
     mark: isTabMark(t.mark) ? t.mark : undefined,
       todoId: normalizeTodoId(t.todoId),
+      // Named by its task: plain text from the file, capped; without one
+      // the tab is simply never named by a prompt.
+      ...restoredTaskName(t),
+      // The agent's own notes, as the host stored them: validated and bounded
+      // again on the way in, and never written back from here.
+      cockpitMeta: readCockpitMeta(t.cockpitMeta),
     };
 }
 

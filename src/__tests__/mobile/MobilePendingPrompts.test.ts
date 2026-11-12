@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { arrivedPending, pendingPrompt, recordsPrompt, withPending } from "../../../mobile-web/src/terminal/pendingPrompts";
+import { arrivedPending, pendingPrompt, recordedRun, recordsPrompt, withPending } from "../../../mobile-web/src/terminal/pendingPrompts";
 
 describe("a sent prompt's record", () => {
   it("is the same words, or a cut record's opening", () => {
@@ -28,5 +28,36 @@ describe("a sent prompt's record", () => {
     const after: TranscriptEntry[] = [...before, { kind: "prompt", text: long.slice(0, 6000).trim(), cut: true, at: "2026-10-14T10:01:00Z" }];
     expect([...arrivedPending(after, [sent])]).toEqual([1]);
     expect(withPending(after, [sent]).filter((entry) => entry.kind === "prompt")).toHaveLength(1);
+  });
+});
+
+describe("one record for several held prompts", () => {
+  const held = (id: number, text: string) => ({ ...pendingPrompt(id, text, []), held: `h${id}` });
+
+  it("gives each its bubble in the record's place: Codex sends a stopped queue as one", () => {
+    const pending = [held(1, "second"), held(2, "third")];
+    const entries: TranscriptEntry[] = [
+      { kind: "prompt", text: "first" },
+      { kind: "prompt", text: "second\nthird" },
+      { kind: "answer", text: "done" },
+    ];
+    expect(arrivedPending(entries, pending)).toEqual(new Set([1, 2]));
+    const shown = withPending(entries, pending);
+    expect(shown.map((entry) => entry.text)).toEqual(["first", "second", "third", "done"]);
+    expect(shown.some((entry) => entry.queued)).toBe(false);
+  });
+
+  it("leaves a third prompt outside the record queued", () => {
+    const pending = [held(1, "second"), held(2, "third"), held(3, "fourth")];
+    const entries: TranscriptEntry[] = [{ kind: "prompt", text: "second\nthird" }];
+    expect(arrivedPending(entries, pending)).toEqual(new Set([1, 2]));
+    const shown = withPending(entries, pending);
+    expect(shown[shown.length - 1]).toMatchObject({ text: "fourth", queued: true });
+  });
+
+  it("names the run a record holds", () => {
+    expect(recordedRun({ text: "b\nc" }, ["a", "b", "c", "d"])).toEqual([1, 2]);
+    expect(recordedRun({ text: "b" }, ["a", "b"])).toEqual([]);
+    expect(recordedRun({ text: "c\nb" }, ["b", "c"])).toEqual([]);
   });
 });

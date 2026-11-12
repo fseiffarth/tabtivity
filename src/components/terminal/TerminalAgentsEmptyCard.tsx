@@ -3,6 +3,7 @@ import { useT } from "../../lib/i18n";
 import { storageKey } from "../../lib/brand";
 import { UntestedTag } from "../common/UntestedTag";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** localStorage record of project ids whose empty-AGENTS.md card was dismissed. */
 const DISMISSED_KEY = storageKey("agents-empty-dismissed");
@@ -70,7 +71,7 @@ export function TerminalAgentsEmptyCard({
         title={t("terminal.agentsEmpty.dismiss")}
         onClick={dismiss}
       >
-        ×
+        <CloseIcon />
       </button>
       <div className="hint-bubble-title">
         {t("terminal.agentsEmpty.title")} <UntestedTag id="terminal.agentsEmpty" />

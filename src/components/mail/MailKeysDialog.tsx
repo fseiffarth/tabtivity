@@ -24,7 +24,7 @@ import { useModalFocus } from "../../hooks/useModalFocus";
  */
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { useT } from "../../lib/i18n";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import {
   formatFingerprint,
   mailPgpBind,
@@ -38,7 +38,9 @@ import {
 } from "../../lib/mail";
 import type { MailAccount, PgpKeyInfo } from "../../types/mail";
 import { UntestedTag } from "../common/UntestedTag";
+import { useDialogs } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 export interface MailKeysDialogProps {
   /** The account new keys are generated for and bound to. */
@@ -49,11 +51,27 @@ export interface MailKeysDialogProps {
 export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
   const t = useT();
   const modalRef = useModalFocus(onClose);
+  const { confirmAction, dialogs } = useDialogs();
   const [keys, setKeys] = useState<PgpKeyInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pasted, setPasted] = useState("");
   const [exported, setExported] = useState<{ fingerprint: string; armored: string } | null>(null);
+  // What the last import or bind did to a key's trust (a re-import with other
+  // user ids drops the tick and the account binding; binding an imported
+  // private key leaves it unchecked), said in words rather than only shown as
+  // a changed row.
+  const [notices, setNotices] = useState<string[]>([]);
+
+  const noticesOf = (infos: PgpKeyInfo[]) =>
+    infos.flatMap((info) =>
+      info.notes.flatMap((note) => {
+        const key = KEY_NOTE_KEYS[note];
+        if (!key) return [];
+        const name = info.identities.join(", ") || formatFingerprint(info.fingerprint);
+        return [t(key, { name })];
+      }),
+    );
 
   const refresh = useCallback(async () => {
     try {
@@ -71,14 +89,35 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
+    setNotices([]);
     try {
-      await fn();
+      const result = await fn();
+      if (Array.isArray(result)) setNotices(noticesOf(result as PgpKeyInfo[]));
+      else if (result && typeof result === "object" && "notes" in result) {
+        setNotices(noticesOf([result as PgpKeyInfo]));
+      }
       await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
+  };
+
+  // An imported private key is a file somebody else may hold the other copy
+  // of: binding it as this account's identity asks first, names the risk, and
+  // the backend refuses without the acknowledgement this sends.
+  const bind = async (key: PgpKeyInfo, acct: MailAccount) => {
+    if (key.origin === "imported") {
+      const ok = await confirmAction({
+        title: t("mail.keys.bindImportedTitle"),
+        body: t("mail.keys.bindImportedBody", { address: acct.address }),
+        confirmLabel: t("mail.keys.bindImportedConfirm"),
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    return mailPgpBind(key.fingerprint, acct.id, true, key.origin === "imported");
   };
 
   const mine = keys.filter((k) => k.secret);
@@ -90,6 +129,7 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
     !!account && key.addresses.includes(account.address.trim().toLowerCase());
 
   return createPortal(
+    <>
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
         ref={modalRef}
@@ -103,8 +143,8 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
           <h2>
             {t("mail.keys.title")} <UntestedTag id="mail.keys.title" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 
@@ -163,8 +203,8 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
                 })
               }
               onBind={
-                account && namesAccount(key)
-                  ? () => void run(() => mailPgpBind(key.fingerprint, account.id, true))
+                account && namesAccount(key) && !key.revoked && !key.expired
+                  ? () => void run(() => bind(key, account))
                   : undefined
               }
               onDelete={() => void run(() => mailPgpDelete(key.fingerprint))}
@@ -221,8 +261,9 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
               disabled={busy || !pasted.trim()}
               onClick={() =>
                 void run(async () => {
-                  await mailPgpImport(pasted);
+                  const added = await mailPgpImport(pasted);
                   setPasted("");
+                  return added;
                 })
               }
             >
@@ -249,6 +290,12 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
             </>
           )}
 
+          {notices.map((text) => (
+            <p key={text} className="mail-note">
+              {text}
+            </p>
+          ))}
+
           {error && <ErrorNote className="project-dialog-error" error={error} />}
 
           <div className="mail-dialog-actions">
@@ -258,10 +305,21 @@ export function MailKeysDialog({ account, onClose }: MailKeysDialogProps) {
           </div>
         </div>
       </div>
-    </div>,
+    </div>
+    {/* Beside the backdrop, not inside it: a click in the confirm must not
+        reach the backdrop's close-on-mousedown. */}
+    {dialogs}
+    </>,
     document.body,
   );
 }
+
+/** The machine tokens an import or bind answers with, as their sentences. */
+const KEY_NOTE_KEYS: Record<string, TranslationKey> = {
+  "identities-changed-unverified": "mail.keys.noteIdentitiesChangedUnverified",
+  "identities-changed-unbound": "mail.keys.noteIdentitiesChangedUnbound",
+  "bound-imported-unverified": "mail.keys.noteBoundImportedUnverified",
+};
 
 function KeyRow({
   info,
@@ -294,6 +352,14 @@ function KeyRow({
           trust model, and an abbreviated one is worse than none because it looks
           like it was checked. */}
       <code className="mail-key-fingerprint">{formatFingerprint(info.fingerprint)}</code>
+      {/* A revoked or expired key is not used to check a signature or to
+          encrypt, whatever tick it carries; the row says so. */}
+      {(info.revoked || info.expired) && (
+        <span className="mail-note">
+          {info.revoked ? t("mail.keys.revoked") : t("mail.keys.expired")}{" "}
+          <UntestedTag id="mail.keys.trust" />
+        </span>
+      )}
       {info.secret && info.verified ? (
         <span className="mail-note">{t("mail.keys.ownKey")}</span>
       ) : (

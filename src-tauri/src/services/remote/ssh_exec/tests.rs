@@ -32,6 +32,36 @@ fn reader_secret_never_enters_the_ssh_command_line() {
 }
 
 #[test]
+fn claude_token_never_enters_the_ssh_command_line() {
+    use crate::services::claude_token::{remote_export_line, REMOTE_ENV};
+    let mut env = HashMap::new();
+    env.insert(REMOTE_ENV.into(), "claude-token-fixture".into());
+    env.insert("KEEP".into(), "kept".into());
+
+    let plain = remote_command("claude", &[], &env, "/work", None);
+    assert!(!plain.contains("claude-token-fixture"));
+    assert!(plain.contains(&remote_export_line(true)), "{plain}");
+    assert!(!plain.contains(&format!("export {REMOTE_ENV}")));
+
+    let wrap = TmuxWrap::Session("claude-tab".into());
+    let wrapped = remote_command("claude", &[], &env, "/work", Some(&wrap));
+    assert!(!wrapped.contains("claude-token-fixture"));
+    // The client keeps the variable for tmux to copy; the session drops it.
+    assert!(wrapped.contains(&format!("&& {} &&", remote_export_line(false))), "{wrapped}");
+    assert!(wrapped.contains(&format!("set -g 'update-environment[{CLAUDE_TOKEN_SLOT}]' {REMOTE_ENV} ';'")));
+    assert!(wrapped.contains("\"tmux \"[012].*)"));
+    assert!(!wrapped.contains(&format!("-e {REMOTE_ENV}")));
+
+    // Without the token nothing of it is written.
+    env.remove(REMOTE_ENV);
+    for tmux in [None, Some(&wrap)] {
+        let command = remote_command("claude", &[], &env, "/work", tmux);
+        assert!(!command.contains(REMOTE_ENV));
+        assert!(!command.contains("update-environment"));
+    }
+}
+
+#[test]
 fn shell_quote_wraps_and_escapes() {
     assert_eq!(shell_quote("abc"), "'abc'");
     assert_eq!(shell_quote("a b"), "'a b'");
@@ -770,6 +800,7 @@ fn run_host_script(script: &str, stub: Option<(&str, &str)>) -> std::process::Ou
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink("/bin/sh", dir.path().join("sh")).unwrap();
+    std::os::unix::fs::symlink("/bin/sleep", dir.path().join("sleep")).unwrap();
     if let Some((version, body)) = stub {
         let tmux = dir.path().join("tmux");
         let source = format!("#!/bin/sh\n[ \"$1\" = -V ] && {{ echo 'tmux {version}'; exit 0; }}\n{body}\n");
@@ -856,7 +887,7 @@ fn host_tmux_targets_are_exact_where_the_host_tmux_has_it() {
 #[test]
 fn host_send_now_presses_esc_only_while_the_queue_hint_shows() {
     let name = concat!(crate::app_slug!(), "-p--agent-0123456789");
-    let script = host_tmux_send_now_command(name, "❯", "Press up to edit queued messages").unwrap();
+    let script = host_tmux_send_now_command(name, "❯", "Press up to edit queued messages", "", 1).unwrap();
     let run = |screen: &str| {
         let body = format!(
             "case \"$1 $2\" in \"-u capture-pane\") printf '%s\\n' '{screen}';; \"send-keys \"*) shift; echo \"pressed $*\";; esac"
@@ -872,8 +903,23 @@ fn host_send_now_presses_esc_only_while_the_queue_hint_shows() {
     assert_eq!(run("✻ Pondering… (9s)\n───\n❯ \n───"), "");
     assert_eq!(run("  the box said Press up to edit queued messages\n❯ "), "");
     // A hint that could leave its quotes is refused outright.
-    assert!(host_tmux_send_now_command(name, "❯", "a\"; rm -rf ~; \"").is_none());
-    assert!(host_tmux_send_now_command("bad name", "❯", "words").is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "a\"; rm -rf ~; \"", "", 1).is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "words", "$(reboot)", 1).is_none());
+    assert!(host_tmux_send_now_command("bad name", "❯", "words", "", 1).is_none());
+    assert!(host_tmux_send_now_command(name, "❯", "words", "", 0).is_none());
+
+    // OpenCode's footer: any row, a count between the words, Esc twice.
+    let script = host_tmux_send_now_command(name, "", " · ctrl+x q ", " pending", 2).unwrap();
+    let run = |screen: &str| {
+        let body = format!(
+            "case \"$1 $2\" in \"-u capture-pane\") printf '%s\\n' '{screen}';; \"send-keys \"*) shift; echo \"pressed $*\";; esac"
+        );
+        String::from_utf8_lossy(&run_host_script(&script, Some(("3.6", &body))).stdout).trim().to_string()
+    };
+    let queued = run("🯦 esc stop · ctrl+x q 2 pending · Build · stub");
+    assert_eq!(queued.matches("Escape").count(), 2, "{queued}");
+    assert!(queued.ends_with("sent"), "{queued}");
+    assert_eq!(run("🯦 esc stop · Build · stub"), "");
 }
 
 /// The no-dial claim against the real `ssh` (run with `--ignored`): with

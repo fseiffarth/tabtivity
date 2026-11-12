@@ -49,6 +49,7 @@ pub fn resolve_agent_session(opts: PtyOptions) -> PtyOptions {
         "opencode" => crate::services::opencode_session::resolve(opts),
         "copilot" => crate::services::copilot_session::resolve(opts),
         "agy" => crate::services::google_chat::resolve(opts),
+        "muse" => crate::services::muse_session::resolve(opts),
         _ => opts,
     }
 }
@@ -1326,9 +1327,43 @@ fn claude_prompt_text(text: &str) -> Option<String> {
     if CLAUDE_NOT_A_PROMPT.iter().any(|tag| text.starts_with(*tag)) || is_cli_written_block(text) {
         return None;
     }
-    let text = collapse_pasted_blocks(strip_trailing_blocks(text));
+    let text = drop_inbox_picture_chips(&collapse_pasted_blocks(strip_trailing_blocks(text)));
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
+}
+
+/// A prompt that names an inbox file: without the `[Image #N]` chips Claude
+/// Code put in for pictures pasted beside it. A Tabby chat gets each inbox
+/// picture it is sent as such a paste (`assistant_attach::picture_pastes_in`),
+/// the chip lands wherever the cursor stood when Claude took the picture, and
+/// the reference itself already draws the picture: kept, the chip made the
+/// record differ from the words sent, so the sending bubble never settled.
+/// A prompt with no inbox reference keeps its chips.
+fn drop_inbox_picture_chips(text: &str) -> String {
+    const CHIP: &str = "[Image #";
+    let names_inbox = [crate::brand::INBOX_DIR, crate::brand::LEGACY_INBOX_DIR]
+        .iter()
+        .any(|dir| text.contains(&format!("@{dir}/")));
+    if !names_inbox || !text.contains(CHIP) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(CHIP) {
+        let after = &rest[start + CHIP.len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits == 0 || !after[digits..].starts_with(']') {
+            out.push_str(&rest[..start + CHIP.len()]);
+            rest = after;
+            continue;
+        }
+        // The blank Claude typed before the chip goes with it.
+        let head = &rest[..start];
+        out.push_str(head.strip_suffix(' ').unwrap_or(head));
+        rest = &after[digits + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Text pasted into Claude Code is recorded as `<pasted_content id="…">…
@@ -1596,6 +1631,11 @@ pub(crate) fn live_record_dir(project_id: Option<&str>, uid: &str) -> Option<Pat
 /// before the source and the new id, so a reader that sees `clear` sees it.
 pub const LIVE_CLEARED_SUFFIX: &str = ".prev";
 
+/// Suffix of the marker the hook leaves while a new conversation (a fresh
+/// start or a `/clear`) in a Claude tab with the cockpit lane has not had its
+/// first prompt: that prompt carries `cockpit_mcp::NAME_HINT` and spends it.
+pub const LIVE_TITLE_SUFFIX: &str = ".title";
+
 /// The Claude conversation the tab's last `/clear` ended, while taking it back
 /// is still an undo: the current session is the one that clear started (the
 /// source beside the winning record says `clear` — the undo's own `/resume`, or
@@ -1669,7 +1709,8 @@ fn restore_cleared_in(dir: &std::path::Path, uid: &str, cleared: &str) -> std::i
 /// turns it into `--session <chat>` (`opencode_session::resolve`),
 /// Antigravity's into `--conversation <chat>` (`google_chat::resolve`).
 /// Copilot's record is pointed at `chat` and the tab relaunched too; its spawn
-/// pins `--session-id <chat>` (`copilot_session::resolve`).
+/// pins `--session-id <chat>` (`copilot_session::resolve`). Muse's likewise,
+/// its spawn turning `resume --last` into `resume <chat>` (`muse_session::resolve`).
 /// `None` for any other agent, or a `chat` that is no id of its CLI's.
 pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: &str) -> Option<UndoClearPlan> {
     if !is_uuid_shaped(uid) {
@@ -1692,7 +1733,7 @@ pub fn resume_chat_plan(agent: &str, project_id: Option<&str>, uid: &str, chat: 
             restore_cleared_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
-        "agy" | "copilot" => {
+        "agy" | "copilot" | "muse" => {
             write_live_session_in(&record_dir(), uid, chat).ok()?;
             Some(UndoClearPlan::Relaunch)
         }
@@ -1909,12 +1950,18 @@ pub enum CodexHookState {
 /// Codex asks for the trust approval per config file. `NoCodex` when no home
 /// has run it yet.
 pub fn codex_hook_state() -> CodexHookState {
+    codex_hook_state_across(&crate::services::agent_home::existing_homes_in(&storage::state_dir()))
+}
+
+/// [`codex_hook_state`] over the given homes.
+fn codex_hook_state_across(homes: &[PathBuf]) -> CodexHookState {
     let mut worst: Option<CodexHookState> = None;
-    for home in crate::services::agent_home::existing_homes_in(&storage::state_dir()) {
-        if !home.join(".codex").join("sessions").is_dir() {
+    for home in homes {
+        // The probe home (a warm-up's Codex run) registers no hook by design.
+        if crate::services::agent_home::is_probe_home(home) || !home.join(".codex").join("sessions").is_dir() {
             continue;
         }
-        let state = codex_hook_state_of_home(&home);
+        let state = codex_hook_state_of_home(home);
         let rank = |s: CodexHookState| match s {
             CodexHookState::Enabled => 0,
             CodexHookState::NoCodex => 1,
@@ -2545,10 +2592,11 @@ fn posix_hook_script_body(live_dir: &str) -> String {
 /// the hook runs under the agent's environment, which a project can shape.
 fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let hint = crate::services::agent_hint::HINT;
+    let name_hint = crate::services::cockpit_mcp::NAME_HINT;
     format!(
         "#!/bin/sh\n\
          # {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
-         # Notification, SessionEnd) — records, per tab, the agent's live session id\n\
+         # PermissionRequest, Notification, SessionEnd) — records, per tab, the agent's live session id\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\n\
          # was left in, incl. after /clear), how the session started (so a prompt\n\
          # sent after a /clear is filed under the new session, linked to the old\n\
@@ -2644,17 +2692,33 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          case \"$event:${UPPER}_TAB_AGENT\" in SessionStart:claude|SessionStart:codex) [ -z \"${UPPER}_PROJECT_DIR\" ] ||\n\
          \x20 printf '%s\\n' '{hint}' ;;\n\
          esac\n\
+         # A new conversation (a fresh start or a /clear, not a resume) in a Claude\n\
+         # tab holding the cockpit lane arms a reminder to name the tab; the first\n\
+         # real prompt carries it beside itself and spends it.\n\
+         if [ \"${UPPER}_TAB_AGENT\" = claude ] && [ -n \"${UPPER}_COCKPIT_MCP_URL\" ]; then\n\
+         \x20 title=\"$dir/${UPPER}_TAB_UID{LIVE_TITLE_SUFFIX}\"\n\
+         \x20 case \"$event\" in\n\
+         \x20   SessionStart) case \"$src\" in startup|clear) : > \"$title\" ;; resume) rm -f \"$title\" ;; esac ;;\n\
+         \x20   UserPromptSubmit) if [ -f \"$title\" ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
+         \x20     rm -f \"$title\"; printf '%s\\n' '{name_hint}'\n\
+         \x20   fi ;;\n\
+         \x20 esac\n\
+         fi\n\
          # The turn state, from the events the agent fires as it works: a prompt\n\
          # submitted or a tool finished means working (a finished tool is also what\n\
          # ends an approval wait), Stop means done, a permission or elicitation\n\
          # notice means blocked on the user, the end of the session means idle —\n\
          # unless a /clear ended it: the CLI is still at its prompt, and the\n\
          # verdict it had (done) is what keeps the tab off its stale screen.\n\
+         # A permission request is the dialog opening (a question, an approval,\n\
+         # a plan to accept): Claude 2.1.322 sends its notice for it only 6 s\n\
+         # later, and none at all for one answered sooner.\n\
          turn=\n\
          case \"$event\" in\n\
          \x20 UserPromptSubmit|PostToolUse) turn=working ;;\n\
+         \x20 PermissionRequest) turn=decision ;;\n\
          \x20 Stop) turn=done ;;\n\
-         \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
+         \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
          # A Bash call put in the background (`run_in_background`, or moved there\n\
@@ -2714,9 +2778,10 @@ fn hook_script_body(live_dir: &str) -> String {
     // PowerShell literal so backslashes are not treated as escapes.
     let live_dir = crate::quote::powershell(live_dir);
     let hint = crate::services::agent_hint::HINT;
+    let name_hint = crate::services::cockpit_mcp::NAME_HINT;
     format!(
         "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
-         # Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
+         # PermissionRequest, Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\r\n\
          # was left in, incl. after /clear) and its turn state (working / decision /\r\n\
          # done / idle), which lights the tab's working and finished marks. No-op\r\n\
@@ -2789,14 +2854,28 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 }} elseif (($src -ne 'clear') -and ($src -ne 'resume')) {{ exit 0 }}\r\n\
          }}\r\n\
          if (($env:{UPPER}_TAB_AGENT -eq 'claude' -or $env:{UPPER}_TAB_AGENT -eq 'codex') -and $env:{UPPER}_PROJECT_DIR -and $event -eq 'SessionStart') {{ Write-Output '{hint}' }}\r\n\
+         # The tab-naming reminder (see the POSIX twin).\r\n\
+         if (($env:{UPPER}_TAB_AGENT -eq 'claude') -and $env:{UPPER}_COCKPIT_MCP_URL) {{\r\n\
+         \x20 $title = $rec + '{LIVE_TITLE_SUFFIX}'\r\n\
+         \x20 $how = ''\r\n\
+         \x20 if ($ms.Success) {{ $how = $ms.Groups[1].Value }}\r\n\
+         \x20 if ($event -eq 'SessionStart') {{\r\n\
+         \x20   if (($how -eq 'startup') -or ($how -eq 'clear')) {{ [IO.File]::WriteAllText($title, '') }}\r\n\
+         \x20   elseif ($how -eq 'resume') {{ Remove-Item -LiteralPath $title -Force -ErrorAction SilentlyContinue }}\r\n\
+         \x20 }} elseif (($event -eq 'UserPromptSubmit') -and (Test-Path -LiteralPath $title) -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{\r\n\
+         \x20   Remove-Item -LiteralPath $title -Force -ErrorAction SilentlyContinue\r\n\
+         \x20   Write-Output '{name_hint}'\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
          # The turn state, from the events the agent fires as it works (see the\r\n\
          # POSIX twin for the mapping).\r\n\
          $turn = ''\r\n\
          switch ($event) {{\r\n\
          \x20 'UserPromptSubmit' {{ $turn = 'working' }}\r\n\
          \x20 'PostToolUse' {{ $turn = 'working' }}\r\n\
+         \x20 'PermissionRequest' {{ $turn = 'decision' }}\r\n\
          \x20 'Stop' {{ $turn = 'done' }}\r\n\
-         \x20 'Notification' {{ if (($ntype -eq 'permission_prompt') -or ($ntype -eq 'elicitation_dialog')) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
+         \x20 'Notification' {{ if (@('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input') -contains $ntype) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
          }}\r\n\
          if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
@@ -2834,16 +2913,20 @@ fn hook_script_body(live_dir: &str) -> String {
 /// live session id across startup/resume/clear/compact; `Stop` re-records it
 /// *with* `permission_mode` after every response — SessionStart payloads don't
 /// carry the mode and a shift+tab mode cycle fires no event of its own, so the
-/// latest Stop record is what resume re-applies. The other four carry the tab's
+/// latest Stop record is what resume re-applies. The others carry the tab's
 /// **turn state** (`services::agent_turn`): a submitted prompt or a finished
-/// tool means working, Stop means done, a permission/elicitation notice means
-/// blocked on the user, the session's end means idle. Codex has no
-/// `Notification` hook; its approval wait is still read off its screen.
-pub const HOOK_EVENTS: [&str; 6] = [
+/// tool means working, Stop means done, a permission request (the dialog
+/// opening) or a permission/elicitation notice means blocked on the user, the
+/// session's end means idle. The notice alone came too late: Claude 2.1.322
+/// sends it 6 s after its dialog opens, and not at all for one answered sooner.
+/// Codex is registered for its own list ([`CODEX_HOOK_EVENTS`]); its approval
+/// wait is still read off its screen.
+pub const HOOK_EVENTS: [&str; 7] = [
     "SessionStart",
     "Stop",
     "UserPromptSubmit",
     "PostToolUse",
+    "PermissionRequest",
     "Notification",
     "SessionEnd",
 ];
@@ -2921,7 +3004,8 @@ pub(crate) fn register_hook_in_settings_as(settings: &HomeFile, cmd: &str) -> st
 /// [`crate::services::codex_bind`], the hook-free fallback that keeps Codex tabs
 /// resumable meanwhile.
 /// The events registered with Codex: [`HOOK_EVENTS`] minus `Notification`,
-/// which Codex 0.154 does not offer (its approval wait is read off its screen).
+/// which Codex 0.154 does not offer, and `PermissionRequest`, which Codex 0.167
+/// offers but nobody has verified live (its approval wait is read off its screen).
 pub const CODEX_HOOK_EVENTS: [&str; 5] = [
     "SessionStart",
     "Stop",

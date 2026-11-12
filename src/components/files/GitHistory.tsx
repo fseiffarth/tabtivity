@@ -13,7 +13,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { useGitWorktreeSelectionStore } from "../../stores/gitWorktreeSelection";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { GitMergeBar, GitPullPanel, type MergeState } from "./GitPullPanel";
-import { LockIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
+import { BranchIcon, CloseIcon, LockIcon, RefreshIcon, UnlockIcon, WarningIcon } from "../common/icons/Icon";
 import { gitWorktreeArgs, type GitWorktreeSelection } from "../../lib/gitWorktree";
 import { ErrorNote } from "../common/ErrorNote";
 import { basename } from "../../lib/paths";
@@ -933,7 +933,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
     setFetching(true);
     setError(null);
     try {
-      await invoke("git_fetch", { projectDir, ...gitArgs, projectId: authProjectId ?? null });
+      await invokeTrusted("git_fetch", { projectDir, ...gitArgs, projectId: authProjectId ?? null });
       await load();
       onChanged?.();
     } catch (e) {
@@ -1152,15 +1152,18 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
   return (
     <div className="git-history">
       {dialogs}
-      <div className="git-worktree-context" title={t("gitHistory.selectedWorktree", { name: selectedWorktree?.path ?? projectDir })}>
-        <span>{t("gitHistory.selectedWorktree", { name: basename(selectedWorktree?.path ?? projectDir) })}</span>
-        {remote && <span>{t(wtSite === "host" ? "gitHistory.worktreeSiteHost" : "gitHistory.worktreeSiteMirror")}</span>}
-        <UntestedTag id="gitHistory.worktreeSelection" />
-      </div>
+      {/* One row: the branch and the worktree it is checked out in share the
+          toolbar (the worktree had a row of its own above it until 2026-11-04). */}
       <div className="git-history-toolbar">
-        <span className="git-history-branch" title={t("gitHistory.currentBranchTitle")}>
+        <span
+          className="git-history-branch"
+          title={`${t("gitHistory.currentBranchTitle")}\n${t("gitHistory.selectedWorktree", { name: selectedWorktree?.path ?? projectDir })}`}
+        >
           ⎇ {current ?? t("gitHistory.detached")}
+          <span className="git-history-worktree">{basename(selectedWorktree?.path ?? projectDir)}</span>
+          {remote && <span className="git-history-worktree">{t(wtSite === "host" ? "gitHistory.worktreeSiteHost" : "gitHistory.worktreeSiteMirror")}</span>}
         </span>
+        <UntestedTag id="gitHistory.worktreeSelection" />
         <button
           className={`toolbar-btn git-history-mode${graphMode ? " active" : ""}`}
           onClick={toggleGraphMode}
@@ -1178,7 +1181,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
           {fetching ? t("gitPull.fetchingShort") : t("gitPull.fetch")}
         </button>
         <button className="toolbar-btn git-history-refresh" onClick={load} title={t("common.refresh")} disabled={loading || actionsBusy || !connected}>
-          ⟳
+          <RefreshIcon />
         </button>
       </div>
 
@@ -1532,7 +1535,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                     aria-label={t("gitHistory.selectWorktree", { name: basename(wt.path) })}
                   >
                     <span className="git-worktree-name">{basename(wt.path)}</span>
-                    <span className="git-worktree-branch">⎇ {label}</span>
+                    <span className="git-worktree-branch"><BranchIcon /> {label}</span>
                     {wt.is_main && <span className="git-worktree-main">{t("gitHistory.mainWorktree")}</span>}
                   </button>
                   {!wt.is_main && (
@@ -1563,7 +1566,7 @@ function GitHistoryView({ projectDir, projectId, remote, hostPinned = false, aut
                       aria-label={t("gitHistory.removeWorktreeTitle", { path: wt.path })}
                       title={t("gitHistory.removeWorktreeTitle", { path: wt.path })}
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   )}
                 </span>
@@ -1837,7 +1840,7 @@ function CommitWindow({ projectDir, worktree, commit, onClose, onCheckout, onRew
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="commit-window" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("gitHistory.commitTitle", { short: commit.short })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="commit-window-meta">
           <span>{commit.author}</span>

@@ -21,7 +21,7 @@ beforeEach(() => {
   invokeMock.mockReset();
   // Seed "loading", never "ready": a wait for `ready` would otherwise pass
   // instantly against the seed, before the dialog has even opened.
-  useHostKeyPromptStore.setState({ pending: null, status: "loading", error: "", keys: [], scan: "" });
+  useHostKeyPromptStore.setState({ pending: null, status: "loading", error: "", keys: [] });
 });
 
 describe("unknownHostKeyTarget", () => {
@@ -64,7 +64,6 @@ describe("withHostKeyConfirm", () => {
           target: "build.example:2222",
           known: false,
           keys: [{ keyType: "ED25519", fingerprint: "SHA256:abc", bits: 256 }],
-          scan: "[build.example]:2222 ssh-ed25519 AAAA",
         });
       if (cmd === "ssh_trust_host_key") return Promise.resolve();
       return Promise.reject(new Error(`unexpected ${cmd}`));
@@ -75,8 +74,8 @@ describe("withHostKeyConfirm", () => {
 
     // The dialog opens on the target parsed out of the error, and the preview is
     // fetched for the split host/port — not the joined string.
-    // The scan is what Accept needs, so it is what "the dialog is ready" means.
-    await vi.waitFor(() => expect(useHostKeyPromptStore.getState().scan).not.toBe(""));
+    // The shown keys are what Accept needs, so they are what "the dialog is ready" means.
+    await vi.waitFor(() => expect(useHostKeyPromptStore.getState().keys).not.toHaveLength(0));
     expect(useHostKeyPromptStore.getState().status).toBe("ready");
     expect(useHostKeyPromptStore.getState().pending?.target).toBe("build.example:2222");
     expect(invokeMock).toHaveBeenCalledWith("ssh_host_key_preview", {
@@ -87,10 +86,12 @@ describe("withHostKeyConfirm", () => {
     await useHostKeyPromptStore.getState().accept();
     await expect(done).resolves.toBe("connected");
     expect(attempt).toHaveBeenCalledTimes(2);
-    // What is stored is what was shown — the scan is handed back verbatim, never
-    // re-fetched at accept time.
+    // What is stored is what was shown: the backend gets the host and the shown
+    // fingerprints, never known_hosts text, and stores only a key that matches.
     expect(invokeMock).toHaveBeenCalledWith("ssh_trust_host_key", {
-      scan: "[build.example]:2222 ssh-ed25519 AAAA",
+      host: "build.example",
+      port: 2222,
+      fingerprints: ["SHA256:abc"],
     });
   });
 
@@ -99,7 +100,6 @@ describe("withHostKeyConfirm", () => {
       target: "build.example:2222",
       known: false,
       keys: [{ keyType: "ED25519", fingerprint: "SHA256:abc", bits: 256 }],
-      scan: "line",
     });
     const attempt = vi.fn().mockRejectedValue(REFUSAL);
     const done = withHostKeyConfirm(attempt);
@@ -116,7 +116,7 @@ describe("withHostKeyConfirm", () => {
     // Another connect accepted this host while we were about to ask. There is
     // nothing left to confirm, so the caller must not be shown a dialog it would
     // only have to dismiss.
-    invokeMock.mockResolvedValue({ target: "build.example:22", known: true, keys: [], scan: "" });
+    invokeMock.mockResolvedValue({ target: "build.example:22", known: true, keys: [] });
     const attempt = vi.fn().mockRejectedValueOnce(REFUSAL).mockResolvedValueOnce("connected");
     await expect(withHostKeyConfirm(attempt)).resolves.toBe("connected");
     expect(attempt).toHaveBeenCalledTimes(2);
@@ -126,14 +126,14 @@ describe("withHostKeyConfirm", () => {
 
   it("offers nothing to accept when the host key cannot be read", async () => {
     // No fingerprint ⇒ no question can be asked. The modal must not present an
-    // Accept that would trust an empty scan.
+    // Accept that would trust nothing that was shown.
     invokeMock.mockRejectedValue("no route to host");
     const attempt = vi.fn().mockRejectedValue(REFUSAL);
     const done = withHostKeyConfirm(attempt);
     await vi.waitFor(() => expect(useHostKeyPromptStore.getState().status).toBe("error"));
-    expect(useHostKeyPromptStore.getState().scan).toBe("");
+    expect(useHostKeyPromptStore.getState().keys).toHaveLength(0);
 
-    await useHostKeyPromptStore.getState().accept(); // a no-op with no scan
+    await useHostKeyPromptStore.getState().accept(); // a no-op with no shown key
     expect(invokeMock).not.toHaveBeenCalledWith("ssh_trust_host_key", expect.anything());
     useHostKeyPromptStore.getState().cancel();
     await expect(done).rejects.toBe(REFUSAL);

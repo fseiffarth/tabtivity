@@ -13,6 +13,43 @@ pub const MAX_PENDING: usize = 500;
 pub const MAX_PENDING_PER_TAB: usize = 100;
 pub const MAX_LOG_BYTES: usize = 8 * 1024 * 1024;
 
+/// The usual budget window: calls per rolling hour.
+pub const HOUR: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// The times of the calls a budget admitted, oldest first: the one "N calls
+/// per rolling window" limiter every lane's budget uses.
+#[derive(Debug, Default)]
+pub struct RollingWindow(std::collections::VecDeque<std::time::Instant>);
+
+impl RollingWindow {
+    /// Forget calls `window` or longer before `now`; whether any are left.
+    pub fn prune(&mut self, window: std::time::Duration, now: std::time::Instant) -> bool {
+        self.0.retain(|at| now.saturating_duration_since(*at) < window);
+        !self.0.is_empty()
+    }
+    /// Admit one call at `now` when fewer than `limit` fall in the `window`
+    /// before it. A refused call takes nothing.
+    pub fn admit(&mut self, limit: usize, window: std::time::Duration, now: std::time::Instant) -> bool {
+        self.prune(window, now);
+        if self.0.len() >= limit { return false; }
+        self.0.push_back(now);
+        true
+    }
+    /// The newest admitted call.
+    pub fn last(&self) -> Option<std::time::Instant> { self.0.back().copied() }
+}
+
+/// One [`RollingWindow`] per key (a tab id), as a lane's budget map holds them.
+pub type RollingWindows = std::collections::HashMap<String, RollingWindow>;
+
+/// [`RollingWindow::admit`] for `key`'s window. Every key whose window emptied
+/// is dropped first, so a closed tab's entry does not stay in the map for the
+/// life of the process.
+pub fn admit_keyed(map: &mut RollingWindows, key: &str, limit: usize, window: std::time::Duration, now: std::time::Instant) -> bool {
+    map.retain(|_, calls| calls.prune(window, now));
+    map.entry(key.to_string()).or_default().admit(limit, window, now)
+}
+
 #[derive(Clone, Serialize)]
 pub struct Audit {
     /// Empty for a request that never authenticated ([`audit_admission`]).
@@ -160,7 +197,7 @@ impl Policy {
             && match caller {
                 Caller::Reader => true,
                 Caller::LocalModel => self.mail_local_read,
-                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web => false,
+                Caller::Agent | Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer => false,
             }
     }
 }
@@ -213,7 +250,7 @@ impl Access {
     pub fn initial(caller: Caller) -> Self {
         // A web-lane session reaches no calendar, board, project, mail or
         // account, and writes nothing: its tools carry no root family.
-        if caller == Caller::Web {
+        if matches!(caller, Caller::Web | Caller::Cockpit | Caller::Printer) {
             return Self {
                 calendars: Scope::default(),
                 projects: Scope::default(),
@@ -314,6 +351,10 @@ pub struct ToolPolicy {
     /// Served to [`Caller::Web`] (`services::web_lane`) — and then to no
     /// other class: `web_fetch` and `web_search` set it and nothing else.
     web: bool,
+    cockpit: bool,
+    /// Served to [`Caller::Printer`] (`services::print_mcp`) — and then to no
+    /// other class: the three print tools set it and nothing else.
+    printer: bool,
 }
 impl ToolPolicy {
     pub fn serves(&self, caller: Caller) -> bool {
@@ -322,6 +363,8 @@ impl ToolPolicy {
             Caller::Helper => self.help,
             Caller::Marker => self.marker,
             Caller::Web => self.web,
+            Caller::Cockpit => self.cockpit,
+            Caller::Printer => self.printer,
             Caller::Reader => self.reader,
             Caller::LocalModel => self.root || self.local,
             Caller::Agent => self.root,
@@ -331,6 +374,10 @@ impl ToolPolicy {
 
 /// Every name must be deliberately assigned. Unknown names never inherit a role.
 pub fn tool(name: &str) -> Option<ToolPolicy> {
+    if crate::services::cockpit_mcp::is_tool(name) {
+        return Some(ToolPolicy { family: "cockpit", write: !crate::services::cockpit_mcp::is_read_only(name), destructive: false,
+            root: false, reader: false, local: false, help: false, marker: false, web: false, cockpit: true, printer: false });
+    }
     let (family, write, destructive, root, reader) = match name {
         "proposals_list" => ("session", false, false, true, true),
         "projects_list"
@@ -355,7 +402,7 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         "todo_update" | "todo_delete" => ("board", true, true, true, true),
         "mail_accounts_list" | "mail_drafts_list" => ("mail", false, false, true, true),
         "mail_folders" | "mail_search" | "mail_read" | "mail_thread" => {
-            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false, web: false });
+            return Some(ToolPolicy { family: "mail", write: false, destructive: false, root: false, reader: true, local: true, help: false, marker: false, web: false, cockpit: false, printer: false });
         }
         // The help corpus (`services::help_mcp`): read-only, compiled in, and
         // served to the help identity alone — never to a root or reader tab
@@ -364,21 +411,27 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         | crate::brand::HELP_TOOL_READ
         | crate::brand::HELP_TOOL_TOPICS
         | crate::brand::HELP_TOOL_STATUS => {
-            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false, web: false });
+            return Some(ToolPolicy { family: "help", write: false, destructive: false, root: false, reader: false, local: false, help: true, marker: false, web: false, cockpit: false, printer: false });
         }
         // The markup questions and ticks (`services::markup_mcp`): they only
         // put a card or a tick in front of the user, served to the markup
         // identity alone on `/mcp/markup` — never to a root or reader tab
         // through `/mcp`.
+        // The print requests (`services::print_mcp`): a request only puts a
+        // card in front of the user, who approves every print; served to the
+        // print identity alone on `/mcp/print`.
+        "print_request" | "print_status" | "print_cancel" => {
+            return Some(ToolPolicy { family: "print", write: name != "print_status", destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: false, cockpit: false, printer: true });
+        }
         "markup_ask" | "markup_withdraw" | "markup_done" => {
-            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false });
+            return Some(ToolPolicy { family: "markup", write: true, destructive: false, root: false, reader: false, local: false, help: false, marker: true, web: false, cockpit: false, printer: false });
         }
         // The chat assistant's web lane (`services::web_lane`): a guarded page
         // fetch and a search, served to the web identity alone on `/mcp/web`
         // — never to a root or reader tab through `/mcp`. Family `web` is on
         // no `Access` list, so the handler gates on `serves(Caller::Web)`.
         "web_fetch" | "web_search" => {
-            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true });
+            return Some(ToolPolicy { family: "web", write: false, destructive: false, root: false, reader: false, local: false, help: false, marker: false, web: true, cockpit: false, printer: false });
         }
         "mail_draft_create" => ("mail", true, false, true, true),
         "mail_draft_update" | "mail_draft_delete" => ("mail", true, true, true, true),
@@ -394,6 +447,8 @@ pub fn tool(name: &str) -> Option<ToolPolicy> {
         help: false,
         marker: false,
         web: false,
+        cockpit: false,
+        printer: false,
     })
 }
 

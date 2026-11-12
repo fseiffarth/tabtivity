@@ -33,6 +33,14 @@ import type { MarkupSend } from "../../../mobile-web/src/components/OutboxViewer
 import { SETTLE_MS, type AgentSignal } from "../../../mobile-web/src/markup/submitState";
 import { NAMES } from "../../lib/brand";
 
+/** The round, the ticks and the agent's card wait behind the head's Agent
+ * badge while marking: open its sheet (it stays open while marking). */
+const openAgent = () => {
+  const badge = screen.queryByRole("button", { name: /^Agent/ });
+  if (badge && badge.getAttribute("aria-pressed") !== "true") fireEvent.click(badge);
+};
+
+
 const PICTURE = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
 const PDF = { name: "20261001-120000-paper.pdf", original: "paper.pdf", kind: "application/pdf", size: 9_000, modified: 1_790_000_000 };
 const ROUND = "abcd1234";
@@ -144,6 +152,7 @@ describe("MarkupView · the agent's ticks", () => {
     const onSend = vi.fn((): MarkupSend => "sent");
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} agent={agent} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     showPicture();
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
     await waitFor(() => expect(submit.disabled).toBe(false));
@@ -158,6 +167,7 @@ describe("MarkupView · the agent's ticks", () => {
     // The agent ticks it off; the next read (here: the agent's edge) shows it.
     ticks = [{ round: body.round, page: 1, mark: 1 }, { round: "zzzz9999", page: 1, mark: 1 }];
     rerender(view("working"));
+    openAgent();
     await waitFor(() => expect(badges()).toHaveLength(1));
     expect(screen.getByText("1 done")).toBeTruthy();
     // Just outside the stroke's top-right corner, on a 336 px wide picture of
@@ -175,6 +185,7 @@ describe("MarkupView · the agent's ticks", () => {
     stored(SENT);
     desktop(() => ({ ticks: [{ round: ROUND, page: 1, mark: 2 }] }));
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(badges()).toHaveLength(1));
     // A pen mid-stroke where the badge lands: nothing goes.
@@ -202,6 +213,7 @@ describe("MarkupView · the agent's ticks", () => {
     stored(SENT);
     desktop(() => ({ ticks: [{ round: ROUND, page: 1, mark: 1 }, { round: ROUND, page: 1, mark: 2 }, { round: "other123", page: 1, mark: 1 }] }));
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(badges()).toHaveLength(2));
     expect(screen.getByText("2 done")).toBeTruthy();
@@ -219,6 +231,7 @@ describe("MarkupView · the agent's ticks", () => {
     stored(SENT);
     const calls = desktop(() => ({}));
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(calls.some((call) => call.url.includes("/markup/questions"))).toBe(true));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
@@ -231,6 +244,7 @@ describe("MarkupView · the agent's ticks", () => {
     stored(SENT);
     desktop(() => ({ ticks: [{ round: ROUND, page: 1, mark: 1 }] }));
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     await waitFor(() => expect(badges()).toHaveLength(1));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
@@ -248,6 +262,7 @@ describe("MarkupView · the agent's ticks", () => {
     const onSend = vi.fn((): MarkupSend => "sent");
     const view = (agent: AgentSignal) => <MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} agent={agent} onClose={() => {}} />;
     const { rerender } = render(view("idle"));
+    openAgent();
     showPicture();
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
     await waitFor(() => expect(submit.disabled).toBe(false));
@@ -256,9 +271,11 @@ describe("MarkupView · the agent's ticks", () => {
     const round = JSON.parse(String(calls.find((call) => call.url.endsWith("/markup"))!.body)).round as string;
     ticks = [{ round, page: 1, mark: 1 }];
     rerender(view("working"));
+    openAgent();
     await waitFor(() => expect(badges()).toHaveLength(1));
     vi.useFakeTimers();
     rerender(view("idle"));
+    openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
     vi.useRealTimers();
     fireEvent.click(await screen.findByRole("button", { name: "Undo the agent's changes from this round" }));
@@ -273,6 +290,7 @@ describe("MarkupView · the agent's ticks", () => {
     stored(markSent(addMark(EMPTY_LAYER, 1, [600, 800], corner), [1], ROUND), PDF);
     desktop(() => ({ ticks: [{ round: ROUND, page: 1, mark: 1 }] }));
     const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     const frame = (container.querySelector("iframe.markup-frame") as HTMLIFrameElement).contentWindow!;
     vi.spyOn(frame, "postMessage").mockImplementation(() => {});
     const say = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent("message", { data, origin: "null", source: frame })); });

@@ -273,6 +273,9 @@ pub struct PhoneUpload {
     /// The phone's device label, when the sidecar knew it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
+    /// `"folder"` for a **New folder** line (size 0); absent for a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// The folder of a local project by its raw id; `None` for an unknown or
@@ -332,6 +335,7 @@ fn phone_uploads_from(
                 size: record.size,
                 at: record.at,
                 phone: record.phone,
+                kind: record.kind,
             })
         })
         .collect())

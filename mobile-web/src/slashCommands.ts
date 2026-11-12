@@ -196,6 +196,14 @@ export function toggleDraftPrefix(draft: string, command: string, commands: read
   return current === command ? words : `${command} ${words}`;
 }
 
+/** The draft led by `command` — kept as it is when it already is, never
+ * toggled off — or `null` when this CLI offers no such chip. A spoken "Tabby
+ * plan" leads the draft this way (`lib/voice/draftEdit.ts`). */
+export function leadDraft(draft: string, command: string, commands: readonly string[]): string | null {
+  if (!commands.includes(command)) return null;
+  return draftPrefix(draft, commands) === command ? draft : toggleDraftPrefix(draft, command, commands);
+}
+
 /** The built-in list for a CLI, empty for one without. */
 export function slashCatalog(cli: string): readonly CatalogEntry[] {
   return CATALOG[cli] ?? [];
@@ -279,6 +287,12 @@ export function forgetSlashCommand(cli: string, line: string, storage?: SlashSto
   if (!all[cli]) return;
   all[cli] = all[cli].filter((entry) => entry.line !== line);
   save(storage, all);
+}
+
+/** Every kept line of every CLI, gone — this device was unpaired
+ * (`forgetDeviceData`). */
+export function forgetSlashCommands(storage?: SlashStorage): void {
+  writeJson(KEY, undefined, storage);
 }
 
 /**

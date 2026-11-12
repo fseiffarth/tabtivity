@@ -7,6 +7,7 @@ import { TabStatusMark, statusMarkSlots } from "./TabLocalityBadges";
 import { UntestedTag } from "../common/UntestedTag";
 import { useClampToViewport } from "../../hooks/useClampToViewport";
 import { useT } from "../../lib/i18n";
+import { CloseIcon, DotIcon } from "../common/icons/Icon";
 
 /** How long the list stays up after the pointer leaves the chip or the list —
  *  long enough to cross the gap between them, short enough to feel like hover. */
@@ -205,7 +206,7 @@ function StackMenu({
             onClick={() => onPick(tab.key)}
             onContextMenu={(e) => onTabContextMenu(e, tab.key, index)}
           >
-            <span className="tab-new-menu-dot" style={{ color: accent }}>●</span>
+            <span className="tab-new-menu-dot" style={{ color: accent }}><DotIcon /></span>
             <span className="tab-stack-row-label">{tab.label}</span>
             <TabStatusMark stateClass={stateClass} slots={statusMarkSlots(tab.kind)} />
             <span
@@ -217,7 +218,7 @@ function StackMenu({
                 onCloseTab(tab.key);
               }}
             >
-              ×
+              <CloseIcon />
             </span>
           </button>
         );

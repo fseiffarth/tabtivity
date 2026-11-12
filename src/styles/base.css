@@ -60,7 +60,7 @@ body {
   width: 100%;
   background: #101624;
   color: #9fb0d0;
-  font-size: 13px;
+  font-size: var(--text-base);
   letter-spacing: 0.02em;
 }
 
@@ -125,7 +125,7 @@ body {
 }
 
 .startup-splash-name {
-  font-size: 17px;
+  font-size: var(--text-xl);
   font-weight: 650;
   letter-spacing: 0.3em;
   padding-left: 0.3em;
@@ -135,7 +135,7 @@ body {
 .startup-splash-message {
   min-height: 18px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   letter-spacing: 0.03em;
   animation: startup-splash-arrive 600ms 140ms var(--ease-out) both;
 }
@@ -171,16 +171,120 @@ body {
   to { transform: translateX(215%); }
 }
 
+/* The keyboard focus ring: one rule, on every control. The state is doubled so a
+   plain `.x { outline: none }` cannot take it off, as the rule it replaced could
+   not; a `.x:focus-visible` still wins, this file being early in the cascade. A
+   rule of its own is for a ring drawn INSIDE (tabs, pills, table rows, whose
+   neighbours would clip it).
+   The xterm helper textarea holds focus whenever a terminal is active and must
+   stay invisible. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.xterm .xterm-helper-textarea:focus-visible:focus-visible {
+  outline: none;
+}
+
+/* Where rows will land while they load: static blocks, one opacity pulse. Never
+   a spinner where rows will appear (`common/SkeletonRows`). */
+.skeleton-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.skeleton-row {
+  height: 14px;
+  background: var(--border-subtle);
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+.skeleton-row:nth-child(3n) {
+  width: 70%;
+}
+
+.skeleton-row:nth-child(3n + 2) {
+  width: 85%;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The one reduced-motion block. Zeroing the tokens settles everything that reads
+   them, and the universal rule every literal transition. The doubled `:root`
+   outranks the theme blocks that declare these tokens later in the cascade, and
+   this file sits early, so the named loops below need their `!important`. A
+   hair of duration rather than none: a few surfaces wait for `transitionend`.
+   An animation whose stand-in is more than "stop" (a static tint, a finished
+   bar) keeps its own rule beside it. */
 @media (prefers-reduced-motion: reduce) {
+  :root:root {
+    --transition: 0ms;
+    --transition-slow: 0ms;
+    --motion-enter: 0ms;
+    --motion-exit: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+
   .startup-splash,
   .startup-splash-mark,
   .startup-splash-name,
   .startup-splash-message,
   .startup-splash-orbit,
-  .startup-splash-progress span {
-    animation: none;
-    transition-duration: 0ms;
+  .startup-splash-progress span,
+  .skeleton-row,
+  .tab-new-btn.empty-hint,
+  .tab.install-pending::before,
+  .tab-status-mark.working,
+  .pill-status-bar.working,
+  .print-progress-steps > i.next,
+  .cal-block.arrived,
+  .cal-month-bar.arrived,
+  .cal-agenda-row.arrived,
+  .cal-task-row.arrived,
+  .hint-bubble,
+  .hint-bubble--banner,
+  .hint-bubble::after,
+  .hint-target,
+  .tour-target,
+  .tour-spotlight,
+  .tour-bubble,
+  .tour-reward,
+  .tour-hint,
+  .tour-hint-btn.nudge {
+    animation: none !important;
   }
+}
+
+/* The CPU paint path (`lib/window/softwarePaint`): a surface lands in one paint.
+   At 1920x1200 the fade cost a menu open 49 ms of renderer time against 15 without
+   it, and a dialog over its backdrop 182 ms against 29, delivering about half its
+   frames, on the thread typing waits on (measured 2026-11-02, WebKitGTK 2.52.6).
+   The hints' and tour's own motion is stilled in onboarding.css. */
+:root[data-software-paint] {
+  --motion-enter: 0ms;
+  --motion-exit: 0ms;
+}
+
+:root[data-software-paint] .skeleton-row,
+:root[data-energy-saver="on"] .skeleton-row {
+  animation: none;
 }
 
 /* #42: detached ("pop out") window root. It renders straight into #root, which
@@ -214,7 +318,7 @@ body {
   justify-content: center;
   background: var(--bg-panel);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--text-base);
   letter-spacing: 0.02em;
   pointer-events: none;
 }
@@ -230,7 +334,7 @@ body {
   align-items: center;
   gap: 2px;
   min-height: 30px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-color);
 }
@@ -253,6 +357,44 @@ body {
 .detached-titlebar-logo svg {
   width: 13px;
   height: 13px;
+}
+
+/* The window's name, on the strip it moves by: plain text, so a press on it
+   drags like one anywhere else. Shrinks before the window controls do. */
+/* The `▣ <box name>` mark of a window showing a box: the swatch in the box's
+   own colour, the name tinted toward it (kept readable on either theme). */
+.detached-titlebar-box {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 0 0 var(--space-2);
+  font-weight: 600;
+  user-select: none;
+}
+.detached-titlebar-box-swatch {
+  width: 12px;
+  height: 11px;
+}
+.detached-titlebar-box-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--box-mark) 55%, var(--text-primary));
+}
+
+.detached-titlebar-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--space-2);
+  color: var(--text-primary);
+  font-weight: 600;
+  user-select: none;
 }
 
 /* The layout tree lives below the title bar and is the positioning context for

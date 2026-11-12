@@ -30,7 +30,7 @@ import type {
   StagedAttachment,
 } from "../../types/mail";
 import { useMailStore, type MailComposeMode } from "../../stores/mail";
-import { WarningIcon } from "../common/icons/Icon";
+import { CloseIcon, WarningIcon } from "../common/icons/Icon";
 import { AttachmentPreview } from "./MailAttachmentPreview";
 import { MailRecipientField } from "./MailRecipientField";
 import { ErrorNote } from "../common/ErrorNote";
@@ -50,7 +50,7 @@ import { ErrorNote } from "../common/ErrorNote";
  * Two hosts. As a dialog its chrome is the canonical `.modal-backdrop` >
  * `.settings-dialog`, and the portal sets its text color explicitly (`body`
  * carries none, so black would be inherited). `embedded`, it is the body of one
- * of the mail window's tabs (`MailOverlay`): no portal, no backdrop, no title
+ * of the Mail view's tabs (`MailView`): no portal, no backdrop, no title
  * row — the tab strip names it and its × closes it — and it stays mounted while
  * another tab is on screen, which is what keeps an unfinished mail unfinished
  * rather than lost.
@@ -599,7 +599,7 @@ export function MailComposeDialog({
                       title={t("mail.removeAttachment")}
                       onClick={() => void doRemoveAttachment(a.staged_id)}
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   </span>
                 );
@@ -697,8 +697,8 @@ export function MailComposeDialog({
           <h2>
             {composeTitle(t, mode)} <UntestedTag id="mailComposeDialog.1" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         {form}

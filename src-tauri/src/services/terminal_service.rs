@@ -531,6 +531,9 @@ fn sanitize_untrusted_layout_with(tabs: &mut [TabEntry], custom: &HashMap<String
         tab.extra.remove(ENV_KEY);
         tab.extra.remove(EMBED_EXEC_KEY);
         tab.extra.remove(API_KEY_KEY);
+        // Agent-authored tab notes are the host's: a folder or bundle cannot
+        // author them (`services::cockpit_meta`).
+        crate::services::cockpit_meta::strip(tab);
         if let Some(spec) = custom.get(&tab.cmd).filter(|spec| !spec.env.is_empty()) {
             let env = spec.env.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
             tab.extra.insert(ENV_KEY.to_string(), Value::Object(env));
@@ -1110,7 +1113,9 @@ mod tests {
                 .extra
                 .insert("env".to_string(), serde_json::json!({ "FOO": "bar", "PATH": "/tmp/evil" }));
             tabs[0].extra.insert(API_KEY_KEY.to_string(), serde_json::json!(true));
+            tabs[0].extra.insert(crate::services::cockpit_meta::KEY.to_string(), serde_json::json!({"v":1,"revision":9}));
             sanitize_untrusted_layout_with(&mut tabs, &no_custom());
+            assert!(!tabs[0].extra.contains_key(crate::services::cockpit_meta::KEY), "'{cmd}' loses cockpitMeta");
             assert_eq!(tabs[0].cmd, cmd, "'{cmd}' stays known");
             assert!(!tabs[0].extra.contains_key("env"), "'{cmd}' loses env");
             assert!(!tabs[0].extra.contains_key("embedExec"), "'{cmd}' loses embedExec");

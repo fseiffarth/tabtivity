@@ -27,6 +27,8 @@ import {
 import { useSettingsStore } from "../../stores/settings";
 import type { PrintJob, PrintSnapshot, PrinterInfo } from "../../types/printing";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
+import { PrintRequestsCard } from "./PrintRequests";
 
 /**
  * The print manager tab: the machine's printers, what is queued on each, and the
@@ -182,6 +184,8 @@ export function PrintManagerPane({ visible = true }: PrintManagerPaneProps) {
       {snapshot?.note && <div className="print-strip notice">{snapshot.note}</div>}
 
       <div className="print-body">
+        {/* What agents asked to print, waiting for Approve (`print_mcp`). */}
+        <PrintRequestsCard />
         {refreshing && <div className="print-empty">{t("printing.reading")}</div>}
 
         {snapshot && !snapshot.supported && (
@@ -244,7 +248,7 @@ export function PrintManagerPane({ visible = true }: PrintManagerPaneProps) {
                         title={t("printing.networkForget")}
                         onClick={() => forgetNetwork(key)}
                       >
-                        ✕
+                        <CloseIcon />
                       </button>
                     </td>
                   </tr>
@@ -412,7 +416,7 @@ function JobTable({ jobs, busy, onAct }: { jobs: PrintJob[]; busy: boolean; onAc
                 title={t("printing.cancelJob")}
                 onClick={() => void onAct(() => printJobCancel(job.printer, job.id))}
               >
-                ✕
+                <CloseIcon />
               </button>
             </td>
           </tr>

@@ -13,9 +13,17 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
 import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
+import { isViewShown, useRootOverlayStore, useViewShown } from "../../stores/rootOverlay";
 import { BrainGlyph } from "../header/HeaderGlyphs";
 import { LOCAL_MODEL_MENU_ID, useAutoloadNotice, useModelsHub } from "../models/useModelsHub";
 import { AgentChips, LocalModelsSection, MachineMeters, MODEL_ROLES } from "../models/ModelsHubSections";
+import {
+  lastUpdateCheck,
+  subscribeAgentUpdates,
+  useAgentVersionNoticeStore,
+} from "../../stores/agents/agentVersionNotice";
+import { relativeToNow } from "../../lib/agents/agentSchedule";
+import { useI18nStore } from "../../lib/i18n";
 
 const MENU_ID = LOCAL_MODEL_MENU_ID;
 
@@ -28,13 +36,13 @@ const MENU_ID = LOCAL_MODEL_MENU_ID;
  * to specific loaded models, so several can run different tasks in parallel. A
  * task with no tag falls back to the default model. Always shown: when Ollama
  * isn't installed (or no models are present yet) the menu offers an "Install
- * Ollama…" entry that opens the overlay's Ollama tab, where Ollama itself and
+ * Ollama…" entry that opens the Models view's Ollama section, where Ollama itself and
  * any model can be installed.
  *
- * A **click** opens the Models & agents overlay (`models/ModelsOverlay`); the
- * hover dropdown stays as it was, and every door in it opens one of the
- * overlay's tabs. The menu's body lives in `models/useModelsHub` and
- * `models/ModelsHubSections`, shared with that overlay; what stays here is the
+ * A **click** opens the console window's Models view (`models/ModelsView`); the
+ * hover dropdown stays as it was, and every door in it opens a section of the
+ * Models or the Agents view. The menu's body lives in `models/useModelsHub` and
+ * `models/ModelsHubSections`, shared with those views; what stays here is the
  * button, the hover frame, the `installed` poll, the progress-event
  * subscription (`stores/agents/ollamaActivity`) and the sole-resident →
  * every-role effect, which has one owner by construction.
@@ -70,8 +78,8 @@ export function LocalModelMenu() {
   // tab (`models/useModelsHub`); its polls run while the menu is open.
   const hub = useModelsHub(open);
   const closeTimer = useRef<number | null>(null);
-  // The click's surface: the Models & agents overlay (`models/ModelsOverlay`).
-  const overlayOpen = useModelsOverlayStore((s) => s.open);
+  // The click's surface: the console window's Models view (`models/ModelsView`).
+  const overlayOpen = useViewShown("models");
   const btnRef = useRef<HTMLButtonElement>(null);
   // Set for the one focus that returns the button its focus after the overlay
   // closes, so that focus does not pop the dropdown open (`onFocus` reveals).
@@ -81,6 +89,14 @@ export function LocalModelMenu() {
 
   // The pull / load progress events, into the shared store (ref-counted).
   useEffect(() => initLocalModelEvents(), []);
+
+  // Each installed CLI's newest release, as the backend's daily check stored it
+  // (`services::agent_latest`): read on every reveal (not at mount, which at
+  // launch would spawn the version probes for nothing) and when the daily
+  // check announces new answers.
+  const agentUpdates = useAgentVersionNoticeStore((s) => s.updates);
+  const lang = useI18nStore((s) => s.lang);
+  useEffect(() => subscribeAgentUpdates(), []);
 
   // Detect whether Ollama is installed: once at mount, then again on each
   // reveal of the dropdown and each close of the overlay (where Ollama is
@@ -108,7 +124,7 @@ export function LocalModelMenu() {
   const reveal = () => {
     // One consumer at a time: while the overlay is up it is the surface, and
     // keyboard focus can still reach this button under it.
-    if (useModelsOverlayStore.getState().open) return;
+    if (isViewShown("models")) return;
     if (closeTimer.current !== null) {
       window.clearTimeout(closeTimer.current);
       closeTimer.current = null;
@@ -117,6 +133,7 @@ export function LocalModelMenu() {
     // Agents, the model list and the installed Ollama version — read on every
     // reveal (`useModelsHub`'s `refresh`).
     hub.refresh();
+    void useAgentVersionNoticeStore.getState().load();
     checkInstalled();
   };
 
@@ -325,9 +342,8 @@ export function LocalModelMenu() {
             window.clearTimeout(closeTimer.current);
             closeTimer.current = null;
           }
-          const store = useModelsOverlayStore.getState();
-          if (store.open) store.close();
-          else store.openOverlay();
+          if (isViewShown("models")) useRootOverlayStore.getState().close();
+          else useModelsOverlayStore.getState().openOverlay();
         }}
         // Keyboard reach: tabbing to the button is the one way in that no
         // pointer will ever open — except the focus handed back on close.
@@ -394,25 +410,62 @@ export function LocalModelMenu() {
               header they keep a fixed place — Manage CLIs + Skills library
               here, Manage local models + Check for updates below. */}
           <button className="tab-new-menu-item" onClick={openAgents}>
-            <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              ●
-            </span>
             {t("localModel.manageAgents")} <UntestedTag id="localModel.manageAgents" />
           </button>
           <button className="tab-new-menu-item" onClick={openSkills}>
-            <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              ●
-            </span>
             {t("localModel.skillsLibrary")} <UntestedTag id="localModel.skillsLibrary" />
           </button>
-          {hub.agents.map((a) => (
-            <div key={a.id} className="local-model-agent-row" title={t("localModel.agentInstalled", { label: a.label })}>
-              {/* Green lamp mirrors a loaded model: this agent CLI is installed. */}
-              <span className="local-model-lamp" aria-hidden="true" />
-              <span className="local-model-loaded-name">{a.label}</span>
-              <AgentChips agent={a} wiredClis={hub.wiredClis} />
-            </div>
-          ))}
+          {(() => {
+            const at = lastUpdateCheck(agentUpdates, hub.agents.map((a) => a.id));
+            return at === null ? null : (
+              <div className="local-model-agent-checked">
+                {t("localModel.agentUpdatesChecked", {
+                  when: relativeToNow(new Date(at * 1000), new Date(), lang),
+                })}{" "}
+                <UntestedTag id="localModel.agentUpdates" />
+              </div>
+            );
+          })()}
+          {hub.agents.map((a) => {
+            const update = agentUpdates[a.id];
+            const when = update?.checkedAt
+              ? relativeToNow(new Date(update.checkedAt * 1000), new Date(), lang)
+              : "";
+            return (
+              <div key={a.id} className="local-model-agent-row" title={t("localModel.agentInstalled", { label: a.label })}>
+                {/* Green lamp mirrors a loaded model: this agent CLI is installed. */}
+                <span className="local-model-lamp" aria-hidden="true" />
+                <span className="local-model-loaded-name">{a.label}</span>
+                {update?.updateAvailable && update.latest && update.current ? (
+                  <button
+                    type="button"
+                    className="local-model-agent-update is-new"
+                    title={t("localModel.agentUpdateTitle", {
+                      label: a.label,
+                      current: update.current,
+                      latest: update.latest,
+                      when,
+                    })}
+                    onClick={openAgents}
+                  >
+                    → {update.latest}
+                  </button>
+                ) : update?.error ? (
+                  <span className="local-model-agent-update" title={update.error}>
+                    {t("agents.updateCouldntCheck")}
+                  </span>
+                ) : update?.latest && update.current ? (
+                  <span
+                    className="local-model-agent-update"
+                    title={t("localModel.agentCurrentTitle", { current: update.current, when })}
+                  >
+                    {t("agents.updatesNone")}
+                  </span>
+                ) : null}
+                <AgentChips agent={a} wiredClis={hub.wiredClis} />
+              </div>
+            );
+          })}
           <LocalModelsSection hub={hub} layout="menu" onManageModels={openOllama} />
           <MachineMeters hub={hub} />
           </div>

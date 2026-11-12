@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { useProjectsStore } from "./projects";
-import { storageKey } from "../lib/brand";
+import { useBoxesStore } from "./boxes";
+import { stripProjects, useBoxSliceStore } from "./boxSlice";
+import { useTabsStore } from "./tabs";
+import { barHiddenIdsNow } from "../lib/projects/barHidden";
 
 /**
  * Where in the window steering is pointing. The mode is a small hierarchy the
@@ -17,13 +20,15 @@ import { storageKey } from "../lib/brand";
  *   region   — a keyboard cursor walking the controls of one surface that
  *              has no tab bar: the side panel, the mail / calendar / to-do
  *              overlays, a pane's + menu, the settings dialog, the top bar
- *              (↑ from the projects), or whatever dialog or menu is on top
+ *              (↑ from the projects), the root window's chrome (↑ from
+ *              Root's tabs), or whatever dialog or menu is on top
  *              (`SteeringRegion`)
  */
 export type SteeringLevel = "projects" | "panes" | "tabs" | "scroll" | "region";
 
 /** The surfaces the region cursor can walk (see `lib/shortcuts/steeringRegion`). */
 export type SteeringRegion =
+  | "cockpit"
   | "side"
   | "mail"
   | "calendar"
@@ -31,9 +36,15 @@ export type SteeringRegion =
   | "addTab"
   | "settings"
   | "header"
+  /** The root window's own chrome (Root view: the view tabs, the rail toggle,
+   *  the bar's buttons), above the Root tabs. */
+  | "chrome"
   /** The card over the active tab's terminal (Undo clear, a sign-in link, a
    *  CLI update notice). */
   | "card"
+  /** The active agent tab's Subagents list (the Chat's top bar) and, with a
+   *  subagent open, its bar (back, previous / next). */
+  | "subagents"
   /** The dialog, right-click menu or top-bar menu on top of everything
    *  (`steeringRegion.topLayer`) — any of them, walked the same way. */
   | "overlay";
@@ -43,15 +54,17 @@ export type SteeringBaseLevel = Exclude<SteeringLevel, "region">;
 
 /** A text box steering lent the keyboard to and takes it back from: the
  *  project jump (`/` on the tab-bar levels), the prompt box (I, and the Plan /
- *  Goal keys), a surface's own search field (`/` in a region). */
-export type SteeringHandoff = "jump" | "prompt" | "search";
+ *  Goal keys), a surface's own search field (`/` in a region), a dialog's text
+ *  field (one it focused itself — a New Folder name — or Enter on one). */
+export type SteeringHandoff = "jump" | "prompt" | "search" | "field";
 
 /**
  * Transient state for keyboard steering mode (the `steeringMode` chord).
  *
  * `subwindowNav`'s sibling: kept out of the tabs store so entering/leaving the
  * mode never churns the layout tree, and deliberately not persisted — a
- * relaunch never starts steering (only `legendHidden` is remembered). While `active`, `useKeyboard` swallows every
+ * relaunch never starts steering, and every entry shows the keys (`legendHidden`
+ * is per visit). While `active`, `useKeyboard` swallows every
  * key in a capture-phase listener (nothing may leak to the terminal
  * underneath), `FocusFrameOverlay` shows the subwindow badges, the project
  * pills wear their station numbers on the projects level, and the bottom legend
@@ -62,6 +75,7 @@ export type SteeringHandoff = "jump" | "prompt" | "search";
  */
 interface KeyboardSteeringState {
   /** Steering on → keys captured, badges/legend visible. */
+  visit: number;
   active: boolean;
   level: SteeringLevel;
   /** The surface the region cursor walks; set only while `level` is "region". */
@@ -72,8 +86,9 @@ interface KeyboardSteeringState {
    *  settings, a menu dropped from the top bar. Leaving a region comes back
    *  to the nearest one still on screen before the base level. */
   regionStack: SteeringRegion[];
-  /** Enter the mode on the current project's tabs. */
-  enter: () => void;
+  /** Enter the mode on the current project's tabs, then go to `level` when
+   *  that is another (the level a box over steering came from). */
+  enter: (level?: SteeringBaseLevel) => void;
   exit: () => void;
   setLevel: (level: SteeringBaseLevel) => void;
   enterRegion: (region: SteeringRegion) => void;
@@ -81,8 +96,8 @@ interface KeyboardSteeringState {
    *  still there (any, when omitted), else for the level it was entered from.
    *  Returns the region it came back to, or null for the base level. */
   leaveRegion: (alive?: (region: SteeringRegion) => boolean) => SteeringRegion | null;
-  /** The key list folded into the corner badge (steering's H). Unlike the
-   *  rest this outlives the mode: per machine, in localStorage. */
+  /** The key list folded into the corner badge (steering's H). For this visit
+   *  only: every entry starts with the keys shown. */
   legendHidden: boolean;
   toggleLegend: () => void;
   /** The box that has the keyboard while steering waits to come back — the
@@ -103,34 +118,36 @@ interface KeyboardSteeringState {
   /** The box went away without coming back (a click elsewhere, a pick that
    *  moved focus on): nothing is waiting any more. */
   dropHandoff: () => void;
+  /** Where the Back key returns to: the tab a status jump (Q R X) left, and
+   *  the tab it landed on, so a run of jumps keeps the first tab
+   *  (`lib/shortcuts/statusJump` `afterStatusJump`). Kept across leaving the
+   *  mode; null when nothing was jumped from. */
+  jumpBack: SteeringJumpBack | null;
+  setJumpBack: (jumpBack: SteeringJumpBack | null) => void;
 }
 
-const LEGEND_HIDDEN_KEY = storageKey("steering.legendHidden");
-
-function readLegendHidden(): boolean {
-  try {
-    return localStorage.getItem(LEGEND_HIDDEN_KEY) === "1";
-  } catch {
-    return false;
-  }
+/** One tab in one scope, as the status jumps name it. */
+export interface SteeringTabRef {
+  scope: string;
+  key: string;
 }
 
-function writeLegendHidden(hidden: boolean) {
-  try {
-    if (hidden) localStorage.setItem(LEGEND_HIDDEN_KEY, "1");
-    else localStorage.removeItem(LEGEND_HIDDEN_KEY);
-  } catch {
-    // localStorage unavailable — the choice still holds for this session.
-  }
+export interface SteeringJumpBack {
+  origin: SteeringTabRef;
+  landed: SteeringTabRef;
 }
 
 export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get) => ({
+  visit: 0,
   active: false,
   level: "tabs",
   region: null,
   regionReturn: "tabs",
   regionStack: [],
-  enter: () => set({ active: true, level: "tabs", region: null, regionStack: [], handedTo: null }),
+  enter: (level = "tabs") => {
+    set({ visit: get().visit + 1, active: true, level: "tabs", region: null, regionStack: [], handedTo: null, legendHidden: false });
+    if (level !== "tabs") get().setLevel(level);
+  },
   exit: () => set({ active: false, level: "tabs", region: null, regionStack: [], handedTo: null }),
   setLevel: (level) => set({ level, region: null, regionStack: [] }),
   enterRegion: (region) => {
@@ -161,12 +178,8 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
     set({ level: get().regionReturn, region: null, regionStack: [] });
     return null;
   },
-  legendHidden: readLegendHidden(),
-  toggleLegend: () => {
-    const legendHidden = !get().legendHidden;
-    writeLegendHidden(legendHidden);
-    set({ legendHidden });
-  },
+  legendHidden: false,
+  toggleLegend: () => set({ legendHidden: !get().legendHidden }),
   handedTo: null,
   handoffReturn: { level: "tabs", region: null, regionReturn: "tabs", regionStack: [] },
   handOff: (box) => {
@@ -175,6 +188,8 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
   },
   resume: () => set({ active: true, handedTo: null, ...get().handoffReturn }),
   dropHandoff: () => set({ handedTo: null }),
+  jumpBack: null,
+  setJumpBack: (jumpBack) => set({ jumpBack }),
 }));
 
 /**
@@ -186,14 +201,21 @@ export const useKeyboardSteeringStore = create<KeyboardSteeringState>((set, get)
  * pill, so a shortcut that walks the strip has to stop there too (see the
  * history note on `useKeyboard`'s cycleProject). The rest are the non-inactive
  * projects in pill display order (`position`).
+ *
+ * **A box slice narrows the ring to the pills it shows** (`stripProjects`):
+ * the box's members, inactive ones included (they have a pill in the slice),
+ * plus the project in scope. Walking a slice never lands on a project whose
+ * pill is hidden, and the badges count the same list.
  */
 export function projectStations(): (string | null)[] {
-  const ps = useProjectsStore.getState();
-  return [
-    null,
-    ...ps.projects
-      .filter((p) => p.status !== "inactive")
-      .sort((a, b) => a.position - b.position)
-      .map((p) => p.id),
-  ];
+  const sliceId = useBoxSliceStore.getState().sliceBoxId;
+  const box = sliceId ? useBoxesStore.getState().boxes.find((b) => b.id === sliceId) ?? null : null;
+  const scope = useTabsStore.getState().scope;
+  const { projects, activeId } = useProjectsStore.getState();
+  const strip = stripProjects(projects, box, scope);
+  // A slice ignores the hidden lists and hide mode (looking into a box is
+  // where its hidden members are found); only the unsliced strip drops them —
+  // in hide mode all but the project in scope, so the ring is root + that one.
+  const hidden = box ? new Set<string>() : barHiddenIdsNow(strip.map((p) => p.id));
+  return [null, ...strip.filter((p) => !hidden.has(p.id) || p.id === scope || p.id === activeId).map((p) => p.id)];
 }

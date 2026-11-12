@@ -49,6 +49,24 @@ passwordless sudo, so prefer **Run in terminal**.
    the home disk is small). For a systemd-managed server, **Apply to the
    service…** runs the one-time service change in a terminal tab.
 
+### Models from Hugging Face
+
+Ollama also pulls GGUF models straight from Hugging Face. In **Browse the
+Ollama registry**, switch **Source** to **Hugging Face**: the list shows GGUF
+repos, and each card's picker lists the repo's quantizations (`Q4_K_M` first
+when there is one). **Pull** downloads `hf.co/<user>/<repo>:<quant>`. You can
+also type such a name into the pull field, for example
+`hf.co/bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M`.
+
+- Only GGUF files work; a repo with only safetensors is not listed. A
+  quantization split into several files (`-00001-of-00003`) is not offered:
+  Hugging Face does not serve it to Ollama.
+- A **gated** repo needs its terms accepted on Hugging Face and Ollama's public
+  key added to your account (Settings → SSH keys): `~/.ollama/id_ed25519.pub`,
+  or `/usr/share/ollama/.ollama/id_ed25519.pub` for the system service.
+- Once downloaded, a Hugging Face model works like any other: load it, open a
+  Local Model tab with it, check it for updates.
+
 Delete a model from **Downloaded Models** with **Delete**; **Update**
 re-pulls it.
 
@@ -112,7 +130,13 @@ calling; the Models & agents menu tags models without it "no tools".
 1. Reveal the file panel, open its **Project settings**, and in the **Native
    Viewers** table tick **Autocomplete** for the file types you want. It is
    off by default and local-only.
-2. In the editor, pause typing or press **Ctrl+Space**. **Tab** accepts,
+   The editor toolbar's **Autocomplete** button turns it on for that one tab;
+   beside it pick **Local** or **Copilot** (with the experimental Copilot
+   feature on) and **Auto** or **On request**. Copilot defaults to On request,
+   so it spends no completions until you ask; Auto asks only after a pause
+   with the caret at the end of a line. A short note says why nothing comes
+   (no local model loaded, Copilot not allowed for this project).
+2. In the editor, pause typing (Auto) or press **Ctrl+Space**. **Tab** accepts,
    **Alt+→** takes one word, **Shift+Tab** cycles the length (sentence → block
    → scope), **Esc** dismisses.
 
@@ -130,3 +154,43 @@ calling; the Models & agents menu tags models without it "no tools".
 - **Ollama on another machine**: `ollama_host` in `settings.json` points
   Tabtivity at another address; a non-local host also needs
   `ollama_allow_remote_host`. There is no UI for this yet.
+
+## Local models only projects
+
+A project can be set to **Local models only** (the project pill's menu →
+**Local models only…**; a lock then shows on the pill). Then no cloud model
+reads it: only agent tabs on an installed local Ollama model start in it, the
+**+** menu offers only the local-model rows, other projects' and boxes'
+agents see an empty folder where it is, and a file of the project cannot be
+dropped onto an agent that is not on a local model. Turning it on closes the
+project's running cloud agent tabs.
+
+OpenCode cannot be kept on the local model while the project keeps its network
+(it re-reads a config file the agent writes while it runs, so the agent could add
+a cloud provider): its local row is not offered there and an OpenCode tab is
+refused with a message naming the local agents that can run. It starts again when
+**Cut network** is on (below). With the network on, the other local agents run
+(Pi, Claude Code on Linux, Codex, Droid, OpenClaw, Cline, Mistral).
+
+It does not stop what a local agent does with its own network (a fetch tool, a
+`curl`, a `git push`, switching to an Ollama cloud model mid-session), and
+shell tabs, the root console's Host session and Windows have no sandbox that
+hides the folder.
+
+**Cut network** (Linux; the switch under Local models only in the same dialog)
+takes the network away from the project's local tabs. Their sandbox has no
+network at all; the only way out is a relay inside Tabtivity to the local Ollama.
+It carries chat, generate, embeddings, the model list and show; it refuses
+installing, copying, creating, pushing or deleting a model, and it checks that
+every request names a model that runs on this machine, so a `/model` switch to
+an Ollama cloud model fails. The model lists the agent sees show local models
+only. The cockpit, help and markup tools and sending a file to your phone keep
+working; the web tool, git push and release, the schedule and the mail tools do
+not. Only **OpenCode, Claude Code and Codex** have been run with the network
+cut: Pi, Droid, Cline, OpenClaw and Mistral are refused in such a project,
+naming themselves. The sandbox is built when a tab starts, so changing the
+switch asks whether to restart the project's running local tabs and never does
+it by itself. On macOS and Windows the switch cannot be turned on.
+
+It is refused for remote, VM and container projects, a folder with another
+project or a box folder inside it, and an Ollama that is not on this machine.

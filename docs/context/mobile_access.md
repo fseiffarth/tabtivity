@@ -88,7 +88,14 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    - switch off → the list is ignored, and `set_*_mobile_access(false)`
      removes both keys.
 
-Root has no per-phone list (out of scope).
+Root has a per-phone list of its own, `tabtivity_mobile_host.root_devices`
+beside the `root_access` switch in `settings.json`, and it is **opt-in**: absent,
+empty or malformed is no phone, so a phone paired later is off root until the
+user ticks it (Settings → Mobile → the root row's phones button, or the phone's
+own panel). `discovery::root_devices` feeds the same `ScopeSource.devices` the
+other lists do, so the catalog, `pty_bridge`'s re-check and `phone_origin` all
+apply it. The list narrows the switch and the review gate; it never opens
+either. The phone draws no root row: the logo on its start page opens it.
 
 ## Where it is enforced
 
@@ -211,6 +218,25 @@ full paths. Three rules keep a stale phone from losing data:
 The three-way merge stays on the desktop (the phone compares, read-only), and so
 does the scan for files only the host holds: it is a recursive host walk behind
 the HPC guard, which a phone must not start or prompt for.
+
+## Finding files on the phone
+
+Four ways in, all ending in the same library and viewer, all behind "Project
+files on the phone". The project header's 🔍 opens the library with its search
+box in focus; the box sits outside the scrolling list (a sticky grid item
+cannot leave its row). Diffs' file rows open a changed file: `chat_changes::
+attach_files` seals a row per path only where the library would list it, so a
+worktree's or a box's file has no Open, and it reads paths from the project
+folder, not the checkout, because a project can be a repo's subfolder. Home's
+Favorites segment reads every project's favorites from the phone and asks the
+desktop only for names; refusals are said at the tap, so it needs no state of
+its own for the switch, a dead host or an unshared project. It opens files
+without Mark up, which needs a tab to send to.
+
+Diffs only knows what a CLI recorded as a file edit: compiled output and other
+shell-made files are not in it. With the switch off a project says so
+(`files_off`) instead of losing its way in with no word. Unpairing forgets all
+of this (`filesPlace::forgetFiles`): the stores hold the desktop's file names.
 
 ## Writing into a project (Upload here)
 

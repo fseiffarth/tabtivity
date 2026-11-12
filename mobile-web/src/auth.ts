@@ -1,6 +1,7 @@
 import { ApiError, api, hopOf, traceConnect } from "./api";
 import { classifyUnavailable, unavailableDetail, type UnavailableReason } from "./connection";
 import { loadDevice as load, loadPendingKey, saveDevice as save, savePendingKey, type AuthRecord } from "./authStore";
+import { NAMES } from "../../src/lib/brand";
 
 function b64url(bytes: ArrayBuffer): string {
   const raw = String.fromCharCode(...new Uint8Array(bytes));
@@ -36,19 +37,50 @@ async function traced<T>(name: string, request: () => Promise<T>): Promise<T> {
   }
 }
 
+/** `MobileAuth::challenge`: the text the pairing key signs to sign in. */
+export function loginPayload(origin: string, deviceId: string, nonce: string, expiresAt: number): string {
+  return [NAMES.mobileAuthContext, origin, deviceId, nonce, String(expiresAt)].join("\n");
+}
+
+/**
+ * The sign-in text for a challenge, made here from its nonce and expiry, or
+ * `null` when the challenge is not one this device signs. The same pairing
+ * key signs the secrets enrolment and the signed actions, so signing the
+ * server's `payload` as sent would let a server that is not to be trusted
+ * (a hosted gateway that intercepts sessions) have it sign one of those
+ * instead. As for `secretsCore.signedAction`, only a nonce and a time go in,
+ * each checked, and the server's own text must be exactly this one.
+ */
+export function checkedLoginPayload(
+  challenge: { nonce?: unknown; payload?: unknown; expires_at?: unknown },
+  origin: string,
+  deviceId: string,
+): string | null {
+  const { nonce, payload, expires_at: expiresAt } = challenge;
+  if (typeof nonce !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(nonce)) return null;
+  if (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt < 0) return null;
+  const expected = loginPayload(origin, deviceId, nonce, expiresAt);
+  return payload === expected ? expected : null;
+}
+
 async function login(record: AuthRecord): Promise<void> {
   if (pendingLogout) {
     traceConnect("cancelled the lock's logout");
     pendingLogout.abort();
     pendingLogout = null;
   }
-  const challenge = await traced("challenge", () => api<{ nonce: string; payload: string }>("/api/v1/auth/challenge", {
+  const challenge = await traced("challenge", () => api<{ nonce: string; payload: string; expires_at: number }>("/api/v1/auth/challenge", {
     method: "POST", body: JSON.stringify({ device_id: record.deviceId }),
   }, AUTH_REQUEST_TIMEOUT));
+  const payload = checkedLoginPayload(challenge, location.origin, record.deviceId);
+  if (payload === null) {
+    traceConnect("challenge refused: its payload is not the sign-in text");
+    throw new Error("invalid_challenge");
+  }
   const signature = await crypto.subtle.sign(
     { name: "ECDSA", hash: "SHA-256" },
     record.privateKey,
-    new TextEncoder().encode(challenge.payload),
+    new TextEncoder().encode(payload),
   );
   await traced("session", () => api("/api/v1/auth/session", {
     method: "POST",

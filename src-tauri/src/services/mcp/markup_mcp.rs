@@ -30,10 +30,19 @@
 //! map back onto the marks they sent in that round ([`ticks`]). The reader
 //! approves each tick; nothing here removes a mark.
 //!
+//! **Two processes** (`docs/headless_mcp_plan.md`, phase 1b): the window and
+//! the Mobile host each serve this lane for the tabs they spawned, each with
+//! its own in-memory stores — a tab's asks and ticks live in the process that
+//! spawned it, and the process-local [`root_mcp::session_alive`] stays a
+//! complete liveness check. The views reach both through
+//! `commands::markup_mcp` ([`merge_asks`], [`merge_ticks`]).
+//!
 //! `AppHandle`-free: the window learns of changes through a hook the command
-//! layer installs ([`set_change_hook`], `commands::markup_mcp`).
+//! layer installs ([`set_change_hook`], `commands::markup_mcp`; the Mobile
+//! host's hook pokes an open window instead).
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::BTreeMap;
+use crate::services::root_mcp_security::{admit_keyed, RollingWindows, HOUR};
 use app_core::sync::LockExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -97,7 +106,7 @@ const CLIPPED_QUESTION_CHARS: usize = 120;
 // ── Store ───────────────────────────────────────────────────────────────────
 
 /// One question as validated and cleaned; what the views render.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Question {
     pub question: String,
@@ -112,7 +121,7 @@ pub struct Question {
     pub quote: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Choice {
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,7 +150,7 @@ struct Ask {
 }
 
 /// An open ask as the views get it: no session, tab or project id.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskView {
     pub id: String,
@@ -155,7 +164,29 @@ pub struct AskView {
 
 fn store() -> &'static Mutex<Vec<Ask>> {
     static STORE: OnceLock<Mutex<Vec<Ask>>> = OnceLock::new();
+    #[cfg(test)]
+    if as_host::active() {
+        static HOST: OnceLock<Mutex<Vec<Ask>>> = OnceLock::new();
+        return HOST.get_or_init(Default::default);
+    }
     STORE.get_or_init(Default::default)
+}
+
+/// Tests only: the asks and ticks are process-wide, and the Mobile host and
+/// the window are two processes. On a thread inside [`as_host::run`] the
+/// stores are a second set, so a test can have the host hold an ask and the
+/// window see it only through the peer (`commands::markup_mcp`).
+#[cfg(test)]
+pub(crate) mod as_host {
+    use std::cell::Cell;
+    thread_local! { static HOST: Cell<bool> = const { Cell::new(false) }; }
+    pub fn active() -> bool { HOST.with(Cell::get) }
+    pub fn run<T>(work: impl FnOnce() -> T) -> T {
+        struct Restore(bool);
+        impl Drop for Restore { fn drop(&mut self) { HOST.with(|h| h.set(self.0)); } }
+        let _restore = Restore(HOST.with(|h| h.replace(true)));
+        work()
+    }
 }
 
 /// Set once by the command layer; called after any change of the open asks,
@@ -262,7 +293,7 @@ struct Tick {
 
 /// A tick as the views get it: no session, tab, project id or path — the
 /// filter by file is done here, like [`list`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TickView {
     pub round: String,
@@ -274,6 +305,11 @@ pub struct TickView {
 
 fn tick_store() -> &'static Mutex<Vec<Tick>> {
     static TICKS: OnceLock<Mutex<Vec<Tick>>> = OnceLock::new();
+    #[cfg(test)]
+    if as_host::active() {
+        static HOST: OnceLock<Mutex<Vec<Tick>>> = OnceLock::new();
+        return HOST.get_or_init(Default::default);
+    }
     TICKS.get_or_init(Default::default)
 }
 
@@ -325,11 +361,49 @@ pub fn ticks(project: &str, target: &str, shown: Shown) -> Vec<TickView> {
     out
 }
 
+// ── Two processes ───────────────────────────────────────────────────────────
+
+/// Most ticks one peer answer carries: the admin plane's frame is 64 KiB
+/// (`protocol::MAX_CONTROL_MESSAGE`), and a tick is about 45 bytes of JSON.
+pub const MAX_PEER_TICKS: usize = 1000;
+
+/// An ask view's creation time, for ordering two processes' asks.
+fn created_at(ask: &AskView) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(&ask.created_at).ok()
+}
+
+/// The asks one process holds for a tab and the asks its peer holds for it
+/// (`commands::markup_mcp`): the window's and the Mobile host's stores each
+/// keep at most one open ask per tab, and a tab asks of the process that
+/// spawned it. Both can hold one only across a respawn by the other
+/// process, until the first sweeps its dead session — the newer one is the
+/// ask the agent means. One ask seen twice (the same id) is one.
+pub fn merge_asks(local: Vec<AskView>, peer: Vec<AskView>) -> Vec<AskView> {
+    let mut all = local;
+    for ask in peer {
+        if !all.iter().any(|a| a.id == ask.id) { all.push(ask); }
+    }
+    if all.len() <= 1 { return all; }
+    // The newest wins; an unreadable time loses to a readable one, and the
+    // local ask (first) wins a tie.
+    let newest = (0..all.len()).rev().max_by_key(|&i| created_at(&all[i])).unwrap_or(0);
+    vec![all.swap_remove(newest)]
+}
+
+/// Both processes' ticks for a tab, this one's first, each once.
+pub fn merge_ticks(local: Vec<TickView>, peer: Vec<TickView>) -> Vec<TickView> {
+    let mut all = local;
+    for tick in peer {
+        if !all.contains(&tick) { all.push(tick); }
+    }
+    all
+}
+
 // ── Answers ─────────────────────────────────────────────────────────────────
 
 /// One question's answer as a viewer sends it: option indices (0-based, into
 /// that question's `options`) and/or a typed **Other…** text.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Answer {
     #[serde(default)]
@@ -403,15 +477,31 @@ pub struct Answered {
     pub receipt: String,
 }
 
-fn mint_receipt() -> String {
+pub fn mint_receipt() -> String {
     crate::services::root_mcp::mint_token().map(|t| t[..16].to_string())
         .unwrap_or_else(|| format!("{:x}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()))
+}
+
+/// A receipt a caller minted itself ([`answer_as`]): what [`mint_receipt`]
+/// makes, bounded so a peer's frame cannot plant anything else.
+pub fn valid_receipt(receipt: &str) -> bool {
+    (8..=64).contains(&receipt.len()) && receipt.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
 /// The user's answer to the open ask `id`: checks every answer against its
 /// question, marks the ask answered and returns the prompt to queue into the
 /// tab. A refused answer changes nothing.
 pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Result<Answered, AnswerError> {
+    answer_as(project, target, id, answers, None)
+}
+
+/// [`answer`] under a receipt the caller chose (`None`: one minted here). The
+/// window answers a Mobile host ask this way: should the host's reply be
+/// lost, the window still holds the receipt and can [`reopen`] the ask it
+/// closed, so the answer is never taken with its prompt lost. A receipt that
+/// is not [`valid_receipt`] is `Invalid`.
+pub fn answer_as(project: &str, target: &str, id: &str, answers: &[Answer], receipt: Option<&str>) -> Result<Answered, AnswerError> {
+    if receipt.is_some_and(|r| !valid_receipt(r)) { return Err(AnswerError::Invalid); }
     let mut asks = store().lock_ok();
     let gone = prune(&mut asks);
     let result = (|| {
@@ -422,7 +512,7 @@ pub fn answer(project: &str, target: &str, id: &str, answers: &[Answer]) -> Resu
             .map(|(q, a)| answer_text(q, a).map(|text| (q.question.clone(), text)))
             .collect::<Result<Vec<_>, _>>()?;
         let prompt = answer_prompt(ask.file.as_deref(), &lines);
-        let receipt = mint_receipt();
+        let receipt = receipt.map_or_else(mint_receipt, str::to_string);
         asks[at].state = State::Answered;
         asks[at].receipt = Some(receipt.clone());
         Ok(Answered { prompt, receipt })
@@ -683,22 +773,17 @@ pub fn resolve_file(root: &Path, file: &str, prove: bool) -> Result<String, Stri
 
 // ── Budget ──────────────────────────────────────────────────────────────────
 
-fn rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
-    static RATES: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+fn rates() -> &'static Mutex<RollingWindows> {
+    static RATES: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     RATES.get_or_init(Default::default)
 }
-fn tick_rates() -> &'static Mutex<HashMap<String, VecDeque<Instant>>> {
-    static RATES: OnceLock<Mutex<HashMap<String, VecDeque<Instant>>>> = OnceLock::new();
+fn tick_rates() -> &'static Mutex<RollingWindows> {
+    static RATES: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     RATES.get_or_init(Default::default)
 }
 /// `limit` calls per tab in `rates`, rolling; a refused call takes nothing.
-fn admit_in(rates: &Mutex<HashMap<String, VecDeque<Instant>>>, tab: &str, limit: usize) -> bool {
-    let mut map = rates.lock_ok();
-    map.retain(|_, calls| { calls.retain(|at| at.elapsed() < Duration::from_secs(3600)); !calls.is_empty() });
-    let calls = map.entry(tab.to_string()).or_default();
-    if calls.len() >= limit { return false; }
-    calls.push_back(Instant::now());
-    true
+fn admit_in(rates: &Mutex<RollingWindows>, tab: &str, limit: usize) -> bool {
+    admit_keyed(&mut rates.lock_ok(), tab, limit, HOUR, Instant::now())
 }
 /// [`ASKS_PER_HOUR`] `markup_ask` calls per tab.
 fn admit_rate(tab: &str) -> bool { admit_in(rates(), tab, ASKS_PER_HOUR) }
@@ -909,38 +994,26 @@ pub fn enabled() -> bool { enabled_in(&crate::storage::settings_path()) }
 /// session or one without its project/target binding is refused here too,
 /// whatever the route said.
 pub fn handle_with(session: &Session, message: &Value, ctx: &Context) -> Option<Value> {
-    let error = |id: Value, code: i64, text: &str| Some(json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":text}}));
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return error(Value::Null, -32600, "invalid request");
-    }
-    let id = message.get("id").cloned()?;
-    if session.identity.caller != Caller::Marker || session.check().is_err() { return error(id, -32000, "access refused"); }
+    use crate::services::root_mcp::{lane_method, rpc_error, rpc_request_id, rpc_result, tool_err, tool_ok, LaneInfo, LaneMethod};
+    let id = match rpc_request_id(message) { Err(reply) => return Some(reply), Ok(id) => id? };
+    if session.identity.caller != Caller::Marker || session.check().is_err() { return Some(rpc_error(id, -32000, "access refused")); }
     let (Some(project), Some(target)) = (session.identity.project.as_deref(), session.identity.schedule_target.as_ref().map(|b| b.target.as_str())) else {
-        return error(id, -32000, "access refused");
+        return Some(rpc_error(id, -32000, "access refused"));
     };
-    let ok = |value: Value| Some(json!({"jsonrpc":"2.0","id":id,"result":value}));
-    match message["method"].as_str().unwrap_or_default() {
-        "initialize" => ok(json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},
-            "serverInfo":{"name":SERVER_NAME,"version":env!("CARGO_PKG_VERSION")},"instructions":INSTRUCTIONS})),
-        "ping" => ok(json!({})),
-        "tools/list" => ok(json!({"tools": tools()})),
-        "tools/call" => {
-            let name = message["params"]["name"].as_str().unwrap_or_default();
-            let args = message["params"].get("arguments").cloned().unwrap_or(json!({}));
-            if !crate::services::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Marker)) {
-                return ok(json!({"content":[{"type":"text","text":"unknown tool"}],"isError":true}));
-            }
-            let value = match name {
-                TOOL_ASK => call_ask(session, project, target, ctx, &args),
-                TOOL_DONE => call_done(session, project, target, ctx, &args),
-                _ => call_withdraw(project, target, &args),
-            };
-            ok(json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false}))
-        }
-        _ => error(id, -32601, "method not found"),
+    let lane = LaneInfo { name: SERVER_NAME, instructions: INSTRUCTIONS, tools };
+    let (name, args) = match lane_method(&lane, &id, message) {
+        LaneMethod::Reply(reply) => return Some(reply),
+        LaneMethod::Call { name, args } => (name, args.unwrap_or(json!({}))),
+    };
+    if !crate::services::root_mcp_security::tool(name).is_some_and(|t| t.serves(Caller::Marker)) {
+        return Some(rpc_result(id, tool_err("unknown tool")));
     }
+    let value = match name {
+        TOOL_ASK => call_ask(session, project, target, ctx, &args),
+        TOOL_DONE => call_done(session, project, target, ctx, &args),
+        _ => call_withdraw(project, target, &args),
+    };
+    Some(rpc_result(id, tool_ok(value)))
 }
 
 /// Open an ask for `(project, target)` as tab `tab`'s agent would, bound to
@@ -951,6 +1024,18 @@ pub(crate) fn test_open_ask(tab: &str, project: &str, target: &str, questions: V
     let msg = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":TOOL_ASK,"arguments":{"questions":questions}}});
     let reply = handle_with(&session, &msg, &Context { enabled: true, root: &|| None }).expect("a reply");
     reply["result"]["structuredContent"]["id"].as_str().expect("an ask id").to_string()
+}
+
+/// Tick marks of `file` (below `root`) as tab `tab`'s agent would
+/// (`markup_done`); the call's result. For another module's tests.
+#[cfg(all(test, unix))]
+pub(crate) fn test_tick(tab: &str, project: &str, target: &str, root: &Path, file: &str, round: &str, marks: &[(u32, u32)]) -> Value {
+    let (_, session) = crate::services::root_mcp::test_session_bound(Caller::Marker, tab, project, target);
+    let marks: Vec<Value> = marks.iter().map(|(page, mark)| json!({"page": page, "mark": mark})).collect();
+    let msg = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":TOOL_DONE,"arguments":{"file":file,"round":round,"marks":marks}}});
+    let root = root.to_path_buf();
+    let reply = handle_with(&session, &msg, &Context { enabled: true, root: &|| Some(root.clone()) }).expect("a reply");
+    reply["result"]["structuredContent"].clone()
 }
 
 #[cfg(test)]
@@ -1205,6 +1290,27 @@ mod tests {
         let (s2, ..) = tab("dismiss");
         assert!(list(&project, &target, Shown::All).is_empty());
         root_mcp::revoke_tab(&s2.identity.tab);
+    }
+
+    #[test]
+    fn an_answer_under_the_callers_receipt_is_undone_by_that_receipt() {
+        let (s, project, target) = tab("answer-as");
+        let pick = [Answer { options: vec![1], other: None }];
+        let id = call(&s, TOOL_ASK, json!({"questions": [q("a?", &["x", "y"])]}), &ctx_on())["id"].as_str().unwrap().to_string();
+        // Malformed receipts are refused before anything is taken.
+        for bad in ["", "short", "has/slash0123", &"a".repeat(65)] {
+            assert_eq!(answer_as(&project, &target, &id, &pick, Some(bad)), Err(AnswerError::Invalid), "{bad:?}");
+        }
+        assert_eq!(list(&project, &target, Shown::All).len(), 1);
+        let mine = mint_receipt();
+        assert!(valid_receipt(&mine), "{mine}");
+        let taken = answer_as(&project, &target, &id, &pick, Some(&mine)).unwrap();
+        assert_eq!(taken.receipt, mine);
+        assert!(taken.prompt.contains('y'), "{}", taken.prompt);
+        // The caller never saw the reply, but holds the receipt: it undoes it.
+        assert_eq!(reopen(&project, &target, &id, &mine), Ok(()));
+        assert_eq!(list(&project, &target, Shown::All).len(), 1);
+        root_mcp::revoke_tab(&s.identity.tab);
     }
 
     #[test]
@@ -1503,5 +1609,45 @@ mod tests {
         for name in root_mcp::tool_names().iter().copied().chain(super::super::help_mcp::TOOLS.iter().copied()) {
             assert!(!crate::services::root_mcp_security::tool(name).unwrap().serves(Caller::Marker), "{name}");
         }
+    }
+
+    fn view(id: &str, at: &str) -> AskView {
+        AskView { id: id.into(), file: None, file_name: None, created_at: at.into(), questions: Vec::new() }
+    }
+
+    #[test]
+    fn two_processes_asks_merge_to_the_newest_and_ticks_to_a_union() {
+        let old = view("ask-old", "2026-11-05T10:00:00+01:00");
+        let new = view("ask-new", "2026-11-05T09:30:00+00:00"); // 10:30 in +01:00: newer across offsets
+        assert_eq!(merge_asks(vec![old.clone()], vec![]), vec![old.clone()]);
+        assert_eq!(merge_asks(vec![], vec![new.clone()]), vec![new.clone()]);
+        assert_eq!(merge_asks(vec![old.clone()], vec![new.clone()]), vec![new.clone()], "the peer's is newer");
+        assert_eq!(merge_asks(vec![new.clone()], vec![old.clone()]), vec![new.clone()], "this one's is newer");
+        assert_eq!(merge_asks(vec![old.clone()], vec![old.clone()]), vec![old.clone()], "one ask seen twice is one");
+        let unreadable = view("ask-x", "yesterday");
+        assert_eq!(merge_asks(vec![unreadable.clone()], vec![old.clone()]), vec![old.clone()], "a readable time beats an unreadable one");
+        let tie = view("ask-tie", &old.created_at);
+        assert_eq!(merge_asks(vec![old.clone()], vec![tie]), vec![old], "a tie keeps this process's ask");
+        let tick = |round: &str, page: u32, mark: u32| TickView { round: round.into(), page, mark };
+        assert_eq!(
+            merge_ticks(vec![tick("r1", 1, 1), tick("r1", 2, 1)], vec![tick("r1", 2, 1), tick("r2", 1, 3)]),
+            vec![tick("r1", 1, 1), tick("r1", 2, 1), tick("r2", 1, 3)],
+        );
+    }
+
+    #[test]
+    fn the_second_process_holds_its_own_asks_and_ticks() {
+        let (s, project, target) = tab("as-host");
+        let in_host = as_host::run(|| {
+            assert!(as_host::active());
+            let ask = call(&s, TOOL_ASK, json!({"questions": [q("a?", &["x", "y"])]}), &ctx_on());
+            assert_eq!(ask["status"], "shown");
+            list(&project, &target, Shown::All)
+        });
+        assert!(!as_host::active(), "the switch is scoped");
+        assert_eq!(in_host.len(), 1);
+        assert!(list(&project, &target, Shown::All).is_empty(), "the other process's store never saw it");
+        assert_eq!(as_host::run(|| list(&project, &target, Shown::All)).len(), 1);
+        root_mcp::revoke_tab(&s.identity.tab);
     }
 }

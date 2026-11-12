@@ -349,6 +349,10 @@ struct Record {
     pdf_after_sha256: Option<String>,
     /// Seconds since the epoch.
     created: u64,
+    /// Nanoseconds since the epoch: orders rounds begun within one second,
+    /// which `created` alone ties. Absent from rounds older builds wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_ns: Option<u64>,
     undone: bool,
     /// Lost its undo at settle (the round grew past the bounds).
     lost: bool,
@@ -1301,6 +1305,10 @@ pub fn begin(state_dir: &Path, root: &Path, owner: Owner, pdf: Option<PdfBefore>
         pdf_before_sha256: kept.map(|(_, digest)| digest),
         pdf_after_sha256: None,
         created: now_secs(),
+        created_ns: std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|d| u64::try_from(d.as_nanos()).ok()),
         undone: false,
         lost: false,
     };
@@ -1622,15 +1630,20 @@ pub fn undo(state_dir: &Path, id: &str, owner: &Owner) -> Result<Changes, RoundE
 fn prune(state_dir: &Path, keep: &str) {
     let Ok(entries) = std::fs::read_dir(rounds_dir(state_dir)) else { return };
     let now = now_secs();
+    // (when, path): `when` in nanoseconds, so rounds begun within one second
+    // keep their order (seconds alone tie them, and the newest could go).
     let mut rounds: Vec<(u64, PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if !valid_id(&name) || name == keep {
             continue;
         }
-        let created = std::fs::read(entry.path().join("round.json"))
+        let value = std::fs::read(entry.path().join("round.json"))
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let created_ns = value.as_ref().and_then(|value| value.get("created_ns").and_then(serde_json::Value::as_u64));
+        let created = value
+            .as_ref()
             .and_then(|value| value.get("created").and_then(serde_json::Value::as_u64))
             .or_else(|| {
                 entry
@@ -1644,7 +1657,7 @@ fn prune(state_dir: &Path, keep: &str) {
         if now.saturating_sub(created) > KEEP_FOR.as_secs() {
             let _ = std::fs::remove_dir_all(entry.path());
         } else {
-            rounds.push((created, entry.path()));
+            rounds.push((created_ns.unwrap_or(created.saturating_mul(1_000_000_000)), entry.path()));
         }
     }
     rounds.sort_by_key(|round| std::cmp::Reverse(round.0));
@@ -2324,7 +2337,10 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(left.len(), KEEP_ROUNDS);
-        assert!(left.contains(ids.last().unwrap()));
+        // Exactly the newest ones, though they were begun within a second or two.
+        for id in &ids[ids.len() - KEEP_ROUNDS..] {
+            assert!(left.contains(id), "a newer round was pruned");
+        }
         // An old one goes whatever the count.
         let old = state.join(ROUNDS_DIR).join(&ids[ids.len() - 2]);
         let mut record: serde_json::Value = serde_json::from_slice(&fs::read(old.join("round.json")).unwrap()).unwrap();

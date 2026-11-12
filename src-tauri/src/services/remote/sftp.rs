@@ -778,14 +778,87 @@ async fn ensure_parent_dirs_on(sftp: &Sftp, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Read a remote file's whole contents on an already-open session.
-pub async fn read_file_on(sftp: &Sftp, path: &str) -> Result<Vec<u8>, String> {
-    let mut fs = sftp.fs();
-    let bytes = fs
-        .read(path)
+/// Read a remote file's contents, but never more than `limit` bytes into memory.
+/// `Ok(None)` when the file holds more than `limit` bytes (nothing is returned
+/// then: a caller treats it as "too large", not as a prefix). The listing's size
+/// is the host's word and the file can grow after it, and `/proc` files report
+/// size 0, so the bound is on the bytes actually read: at most `limit + 1` plus
+/// one chunk are ever held, whatever the host sends.
+pub async fn read_file_up_to(sftp: &Sftp, path: &str, limit: u64) -> Result<Option<Vec<u8>>, String> {
+    let file = sftp.open(path).await.map_err(|e| format!("sftp read failed: {e}"))?;
+    read_bounded(limit, file, |mut file, want| async move {
+        let chunk = file
+            .read(want, bytes::BytesMut::with_capacity(want as usize))
+            .await
+            .map(|chunk| chunk.map(|c| c.to_vec()))
+            .map_err(|e| format!("sftp read failed: {e}"));
+        (file, chunk)
+    })
+    .await
+}
+
+/// The loop behind [`read_file_up_to`], over any chunk source `S` (handed to `next`
+/// and handed back with each answer; `None` or an empty chunk is the end):
+/// `Ok(None)` as soon as more than `limit` bytes were seen.
+async fn read_bounded<S, F, Fut>(limit: u64, mut source: S, mut next: F) -> Result<Option<Vec<u8>>, String>
+where
+    F: FnMut(S, u32) -> Fut,
+    Fut: std::future::Future<Output = (S, Result<Option<Vec<u8>>, String>)>,
+{
+    let mut bytes: Vec<u8> = Vec::new();
+    loop {
+        // One byte past the limit is read so that "exactly limit" and "more" differ.
+        let room = limit.saturating_add(1).saturating_sub(bytes.len() as u64);
+        let want = u32::try_from(room).unwrap_or(u32::MAX).min(STREAM_CHUNK as u32);
+        let (back, chunk) = next(source, want).await;
+        source = back;
+        match chunk? {
+            Some(chunk) if !chunk.is_empty() => {
+                bytes.extend_from_slice(&chunk);
+                if bytes.len() as u64 > limit {
+                    return Ok(None);
+                }
+            }
+            _ => return Ok(Some(bytes)),
+        }
+    }
+}
+
+/// Up to `max` bytes of a remote file from byte `offset`, on an already-open
+/// session: the ranged read a growing log or event file needs, where
+/// a whole-file read would move the whole file again on every refresh. Short at
+/// the end of the file, empty when `offset` is at or past it.
+///
+/// The offset is set before every request rather than trusting the handle to
+/// advance by what arrived: it advances by what was *asked*, and a server may
+/// answer with less.
+pub async fn read_range_on(
+    sftp: &Sftp,
+    path: &str,
+    offset: u64,
+    max: usize,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncSeekExt;
+    let mut file = sftp
+        .open(path)
         .await
-        .map_err(|e| format!("sftp read failed: {e}"))?;
-    Ok(bytes.to_vec())
+        .map_err(|e| format!("sftp open failed: {e}"))?;
+    let mut out: Vec<u8> = Vec::with_capacity(max.min(STREAM_CHUNK));
+    while out.len() < max {
+        file.seek(std::io::SeekFrom::Start(offset.saturating_add(out.len() as u64)))
+            .await
+            .map_err(|e| format!("sftp seek failed: {e}"))?;
+        let want = (max - out.len()).min(STREAM_CHUNK) as u32;
+        match file
+            .read(want, bytes::BytesMut::with_capacity(want as usize))
+            .await
+            .map_err(|e| format!("sftp read failed: {e}"))?
+        {
+            Some(chunk) if !chunk.is_empty() => out.extend_from_slice(&chunk),
+            _ => break,
+        }
+    }
+    Ok(out)
 }
 
 /// Write (create/truncate) a remote file with `bytes`, creating missing parent
@@ -805,7 +878,7 @@ pub async fn create_file_on(sftp: &Sftp, path: &str) -> Result<(), String> {
 }
 
 /// Chunk size for the streaming transfers below — bounded so an arbitrarily large
-/// file never lives fully in memory (the whole-file `read_file_on`/`write_file_on`
+/// file never lives fully in memory (the whole-file `read_file_up_to`/`write_file_on`
 /// buffer everything, which is why the git-lockstep bundle transport streams; #28n
 /// Phase 3), and a manual sync pull of a file over the RAM cap too.
 pub const STREAM_CHUNK: usize = 256 * 1024;
@@ -846,7 +919,7 @@ pub async fn upload_file_streaming_on(
 
 /// Download a host file to a local path in bounded chunks (never buffering the
 /// whole file), creating missing parent directories first. The remote streaming
-/// analogue of `read_file_on` for large payloads (git bundles at initial pairing).
+/// analogue of `read_file_up_to` for large payloads (git bundles at initial pairing).
 pub async fn download_file_streaming_on(
     sftp: &Sftp,
     remote_path: &str,
@@ -1031,9 +1104,27 @@ pub async fn read_file(
     port: Option<u16>,
     password: Option<&str>,
     path: &str,
+    limit: u64,
+) -> Result<Option<Vec<u8>>, String> {
+    with_oneshot(user, host, port, password, |sftp| async move {
+        let r = read_file_up_to(&sftp, path, limit).await;
+        (sftp, r)
+    })
+    .await
+}
+
+/// One-shot [`read_range_on`].
+pub async fn read_range(
+    user: &Option<String>,
+    host: &str,
+    port: Option<u16>,
+    password: Option<&str>,
+    path: &str,
+    offset: u64,
+    max: usize,
 ) -> Result<Vec<u8>, String> {
     with_oneshot(user, host, port, password, |sftp| async move {
-        let r = read_file_on(&sftp, path).await;
+        let r = read_range_on(&sftp, path, offset, max).await;
         (sftp, r)
     })
     .await
@@ -1157,6 +1248,33 @@ mod tests {
             size: 0,
             modified_secs: None,
         }
+    }
+
+    /// A host that never stops sending is cut off one chunk past the limit; a file
+    /// of exactly `limit` bytes still reads whole. (Without the bound this loop
+    /// would run until the 10 GiB the fake source claims.)
+    #[test]
+    fn a_bounded_read_stops_at_the_limit_however_much_the_host_sends() {
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        // `S` is the bytes asked for so far.
+        let endless = |asked: u64, want: u32| {
+            assert!(asked < 10 << 30, "read past every sane bound");
+            async move { (asked + u64::from(want), Ok(Some(vec![7u8; want as usize]))) }
+        };
+        let limit = 3 * STREAM_CHUNK as u64 + 5;
+        assert_eq!(rt.block_on(read_bounded(limit, 0u64, endless)).unwrap(), None);
+
+        // `S` is what the fake file has left: exactly `limit` bytes still reads whole.
+        let exact = |left: u64, want: u32| {
+            let n = u64::from(want).min(left);
+            async move { (left - n, Ok(Some(vec![1u8; n as usize]))) }
+        };
+        let whole = rt.block_on(read_bounded(limit, limit, exact)).unwrap().expect("exactly the limit is allowed");
+        assert_eq!(whole.len() as u64, limit);
+        assert_eq!(rt.block_on(read_bounded(limit, limit + 1, exact)).unwrap(), None);
+
+        let failing = |s: (), _: u32| async move { (s, Err::<Option<Vec<u8>>, String>("boom".into())) };
+        assert_eq!(rt.block_on(read_bounded(10, (), failing)), Err("boom".to_string()));
     }
 
     #[test]

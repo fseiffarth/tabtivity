@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "../../stores/settings";
-import { useQuiesce, saverInterval } from "../../stores/power";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import {
@@ -13,6 +13,8 @@ import {
   type GpuSample,
 } from "../../lib/gpu";
 import { useT } from "../../lib/i18n";
+import { MeterIcon } from "../common/icons/Icon";
+import { UntestedTag } from "../common/UntestedTag";
 
 interface AppResourceUsage {
   cpu_percent: number;
@@ -60,38 +62,23 @@ export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: bool
   const fastMode = useFastMode();
   const anyShown = (showCpu || showRam || showGpu) && !fastMode;
   const [usage, setUsage] = useState<AppResourceUsage | null>(null);
-  const quiesce = useQuiesce();
-
   useEffect(() => {
-    if (!anyShown) {
-      setUsage(null);
-      return;
+    if (!anyShown) setUsage(null);
+  }, [anyShown]);
+
+  const poll = useCallback(async (run: PollRun) => {
+    try {
+      // Skip GPU and Ollama reads when their row is hidden.
+      const next = await invoke<AppResourceUsage>("debug_app_resource_usage", { gpu: showGpu });
+      if (!run.stopped) setUsage(next);
+    } catch {
+      if (!run.stopped) setUsage(null);
     }
-    // Folded keeps the last reading rather than clearing it: the cluster
-    // counts this member by its report, and a member that vanished on fold
-    // could drop the count below the fold threshold and unfold the row again.
-    if (folded) return;
-
-    let cancelled = false;
-    // `gpu: false` with the GPU row hidden: the backend then skips its GPU and
-    // Ollama reads instead of sampling what nobody will see.
-    const poll = () => {
-      invoke<AppResourceUsage>("debug_app_resource_usage", { gpu: showGpu })
-        .then((next) => {
-          if (!cancelled) setUsage(next);
-        })
-        .catch(() => {
-          if (!cancelled) setUsage(null);
-        });
-    };
-
-    poll();
-    const id = window.setInterval(poll, saverInterval(RESOURCE_POLL_MS, quiesce));
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [anyShown, showGpu, quiesce, folded]);
+  }, [showGpu]);
+  // Folded stops the poll but keeps the last reading: the cluster counts this
+  // member by its report, and one that vanished on fold could drop the count
+  // below the fold threshold and unfold the row again.
+  usePoll(poll, RESOURCE_POLL_MS, { enabled: anyShown && !folded, onBlur: "widen" });
 
   // One reading for the folded tooltip. It shows CPU and RAM only, so the GPU
   // and Ollama reads are skipped and the last GPU figures carried over until
@@ -134,35 +121,61 @@ export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: bool
 
   if (!anyShown || !usage) return null;
 
+  const tones = [
+    showCpu ? usageTone("cpu", usage.cpu_percent) : "low",
+    showRam ? usageTone("ram", usage.rss_bytes) : "low",
+    showGpu ? gpuRowTone(usage.gpus, usage.vram_bytes) : "low",
+  ];
+  const worst = tones.includes("high") ? "high" : tones.includes("medium") ? "medium" : "low";
+  const summary = [
+    showCpu ? `${t("appResource.cpuLabel")} ${usage.cpu_percent.toFixed(1)}%` : null,
+    showRam ? `${t("appResource.ramLabel")} ${formatBytes(usage.rss_bytes)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <div
-      className="app-resource-display"
-      title={t(
-        usage.process_count === 1 ? "appResource.processCountOne" : "appResource.processCountMany",
-        { count: usage.process_count },
-      )}
-    >
-      {showCpu && (
-        <span
-          className={`app-resource-row ${usageTone("cpu", usage.cpu_percent)}`}
-          title={t("appResource.cpuTitle")}
-        >
-          <span className="app-resource-symbol" aria-hidden>{t("appResource.cpuLabel")}</span>
-          <span>{usage.cpu_percent.toFixed(1)}%</span>
+    <div className="app-resource-display" tabIndex={0} role="group" aria-label={summary}>
+      <MeterIcon className={`header-status-glyph app-resource-meter ${worst}`} />
+      {/* Stays mounted: the card opens on `:hover`/`:focus-within`, so a pointer
+          reaching the meter costs no render and the figures are already there. */}
+      <div className="project-pill-popup app-resource-card">
+        {showCpu && (
+          <span
+            className={`app-resource-row ${usageTone("cpu", usage.cpu_percent)}`}
+            title={t("appResource.cpuTitle")}
+          >
+            <span className="app-resource-symbol" aria-hidden>{t("appResource.cpuLabel")}</span>
+            <span>{usage.cpu_percent.toFixed(1)}%</span>
+          </span>
+        )}
+        {showRam && (
+          <span
+            className={`app-resource-row ${usageTone("ram", usage.rss_bytes)}`}
+            title={t("appResource.ramTitle")}
+          >
+            <span className="app-resource-symbol" aria-hidden>{t("appResource.ramLabel")}</span>
+            <span>{formatBytes(usage.rss_bytes)}</span>
+          </span>
+        )}
+        {showGpu && <GpuRow gpus={usage.gpus} ollamaBytes={usage.vram_bytes} />}
+        <span className="pill-popup-path">
+          {t(
+            usage.process_count === 1 ? "appResource.processCountOne" : "appResource.processCountMany",
+            { count: usage.process_count },
+          )}
         </span>
-      )}
-      {showRam && (
-        <span
-          className={`app-resource-row ${usageTone("ram", usage.rss_bytes)}`}
-          title={t("appResource.ramTitle")}
-        >
-          <span className="app-resource-symbol" aria-hidden>{t("appResource.ramLabel")}</span>
-          <span>{formatBytes(usage.rss_bytes)}</span>
-        </span>
-      )}
-      {showGpu && <GpuRow gpus={usage.gpus} ollamaBytes={usage.vram_bytes} />}
+        <UntestedTag id="desktop.header.meter" />
+      </div>
     </div>
   );
+}
+
+/** The GPU row's tone, shared with the meter so it takes the worst of three. */
+function gpuRowTone(gpus: GpuSample[], ollamaBytes: number): "low" | "medium" | "high" {
+  if (gpus.length === 0) return usageTone("ram", ollamaBytes);
+  const { used, total } = gpuTotals(gpus);
+  return gpuTone(used, total);
 }
 
 /**
@@ -178,7 +191,7 @@ function GpuRow({ gpus, ollamaBytes }: { gpus: GpuSample[]; ollamaBytes: number 
   if (gpus.length === 0) {
     return (
       <span
-        className={`app-resource-row ${usageTone("ram", ollamaBytes)}`}
+        className={`app-resource-row ${gpuRowTone(gpus, ollamaBytes)}`}
         title={t("appResource.gpuNoDeviceTitle")}
       >
         <span className="app-resource-symbol" aria-hidden>{t("appResource.gpuLabel")}</span>
@@ -192,7 +205,7 @@ function GpuRow({ gpus, ollamaBytes }: { gpus: GpuSample[]; ollamaBytes: number 
 
   return (
     <span
-      className={`app-resource-row ${gpuTone(used, total)}`}
+      className={`app-resource-row ${gpuRowTone(gpus, ollamaBytes)}`}
       title={gpuTooltip(gpus, ollamaBytes)}
     >
       <span className="app-resource-symbol" aria-hidden>{t("appResource.gpuLabel")}</span>

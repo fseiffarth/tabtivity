@@ -22,6 +22,7 @@ import { useT } from "../../lib/i18n";
 import { DEFAULT_LOOKAHEAD_DAYS } from "../../lib/alerts";
 import type { ProjectEntry, Settings, ViewerPref } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
+import { CheckIcon } from "../common/icons/Icon";
 
 /**
  * The file-view filters (which endings/paths a project's tree hides) and the
@@ -401,7 +402,7 @@ export function ProjectFilesSettingsDialog({
                 className="settings-btn"
                 onClick={() => setShowPython(true)}
               >
-                {project.python_interpreter ? "✓ " : ""}
+                {project.python_interpreter ? <><CheckIcon />{" "}</> : ""}
                 {t("projectSettings.pythonInterpreter")}
               </button>
             </div>

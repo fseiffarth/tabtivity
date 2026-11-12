@@ -74,7 +74,7 @@ import {
   type ScratchCandidate,
 } from "../../lib/remote/hpc/hpcWorkspace";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { GearIcon, UploadIcon } from "../common/icons/Icon";
+import { CheckIcon, CloseIcon, GearIcon, UploadIcon } from "../common/icons/Icon";
 import { ErrorNote } from "../common/ErrorNote";
 
 type Step = "login" | "project" | "workspace" | "data" | "run" | "watch";
@@ -356,7 +356,7 @@ function HpcPipelineWizard({ onClose }: { onClose: () => void }) {
           <h2>
             {t("hpcWizard.title")} <UntestedTag id="hpcWizard.title" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
         <StepTrail step={step} />
@@ -1009,7 +1009,7 @@ function DataStep({
       {uploaded.length > 0 && (
         <ul className="hpc-wizard-uploaded">
           {uploaded.map((f) => (
-            <li key={f}>✓ {f}</li>
+            <li key={f}><CheckIcon /> {f}</li>
           ))}
         </ul>
       )}

@@ -29,7 +29,7 @@ pub(crate) use crate::services::project_registry::{
 /// SFTP/SSH. This path becomes the project's `directory` (a stable local key the
 /// fs/git/terminal commands resolve to a `RemoteTarget`).
 pub(crate) fn remote_project_state_dir(id: &str) -> std::path::PathBuf {
-    storage::state_dir().join("remote-projects").join(id)
+    storage::remote_project_dir_in(&storage::state_dir(), id)
 }
 
 /// Drop the per-project state that is bound to **one specific host**: the byte-sync
@@ -734,6 +734,10 @@ pub(crate) fn entry_is_vm(entry: &ProjectEntry) -> bool {
 /// exist. `src` is only removed after the whole copy succeeded, so a failed
 /// fallback leaves the source intact and the move retryable.
 pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
+    move_tree_with(src, dst, CopyLimits::DEFAULT)
+}
+
+fn move_tree_with(src: &Path, dst: &Path, limits: CopyLimits) -> Result<(), String> {
     if !src.exists() {
         return Ok(());
     }
@@ -745,7 +749,7 @@ pub(crate) fn move_tree(src: &Path, dst: &Path) -> Result<(), String> {
         Err(e) if crate::paths::is_cross_device(&e) || dst.exists() => {}
         Err(e) => return Err(format!("could not move {}: {e}", src.display())),
     }
-    copy_tree_core(src, dst, true)?;
+    copy_tree_core_with(src, dst, true, limits)?;
     fs::remove_dir_all(src).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -765,10 +769,25 @@ fn move_fresh_tree(
     what: &str,
     rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<(), String> {
+    move_fresh_tree_with(src, dst, what, rename, CopyLimits::DEFAULT)
+}
+
+fn move_fresh_tree_with(
+    src: &Path,
+    dst: &Path,
+    what: &str,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    limits: CopyLimits,
+) -> Result<(), String> {
     match rename(src, dst) {
         Ok(()) => Ok(()),
         Err(e) if crate::paths::is_cross_device(&e) => {
-            copy_tree_core(src, dst, true)?;
+            // `dst` was free, so what is there after a failed copy (a bound
+            // hit, a read error) is our half-made tree; the source stays.
+            if let Err(error) = copy_tree_core_with(src, dst, true, limits) {
+                let _ = fs::remove_dir_all(dst);
+                return Err(error);
+            }
             fs::remove_dir_all(src).map_err(|e| e.to_string())
         }
         Err(e) => Err(format!("could not move {what}: {e}")),
@@ -790,10 +809,82 @@ fn move_fresh_tree(
 /// case — errored out a cross-device `archive_project` halfway through the
 /// move, and a link to a large tree silently duplicated it. A dangling link is
 /// therefore fine here: the link itself is copied, pointing at the same target.
+///
+/// Gap 83: the tree is one an agent may have written to, so the walk takes
+/// each entry's type from the directory entry (an `lstat`, never a followed
+/// link) and copies only regular files, read from a handle opened
+/// `O_NOFOLLOW | O_NONBLOCK` and checked regular on that handle
+/// ([`home_io::open_regular`]) — a FIFO an agent planted blocks nothing, and
+/// pipes, sockets and devices are skipped (they carry no data, so a move that
+/// skipped one still removes its source). Entries, bytes and depth are
+/// bounded like [`tree_copy`]'s; a bound hit fails the copy, and every caller
+/// removes the source only after a copy that returned `Ok`.
 fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> {
+    copy_tree_core_with(src, dst, keep_git, CopyLimits::DEFAULT)
+}
+
+/// What one [`copy_tree_core`] walk may cover.
+#[derive(Debug, Clone, Copy)]
+struct CopyLimits {
+    entries: usize,
+    bytes: u64,
+    depth: usize,
+}
+
+impl CopyLimits {
+    /// The user's own copy (archive, mirror move, Duplicate, the Remote →
+    /// Remote-only move-out): the tree is theirs and a `target/` or
+    /// `node_modules/` easily holds 200 000 entries, so there is no entry or
+    /// byte cap (user decision, 2026-11-05; the caps of
+    /// [`crate::services::tree_copy`] guard a tree a stranger or a remote host
+    /// picks). The depth cap stays: it bounds the walk's recursion, not a size.
+    const DEFAULT: CopyLimits = CopyLimits { entries: usize::MAX, bytes: u64::MAX, depth: 128 };
+}
+
+/// The running totals of one walk.
+#[derive(Default)]
+struct CopyTally {
+    entries: usize,
+    bytes: u64,
+    skipped: usize,
+}
+
+fn copy_tree_core_with(
+    src: &Path,
+    dst: &Path,
+    keep_git: bool,
+    limits: CopyLimits,
+) -> Result<(), String> {
+    let mut tally = CopyTally::default();
+    copy_dir_core(src, dst, keep_git, limits, &mut tally, 0)?;
+    if tally.skipped > 0 {
+        eprintln!(
+            "copy_tree_core: left {} special file(s) (pipes, sockets, devices) out of {}",
+            tally.skipped,
+            src.display()
+        );
+    }
+    Ok(())
+}
+
+fn copy_dir_core(
+    src: &Path,
+    dst: &Path,
+    keep_git: bool,
+    limits: CopyLimits,
+    tally: &mut CopyTally,
+    depth: usize,
+) -> Result<(), String> {
+    if depth > limits.depth {
+        return Err("too large to copy: the folders are nested too deeply".to_string());
+    }
     fs::create_dir_all(dst).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
+        tally.entries += 1;
+        if tally.entries > limits.entries {
+            return Err("too large to copy: the folder holds too many entries".to_string());
+        }
         let file_type = entry.file_type().map_err(|e| e.to_string())?;
         if !keep_git && entry.file_name() == ".git" {
             continue;
@@ -806,12 +897,120 @@ fn copy_tree_core(src: &Path, dst: &Path, keep_git: bool) -> Result<(), String> 
             if !keep_git && fs::symlink_metadata(from.join(".git")).is_ok() {
                 continue;
             }
-            copy_tree_core(&from, &to, keep_git)?;
+            copy_dir_core(&from, &to, keep_git, limits, tally, depth + 1)?;
+        } else if file_type.is_file() {
+            copy_file_core(&from, &to, limits, tally)?;
         } else {
-            fs::copy(&from, &to).map_err(|e| e.to_string())?;
+            tally.skipped += 1;
         }
     }
     Ok(())
+}
+
+/// Open `from` (listed as a regular file) for reading the way
+/// [`crate::services::home_io::open_regular`] does — no link followed, no wait
+/// on a FIFO, regular on the handle — but telling "not there to copy" from
+/// "could not be read": `Ok(None)` only for a file that vanished or stopped
+/// being a regular file since the directory read (a swapped-in link, pipe or
+/// socket); an unreadable file (permissions, I/O) is an `Err`, so the move
+/// that called never removes a source holding bytes it could not copy.
+fn open_source_file(from: &Path) -> Result<Option<fs::File>, String> {
+    #[cfg(unix)]
+    let opened = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(from)
+    };
+    #[cfg(not(unix))]
+    let opened = match fs::symlink_metadata(from) {
+        Ok(m) if m.is_file() => fs::File::open(from),
+        Ok(_) => return Ok(None),
+        Err(e) => Err(e),
+    };
+    match opened {
+        Ok(file) => Ok(file
+            .metadata()
+            .map_err(|e| format!("{}: {e}", from.display()))?
+            .is_file()
+            .then_some(file)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        #[cfg(unix)]
+        // ELOOP: a link where the file was; ENXIO: a socket or an unopened pipe.
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENXIO)) => Ok(None),
+        Err(e) => Err(format!("{}: {e}", from.display())),
+    }
+}
+
+/// One regular file, through a no-follow, non-blocking handle that is checked
+/// regular once open. A file that stopped being regular (or vanished) between
+/// the directory read and the open is skipped, like a special file. The
+/// destination may be left by an interrupted earlier pass (a resumed archive),
+/// so it is opened by [`create_destination`]: never through a link.
+fn copy_file_core(from: &Path, to: &Path, limits: CopyLimits, tally: &mut CopyTally) -> Result<(), String> {
+    use std::io::Read;
+    let Some(input) = open_source_file(from)? else {
+        tally.skipped += 1;
+        return Ok(());
+    };
+    let permissions = input.metadata().ok().map(|m| m.permissions());
+    let mut out = create_destination(to)?;
+    let room = limits.bytes.saturating_sub(tally.bytes);
+    // One byte past the room tells "exactly full" from "over".
+    let copied = std::io::copy(&mut input.take(room.saturating_add(1)), &mut out)
+        .map_err(|e| e.to_string())?;
+    if copied > room {
+        return Err("too large to copy: the copy is larger than the limit".to_string());
+    }
+    tally.bytes += copied;
+    if let Some(permissions) = permissions {
+        let _ = out.set_permissions(permissions);
+    }
+    Ok(())
+}
+
+/// Open the destination file of a copy for writing without following a link.
+/// A new file is made with `O_EXCL | O_NOFOLLOW`; one a resumed pass left is
+/// opened `O_NOFOLLOW | O_NONBLOCK`, checked regular on the handle (a FIFO
+/// planted there fails instead of blocking the copy), and then emptied. A link
+/// at `to` is refused: the copy fails (a move keeps its source) rather than
+/// write through it or guess what it was meant to be.
+fn create_destination(to: &Path) -> Result<fs::File, String> {
+    let refuse = |why: &str| format!("{}: {why}", to.display());
+    match fs::symlink_metadata(to) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(refuse("the destination is a link, not a file the copy may write"));
+        }
+        Ok(meta) if !meta.is_file() => {
+            return Err(refuse("the destination is not a regular file"));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            return options.open(to).map_err(|e| format!("{}: {e}", to.display()));
+        }
+        Err(e) => return Err(refuse(&e.to_string())),
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    if !file.metadata().map_err(|e| format!("{}: {e}", to.display()))?.is_file() {
+        return Err(refuse("the destination is not a regular file"));
+    }
+    file.set_len(0).map_err(|e| format!("{}: {e}", to.display()))?;
+    Ok(file)
 }
 
 /// Recreate one symlink at `to`, replacing whatever an interrupted earlier copy
@@ -1765,6 +1964,14 @@ pub fn set_project_sandbox_blocking(
         );
     }
 
+    // A local-models-only project runs no container yet
+    // (`services::agent_privacy`).
+    if enabled {
+        if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
+            return Err(refusal);
+        }
+    }
+
     // Existing spec: the `projects.json` mirror in the state dir is the ONLY
     // source. There used to be a `project.json` fallback for entries predating the
     // mirror, but `project.json` lives inside the project tree — inside the
@@ -1854,6 +2061,13 @@ pub fn set_project_sandbox_spec(
     clean(&mut spec.memory);
     clean(&mut spec.cpus);
     clean(&mut spec.network);
+    if spec.enabled {
+        if let Ok(entry) = crate::services::remote::project_entry(&project_id) {
+            if let Some(refusal) = crate::services::agent_privacy::locked_refusal(&entry) {
+                return Err(refusal);
+            }
+        }
+    }
     // Refuse `host` (and any non-name) here, where the user can see the error —
     // `services::sandbox::harden_opts` additionally drops an invalid network at
     // spawn, so a spec written before this check still can't remove isolation.

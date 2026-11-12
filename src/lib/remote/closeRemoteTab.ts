@@ -34,6 +34,9 @@ import { noteClosedAgentTab } from "../../stores/agents/closedAgentTabs";
 import { MOBILE_ACCESS_KEY } from "../brand";
 import { ROOT_SCOPE } from "../terminal/ptyId";
 import { isHostPinned } from "../projectTabHost";
+import { isDetachedWindow } from "../../stores/detachedContext";
+import { popoutTab } from "../../stores/popoutView";
+import { tabCloseGuard } from "../tabs/tabCloseGuard";
 
 /**
  * The persistent host tmux session a tab owns, or `null` if the tab is not a
@@ -120,23 +123,55 @@ export function mintedLocalSessionOf(scope: string, tab: TabEntry): string | nul
  * close chord, a bulk close, or the phone's ✕ (`MobileBridgeHost`), which is why
  * it takes a scope: the phone closes a tab in whichever project it is looking at.
  *
+ * A tab whose pane would lose unsaved work (a file edited with autosave off)
+ * asks first, through the guard its pane registered (`lib/tabs/tabCloseGuard`):
+ * Save / Discard / Cancel. Resolves whether the tab closed. With nothing to
+ * lose the close happens at once, before this returns, as it always did.
+ *
  * The tab leaves the layout (its pane unmounts, killing the PTY client) and the
  * local tmux session it minted is ended with it. A resumable agent tab is kept
  * for "Reopen closed tab" (`stores/agents/closedAgentTabs`). A remote session is left
  * running; see the file header. Programmatic removals (a re-run replacing its
  * prior tab, a file tab following its file) keep calling `removeTab` directly.
  */
-export function closeTabInScope(scope: string, key: string): void {
+export function closeTabInScope(scope: string, key: string): Promise<boolean> {
+  const guard = tabCloseGuard(scope, key);
+  if (!guard?.wouldLose()) {
+    closeTabNow(scope, key);
+    return Promise.resolve(true);
+  }
+  return guard.confirm().then((close) => {
+    if (close) closeTabNow(scope, key);
+    return close;
+  });
+}
+
+function closeTabNow(scope: string, key: string): void {
   const store = useTabsStore.getState();
-  const tab = (store.tabsByScope[scope] ?? []).find((t) => t.key === key);
+  // In a popout the tab is the popout view's (its tabs store is empty), and
+  // `removeTabInScope` closes it the way its × does: the main window records it
+  // for "Reopen closed tab" from that close (`noteClosedPopoutTabs`), so the
+  // record is not written in this heap too.
+  const inPopout = isDetachedWindow();
+  const tab = inPopout ? popoutTab(scope, key) : (store.tabsByScope[scope] ?? []).find((t) => t.key === key);
   const session = tab ? mintedLocalSessionOf(scope, tab) : null;
   // An agent tab a restart would resume can be reopened the same way.
-  if (tab) noteClosedAgentTab(scope, tab, !!session);
+  if (tab && !inPopout) noteClosedAgentTab(scope, tab, !!session);
   store.removeTabInScope(scope, key);
   if (session) void invoke<void>("local_tmux_kill", { session }).catch(() => {});
 }
 
 /** `closeTabInScope` for the active scope — the desktop's own close. */
-export function closeTabWithConfirm(key: string): void {
-  closeTabInScope(useTabsStore.getState().scope, key);
+export function closeTabWithConfirm(key: string): Promise<boolean> {
+  return closeTabInScope(useTabsStore.getState().scope, key);
+}
+
+/** Close several of the active scope's tabs one at a time, so each one with
+ *  unsaved work gets its own question; a Cancel stops the rest, which stay
+ *  open. */
+export async function closeTabsWithConfirm(keys: readonly string[]): Promise<void> {
+  const scope = useTabsStore.getState().scope;
+  for (const key of keys) {
+    if (!(await closeTabInScope(scope, key))) return;
+  }
 }

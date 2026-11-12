@@ -34,7 +34,11 @@ vi.mock("../../components/embed/pdf/markupPage", async (original) => {
   return { ...real, markupPagePicture: vi.fn(real.markupPagePicture) };
 });
 
-import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupBar, PdfMarkupUndoConfirm } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupAgentPanel } from "../../components/embed/pdf/PdfMarkupAgentPanel";
+import { PdfMarkupDock } from "../../components/embed/pdf/PdfMarkupDock";
+/** The harness shows the agent panel open throughout. */
+const PINNED: ReadonlySet<string> = new Set(["ask-1:0"]);
 import { markupPagePicture } from "../../components/embed/pdf/markupPage";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
@@ -68,7 +72,7 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
     docSize: 9_000,
     docVersion: 0,
   });
-  return <PdfMarkupBar markup={markup} page={1} onReload={onReload} onDone={() => {}} />;
+  return <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={onReload} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={onReload} /></>;
 }
 
 const submitButton = () => screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;

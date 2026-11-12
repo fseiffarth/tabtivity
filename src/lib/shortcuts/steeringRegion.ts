@@ -1,7 +1,7 @@
 /**
  * The region cursor of keyboard steering mode: one highlighted control inside a
  * surface that has no tab bar to step through — the side panel, the mail /
- * calendar / to-do overlays, a pane's + menu, the settings dialog. ↑/↓ walk
+ * calendar / to-do views, a pane's + menu, the settings dialog. ↑/↓ walk
  * it, Enter presses it.
  *
  * It is deliberately NOT DOM focus. Focusing a control runs its focus handlers
@@ -17,9 +17,13 @@
  * so a surface needs no steering code of its own to be walkable.
  */
 import { experimentalEnabled } from "../experimental";
+import { wrapStep } from "../wrapStep";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
-import type { FilesPanelView, Settings } from "../../types";
+import type { Settings } from "../../types";
 import type { SteeringRegion } from "../../stores/keyboardSteering";
+import { steeringInRoot, steeringTabsActive } from "./steeringScope";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { isDetachedWindow } from "../../stores/detachedContext";
 
 const CURSOR_CLASS = "steer-cursor";
 
@@ -30,11 +34,8 @@ const PRESSABLE =
   '[tabindex]:not([tabindex="-1"]), [role="button"], [role="tab"], [role="treeitem"], ' +
   '[role="option"], [role="menuitem"], [role="checkbox"], [role="switch"]';
 
-/** The side panel's views in the order ←/→ walk them — the four its edge rail
- *  and switcher lead with (`AppShell`'s EDGE_VIEWS). */
-export const SIDE_PANEL_VIEWS: readonly FilesPanelView[] = ["files", "git", "windows", "agents"];
-
-/** The header apps steering can open, and the gate each one's button has. */
+/** The header apps steering can show (views of the console window), and the gate
+ *  each one's button has. */
 export type SteeringApp = "mail" | "calendar" | "todo";
 
 export function steeringAppEnabled(app: SteeringApp, settings: Settings | null | undefined): boolean {
@@ -50,6 +51,42 @@ export function steeringAppEnabled(app: SteeringApp, settings: Settings | null |
 
 let cursor: HTMLElement | null = null;
 
+/** The root window's frame while the chrome region walks it: the cursor then
+ *  lands only on the window's own controls (`CHROME_ZONE`), not on the Root
+ *  view's terminals or a cockpit view's rows. `regionRoot` sets and clears it
+ *  per region, ahead of every use of the root. */
+const chromeFrames = new WeakSet<HTMLElement>();
+/** The same frame while an app region (mail / calendar / to-do) walks it: the
+ *  whole window but its view strip, which is the chrome level's. */
+const appFrames = new WeakSet<HTMLElement>();
+const APP_SKIP = ".root-view-strip";
+/** What the subagents region walks in an agent tab's pane: the Subagents (and
+ *  Workspaces) lists in the Chat's top bar, and an open subagent's bar. */
+const SUBAGENT_ZONE = ".terminal-reader-subagent-index, .terminal-reader-subagent-bar";
+/** The panes the subagents region walks, so `regionTargets` keeps to its zone. */
+const subagentFrames = new WeakSet<HTMLElement>();
+/** What the chrome level walks: the title bar's view tabs and buttons, and the
+ *  rail's fold toggle. */
+const CHROME_ZONE = ".root-overlay-bar, .cockpit-rail-expand, .cockpit-rail-collapse";
+/** Root's own tab strip sits in the bar too: those tabs are the tab level's. */
+const CHROME_SKIP = ".root-overlay-slot .tab-strip, .root-overlay-slot .tab-new-wrap";
+const ADD_TAB_SUBMENU = "[data-steer-add-tab-submenu]";
+/** A popout's title bar while the chrome region walks it: only its buttons
+ *  (dock back, hide, minimize, maximize, close), never the logo, the grip or
+ *  the name. */
+const popoutChromeFrames = new WeakSet<HTMLElement>();
+const POPOUT_CHROME_ZONE = ".detached-titlebar-actions, .detached-titlebar-controls";
+
+/** The root console's window frame (the cockpit, its apps and its chrome), when open. */
+function rootFrame(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(".root-console-backdrop > .root-overlay");
+}
+
+/** The first element under `within` matching `selector` that is on screen. */
+function firstShown(selector: string, within: ParentNode = document): HTMLElement | null {
+  return Array.from(within.querySelectorAll<HTMLElement>(selector)).find(shown) ?? null;
+}
+
 function lastMatch(selector: string): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>(selector);
   return all.length > 0 ? all[all.length - 1] : null;
@@ -59,27 +96,72 @@ function lastMatch(selector: string): HTMLElement | null {
  *  screen (the overlay still loading, the panel closed by the pointer). */
 export function regionRoot(region: SteeringRegion): HTMLElement | null {
   switch (region) {
+    case "cockpit": {
+      const frame = rootFrame();
+      if (frame) { chromeFrames.delete(frame); appFrames.delete(frame); }
+      return frame;
+    }
     case "side":
       return document.querySelector<HTMLElement>(".side-panel.open");
-    case "addTab":
-      return lastMatch(".tab-add-menu");
+    case "addTab": {
+      const menu = lastMatch(".tab-add-menu");
+      const submenus = menu?.querySelectorAll<HTMLElement>(`${ADD_TAB_SUBMENU}:not([data-steer-add-tab-submenu="hover"])`);
+      // More and its machine picker are siblings. The deeper one is rendered
+      // last. A pointer preview does not take over the keyboard cursor.
+      if (submenus) {
+        for (let i = submenus.length - 1; i >= 0; i--) {
+          if (shown(submenus[i])) return submenus[i];
+        }
+      }
+      return menu;
+    }
     case "header":
       return document.querySelector<HTMLElement>(".app-header");
+    case "chrome": {
+      // A popout's chrome is its own title bar (`POPOUT_CHROME_ZONE`).
+      if (isDetachedWindow()) {
+        const bar = document.querySelector<HTMLElement>(".detached-titlebar");
+        if (bar) popoutChromeFrames.add(bar);
+        return bar;
+      }
+      // The root window's frame, walked only over its chrome (`CHROME_ZONE`).
+      const frame = rootFrame();
+      if (frame) {
+        appFrames.delete(frame);
+        chromeFrames.add(frame);
+      }
+      return frame;
+    }
     case "card":
       return activeTabCard();
-    case "overlay":
-      return topLayer();
+    case "subagents": {
+      const frame = activeSubagentFrame();
+      if (frame) subagentFrames.add(frame);
+      return frame;
+    }
+    case "overlay": {
+      // The same frame, walked whole (a cockpit view opened with U).
+      const layer = topLayer();
+      if (layer) {
+        chromeFrames.delete(layer);
+        appFrames.delete(layer);
+      }
+      return layer;
+    }
     case "settings":
       // The page, not the whole dialog: ←/→ step the left-hand list
       // (`stepSettingsPage`), so ↑/↓ need not wade through it.
       return settingsDialog()?.querySelector<HTMLElement>(".settings-panel-content") ?? null;
-    default:
-      // The three header overlays share the root console's frame; each adds
-      // its own class. The last one mounted is the one on top.
-      return (
-        document.querySelector<HTMLElement>(`.root-overlay.${region}-overlay`) ??
-        lastMatch(".app-overlay-backdrop .root-overlay")
-      );
+    default: {
+      // The three apps are views of the root console's window: the region
+      // walks its frame, minus the view strip (`APP_SKIP`).
+      const frame = rootFrame();
+      if (frame) {
+        chromeFrames.delete(frame);
+        appFrames.add(frame);
+      }
+      return frame;
+    }
   }
 }
 
@@ -108,20 +190,25 @@ const LAYER =
 const HEADER_POPUP =
   ".app-header [role='menu'], .app-header .tab-new-menu, .app-header .project-switcher-add-menu";
 
-function lastShown(selector: string): HTMLElement | null {
+function lastShown(selector: string, skip?: (el: HTMLElement) => boolean): HTMLElement | null {
   const all = document.querySelectorAll<HTMLElement>(selector);
   for (let i = all.length - 1; i >= 0; i--) {
-    if (shown(all[i]) && !all[i].closest(".steering-legend")) return all[i];
+    if (shown(all[i]) && !all[i].closest(".steering-legend") && !skip?.(all[i])) return all[i];
   }
   return null;
 }
+
+/** The root window itself, while steering's tab levels belong to its Root view
+ *  (`steeringScope`): that window is the place being steered, not a layer over
+ *  it, so it is not walked as an overlay (a menu or dialog over it still is). */
+const rootWindow = (el: HTMLElement) => steeringInRoot() && !!el.closest(".root-console-backdrop");
 
 /** The floating surface on top, or null when the window is bare. Last in the
  *  document wins: a portal opens at the end of <body>, a dialog raised from
  *  inside another sits inside it, and among equal z-indexes the later one
  *  paints on top. */
 export function topLayer(): HTMLElement | null {
-  return lastShown(LAYER) ?? lastShown(HEADER_POPUP);
+  return lastShown(LAYER, rootWindow) ?? lastShown(HEADER_POPUP);
 }
 
 /** The region that walks `layer`: the surfaces with a region of their own
@@ -131,10 +218,14 @@ export function regionForLayer(layer: HTMLElement): SteeringRegion {
   const holds = (sel: string) => layer.matches(sel) || !!layer.querySelector(sel);
   const settings = settingsDialog();
   if (settings && layer.contains(settings)) return "settings";
-  for (const app of ["mail", "calendar", "todo"] as const) {
-    if (holds(`.root-overlay.${app}-overlay`)) return app;
+  // The apps are views of the console window: that window, while one of them
+  // is the shown view, is the app's region.
+  const { open, view } = useRootOverlayStore.getState();
+  if (open && (view === "mail" || view === "calendar" || view === "todo") && holds(".root-console-backdrop")) {
+    return view;
   }
   if (holds(".tab-add-menu")) return "addTab";
+  if (open && !["root", "mail", "calendar", "todo"].includes(view) && holds(".root-console-backdrop")) return "cockpit";
   return "overlay";
 }
 
@@ -152,6 +243,11 @@ function sendKey(target: HTMLElement, key: string): boolean {
   return target.dispatchEvent(e);
 }
 
+/** Let the add-tab flyout consume Escape without closing its parent portal. */
+export function closeAddTabSubmenu(root: HTMLElement): boolean {
+  return root.matches(ADD_TAB_SUBMENU) && !sendKey(root, "Escape");
+}
+
 /**
  * Close `layer` the way its own Escape does — the dialog decides (a dirty form
  * may ask first). The key goes to what has focus inside it, else to the layer
@@ -166,14 +262,14 @@ export function dismissLayer(layer: HTMLElement, after?: () => void): void {
     focused instanceof HTMLElement && layer.contains(focused) && !isTextEntry(focused) && !focused.closest(".xterm")
       ? focused
       : layer;
-  sendKey(target, "Escape");
+  const needsFallback = sendKey(target, "Escape");
   window.setTimeout(() => {
-    fallBack();
+    if (needsFallback) fallBack();
     if (after) window.setTimeout(after, 0);
   }, 0);
   function fallBack() {
     if (!layer.isConnected || !shown(layer)) return;
-    const close = Array.from(layer.querySelectorAll<HTMLElement>(".dialog-close-btn")).find(shown);
+    const close = firstShown(".dialog-close-btn", layer);
     if (close) {
       close.click();
       return;
@@ -218,9 +314,23 @@ export function openContextMenu(el: HTMLElement): void {
   );
 }
 
-/** The workspace's active tab, as its tab bar draws it — not a header app's
- *  or the root console's (they share the subwindow frame). */
+/** The active tab, as its tab bar draws it: the workspace's — not a header app's
+ *  or the root console's (they share the subwindow frame) — or, while steering
+ *  walks the Root view (`steeringScope`), the one in Root's strip. */
 export function activeTabElement(): HTMLElement | null {
+  if (steeringInRoot()) {
+    // A split layout draws a strip per subwindow (inside `.root-overlay-group`):
+    // the focused one's active tab. Unsplit, the one strip sits in the window's
+    // bar, outside any group. (A single selector for both would also match
+    // every other subwindow's active tab, and the first in the document wins.)
+    const inFocusedGroup = firstShown(".root-console-backdrop .root-overlay-group.focused .tab.active");
+    if (inFocusedGroup) return inFocusedGroup;
+    return (
+      Array.from(document.querySelectorAll<HTMLElement>(".root-console-backdrop .tab-strip .tab.active:not(.root-view-tab)")).find(
+        (el) => shown(el) && !el.closest(".root-overlay-group"),
+      ) ?? null
+    );
+  }
   const all = Array.from(document.querySelectorAll<HTMLElement>(".subwindow.focused .tab.active"));
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
 }
@@ -229,13 +339,69 @@ export function activeTabElement(): HTMLElement | null {
  *  link, a CLI update notice (`TerminalSignInCard` and its siblings, all in
  *  its frame); only the active tab's pane is on screen. */
 export function activeTabCard(): HTMLElement | null {
+  if (steeringInRoot()) {
+    return firstShown(".root-console-backdrop .terminal-sign-in");
+  }
   const all = Array.from(document.querySelectorAll<HTMLElement>(".subwindow.focused .terminal-sign-in"));
   return all.find((el) => shown(el) && !el.closest(".root-overlay")) ?? null;
 }
 
+/** The active agent tab's Subagents toggle, or its open subagent's bar —
+ *  whichever is on screen first; only the active tab's pane is. */
+function activeSubagentControl(): HTMLElement | null {
+  const controls = ".terminal-reader-subagent-toggle, .terminal-reader-subagent-bar";
+  if (steeringInRoot()) {
+    return firstShown(`.root-console-backdrop :is(${controls})`);
+  }
+  const active = steeringTabsActive();
+  if (!active) return null;
+  // CenterPanel draws tab bodies in a sibling pane layer, outside the
+  // subwindow frame. Match the active scope and tab, not that frame's DOM.
+  const pane = Array.from(document.querySelectorAll<HTMLElement>(".center-pane")).find(
+    (el) => el.dataset.scopeKey === active.scope && el.dataset.tabKey === active.tab.key && shown(el),
+  );
+  if (!pane) return null;
+  return firstShown(controls, pane);
+}
+
+/** The pane the subagents region walks: the one holding both the Chat's top bar
+ *  (the Subagents list) and the Chat (an open subagent's bar). Null while the
+ *  active tab shows neither — no agent tab, the Terminal view, no subagents. */
+export function activeSubagentFrame(): HTMLElement | null {
+  let pane = activeSubagentControl()?.parentElement ?? null;
+  while (pane && !pane.querySelector(".terminal-reader")) pane = pane.parentElement;
+  return pane;
+}
+
+/** Open the pane's Subagents list unless a subagent is open (its bar is then
+ *  what the region walks first). True when it pressed the toggle: the list
+ *  draws after this event, not yet. */
+export function openSubagentList(frame: HTMLElement): boolean {
+  if (frame.querySelector(".terminal-reader-subagent-bar:not(.terminal-reader-chat-bar)")) return false;
+  const toggle = firstShown(".terminal-reader-subagent-toggle", frame);
+  if (!toggle || toggle.getAttribute("aria-expanded") === "true") return false;
+  toggle.click();
+  return true;
+}
+
+/** Close whichever of the pane's lists is open. */
+export function closeSubagentList(frame: HTMLElement): void {
+  frame.querySelector<HTMLElement>('.terminal-reader-subagent-toggle[aria-expanded="true"]')?.click();
+}
+
+/** The subagents region's first stop: an open list's first subagent (the ones
+ *  at work head it), else an open subagent's Back, else the Subagents toggle. */
+export function placeSubagentCursor(frame: HTMLElement): boolean {
+  if (cursor?.isConnected && frame.contains(cursor) && regionTargets(frame).includes(cursor)) return true;
+  const first =
+    frame.querySelector<HTMLElement>(".terminal-reader-subagent-list button:not(:disabled)") ??
+    frame.querySelector<HTMLElement>(".terminal-reader-subagent-bar .terminal-reader-subagent-nav:not(:disabled)");
+  return (first && pointRegionCursor(frame, first)) || placeRegionCursor(frame);
+}
+
 /** The current project's pill (or box chip) in the header. */
 export function activeProjectElement(): HTMLElement | null {
-  return Array.from(document.querySelectorAll<HTMLElement>(".project-pill.active, .box-chip.active")).find(shown) ?? null;
+  return firstShown(".project-pill.active, .box-chip.active");
 }
 
 /** Scroll `root`'s first scrolling box by part of its height — for a surface
@@ -281,7 +447,7 @@ export function stepSettingsPage(delta: 1 | -1): boolean {
   );
   if (pages.length === 0) return false;
   const at = pages.findIndex((el) => el.matches('[aria-current]:not([aria-current="false"])'));
-  const next = at < 0 ? (delta > 0 ? 0 : pages.length - 1) : (at + delta + pages.length) % pages.length;
+  const next = at < 0 ? (delta > 0 ? 0 : pages.length - 1) : wrapStep(at, delta, pages.length);
   if (next === at) return false;
   pages[next].click();
   return true;
@@ -299,7 +465,8 @@ function pointerish(el: Element): boolean {
 
 /** Never under the cursor: the project pills (the projects level walks them —
  *  the top bar's walk would wade through every one) and the window's own
- *  minimize / maximize / close buttons. */
+ *  minimize / maximize / close buttons — except in a popout's title bar, whose
+ *  chrome region is exactly those buttons and the dock / hide ones. */
 const NOT_A_TARGET = ".app-header .project-pill, .wm-controls";
 
 /** Everything in `root` the cursor can land on, in document order. A clickable
@@ -308,6 +475,11 @@ const NOT_A_TARGET = ".app-header .project-pill, .wm-controls";
  *  is one. */
 export function regionTargets(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
+  const chrome = chromeFrames.has(root);
+  const popoutChrome = popoutChromeFrames.has(root);
+  const app = appFrames.has(root);
+  const subagents = subagentFrames.has(root);
+  const addTab = root.matches(".tab-add-menu");
   // Every element's cursor is read once: a parent comes before its children
   // in document order, so its answer is already here when they ask. (The mail
   // overlay is thousands of elements; each step walks them all.)
@@ -321,7 +493,13 @@ export function regionTargets(root: HTMLElement): HTMLElement[] {
     return is;
   };
   for (const el of Array.from(root.querySelectorAll<HTMLElement>("*"))) {
-    if (el.closest(NOT_A_TARGET)) continue;
+    if (popoutChrome) {
+      if (!el.closest(POPOUT_CHROME_ZONE)) continue;
+    } else if (el.closest(NOT_A_TARGET)) continue;
+    if (addTab && el.closest(ADD_TAB_SUBMENU)) continue;
+    if (chrome && (!el.closest(CHROME_ZONE) || el.closest(CHROME_SKIP))) continue;
+    if (app && el.closest(APP_SKIP)) continue;
+    if (subagents && !el.closest(SUBAGENT_ZONE)) continue;
     const pressable = el.matches(PRESSABLE);
     if (!pressable) {
       if (!pointerOf(el)) continue;
@@ -339,7 +517,11 @@ let lastCursorIn = new WeakMap<HTMLElement, HTMLElement>();
 
 function setCursor(el: HTMLElement | null, root?: HTMLElement) {
   if (el && root) lastCursorIn.set(root, el);
-  if (cursor === el) return;
+  if (cursor === el) {
+    // A re-render that rewrote the element's `className` dropped the class.
+    if (el && !el.classList.contains(CURSOR_CLASS)) el.classList.add(CURSOR_CLASS);
+    return;
+  }
   cursor?.classList.remove(CURSOR_CLASS);
   cursor = el;
   if (!el) return;
@@ -349,6 +531,18 @@ function setCursor(el: HTMLElement | null, root?: HTMLElement) {
 
 export function clearRegionCursor() {
   setCursor(null);
+}
+
+/** Put the cursor on `el` (a target of `root`) and remember it there — for a
+ *  surface that steers itself (`steeringSidePanel`). */
+export function setRegionCursor(el: HTMLElement, root: HTMLElement) {
+  setCursor(el, root);
+}
+
+/** Where the cursor last was on `root`, if that control is still on screen. */
+export function rememberedCursor(root: HTMLElement): HTMLElement | null {
+  const back = lastCursorIn.get(root);
+  return back?.isConnected && root.contains(back) ? back : null;
 }
 
 /** Forget every surface's last cursor (tests). */
@@ -384,13 +578,14 @@ export function regionCursor(): HTMLElement | null {
 }
 
 /** Put the cursor on `root`'s selected control (the active view tab, the open
- *  message), else its first one. False when there is nothing to land on yet. */
+ *  message, a dialog's `data-steering-default` button), else its first one.
+ *  False when there is nothing to land on yet. */
 export function placeRegionCursor(root: HTMLElement): boolean {
   if (cursor?.isConnected && root.contains(cursor)) return true;
   const targets = regionTargets(root);
   if (targets.length === 0) return false;
   const selected = targets.find((el) =>
-    el.matches('[aria-selected="true"], [aria-current]:not([aria-current="false"]), .selected'),
+    el.matches('[aria-selected="true"], [aria-current]:not([aria-current="false"]), .selected, [data-steering-default]'),
   );
   // Never land on a dialog's × first: Enter there would close what was just
   // opened.
@@ -412,7 +607,7 @@ export function moveRegionCursor(root: HTMLElement, delta: 1 | -1): void {
       ? delta > 0
         ? 0
         : targets.length - 1
-      : (at + delta + targets.length) % targets.length;
+      : wrapStep(at, delta, targets.length);
   setCursor(targets[next], root);
 }
 
@@ -427,7 +622,7 @@ function sameLine(a: HTMLElement, b: HTMLElement): boolean {
 
 /** `targets` cut into lines: runs, in document order, that share their first
  *  target's line. */
-function regionLines(targets: HTMLElement[]): HTMLElement[][] {
+export function regionLines(targets: HTMLElement[]): HTMLElement[][] {
   const lines: HTMLElement[][] = [];
   for (const el of targets) {
     const line = lines[lines.length - 1];
@@ -449,7 +644,7 @@ export function moveRegionCursorByLine(root: HTMLElement, delta: 1 | -1): void {
   const current = cursor;
   const at = current ? lines.findIndex((line) => line.includes(current)) : -1;
   const next =
-    at < 0 ? (delta > 0 ? 0 : lines.length - 1) : (at + delta + lines.length) % lines.length;
+    at < 0 ? (delta > 0 ? 0 : lines.length - 1) : wrapStep(at, delta, lines.length);
   setCursor(lines[next][0], root);
 }
 
@@ -463,10 +658,19 @@ function isTextEntry(el: HTMLElement): boolean {
   );
 }
 
+/** The text field `layer` holds the caret in — a dialog that focused its own
+ *  name box, say — or null. A dropdown (`select`) does not count: arrows walk
+ *  it either way. */
+export function focusedTypingField(layer: HTMLElement): HTMLElement | null {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement) || el instanceof HTMLSelectElement || !layer.contains(el)) return null;
+  return isTextEntry(el) ? el : null;
+}
+
 /**
  * Press the control under the cursor. "type" — it takes text, so it now has
  * DOM focus and the caller leaves steering for the user to type; "press" — it
- * was clicked; null — no cursor.
+ * was clicked; "open" — it was double-clicked; null — no cursor.
  */
 /** `root`'s first shown text field — the + menu's filter, a search box. */
 export function regionSearchField(root: HTMLElement): HTMLElement | null {
@@ -494,13 +698,20 @@ export function closeRegionDropdown(root: HTMLElement): boolean {
   return true;
 }
 
-export function activateRegionCursor(): "type" | "press" | null {
+export function activateRegionCursor(): "type" | "press" | "open" | null {
   const el = regionCursor();
   if (!el) return null;
-  if (isTextEntry(el)) {
+  if (isTextEntry(el) || (el instanceof HTMLInputElement && el.type === "range")) {
     setCursor(null);
     el.focus();
     return "type";
+  }
+  // A row that opens on a double-click (a file in the tree) is opened as the
+  // pointer does: with that event, since a click only selects it. No modifier
+  // rides along — Shift would send the file to the OS default app.
+  if (el.matches('[data-steer-open="dblclick"]')) {
+    el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));
+    return "open";
   }
   // A dropdown option closes its list, taking the cursor with it: hand the
   // cursor back to the dropdown, so the next ↑/↓ goes on from there.

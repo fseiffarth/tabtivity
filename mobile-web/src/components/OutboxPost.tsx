@@ -1,8 +1,10 @@
+import { PdfFileCover } from "./PdfFileCover";
 import { useState } from "react";
 
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
+import { fileBadge, viewableFile } from "./InboxPreview";
 import type { OutboxPost as Post } from "../terminal/outboxPosts";
 import { formatBytes } from "../../../src/lib/formatBytes";
 
@@ -62,12 +64,12 @@ export function OutboxPost({ scope, post, onOpen, onSettle }: {
     </div>}
     {others.map((file) => {
       const card = <>
-        <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>
+        {file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
         <strong>{sentName(file)}</strong>
         <small>{formatBytes(file.size)}</small>
       </>;
       const label = t("mobile.outbox.open", { name: sentName(file) });
-      return !file.kind.startsWith("text/") && file.kind !== "application/pdf"
+      return !viewableFile(file)
         ? <a key={file.name} className="outbox-post-file" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={label}>{card}</a>
         : <button key={file.name} className="outbox-post-file" onClick={() => onOpen(file)} aria-label={label} title={sentName(file)}>{card}</button>;
     })}

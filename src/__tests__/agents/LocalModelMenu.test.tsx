@@ -1,6 +1,6 @@
 /**
  * The header's Models & agents button (`layout/LocalModelMenu`): the hover
- * dropdown and what it shares with the Models & agents overlay.
+ * dropdown and what it shares with the Models view of the console window.
  *
  * Written as a characterization suite before the menu's body moved out into
  * `models/useModelsHub` + `stores/agents/ollamaActivity`, so the move had to
@@ -14,7 +14,7 @@
  *     written once — including when the unload that left it was done in the
  *     overlay (the model list is shared, `stores/agents/ollamaActivity`).
  *
- * And the click that opens the Models & agents overlay: every door in the
+ * And the click that opens the Models view of the console window: every door in the
  * dropdown lands on its tab and none goes out to Settings, the dropdown stays
  * shut while the overlay is up, and Escape hands focus back to the button
  * without popping the dropdown open. A dropdown opened by keyboard focus
@@ -52,6 +52,8 @@ vi.mock("../../components/settings/OllamaPanel", () => ({
 vi.mock("../../components/skills/SkillsLibraryView", () => ({
   SkillsLibraryView: () => <div data-testid="skills-view" />,
 }));
+vi.mock("../../components/agents/CliOverviewView", () => ({ CliOverviewBody: () => <div /> }));
+vi.mock("../../components/tabs/TabPane", () => ({ TabPane: () => null }));
 
 import { invoke } from "@tauri-apps/api/core";
 import { LocalModelMenu } from "../../components/layout/LocalModelMenu";
@@ -61,10 +63,12 @@ import { resetOllamaStatusPoller } from "../../lib/ollamaStatus";
 import { resetOllamaAutoload, useOllamaAutoloadStore } from "../../stores/agents/ollamaAutoload";
 import { __resetOllamaActivityForTests } from "../../stores/agents/ollamaActivity";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
-import { ModelsOverlayHost } from "../../components/models/ModelsOverlay";
+import { RootOverlayHost } from "../../components/layout/RootOverlay";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { useTabsStore } from "../../stores/tabs";
 import { localModelTabLabels } from "../../components/models/useModelsHub";
 import { envName } from "../../lib/brand";
+import { resetAgentVersionNotice } from "../../stores/agents/agentVersionNotice";
 
 const invokeMock = vi.mocked(invoke);
 
@@ -73,6 +77,7 @@ let models: Model[] = [];
 let patches: Array<Record<string, unknown>> = [];
 let ollamaInstalled = true;
 let clearAnswer: (model: string) => Promise<unknown> = () => Promise.resolve(null);
+let versionRows: unknown[] = [];
 
 const modelInfo = (m: Model) => ({
   name: m.name,
@@ -97,6 +102,8 @@ function backend() {
           { id: "claude", label: "Claude Code", bin: "claude", installed: true },
           { id: "codex", label: "Codex", bin: "codex", installed: false },
         ]);
+      case "agent_versions":
+        return Promise.resolve(versionRows);
       case "root_mcp_status":
         return Promise.resolve({ wired_clis: ["claude"] });
       case "list_ollama_models_detailed":
@@ -149,7 +156,7 @@ async function renderInstalled() {
   const view = render(
     <>
       <LocalModelMenu />
-      <ModelsOverlayHost />
+      <RootOverlayHost />
     </>,
   );
   // The installed poll flips the button's tooltip from "install" to a status.
@@ -174,6 +181,8 @@ beforeEach(() => {
   patches = [];
   ollamaInstalled = true;
   clearAnswer = () => Promise.resolve(null);
+  versionRows = [];
+  resetAgentVersionNotice();
   useTabsStore.setState({ tabs: [], tabsByScope: {} } as never);
   h.listeners.clear();
   invokeMock.mockReset();
@@ -181,7 +190,8 @@ beforeEach(() => {
   resetOllamaStatusPoller();
   resetOllamaAutoload();
   __resetOllamaActivityForTests();
-  useModelsOverlayStore.setState({ open: false, view: "home" });
+  useModelsOverlayStore.setState({ agentsSection: "agents", modelsSection: "models" });
+  useRootOverlayStore.setState({ open: false, view: "root" });
   useHeaderHoverMenuStore.setState({ openId: null });
   useSettingsStore.setState({
     settings: { ollama_model: "qwen:7b", ollama_roles: {} },
@@ -260,7 +270,7 @@ describe("LocalModelMenu dropdown", () => {
     expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(0);
 
     act(() => useModelsOverlayStore.getState().openOverlay("models"));
-    const dialog = await screen.findByRole("dialog", { name: "Models & agents" });
+    const dialog = await screen.findByRole("dialog", { name: "Cockpit" });
     const unload = await within(dialog).findByTitle("Unload llama:8b from memory");
     fireEvent.click(unload);
     await waitFor(() => expect(patches.filter((p) => "ollama_roles" in p)).toHaveLength(1));
@@ -309,36 +319,38 @@ describe("LocalModelMenu and Ollama cloud models (gap 25)", () => {
   });
 });
 
-describe("LocalModelMenu button and the Models & agents overlay", () => {
+describe("LocalModelMenu button and the Models view", () => {
   it("toggles the overlay on click and closes the dropdown", async () => {
     const { wrap, btn } = await renderInstalled();
     await hover(wrap);
     expect(btn.getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(btn);
-    expect(useModelsOverlayStore.getState().open).toBe(true);
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "models" });
     expect(wrap.querySelector(".local-model-menu")).toBeNull();
     expect(btn.getAttribute("aria-pressed")).toBe("true");
     expect(btn.getAttribute("aria-expanded")).toBe("false");
-    expect(await screen.findByRole("dialog", { name: "Models & agents" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Cockpit" })).toBeTruthy();
     fireEvent.click(btn);
-    expect(useModelsOverlayStore.getState().open).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
   it("opens each door's tab and never dispatches the Settings event", async () => {
     useOllamaAutoloadStore.setState({ phase: "skipped", pending: ["llama:8b"], models: ["llama:8b"], dismissed: false });
     const spy = vi.spyOn(window, "dispatchEvent");
     const { wrap } = await renderInstalled();
-    const door = async (label: string, tab: string) => {
-      act(() => useModelsOverlayStore.setState({ open: false, view: "models" }));
+    const door = async (label: string, view: string, section: string) => {
+      act(() => useRootOverlayStore.setState({ open: false, view: "root" }));
       await hover(wrap);
       fireEvent.click(await within(wrap).findByText(label));
-      expect(useModelsOverlayStore.getState()).toMatchObject({ open: true, view: tab });
+      expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view });
+      const sections = useModelsOverlayStore.getState();
+      expect(view === "agents" ? sections.agentsSection : sections.modelsSection).toBe(section);
       expect(wrap.querySelector(".local-model-menu")).toBeNull();
     };
-    await door("Manage CLIs…", "agents");
-    await door("Skills library…", "skills");
-    await door("Manage local models…", "ollama");
-    await door("Ollama…", "ollama");
+    await door("Manage CLIs…", "agents", "agents");
+    await door("Skills library…", "agents", "skills");
+    await door("Manage local models…", "models", "ollama");
+    await door("Ollama…", "models", "ollama");
     const settingsEvents = spy.mock.calls.filter(([e]) => (e as Event).type === "app:open-settings");
     expect(settingsEvents).toHaveLength(0);
     spy.mockRestore();
@@ -350,7 +362,8 @@ describe("LocalModelMenu button and the Models & agents overlay", () => {
     const wrap = view.container.querySelector(".global-apps-menu") as HTMLElement;
     fireEvent.mouseEnter(wrap);
     fireEvent.click(await screen.findByText("Install Ollama…"));
-    expect(useModelsOverlayStore.getState()).toMatchObject({ open: true, view: "ollama" });
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "models" });
+    expect(useModelsOverlayStore.getState().modelsSection).toBe("ollama");
   });
 
   it("asks whether Ollama is installed at mount and on reveal, never on a timer", async () => {
@@ -400,9 +413,7 @@ describe("LocalModelMenu button and the Models & agents overlay", () => {
   it("hands focus back to the button on Escape without opening the dropdown", async () => {
     const { wrap, btn } = await renderInstalled();
     fireEvent.click(btn);
-    const dialog = await screen.findByRole("dialog", { name: "Models & agents" });
-    // The active tab takes focus on open.
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    await screen.findByRole("dialog", { name: "Cockpit" });
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(btn);
@@ -433,7 +444,7 @@ describe("LocalModelMenu button and the Models & agents overlay", () => {
     fireEvent.keyDown(btn, { key: "Escape" });
     expect(wrap.querySelector(".local-model-menu")).toBeNull();
     expect(useHeaderHoverMenuStore.getState().openId).toBeNull();
-    expect(useModelsOverlayStore.getState().open).toBe(false);
+    expect(useRootOverlayStore.getState().open).toBe(false);
     expect(document.activeElement).toBe(btn);
   });
 
@@ -534,5 +545,48 @@ describe("Clear conversations (gap 33 follow-up)", () => {
     ).toBeTruthy();
     expect(screen.getByText(/A tab of this model started while they were being deleted/)).toBeTruthy();
     expect(screen.queryByText("qwen:7b's conversations were not cleared")).toBeNull();
+  });
+});
+
+describe("LocalModelMenu · daily CLI release check", () => {
+  const row = (update: Record<string, unknown>) => ({
+    agent: "claude",
+    label: "Claude Code",
+    version: "2.1.316",
+    state: "match",
+    stale: [],
+    dismissed: false,
+    update: { agent: "claude", current: "2.1.316", checkable: true, error: null, checkedAt: 1, ...update },
+  });
+
+  it("shows a newer release on the agent's row and opens Manage CLIs from it", async () => {
+    versionRows = [row({ latest: "2.1.320", updateAvailable: true })];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    const offer = await screen.findByRole("button", { name: "→ 2.1.320" });
+    expect(offer.getAttribute("title")).toMatch(/installed 2\.1\.316/);
+    expect(screen.getByText(/New releases checked/)).toBeTruthy();
+    fireEvent.click(offer);
+    expect(useRootOverlayStore.getState()).toMatchObject({ open: true, view: "agents" });
+    expect(useModelsOverlayStore.getState().agentsSection).toBe("agents");
+  });
+
+  it("says up to date, and re-reads when the daily check announces new answers", async () => {
+    versionRows = [row({ latest: "2.1.316", updateAvailable: false })];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    expect(await screen.findByText("up to date")).toBeTruthy();
+    versionRows = [row({ latest: "2.1.321", updateAvailable: true })];
+    fire("agent-updates-checked", []);
+    expect(await screen.findByRole("button", { name: "→ 2.1.321" })).toBeTruthy();
+  });
+
+  it("shows nothing for a CLI no check has reached", async () => {
+    versionRows = [{ ...row({}), update: null }];
+    const { wrap } = await renderInstalled();
+    await hover(wrap);
+    await waitFor(() => expect(calls("agent_versions").length).toBeGreaterThan(0));
+    expect(screen.queryByText("up to date")).toBeNull();
+    expect(screen.queryByText(/New releases checked/)).toBeNull();
   });
 });

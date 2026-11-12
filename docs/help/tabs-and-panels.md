@@ -22,6 +22,12 @@ related: [files-and-viewers, root-console, keyboard, scheduled-prompts, project-
      when that experimental feature is on.
 3. The new tab opens focused in that pane.
 
+Starting an agent while a tab of the same agent in the same project has not been
+asked anything yet focuses that empty tab instead of opening a second blank one.
+This covers the + menu, the Ctrl+1–9 chords, Start Here, the prompt chart's
+"New tab" and the phone's ＋. A tab restored from a previous run, or one running
+another folder, machine, model or login, is never taken over.
+
 Only agents whose CLI is installed are listed. Install missing ones from
 Settings → Agents → Manage CLIs (see `agent-clis`).
 
@@ -33,8 +39,19 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
 - Drag a file from the file tree onto a tab bar or pane edge to open it there.
 - Drag a tab (or a whole tab bar) out of the window to pop it into its own
   window; drag it back to dock it.
+- Name a subwindow: right-click the empty part of its tab bar → **Name this
+  subwindow…**. The name shows beside the grip and is saved with the layout;
+  save an empty name to remove it. A popped-out window is named the same way
+  from its title bar, and the name also becomes the window's title in the
+  taskbar and Alt+Tab. A named subwindow keeps its name when you pop it out or
+  dock it back. A window split into several panes has its own name, and each
+  pane can have one too; docking keeps the panes' names, not the window's.
 - Right-click a tab for Rename, Duplicate, Close, Close others, and its task.
   Shift+right-click renames inline; double-click also renames.
+- A new agent tab (Claude, Codex, …) opens under its CLI's name and takes the
+  name of its first prompt once you send one — shortened to about 40
+  characters; after `/clear` the next prompt names it again. A tab you renamed
+  yourself keeps your name. Turn it off in Settings → Agents.
 - Group tabs: right-click a tab → New tab group… (or Add to group “…”). A
   group folds into one chip in the bar; hover the chip to list its tabs and
   click one to open it. Right-click the chip to rename, ungroup or close the
@@ -112,3 +129,12 @@ model storage, downloads, the catalog) and **Skills**. Click a tile (or use
 the arrow keys and Enter) to open it; **All sections** in the title bar goes
 back. Every entry in the menu opens its section directly; Escape or a click
 outside closes the window.
+
+Once a day, about a minute and a half after start and then whenever a CLI's last check is
+a day old, the app asks each installed CLI's release feed (npm, PyPI, GitHub
+or the vendor's own) for its newest version. Nothing is installed by it. The
+hover menu shows the result beside each agent — *up to date*, *→ 2.1.320*
+(click it to open Agents & CLIs, where **Update to …** runs) or *couldn't
+check* — and says when the releases were last checked. A newly opened tab of
+that CLI shows a card when a newer release is out; **Update…** opens Agents &
+CLIs, × hides that release until the next start.

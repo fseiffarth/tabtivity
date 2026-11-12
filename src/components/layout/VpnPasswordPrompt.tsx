@@ -14,6 +14,7 @@ import { ConnectionLog } from "../common/ConnectionLog";
 import { PasswordInput } from "../common/PasswordInput";
 import { needsSeparateKeyPassphrase, type VpnAuthNeeds } from "../../types";
 import { useT } from "../../lib/i18n";
+import { CheckIcon, CloseIcon } from "../common/icons/Icon";
 
 /**
  * Activation-time OpenVPN password prompt. Rendered once at the app root; shows
@@ -186,7 +187,7 @@ export function VpnPasswordPrompt() {
             )}
             onClick={connected ? close : cancel}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
         <p className="vpn-prompt-text">
@@ -277,7 +278,7 @@ export function VpnPasswordPrompt() {
         {(connecting || log.length > 0) && <ConnectionLog lines={log} busy={connecting} />}
         {connected && (
           <div className="vpn-prompt-connected" role="status">
-            <span className="vpn-connected-check" aria-hidden="true">✓</span> {t("vpnPrompt.tunnelUp")}
+            <span className="vpn-connected-check" aria-hidden="true"><CheckIcon /></span> {t("vpnPrompt.tunnelUp")}
           </div>
         )}
         {status === "error" && error && (

@@ -4,7 +4,7 @@
  * beneath it — the tab bars and file sidebar lost theirs first, and the header,
  * menus, dialogs and modal backdrop followed when it made every header hover
  * menu slow to appear and to vanish. To make up for the lost frost, the fills
- * the glass themes read (`--glass-panel`, which `--glass-subheader` mixes over,
+ * the glass themes read (`--glass-panel`, which `--glass-subheader` reads,
  * and `--glass-elevated`) are (near-)opaque, so nothing behind them reads through.
  */
 import { describe, it, expect } from "vitest";
@@ -50,7 +50,8 @@ describe("glass chrome fill without the blur", () => {
   });
 
   it("the tab bars and the docked file column read that fill", () => {
-    expect(CSS).toMatch(/--glass-subheader\s*:\s*color-mix\([^;]*var\(--glass-panel\)\)/);
+    // The tab bars read the panel fill as it is (no accent mix since 2026-11-04).
+    expect(CSS).toMatch(/--glass-subheader\s*:\s*var\(--glass-panel\)/);
     expect(CSS).toMatch(/\[data-theme="light_lavender"\] \.subwindow-files\s*\{\s*background:\s*var\(--glass-panel\)/);
   });
 });

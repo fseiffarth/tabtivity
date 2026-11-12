@@ -44,6 +44,7 @@ import { useDialogs } from "../common/PromptDialogs";
 import { NAMES } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** OS-appropriate command to install git, used by the one-click "Install git"
  *  prompt shown when creating/importing a git-backed project on a machine with
@@ -1264,7 +1265,7 @@ export function ProjectDialog({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="project-dialog-title" className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2 id="project-dialog-title">{kind === "new" ? t("projectDialog.titleNew") : t("projectDialog.titleImport")} <UntestedTag id="desktop.projectForms" /></h2>
-          <button type="button" className="dialog-close-btn" aria-label={t("common.close")} onClick={onClose}>×</button>
+          <button type="button" className="dialog-close-btn" aria-label={t("common.close")} onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
         <h3 className="project-form-heading">{t("projectDialog.groupLocation")}</h3>

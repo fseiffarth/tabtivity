@@ -172,38 +172,56 @@ pub enum AttachTarget {
 }
 
 /// A CLI's sign on its screen that a message typed mid-turn still waits in
-/// its queue: a row starting with `row_start` that holds `words`. While it
-/// shows, Esc stops the turn and the CLI sends the queue at once; once the
-/// turn has taken the message in (Claude does at its next tool call), the
-/// sign is gone and an Esc would stop the turn that is to answer it — so Send
-/// now presses only while it shows (`AttachTarget::send_now`).
+/// its queue: a row starting with `row_start` that holds `words` and, after
+/// them, `row_tail`. While it shows, Esc stops the turn and the queue goes on;
+/// once the turn has taken the message in (Claude does at its next tool
+/// call), the sign is gone and an Esc would stop the turn that is to answer
+/// it — so Send now presses only while it shows (`AttachTarget::send_now`).
 #[derive(Debug, Clone, Copy)]
 struct QueueHint {
     row_start: &'static str,
     words: &'static str,
+    row_tail: &'static str,
+    /// Esc presses a stop takes, [`ESC_GAP`] apart.
+    presses: u8,
 }
 
-/// Which CLIs Send now serves (probed 2026-10-25). Claude Code 2.1.310 holds
+/// Between the Escs of a stop that takes two: tmux hands two in one call to
+/// the TUI as a single sequence, which OpenCode ignores.
+const ESC_GAP: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Which CLIs Send now serves (probed 2026-11-02). Claude Code 2.1.310 holds
 /// a mid-turn message until its next tool call and says so in its empty box.
-/// Codex 0.164 and Copilot take one into the running turn at once, so there
-/// is nothing to send now; OpenCode queues one but marks it nowhere a screen
-/// can read. Any other CLI is unprobed.
+/// Codex 0.166 lists what was queued with Tab (how a chat types it,
+/// `agentQueueWrites`) under a heading of its own; Esc drops that list back
+/// into its box, and the phone then presses Enter (`finishSendNow`). OpenCode
+/// 2.2.5's mini footer counts what waits and needs Esc twice; its full TUI
+/// marks a queue nowhere, and neither does Copilot. Any other CLI is unprobed.
 fn queue_hint(family: &str) -> Option<QueueHint> {
     match family {
-        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages" }),
+        "claude" => Some(QueueHint { row_start: "❯", words: "Press up to edit queued messages", row_tail: "", presses: 1 }),
+        "codex" => Some(QueueHint { row_start: "•", words: "Queued follow-up inputs", row_tail: "", presses: 1 }),
+        // The footer's opening words change with the width: `esc interrupt`,
+        // `esc stop`.
+        "opencode" => Some(QueueHint { row_start: "", words: " · ctrl+x q ", row_tail: " pending", presses: 2 }),
         _ => None,
     }
 }
 
 fn queue_hint_shown(screen: &str, hint: &QueueHint) -> bool {
-    screen.lines().any(|row| row.starts_with(hint.row_start) && row.contains(hint.words))
+    screen.lines().any(|row| {
+        let Some(rest) = row.strip_prefix(hint.row_start) else { return false };
+        rest.find(hint.words).is_some_and(|at| rest[at + hint.words.len()..].contains(hint.row_tail))
+    })
 }
 
-/// The two one-shots the bridge runs beside the attach.
+/// The one-shots the bridge runs beside the attach.
 #[derive(Debug, Clone, Copy)]
 enum Probe {
     Capture,
     WindowSize,
+    /// `ssh_exec::TMUX_VT100_DIM`, before the attach's first redraw.
+    KeepDim,
 }
 
 impl AttachTarget {
@@ -226,10 +244,12 @@ impl AttachTarget {
         match (self, probe) {
             (Self::Local { name }, Probe::Capture) => Ok(tmux_capture_command(name)),
             (Self::Local { name }, Probe::WindowSize) => Ok(tmux_window_size_command(name)),
+            (Self::Local { .. }, Probe::KeepDim) => Ok(tmux_keep_dim_command()),
             (Self::Host { name, ssh }, probe) => {
                 let script = match probe {
                     Probe::Capture => crate::services::ssh_exec::host_tmux_capture_command(name, MOBILE_SCROLLBACK_LINES),
                     Probe::WindowSize => crate::services::ssh_exec::host_tmux_window_size_command(name),
+                    Probe::KeepDim => Some(crate::services::ssh_exec::host_tmux_keep_dim_command()),
                 }
                 .ok_or("invalid tmux session name")?;
                 let args = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script)?;
@@ -242,8 +262,9 @@ impl AttachTarget {
 
     /// Send now: Esc straight into the pane (`send-keys`, so tmux's
     /// escape-time does not hold it back as an attach client's Esc is) while
-    /// `hint` is on its screen; whether it went. A local check and press are
-    /// two tmux calls milliseconds apart; a host's are one script on the host
+    /// `hint` is on its screen, as often as the CLI's stop takes; whether it
+    /// went. A local check and press are tmux calls milliseconds apart; a
+    /// host's are one script on the host
     /// (`ssh_exec::host_tmux_send_now_command`), under the probe deadline.
     fn send_now(&self, hint: QueueHint) -> bool {
         match self {
@@ -254,12 +275,17 @@ impl AttachTarget {
                 if !screen.status.success() || !queue_hint_shown(&String::from_utf8_lossy(&screen.stdout), &hint) {
                     return false;
                 }
-                let mut press = crate::services::tmux_local::tmux_command();
-                press.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
-                press.status().is_ok_and(|status| status.success())
+                (0..hint.presses).all(|press| {
+                    if press > 0 {
+                        std::thread::sleep(ESC_GAP);
+                    }
+                    let mut key = crate::services::tmux_local::tmux_command();
+                    key.args(["send-keys", "-t", &format!("={name}:"), "Escape"]);
+                    key.status().is_ok_and(|status| status.success())
+                })
             }
             Self::Host { name, ssh } => {
-                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words) else {
+                let Some(script) = crate::services::ssh_exec::host_tmux_send_now_command(name, hint.row_start, hint.words, hint.row_tail, hint.presses) else {
                     return false;
                 };
                 let Ok(args) = crate::services::ssh_exec::host_mux_args(&ssh.spec, &ssh.control_path, false, &script) else {
@@ -279,6 +305,7 @@ impl AttachTarget {
     fn run(&self, probe: Probe) -> Option<std::process::Output> {
         let mut command = self.probe_command(probe).ok()?;
         match self {
+            Self::Local { .. } if matches!(probe, Probe::KeepDim) => keep_dim(tmux_dim_check_command(), command),
             Self::Local { .. } => command.output().ok(),
             Self::Host { .. } => crate::paths::output_within(command, PROBE_TIMEOUT).ok(),
         }
@@ -379,6 +406,38 @@ fn tmux_window_size_command(tmux_name: &str) -> Command {
         "#{window_width}x#{window_height}",
     ]);
     command
+}
+
+/// The read half of teaching this tmux server that a `vt100` client can take
+/// dim text (`ssh_exec::TMUX_VT100_DIM`): prints the server's
+/// `terminal-overrides`, in which [`keep_dim`] looks for an entry already there.
+fn tmux_dim_check_command() -> Command {
+    let mut command = crate::services::tmux_local::tmux_command();
+    command.args(["show-options", "-s", crate::services::ssh_exec::TMUX_VT100_DIM.0]);
+    command
+}
+
+/// The write half: **append** the entry (`set-option -as`), never set an index
+/// of the user's own option.
+fn tmux_keep_dim_command() -> Command {
+    let (option, value) = crate::services::ssh_exec::TMUX_VT100_DIM;
+    let mut command = crate::services::tmux_local::tmux_command();
+    command.args(["set-option", "-as", option, value]);
+    command
+}
+
+/// Teach this tmux server that a `vt100` client can take dim text, once: when
+/// its `terminal-overrides` already holds a `vt100:dim=` entry (ours from an
+/// earlier attach, or the user's own) nothing is written. A one-shot, not a
+/// step of the attach: a tmux that refuses it still attaches.
+fn keep_dim(show: Command, append: Command) -> Option<std::process::Output> {
+    let mut show = show;
+    let shown = show.output().ok()?;
+    if shown.status.success() && String::from_utf8_lossy(&shown.stdout).contains(crate::services::ssh_exec::TMUX_VT100_DIM_MARK) {
+        return Some(shown);
+    }
+    let mut append = append;
+    append.output().ok()
 }
 
 fn parse_window_size(raw: &str) -> Option<(u16, u16)> {
@@ -904,6 +963,10 @@ pub async fn attach(
     catalog: Arc<Mutex<CatalogCache>>,
     // The tab runs an agent: its input obeys the AI switch.
     ai: bool,
+    // A Tabby chat whose CLI takes a pasted picture path as the picture
+    // (Claude): its inbox picture references get that paste
+    // (`assistant_attach::picture_pastes_in`).
+    pictures: bool,
     // Called on the leading edge of each burst of typing from this viewer (see
     // `INPUT_REPORT_INTERVAL`), and on every interrupt key with `true` (see
     // `is_interrupt_frame`). A callback rather than a desktop call of its
@@ -915,16 +978,26 @@ pub async fn attach(
     on_seen: impl Fn(),
 ) -> Result<(), String> {
     let tmux_name = target.name().to_string();
+    // A Tabby chat's own session: what the phone types into it is the user's
+    // own input, which decides whether the chat has had an `@` attachment
+    // (`assistant_attach`, gap 78). The backend reads it here, off the bytes.
+    let chat = crate::services::assistant_attach::chat_of_tmux(&tmux_name);
+    if let (Some(uid), true) = (&chat, pictures) {
+        crate::services::assistant_attach::note_picture_chat(uid);
+    }
     let guard = registry.acquire(&tmux_name, viewer).await?;
     // Do this before the live attach starts redrawing. The browser receives it
     // before every PTY byte below, and tmux's clear/redraw then leaves these
     // lines in xterm's normal scrollback buffer above the live screen. The
     // geometry probe rides along in the same blocking hop.
     let probe_target = target.clone();
-    let (history, initial_window) =
-        tokio::task::spawn_blocking(move || (captured_scrollback(&probe_target), window_size(&probe_target)))
-            .await
-            .unwrap_or_default();
+    let (history, initial_window) = tokio::task::spawn_blocking(move || {
+        // Whatever it answers: the phone only reads less without it.
+        let _ = probe_target.run(Probe::KeepDim);
+        (captured_scrollback(&probe_target), window_size(&probe_target))
+    })
+    .await
+    .unwrap_or_default();
     // Open at the real window size so the very first redraw is already correctly
     // shaped, instead of a guaranteed mis-sized 24x80 frame on every attach.
     let (open_cols, open_rows) = initial_window.unwrap_or((80, 24));
@@ -1151,6 +1224,9 @@ pub async fn attach(
                         tokio::time::sleep_until(at + input_gap(previous_key, &bytes)).await;
                     }
                     last_write = Some((tokio::time::Instant::now(), opens_with_key(&bytes)));
+                    if let Some(uid) = &chat {
+                        crate::services::assistant_attach::note_input_in(&state_dir, uid, &bytes);
+                    }
                     // The AI switch: nothing typed reaches an agent while it is
                     // off. The frame is still acked — it was handled, by
                     // dropping it — and the phone is told why.
@@ -1164,7 +1240,22 @@ pub async fn attach(
                         if !deliver(&mut ws_tx, Message::Text(ack_frame(input_frames).into())).await { break Ok(()); }
                         continue;
                     }
-                    if writer.write_all(&bytes).is_err() || writer.flush().is_err() { break Ok(()); }
+                    // A picture reference in a Tabby chat: the file's paste
+                    // goes in after it, and an Enter right behind waits for
+                    // the CLI to take it (the loop holds the next frames).
+                    let pieces = chat
+                        .as_deref()
+                        .filter(|_| pictures)
+                        .and_then(|uid| crate::services::assistant_attach::picture_pastes_in(&state_dir, uid, &bytes))
+                        .unwrap_or_else(|| vec![bytes.to_vec()]);
+                    let mut written = true;
+                    for (index, piece) in pieces.iter().enumerate() {
+                        if index > 0 {
+                            tokio::time::sleep(crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).await;
+                        }
+                        if writer.write_all(piece).is_err() || writer.flush().is_err() { written = false; break; }
+                    }
+                    if !written { break Ok(()); }
                     // After the write, so a frame that never reached the PTY is
                     // never reported as having commanded it — and never acked.
                     input_frames += 1;
@@ -1330,6 +1421,7 @@ mod tests {
         for (probe, script) in [
             (Probe::Capture, crate::services::ssh_exec::host_tmux_capture_command(name, MOBILE_SCROLLBACK_LINES).unwrap()),
             (Probe::WindowSize, crate::services::ssh_exec::host_tmux_window_size_command(name).unwrap()),
+            (Probe::KeepDim, crate::services::ssh_exec::host_tmux_keep_dim_command()),
         ] {
             let command = target.probe_command(probe).expect("one-shot");
             let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -1705,10 +1797,150 @@ mod tests {
         assert!(!queue_hint_shown("❯ Reply only BANANA\n✽ Osmosing… (4s)\n───\n❯ \n───", &hint));
         // The words in the conversation are not the box.
         assert!(!queue_hint_shown("  it said Press up to edit queued messages\n❯ ", &hint));
-        // CLIs that take a mid-turn message in at once, or show no queue.
-        for family in ["codex", "copilot", "opencode", "gemini", "agent"] {
+        // CLIs that mark no queue on screen, or were never probed.
+        for family in ["copilot", "gemini", "agent"] {
             assert!(queue_hint(family).is_none(), "{family}");
         }
+    }
+
+    /// Screens as Codex 0.166.0 and OpenCode mini 2.2.5 drew them.
+    #[test]
+    fn send_now_reads_codex_and_opencode_queues_off_their_own_rows() {
+        let codex = queue_hint("codex").expect("codex has a hint");
+        assert_eq!(codex.presses, 1);
+        assert!(queue_hint_shown("• Working (5s • esc to interrupt)\n\n• Queued follow-up inputs\n  ↳ second\n    shift+← edit last queued message\n\n› Ask Codex", &codex));
+        // Prompts sent with Enter: Tabtivity's chat never leaves them there.
+        assert!(!queue_hint_shown("• Messages to be submitted after next tool call\n  ↳ second\n\n› Ask Codex", &codex));
+        // The heading quoted in the agent's own answer.
+        assert!(!queue_hint_shown("  it said • Queued follow-up inputs\n› Ask Codex", &codex));
+
+        let opencode = queue_hint("opencode").expect("opencode has a hint");
+        assert_eq!(opencode.presses, 2);
+        assert!(queue_hint_shown("› first\n┃\n🯦 esc interrupt · ctrl+x q 2 pending · Build · stub · Ollama · ctrl+p menu", &opencode));
+        // A phone-wide pane shortens the footer's opening words.
+        assert!(queue_hint_shown("🯦 esc stop · ctrl+x q 1 pending · Build · stub", &opencode));
+        // Nothing waits, and the full TUI draws neither.
+        assert!(!queue_hint_shown("🯦 esc interrupt · Build · stub · Ollama · ctrl+p menu", &opencode));
+        assert!(!queue_hint_shown("   ■⬝⬝⬝⬝⬝⬝⬝ esc interrupt     ↓ 1 shell  ctrl+p commands", &opencode));
+        // The key named in prose, with no count after it.
+        assert!(!queue_hint_shown("the panel opens with · ctrl+x q here", &opencode));
+    }
+
+    /// The two local halves read and append; neither writes an index.
+    #[test]
+    fn the_local_dim_override_is_appended_never_set_at_an_index() {
+        let args = |command: std::process::Command| command.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let check = args(super::tmux_dim_check_command());
+        assert!(check.ends_with(&["show-options".into(), "-s".into(), "terminal-overrides".into()]), "{check:?}");
+        let append = args(super::tmux_keep_dim_command());
+        assert!(append.ends_with(&["set-option".into(), "-as".into(), "terminal-overrides".into(), r",vt100:dim=\E[2m".into()]), "{append:?}");
+        assert!(!append.iter().any(|a| a.contains('[') && a.contains("terminal-overrides")), "no index: {append:?}");
+    }
+
+    /// The host form: one `sh -c`, the option shown and a `vt100:dim=` entry
+    /// looked for before the append, no index, no `grep`, no single quote.
+    #[test]
+    fn the_host_dim_override_is_appended_once_never_set_at_an_index() {
+        let script = crate::services::ssh_exec::host_tmux_keep_dim_command();
+        assert_eq!(
+            script,
+            r#"exec sh -c 'case "$(tmux show-options -s terminal-overrides 2>/dev/null)" in *vt100:dim=*) ;; *) tmux set-option -as terminal-overrides ",vt100:dim=\E[2m";; esac'"#
+        );
+        assert!(!script.contains("terminal-overrides["), "{script}");
+    }
+
+    /// A tmux on a private `-L` socket (skipped where there is no tmux): the
+    /// real builders' arguments, run against a server that already holds the
+    /// user's own entries at indexes 0, 1 and 77. A first call appends the
+    /// entry once, a second changes nothing, and the user's entries survive;
+    /// a user's own `vt100:dim=` entry is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn keeping_dim_appends_once_and_never_overwrites_the_users_entries() {
+        let Some(tmux) = crate::paths::resolve_executable("tmux") else {
+            eprintln!("no tmux: skipped");
+            return;
+        };
+        let socket = format!("keep-dim-append-{}", std::process::id());
+        let private = |args: Vec<String>| {
+            let mut command = std::process::Command::new(&tmux);
+            command.args(["-L", &socket]).args(args);
+            command
+        };
+        let from = |command: std::process::Command| command.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        let shown = || {
+            let out = private(vec!["show-options".into(), "-sv".into(), "terminal-overrides".into()]).output().expect("tmux runs");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let started = private(vec!["-f".into(), "/dev/null".into(), "new-session".into(), "-d".into(), "-s".into(), "k".into(), "sleep 30".into()]).status();
+        if !started.is_ok_and(|status| status.success()) {
+            eprintln!("tmux did not start: skipped");
+            return;
+        }
+        let run = || super::keep_dim(private(from(super::tmux_dim_check_command())), private(from(super::tmux_keep_dim_command()))).expect("tmux answers");
+        for (index, entry) in [(0, "xterm*:Tc"), (1, "foo*:Ms=x"), (77, "mine*:Ss=y")] {
+            assert!(private(vec!["set-option".into(), "-s".into(), format!("terminal-overrides[{index}]"), entry.into()]).status().unwrap().success());
+        }
+        let before = shown();
+        assert!(run().status.success());
+        let once = shown();
+        assert!(run().status.success());
+        let twice = shown();
+        let count = |text: &str| text.lines().filter(|line| line.contains("vt100:dim=")).count();
+        assert_eq!((count(&before), count(&once), count(&twice)), (0, 1, 1), "{once:?}");
+        for entry in ["xterm*:Tc", "foo*:Ms=x", "mine*:Ss=y"] {
+            assert!(twice.lines().any(|line| line == entry), "the user's {entry} is kept: {twice:?}");
+        }
+        assert_eq!(once, twice);
+        // The user's own dim entry: nothing is added.
+        assert!(private(vec!["set-option".into(), "-s".into(), "terminal-overrides".into(), r"vt100:dim=\E[2m".into()]).status().unwrap().success());
+        assert!(private(vec!["set-option".into(), "-as".into(), "terminal-overrides".into(), "x*:Tc".into()]).status().unwrap().success());
+        let theirs = shown();
+        run();
+        assert_eq!(shown(), theirs);
+        let _ = private(vec!["kill-server".into()]).status();
+    }
+
+    /// The attach client against the real tmux (run with `--ignored`): `vt100`
+    /// has no `dim`, so without the override tmux strips SGR 2 from what the
+    /// phone receives, and Claude's prompt suggestion, which only its dimness
+    /// tells from a typed draft, could never be read there.
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "runs the real tmux"]
+    fn the_attach_client_receives_dim_text() {
+        use portable_pty::{native_pty_system, PtySize};
+        use std::io::Read;
+        let name = format!("keep-dim-test-{}", std::process::id());
+        let tmux = |args: &[&str]| crate::services::tmux_local::tmux_command().args(args).output().expect("tmux runs");
+        tmux(&["new-session", "-d", "-s", &name, "-x", "40", "-y", "6", "printf '\\033[2mfaint\\033[0m'; sleep 20"]);
+        let target = super::AttachTarget::Local { name: name.clone() };
+        assert!(target.run(super::Probe::KeepDim).is_some_and(|out| out.status.success()));
+
+        let pair = native_pty_system().openpty(PtySize { rows: 6, cols: 40, pixel_width: 0, pixel_height: 0 }).expect("pty");
+        let mut child = pair.slave.spawn_command(target.attach_command().expect("attach")).expect("attach runs");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let (sender, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = [0; 4096];
+            while let Ok(read) = reader.read(&mut bytes) {
+                if read == 0 || sender.send(bytes[..read].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut seen = Vec::new();
+        while !seen.windows(5).any(|window| window == b"faint") {
+            let Ok(bytes) = received.recv_timeout(std::time::Duration::from_secs(5)) else { break };
+            seen.extend(bytes);
+        }
+        let _ = child.kill();
+        tmux(&["kill-session", "-t", &format!("={name}")]);
+        let shown = String::from_utf8_lossy(&seen);
+        // Set and not reset by the text: tmux may move the cursor in between.
+        let before = shown.split("faint").next().unwrap_or_default();
+        assert!(before.rsplit("\u{1b}[m").next().is_some_and(|run| run.contains("\u{1b}[2m")), "{shown:?}");
     }
 
     /// The local check and press against the real tmux (run with

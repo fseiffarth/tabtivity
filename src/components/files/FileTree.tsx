@@ -1,3 +1,4 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useModalFocus } from "../../hooks/useModalFocus";
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -7,7 +8,7 @@ import { invokeTrusted } from "../../lib/execTrust";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { FileDropContext } from "./fileDropContext";
 import { openTabInScope, useTabScope } from "../../lib/tabs/tabScopeContext";
-import { openFileEntry } from "../../lib/files/openFileEntry";
+import { openFileEntry, openTrainingRuns } from "../../lib/files/openFileEntry";
 import { closeTabsForDeletedPath, retargetTabsForRenamedPath } from "./fileTabSync";
 import { HOST_OS } from "../../lib/platform";
 import { useSettingsStore } from "../../stores/settings";
@@ -60,11 +61,11 @@ import { RenameDialog, containingFolderLabel } from "./RenameDialog";
 import { useDialogs } from "../common/PromptDialogs";
 import { Dropdown } from "../common/Dropdown";
 import { FileIcon } from "../common/icons/FileIcon";
-import { ArrowDownIcon, ArrowUpIcon, PlayIcon, SearchIcon } from "../common/icons/Icon";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, RefreshIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
-import { storageKey } from "../../lib/brand";
-import type { GitStatusMap, MoveTargetAttrs, RowActions } from "./fileTreeTypes";
+import { BRAND, storageKey } from "../../lib/brand";
+import type { GitStatusMap, MoveTargetAttrs, RowActions, SharedTreeSearch } from "./fileTreeTypes";
 import { beginNativeFileDrag, startEntryPointerDrag } from "./fileTreeDrag";
 import { useFileTreeFsWatch, useFileTreeListingState, useFileTreeMountLoad } from "./useFileTreeListing";
 import { useFileTreeEmbedCaps, useFileTreeMountProbes, useFileTreeSearch, useFileTreeTooltip } from "./useFileTreeChrome";
@@ -189,6 +190,9 @@ interface Props {
    *  use, e.g. a bare `<FileTree>` in a test). */
   searchOpen?: boolean;
   onSearchOpenChange?: (open: boolean) => void;
+  /** The host's own search (the box side panel's one shared field): the tree
+   *  draws no search box of its own and lists this query's results instead. */
+  sharedSearch?: SharedTreeSearch;
   /** Bumped by the host's ↻ to force a re-list. A counter, not a boolean: two
    *  refreshes in a row must both land. */
   refreshNonce?: number;
@@ -256,7 +260,7 @@ function GitMarker({ status }: { status: string | undefined }) {
   if (status === "ignored") {
     return (
       <span style={{ ...slot, color: STATUS_COLOR[status] }} title={t(STATUS_TITLE_KEY[status])}>
-        ✕
+        <CloseIcon />
       </span>
     );
   }
@@ -303,6 +307,9 @@ interface FileRowProps {
   scanExcluded: boolean;
   canPyRun: boolean;
   canShRun: boolean;
+  /** Some row of the listing wears a run button: rows without one reserve its
+   *  width so icons and names stay in one column. */
+  runSlot: boolean;
   isRunning: boolean;
   runLocked: boolean;
   isCompiling: boolean;
@@ -344,6 +351,7 @@ const FileRow = React.memo(function FileRow({
   scanExcluded,
   canPyRun,
   canShRun,
+  runSlot,
   isRunning,
   runLocked,
   isCompiling,
@@ -372,6 +380,11 @@ const FileRow = React.memo(function FileRow({
       className={`file-entry ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${scaffold ? " scaffold" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
       // Row key for jump-to-path reveal scroll (search results).
       data-entry-path={e.path}
+      // Keyboard steering opens a file as the pointer does, with a double-click
+      // (a click only selects it); a .zip is extracted in place, so steering
+      // stays in the panel for it (`steeringSidePanel`).
+      data-steer-open={e.is_dir ? undefined : "dblclick"}
+      data-steer-stay={!e.is_dir && e.extension === ".zip" ? "" : undefined}
       // Folders are drag-to-move destinations: dropping a dragged file
       // here relocates it (hit-tested by data-move-rel in the drag).
       data-move-rel={e.is_dir ? rel : undefined}
@@ -411,7 +424,7 @@ const FileRow = React.memo(function FileRow({
               title={t("fileTree.excludedFromByteSync")}
               aria-label={t("fileTree.excludedFromByteSync")}
             >
-              ✕
+              <CloseIcon />
             </span>
           ) : (
             <>
@@ -493,7 +506,7 @@ const FileRow = React.memo(function FileRow({
                   title={t("fileTree.autoSyncing")}
                   aria-label={t("fileTree.autoSyncing")}
                 >
-                  ⟳
+                  <RefreshIcon />
                 </span>
               )}
             </>
@@ -534,6 +547,7 @@ const FileRow = React.memo(function FileRow({
           <span className="file-run-spinner" />
         </span>
       )}
+      {runSlot && !canRun && !isCompiling && <span className="file-run-slot" aria-hidden="true" />}
       <span className="file-icon"><FileIcon ext={e.extension} isDir={e.is_dir} /></span>
       <span className="file-name">{e.name}</span>
       {notOnRemote && (
@@ -588,6 +602,7 @@ export function FileTree({
   active = true,
   searchOpen: searchOpenProp,
   onSearchOpenChange,
+  sharedSearch,
   refreshNonce,
 }: Props) {
   const t = useT();
@@ -1058,6 +1073,7 @@ export function FileTree({
   // every search result (both name and content hits).
   function revealPath(rel: string, isDir: boolean) {
     setSearch("");
+    sharedSearch?.onSettled();
     if (isDir) {
       load(rel);
       return;
@@ -1288,7 +1304,7 @@ export function FileTree({
       selected.has(entry.path) && selected.size > 1
         ? entries.filter((en) => selected.has(en.path)).map((en) => en.path)
         : [entry.path];
-    beginNativeFileDrag(paths);
+    void beginNativeFileDrag(paths);
   }
 
   // The pointer drag a row starts: see `startEntryPointerDrag` (fileTreeDrag.ts).
@@ -1867,6 +1883,14 @@ export function FileTree({
   function copyEntries(targets: FileEntry[], op: "copy" | "cut") {
     setContextMenu(null);
     if (targets.length === 0) return;
+    // A Copy also goes on the system clipboard as files, so another app
+    // (Teams, mail, a browser upload) can paste them. Local listings only: a
+    // host listing's paths don't exist on this machine. Best-effort — the
+    // in-app Paste below works without it.
+    if (op === "copy" && !remoteListing) {
+      void invoke("copy_files_to_clipboard", { paths: targets.map((entry) => entry.path) })
+        .catch((err) => console.warn(`[${BRAND.slug}] system clipboard copy failed:`, err));
+    }
     setClipboardEntries(
       targets.map((entry) => ({
         projectDir,
@@ -2094,7 +2118,12 @@ export function FileTree({
     setSystemFiles([]);
     if (remoteListing) return;
     invoke<SystemClipboardFile[]>("clipboard_file_paths")
-      .then((files) => setSystemFiles(Array.isArray(files) ? files : []))
+      .then((files) => {
+        // The tree's own Copy put these there too (`copyEntries`): its in-app
+        // Paste already offers them, so don't list them twice.
+        const inApp = new Set(useFileClipboardStore.getState().entries.map((entry) => entry.path));
+        setSystemFiles(Array.isArray(files) ? files.filter((file) => !inApp.has(file.path)) : []);
+      })
       .catch(() => setSystemFiles([]));
   }
 
@@ -2368,7 +2397,7 @@ export function FileTree({
   // host-pinned project, whose backends search the host (only while connected:
   // `remoteBlocked` returned above).
   const canSearch = !remoteListing || hostPinned;
-  const searching = canSearch && searchOpen && search.trim().length > 0;
+  const searching = canSearch && (sharedSearch ? sharedSearch.query.trim().length > 0 : searchOpen && search.trim().length > 0);
   // Folder the search is confined to: the browsed folder by default, the whole
   // project when "root" is chosen (or when already at the root).
   const searchScope = searchRoot ? "" : relPath;
@@ -2408,7 +2437,7 @@ export function FileTree({
           title={t("fileTree.excludedFromByteSync")}
           aria-label={t("fileTree.excludedFromByteSync")}
         >
-          ✕
+          <CloseIcon />
         </span>
       );
     }
@@ -2458,7 +2487,7 @@ export function FileTree({
           title={t("fileTree.folderInSync", { name: label })}
           aria-label={t("fileTree.folderInSync", { name: label })}
         >
-          ✓
+          <CheckIcon />
         </span>
       );
     }
@@ -2525,7 +2554,7 @@ export function FileTree({
             {folderSyncSlot}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
-                ⟳ {syncProgress.done}/{syncProgress.total}
+                <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
               </span>
             )}
             <button
@@ -2535,7 +2564,7 @@ export function FileTree({
               title={t("fileTree.refreshSftpTitle")}
               aria-label={t("common.refresh")}
             >
-              ↻
+              <RefreshIcon />
             </button>
           </div>
         </div>
@@ -2556,7 +2585,7 @@ export function FileTree({
                 runs. Without it the local side showed nothing at all. */}
             {syncProgress && (
               <span className="file-tree-sync-progress" title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}>
-                ⟳ {syncProgress.done}/{syncProgress.total}
+                <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
               </span>
             )}
           </div>
@@ -2565,7 +2594,7 @@ export function FileTree({
       {/* Closed under a host that owns the chrome, there is nothing left to
           draw — that is the row the move to the toolbar buys back. A bare tree
           still renders the row, because its own toggle lives in it. */}
-      {canSearch && (searchOpen || !hostOwnsSearchChrome) && (
+      {canSearch && !sharedSearch && (searchOpen || !hostOwnsSearchChrome) && (
         <div className={`file-tree-search${searchOpen ? "" : " file-tree-search--collapsed"}`}>
           <div className="file-tree-search-row">
             {/* The one control that survives the fold. It sits where the input
@@ -2621,7 +2650,7 @@ export function FileTree({
                     aria-label={t("fileTree.clearSearch")}
                     onClick={() => setSearch("")}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 )}
               </>
@@ -2640,7 +2669,7 @@ export function FileTree({
                 title={t("fileTree.refreshTitle")}
                 aria-label={t("common.refresh")}
               >
-                ↻
+                <RefreshIcon />
               </button>
             )}
           </div>
@@ -2851,7 +2880,7 @@ export function FileTree({
         );
       })()}
       </div>
-      {loading && <div className="file-tree-loading">{t("common.loading")}</div>}
+      {loading && <SkeletonRows count={6} className="file-tree-skeleton" />}
       {error && <ErrorNote className="file-tree-error" error={error} />}
       {/* What the last transfer did — the success half, which nothing reported
           before. Same chrome as the whole-project row's result line. */}
@@ -2867,7 +2896,7 @@ export function FileTree({
             title={t("common.close")}
             aria-label={t("common.close")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       )}
@@ -2876,10 +2905,10 @@ export function FileTree({
         <FileTreeSearch
           projectDir={projectDir}
           projectId={projectId}
-          query={search}
-          mode={searchMode}
-          caseSensitive={searchCase}
-          scopeRel={searchScope}
+          query={sharedSearch ? sharedSearch.query : search}
+          mode={sharedSearch ? sharedSearch.mode : searchMode}
+          caseSensitive={sharedSearch ? sharedSearch.caseSensitive : searchCase}
+          scopeRel={sharedSearch ? "" : searchScope}
           hostPinned={hostPinned}
           onReveal={revealPath}
         />
@@ -2896,6 +2925,17 @@ export function FileTree({
         // from `rows` alone.
         const { standard, gitignored, hiddenExt } = sections;
         const rows = rowWindow;
+
+        // The same two run verdicts `renderEntry` hands each row, asked of every
+        // row on screen: one runnable file reserves the run-button column for
+        // all of them, so the ▶ never pushes only its own row's icon right.
+        const runnableRow = (e: FileEntry) =>
+          !e.is_dir && (shellRunnerFor(e.extension, HOST_OS) !== null
+            || (isPythonPath(e.path) && isMainScriptCached(pyMainCache, e.path)));
+        const runSlot = rows.regular.some(runnableRow)
+          || (scaffoldExpanded && rows.standard.some(runnableRow))
+          || (gitignoredExpanded && rows.gitignored.some(runnableRow))
+          || (hiddenExtExpanded && rows.hiddenExt.some(runnableRow));
 
         function renderEntry(e: FileEntry, isScaffold = false, isGitignored = false, isHiddenExt = false) {
           const status = isGitignored || isHiddenExt ? undefined : displayStatuses[e.name];
@@ -2996,6 +3036,7 @@ export function FileTree({
               scanExcluded={e.is_dir && isScanExcluded(rel)}
               canPyRun={canPyRun}
               canShRun={canShRun}
+              runSlot={runSlot}
               isRunning={isRunning}
               runLocked={runLocked}
               isCompiling={isCompiling}
@@ -3295,8 +3336,13 @@ export function FileTree({
               const n = menuEntries.length;
               return (
                 <>
-                  <button onClick={() => copyEntries(menuEntries, "copy")}>
+                  <button
+                    className={remoteListing ? undefined : "untested"}
+                    title={remoteListing ? undefined : t("fileTree.copyToOtherAppsHint")}
+                    onClick={() => copyEntries(menuEntries, "copy")}
+                  >
                     {t("fileTree.copyItemsCount", { count: n })}
+                    {!remoteListing && <UntestedTag id="fileTree.copyToSystem" />}
                   </button>
                   <button onClick={() => copyEntries(menuEntries, "cut")}>
                     {t("fileTree.cutItemsCount", { count: n })}
@@ -3329,16 +3375,38 @@ export function FileTree({
             const downloadExcluded = syncTracked && isPathExcluded(syncStatus, entryRel);
             return (
               <>
-                {onOpenFolderTab && entry.is_dir && (
+                {entry.is_dir && (onOpenFolderTab || !disabledViewerSet.has("tensorboard")) && (
                   <>
-                    <button
-                      onClick={() => {
-                        setContextMenu(null);
-                        onOpenFolderTab(entryRel);
-                      }}
-                    >
-                      {t("fileTree.openInNewTab")}
-                    </button>
+                    {onOpenFolderTab && (
+                      <button
+                        onClick={() => {
+                          setContextMenu(null);
+                          onOpenFolderTab(entryRel);
+                        }}
+                      >
+                        {t("fileTree.openInNewTab")}
+                      </button>
+                    )}
+                    {/* Every folder holding TensorBoard event files below this one is a
+                        training run, drawn natively (no TensorBoard process). */}
+                    {!disabledViewerSet.has("tensorboard") && (
+                      <button
+                        className="untested"
+                        onClick={() => {
+                          setContextMenu(null);
+                          openTrainingRuns({
+                            entry,
+                            projectDir,
+                            label: t("tensorboard.tabLabel", { name: entry.name }),
+                            placeTab: fileDrop ? fileDrop.openTab : undefined,
+                            scope: tabScope,
+                          });
+                        }}
+                      >
+                        {t("tensorboard.openAsRuns")}
+                        <UntestedTag id="viewer.tensorboard.runs" />
+                      </button>
+                    )}
                     <hr />
                   </>
                 )}
@@ -3465,9 +3533,9 @@ export function FileTree({
                   </>
                 )}
                 {/* `compile_tex` builds on this machine; a host-pinned project
-                    has no local tree to build in (its Compile is the viewer's
-                    host build tab). */}
-                {isTex && texCap?.available && !hostPinned && (
+                    or a host listing has no local tree to build in (their
+                    Compile is the viewer's host build tab). */}
+                {isTex && texCap?.available && !hostPinned && !remoteListing && (
                   <>
                     <button
                       onClick={() => compileTex(entry, true)}
@@ -3509,8 +3577,13 @@ export function FileTree({
                   </>
                 )}
                 <hr />
-                <button onClick={() => copyEntries([entry], "copy")}>
+                <button
+                  className={remoteListing ? undefined : "untested"}
+                  title={remoteListing ? undefined : t("fileTree.copyToOtherAppsHint")}
+                  onClick={() => copyEntries([entry], "copy")}
+                >
                   {t("common.copy")}
+                  {!remoteListing && <UntestedTag id="fileTree.copyToSystem" />}
                 </button>
                 <button onClick={() => copyEntries([entry], "cut")}>
                   {t("common.cut")}

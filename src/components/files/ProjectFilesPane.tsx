@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { FileTree } from "./FileTree";
 import { DownloadsSection } from "./DownloadsSection";
@@ -10,6 +10,14 @@ import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useSyncStore } from "../../stores/remote/sync";
 import { confirmSyncTransfer } from "../../stores/remote/syncConfirm";
 import { useBigFoldersStore } from "../../stores/bigFolders";
+import { useGitDirtyStore } from "../../stores/gitDirty";
+import { useFastMode } from "../../lib/agents/fastMode";
+import { memberColor } from "../../lib/theme/boxColor";
+import { useBoxAccordionStore, type BoxMemberView } from "../../stores/boxAccordion";
+import { useBoxAccordion } from "./useBoxAccordion";
+import { BoxMemberMenu } from "./BoxMemberMenu";
+import type { SharedTreeSearch } from "./fileTreeTypes";
+import { openProjectFilesTab } from "../../lib/tabs/openProjectFilesTab";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
 import {
   autoFileSource,
@@ -25,7 +33,9 @@ import type { SortKey } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { UntestedTag } from "../common/UntestedTag";
-import { FolderIcon, GearIcon, HexagonIcon } from "../common/icons/Icon";
+import { useLockstepState } from "../../hooks/useLockstepState";
+import { BoxEmptyLine } from "../projects/BoxEmptyLine";
+import { CloseIcon, FolderIcon, GripIcon, HexagonIcon, MoreIcon, RefreshIcon } from "../common/icons/Icon";
 
 /**
  * THE project file view — the tree, the remote sync row and the Downloads
@@ -320,6 +330,13 @@ function BoxRootSection({
   onSearchOpenChange,
   refreshNonce,
   reorder,
+  expanded,
+  onToggle,
+  view,
+  onViewChange,
+  agentCount = 0,
+  springArmed = false,
+  sharedSearch,
 }: BoxRoot & {
   sortKey: SortKey;
   descending: boolean;
@@ -329,10 +346,22 @@ function BoxRootSection({
   onSearchOpenChange?: (open: boolean) => void;
   refreshNonce?: number;
   reorder?: RootReorder;
+  /** Accordion state, owned by the pane (`useBoxAccordion`): the section is
+   *  open, its header click, the member's Files/Git view, its agent tabs. */
+  expanded: boolean;
+  onToggle: () => void;
+  view: BoxMemberView;
+  onViewChange: (view: BoxMemberView) => void;
+  agentCount?: number;
+  /** A file drag has dwelt over this collapsed header: it opens soon. */
+  springArmed?: boolean;
+  /** The pane's one search field, handed to the expanded member's tree only. */
+  sharedSearch?: SharedTreeSearch;
 }) {
   const t = useT();
-  const [collapsed, setCollapsed] = useState(false);
-  const [view, setView] = useState<"files" | "git">("files");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const collapsed = !expanded;
+  const setView = onViewChange;
   const [showSettings, setShowSettings] = useState(false);
   const rel = useProjectsStore((s) => s.sidePanelFolderByProject[rootId] ?? "");
   const setSidePanelFolder = useProjectsStore((s) => s.setSidePanelFolder);
@@ -360,9 +389,53 @@ function BoxRootSection({
     remoteBlocked,
   });
   const toolbarBtnStyle = { marginLeft: 2 } as const;
+  const openFolder = () => {
+    const sub = rel.replace(/^\/+|\/+$/g, "");
+    const path = sub ? `${treeDir.replace(/\/+$/, "")}/${sub}` : treeDir;
+    invoke("open_in_file_manager", { path }).catch((e) =>
+      console.error("open_in_file_manager", e),
+    );
+  };
+  // The header's git mark. A remote member gets none (its tree lives behind an
+  // SSH pool; the box view never probes it), and a member nobody has probed yet
+  // gets none either: an absent reading is omitted, never drawn as clean.
+  const fastMode = useFastMode();
+  const dirty = useGitDirtyStore((s) =>
+    variant === "member" && !remote && !fastMode ? s.byId[rootId] : undefined,
+  );
+  useEffect(() => {
+    // One probe for a local member nothing else has read (a closed project the
+    // header strip does not poll), only while the pane is on screen.
+    if (variant !== "member" || remote || fastMode || !active || !dir) return;
+    if (useGitDirtyStore.getState().byId[rootId] !== undefined) return;
+    void useGitDirtyStore.getState().refresh(rootId, dir);
+  }, [variant, remote, fastMode, active, dir, rootId]);
+  const showDirty = dirty === "dirty" || dirty === "staged" || dirty === "unpushed" || dirty === "broken";
+  const dirtyTitle =
+    dirty === "dirty"
+      ? t("pill.gitDirty")
+      : dirty === "staged"
+        ? t("pill.gitStaged")
+        : dirty === "unpushed"
+          ? t("pill.gitUnpushed")
+          : t("pill.gitBroken");
+  // A collapsed section is still a drop target: the header names the member's
+  // root like the tree's own crumb would, and a dwell over it opens it.
+  const dropAttrs =
+    collapsed && (variant === "member" || variant === "box")
+      ? {
+          "data-move-rel": "",
+          "data-move-root": treeDir,
+          "data-move-remote": remote && source === "remote" ? ("1" as const) : undefined,
+          "data-spring-root": rootId,
+        }
+      : undefined;
+  const accent =
+    variant === "member" ? ({ "--file-root-accent": memberColor(rootId) } as CSSProperties) : undefined;
   return (
     <div
-      className={`file-root file-root--${variant}${collapsed ? " is-collapsed" : ""}${
+      style={accent}
+      className={`file-root file-root--${variant}${collapsed ? " is-collapsed" : ""}${springArmed ? " is-spring-armed" : ""}${
         reorder?.dragging ? " is-reorder-dragging" : ""
       }${reorder?.dropBefore ? " is-drop-before" : ""}${
         reorder?.dropAfter ? " is-drop-after" : ""
@@ -371,7 +444,7 @@ function BoxRootSection({
       {/* The header BAND, not the header button: the grip has to sit inside the
           sticky row (a button inside a button is not markup), so the row is what
           sticks and the button is an ordinary child of it. */}
-      <div className="file-root-headrow" ref={reorder?.headerRef}>
+      <div className="file-root-headrow" ref={reorder?.headerRef} {...dropAttrs}>
         {reorder && (
           <button
             type="button"
@@ -388,26 +461,61 @@ function BoxRootSection({
               reorder.onGripNudge(e.key === "ArrowUp" ? -1 : 1);
             }}
           >
-            ⠿
+            <GripIcon />
           </button>
         )}
         <button
           type="button"
           className="file-root-header"
-          onClick={() => setCollapsed((c) => !c)}
+          onClick={onToggle}
+          aria-expanded={expanded}
           title={dir}
         >
           <span className="file-root-caret" aria-hidden>
             {collapsed ? "▸" : "▾"}
           </span>
-          <span className="file-root-icon" aria-hidden>
-            {icon}
-          </span>
+          {variant === "member" ? (
+            <span className="file-root-dot" style={{ background: memberColor(rootId) }} aria-hidden />
+          ) : (
+            <span className="file-root-icon" aria-hidden>
+              {icon}
+            </span>
+          )}
           <span className="file-root-name">{label}</span>
-          <span className="file-root-kind">
-            {t(variant === "box" ? "fileRoot.kindBox" : "fileRoot.kindProject")}
-          </span>
+          {showDirty && (
+            <span
+              className={`file-root-dirty git-${dirty}`}
+              title={dirtyTitle}
+              role="img"
+              aria-label={dirtyTitle}
+            />
+          )}
+          {agentCount > 0 && (
+            <span
+              className="file-root-agents"
+              title={t("fileRoot.agentsTitle", { count: agentCount })}
+            >
+              ✦{agentCount}
+            </span>
+          )}
+          {variant === "box" && <span className="file-root-kind">{t("fileRoot.kindBox")}</span>}
         </button>
+        {variant === "member" && (
+          <button
+            type="button"
+            className="file-root-more"
+            aria-haspopup="menu"
+            aria-expanded={menu !== null}
+            aria-label={t("fileRoot.moreAria")}
+            title={t("fileRoot.moreTitle")}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenu({ x: r.left, y: r.bottom + 2 });
+            }}
+          >
+            <MoreIcon />
+          </button>
+        )}
       </div>
       {!collapsed && variant === "member" && (
         <div className="side-panel-toolbar side-panel-toolbar--box-root">
@@ -422,33 +530,8 @@ function BoxRootSection({
               {t(v === "files" ? "projectFilesView.tabFiles" : "projectFilesView.tabGit")}
             </button>
           ))}
-          {!pinned && (
-            <button
-              className="toolbar-btn toolbar-btn--sm"
-              style={toolbarBtnStyle}
-              onClick={() => {
-                const sub = rel.replace(/^\/+|\/+$/g, "");
-                const path = sub ? `${treeDir.replace(/\/+$/, "")}/${sub}` : treeDir;
-                invoke("open_in_file_manager", { path }).catch((e) =>
-                  console.error("open_in_file_manager", e),
-                );
-              }}
-              title={t("projectFilesView.openInFileManagerTitle")}
-            >
-              ⧉
-            </button>
-          )}
-          {localFile && project && (
-            <button
-              className="toolbar-btn toolbar-btn--sm"
-              style={toolbarBtnStyle}
-              onClick={() => setShowSettings(true)}
-              title={t("projectFilesView.projectSettingsTitle")}
-            >
-              <GearIcon />
-            </button>
-          )}
-          <UntestedTag id="projectFilesPane.1" />
+          <UntestedTag id="projectFilesPane.accordion" />
+          <UntestedTag id="projectFilesPane.dropCollapsed" />
           {remote && !pinned && (
             <span style={{ marginLeft: "auto" }}>
               <FileSourceSwitch source={source} onChange={setSource} />
@@ -501,6 +584,7 @@ function BoxRootSection({
             searchOpen={searchOpen}
             onSearchOpenChange={onSearchOpenChange}
             refreshNonce={refreshNonce}
+            sharedSearch={sharedSearch}
           />
         </div>
       )}
@@ -514,6 +598,23 @@ function BoxRootSection({
             onChanged={() => {}}
           />
         </div>
+      )}
+      {menu && variant === "member" && (
+        <BoxMemberMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          view={view}
+          onView={(v) => {
+            setView(v);
+            if (!expanded) onToggle();
+          }}
+          onOpenFolder={pinned ? undefined : openFolder}
+          onSettings={localFile && project ? () => setShowSettings(true) : undefined}
+          source={remote && !pinned ? source : undefined}
+          onSource={remote && !pinned ? setSource : undefined}
+          onOpenTab={() => openProjectFilesTab(t, dir, "")}
+        />
       )}
       {showSettings && project && localFile && (
         <ProjectFilesSettingsDialog
@@ -576,14 +677,14 @@ function useMemberReorder(
     const next = [...memberOrder];
     next.splice(from, 1);
     next.splice(to, 0, id);
-    // Rewrite only the slots the VIEW can address. A box may hold member ids
-    // this panel shows no root for (a project that is gone, or one whose folder
-    // doesn't resolve); they keep their positions in `member_ids` instead of
-    // being reshuffled — or dropped — by a gesture that never named them.
-    const shown = new Set(memberOrder);
-    let i = 0;
-    const memberIds = activeBox.member_ids.map((mid) => (shown.has(mid) ? next[i++] : mid));
-    void useBoxesStore.getState().setBoxMembers(activeBox.id, memberIds);
+    // Name only the members the VIEW shows a root for, in their new order: the
+    // backend puts them into the slots they hold and leaves every other member
+    // (a project that is gone, one whose folder doesn't resolve, one added
+    // meanwhile by another window) exactly where it is.
+    useBoxesStore
+      .getState()
+      .reorderBoxMembers(activeBox.id, next)
+      .catch((error) => useProjectsStore.setState({ switchToast: error instanceof Error ? error.message : String(error) }));
   };
 
   return (rootId: string): RootReorder => ({
@@ -736,6 +837,42 @@ export function ProjectFilesPane({
     [boxRoots],
   );
   const reorderFor = useMemberReorder(activeBox, memberOrder);
+  const accordion = useBoxAccordion({ scope, box: activeBox, memberOrder, active });
+  // ONE search field for the whole box, above the sections, searching the
+  // expanded member (the host's 🔍 opens it, as it opened the per-tree boxes).
+  const boxSearchOpen = !!activeBox && !!searchOpen;
+  const [boxQuery, setBoxQuery] = useState("");
+  const [boxSearchMode, setBoxSearchMode] = useState<"name" | "content">("name");
+  const [boxSearchCase, setBoxSearchCase] = useState(false);
+  const searchedRoot = boxRoots.find(
+    (r) => r.variant === "member" && r.rootId === accordion.expandedId,
+  );
+  const searchedProject = useProjectsStore((s) =>
+    searchedRoot ? s.projects.find((p) => p.id === searchedRoot.rootId) ?? null : null,
+  );
+  const searchedRemote = !!searchedRoot?.remote;
+  const [searchedSource] = useFileSource(searchedRemote ? searchedRoot!.rootId : null, searchedRemote);
+  // The search backends walk a local path: a remote member is searchable on its
+  // Local side (or when host-pinned, where they ask the host).
+  const searchable =
+    !!searchedRoot && (!searchedRemote || isHostPinned(searchedProject) || searchedSource === "local");
+  useEffect(() => {
+    // Closing the field, or moving to another member, drops the query: the next
+    // open must not silently repopulate results nobody typed there.
+    if (!boxSearchOpen) setBoxQuery("");
+  }, [boxSearchOpen]);
+  useEffect(() => {
+    setBoxQuery("");
+  }, [accordion.expandedId]);
+  const sharedSearch = useMemo<SharedTreeSearch>(
+    () => ({
+      query: searchable ? boxQuery : "",
+      mode: boxSearchMode,
+      caseSensitive: boxSearchCase,
+      onSettled: () => setBoxQuery(""),
+    }),
+    [searchable, boxQuery, boxSearchMode, boxSearchCase],
+  );
   const projectId = project?.id ?? null;
   const isRemoteProject = !!project?.remote;
   // No local copy (`isHostPinned`): the tree is always the host's, and the
@@ -753,6 +890,13 @@ export function ProjectFilesPane({
   // The outcome line under the row: what the transfer did, or why it failed.
   // `bad` only colours it — a skipped-conflicts result is not an error.
   const [syncResult, setSyncResult] = useState<{ text: string; bad: boolean } | null>(null);
+  // With Git lockstep on, byte-sync (Sync all, Auto-sync) leaves every git-tracked
+  // file to Git sync. Neither said so: a Sync all that moved none of the files the
+  // user meant read as a success, and a lockstep that was not delivering was
+  // visible only in the Git view.
+  const lockstep = useLockstepState(projectId, isRemoteProject && !remoteBlocked && !compact);
+  const lockstepOn = !!lockstep?.enabled;
+  const lockstepStuck = lockstepOn && lockstep?.status === "desynchronized";
 
   /**
    * Run one whole-tree transfer with the confirm dialog in front of it, and
@@ -780,7 +924,9 @@ export function ProjectFilesPane({
     try {
       if (direction === "pull") {
         await useSyncStore.getState().syncWholeProject(projectId);
-        setSyncResult({ text: t("projectFilesPane.syncPullDone"), bad: false });
+        const parts = [t("projectFilesPane.syncPullDone")];
+        if (lockstepOn) parts.push(t("projectFilesPane.syncTrackedByGit"));
+        setSyncResult({ text: parts.join(" · "), bad: false });
       } else {
         const r = await useSyncStore.getState().pushWholeProject(projectId);
         const parts = [t("projectFilesPane.syncPushed", { count: r.pushed })];
@@ -797,6 +943,9 @@ export function ProjectFilesPane({
         }
         if (r.skipped_excluded > 0) {
           parts.push(t("projectFilesPane.syncExcludedSkipped", { count: r.skipped_excluded }));
+        }
+        if (r.skipped_tracked > 0) {
+          parts.push(t("projectFilesPane.syncTrackedSkipped", { count: r.skipped_tracked }));
         }
         setSyncResult({ text: parts.join(" · "), bad: r.failed_total > 0 });
       }
@@ -835,11 +984,13 @@ export function ProjectFilesPane({
                 onClick={() =>
                   void useSyncStore.getState().setAuto(projectId, [""], !autoAll, true)
                 }
-                title={t(
-                  autoAll
-                    ? "projectFilesPane.autoSyncOnTitle"
-                    : "projectFilesPane.autoSyncOffTitle",
-                )}
+                title={
+                  t(
+                    autoAll
+                      ? "projectFilesPane.autoSyncOnTitle"
+                      : "projectFilesPane.autoSyncOffTitle",
+                  ) + (lockstepOn ? "\n" + t("projectFilesPane.autoSyncLockstepNote") : "")
+                }
               >
                 {t(autoAll ? "projectFilesPane.autoSyncOn" : "projectFilesPane.autoSyncOff")}
               </button>
@@ -873,7 +1024,7 @@ export function ProjectFilesPane({
               style={{ marginLeft: "auto" }}
               title={t("fileTree.syncingRel", { rel: syncProgress.rel || "…" })}
             >
-              ⟳ {syncProgress.done}/{syncProgress.total}
+              <RefreshIcon /> {syncProgress.done}/{syncProgress.total}
             </span>
           )}
           <button
@@ -896,6 +1047,17 @@ export function ProjectFilesPane({
           </button>
         </div>
       )}
+      {/* Lockstep is the transport for every git-tracked file here, and it is not
+          in step: until that is resolved (Git view), committed files reach the
+          other side by no route at all — Sync all and Auto-sync never carry them. */}
+      {!compact && !activeBox && isRemoteProject && projectId && !remoteBlocked && lockstepStuck && (
+        <div className="project-files-sync-result project-files-sync-result--bad" role="status">
+          <span>
+            {t("projectFilesPane.lockstepStuck", { detail: lockstep?.detail ?? "—" })}{" "}
+            <UntestedTag id="projectFilesPane.lockstepNotes" />
+          </span>
+        </div>
+      )}
       {/* The outcome of the last whole-tree transfer. Dismissible, and it stays
           until dismissed or superseded: a push that ends in one second must not
           report itself in a toast the user is not looking at yet. */}
@@ -911,19 +1073,114 @@ export function ProjectFilesPane({
             title={t("common.close")}
             aria-label={t("common.close")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       )}
+      {mountTree && boxSearchOpen && (
+        <div className="file-tree-search box-shared-search">
+          <div className="file-tree-search-row">
+            <input
+              type="text"
+              className="file-tree-search-input"
+              value={boxQuery}
+              autoFocus
+              disabled={!searchable}
+              placeholder={
+                !searchedRoot
+                  ? t("fileRoot.searchNoMember")
+                  : !searchable
+                    ? t("fileRoot.searchNeedsLocal")
+                    : boxSearchMode === "name"
+                      ? t("fileRoot.findIn", { name: searchedRoot.label })
+                      : t("fileRoot.searchIn", { name: searchedRoot.label })
+              }
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(e) => setBoxQuery(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") {
+                  if (boxQuery) setBoxQuery("");
+                  else onSearchOpenChange?.(false);
+                }
+              }}
+            />
+            {boxQuery && (
+              <button
+                type="button"
+                className="file-tree-search-clear"
+                title={t("fileTree.clearSearch")}
+                aria-label={t("fileTree.clearSearch")}
+                onClick={() => setBoxQuery("")}
+              >
+                <CloseIcon />
+              </button>
+            )}
+            <UntestedTag id="projectFilesPane.sharedSearch" />
+          </div>
+          <div className="file-tree-search-modes">
+            <button
+              type="button"
+              className={`file-tree-search-mode${boxSearchMode === "name" ? " active" : ""}`}
+              aria-pressed={boxSearchMode === "name"}
+              onClick={() => setBoxSearchMode("name")}
+              title={t("fileTree.searchNamesTitle")}
+            >
+              {t("fileTree.searchName")}
+            </button>
+            <button
+              type="button"
+              className={`file-tree-search-mode${boxSearchMode === "content" ? " active" : ""}`}
+              aria-pressed={boxSearchMode === "content"}
+              onClick={() => setBoxSearchMode("content")}
+              title={t("fileTree.searchContentTitle")}
+            >
+              {t("fileTree.searchContent")}
+            </button>
+            {boxSearchMode === "content" && (
+              <button
+                type="button"
+                className={`file-tree-search-mode${boxSearchCase ? " active" : ""}`}
+                aria-pressed={boxSearchCase}
+                onClick={() => setBoxSearchCase((v) => !v)}
+                title={t("search.caseSensitive")}
+              >
+                Aa
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="side-panel-scroll" style={{ flex: 1, overflowY: "auto" }}>
+        {mountTree && activeBox && activeBox.member_ids.length === 0 && (
+          <div className="file-tree-empty box-empty-panel"><BoxEmptyLine boxId={activeBox.id} /></div>
+        )}
         {mountTree && activeBox ? (
           boxRoots.length === 0 ? (
-            <div className="file-tree-empty">{t("projectFilesPane.noMemberFolders")}</div>
+            activeBox.member_ids.length > 0 && (
+              <div className="file-tree-empty">{t("projectFilesPane.noMemberFolders")}</div>
+            )
           ) : (
             boxRoots.map((r) => (
               <BoxRootSection
                 key={r.rootId}
                 {...r}
+                expanded={
+                  (r.variant === "box" ? !accordion.boxFolded : accordion.expandedId === r.rootId) ||
+                  accordion.dragOpen.includes(r.rootId)
+                }
+                onToggle={
+                  r.variant === "box" ? accordion.toggleBoxFolded : () => accordion.toggleMember(r.rootId)
+                }
+                view={accordion.views?.[r.rootId] ?? "files"}
+                onViewChange={(v) => {
+                  if (accordion.boxId) {
+                    useBoxAccordionStore.getState().setView(accordion.boxId, r.rootId, v);
+                  }
+                }}
+                agentCount={accordion.agentCounts[r.rootId] ?? 0}
+                springArmed={accordion.armedId === r.rootId}
                 // Only the members reorder: the box's own folder root always
                 // leads the list, so it carries no grip.
                 reorder={r.variant === "member" ? reorderFor(r.rootId) : undefined}
@@ -931,8 +1188,15 @@ export function ProjectFilesPane({
                 descending={descending}
                 onSortChange={compact ? undefined : onSortChange}
                 active={active}
-                searchOpen={searchOpen}
+                // The trees draw no search box in a box: the one field above
+                // the sections feeds the expanded member (`sharedSearch`).
+                searchOpen={false}
                 onSearchOpenChange={onSearchOpenChange}
+                sharedSearch={
+                  boxSearchOpen && r.variant === "member" && r.rootId === accordion.expandedId
+                    ? sharedSearch
+                    : undefined
+                }
                 refreshNonce={refreshNonce}
               />
             ))

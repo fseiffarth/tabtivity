@@ -93,6 +93,24 @@ export function orderedTabKeys(node: LayoutNode | null): string[] {
   return allGroups(node).flatMap((g) => g.tabKeys);
 }
 
+/** The tab `delta` steps from the focused subwindow's active tab, walking every
+ *  tab of the layout in `orderedTabKeys` order (so past a subwindow's last tab
+ *  comes the next subwindow's first), wrapping at the ends. Null when there is
+ *  no other tab to go to. */
+export function stepOrderedTab(
+  node: LayoutNode | null,
+  focusedGroupId: string | null,
+  delta: 1 | -1,
+): { groupId: string; key: string } | null {
+  const slots = allGroups(node).flatMap((g) => g.tabKeys.map((key) => ({ groupId: g.id, key })));
+  if (slots.length < 2) return null;
+  const focused = (focusedGroupId && findGroup(node, focusedGroupId)) || allGroups(node)[0];
+  const curKey = focused?.activeKey ?? focused?.tabKeys[0];
+  const found = slots.findIndex((s) => s.groupId === focused?.id && s.key === curKey);
+  const cur = found >= 0 ? found : 0;
+  return slots[(cur + delta + slots.length) % slots.length];
+}
+
 /** Remove a tab key from whichever group holds it within a subtree, collapsing
  *  an emptied group / lone-child split. Returns the new (possibly null) subtree;
  *  returns the input unchanged if the key isn't present. Used by the detached
@@ -508,6 +526,43 @@ export function allNodeIds(node: LayoutNode | null): string[] {
   if (!node) return [];
   if (node.type === "group") return [node.id];
   return [node.id, ...node.children.flatMap(allNodeIds)];
+}
+
+/** The longest subwindow name kept: it is a label in a bar, not a description. */
+export const MAX_SUBWINDOW_NAME = 60;
+
+/** A name as stored: trimmed and capped, or nothing. Saved layouts come through
+ *  here too, so the type is checked rather than assumed. */
+export function cleanSubwindowName(name: unknown): string | undefined {
+  if (typeof name !== "string") return undefined;
+  return name.trim().slice(0, MAX_SUBWINDOW_NAME).trimEnd() || undefined;
+}
+
+/** `g` under `name`; an empty name takes the name off. */
+export function withGroupName(g: GroupNode, name: string): GroupNode {
+  return { ...g, name: cleanSubwindowName(name) };
+}
+
+/**
+ * What a popout or hidden subtree goes by: its own name, else its first named
+ * pane's, which is how a named subwindow keeps its window name once it is split.
+ */
+export function subtreeName(subtree: LayoutNode, own?: string): string | undefined {
+  return own ?? allGroups(subtree).find((g) => g.name)?.name;
+}
+
+/**
+ * Name a whole popout or hidden subtree. One pane's name is its group's, so it
+ * docks with the pane; a split's stays beside the tree. Spread the result over
+ * the record: `name` is always returned, so a group's clears any older one.
+ */
+export function nameSubtree(
+  subtree: LayoutNode,
+  name: string,
+): { subtree: LayoutNode; name: string | undefined } {
+  return subtree.type === "group"
+    ? { subtree: withGroupName(subtree, name), name: undefined }
+    : { subtree, name: cleanSubwindowName(name) };
 }
 
 /** Deep-clone a layout tree, regenerating all group/split ids. */

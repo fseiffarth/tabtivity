@@ -1486,12 +1486,15 @@ pub enum DesktopRequest {
         request_id: String,
         project_id: String,
     },
-    /// What a transfer of `paths` would do (`sync_transfer_preview`), for the
-    /// phone's confirmation.
+    /// What `op` (never `forget`) would do to `paths`, for the phone's
+    /// confirmation: a transfer's price (`sync_transfer_preview`), or the
+    /// files a deletion would remove. The answer carries the window's
+    /// fingerprint of the rows it read, which the sidecar seals into the
+    /// phone's preview token.
     SyncPreview {
         request_id: String,
         project_id: String,
-        direction: SyncDirection,
+        op: SyncOp,
         paths: Vec<String>,
     },
     /// One take-a-side, deletion or forget over `paths`. The window checks
@@ -1502,6 +1505,12 @@ pub enum DesktopRequest {
         project_id: String,
         op: SyncOp,
         paths: Vec<String>,
+        /// The fingerprint from the preview the phone confirmed, unsealed from
+        /// its token by the sidecar. The window recomputes it from a fresh
+        /// status pass and moves nothing on a mismatch. Every op but
+        /// `forget` carries one; a window never acts on one without.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<String>,
     },
     /// The mirror's copy of one diverged file against the host's (`sync_diff`).
     SyncDiff {
@@ -1533,6 +1542,41 @@ pub enum SyncOp {
     DeleteLocal,
     /// Stop tracking a file gone from both sides.
     Forget,
+}
+
+impl SyncOp {
+    /// The wire spelling, which a preview token binds to.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pull => "pull",
+            Self::Push => "push",
+            Self::DeleteHost => "delete_host",
+            Self::DeleteLocal => "delete_local",
+            Self::Forget => "forget",
+        }
+    }
+
+    /// Whether the phone must have previewed this op before resolving it:
+    /// everything but `forget`, which only drops a record of a file that is
+    /// gone from both sides.
+    pub fn needs_preview(self) -> bool {
+        self != Self::Forget
+    }
+
+    /// Whether this op deletes a copy of a file (the host account's, or the
+    /// mirror's).
+    pub fn deletes(self) -> bool {
+        matches!(self, Self::DeleteHost | Self::DeleteLocal)
+    }
+}
+
+impl From<SyncDirection> for SyncOp {
+    fn from(direction: SyncDirection) -> Self {
+        match direction {
+            SyncDirection::Pull => Self::Pull,
+            SyncDirection::Push => Self::Push,
+        }
+    }
 }
 
 /// One row of the window's diverged list. `state` is `amber` (both sides have
@@ -2225,8 +2269,13 @@ pub enum DesktopResponse {
         #[serde(default)]
         files: Vec<DivergedFile>,
     },
+    /// Answer to [`DesktopRequest::SyncPreview`]. `fingerprint`: the window's
+    /// hash of the state and mtimes of the rows it read (hex); empty from a
+    /// window that predates it, which the sidecar will not seal a token for.
     SyncPreview {
         preview: SyncPreviewFacts,
+        #[serde(default)]
+        fingerprint: String,
     },
     /// Answer to [`DesktopRequest::SyncResolve`], in counts: why a file failed
     /// is the backend's sentence, which may name a full path. `skipped` no
@@ -2284,6 +2333,46 @@ pub enum AdminRequest {
     /// phone marks (`presence.rs`). A sidecar older than this answers an
     /// error, which the desktop shows as no marks.
     Presence,
+    /// The window's half of the markup questions of tabs the sidecar spawned
+    /// (`docs/headless_mcp_plan.md`, phase 1b): the sidecar holds those
+    /// tabs' asks and ticks in its own memory, and the window's markup views
+    /// read, answer and dismiss them through these. Keyed as the window's own
+    /// commands are, by project and schedule target. A sidecar older than
+    /// this answers an error, which the window reads as no asks.
+    MarkupList {
+        project_id: String,
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    MarkupTicks {
+        project_id: String,
+        target: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    MarkupAnswer {
+        project_id: String,
+        target: String,
+        ask_id: String,
+        answers: Vec<crate::services::markup_mcp::Answer>,
+        /// The receipt the window minted for this answer, so it can reopen
+        /// the ask should this reply never reach it. Absent: the sidecar
+        /// mints one (and a lost reply leaves the ask closed).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        receipt: Option<String>,
+    },
+    MarkupReopen {
+        project_id: String,
+        target: String,
+        ask_id: String,
+        receipt: String,
+    },
+    MarkupDismiss {
+        project_id: String,
+        target: String,
+        ask_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2307,6 +2396,26 @@ pub enum AdminResponse {
     Presence {
         projects: Vec<ProjectPresence>,
         tabs: Vec<TabPresence>,
+    },
+    /// Answer to [`AdminRequest::MarkupList`].
+    MarkupAsks {
+        asks: Vec<crate::services::markup_mcp::AskView>,
+    },
+    /// Answer to [`AdminRequest::MarkupTicks`], newest
+    /// `markup_mcp::MAX_PEER_TICKS` at most.
+    MarkupTicks {
+        ticks: Vec<crate::services::markup_mcp::TickView>,
+    },
+    /// Answer to [`AdminRequest::MarkupAnswer`]: the prompt for the caller to
+    /// queue into the tab and the receipt that reopens the ask.
+    MarkupAnswered {
+        prompt: String,
+        receipt: String,
+    },
+    /// A markup request the ask did not take, by its wire code (`gone`,
+    /// `answered`, `superseded`, `invalid_answer`, `invalid_target`).
+    MarkupRefused {
+        code: String,
     },
     Error {
         message: String,

@@ -255,6 +255,32 @@ describe("the desktop Reader's live screen", () => {
     expect(live.question?.options[0]).toMatchObject({ label: "Receive-only, all CLIs (Recommended)" });
   });
 
+  it("reads an idle box under Claude Code 2.1.318's diff panel as the input frame, not a stray screen", () => {
+    // 2.1.318 stops the divider above the box and draws the box and footer at
+    // full width: read whole, the panel's rows stayed in the Chat's reading.
+    const side = (left: string, right = "") => `${left.padEnd(95)}│${right.padEnd(76)}`;
+    const rows = [
+      side("", `${" ".repeat(74)}✕`),
+      side("● The first compile finished; the markup test run is going now on the final code."),
+      side(""),
+      side("  Read 1 file"),
+      ...Array.from({ length: 8 }, () => side("")),
+      side("", `${" ".repeat(26)}No changes this session`),
+      ...Array.from({ length: 8 }, () => side("")),
+      side("", "+4 files edited before this session (show)"),
+      side(""),
+      "─".repeat(172),
+      "❯ ",
+      "─".repeat(172),
+      "  user@host:~/projects/app (develop*) · Opus 5.5 [high]",
+      "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent",
+    ];
+    const live = readReaderLive(plainBuffer(rows), "Claude", 172);
+    expect(live.stray).toBe(false);
+    expect(live.question).toBeNull();
+    expect(live.status?.model).toBe("Opus 5.5");
+  });
+
   it("reads a permission prompt as its question, its context and its options", () => {
     const live = readReaderLive(plainBuffer(PERMISSION), "Claude");
     expect(live.question?.options.map((option) => option.label)).toEqual([
@@ -419,6 +445,16 @@ describe("the desktop Reader's live screen", () => {
     ]);
     expect(menu.ask[0]).toBe("Hooks need review");
     expect(answerKeys(hooks, hooks.options[1])).toEqual(["\u001b[B", "\r"]);
+  });
+
+  it("offers the hook path trust action without typing a chat prompt", () => {
+    const rows = ["Hooks", "SessionStart", "/tmp/config.toml", "Runs a session hook", "t trust this path · esc back"];
+    const live = readReaderLive(plainBuffer(rows), "Codex", 100);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["trust this path", "back"]);
+    expect(answerKeys(live.question!, live.question!.options[0])).toEqual(["t"]);
+    expect(answerKeys(live.question!, live.question!.options[1])).toEqual(["\u001b"]);
+    expect(live.ask.join(" ")).toContain("/tmp/config.toml");
+    expect(readReaderLive(plainBuffer(rows), "Claude", 100).question).toBeNull();
   });
 
   it("reads Codex's hooks page, which has no numbered rows, as a card of its footer's answers", () => {

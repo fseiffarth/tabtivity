@@ -6,6 +6,7 @@ import { readContextUsage, type ContextCategory, type ContextUsage } from "../..
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import type { TabEntry } from "../../stores/tabs";
 import { UntestedTag } from "../common/UntestedTag";
+import { CloseIcon } from "../common/icons/Icon";
 
 /** `/context` prints its card into the scrollback, listings and all: a few
  * screenfuls above the input box. The fullscreen renderer keeps no
@@ -81,7 +82,7 @@ export function TerminalReaderContext({ tab, ptyId, agentLabel, visible, canRefr
       <strong>{t("terminal.reader.context.title", { agent: agentLabel })}</strong>
       <UntestedTag id="terminal.reader.context" />
       <button type="button" className="terminal-reader-fact-model" onClick={onRefresh} disabled={!canRefresh || refreshing || !tab.scheduleTargetId}>{t("terminal.reader.context.refresh")}</button>
-      <button type="button" className="terminal-reader-picker-close" onClick={onClose} aria-label={t("common.close")}>✕</button>
+      <button type="button" className="terminal-reader-picker-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon /></button>
     </div>
     {usage ? <>
       <div className="terminal-reader-context-total">

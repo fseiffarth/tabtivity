@@ -60,7 +60,7 @@ export const CALENDAR_TAB_CMD = tabCommand("calendar");
  * one zustand store), so a mail tab showed the same mailbox from every scope —
  * i.e. exactly what the header's ✉ button already opens over whatever is on
  * screen, without belonging to a project you then switch away from. The tab kind
- * is gone; `MailPane` lives on, rendered only by `MailOverlayHost`.
+ * is gone; `MailPane` lives on, rendered only by `MailView`.
  *
  * The constant stays because the *persisted layouts* do: a saved tree written
  * before the removal still carries `kind: "mail"` tabs holding this `cmd`, and
@@ -312,9 +312,10 @@ export function isSavedWhileLive(
 
 /**
  * Whether a tab is a local-model tab that restores by relaunching its launch
- * line (`TabEntry.localLaunch`) — the drivers other than Mistral, which have no
- * session to resume. While its tmux session lives, the restore reattaches the
- * running agent; once that is gone the relaunch is a fresh conversation.
+ * line (`TabEntry.localLaunch`) — the drivers other than Mistral. While its
+ * tmux session lives, the restore reattaches the running agent; once that is
+ * gone the relaunch is a fresh conversation, except OpenCode's, which carries
+ * a session id and resumes on that line (`resumeArgsOf`).
  */
 export function isRelaunchableLocalTab(
   tab: { kind: TabKind; localLaunch?: LocalLaunch },
@@ -330,6 +331,21 @@ export function isRelaunchableLocalTab(
     Array.isArray(launch.args) &&
     launch.args.every((arg) => typeof arg === "string")
   );
+}
+
+/**
+ * The args a restore respawns this tab on — the one answer for the layout
+ * load, a reopen, a relaunch and a move. A local-model tab that also resumes
+ * keeps its launch line in front: OpenCode's model picks its provider and its
+ * interface, and the backend turns the flag behind it into the tab's session.
+ */
+export function resumeArgsOf(
+  tab: { kind: TabKind; cmd: string; sessionId?: string; resumeArgs?: string[]; localLaunch?: LocalLaunch },
+): string[] {
+  const launch = isRelaunchableLocalTab(tab) && tab.localLaunch ? tab.localLaunch.args : [];
+  if (!isResumableAgentTab(tab) || !tab.sessionId) return [...launch];
+  const resume = tab.cmd in RESUMABLE_AGENTS ? RESUMABLE_AGENTS[tab.cmd](tab.sessionId) : tab.resumeArgs ?? [];
+  return [...launch, ...resume];
 }
 
 /**

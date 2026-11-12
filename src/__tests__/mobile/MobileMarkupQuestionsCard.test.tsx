@@ -47,6 +47,14 @@ import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { storageKey } from "../../lib/brand";
 import { answersOf, NO_PICK, toggleOption } from "../../lib/viewers/markupQuestionPicks";
 
+/** The round, the ticks and the agent's card wait behind the head's Agent
+ * badge while marking: open its sheet (it stays open while marking). */
+const openAgent = () => {
+  const badge = screen.queryByRole("button", { name: /^Agent/ });
+  if (badge && badge.getAttribute("aria-pressed") !== "true") fireEvent.click(badge);
+};
+
+
 const PICTURE = { name: "20261001-120000-plot.png", original: "plot.png", kind: "image/png", size: 4_000, modified: 1_790_000_000 };
 const PDF = { name: "20261001-120000-paper.pdf", original: "paper.pdf", kind: "application/pdf", size: 9_000, modified: 1_790_000_000 };
 const ASK = "ask-0123456789abcdef";
@@ -201,6 +209,7 @@ describe("MarkupView · the agent's questions", () => {
     const calls = desktop(() => asks);
     const onSend = vi.fn((): MarkupSend => "sent");
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={onSend} onClose={() => {}} />);
+    openAgent();
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
     settle();
@@ -232,6 +241,7 @@ describe("MarkupView · the agent's questions", () => {
   it("pages through the questions with ‹ ›, picks several answers, takes a typed Other…, and sends them together", async () => {
     const calls = desktop(() => [TWO]);
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
     settle();
@@ -261,6 +271,7 @@ describe("MarkupView · the agent's questions", () => {
   it("unticks a typed Other… with a second tap, keeping the other picks", async () => {
     const calls = desktop(() => [TWO]);
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
     settle();
@@ -296,6 +307,7 @@ describe("MarkupView · the agent's questions", () => {
       () => ({ status: 409, body: { error: "delivery_failed" } }),
     );
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
     settle();
@@ -314,6 +326,7 @@ describe("MarkupView · the agent's questions", () => {
   it("takes no tap in the moment after a new ask opened it", async () => {
     const calls = desktop(() => [ONE]);
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
     // A stroke already on its way lands on the fresh card: nothing happens.
@@ -332,6 +345,7 @@ describe("MarkupView · the agent's questions", () => {
     let asks: unknown[] = [ONE];
     desktop(() => asks);
     render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     showPicture();
     const card = await screen.findByRole("region", { name: "The agent's questions about your marks" });
     settle();
@@ -345,12 +359,14 @@ describe("MarkupView · the agent's questions", () => {
     const calls = desktop(() => [ONE]);
     const hidden = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const { unmount } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
     expect(calls.some((call) => call.url.includes("/markup/questions"))).toBe(false);
     hidden.mockRestore();
     unmount();
     // No agent tab to answer into (a new-tab Submit): no card, no poll.
     render(<MarkupView projectId="p1" scope={{ tab: "t1" }} file={PICTURE} newTab={{ projectId: "p1", show: () => {} }} onClose={() => {}} />);
+    openAgent();
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
     expect(calls.some((call) => call.url.includes("/markup/questions"))).toBe(false);
   });
@@ -359,6 +375,7 @@ describe("MarkupView · the agent's questions", () => {
     desktop(() => [{ ...ONE, file_name: "paper.pdf" }]);
     store.loadLayer.mockResolvedValue({ layer: EMPTY_LAYER, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
     const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
     const iframe = container.querySelector("iframe.markup-frame") as HTMLIFrameElement;
     const frame = iframe.contentWindow!;
     const sent: unknown[] = [];

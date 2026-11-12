@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { ApiError, holdPrompt, listProjectFiles, markupUndoConflict, MAX_INBOX_FILE, previewMarkupUndo, runMarkupUndo, saveRemarks, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
@@ -9,14 +10,15 @@ import { readFlag, writeFlag } from "../prefs";
 import {
   addMark, approveMarks, approveShown, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, eraseRect, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, markAnchors, markBox, markedPages,
   markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, tickGroups, undo,
-  addMarks, canAddAll, markAt, marksIn, MAX_COMMENT, moveMarks, removeMarks, restyleMarks, setComment, snapStroke, stampSize, STAMP_SYMBOLS,
+  addMarks, canAddAll, copyMarks, markAt, marksIn, marksInLoop, MAX_COMMENT, moveMarks, removeMarks, restyleMarks, setComment, snapStroke, stampSize, straightenStroke,
   type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type StampMark, type TextMark,
 } from "../markup/layer";
 import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
 import {
-  colorOf, colorsFor, ERASER_MODES, eraserPx, PEN_SIZES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
-  applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX, TEXT_MARK_MODES,
-  type PenPreset, type PenPrefs, type PenTool,
+  colorOf, colorsFor, ERASER_MODES, eraserPx, inkStyle, PEN_ONLY_STYLES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
+  applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX,
+  armDock, armProof, dockToolOf, DOCK_TOOLS, isArmed, LASSO_MODES, PROOF_PICKS, proofOf, removePreset, SIZE_MAX, SIZE_MIN, clampSize,
+  type DockTool, type PenPrefs, type PenTool,
 } from "../markup/pen";
 import { openMarkupTab, useOpenedTabAgent } from "../markup/newTab";
 import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
@@ -31,6 +33,7 @@ import { storageDashKey } from "../../../src/lib/brand";
 import { useMarkupAsks } from "../markup/questions";
 import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
 import { EraserIcon } from "../markup/EraserIcon";
+import { DOCK_LABEL_KEYS, DockIcon, ERASER_MODE_KEYS, PROOF_GLYPHS, proofKey } from "../markup/dock";
 import { OptionSheet } from "./OptionSheet";
 import { bitmapDataUrl, canPrint, MAX_PRINT_PAGES, PRINT_WIDTH, printContent } from "../print";
 import { useBackLayer } from "../backStack";
@@ -39,10 +42,6 @@ type Tool = PenTool;
 
 /** The pen styles' glyphs, as the desktop strip shows them. */
 const PEN_STYLE_GLYPHS: Record<(typeof PEN_STYLES)[number], string> = { pen: "✎", marker: "▬", dashed: "┄", arrow: "↗" };
-/** The proofreading stamps' glyphs, for the symbol picker and the tool. */
-const STAMP_GLYPHS: Record<(typeof STAMP_SYMBOLS)[number], string> = { insert: "⁁", delete: "✕", paragraph: "¶", swap: "⇄" };
-/** The toolbar's tools, in order. */
-const TOOLBAR: readonly PenTool[] = ["ink", "box", "text", "textmark", "stamp", "select", "eraser"];
 /** **Annotate**'s tools: what becomes a remark in the PDF — a highlight over
  * words or a box, a note — and the select tool (a highlight's remark) and the
  * eraser. */
@@ -59,11 +58,8 @@ const REMARKS_FAILURES: Record<string, TranslationKey> = {
 };
 /** How near a tap of the select tool must come to a mark, CSS pixels. */
 const SELECT_PX = 12;
-/** A preset chip's glyph: its pen's style, or its tool's. */
-function presetGlyph(preset: PenPreset): string {
-  if (preset.tool === "ink") return PEN_STYLE_GLYPHS[preset.style];
-  return preset.tool === "box" ? "▭" : preset.tool === "text" ? "T" : preset.tool === "stamp" ? "⁁" : "ab";
-}
+/** How long a favourite is held before it is taken out. */
+const FAVOURITE_HOLD_MS = 600;
 type Size = [number, number];
 type Picture = { bitmap: ImageBitmap; width: number };
 type Failure = FrameFailure | "tooLarge" | "fetch" | "timeout" | "picture";
@@ -326,7 +322,7 @@ type Gesture =
   | { kind: "stamp"; n: number; pointerId: number; mark: StampMark }
   /** The select tool: a drag from a selected mark moves the selection
    * (`move`); from elsewhere it draws the selecting rectangle. */
-  | { kind: "select"; n: number; pointerId: number; start: [number, number]; end: [number, number]; clientX: number; clientY: number; move: number[] | null; moved: boolean }
+  | { kind: "select"; n: number; pointerId: number; start: [number, number]; end: [number, number]; clientX: number; clientY: number; move: number[] | null; moved: boolean; loop: [number, number][] | null }
   | { kind: "box"; n: number; pointerId: number; start: [number, number]; end: [number, number] }
   | { kind: "erase"; n: number; pointerId: number; last: [number, number] }
   /** The area eraser's rectangle, from where it was pressed. */
@@ -374,7 +370,7 @@ type NoteDraft = { n: number; at: [number, number]; index: number | null; text: 
  * the new marks. Once the agent has finished, **Reload PDF** draws the file
  * as it is now (or its newer copy, `refresh`) under the same layer.
  */
-export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, adoptFrom, toChat, startMarking = false }: {
+export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file: givenFile, place, folder, onSend, newTab, agent: givenAgent = "idle", model: givenModel, pickModel, dialog, refresh, onClose, reader, share, adoptFrom, toChat, startMarking = false, paned = false }: {
   tabId?: string;
   /** The project the file belongs to — the phone-side layer's key. */
   projectId?: string;
@@ -410,6 +406,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** Opens reading: the head's actions (Save, Share), and what went wrong
    * with one of them. */
   reader?: { actions: ReactNode; alert?: string };
+  /** Share… while marking, in the palette's ⋯ menu: the reader's head (and
+   * its Share) gives way to Submit/Done then. The file as stored is shared,
+   * not the marks on screen. `OutboxViewer`'s `useOutboxShare` runs it. */
+  share?: { run: () => void; busy: boolean; ready: boolean; failed: boolean };
   /** The layer key of the outbox copy this project file is shown in place of
    * (`OutboxViewer`): marks drawn on the copy before the swap move over once,
    * while the project file has none of its own — never merged into some. */
@@ -421,6 +421,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** The reader opens marking whatever this phone's "PDFs open in" says — the
    * files library's **Mark up** asked for it. */
   startMarking?: boolean;
+  /** Read beside the files library's folder on a wide screen (`OutboxViewer`'s
+   * `paned`); marking still takes the whole screen. */
+  paned?: boolean;
 }) {
   const t = useT();
   /** The file shown — the host's, until a Reload finds a newer one. */
@@ -504,6 +507,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   /** The area eraser's rectangle while it is dragged, page units — or the
    * select tool's (`select`). */
   const [area, setArea] = useState<{ n: number; rect: [number, number, number, number]; select?: boolean } | null>(null);
+  /** The lasso's freehand loop while it is drawn, page units. */
+  const [loop, setLoop] = useState<{ n: number; points: [number, number][] } | null>(null);
   /** The select tool's marks: indices into `layer.pages[n].marks` of the
    * layer they were picked in — a selection holds only while that layer is
    * the present one (an undo, an erase or a Submit renumbers the marks). */
@@ -530,10 +535,14 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const opensOnMarks = useRef(reading && canMark && readMarkupOpen() === "auto");
   const [penMode, setPenMode] = useState(readPenMode);
   const [popover, setPopover] = useState<"colors" | "more" | null>(null);
-  /** Where a press on the colour well began, and whether it turned into a
-   * swipe — whose click then opens nothing. */
-  const wellSwipe = useRef<number | null>(null);
-  const wellSwiped = useRef(false);
+  /** The agent's sheet, opened and closed by the head's Agent badge only —
+   * drawing, the tools and their sheets leave it as it is. */
+  const [agentOpen, setAgentOpen] = useState(false);
+  /** A favourite held to take it out: the timer, and whether it fired — its
+   * click then arms nothing. */
+  const favouriteTimer = useRef<number | undefined>(undefined);
+  const favouriteHeld = useRef(false);
+  useEffect(() => () => window.clearTimeout(favouriteTimer.current), []);
   const [note, setNote] = useState<NoteDraft | null>(null);
   const [limitHit, setLimitHit] = useState(false);
   const [sending, setSending] = useState<string | null>(null);
@@ -1086,11 +1095,17 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * finger's or a mouse's the even 0.5 — never bent (`strokePressure`). */
   const pressureOf = (style: InkMark["style"], sample: { pointerType: string; pressure: number }) =>
     sample.pointerType === "pen" && sample.pressure > 0 ? strokePressure(style ?? "pen", sample.pressure, pen.pressure) : strokePressure(style ?? "pen", 0.5);
+  /** How the eraser takes marks (`EraseOptions`): whole strokes unless it
+   * rubs (Partial); the area mode's stylus end takes whole strokes too. */
+  const eraseHow = () => ({ sent: showSent, whole: pen.eraser !== "partial", highlights: pen.eraseHighlights });
+  /** A highlighter stroke with Straight lines on, as shown and kept. */
+  const straight = tool === "highlight" && pen.straight;
+  const shaped = (mark: InkMark): InkMark => (straight ? straightenStroke(mark) : mark);
   /** Waits for the stroke to rest `SNAP_HOLD_MS` where it is now; then its
    * shape (`snapStroke`) is previewed, and taken if it lifts there. */
   const armSnap = (g: Extract<Gesture, { kind: "ink" }>) => {
     window.clearTimeout(snapTimer.current);
-    if (!pen.snap) return;
+    if (!pen.snap || straight) return;
     snapTimer.current = window.setTimeout(() => {
       const size = pageSize(g.n);
       if (gesture.current !== g || !size) return;
@@ -1163,19 +1178,20 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       setArea({ n, rect: [at[0], at[1], at[0], at[1]] });
     } else if (tool === "eraser" || stylusErases(event)) {
       gesture.current = { kind: "erase", n, pointerId: event.pointerId, last: at };
-      scratchRef.current = eraseAt(history.present, n, at[0], at[1], eraserPx(ERASE_PX, pen.eraser) * unitsPerPixel(n, canvas), showSent);
+      scratchRef.current = eraseAt(history.present, n, at[0], at[1], eraserPx(ERASE_PX, pen.eraser) * unitsPerPixel(n, canvas), eraseHow());
       setScratch(scratchRef.current);
-    } else if (tool === "ink") {
-      const pressure = pressureOf(pen.style, event);
-      const mark: InkMark = { kind: "ink", color, width: strokeWidth(size[0], pen), points: [[at[0], at[1], pressure]] };
-      if (pen.style !== "pen") mark.style = pen.style;
-      const g: Gesture = { kind: "ink", n, pointerId: event.pointerId, last: at, mark, whole: pen.style !== "pen", hold: [event.clientX, event.clientY], snapped: null };
+    } else if (tool === "ink" || tool === "highlight") {
+      const style = inkStyle({ tool, style: pen.style });
+      const pressure = pressureOf(style, event);
+      const mark: InkMark = { kind: "ink", color, width: strokeWidth(size[0], { size: pen.size, style }), points: [[at[0], at[1], pressure]] };
+      if (style !== "pen") mark.style = style;
+      const g: Gesture = { kind: "ink", n, pointerId: event.pointerId, last: at, mark, whole: style !== "pen", hold: [event.clientX, event.clientY], snapped: null };
       gesture.current = g;
       armSnap(g);
       // Only the plain pen paints piece by piece; a styled stroke is one path
       // (see-through, dashed, headed), previewed whole as it grows.
-      if (pen.style === "pen") paintPiece(n, at, at, pressure);
-      else setPreview({ n, marks: [{ ...mark, points: mark.points.slice() }] });
+      if (style === "pen") paintPiece(n, mark);
+      else setPreview({ n, marks: [shaped({ ...mark, points: mark.points.slice() })] });
     } else if (tool === "box") {
       gesture.current = { kind: "box", n, pointerId: event.pointerId, start: at, end: at };
     } else if (tool === "textmark") {
@@ -1193,7 +1209,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       const inside = box !== null && at[0] >= box[0] && at[0] <= box[0] + box[2] && at[1] >= box[1] && at[1] <= box[1] + box[3];
       const move = selected?.n === n && (inside || selected.indices.includes(hit)) ? selected.indices : hit >= 0 ? [hit] : null;
       if (move && move !== selected?.indices) setSelection({ n, indices: move, layer: history.present });
-      gesture.current = { kind: "select", n, pointerId: event.pointerId, start: at, end: at, clientX: event.clientX, clientY: event.clientY, move, moved: false };
+      gesture.current = {
+        kind: "select", n, pointerId: event.pointerId, start: at, end: at, clientX: event.clientX, clientY: event.clientY, move, moved: false,
+        loop: !move && pen.lasso === "free" ? [at] : null,
+      };
     } else {
       const index = noteAt(history.present.pages[n], at[0], at[1]);
       const grabbed = index >= 0 ? (history.present.pages[n].marks[index] as TextMark) : null;
@@ -1204,23 +1223,37 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     }
   };
 
-  /** Draws one piece of the stroke in progress straight onto the page's layer
-   * canvas — the whole layer is redrawn, curved, when the stroke ends. */
-  const paintPiece = (n: number, from: [number, number], to: [number, number], pressure: number) => {
+  /** Draws the newest piece of the stroke in progress straight onto the
+   * page's layer canvas: the curve from the midpoint before the last sample,
+   * through it, to the midpoint after it — the curves `rasterize.ts` draws the
+   * finished stroke with, so nothing jumps when the pen lifts. */
+  const paintPiece = (n: number, mark: InkMark) => {
     const canvas = overlays.current.get(n);
     const size = pageSize(n);
-    const g = gesture.current;
     const ctx = canvas?.getContext("2d");
-    if (!canvas || !size || !ctx || g?.kind !== "ink") return;
+    const points = mark.points;
+    if (!canvas || !size || !ctx || !points.length) return;
     const scale = canvas.width / size[0];
+    const at = points.length - 1;
+    const mid = (a: readonly number[], b: readonly number[]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
     ctx.save();
     ctx.scale(scale, scale);
     ctx.lineCap = "round";
-    ctx.strokeStyle = INK[g.mark.color];
-    ctx.lineWidth = inkWidth(g.mark.width, pressure);
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = INK[mark.color];
     ctx.beginPath();
-    ctx.moveTo(from[0], from[1]);
-    ctx.lineTo(to[0], to[1]);
+    if (at === 0) {
+      ctx.lineWidth = inkWidth(mark.width, points[0][2]);
+      ctx.moveTo(points[0][0], points[0][1]);
+      ctx.lineTo(points[0][0], points[0][1]);
+    } else {
+      const control = points[at - 1];
+      const from = at >= 2 ? mid(points[at - 2], control) : [control[0], control[1]];
+      const to = mid(control, points[at]);
+      ctx.lineWidth = inkWidth(mark.width, control[2]);
+      ctx.moveTo(from[0], from[1]);
+      ctx.quadraticCurveTo(control[0], control[1], to[0], to[1]);
+    }
     ctx.stroke();
     ctx.restore();
   };
@@ -1243,8 +1276,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       for (const sample of samples.length ? samples : [native]) {
         const at = toPage(g.n, canvas, sample.clientX, sample.clientY);
         const pressure = pressureOf(g.mark.style, sample);
-        if (!g.whole) paintPiece(g.n, g.last, at, pressure);
         g.mark.points.push([at[0], at[1], pressure]);
+        if (!g.whole) paintPiece(g.n, g.mark);
         g.last = at;
       }
       // Moved on from where it rested: no shape, and the wait starts afresh.
@@ -1253,7 +1286,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         g.snapped = null;
         armSnap(g);
       }
-      if (g.whole) setPreview({ n: g.n, marks: [g.snapped ?? { ...g.mark, points: g.mark.points.slice() }] });
+      if (g.whole) setPreview({ n: g.n, marks: [g.snapped ?? shaped({ ...g.mark, points: g.mark.points.slice() })] });
     } else if (g.kind === "area") {
       g.end = toPage(g.n, canvas, event.clientX, event.clientY);
       setArea({ n: g.n, rect: [Math.min(g.start[0], g.end[0]), Math.min(g.start[1], g.end[1]), Math.max(g.start[0], g.end[0]), Math.max(g.start[1], g.end[1])] });
@@ -1275,12 +1308,15 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       if (g.move) {
         scratchRef.current = moveMarks(history.present, g.n, g.move, g.end[0] - g.start[0], g.end[1] - g.start[1]);
         setScratch(scratchRef.current);
+      } else if (g.loop) {
+        g.loop.push(g.end);
+        setLoop({ n: g.n, points: g.loop.slice() });
       } else {
         setArea({ n: g.n, rect: [Math.min(g.start[0], g.end[0]), Math.min(g.start[1], g.end[1]), Math.max(g.start[0], g.end[0]), Math.max(g.start[1], g.end[1])], select: true });
       }
     } else if (g.kind === "erase") {
       const at = toPage(g.n, canvas, event.clientX, event.clientY);
-      scratchRef.current = eraseAlong(scratchRef.current ?? history.present, g.n, g.last, at, eraserPx(ERASE_PX, pen.eraser) * unitsPerPixel(g.n, canvas), showSent);
+      scratchRef.current = eraseAlong(scratchRef.current ?? history.present, g.n, g.last, at, eraserPx(ERASE_PX, pen.eraser) * unitsPerPixel(g.n, canvas), eraseHow());
       g.last = at;
       setScratch(scratchRef.current);
     } else if (g.kind === "text" && g.index >= 0) {
@@ -1308,6 +1344,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       // A gesture the browser took over (a scroll) is not a mark, nor a move.
       setPreview(null);
       setArea(null);
+      setLoop(null);
       if (g.kind === "text" || g.kind === "select") { scratchRef.current = null; setScratch(null); }
       overlayRedraw(g.n);
       return;
@@ -1315,7 +1352,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (g.kind === "ink") {
       if (g.whole) setPreview(null);
       // Lifted where it rested: the shape it snapped to.
-      add(g.n, g.snapped ?? finishStroke(g.mark, size));
+      add(g.n, g.snapped ?? shaped(finishStroke(g.mark, size)));
     } else if (g.kind === "textmark") {
       setPreview(null);
       addAll(g.n, textMarksOf(g, size));
@@ -1333,7 +1370,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         }
       } else if (!g.move && g.moved) {
         setArea(null);
-        const picked = marksIn(history.present.pages[g.n], [g.start[0], g.start[1], g.end[0], g.end[1]]);
+        setLoop(null);
+        const picked = g.loop
+          ? marksInLoop(history.present.pages[g.n], g.loop)
+          : marksIn(history.present.pages[g.n], [g.start[0], g.start[1], g.end[0], g.end[1]]);
         setSelection(picked.length ? { n: g.n, indices: picked, layer: history.present } : null);
       } else if (!g.move) {
         // A tap on no mark lets the selection go.
@@ -1341,7 +1381,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       }
     } else if (g.kind === "area") {
       setArea(null);
-      const next = eraseRect(history.present, g.n, g.start, g.end, showSent);
+      const next = eraseRect(history.present, g.n, g.start, g.end, { sent: showSent, highlights: pen.eraseHighlights });
       if (next !== history.present) setHistory((now) => commit(now, next));
     } else if (g.kind === "box") {
       setPreview(null);
@@ -2175,12 +2215,34 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (canvas) overlays.current.set(n, canvas);
     else overlays.current.delete(n);
   }, []);
+  /** Annotate's tools: a tap arms one, the armed one again opens its sheet. */
+  const toggleColors = () => setPopover((open) => (open === "colors" ? null : "colors"));
   const pickTool = (name: Tool) => {
+    if (tool === name) return toggleColors();
     // Each tool draws in its own remembered colour (`colorOf`).
     setPen((was) => ({ ...was, tool: name }));
     setPopover(null);
     setSelection(null);
   };
+  /** The dock slot the armed tool sits in. */
+  const slot = dockToolOf(tool);
+  /** A dock slot tapped: the armed one again opens or closes its sheet;
+   * another arms its tool (Proof: what it armed last). */
+  const pressSlot = (name: DockTool) => {
+    if (slot === name) return toggleColors();
+    setPen((was) => armDock(was, name));
+    setPopover(null);
+    setSelection(null);
+  };
+  const holdFavourite = (i: number) => {
+    window.clearTimeout(favouriteTimer.current);
+    favouriteHeld.current = false;
+    favouriteTimer.current = window.setTimeout(() => {
+      favouriteHeld.current = true;
+      setPen((was) => removePreset(was, i));
+    }, FAVOURITE_HOLD_MS);
+  };
+  const releaseFavourite = () => window.clearTimeout(favouriteTimer.current);
   /** A colour tapped: the selection's marks wear it while the select tool
    * holds some (`restyleMarks` keeps yellow to highlights), else the armed
    * tool remembers it. */
@@ -2204,6 +2266,17 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (!selected || !commentable) return;
     changeSelected(setComment(history.present, selected.n, selected.indices[0], text));
   };
+  /** The selection copied a little down and right, the copies selected. */
+  const copySelected = () => {
+    if (!selected) return;
+    const size = pageSize(selected.n);
+    if (!size) return;
+    const offset = (16 * size[0]) / cssWidth;
+    const copied = copyMarks(history.present, selected.n, selected.indices, offset, offset);
+    if (!copied) { setLimitHit(true); return; }
+    setHistory((now) => commit(now, copied.layer));
+    setSelection({ n: selected.n, indices: copied.indices, layer: copied.layer });
+  };
   const deleteSelected = () => {
     if (!selected) return;
     const next = removeMarks(history.present, selected.n, selected.indices);
@@ -2216,8 +2289,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const styles = new Set(selectedMarks.flatMap((mark) => (mark.kind === "ink" ? [mark.style ?? "pen"] : [])));
     return styles.size === 1 ? [...styles][0] : null;
   })();
-  /** Whether the armed pen is `preset` — its chip is ringed. */
-  const isPreset = (preset: PenPreset) => preset.tool === tool && preset.color === color && preset.size === pen.size && (preset.tool !== "ink" || preset.style === pen.style);
   /** The next of `options` after `now`, round — a ⋯ row's tap. */
   const cycle = <T,>(options: readonly T[], now: T): T => options[(options.indexOf(now) + 1) % options.length];
   const togglePenOnly = () => {
@@ -2234,6 +2305,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       left: area.rect[0] * cssWidth / size[0], top: area.rect[1] * cssWidth / size[0],
       width: (area.rect[2] - area.rect[0]) * cssWidth / size[0], height: (area.rect[3] - area.rect[1]) * cssWidth / size[0],
     }} />}
+    {/* The lasso's loop while it is drawn. */}
+    {loop?.n === n && <svg className="markup-lasso" aria-hidden="true" width={cssWidth} height={cssWidth * size[1] / size[0]}>
+      <polyline points={loop.points.map(([x, y]) => `${x * cssWidth / size[0]},${y * cssWidth / size[0]}`).join(" ")} />
+    </svg>}
     {selectionOutline(n, size)}
   </>;
   /** A dashed outline around the selection, following it as it is dragged. */
@@ -2250,10 +2325,56 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     && <NoteEditor note={note} size={size} width={cssWidth} onChange={editNote} onColor={(next) => setNote((draft) => draft && { ...draft, color: next })}
       onSave={saveNote} onCancel={() => setNote(null)} />;
 
-  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown ? " has-questions" : ""}`} role="dialog" aria-modal="true"
+  /** While marking (not Annotate), the round's pill, the ticks and the
+   * agent's question card wait behind the head's **Agent** badge — a sheet
+   * over the palette, opened by the badge only, never by itself
+   * (`docs/markup_notes_style_plan.md`). Reading, they show as before. */
+  const agentTucked = marking && !annotating;
+  const agentCount = asks.reduce((sum, ask) => sum + ask.questions.length, 0) + tickedGroups.length;
+  /** The ✓ badges and `?` pins draw on the pages only while the agent's
+   * sheet is open — or always, reading. */
+  const agentShown = !agentTucked || agentOpen;
+  const agentAttention = !!submitted && (asking || applyNow || undoNow || !!pillReload);
+  const questionsCard = cardShown && <MarkupQuestionsCard tabId={askTab} asks={asks} online={online} focus={questionFocus}
+    onShowPin={isPdf ? showPin : undefined} onAnswered={questionsAnswered} onClosed={dropAsk} onRefresh={refreshAsks} onBusy={setQuestionBusy} />;
+  const agentItems = <>
+    {submitted && roundWords && <div className={`markup-round ${submitted.phase}`} role="status">
+      {glyph && <span className={`agent-status ${glyph}`} aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH[glyph]}</span></span>}
+      <span className="markup-round-words">{roundWords}</span>
+      {roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      {asking && dialog && <span className="markup-round-dialog">{t("mobile.markup.round.dialog", { line: dialog })}</span>}
+      {onSend && toChat && <button className={asking ? "markup-submit markup-chat" : "outbox-action markup-chat"} onClick={() => toChat({ scope, file, place, folder })}
+        title={t(asking ? "mobile.markup.answerInChatTitle" : "mobile.markup.toChatTitle")}>
+        {t(asking ? "mobile.markup.answerInChat" : "mobile.markup.toChat")}
+        {(asking ? isUntested("mobile.markup.tabDialog") : isUntested("mobile.markup.chatLink")) && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      </button>}
+      {applyNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={reloading || sending !== null || !online}
+        onClick={() => void apply()} title={t("mobile.markup.applyTitle")}>{t("mobile.markup.apply")}{isUntested("mobile.markup.apply") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
+      {undoNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={undoBusy || reloading || sending !== null || !online}
+        onClick={() => void askUndo()} title={t("mobile.markup.undoRoundTitle")} aria-label={t("mobile.markup.undoRoundTitle")}>{t("mobile.markup.undoRound")}{isUntested("mobile.markup.undo") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
+      {pillReload && <button className={reloadPrimary ? "markup-submit markup-reload" : "outbox-action markup-reload"} disabled={reloading || sending !== null}
+        onClick={() => void reload()}>{t("mobile.markup.reload")}</button>}
+    </div>}
+    {ticked.length > 0 && <div className="markup-round markup-ticks" role="status">
+      <span className="agent-status done" aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH.done}</span></span>
+      <span className="markup-round-words">{t("mobile.markup.ticks.done", { count: tickedGroups.length })}</span>
+      {isUntested("mobile.markup.ticks") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      <button className="outbox-action markup-approve-all" disabled={sending !== null} onClick={approveAllTicked}
+        title={t("mobile.markup.ticks.approveAllTitle")}>{t("mobile.markup.ticks.approveAll")}</button>
+    </div>}
+    {noUndo && submitted && <p role="status">{t("mobile.markup.noUndo", { reason: t(NO_UNDO_KEYS[noUndo] ?? "mobile.markup.noUndo.other") })}</p>}
+    {undoNote && <p role={undoNote.alert ? "alert" : "status"}>{undoNote.text}</p>}
+    {reloadNote && <p role="status">{t(reloadNote)}</p>}
+
+  </>;
+
+  // Beside the files library's folder only while reading: marking takes the
+  // whole screen.
+  const besideFolder = paned && !marking;
+  return <div className={`outbox-viewer markup-view${reading ? " markup-reader" : ""}${marking ? " marking" : ""}${cardShown && !agentTucked ? " has-questions" : ""}${besideFolder ? " paned" : ""}`} role="dialog" aria-modal={!besideFolder}
     aria-label={marking ? t("mobile.markup.title", { name: sentName(file) }) : sentName(file)}>
     <div className="outbox-viewer-head">
-      {(reading || !marking) && <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")} disabled={sending !== null}>✕</button>}
+      {(reading || !marking) && <button className="sheet-close" onClick={onClose} aria-label={t("mobile.outbox.close")} disabled={sending !== null}><CloseIcon size="1em" /></button>}
       <div className="outbox-viewer-title">
         <h2>{sentName(file)}</h2>
         <small>
@@ -2272,9 +2393,17 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
           ? <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online || note !== null} onClick={() => void saveToPdf()} title={t("mobile.remarks.saveTitle")}>
             {t("mobile.remarks.save")}{isUntested("mobile.remarks") && <span className="untested">{t("mobile.outbox.untested")}</span>}
           </button>
-          : <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online} onClick={() => void submit()} title={t("mobile.markup.submitTitle")}>
+          : <>
+            <button className={`outbox-action markup-agent${agentOpen ? " selected" : ""}${agentAttention ? " is-attention" : ""}`}
+              aria-expanded={agentOpen} aria-pressed={agentOpen} onClick={() => setAgentOpen((open) => !open)} title={t("pdfMarkup.agentTitle")}>
+              {t("pdfMarkup.agent")}
+              {agentCount > 0 && <span className="markup-agent-count">{agentCount}</span>}
+              {agentCount === 0 && agentAttention && <span className="markup-agent-dot" aria-hidden="true" />}
+            </button>
+            <button className="markup-submit" disabled={!sendable.length || sending !== null || reloading || !online} onClick={() => void submit()} title={t("mobile.markup.submitTitle")}>
             {t("mobile.markup.submit")}
-          </button>}
+          </button>
+          </>}
         <button className="outbox-action markup-done" onClick={done} disabled={sending !== null}>{t("mobile.markup.done")}</button>
       </> : <>
         {canMark && <button className={`outbox-action markup-toggle${empty ? "" : " has-marks"}`} onClick={() => setMarking(true)}
@@ -2288,33 +2417,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </>}
     </div>
     <div className="markup-notes">
-      {submitted && roundWords && <div className={`markup-round ${submitted.phase}`} role="status">
-        {glyph && <span className={`agent-status ${glyph}`} aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH[glyph]}</span></span>}
-        <span className="markup-round-words">{roundWords}</span>
-        {roundUntested && <span className="untested">{t("mobile.outbox.untested")}</span>}
-        {asking && dialog && <span className="markup-round-dialog">{t("mobile.markup.round.dialog", { line: dialog })}</span>}
-        {onSend && toChat && <button className={asking ? "markup-submit markup-chat" : "outbox-action markup-chat"} onClick={() => toChat({ scope, file, place, folder })}
-          title={t(asking ? "mobile.markup.answerInChatTitle" : "mobile.markup.toChatTitle")}>
-          {t(asking ? "mobile.markup.answerInChat" : "mobile.markup.toChat")}
-          {(asking ? isUntested("mobile.markup.tabDialog") : isUntested("mobile.markup.chatLink")) && <span className="untested">{t("mobile.outbox.untested")}</span>}
-        </button>}
-        {applyNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={reloading || sending !== null || !online}
-          onClick={() => void apply()} title={t("mobile.markup.applyTitle")}>{t("mobile.markup.apply")}{isUntested("mobile.markup.apply") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
-        {undoNow && <button className={reloadPrimary ? "outbox-action markup-apply" : "markup-submit markup-apply"} disabled={undoBusy || reloading || sending !== null || !online}
-          onClick={() => void askUndo()} title={t("mobile.markup.undoRoundTitle")} aria-label={t("mobile.markup.undoRoundTitle")}>{t("mobile.markup.undoRound")}{isUntested("mobile.markup.undo") && <span className="untested">{t("mobile.outbox.untested")}</span>}</button>}
-        {pillReload && <button className={reloadPrimary ? "markup-submit markup-reload" : "outbox-action markup-reload"} disabled={reloading || sending !== null}
-          onClick={() => void reload()}>{t("mobile.markup.reload")}</button>}
-      </div>}
-      {ticked.length > 0 && <div className="markup-round markup-ticks" role="status">
-        <span className="agent-status done" aria-hidden="true"><span className="agent-status-glyph">{AGENT_STATUS_GLYPH.done}</span></span>
-        <span className="markup-round-words">{t("mobile.markup.ticks.done", { count: tickedGroups.length })}</span>
-        {isUntested("mobile.markup.ticks") && <span className="untested">{t("mobile.outbox.untested")}</span>}
-        <button className="outbox-action markup-approve-all" disabled={sending !== null} onClick={approveAllTicked}
-          title={t("mobile.markup.ticks.approveAllTitle")}>{t("mobile.markup.ticks.approveAll")}</button>
-      </div>}
-      {noUndo && submitted && <p role="status">{t("mobile.markup.noUndo", { reason: t(NO_UNDO_KEYS[noUndo] ?? "mobile.markup.noUndo.other") })}</p>}
-      {undoNote && <p role={undoNote.alert ? "alert" : "status"}>{undoNote.text}</p>}
-      {reloadNote && <p role="status">{t(reloadNote)}</p>}
+      {!agentTucked && agentItems}
       {storage === "unsaved" && <p role="status">{t("mobile.markup.unsaved")}</p>}
       {changed && <p role="status">{t("mobile.markup.changed")}</p>}
       {marking && !onSend && newTab && !openedTab && <p role="status">{t("mobile.markup.newTabNote")}{isUntested("mobile.markup.newTab") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
@@ -2336,6 +2439,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </p>}
       {failure && <p role="alert">{t(FAILURE_KEYS[failure])}</p>}
       {reader?.alert && <p role="alert">{reader.alert}</p>}
+      {share?.failed && !reader?.alert && <p role="alert">{t("mobile.outbox.shareError")}</p>}
       {printing && <p role="status">{t("mobile.outbox.printing", { n: printing.n, count: printing.count })}</p>}
       {printFailure && <p role="alert">{printFailure}</p>}
     </div>
@@ -2356,8 +2460,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
                 {!pictures[n] && <span className="markup-page-note">{t(pageFailures.has(n) ? "mobile.markup.pageFailed" : "mobile.markup.pageLoading", { n })}</span>}
                 {layerCanvas(n, size)}
               </>}
-              {tickLayer(n, size)}
-              {pinLayer(n, size)}
+              {agentShown && tickLayer(n, size)}
+              {agentShown && pinLayer(n, size)}
               {noteEditor(n, size)}
             </div>;
           })}
@@ -2373,7 +2477,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             }}
             onError={() => setFailure("picture")} />
           {sizes && layerCanvas(1, sizes[0])}
-          {sizes && tickLayer(1, sizes[0])}
+          {sizes && agentShown && tickLayer(1, sizes[0])}
           {sizes && noteEditor(1, sizes[0])}
         </div>
       </div>}
@@ -2387,91 +2491,106 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         <button onClick={() => jumpTo(nextStop)} disabled={nextStop === undefined}
           aria-label={t("mobile.markup.nextMark")} title={t("mobile.markup.nextMark")}><span aria-hidden="true">↓</span></button>
       </div>}
-      {cardShown && <MarkupQuestionsCard tabId={askTab} asks={asks} online={online} focus={questionFocus}
-        onShowPin={isPdf ? showPin : undefined} onAnswered={questionsAnswered} onClosed={dropAsk} onRefresh={refreshAsks} onBusy={setQuestionBusy} />}
+      {!agentTucked && questionsCard}
       {marking && <>
-      {popover === "colors" && tool === "eraser" && <div className="markup-popover markup-pen" role="group" aria-label={t("mobile.markup.tool.eraser")}>
-        <div className="markup-pen-row">
-          {ERASER_MODES.map((mode, i) => <button key={mode} className={`markup-pen-size${pen.eraser === mode ? " selected" : ""}`} aria-pressed={pen.eraser === mode}
-            onClick={() => { setPen((was) => ({ ...was, eraser: mode })); setPopover(null); }}
-            aria-label={t(`mobile.markup.eraser.${mode}` as TranslationKey)} title={t(`mobile.markup.eraser.${mode}` as TranslationKey)}>
-            {mode === "area" ? <span className="markup-pen-area" aria-hidden="true" /> : <span className="markup-pen-ring" style={{ width: 8 + 5 * i, height: 8 + 5 * i }} aria-hidden="true" />}
-          </button>)}
-        </div>
-        {isUntested("mobile.markup.areaEraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+      {agentOpen && agentTucked && <div className="markup-popover markup-agent" role="group" aria-label={t("pdfMarkup.agent")}>
+        {agentItems}
+        {questionsCard}
+        {!submitted && !ticked.length && !cardShown && !noUndo && !undoNote && !reloadNote && <p className="markup-pen-meaning">{t("pdfMarkup.agentNothing")}</p>}
+        {isUntested("mobile.markup.agentSheet") && <span className="untested">{t("mobile.outbox.untested")}</span>}
       </div>}
-      {popover === "colors" && tool === "select" && <div className="markup-popover markup-pen" role="group" aria-label={t("mobile.markup.tool.select")}>
-        {selected ? <>
-          <p className="markup-pen-meaning">{t("mobile.markup.selected", { count: selectedMarks.length })}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>
-          {selectedMarks.some((mark) => mark.kind === "ink") && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.style")}>
-            {PEN_STYLES.map((style) => <button key={style} className={`markup-pen-style${selectedStyle === style ? " selected" : ""}`} aria-pressed={selectedStyle === style}
-              onClick={() => changeSelected(restyleMarks(history.present, selected.n, selected.indices, { style }))}
-              aria-label={t(`mobile.markup.style.${style}` as TranslationKey)} title={t(`mobile.markup.style.${style}` as TranslationKey)}>
-              <span aria-hidden="true">{PEN_STYLE_GLYPHS[style]}</span>
-            </button>)}
+      {popover === "colors" && <div className="markup-popover markup-pen" role="group"
+        aria-label={t("mobile.markup.options", { tool: t(annotating ? `mobile.markup.tool.${tool}` as TranslationKey : DOCK_LABEL_KEYS[dockToolOf(tool)]) })}>
+        {/* Saved pens: one tap arms one, a hold takes it out. */}
+        {!annotating && (slot === "ink" || slot === "highlight") && <div className="markup-pen-row markup-presets" role="group" aria-label={t("mobile.markup.presets")}>
+          {pen.presets.map((preset, i) => <button key={i} className={`markup-preset${isArmed(pen, preset) ? " selected" : ""}`} aria-pressed={isArmed(pen, preset)}
+            onClick={() => { if (favouriteHeld.current) { favouriteHeld.current = false; return; } setPen((was) => applyPreset(was, preset)); setPopover(null); }}
+            onPointerDown={() => holdFavourite(i)} onPointerUp={releaseFavourite} onPointerLeave={releaseFavourite} onContextMenu={(event) => event.preventDefault()}
+            aria-label={t("mobile.markup.preset", { n: i + 1 })} title={t("mobile.markup.favouriteHint")}>
+            <span className="markup-fav-dot" style={{ background: INK[preset.color], width: preset.tool === "highlight" || preset.tool === "box" ? 18 : 5 + preset.size, height: preset.tool === "highlight" || preset.tool === "box" ? 18 : 5 + preset.size }} aria-hidden="true" />
+          </button>)}
+          <button className="markup-preset markup-preset-add" onClick={() => setPen(savePreset)} aria-label={t("mobile.markup.savePreset")} title={t("mobile.markup.savePreset")}>+</button>
+          {isUntested("mobile.markup.dock") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </div>}
+        {slot === "proof" && !annotating && <div className="markup-proof" role="group" aria-label={t("mobile.markup.tool.proof")}>
+          {PROOF_PICKS.map((pick) => <button key={pick} className={proofOf(pen) === pick ? "selected" : ""} aria-pressed={proofOf(pen) === pick}
+            onClick={() => setPen((was) => armProof(was, pick))}>
+            <span aria-hidden="true" className={pick === "strike" || pick === "underline" || pick === "highlight" ? `markup-textmark-glyph is-${pick}` : undefined}>{PROOF_GLYPHS[pick]}</span>
+            <span>{t(proofKey(pick))}</span>
+          </button>)}
+        </div>}
+        {tool === "eraser" && <>
+          <div className="markup-seg" role="group" aria-label={t("mobile.markup.tool.eraser")}>
+            {ERASER_MODES.map((mode) => <button key={mode} className={pen.eraser === mode ? "selected" : ""} aria-pressed={pen.eraser === mode}
+              onClick={() => setPen((was) => ({ ...was, eraser: mode }))}>{t(ERASER_MODE_KEYS[mode])}</button>)}
+          </div>
+          <button role="switch" className="markup-pen-switch" aria-checked={pen.eraseHighlights} onClick={() => setPen((was) => ({ ...was, eraseHighlights: !was.eraseHighlights }))}>
+            {t("mobile.markup.eraseHighlights")}<span className="markup-switch" aria-hidden="true" />
+          </button>
+          <p className="markup-pen-meaning">{t("mobile.markup.quickEraseHint")}</p>
+          {isUntested("mobile.markup.areaEraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </>}
+        {tool === "select" && <>
+          {!annotating && <div className="markup-seg" role="group" aria-label={t("mobile.markup.tool.lasso")}>
+            {LASSO_MODES.map((mode) => <button key={mode} className={pen.lasso === mode ? "selected" : ""} aria-pressed={pen.lasso === mode}
+              onClick={() => setPen((was) => ({ ...was, lasso: mode }))}>{t(mode === "free" ? "mobile.markup.lasso.free" : "mobile.markup.lasso.rect")}</button>)}
           </div>}
+          {selected ? <>
+            <p className="markup-pen-meaning">{t("mobile.markup.selected", { count: selectedMarks.length })}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>
+            {selectedMarks.some((mark) => mark.kind === "ink") && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.style")}>
+              {PEN_STYLES.map((style) => <button key={style} className={`markup-pen-style${selectedStyle === style ? " selected" : ""}`} aria-pressed={selectedStyle === style}
+                onClick={() => changeSelected(restyleMarks(history.present, selected.n, selected.indices, { style }))}
+                aria-label={t(`mobile.markup.style.${style}` as TranslationKey)} title={t(`mobile.markup.style.${style}` as TranslationKey)}>
+                <span aria-hidden="true">{PEN_STYLE_GLYPHS[style]}</span>
+              </button>)}
+            </div>}
+            <div className="markup-pen-row markup-colors" role="group" aria-label={t("mobile.markup.color")}>
+              {offeredColors.map((name) => <button key={name} className={`markup-color${shownColor === name ? " selected" : ""}`} aria-pressed={shownColor === name}
+                style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => pickColor(name)}
+                aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
+            </div>
+            {/* A comment on the one selected stroke, box or stamp; keyed by the
+                mark, so a saved comment (a new mark object) starts afresh. */}
+            {commentable && <CommentBox key={tickKey(commentable)} comment={commentable.comment ?? ""} onSave={saveComment} />}
+            <div className="markup-pen-row markup-pen-actions">
+              <button onClick={copySelected}>{t("mobile.markup.copy")}</button>
+              <button onClick={deleteSelected}>{t("mobile.markup.deleteSelected")}</button>
+            </div>
+          </> : <p className="markup-pen-meaning">{t("mobile.markup.lassoHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
+        </>}
+        {tool !== "eraser" && tool !== "select" && <>
+          {tool === "textmark" && annotating && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.tool.textmark")}>
+            <span className="markup-textmark-glyph is-highlight" aria-hidden="true">ab</span>
+          </div>}
+          {tool === "ink" && <div className="markup-seg" role="group" aria-label={t("mobile.markup.style")}>
+            {PEN_ONLY_STYLES.map((style) => <button key={style} className={pen.style === style ? "selected" : ""} aria-pressed={pen.style === style}
+              onClick={() => setPen((was) => ({ ...was, style }))}>{t(`mobile.markup.style.${style}` as TranslationKey)}</button>)}
+          </div>}
+          {(tool === "ink" || tool === "highlight" || (tool === "textmark" && textMark !== "highlight")) && <label className="markup-size">
+            <span>{t("mobile.markup.size")}</span>
+            <input type="range" min={SIZE_MIN} max={SIZE_MAX} step={1} value={pen.size} aria-label={t("mobile.markup.size")}
+              onChange={(event) => setPen((was) => ({ ...was, size: clampSize(Number(event.target.value)) }))} />
+            <span className="markup-more-value">{pen.size}</span>
+          </label>}
           <div className="markup-pen-row markup-colors" role="group" aria-label={t("mobile.markup.color")}>
-            {offeredColors.map((name) => <button key={name} className={`markup-color${shownColor === name ? " selected" : ""}`} aria-pressed={shownColor === name}
-              style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => pickColor(name)}
+            {offeredColors.map((name) => <button key={name} className={`markup-color${color === name ? " selected" : ""}`} aria-pressed={color === name}
+              style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => setColor(name)}
               aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
           </div>
-          {/* A comment on the one selected stroke, box or stamp; keyed by the
-              mark, so a saved comment (a new mark object) starts afresh. */}
-          {commentable && <CommentBox key={tickKey(commentable)} comment={commentable.comment ?? ""} onSave={saveComment} />}
-          <div className="markup-pen-row markup-pen-actions">
-            <button onClick={deleteSelected}>{t("mobile.markup.deleteSelected")}</button>
-          </div>
-        </> : <p className="markup-pen-meaning">{t("mobile.markup.selectHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
-      </div>}
-      {popover === "colors" && tool !== "eraser" && tool !== "select" && <div className="markup-popover markup-pen" role="group" aria-label={t("mobile.markup.penOptions")}>
-        {/* Saved pens: one tap arms one. */}
-        {!annotating && <div className="markup-pen-row markup-presets" role="group" aria-label={t("mobile.markup.presets")}>
-          {pen.presets.map((preset, i) => <button key={i} className={`markup-preset${isPreset(preset) ? " selected" : ""}`} aria-pressed={isPreset(preset)}
-            onClick={() => { setPen((was) => applyPreset(was, preset)); setPopover(null); }}
-            aria-label={t("mobile.markup.preset", { n: i + 1 })} title={t("mobile.markup.preset", { n: i + 1 })}>
-            <span aria-hidden="true">{presetGlyph(preset)}</span>
-            <span className="markup-preset-dot" style={{ background: INK[preset.color] }} aria-hidden="true" />
-          </button>)}
-          {isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
-        </div>}
-        {tool === "textmark" && !annotating && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.tool.textmark")}>
-          {TEXT_MARK_MODES.map((mode) => <button key={mode} className={`markup-pen-style${pen.textMark === mode ? " selected" : ""}`} aria-pressed={pen.textMark === mode}
-            onClick={() => setPen((was) => ({ ...was, textMark: mode }))}
-            aria-label={t(`mobile.markup.textMark.${mode}` as TranslationKey)} title={t(`mobile.markup.textMark.${mode}` as TranslationKey)}>
-            <span className={`markup-textmark-glyph is-${mode}`} aria-hidden="true">ab</span>
-          </button>)}
-        </div>}
-        {tool === "stamp" && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.tool.stamp")}>
-          {STAMP_SYMBOLS.map((symbol) => <button key={symbol} className={`markup-pen-style${pen.stamp === symbol ? " selected" : ""}`} aria-pressed={pen.stamp === symbol}
-            onClick={() => setPen((was) => ({ ...was, stamp: symbol }))}
-            aria-label={t(`mobile.markup.stamp.${symbol}` as TranslationKey)} title={t(`mobile.markup.stamp.${symbol}` as TranslationKey)}>
-            <span aria-hidden="true">{STAMP_GLYPHS[symbol]}</span>
-          </button>)}
-        </div>}
-        {tool === "ink" && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.style")}>
-          {PEN_STYLES.map((style) => <button key={style} className={`markup-pen-style${pen.style === style ? " selected" : ""}`} aria-pressed={pen.style === style}
-            onClick={() => setPen((was) => ({ ...was, style }))} aria-label={t(`mobile.markup.style.${style}` as TranslationKey)} title={t(`mobile.markup.style.${style}` as TranslationKey)}>
-            <span aria-hidden="true">{PEN_STYLE_GLYPHS[style]}</span>
-          </button>)}
-        </div>}
-        {(tool === "ink" || (tool === "textmark" && textMark !== "highlight")) && <div className="markup-pen-row" role="group" aria-label={t("mobile.markup.size")}>
-          {PEN_SIZES.map((size) => <button key={size} className={`markup-pen-size${pen.size === size ? " selected" : ""}`} aria-pressed={pen.size === size}
-            onClick={() => setPen((was) => ({ ...was, size }))} aria-label={t(`mobile.markup.size.${size}` as TranslationKey)} title={t(`mobile.markup.size.${size}` as TranslationKey)}>
-            <span className="markup-pen-dot" style={{ width: 5 + 4 * size, height: 5 + 4 * size, background: INK[color] }} aria-hidden="true" />
-          </button>)}
-        </div>}
-        <div className="markup-pen-row markup-colors" role="group" aria-label={t("mobile.markup.color")}>
-          {offeredColors.map((name) => <button key={name} className={`markup-color${color === name ? " selected" : ""}`} aria-pressed={color === name}
-            style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => { setColor(name); setPopover(null); }}
-            aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
-        </div>
-        <div className="markup-pen-row markup-pen-actions">
-          <button onClick={() => setPen(savePreset)}>{t("mobile.markup.savePreset")}</button>
-          <button onClick={() => setPen(resetPresets)}>{t("mobile.markup.resetPresets")}</button>
-          {isUntested("mobile.markup.pen") && <span className="untested">{t("mobile.outbox.untested")}</span>}
-        </div>
+          {tool === "highlight" && <>
+            <button role="switch" className="markup-pen-switch" aria-checked={pen.straight} onClick={() => setPen((was) => ({ ...was, straight: !was.straight }))}>
+              {t("mobile.markup.straight")}<span className="markup-switch" aria-hidden="true" />
+            </button>
+            <p className="markup-pen-meaning">{t("mobile.markup.highlightHint")}</p>
+          </>}
+          {tool === "ink" && isUntested("mobile.markup.pen") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </>}
       </div>}
       {popover === "more" && <div className="markup-popover markup-more">
+        {share && <button onClick={() => { setPopover(null); share.run(); }} disabled={share.busy}>
+          <span aria-hidden="true">⇪</span>{t(share.ready ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
+          {isUntested("mobile.markup.share") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        </button>}
         <button onClick={() => { setHistory((now) => commit(now, clearPage(now.present, current, showSent))); setPopover(null); }}
           disabled={!history.present.pages[current] && !(showSent && history.present.sent?.pages[current])}>
           <span aria-hidden="true">⌧</span>{t("mobile.markup.clearPage", { n: current })}
@@ -2482,9 +2601,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
           <span aria-hidden="true">⌧</span>{t("mobile.markup.clearAll")}
           {isUntested("mobile.markup.clearAll") && <span className="untested">{t("mobile.outbox.untested")}</span>}
         </button>
-        {penMode !== "none" && <button role="switch" aria-checked={penMode === "pen"} onClick={togglePenOnly}>
-          <span aria-hidden="true">✎</span>{t("mobile.markup.penOnly")}<span className="markup-switch" aria-hidden="true" />
-        </button>}
+        <button onClick={() => { setPen(resetPresets); setPopover(null); }}>
+          <span aria-hidden="true">☆</span>{t("mobile.markup.resetPresets")}
+        </button>
         <button role="switch" aria-checked={pen.snap} onClick={() => setPen((was) => ({ ...was, snap: !was.snap }))}>
           <span aria-hidden="true">⌒</span>{t("mobile.markup.snap")}<span className="markup-switch" aria-hidden="true" />
           {isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
@@ -2522,46 +2641,30 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       </p>}
       {!popover && tool === "stamp" && <p className="markup-hint">{t("mobile.markup.stampHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
       {!popover && tool === "select" && <p className="markup-hint">
-        {selected ? t("mobile.markup.selected", { count: selectedMarks.length }) : t("mobile.markup.selectHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
+        {selected ? t("mobile.markup.selected", { count: selectedMarks.length }) : t("mobile.markup.lassoHint")}{isUntested("mobile.markup.tools2") && <span className="untested">{t("mobile.outbox.untested")}</span>}
       </p>}
-      {!popover && tool === "eraser" && <p className="markup-hint">{t(pen.eraser === "area" ? "mobile.markup.eraserAreaHint" : "mobile.markup.eraserHint")}{isUntested("mobile.markup.eraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
+      {!popover && tool === "eraser" && <p className="markup-hint">{t(pen.eraser === "area" ? "mobile.markup.eraserAreaHint" : pen.eraser === "partial" ? "mobile.markup.eraserHint" : "mobile.markup.quickEraseHint")}{isUntested("mobile.markup.eraser") && <span className="untested">{t("mobile.outbox.untested")}</span>}</p>}
       <div className="markup-toolbar" role="toolbar" aria-label={t("mobile.markup.tools")}>
-        {(annotating ? REMARK_TOOLBAR : TOOLBAR).map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
-          onClick={() => pickTool(name)} aria-label={t(`mobile.markup.tool.${name}` as TranslationKey)} title={t(`mobile.markup.tool.${name}` as TranslationKey)}>
-          {name === "eraser" ? <EraserIcon />
-            : name === "textmark" ? <span className={`markup-textmark-glyph is-${textMark}`} aria-hidden="true">ab</span>
-            : <span aria-hidden="true">{name === "ink" ? "✎" : name === "box" ? "▭" : name === "text" ? "T" : name === "stamp" ? STAMP_GLYPHS[pen.stamp] : "↖"}</span>}
-        </button>)}
-        {/* On a wide screen the armed tool's colours sit in the toolbar too —
-            the selection's, while the select tool holds some. */}
-        {tool !== "eraser" && (tool !== "select" || selected) && <span className="markup-toolbar-colors" role="group" aria-label={t("mobile.markup.color")}>
-          {offeredColors.map((name) => <button key={name} className={`markup-color${shownColor === name ? " selected" : ""}`} aria-pressed={shownColor === name}
-            style={{ background: INK[name], ["--swatch" as string]: INK[name] }} onClick={() => pickColor(name)}
-            aria-label={t(`mobile.markup.color.${name}` as TranslationKey)} />)}
-        </span>}
-        {/* The well opens the pen's options; a sideways swipe on it steps the colour. */}
-        <button className={`markup-color-well${tool === "eraser" ? " is-eraser" : ""}`} aria-expanded={popover === "colors"}
-          onPointerDown={(event) => { wellSwipe.current = event.clientX; }}
-          onPointerUp={(event) => {
-            const from = wellSwipe.current;
-            wellSwipe.current = null;
-            if (from === null || tool === "eraser" || Math.abs(event.clientX - from) < 24) return;
-            const offered = offeredColors;
-            const at = offered.indexOf(shownColor ?? color);
-            pickColor(offered[(at + (event.clientX > from ? 1 : offered.length - 1)) % offered.length]);
-            wellSwiped.current = true;
-          }}
-          onClick={() => {
-            if (wellSwiped.current) { wellSwiped.current = false; return; }
-            setPopover((open) => (open === "colors" ? null : "colors"));
-          }}
-          aria-label={tool === "eraser"
-            ? t(`mobile.markup.eraser.${pen.eraser}` as TranslationKey)
-            : t("mobile.markup.colorOf", { color: t(`mobile.markup.color.${shownColor ?? color}` as TranslationKey) })}>
-          {tool === "eraser"
-            ? (pen.eraser === "area" ? <span className="markup-pen-area" aria-hidden="true" /> : <span className="markup-pen-ring" style={{ width: 8 + 5 * ERASER_MODES.indexOf(pen.eraser), height: 8 + 5 * ERASER_MODES.indexOf(pen.eraser) }} aria-hidden="true" />)
-            : <span style={{ background: INK[shownColor ?? color] }} className={pen.style !== "pen" && tool === "ink" ? `is-${pen.style}` : undefined} />}
-        </button>
+        {/* Draw or scroll: what a finger does, always in sight. */}
+        {!annotating && <button className={`markup-finger${fingerDrawsRef.current ? " selected" : ""}`} aria-pressed={fingerDrawsRef.current} onClick={togglePenOnly}
+          title={t(fingerDrawsRef.current ? "mobile.markup.drawTitle" : "mobile.markup.scrollTitle")}
+          aria-label={t(fingerDrawsRef.current ? "mobile.markup.drawTitle" : "mobile.markup.scrollTitle")}>
+          <span aria-hidden="true">{fingerDrawsRef.current ? "✎" : "☝"}</span>
+          <small>{t(fingerDrawsRef.current ? "mobile.markup.draw" : "mobile.markup.scroll")}</small>
+        </button>}
+        {!annotating && <span className="markup-toolbar-rule" aria-hidden="true" />}
+        {annotating
+          ? REMARK_TOOLBAR.map((name) => <button key={name} aria-pressed={tool === name} className={tool === name ? "selected" : ""}
+            onClick={() => pickTool(name)} aria-label={t(`mobile.markup.tool.${name}` as TranslationKey)} title={t(`mobile.markup.tool.${name}` as TranslationKey)}>
+            {name === "eraser" ? <EraserIcon />
+              : name === "textmark" ? <span className="markup-textmark-glyph is-highlight" aria-hidden="true">ab</span>
+              : <span aria-hidden="true">{name === "box" ? "▭" : name === "text" ? "T" : "↖"}</span>}
+          </button>)
+          : DOCK_TOOLS.map((name) => <button key={name} aria-pressed={slot === name} aria-expanded={slot === name ? popover === "colors" : undefined}
+            className={slot === name ? "selected" : ""} onClick={() => pressSlot(name)}
+            aria-label={t(DOCK_LABEL_KEYS[name])} title={t(DOCK_LABEL_KEYS[name])}>
+            <DockIcon tool={name} size={20} />
+          </button>)}
         <span className="markup-toolbar-rule" aria-hidden="true" />
         <button onClick={() => setHistory(undo)} disabled={!history.past.length} aria-label={t("mobile.markup.undo")} title={t("mobile.markup.undo")}><span aria-hidden="true">↶</span></button>
         <button onClick={() => setHistory(redo)} disabled={!history.future.length} aria-label={t("mobile.markup.redo")} title={t("mobile.markup.redo")}><span aria-hidden="true">↷</span></button>

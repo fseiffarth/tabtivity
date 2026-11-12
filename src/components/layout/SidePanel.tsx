@@ -12,6 +12,7 @@ import {
   isPtyTabKind,
   type TabEntry,
 } from "../../stores/tabs";
+import { subtreeName } from "../../stores/tabs/layoutTree";
 import { useShallow } from "zustand/react/shallow";
 import { useActivityStore, type AttentionKind } from "../../stores/activity";
 import { resolveProjectDirectory, type FilesPanelView } from "../../types";
@@ -29,7 +30,7 @@ import {
 // Single source of truth for the displayed version: package.json is kept in
 // lockstep with the Tauri manifests on each version bump.
 import { version as APP_VERSION } from "../../../package.json";
-import { PencilIcon, UndoIcon } from "../common/icons/Icon";
+import { CloseIcon, PencilIcon, UndoIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 import { usePoll, type PollRun } from "../../lib/usePoll";
 
@@ -367,7 +368,7 @@ export function SidePanel({
           <div className="hidden-sw-list">
             {hiddenGroups.map((h, hi) => {
               const rowStatus = hiddenStatus.rows[hi].status;
-              const name = h.name ?? t("sidePanel.hiddenName", { n: hi + 1 });
+              const name = subtreeName(h.subtree, h.name) ?? t("sidePanel.hiddenName", { n: hi + 1 });
               const tabs = orderedTabKeys(h.subtree)
                 .map((k) => scopeTabs?.find((t) => t.key === k)?.label ?? k)
                 .join(", ");
@@ -424,7 +425,7 @@ export function SidePanel({
                     title={t("sidePanel.closeSubwindow")}
                     onClick={() => closeHiddenGroup(h.id)}
                   >
-                    ×
+                    <CloseIcon />
                   </button>
                 </div>
               );

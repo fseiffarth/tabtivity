@@ -132,6 +132,8 @@ fn launch_tracked(
         window_id,
         origin: origin.to_string(),
         launch_id,
+        // `since` is the launcher's own start time (0 = unreadable).
+        pid_start: (since != 0).then_some(since),
     };
     {
         let mut reg = registry.lock_ok();
@@ -356,6 +358,7 @@ fn watch_child_exit(
                 ExitAction::KeepDemoted(adopt) => {
                     if let Some(entry) = reg.windows.get_mut(&id) {
                         entry.pid = 0;
+                        entry.pid_start = None;
                         if adopt.is_some() {
                             entry.window_id = adopt;
                         }
@@ -367,6 +370,7 @@ fn watch_child_exit(
                 ExitAction::KeepFamily { lead, adopt } => {
                     if let Some(entry) = reg.windows.get_mut(&id) {
                         entry.pid = lead;
+                        entry.pid_start = family_start(&family, lead);
                         if adopt.is_some() {
                             entry.window_id = adopt;
                         }
@@ -706,6 +710,7 @@ fn open_file_blocking(
             launch_exec,
             path,
             pid,
+            (since != 0).then_some(since),
             project_id,
             window_id,
             origin,
@@ -729,6 +734,7 @@ fn open_file_blocking(
         "open-file".to_string(),
         path,
         0,
+        None,
         project_id,
         window_id,
         origin,
@@ -2214,12 +2220,35 @@ pub fn close_tracked_window(
     if entry.pid == 0 {
         return Err("not closeable: no tracked pid".into());
     }
+    leader_unchanged(&entry, crate::services::proc_table::start_time(entry.pid))?;
     crate::terminal::reap_child_subtree(entry.pid, crate::terminal::ReapMode::Graceful);
     registry.lock_ok().windows.remove(&id);
     if let Some(notify) = notify {
         notify(entry.project_id.clone());
     }
     Ok(())
+}
+
+/// The start time the launch family recorded for `pid`, when it is a member.
+fn family_start(family: &[FamilyMember], pid: u32) -> Option<u64> {
+    family.iter().find(|m| m.pid == pid).map(|m| m.start)
+}
+
+/// Whether the process now under `row.pid` (its start time, `now`) is still the
+/// one the row recorded — the check [`close_tracked_window`] makes before it
+/// signals a subtree, so an app that exited and whose pid was reused is never
+/// taken for the row. Linux only (the only system with a start time to compare):
+/// there a row without a recorded start, or whose recorded start no longer
+/// matches, is refused. Elsewhere the check is skipped and Close keeps its
+/// behaviour of signalling the recorded pid.
+fn leader_unchanged(row: &TrackedWindow, now: Option<u64>) -> Result<(), String> {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+    match (row.pid_start, now) {
+        (Some(recorded), Some(now)) if recorded == now => Ok(()),
+        _ => Err("not closeable: the app is no longer tracked".into()),
+    }
 }
 
 /// Backstop for the exit watcher: drop Apps-view rows in the given scope whose
@@ -2401,7 +2430,10 @@ fn prune_candidates(
             // The exit watcher owns a launcher that just died.
             Some(LaunchTrack { family: None, .. }) => {}
             Some(LaunchTrack { family: Some(family), .. }) => match live_lead(family) {
-                Some(lead) => w.pid = lead,
+                Some(lead) => {
+                    w.pid = lead;
+                    w.pid_start = family_start(family, lead);
+                }
                 None => dead.push((w.id.clone(), w.window_id, w.pid)),
             },
             None if !alive(w.pid) => dead.push((w.id.clone(), w.window_id, w.pid)),
@@ -2434,6 +2466,7 @@ fn apply_prune(reg: &mut WindowRegistry, dead: Vec<DeadRow>, list: &WindowList) 
             None => {
                 if let Some(w) = windows.get_mut(&id) {
                     w.pid = 0;
+                    w.pid_start = None;
                 }
             }
         }
@@ -2445,6 +2478,7 @@ fn track_opened_file(
     exec: String,
     path: String,
     pid: u32,
+    pid_start: Option<u64>,
     project_id: Option<String>,
     window_id: Option<u64>,
     origin: String,
@@ -2466,6 +2500,7 @@ fn track_opened_file(
         window_id,
         origin,
         launch_id: None,
+        pid_start,
     };
     registry.lock_ok().windows.insert(id, win.clone());
     Ok(win)
@@ -2638,6 +2673,7 @@ pub fn row_for_raised_window(
         window_id: Some(window_id),
         origin: ORIGIN_PROJECT_IDE.to_string(),
         launch_id: None,
+        pid_start: None,
     }
 }
 
@@ -2912,6 +2948,7 @@ mod tests {
             window_id,
             origin: origin.to_string(),
             launch_id: None,
+            pid_start: None,
         }
     }
 
@@ -3232,10 +3269,65 @@ mod tests {
         let list = || WindowList::Complete(Vec::new());
         prune_dead_windows_with(&mut reg, Some("p1"), |_| false, live_lead, list, false);
         assert_eq!(reg.windows["w0"].pid, 301);
+        assert_eq!(reg.windows["w0"].pid_start, Some(6), "the new lead's own start time");
         // Family dead, no window: gone.
         prune_dead_windows_with(&mut reg, Some("p1"), |_| true, |_| None, list, false);
         assert!(reg.windows.is_empty());
         assert!(reg.launches.is_empty(), "its launch bookkeeping goes with it");
+    }
+
+    #[test]
+    fn close_refuses_a_leader_whose_pid_was_reused() {
+        let mut row = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        row.pid = 100;
+        // Same process: allowed (on Linux; elsewhere nothing is compared).
+        row.pid_start = Some(77);
+        assert!(leader_unchanged(&row, Some(77)).is_ok());
+        if cfg!(target_os = "linux") {
+            // The pid now belongs to a process that started later.
+            let err = leader_unchanged(&row, Some(78)).unwrap_err();
+            assert!(err.contains("no longer tracked"), "{err}");
+            // The process is gone, or its start cannot be read.
+            assert!(leader_unchanged(&row, None).is_err());
+            // A row from before the start was recorded.
+            row.pid_start = None;
+            let err = leader_unchanged(&row, Some(77)).unwrap_err();
+            assert!(err.contains("no longer tracked"), "{err}");
+        } else {
+            // macOS and Windows keep today's behaviour: no start to compare.
+            assert!(leader_unchanged(&row, Some(78)).is_ok());
+            row.pid_start = None;
+            assert!(leader_unchanged(&row, None).is_ok());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn close_accepts_a_live_leader_with_its_recorded_start() {
+        let me = std::process::id();
+        let start = crate::services::proc_table::start_time(me).expect("own start time");
+        let mut row = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        row.pid = me;
+        row.pid_start = Some(start);
+        assert!(leader_unchanged(&row, crate::services::proc_table::start_time(me)).is_ok());
+        row.pid_start = Some(start + 1);
+        assert!(leader_unchanged(&row, crate::services::proc_table::start_time(me)).is_err());
+    }
+
+    #[test]
+    fn a_demoted_row_keeps_no_start_and_a_family_row_takes_its_lead_s() {
+        let family = [member(300, 5), member(301, 6)];
+        assert_eq!(family_start(&family, 301), Some(6));
+        assert_eq!(family_start(&family, 999), None);
+        // The pid-0 demotion of apply_prune drops the start with the pid.
+        let mut w = tracked(Some("p1"), ORIGIN_SIDE_FILE_TREE, None);
+        w.pid = 100;
+        w.pid_start = Some(9);
+        let mut reg = registry_of(vec![w]);
+        // A Wayland list is silent about a row without an X window id.
+        apply_prune(&mut reg, vec![("w0".into(), None, 100)], &WindowList::XWaylandOnly(Vec::new()));
+        assert_eq!(reg.windows["w0"].pid, 0);
+        assert_eq!(reg.windows["w0"].pid_start, None);
     }
 
     #[test]

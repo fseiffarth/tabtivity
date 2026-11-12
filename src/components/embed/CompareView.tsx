@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
-import { useT } from "../../lib/i18n";
+import { dateLocale, useI18nStore, useT } from "../../lib/i18n";
 import { useUnsavedWork } from "../../lib/window/unsavedWork";
+import { useDialogs } from "../common/PromptDialogs";
 import { useProjectsStore } from "../../stores/projects";
 import { resolveProjectDirectory } from "../../types";
 import { isPathWithin } from "../../lib/paths";
@@ -14,13 +15,15 @@ import {
   groupChanges,
   buildMerged,
   applyBlockToggle,
-  canToggle,
   locateBlock,
+  blockSideLines,
   type AlignRow,
   type ChangeBlock,
   type Decision,
 } from "../../lib/viewers/linediff";
-import { ArrowLeftIcon, ArrowRightIcon, UndoIcon } from "../common/icons/Icon";
+import { blockSideTime, newerSide, type SideTime, type SideTimes } from "../../lib/viewers/syncSideTimes";
+import { SideStamp, TakeWhen, blockSideText } from "./SyncTimeStamps";
+import { ArrowLeftIcon, ArrowRightIcon, CheckIcon, UndoIcon } from "../common/icons/Icon";
 
 /** Mirrors the Rust `GitCommit` (serde default snake→camel via serde? no — the
  *  struct is plain, so fields arrive as declared: hash/short/subject/… ). */
@@ -80,6 +83,9 @@ function SideColumn({
   enabledOf,
   onJump,
   syncMode,
+  headExtra,
+  blockTimes,
+  nowMs,
 }: {
   title: string;
   rows: AlignRow[];
@@ -99,8 +105,16 @@ function SideColumn({
   enabledOf?: (b: ChangeBlock) => boolean;
   /** Snap all panes to a block (from a ruler-bar click). */
   onJump?: (b: ChangeBlock) => void;
+  /** Sync merge: the side's modified-time stamp, shown beside the title. */
+  headExtra?: React.ReactNode;
+  /** Sync merge: this side's time per block id (null = not dated) and whether
+   *  it is the block's newer side. */
+  blockTimes?: Map<number, { time: SideTime | null; newer: boolean }>;
+  nowMs?: number;
 }) {
   const t = useT();
+  const uiLang = useI18nStore((s) => s.lang);
+  const locale = dateLocale(uiLang);
   const lang = useMemo(() => languageForPath(path), [path]);
   const lines = useMemo(() => {
     const out: { text: string; tint: string | undefined; no: number; ri: number }[] = [];
@@ -155,7 +169,10 @@ function SideColumn({
 
   return (
     <div className="file-viewer-compare-col">
-      <div className="file-viewer-compare-col-head">{title}</div>
+      <div className="file-viewer-compare-col-head">
+        <span className="file-viewer-compare-col-title">{title}</span>
+        {headExtra}
+      </div>
       <div className="file-viewer-compare-col-body-wrap">
         <DiffRuler blocks={blocks} totalRows={rows.length} side={side} onJump={onJump} />
         <div
@@ -193,21 +210,30 @@ function SideColumn({
               {[...anchors.entries()].map(([i, b]) => {
                 const enabled = enabledOf ? enabledOf(b) : true;
                 const active = !!isActive?.(b);
+                const bt = blockTimes?.get(b.id);
+                const when = bt?.time ?? null;
+                const sideName = side === "left" ? t("compareView.sideLocal") : t("compareView.sideRemote");
+                const baseTitle = enabled
+                  ? side === "left"
+                    ? t("compareView.takeFromLeftTitle")
+                    : t("compareView.takeFromRightTitle")
+                  : t("compareView.editedManuallyTitle");
                 return (
                   <button
                     className={`file-viewer-compare-take ${side}${active ? " active" : ""}${enabled ? "" : " disabled"}`}
                     key={b.id}
                     style={{ top: i * LINE_H }}
                     title={
-                      enabled
-                        ? side === "left"
-                          ? t("compareView.takeFromLeftTitle")
-                          : t("compareView.takeFromRightTitle")
-                        : t("compareView.editedManuallyTitle")
+                      when && nowMs != null
+                        ? `${baseTitle}\n${blockSideText(t, locale, nowMs, sideName, when)}${bt?.newer ? `\n${t("syncTimes.blockNewer", { side: sideName })}` : ""}`
+                        : baseTitle
                     }
                     onClick={() => enabled && onTake(b)}
                   >
                     {side === "left" ? <>{label} <ArrowRightIcon /></> : <><ArrowLeftIcon /> {label}</>}
+                    {when && nowMs != null && (
+                      <TakeWhen t={t} lang={locale} nowMs={nowMs} time={when} newer={!!bt?.newer} />
+                    )}
                   </button>
                 );
               })}
@@ -272,6 +298,9 @@ export function CompareView({
   left,
   rightTitle,
   applyLabel,
+  sideTimes,
+  barExtra,
+  loadResult,
 }: {
   path: string;
   /** The live editor content (the "new" side). */
@@ -288,8 +317,19 @@ export function CompareView({
   rightTitle?: string;
   /** Label for the apply button. Defaults to "Apply to file". */
   applyLabel?: string;
+  /** Sync merge: how old each side is (file mtime + per-line blame), so the
+   *  headers, change chips and Take buttons can say which side is newer. */
+  sideTimes?: SideTimes;
+  /** Sync merge: extra header buttons (e.g. hand the conflict to an agent). */
+  barExtra?: React.ReactNode;
+  /** Sync merge: text the parent wants loaded into the Result column (a resolved
+   *  file coming back). The nonce makes the same text loadable twice. Nothing is
+   *  written or synced by loading it. */
+  loadResult?: { text: string; nonce: number } | null;
 }) {
   const t = useT();
+  const uiLang = useI18nStore((s) => s.lang);
+  const locale = dateLocale(uiLang);
   const syncMode = left != null;
   const projectDir = useMemo(() => projectDirFor(path), [path]);
   const relPath = useMemo(() => relFromAbs(projectDir, path), [projectDir, path]);
@@ -364,6 +404,68 @@ export function CompareView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [oldText, rightText]);
 
+  // A resolved file handed back by the parent ("Load resolved"): it becomes the
+  // Result text for the user to review. Every block is marked as hand-edited
+  // (`manual`, decisions cleared) because the buffer no longer follows the
+  // per-block picks; nothing is written or synced here.
+  // Hand edits or per-change picks already in the Result are asked about
+  // first: loading replaces them and nothing brings them back.
+  const lastLoad = useRef<number | null>(null);
+  const { confirmAction, dialogs } = useDialogs();
+  useEffect(() => {
+    if (!loadResult || lastLoad.current === loadResult.nonce) return;
+    lastLoad.current = loadResult.nonce;
+    const apply = () => {
+      setDecisions({});
+      setManual(true);
+      setResultText(loadResult.text);
+    };
+    if (!manual && Object.keys(decisions).length === 0) {
+      apply();
+      return;
+    }
+    let live = true;
+    void confirmAction({
+      title: t("syncHandoff.replaceTitle"),
+      body: t("syncHandoff.replaceBody"),
+      confirmLabel: t("syncHandoff.replaceConfirm"),
+      danger: true,
+    }).then((ok) => {
+      if (ok && live) apply();
+    });
+    return () => {
+      live = false;
+    };
+    // Runs per load only; the picks are read as they stand when it lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadResult]);
+
+  // Sync merge: date every change block on each side (newest commit of its lines
+  // per git blame, else the file's save time) and name the newer side. Computed
+  // once per diff/blame, not per render.
+  const nowMs = Date.now();
+  const blockTimes = useMemo(() => {
+    if (!sideTimes) return null;
+    const lines = blockSideLines(rows, blocks);
+    return blocks.map((b, i) => {
+      const left = blockSideTime(lines[i]?.left ?? [], sideTimes.left.blame, sideTimes.left.mtime);
+      const right = blockSideTime(lines[i]?.right ?? [], sideTimes.right.blame, sideTimes.right.mtime);
+      const newer = newerSide(left, right);
+      return { id: b.id, left, right, newer };
+    });
+  }, [sideTimes, rows, blocks]);
+  // Each side column's dates by block id, built once per `blockTimes`.
+  const sideBlockTimes = useMemo(() => {
+    if (!blockTimes) return null;
+    const of = (side: "left" | "right") => {
+      const m = new Map<number, { time: SideTime | null; newer: boolean }>();
+      for (const bt of blockTimes) m.set(bt.id, { time: bt[side], newer: bt.newer === side });
+      return m;
+    };
+    return { left: of("left"), right: of("right") };
+  }, [blockTimes]);
+  const timesOf = (side: "left" | "right") => sideBlockTimes?.[side];
+
   // A merge in progress (GitMergeView's conflict resolve, SyncMergeView): picks
   // or hand edits not yet applied live only here. Plain diffs (no `onApply`)
   // hold nothing to lose.
@@ -401,30 +503,52 @@ export function CompareView({
     if (decisionOf(b) !== d) toggle(b);
   };
 
-  const toggleEnabled = (b: ChangeBlock): boolean =>
-    !manual || canToggle(resultText, b, decisionOf(b));
-
   // Syntax-highlight the editable result so the middle column reads like the two
   // side columns instead of flat monochrome text. The highlighted lines paint a
   // backdrop that the transparent-text textarea sits on top of (its caret and
   // selection stay live); scroll is mirrored from the textarea in its onScroll.
   const lang = useMemo(() => languageForPath(path), [path]);
   const resultLines = useMemo(() => resultText.split("\n"), [resultText]);
-  const resultHtml = useMemo(() => resultLines.map((line) => highlight(line, lang)), [resultLines, lang]);
+  // `highlight` reads one line alone, so a keystroke re-highlights only the
+  // lines it changed: the rest come from the previous render's lines (kept for
+  // the same language only, and only the lines still in the buffer).
+  const highlightCache = useRef<{ lang: string; lines: Map<string, string | null> }>({ lang: "", lines: new Map() });
+  const resultHtml = useMemo(() => {
+    const prev = highlightCache.current.lang === lang ? highlightCache.current.lines : new Map<string, string | null>();
+    const next = new Map<string, string | null>();
+    const html = resultLines.map((line) => {
+      const known = next.has(line) ? next.get(line) : prev.get(line);
+      const out = known !== undefined ? known : highlight(line, lang);
+      next.set(line, out);
+      return out;
+    });
+    highlightCache.current = { lang, lines: next };
+    return html;
+  }, [resultLines, lang]);
+
+  // Where each block's current side sits in the live buffer, located by context
+  // so it survives hand-edits and the per-hunk toggles (`locateBlock`); null for
+  // a block that can't be uniquely located. One pass serves the toggles and the
+  // changed-line tint.
+  const located = useMemo(() => {
+    const m = new Map<number, { start: number; len: number } | null>();
+    for (const b of blocks) m.set(b.id, locateBlock(resultLines, b, decisions[b.id] ?? "accept"));
+    return m;
+  }, [blocks, resultLines, decisions]);
+
+  const toggleEnabled = (b: ChangeBlock): boolean =>
+    !manual || located.get(b.id) != null;
 
   // Which result lines currently belong to a change block — used to tint the
   // changed regions in the middle backdrop (the same blue as the mid ruler bars).
-  // Located by context against the live buffer so it survives hand-edits and the
-  // per-hunk toggles; a block that can't be uniquely located just isn't marked.
+  // A block that can't be uniquely located just isn't marked.
   const changedLines = useMemo(() => {
     const s = new Set<number>();
-    for (const b of blocks) {
-      const loc = locateBlock(resultLines, b, decisionOf(b));
+    for (const loc of located.values()) {
       if (loc) for (let k = 0; k < loc.len; k++) s.add(loc.start + k);
     }
     return s;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, resultLines, decisions]);
+  }, [located]);
 
   // Proportional scroll-sync across the three panes (content heights differ, so
   // this is by ratio, not line-for-line). Feedback is suppressed by *echo
@@ -479,6 +603,20 @@ export function CompareView({
     }
   };
 
+  // Sync merge: the column-header cue (file mtime + "newer" badge).
+  const headStamp = (side: "left" | "right") =>
+    sideTimes ? (
+      <SideStamp
+        t={t}
+        lang={locale}
+        nowMs={nowMs}
+        side={side}
+        mtime={sideTimes[side].mtime}
+        newer={sideTimes.newer === side}
+        basis={sideTimes.newerBasis}
+      />
+    ) : undefined;
+
   const revLabel = (c: GitCommit) => `${c.short}${c.is_head ? " (HEAD)" : ""} · ${c.subject}`;
   const options =
     history.length > 0
@@ -511,6 +649,7 @@ export function CompareView({
           </>
         )}
         {syncMode && <UntestedTag id="compareView.1" />}
+        {sideTimes && <UntestedTag id="compareView.sideTimes" />}
         <div className="file-viewer-compare-bar-gap" />
         {syncMode ? (
           // Sync merge: name the two sides by what they are (local mirror vs
@@ -563,6 +702,7 @@ export function CompareView({
             {applyLabel ?? t("compareView.applyToFile")}
           </button>
         )}
+        {barExtra}
         <button className="file-viewer-format-btn" onClick={onClose} title={t("compareView.closeTitle")}>
           {t("common.close")}
         </button>
@@ -593,6 +733,9 @@ export function CompareView({
             enabledOf={toggleEnabled}
             onJump={scrollToBlock}
             syncMode={syncMode}
+            headExtra={headStamp("left")}
+            blockTimes={timesOf("left")}
+            nowMs={nowMs}
           />
 
           <div className="file-viewer-compare-col file-viewer-compare-col-mid">
@@ -603,23 +746,42 @@ export function CompareView({
                   {blocks.map((b, i) => {
                     const dec = decisionOf(b);
                     const enabled = toggleEnabled(b);
+                    const bt = blockTimes?.[i];
+                    const lines: string[] = [
+                      enabled
+                        ? syncMode
+                          ? dec === "accept"
+                            ? t("compareView.chipRemoteTitle")
+                            : t("compareView.chipLocalTitle")
+                          : dec === "accept"
+                            ? t("compareView.chipKeptTitle")
+                            : t("compareView.chipRevertedTitle")
+                        : t("compareView.chipDisabledTitle"),
+                    ];
+                    if (bt?.left) lines.push(blockSideText(t, locale, nowMs, t("compareView.sideLocal"), bt.left));
+                    if (bt?.right) lines.push(blockSideText(t, locale, nowMs, t("compareView.sideRemote"), bt.right));
+                    if (bt?.newer)
+                      lines.push(
+                        t("syncTimes.blockNewer", {
+                          side: bt.newer === "left" ? t("compareView.sideLocal") : t("compareView.sideRemote"),
+                        }),
+                      );
                     return (
                       <span
                         className={`file-viewer-compare-chip ${dec === "accept" ? "accept" : "reject"}${enabled ? "" : " disabled"}`}
                         key={b.id}
-                        title={
-                          enabled
-                            ? dec === "accept"
-                              ? t("compareView.chipKeptTitle")
-                              : t("compareView.chipRevertedTitle")
-                            : t("compareView.chipDisabledTitle")
-                        }
+                        title={lines.join("\n")}
                         onClick={() => {
                           scrollToBlock(b);
                           if (enabled) toggle(b);
                         }}
                       >
-                        {dec === "accept" ? "✓" : <UndoIcon />} {i + 1}
+                        {dec === "accept" ? <CheckIcon /> : <UndoIcon />} {i + 1}
+                        {bt?.newer && (
+                          <span className={`file-viewer-compare-chip-newer ${bt.newer}`}>
+                            {bt.newer === "left" ? <ArrowLeftIcon /> : <ArrowRightIcon />}
+                          </span>
+                        )}
                       </span>
                     );
                   })}
@@ -679,9 +841,13 @@ export function CompareView({
             enabledOf={toggleEnabled}
             onJump={scrollToBlock}
             syncMode={syncMode}
+            headExtra={headStamp("right")}
+            blockTimes={timesOf("right")}
+            nowMs={nowMs}
           />
         </div>
       )}
+      {dialogs}
     </div>
   );
 }

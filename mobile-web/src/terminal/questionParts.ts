@@ -1,3 +1,4 @@
+import { PANEL_SCROLLBAR } from "./openCodeQuestion";
 import { dedentLines, joinProseWraps, type ReadableLine } from "./readableScreen";
 import {
   codexQuestionProgress,
@@ -45,6 +46,19 @@ function withoutEdgeBlanks(lines: readonly ReadableLine[]): ReadableLine[] {
   return lines.slice(first, end);
 }
 
+/** `line` without a panel's scrollbar down its right edge. */
+function withoutScrollbar(line: ReadableLine): ReadableLine {
+  const text = line.text.replace(PANEL_SCROLLBAR, "");
+  if (text.length === line.text.length) return line;
+  let left = text.length;
+  const spans = line.spans.flatMap((span) => {
+    const kept = span.text.slice(0, left);
+    left -= kept.length;
+    return kept ? [{ ...span, text: kept }] : [];
+  });
+  return { ...line, text, spans };
+}
+
 /** How many lines a review page's heading (`Review your answers`) may take
  * between its tab row and its answers. */
 const REVIEW_HEADING_LINES = 2;
@@ -89,7 +103,7 @@ function reviewTabRow(tail: readonly ReadableLine[], context: number): number | 
  */
 export function questionParts(tail: readonly ReadableLine[], question: SelectPrompt): QuestionParts {
   let ask = withoutEdgeBlanks(tail.slice(question.question, question.start));
-  let context = withoutEdgeBlanks(tail.slice(question.context, question.question));
+  let context = withoutEdgeBlanks(tail.slice(question.context, question.question).map(withoutScrollbar));
   if (question.navigation) {
     const nav = question.navigation;
     return {

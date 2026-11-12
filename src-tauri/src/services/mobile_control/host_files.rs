@@ -35,6 +35,8 @@ use tokio::process::Child;
 
 use super::files::{self, Crumb, Entry, FilesError, Found, Hit, Listing, MAX_ENTRIES, MAX_HITS};
 use super::outbox::{self, MAX_OUTBOX_FILE, SNIFF_BYTES};
+use super::serve;
+use tokio::io::AsyncSeekExt;
 use crate::schema::project::RemoteSpec;
 
 /// How long a session nobody used is kept.
@@ -55,7 +57,7 @@ const MAX_FOLDERS: usize = 500;
 const SEARCH_DEADLINE: Duration = Duration::from_secs(10);
 /// Folders a search does not walk into: what a project's `.gitignore` keeps
 /// out of the local search, which cannot run git on the host.
-const SEARCH_SKIP: &[&str] = &["node_modules", "target", "__pycache__", ".venv", "venv", ".cache", ".tox", ".mypy_cache", ".pytest_cache"];
+const SEARCH_SKIP: &[&str] = files::WALK_SKIP;
 /// How long a `ssh -G` answer is used: one that found a socket, one that did not.
 const RESOLVE_KEEP: Duration = Duration::from_secs(5 * 60);
 const RESOLVE_RETRY: Duration = Duration::from_secs(30);
@@ -204,9 +206,21 @@ impl HostFiles {
     }
 
     /// Names below the remote root that hold every word ([`search_on`]).
-    pub async fn search(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, query: String, key: Vec<u8>, raw_id: String) -> Result<Found, FilesError> {
+    pub async fn search(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, query: String, under: String, key: Vec<u8>, raw_id: String) -> Result<Found, FilesError> {
         let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
-        self.with_session(spec, known, |session| async move { search_on(&session.sftp, &root, &query, &key, &raw_id).await }).await
+        self.with_session(spec, known, |session| async move { search_on(&session.sftp, &root, &query, &under, &key, &raw_id).await }).await
+    }
+
+    /// One file or folder as its folder would row it ([`entry_on`]).
+    pub async fn entry(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, rel: String, key: Vec<u8>, raw_id: String) -> Result<Entry, FilesError> {
+        let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
+        self.with_session(spec, known, |session| async move { entry_on(&session.sftp, &root, &rel, &key, &raw_id).await }).await
+    }
+
+    /// One range of a file, read on its own ([`read_range_on`]).
+    pub async fn read_range(self: &Arc<Self>, spec: &RemoteSpec, known: Option<PathBuf>, rel: String, range: String) -> Result<HostRead, FilesError> {
+        let root = root_of(spec).ok_or(FilesError::Unavailable)?.to_string();
+        self.with_session(spec, known, |session| async move { read_range_on(&session.sftp, &root, &rel, &range).await }).await
     }
 
     /// One file's bytes and media type ([`read_on`]).
@@ -274,6 +288,24 @@ async fn proven(fs: &mut Fs, root: &str, rel: &str) -> Result<String, FilesError
         return Err(FilesError::NotFound);
     }
     Ok(full)
+}
+
+/// `path` (proven by [`proven`] before it was opened) once more after the
+/// read: still no link at the leaf (`lstat`), and still its own `realpath`.
+/// SFTP holds no handle to open by, so a leaf swapped for a link between the
+/// proof and the open could be read through; this drops those bytes unless
+/// the link was swapped back meanwhile — it narrows the window, it does not
+/// close it.
+async fn still_proven(fs: &mut Fs, path: &str) -> Result<(), FilesError> {
+    let meta = fs.symlink_metadata(path).await.map_err(sftp_error)?;
+    if !meta.file_type().is_some_and(|kind| kind.is_file() && !kind.is_symlink()) {
+        return Err(FilesError::NotFound);
+    }
+    let real = fs.canonicalize(path).await.map_err(sftp_error)?;
+    if real.to_str() != Some(path) {
+        return Err(FilesError::NotFound);
+    }
+    Ok(())
 }
 
 /// One name a folder read gave: kept only as a folder or a regular file.
@@ -412,7 +444,93 @@ pub async fn read_on(sftp: &Sftp, root: &str, rel: &str) -> Result<(Vec<u8>, &'s
     if meta.len().is_none() && bytes.len() as u64 == MAX_OUTBOX_FILE && !kind.starts_with("text/") {
         return Err(FilesError::TooLarge);
     }
+    still_proven(&mut fs, &path).await?;
     Ok((bytes, kind))
+}
+
+/// A remote read as the raw route answers it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HostRead {
+    /// The whole file, bounded as [`read_on`].
+    Whole(Vec<u8>, &'static str),
+    /// `bytes` start at `start` of a `total`-byte file.
+    Part { bytes: Vec<u8>, kind: &'static str, start: u64, total: u64 },
+    Unsatisfiable { kind: &'static str, total: u64 },
+}
+
+/// The one range `range` (a `Range` header's value) asks of the file `rel`
+/// names, read after a seek — at most `MAX_OUTBOX_FILE` bytes per answer
+/// (a shorter 206 is legal; a film's player asks again from where it
+/// stopped). A text is ranged over its first `MAX_OUTBOX_FILE` bytes, as it
+/// is served. A range this cannot use, or a host that sends no size, reads
+/// the whole as [`read_on`] does.
+pub async fn read_range_on(sftp: &Sftp, root: &str, rel: &str, range: &str) -> Result<HostRead, FilesError> {
+    if rel.is_empty() {
+        return Err(FilesError::NotFound);
+    }
+    let mut fs = sftp.fs();
+    let path = proven(&mut fs, root, rel).await?;
+    let mut file = sftp.open(&path).await.map_err(sftp_error)?;
+    let meta = file.metadata().await.map_err(sftp_error)?;
+    if !meta.file_type().is_some_and(|kind| kind.is_file()) {
+        return Err(FilesError::NotFound);
+    }
+    let head = read_up_to(&mut file, SNIFF_BYTES as u64).await?;
+    let kind = outbox::classify(&head);
+    let whole = || async { read_on(sftp, root, rel).await.map(|(bytes, kind)| HostRead::Whole(bytes, kind)) };
+    let Some(size) = meta.len() else { return whole().await };
+    let total = if kind.starts_with("text/") { size.min(MAX_OUTBOX_FILE) } else { size };
+    match serve::parse_range(range, total) {
+        serve::Wanted::Whole => whole().await,
+        serve::Wanted::Unsatisfiable => {
+            still_proven(&mut fs, &path).await?;
+            Ok(HostRead::Unsatisfiable { kind, total })
+        }
+        serve::Wanted::Part { start, end } => {
+            let end = end.min(start + MAX_OUTBOX_FILE - 1);
+            file.seek(std::io::SeekFrom::Start(start)).await.map_err(|error| FilesError::Io(error.to_string()))?;
+            let bytes = read_up_to(&mut file, end - start + 1).await?;
+            still_proven(&mut fs, &path).await?;
+            // The file shrank under the read: nothing of it is where it was.
+            if bytes.is_empty() {
+                return Err(FilesError::NotFound);
+            }
+            Ok(HostRead::Part { bytes, kind, start, total })
+        }
+    }
+}
+
+/// The file or folder `rel` names below the remote root, as its folder's
+/// listing would row it — `lstat`'d, never through a link, a file typed by its
+/// head; `NotFound` for anything else.
+pub async fn entry_on(sftp: &Sftp, root: &str, rel: &str, host_key: &[u8], raw_id: &str) -> Result<Entry, FilesError> {
+    if rel.is_empty() {
+        return Err(FilesError::NotFound);
+    }
+    let mut fs = sftp.fs();
+    let path = proven(&mut fs, root, rel).await?;
+    let meta = fs.symlink_metadata(&path).await.map_err(sftp_error)?;
+    let file_type = meta.file_type().ok_or(FilesError::NotFound)?;
+    let kind = if file_type.is_symlink() {
+        return Err(FilesError::NotFound);
+    } else if file_type.is_dir() {
+        "dir"
+    } else if file_type.is_file() {
+        sniff(sftp, &path).await.ok_or(FilesError::NotFound)?
+    } else {
+        return Err(FilesError::NotFound);
+    };
+    let name = rel.rsplit('/').next().unwrap_or(rel).to_string();
+    Ok(Entry {
+        token: seal(host_key, raw_id, rel)?,
+        name,
+        kind,
+        size: if kind == "dir" { 0 } else { meta.len().unwrap_or(0) },
+        modified: meta.modified().map(|t| t.as_duration().as_secs()).unwrap_or(0),
+        created: None,
+        ignored: false,
+        items: None,
+    })
 }
 
 /// A name the walk found: its path below the root and its row.
@@ -451,17 +569,22 @@ fn trail_of(rel: &str, host_key: &[u8], raw_id: &str) -> Result<Vec<Crumb>, File
 }
 
 /// Names below the remote root that hold every word of `query`, by a bounded
-/// breadth-first walk (no links, no hidden names, not into [`SEARCH_SKIP`]).
-pub async fn search_on(sftp: &Sftp, root: &str, query: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
+/// breadth-first walk (no links, no hidden names, not into [`SEARCH_SKIP`])
+/// that starts at the folder `under` (the root when empty), proven first.
+pub async fn search_on(sftp: &Sftp, root: &str, query: &str, under: &str, host_key: &[u8], raw_id: &str) -> Result<Found, FilesError> {
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
     if words.is_empty() {
         return Ok(Found { hits: Vec::new(), truncated: false });
     }
     let mut fs = sftp.fs();
     let root = canonical_root(&mut fs, root).await?;
+    // A folder to search inside is walked into only once proven link-free.
+    if !under.is_empty() {
+        proven(&mut fs, &root, under).await?;
+    }
     let started = Instant::now();
     let mut candidates = Vec::new();
-    let mut folders = VecDeque::from([String::new()]);
+    let mut folders = VecDeque::from([under.to_string()]);
     let mut read = 0usize;
     let mut cut = false;
     while let Some(rel) = folders.pop_front() {

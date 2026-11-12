@@ -19,8 +19,9 @@ import { isDetachedWindow } from "../../../stores/detachedContext";
 import { usePdfMarkupLink } from "../../../stores/viewers/markupLinks";
 import { UntestedTag } from "../../common/UntestedTag";
 import { PdfMarkupLayer } from "../pdf/PdfMarkupLayer";
-import { markupStripKey, PdfMarkupBar } from "../pdf/PdfMarkupBar";
-import { PdfMarkupQuestions } from "../pdf/PdfMarkupQuestions";
+import { markupStripKey, markupStripKeyUp, PdfMarkupBar, PdfMarkupUndoConfirm } from "../pdf/PdfMarkupBar";
+import { PdfMarkupDock } from "../pdf/PdfMarkupDock";
+import { PdfMarkupAgentPanel } from "../pdf/PdfMarkupAgentPanel";
 import { PdfTickBadges, tickBadgesByPage } from "../pdf/PdfMarkupTicks";
 import { usePdfMarkup, type PdfMarkup } from "../pdf/usePdfMarkup";
 import { ImageAnnotator } from "./lazyViewers";
@@ -28,6 +29,7 @@ import { useViewerState } from "./viewerState";
 import { ViewerHeader } from "./ViewerHeader";
 import { PrintButton } from "./toolbar";
 import { useNonPassiveWheel } from "./fontZoom";
+import { PencilIcon } from "../../common/icons/Icon";
 
 /** Pure zoom-to-cursor math for the image viewer (#52): given the current and
  *  next scale, the current top-left offset, and the viewport-local anchor the
@@ -321,11 +323,19 @@ export function ImageView({
       markup.redo();
     } else if (!mod && !e.altKey && markupStripKey(markup, e)) {
       e.preventDefault();
+    } else if (e.key === "Escape" && markup.panel) {
+      e.preventDefault();
+      markup.setPanel(false);
     } else if (e.key === "Escape") {
       e.preventDefault();
       if (markup.edit.selection) markup.edit.clearSelection();
       else leaveMarkup();
     }
+  };
+  /** A held E's quick eraser ends when it is let go. */
+  const onKeyUp = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!marking || isTextEntry(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (markupStripKeyUp(markup, e)) e.preventDefault();
   };
   const naturalRef = useRef<{ w: number; h: number } | null>(null);
   naturalRef.current = natural;
@@ -500,7 +510,7 @@ export function ImageView({
   const percent = Math.round(scale * 100);
 
   return (
-    <div className="file-viewer" onKeyDown={onKeyDown}>
+    <div className="file-viewer" onKeyDown={onKeyDown} onKeyUp={onKeyUp}>
       <ViewerHeader onOpenExternally={onOpenExternally}>
         <div className="file-viewer-zoom" role="group" aria-label={t("imageZoom.controlsLabel")}>
           <button
@@ -565,7 +575,7 @@ export function ImageView({
                 )}
                 aria-pressed={marking}
               >
-                ✎ {t("pdfMarkup.toggle")}
+                <PencilIcon /> {t("pdfMarkup.toggle")}
               </button>
               <UntestedTag id="desktop.markup.picture" />
             </>
@@ -573,9 +583,9 @@ export function ImageView({
         </div>
         <PrintButton onPrint={handlePrint} disabled={!url} />
       </ViewerHeader>
-      {marking && <PdfMarkupBar markup={markup} page={1} onReload={reloadUnderMarks} onDone={leaveMarkup} picture />}
-      {marking && <PdfMarkupQuestions questions={markup.questions} pinned={noPins} />}
-      <div className="file-viewer-body file-viewer-image-body">
+      {marking && <PdfMarkupBar markup={markup} onDone={leaveMarkup} />}
+      {marking && <PdfMarkupUndoConfirm markup={markup} onReload={reloadUnderMarks} />}
+      <div className={`file-viewer-body file-viewer-image-body${marking ? " is-marking" : ""}`}>
         {annotating && url != null && (
           <Suspense fallback={null}>
             <ImageAnnotator
@@ -629,7 +639,7 @@ export function ImageView({
                 style={{ transform: `translate(${offset.x}px, ${offset.y}px)`, width: natural.w * scale, height: natural.h * scale }}
               >
                 <PdfMarkupLayer n={1} size={[natural.w, natural.h]} scale={scale} edit={markup.edit} />
-                {tickBadges && tickBadges.length > 0 && (
+                {markup.panel && tickBadges && tickBadges.length > 0 && (
                   <PdfTickBadges
                     badges={tickBadges}
                     size={[natural.w, natural.h]}
@@ -642,6 +652,8 @@ export function ImageView({
             )}
           </div>
         )}
+        {marking && markup.panel && <PdfMarkupAgentPanel markup={markup} pinned={noPins} onReload={reloadUnderMarks} picture />}
+        {marking && natural && <PdfMarkupDock markup={markup} page={1} picture area={viewportRef} />}
       </div>
     </div>
   );

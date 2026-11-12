@@ -4,8 +4,7 @@ import { agentSwitchChoices, sameDir, worktreeName, type GitWorktree, type Trans
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { onTerminalExit } from "../../lib/terminal/terminalBus";
 import { resolveProjectDirectory, type ProjectEntry } from "../../types";
-import { useTabsStore, type TabEntry } from "../tabs";
-import { resumeArgsOf } from "./closedAgentTabs";
+import { resumeArgsOf, useTabsStore, type TabEntry } from "../tabs";
 
 /**
  * Moving an agent tab to another worktree of its project — the Reader's branch

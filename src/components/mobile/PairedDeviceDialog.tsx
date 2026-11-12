@@ -4,6 +4,7 @@ import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { usePairedPhones } from "./usePairedPhones";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * One paired phone's access — the same `PairedDeviceAccess` block as under its
@@ -47,7 +48,7 @@ export function PairedDeviceDialog({ deviceId, onClose }: { deviceId: string; on
             className="dialog-close-btn"
             aria-label={t("common.close")}
             onClick={onClose}
-          >×</button>
+          ><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
           <PairedDeviceAccess

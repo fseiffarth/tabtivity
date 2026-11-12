@@ -30,6 +30,14 @@ pub struct TrackedWindow {
     /// frontend has no use for it.
     #[serde(default, skip_serializing)]
     pub launch_id: Option<String>,
+    /// The start time (clock ticks since boot, `proc_table::start_time`) of
+    /// the process `pid` named when the row took it, so Close can tell that
+    /// pid from an unrelated process that reused it
+    /// (`commands::apps::leader_unchanged`). `None` when it could not be read,
+    /// for a pid-0 row, and always off Linux (no start time there). In memory
+    /// only; never serialized.
+    #[serde(default, skip_serializing)]
+    pub pid_start: Option<u64>,
 }
 
 /// One process of a launch family: pid plus start time, so a reused pid is
@@ -126,6 +134,26 @@ pub struct WindowRegistry {
     /// `sync_detached_scope` (`None` until the first scope change). A popout
     /// built for another scope retires as soon as its build completes.
     pub detached_active_scope: Option<String>,
+    /// Native Wayland: when each popout was last placed, and the identity of
+    /// the screen its `detached_bounds` record names — what decides whether a
+    /// reading of the window may become that record (`services::popout_screen`).
+    pub detached_screens: crate::services::popout_screen::PopoutScreens,
+}
+
+impl WindowRegistry {
+    /// Mark `label`'s placement (the fullscreen hop of `present_on_monitor`)
+    /// begun or finished. While it is under way, and for a moment after, what
+    /// GDK says about the window is not recorded as its screen or size.
+    pub fn set_detached_placing(&mut self, label: &str, placing: bool) {
+        self.detached_screens
+            .set_placing(label, placing, std::time::Instant::now());
+    }
+
+    /// Whether `label`'s placement is under way (and the mark not stale).
+    pub fn is_detached_placing(&self, label: &str) -> bool {
+        self.detached_screens
+            .is_placing(label, std::time::Instant::now())
+    }
 }
 
 pub type WindowRegistryState = Arc<Mutex<WindowRegistry>>;

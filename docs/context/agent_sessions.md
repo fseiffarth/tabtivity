@@ -108,6 +108,16 @@ resumed after a crash never starts out "working" from a stale file. Codex's
 new hooks need the same one-time `/hooks` trust as its `SessionStart` one;
 until then a Codex tab stays on the byte heuristic.
 
+Claude's `decision` comes from `PermissionRequest` (Claude only, since
+2026-11-10), the dialog opening: the notice alone came 6 s late, and never for
+a dialog the user had pressed a key in (2.1.322). Answering retires the
+verdict — a declined question fires no hook at all — except where the pane is
+on screen: there `noteUserInput` keeps it while `dialogOnScreen` (the Reader's
+reading of the live xterm) still finds a dialog, since a multi-question ask
+pages through its questions under one request with no hook between, and
+Claude's cell-diff repaints never put a whole dialog in the byte tail. Arrow,
+Tab and page keys never retire it.
+
 Every record in the slice is written by the agent's hook, and a fenced agent
 can replace it with a FIFO, a link or a huge file. The host reads them all
 (`<key>`, `.turn`, `.src`, `.mode`, `.prev`, on the watcher thread and at
@@ -146,8 +156,15 @@ top-level session gets `--session <id>`; one noted at an earlier launch
 (host-only `live_sessions/<uid>.opencode`) without a record never took a
 prompt and starts fresh; a tab from before the plugin keeps `--continue`. The
 Reader reads the same record (`opencode_store`), else the folder's newest
-since the last fresh launch. Remote and local-model OpenCode tabs are as
-before.
+since the last fresh launch. Remote OpenCode tabs are as before.
+
+A local-model OpenCode tab (`local_agent`, 2.x `mini`) resumes the same way
+against its local-model home's store and record: it mints the key in every
+scope, keeps its launch line (`localLaunch`) and restores on that line plus
+the resume flag (`tabKinds.resumeArgsOf`), because `--model ollama/<m>` picks
+both the provider and `mini`. A tab saved before it had a key mints one at
+restore and goes through `--continue` once. Assistant chats stay out of
+`resolve`: `assistant::launch_line` decides theirs.
 
 OpenCode 2 uses the same plugin file with a default `{id, server, setup}`
 entrypoint: recent V1 calls `server`, V2 registers a prompt hook in `setup`
@@ -179,6 +196,16 @@ user-level `AGENTS.md`, OpenCode a hint file in its `opencode.json`
 `~/.claude/CLAUDE.md` fallback carrying the user's global instructions. All of
 it is written into the agent home at each spawn, after the global layer. CLIs with neither (Aider, Goose, Crush, …) get no
 hint. See the third-party update checklist.
+
+The CLIs that load user skills from their home also get a `tabtivity-send`
+skill (`agent_hint::write_skill_in_home`, 2026-11-08): `SKILL.md` in
+`.claude/skills` (Claude, OpenCode), `.codex/skills` and `.copilot/skills`,
+rewritten at each spawn after the global layer, never in the assistant's or
+the probe's home. It carries the whole contract (piped `-n`, `--clear`,
+limits, exit codes) and is a slash command (`/tabtivity-send <file>`). The
+shared `.agents/skills` is left out: OpenCode, Codex and Copilot all read it
+beside their own and would list the skill twice. The one-line hint stays,
+since a skill loads only when the model matches its description.
 
 ### Where Codex keeps a session, and why resume died
 
@@ -313,5 +340,9 @@ every place a log can be has to be probed:
   `/proc/<pid>/environ` carries the tab's `TAB_UID` names the session the CLI
   is on now, so a `/clear`, a self-relaunch under a fresh id and a tab moved
   from here (it runs on its local run's id) are followed. With no running CLI
-  to ask, the locally recorded live id's file, then the launch id's. A host
+  to ask, the locally recorded live id's file, then the launch id's. Its
+  subagents open too: the session's `subagents/` folder is copied beside the
+  local copy — every `.meta.json` with each read (what gives a spawn's card
+  its handle), a subagent's own file or a `Workflow` run's journal only when
+  it is opened — and emptied when the copied session changes. A host
   tab of any other CLI has no chat.

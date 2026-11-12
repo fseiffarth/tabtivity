@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { observeStripResize } from "../../lib/observeStripResize";
 import { closedTabSlotHeld, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 /**
  * The horizontally-scrolling tab strip + flanking chevrons — the SAME overflow
@@ -9,7 +10,7 @@ import { closedTabSlotHeld, useClosedTabSlot } from "../../lib/tabs/closedTabSlo
  * wheel-to-horizontal, chevrons that appear only on overflow). Its own component
  * so each bar gets its own strip ref + scroll state, exactly as each main-window
  * `TabBar` instance does: every group's bar in a (possibly multi-pane) popout
- * (`DetachedCenterPanel`) and the mail window's bar (`MailOverlay`). The bar div
+ * (`DetachedCenterPanel`) and the Mail view's sub-bar strip (`MailView`). The bar div
  * and its drag handling stay with the caller; this only owns the scroll chrome.
  */
 export function ScrollingTabStrip({
@@ -145,7 +146,7 @@ export function ScrollingTabStrip({
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(-1)}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <div
@@ -165,7 +166,7 @@ export function ScrollingTabStrip({
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(1)}
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
     </>

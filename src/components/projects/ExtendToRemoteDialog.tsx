@@ -17,6 +17,7 @@ import { hostKeyConfirmOnce } from "../../lib/remote/hostKeyOnce";
 import type { DroppedGlobalMachine } from "../../stores/remote/remoteMachines";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * "Extend to remote…" modal for an existing **local** project. It attaches a
@@ -224,7 +225,7 @@ export function ExtendToRemoteDialog({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("extendRemote.title", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
         <p className="ssh-optional-hint">

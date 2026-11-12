@@ -1,10 +1,14 @@
+import { SkeletonRows } from "../common/SkeletonRows";
 import { useHeaderMenu } from "../../hooks/useHeaderMenu";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
+import { barHiddenReason, setBarSolo, setProjectBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
+import { BoxEmptyLine } from "../projects/BoxEmptyLine";
+import { useBoxNameCheck, useQuickCreateBox } from "../projects/useQuickCreateBox";
 import { useDialogs } from "../common/PromptDialogs";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { ProjectSearch } from "../projects/ProjectSearch";
@@ -13,8 +17,9 @@ import { UntestedTag } from "../common/UntestedTag";
 import { useHpcPipelineStore } from "../../stores/remote/hpc/hpcPipeline";
 import { useBigFoldersStore } from "../../stores/bigFolders";
 import { useProjectsStore } from "../../stores/projects";
-import { BOX_SCOPE_PREFIX, useBoxMembership, useBoxesStore } from "../../stores/boxes";
+import { BOX_SCOPE_PREFIX, defaultBoxName, useBoxMembership, useBoxesStore } from "../../stores/boxes";
 import { useBoxEditorStore } from "../../stores/boxEditor";
+import { dissolveBox, stripProjects, useBoxSliceStore } from "../../stores/boxSlice";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { ROOT_SCOPE, useTabsStore } from "../../stores/tabs";
@@ -29,9 +34,11 @@ import { useFastMode } from "../../lib/agents/fastMode";
 import { resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { boxColor } from "../../lib/theme/boxColor";
+import type { HeaderWidthTier } from "../../lib/headerPins";
 import { useT } from "../../lib/i18n";
 import { OPEN_PROJECT_DIALOG_EVENT } from "../../lib/projects/projectDialogEvent";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 // Re-exported for tests and any external callers that imported these scaffold
 // helpers from ProjectSwitcher before the dialog was extracted (the public
@@ -59,11 +66,24 @@ const ProjectImportBundleDialog = lazy(() =>
     default: m.ProjectImportBundleDialog,
   })),
 );
+const ProjectSetExportDialog = lazy(() =>
+  import("../projects/ProjectSetExportDialog").then((m) => ({
+    default: m.ProjectSetExportDialog,
+  })),
+);
 
 /** This bar's entry in the shared header hover-menu id (stores/headerHoverMenu). */
 const ADD_MENU_ID = "project-add";
 
-export function ProjectSwitcher({ open = true }: { open?: boolean }) {
+export function ProjectSwitcher({
+  open = true,
+  widthTier = 0,
+}: {
+  open?: boolean;
+  /** The header's width tier (`HeaderBar` owns it): how many box pills the
+   *  leading row may hold (`boxPillBudget`). Wide when omitted. */
+  widthTier?: HeaderWidthTier;
+}) {
   const t = useT();
   const { confirmAction, dialogs } = useDialogs();
   const projects = useProjectsStore((s) => s.projects);
@@ -73,12 +93,17 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const reorderProjects = useProjectsStore((s) => s.reorderProjects);
   const boxes = useBoxesStore((s) => s.boxes);
   const renameBox = useBoxesStore((s) => s.renameBox);
-  const deleteBox = useBoxesStore((s) => s.deleteBox);
   const addToBox = useBoxesStore((s) => s.addToBox);
   const removeFromBox = useBoxesStore((s) => s.removeFromBox);
   const boxProjects = useBoxesStore((s) => s.boxProjects);
-  const openBox = useBoxesStore((s) => s.openBox);
   const membership = useBoxMembership();
+  const barHidden = useBarHidden();
+  // Box names are validated now (empty, taken, too long): a rename or an
+  // Alt-drag grouping the backend refuses says why instead of failing silently.
+  const { messageOf } = useBoxNameCheck();
+  const toastFailure = (error: unknown) => useProjectsStore.setState({ switchToast: messageOf(error) });
+  // The "+" menu's New Box row: name it, Enter, you are in (the one create door).
+  const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const openHpcWizard = useHpcPipelineStore((s) => s.openWizard);
   // Multi-select (3b): Escape clears the Ctrl/Cmd-click pill selection.
   const anySelected = usePillSelectionStore((s) => s.selected.length > 0);
@@ -97,10 +122,12 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   const scope = useTabsStore((s) => s.scope);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsPanel, setSettingsPanel] = useState<SettingsPanelKind>("main");
+  const projectsLoaded = useProjectsStore((s) => s.loaded);
   const [settingsAnchor, setSettingsAnchor] = useState<string | undefined>(undefined);
+  const [settingsReveal, setSettingsReveal] = useState<{ path: string[]; open?: boolean } | undefined>(undefined);
   // "clone" is the import dialog opened straight onto its GitHub/GitLab source —
   // the same dialog, so the source can still be switched back inside it.
-  const [dialog, setDialog] = useState<"new" | "import" | "clone" | "bundle" | null>(null);
+  const [dialog, setDialog] = useState<"new" | "import" | "clone" | "bundle" | "exportSet" | null>(null);
   const addMenu = useHeaderMenu(ADD_MENU_ID);
   const showAddMenu = addMenu.open;
   const closeHeaderMenu = useHeaderHoverMenuStore((s) => s.close);
@@ -129,11 +156,12 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
       // guide's "Open Mobile settings").
       const detail = (e as CustomEvent).detail as
         | SettingsPanelKind
-        | { panel?: SettingsPanelKind; anchor?: string }
+        | { panel?: SettingsPanelKind; anchor?: string; reveal?: { path: string[]; open?: boolean } }
         | undefined;
       const named = typeof detail === "string" ? { panel: detail } : detail;
       setSettingsPanel(named?.panel ?? "main");
       setSettingsAnchor(named?.anchor);
+      setSettingsReveal(named?.reveal);
       setShowSettings(true);
     };
     // Steering's Escape out of the settings region closes the dialog again.
@@ -172,25 +200,6 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     // The same stale-object bug affected any other pill-visible metadata that
     // was not copied into that signature.
   }, [projects]);
-
-  // On steering's projects level, every pill wears its station number
-  // (the digit that jumps there — 1 is the root pill). Numbered from the SAME
-  // ring the digit handler and cycleProject walk (projectStations), so badge
-  // and jump can never disagree. On tabs and panes, digits open agent tabs,
-  // so project station badges must disappear. Only the first nine stations
-  // get a digit. A box slice hides some ring members — their digits still jump.
-  const steeringOnProjects = useKeyboardSteeringStore((s) => s.active && s.level === "projects");
-  const stationById = useMemo(() => {
-    if (!steeringOnProjects) return null;
-    const m = new Map<string, number>();
-    projectStations().forEach((id, i) => {
-      if (id && i < 9) m.set(id, i + 1);
-    });
-    return m;
-    // `projects` re-mints the map when the strip changes; projectStations reads
-    // the store imperatively, which the linter cannot see.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [steeringOnProjects, projects]);
 
   // Per-pill git "dirty" dots: poll every active local project's git state on a
   // shared interval (one loop for all pills, deduped by project id) and store
@@ -307,12 +316,12 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
     return () => window.clearInterval(id);
   }, [fenceMarkSignature, quiesce]);
 
-  // Which box's slice the strip is showing (`null` = every active project).
-  // A *view*, deliberately not the scope: clicking a member switches to that
-  // project without collapsing the slice, so hopping between a box's projects
-  // never reshuffles the row under the pointer. Session-only — a slice is where
-  // you are looking right now, not a setting.
-  const [boxFilter, setBoxFilter] = useState<string | null>(null);
+  // Which box's slice the strip is showing (`null` = every active project) lives
+  // in `stores/boxSlice`, so the ✕, the palette and the search can reach it too;
+  // the effects that keep it in step with the scope and the boxes stay here.
+  const boxFilter = useBoxSliceStore((s) => s.sliceBoxId);
+  const selectBox = useBoxSliceStore((s) => s.selectBox);
+  const leaveBox = useBoxSliceStore((s) => s.leaveBox);
   const [boxCandidateFilter, setBoxCandidateFilter] = useState("");
 
   // Entering a box scope by any other door (the search popover, a restored
@@ -320,15 +329,13 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // scope does NOT clear it, which is exactly what keeps the strip still while
   // its projects are being visited.
   useEffect(() => {
-    if (!scope.startsWith(BOX_SCOPE_PREFIX)) return;
-    const id = scope.slice(BOX_SCOPE_PREFIX.length);
-    setBoxFilter((cur) => (cur === id ? cur : id));
+    useBoxSliceStore.getState().followScope(scope);
   }, [scope]);
 
   // A dissolved box takes its slice with it, or the strip would stay filtered
   // by something no menu can select any more.
   useEffect(() => {
-    if (boxFilter && !boxes.some((b) => b.id === boxFilter)) setBoxFilter(null);
+    useBoxSliceStore.getState().dropIfGone(boxes.map((b) => b.id));
   }, [boxes, boxFilter]);
 
   // Membership mode follows the selected slice rather than the current tab
@@ -349,37 +356,12 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
 
   // Where the UNSLICED strip last stood. A slice is a detour the scope takes
   // with it (`openBox` enters the box), so leaving it by "All projects" has to
-  // hand the scope back — otherwise the strip says "every project" while the
-  // tabs below are still the box's and not one pill on the row is lit. Only
-  // scopes seen while no slice was selected count: a member opened from inside
-  // the slice was current in the BOX's view, not in this one. Root is a
-  // legitimate value — it is where a session starts, and where a remembered
-  // project that has since been closed lands.
-  const lastUnslicedScope = useRef<string>(ROOT_SCOPE);
+  // hand the scope back (`boxSlice.selectBox(null)`) — otherwise the strip says
+  // "every project" while the tabs below are still the box's and not one pill
+  // on the row is lit.
   useEffect(() => {
-    if (boxFilter || scope.startsWith(BOX_SCOPE_PREFIX)) return;
-    lastUnslicedScope.current = scope;
+    useBoxSliceStore.getState().noteScope(scope);
   }, [boxFilter, scope]);
-
-  /** Pick a box's slice (and open its scope) or go back to every project. */
-  const selectBox = (boxId: string | null) => {
-    setBoxFilter(boxId);
-    // Picking a box makes the BOX the current scope: its tabs, its pill lit.
-    if (boxId) {
-      void openBox(boxId);
-      return;
-    }
-    // Back to every project — and to the project that view was last on (user,
-    // 2026-09-05). Only from inside a box scope: once the user has hopped to a
-    // member, strip and tabs already agree, and re-activating would be a
-    // pointless project-runtime switch. `setActive` with the id it already
-    // holds is the established way back out of a box (CenterPanel keys its
-    // `setScope` off `switchGeneration` for exactly this).
-    if (!scope.startsWith(BOX_SCOPE_PREFIX)) return;
-    const back = lastUnslicedScope.current;
-    const alive = projects.some((p) => p.id === back && p.status !== "inactive");
-    void setActive(alive ? back : null);
-  };
 
   // The built-in root scope, picked from the same chip as the boxes.
   // Root is no longer a place to switch to: it opens as the root console over
@@ -396,12 +378,58 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
   // Members show REGARDLESS of status: a member closed in the general strip is
   // still open inside its box (openBox restored its tabs box-locally), so the
   // slice keeps its pill while the general strip — activeProjects — does not.
+  // The unsliced strip leaves out what the user hid from it, one by one or a
+  // whole box's members (`lib/projects/barHidden`) — except the project in
+  // scope, for the same reason a slice keeps it. A slice ignores the lists:
+  // looking into a box is where its hidden members are still found.
+  // Hide mode (`bar_solo`) leaves only the project in scope, the rest in the
+  // dropdown's hidden list, so following the scope keeps one pill on the row.
+  const barHiddenSplit = useMemo(() => {
+    const shown: ProjectEntry[] = [];
+    const own: ProjectEntry[] = [];
+    const others: ProjectEntry[] = [];
+    const byBox = new Map<string, ProjectEntry[]>();
+    for (const p of activeProjects) {
+      const why = p.id === scope ? null : barHiddenReason(p.id, membership.get(p.id), barHidden);
+      if (!why) shown.push(p);
+      else if (why.kind === "project") own.push(p);
+      else if (why.kind === "solo") others.push(p);
+      else byBox.set(why.boxId, [...(byBox.get(why.boxId) ?? []), p]);
+    }
+    const groups = boxes
+      .filter((b) => byBox.has(b.id))
+      .sort((a, b) => a.position - b.position)
+      .map((box) => ({ box, members: byBox.get(box.id) ?? [] }));
+    return { shown, own, others, groups };
+  }, [activeProjects, barHidden, boxes, membership, scope]);
+  const aliveProjectIds = useMemo(() => new Set(projects.map((p) => p.id)), [projects]);
+  const aliveBoxIds = useMemo(() => new Set(boxes.map((b) => b.id)), [boxes]);
+
   const visibleProjects = useMemo<ProjectEntry[]>(() => {
-    if (!currentBox) return activeProjects;
-    return projects
-      .filter((p) => currentBoxMemberIds.has(p.id) || p.id === scope)
-      .sort((a, b) => a.position - b.position);
-  }, [activeProjects, currentBox, currentBoxMemberIds, projects, scope]);
+    if (!currentBox) return barHiddenSplit.shown;
+    return stripProjects(projects, currentBox, scope);
+  }, [barHiddenSplit, currentBox, projects, scope]);
+
+  // On steering's projects level, every pill wears its station number
+  // (the digit that jumps there — 1 is the root pill). Numbered from the SAME
+  // ring the digit handler and cycleProject walk (projectStations), so badge
+  // and jump can never disagree. On tabs and panes, digits open agent tabs,
+  // so project station badges must disappear. Only the first nine stations
+  // get a digit. A slice narrows the ring to the pills it shows (inactive
+  // members included), so the badges count the visible strip.
+  const steeringOnProjects = useKeyboardSteeringStore((s) => s.active && s.level === "projects");
+  const stationById = useMemo(() => {
+    if (!steeringOnProjects) return null;
+    const m = new Map<string, number>();
+    projectStations().forEach((id, i) => {
+      if (id && i < 9) m.set(id, i + 1);
+    });
+    return m;
+    // `visibleProjects` re-mints the map when the strip (projects, slice,
+    // scope) changes; projectStations reads the stores imperatively, which the
+    // linter cannot see.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steeringOnProjects, visibleProjects]);
 
   const boxCandidates = useMemo(() => {
     if (!currentBox) return [];
@@ -492,10 +520,25 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
 
   // Alt-drop one pill onto another: spin up a fresh box holding both projects
   // (phone-style "drag onto" grouping). Additive — neither project leaves any
-  // box it was already in; the user renames the new box via its chip.
+  // box it was already in. The box takes the next free "Box N" and its pill goes
+  // straight into rename, so a gesture with no name prompt still ends named.
   const groupProjects = async (fromId: string, toId: string) => {
     if (fromId === toId) return;
-    await boxProjects([toId, fromId], { name: t("projectSwitcher.newBox") });
+    // Box names are unique now, so a second "New Box" would be refused: take the
+    // next free "Box N" (the user renames it via its pill).
+    const name = defaultBoxName(useBoxesStore.getState().boxes, (n) => t("boxName.default", { n }));
+    try {
+      const created = await boxProjects([toId, fromId], { name });
+      if (!created) return;
+      // In the box (its pill is then on the row), with the pill's name field
+      // open: `selectBox` sets the slice before it awaits, so the field mounts
+      // on a pill that stands there.
+      const entered = selectBox(created.id);
+      useBoxEditorStore.getState().startRename(created.id);
+      await entered;
+    } catch (error) {
+      toastFailure(error);
+    }
   };
 
   // Empty pill-strip space doubles as a window-drag handle: pressing the bare
@@ -561,6 +604,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             onClose={() => setShowSettings(false)}
             initialPanel={settingsPanel}
             initialAnchor={settingsAnchor}
+            initialReveal={settingsReveal}
           />
         </Suspense>,
         document.body,
@@ -595,6 +639,11 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
           />
         </Suspense>
       )}
+      {dialog === "exportSet" && (
+        <Suspense fallback={null}>
+          <ProjectSetExportDialog onClose={() => setDialog(null)} />
+        </Suspense>
+      )}
 
       <div
         className="project-switcher"
@@ -610,9 +659,13 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             (the Tabtivity logo) is the leftmost thing in the window — so there is
             nothing on its left to divide it from. */}
         <div
+          // A slice tints the whole strip in its box's colour (static tint, see
+          // `.project-pills-region.is-sliced`), so "I am looking at a box" reads
+          // across the row, not only on the one pill.
           className={`project-pills-region${pillOverflow.left ? " overflow-left" : ""}${
             pillOverflow.right ? " overflow-right" : ""
-          }`}
+          }${currentBox ? " is-sliced" : ""}`}
+          style={currentBox ? ({ "--slice-color": boxColor(currentBox) } as CSSProperties) : undefined}
         >
           {/* The row's leading segment: ONE chip for every scope that is not a
               project pill — the root terminal and the boxes. It sits outside .project-pills-scroll, which is what pins
@@ -627,16 +680,25 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
           <BoxScopeChip
             boxes={boxes}
             selectedId={boxFilter}
-            onSelect={selectBox}
-            onRename={(boxId, name) => void renameBox(boxId, name)}
-            // The pill's Delete is one right-click away on every box now, so it
-            // asks the same question the editor's Dissolve does — and says the
-            // same thing about what survives (folder, agent docs, members).
-            onDelete={(boxId) => {
+            onSelect={(id) => void selectBox(id)}
+            onLeave={() => void leaveBox()}
+            widthTier={widthTier}
+            onRename={(boxId, name) => void renameBox(boxId, name).catch(toastFailure)}
+            // "Dissolve box…" on the pill asks the same question the editor's
+            // Dissolve does — and says the same thing about what survives
+            // (folder, agent docs, members). Dissolving the box you are in
+            // leaves it first, or the scope would stay `box:<id>` of a box that
+            // is gone.
+            onDissolve={(boxId) => {
               const target = boxes.find((b) => b.id === boxId);
               if (!target) return;
-              void confirmAction(dissolveBoxSpec(t, target.name)).then((ok) => {
-                if (ok) void deleteBox(boxId);
+              void confirmAction(dissolveBoxSpec(t, target.name, target.folder)).then(async (ok) => {
+                if (!ok) return;
+                try {
+                  await dissolveBox(boxId);
+                } catch (error) {
+                  toastFailure(error);
+                }
               });
             }}
             active={!!boxFilter && scope === `${BOX_SCOPE_PREFIX}${boxFilter}`}
@@ -645,6 +707,18 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             // Steering station 1 is the ring's root (`null`) head, which
             // `stationById` cannot carry precisely because it has no id.
             rootStation={steeringOnProjects ? 1 : undefined}
+            hidden={
+              currentBox
+                ? undefined
+                : {
+                    projects: barHiddenSplit.own,
+                    byBox: barHiddenSplit.groups,
+                    others: barHiddenSplit.others,
+                    aliveProjectIds,
+                    aliveBoxIds,
+                    onOpen: (id) => void setActive(id),
+                  }
+            }
           />
           {/* Hairline between the fixed leading segment (★ · ⬡) and the
               scrolling project strip, so the two zones read as two zones. */}
@@ -666,7 +740,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
               scrollPills(-1);
             }}
           >
-            ‹
+            <ChevronLeftIcon />
           </button>
           <div
             className="project-pills-scroll"
@@ -675,6 +749,10 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
             // window; pills/boxes are nested so their press is left untouched.
             onMouseDown={startWindowDrag}
           >
+            {!projectsLoaded && <SkeletonRows count={3} className="project-pills-skeleton" />}
+            {projectsLoaded && currentBox && visibleProjects.length === 0 && (
+              <BoxEmptyLine boxId={currentBox.id} className="box-empty-strip" />
+            )}
             {visibleProjects.map((project) => {
               const isCurrentBoxMember = currentBoxMemberIds.has(project.id);
               // The swatches a member pill wears: one per box it is in, in the
@@ -718,6 +796,19 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
                   shiftPx={pillShifts.get(project.id)}
                   groupHintActive={pillDrag?.groupTargetId === project.id}
                   station={stationById?.get(project.id)}
+                  barHidden={barHidden.projects.has(project.id)}
+                  onToggleBarHidden={(hide) => void setProjectBarHidden(project.id, hide, aliveProjectIds)}
+                  solo={barHidden.solo}
+                  // "Hide other projects" from any pill keeps THAT one: it
+                  // switches there first, since hide mode keeps the scope's.
+                  onToggleSolo={
+                    currentBox
+                      ? undefined
+                      : () => {
+                          if (!barHidden.solo && project.id !== scope) void setActive(project.id);
+                          void setBarSolo(!barHidden.solo);
+                        }
+                  }
                 />
               );
             })}
@@ -734,7 +825,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
               scrollPills(1);
             }}
           >
-            ›
+            <ChevronRightIcon />
           </button>
         </div>
         <div className="project-switcher-separator" />
@@ -819,6 +910,13 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
                   </button>
                   <button
                     className="untested"
+                    onClick={() => { closeHeaderMenu(ADD_MENU_ID); setDialog("exportSet"); }}
+                    title={t("projectSwitcher.exportSetTitle")}
+                  >
+                    {t("projectSwitcher.exportSet")} <UntestedTag id="transfer.exportSet" />
+                  </button>
+                  <button
+                    className="untested"
                     onClick={() => { closeHeaderMenu(ADD_MENU_ID); openHpcWizard(); }}
                   >
                     {t("projectSwitcher.hpcPipeline")} <UntestedTag id="projectSwitcher.hpcPipeline" />
@@ -827,7 +925,7 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
                     className="untested"
                     onClick={() => {
                       closeHeaderMenu(ADD_MENU_ID);
-                      useBoxEditorStore.getState().openCreate();
+                      void quickCreateBox();
                     }}
                   >
                     {t("projectSwitcher.newBox")} <UntestedTag id="projectSwitcher.newBox" />
@@ -847,10 +945,11 @@ export function ProjectSwitcher({ open = true }: { open?: boolean }) {
           projects={projects}
           boxes={boxes}
           onActivateProject={(id) => void setActive(id)}
-          onOpenBox={(id) => selectBox(id)}
+          onOpenBox={(id) => void selectBox(id)}
         />
       </div>
       {dialogs}
+      {quickCreateDialogs}
     </>
   );
 }

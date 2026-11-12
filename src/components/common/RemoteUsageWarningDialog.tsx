@@ -18,6 +18,7 @@ import { PRIMARY_HOST, sshOf, useRemoteStatusStore } from "../../stores/remote/r
 import { useSettingsStore } from "../../stores/settings";
 import { isHpcHost } from "../../lib/remote/hpc/hpcHost";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { CloseIcon } from "./icons/Icon";
 
 /**
  * Host usage — CPU/load, memory, GPU, logged-in sessions and top processes (see
@@ -480,7 +481,7 @@ export function RemoteUsageWarningDialog() {
       >
         <div className="settings-title-row">
           <h2>{t("usage.title")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={close}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={close}><CloseIcon /></button>
         </div>
         <div className="dialog-scroll">
           <p className="remote-usage-lede">

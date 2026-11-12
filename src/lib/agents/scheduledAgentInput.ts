@@ -1,8 +1,17 @@
-import { agentInputWrites, bracketsAgentMessage } from "../../../shared/agentComposer";
+import { agentInputWrites, agentQueueWrites, bracketsAgentMessage } from "../../../shared/agentComposer";
 import { writePtyInput } from "../terminal/terminalInput";
 
 const ENCODER = new TextEncoder();
 const WRITE_GAP_MS = 24;
+/**
+ * The wait before a submission's last write, its Enter — the phone's
+ * (`useComposer.ts`) and `paneKeys.ts`' pacing. A prompt typed in more than one
+ * piece keeps Claude Code redrawing, and at the write gap its Enter arrived in
+ * the same read as the last piece: the words stayed in the composer and the
+ * chat's bubble said "Sending…" for good (2.1.317, 3 of 8 two-piece prompts
+ * probed 2026-11-03; none of the one-piece ones).
+ */
+const SUBMIT_GAP_MS = 200;
 /**
  * How long a prefix command is given before the next submission goes in, when
  * the caller supplies no settle of its own. A slash command owns a whole turn:
@@ -109,8 +118,12 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function gap(): Promise<void> {
-  return wait(WRITE_GAP_MS);
+/** Each write of `writes` in turn, the last (the Enter) {@link SUBMIT_GAP_MS} after the rest. */
+async function typeWrites(ptyId: string, writes: readonly string[]): Promise<void> {
+  for (let index = 0; index < writes.length; index += 1) {
+    await writePtyInput(ptyId, ENCODER.encode(writes[index]));
+    if (index + 1 < writes.length) await wait(index + 2 === writes.length ? SUBMIT_GAP_MS : WRITE_GAP_MS);
+  }
 }
 
 /**
@@ -131,8 +144,9 @@ export async function submitScheduledAgentMessage(
   const takesInput = options.whileBusy ? (input?.started ?? input?.ready) : input?.ready;
   if (!input || !takesInput?.()) throw new Error("agent terminal is not ready");
   const bracketed = bracketsAgentMessage(input.agent, input.bracketedPaste());
-  const messageWrites = agentInputWrites(message, bracketed);
-  if (messageWrites.length === 0) throw new Error("scheduled prompt is empty");
+  const typed = agentInputWrites(message, bracketed);
+  if (typed.length === 0) throw new Error("scheduled prompt is empty");
+  const messageWrites = options.whileBusy ? agentQueueWrites(typed, input.agent, message) : typed;
   const prefaceWrites = (options.preface ?? [])
     .map((command) => agentInputWrites(command, bracketed))
     .filter((writes) => writes.length > 0);
@@ -144,11 +158,7 @@ export async function submitScheduledAgentMessage(
     // input, or the output it provokes would not read as this tab working.
     if (submission === submissions.length - 1) { options.beforeMessage?.(); input.recordAuthorizedInput(); }
     else input.noteInput?.();
-    const writes = submissions[submission];
-    for (let index = 0; index < writes.length; index += 1) {
-      await writePtyInput(input.ptyId, ENCODER.encode(writes[index]));
-      if (index + 1 < writes.length) await gap();
-    }
+    await typeWrites(input.ptyId, submissions[submission]);
     if (submission + 1 < submissions.length) {
       await (options.settle ? options.settle(input.ptyId) : wait(PREFACE_GAP_MS));
     }
@@ -168,10 +178,7 @@ export async function submitScheduledAgentCommand(scheduleTargetId: string, comm
   if (typed.length === 0) throw new Error("command is empty");
   const writes = [...(input.dialogCloseKeys?.() ?? []), ...typed];
   input.noteInput?.();
-  for (let index = 0; index < writes.length; index += 1) {
-    await writePtyInput(input.ptyId, ENCODER.encode(writes[index]));
-    if (index + 1 < writes.length) await gap();
-  }
+  await typeWrites(input.ptyId, writes);
   return input.ptyId;
 }
 

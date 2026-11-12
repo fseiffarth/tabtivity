@@ -15,9 +15,11 @@ type Open = Omit<SteeringConfirmDetail, "handled">;
 /**
  * Steering's "are you sure" before W closes a tab or K clears an agent's
  * conversation (`steeringConfirm`). Steering stays on and walks the box as the
- * overlay region: the Confirm key (Y) says yes, Esc no, Enter presses the
- * button under the cursor — Cancel to start with, so a stray Enter keeps the
- * tab. Mounted once in `AppShell`; opened by `STEERING_CONFIRM_EVENT`.
+ * overlay region: Enter presses the button under the cursor — Close/Clear to
+ * start with (`data-steering-default`, and it has focus), so Enter says yes —
+ * the Confirm key (Y) says yes from anywhere, and so does W again over Close
+ * (the key that asked), Esc no. Mounted once in
+ * `AppShell`; opened by `STEERING_CONFIRM_EVENT`.
  */
 export function SteeringConfirmOverlay() {
   const t = useT();
@@ -41,9 +43,9 @@ export function SteeringConfirmOverlay() {
     runSteeringConfirm(open);
   };
   const confirmLabel = t(close ? "steering.confirm.closeButton" : "steering.confirm.clearButton");
-  const keys = steeringRowKeys(["confirm"], steerKeys);
+  const keys = steeringRowKeys(close ? ["confirm", "closeTab"] : ["confirm"], steerKeys);
   return (
-    <DialogShell onDismiss={() => setOpen(null)}>
+    <DialogShell className="steering-confirm-dialog" onDismiss={() => setOpen(null)}>
       <h2>
         {t(close ? "steering.confirm.closeTitle" : "steering.confirm.clearTitle", { tab: open.tab.label })}
         <UntestedTag id="steering.confirm" />
@@ -51,16 +53,26 @@ export function SteeringConfirmOverlay() {
       <p className="file-delete-body">{t(close ? "steering.confirm.closeBody" : "steering.confirm.clearBody")}</p>
       <div className="file-delete-actions">
         <span className="steering-prompt-hint">
-          {keys !== "—" && (
-            <span><kbd>{keys}</kbd> {confirmLabel}</span>
-          )}
+          <span>
+            <kbd>{t("steering.prompt.keyEnter")}</kbd>
+            {keys !== "—" && <> <kbd>{keys}</kbd></>} {confirmLabel}
+          </span>
           <span><kbd>{t("steering.prompt.keyEsc")}</kbd> {t("common.cancel")}</span>
         </span>
-        <button type="button" autoFocus onClick={() => setOpen(null)}>
+        <button type="button" onClick={() => setOpen(null)}>
           {t("common.cancel")}
         </button>
-        {/* STEERING_CONFIRM_ATTR: what the Confirm key presses. */}
-        <button type="button" className="danger" data-steering-confirm="" onClick={confirm}>
+        {/* STEERING_CONFIRM_ATTR: what the Confirm key presses; the default,
+            so Enter does it too. */}
+        <button
+          type="button"
+          className="danger"
+          autoFocus
+          data-steering-confirm=""
+          data-steering-confirm-kind={open.kind}
+          data-steering-default=""
+          onClick={confirm}
+        >
           {confirmLabel}
         </button>
       </div>

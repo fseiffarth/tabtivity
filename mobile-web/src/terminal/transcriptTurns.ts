@@ -84,7 +84,22 @@ export function commandArgsInline(args: string): boolean {
   return args.length <= 24 && !/\s/.test(args);
 }
 
-export function transcriptTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
+/** `transcriptTurns` by the `entries` array it was given. Every reader of a
+ * session (the chat, read-aloud, hands-free, the voice landing, the link
+ * list) asks for the turns of the same array on each update; an entries array
+ * is never changed in place once built (a change is a new array), and no
+ * caller changes the turns it gets back, so one pass serves them all. */
+const turnsCache = new WeakMap<readonly TranscriptEntry[], readonly TranscriptTurn[]>();
+
+export function transcriptTurns(entries: readonly TranscriptEntry[]): readonly TranscriptTurn[] {
+  const cached = turnsCache.get(entries);
+  if (cached) return cached;
+  const turns = buildTurns(entries);
+  turnsCache.set(entries, turns);
+  return turns;
+}
+
+function buildTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
   const seen = new Map<string, number>();
   return entries.map((entry, index) => {
     // A record without a time falls back to its position; two records that

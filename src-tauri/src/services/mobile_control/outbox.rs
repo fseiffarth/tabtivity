@@ -119,10 +119,79 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// The media type of a picture, film or sound the phone may be able to show
+/// (`<img>` on some phones only, `<video>`, `<audio>`), by its magic bytes
+/// alone — never by a name. `None` for anything else.
+pub fn sniff_media(head: &[u8]) -> Option<&'static str> {
+    // A real `ftyp` box is a few dozen bytes long: its size field starts
+    // with two zero bytes, which no text file does.
+    if head.len() >= 12 && head[0] == 0 && head[1] == 0 && &head[4..8] == b"ftyp" {
+        return iso_brand(head);
+    }
+    if head.starts_with(b"\x1a\x45\xdf\xa3") {
+        // EBML: only the `webm` doctype plays in a phone browser.
+        let window = &head[..head.len().min(64)];
+        return window.windows(4).any(|w| w == b"webm").then_some("video/webm");
+    }
+    if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WAVE" {
+        return Some("audio/wav");
+    }
+    if head.starts_with(b"OggS") {
+        return Some("audio/ogg");
+    }
+    if head.starts_with(b"fLaC") {
+        return Some("audio/flac");
+    }
+    if head.starts_with(b"ID3") || mpeg_frame(head) {
+        return Some("audio/mpeg");
+    }
+    None
+}
+
+/// An ISO base media file's kind from its `ftyp` box: the major brand, or —
+/// for the generic `mif1`/`msf1` — the compatible brands after it.
+fn iso_brand(head: &[u8]) -> Option<&'static str> {
+    fn of(brand: &[u8]) -> Option<&'static str> {
+        Some(match brand {
+            b"avif" | b"avis" => "image/avif",
+            b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" => "image/heic",
+            b"isom" | b"iso2" | b"iso4" | b"iso5" | b"iso6" | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V " | b"M4VP" | b"MSNV" => "video/mp4",
+            b"qt  " => "video/quicktime",
+            b"M4A " | b"M4B " => "audio/mp4",
+            _ => return None,
+        })
+    }
+    let major = &head[8..12];
+    if major != b"mif1" && major != b"msf1" {
+        return of(major);
+    }
+    let size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+    let end = size.min(head.len());
+    // Compatible brands start after the 4-byte minor version.
+    let generic = head.get(16..end).into_iter().flat_map(|rest| rest.as_chunks::<4>().0).find_map(|brand| match of(brand) {
+        Some(kind) if kind.starts_with("image/") => Some(kind),
+        _ => None,
+    });
+    Some(generic.unwrap_or("image/heif"))
+}
+
+/// An MPEG-1/2 layer III frame header (an MP3 without an ID3 tag): the sync
+/// bits, a version that is not reserved, layer III, and a bitrate index that
+/// is neither free nor bad.
+fn mpeg_frame(head: &[u8]) -> bool {
+    head.len() >= 4
+        && head[0] == 0xff
+        && head[1] & 0xe0 == 0xe0
+        && head[1] & 0x18 != 0x08
+        && head[1] & 0x06 == 0x02
+        && !matches!(head[2] >> 4, 0x0 | 0xf)
+}
+
 /// Active formats such as HTML/SVG/JS are always inert text. A UTF-8
 /// sequence cut by the bounded head read is accepted only at that boundary.
 pub fn classify(head: &[u8]) -> &'static str {
     if let Some(kind) = sniff(head) { return kind; }
+    if let Some(kind) = sniff_media(head) { return kind; }
     let utf8 = match std::str::from_utf8(head) {
         Ok(_) => true,
         Err(e) => head.len() == SNIFF_BYTES && e.error_len().is_none(),
@@ -536,6 +605,47 @@ mod tests {
         assert_eq!(classify(b"a\xc3"), "application/octet-stream");
         assert_eq!(sniff(b"\x89PN"), None);
         assert_eq!(sniff(b""), None);
+    }
+
+    #[test]
+    fn films_sounds_and_newer_pictures_are_typed_by_their_bytes() {
+        let ftyp = |major: &[u8; 4], compat: &[&[u8; 4]]| {
+            let size = 16 + 4 * compat.len();
+            let mut head = (size as u32).to_be_bytes().to_vec();
+            head.extend_from_slice(b"ftyp");
+            head.extend_from_slice(major);
+            head.extend_from_slice(&[0, 0, 0, 0]);
+            for brand in compat {
+                head.extend_from_slice(*brand);
+            }
+            head.extend_from_slice(b"\0\0\0\x08free");
+            head
+        };
+        assert_eq!(classify(&ftyp(b"isom", &[b"isom", b"avc1"])), "video/mp4");
+        assert_eq!(classify(&ftyp(b"qt  ", &[])), "video/quicktime");
+        assert_eq!(classify(&ftyp(b"M4A ", &[b"isom"])), "audio/mp4");
+        assert_eq!(classify(&ftyp(b"heic", &[b"mif1"])), "image/heic");
+        assert_eq!(classify(&ftyp(b"mif1", &[b"mif1", b"heic"])), "image/heic");
+        assert_eq!(classify(&ftyp(b"mif1", &[b"mif1", b"avif"])), "image/avif");
+        assert_eq!(classify(&ftyp(b"mif1", &[b"mif1"])), "image/heif");
+        assert_eq!(classify(&ftyp(b"avif", &[])), "image/avif");
+        // An unknown brand downloads; a brand past the box is not read.
+        assert_eq!(classify(&ftyp(b"crx ", &[])), "application/octet-stream");
+        let mut short = ftyp(b"mif1", &[]);
+        short.extend_from_slice(b"heic");
+        assert_eq!(classify(&short), "image/heif");
+        assert_eq!(classify(b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\x82\x84webm"), "video/webm");
+        assert_eq!(classify(b"\x1a\x45\xdf\xa3\x9f\x42\x82\x88matroska"), "application/octet-stream");
+        assert_eq!(classify(b"RIFF\x24\0\0\0WAVEfmt "), "audio/wav");
+        assert_eq!(classify(b"OggS\0\x02\0\0"), "audio/ogg");
+        assert_eq!(classify(b"fLaC\0\0\0\x22"), "audio/flac");
+        assert_eq!(classify(b"ID3\x04\0\0\0\0\0\x21"), "audio/mpeg");
+        assert_eq!(classify(b"\xff\xfb\x90\x64\0"), "audio/mpeg");
+        // A sync word with a bad bitrate, or a JPEG, is not a sound.
+        assert_eq!(classify(b"\xff\xfb\xf0\x64\0"), "application/octet-stream");
+        assert_eq!(classify(JPEG), "image/jpeg");
+        // A name never decides: a text file that says "ftyp" is text.
+        assert_eq!(classify(b"0000ftypisom is not a film"), "text/plain; charset=utf-8");
     }
 
     #[test]

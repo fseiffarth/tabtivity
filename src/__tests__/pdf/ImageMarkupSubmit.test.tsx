@@ -4,7 +4,7 @@
  * layer and the picture with them drawn on as `picturePng` — the phone's
  * picture Submit — and the strip speaks of the picture, not a PDF.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -29,7 +29,11 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
   composedPng: mocks.composedPng,
 }));
 
-import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupBar, PdfMarkupUndoConfirm } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupAgentPanel } from "../../components/embed/pdf/PdfMarkupAgentPanel";
+import { PdfMarkupDock } from "../../components/embed/pdf/PdfMarkupDock";
+/** The harness shows the agent panel open throughout. */
+const PINNED: ReadonlySet<string> = new Set(["ask-1:0"]);
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
 import { useSettingsStore } from "../../stores/settings";
@@ -54,7 +58,7 @@ function Harness() {
     docVersion: 0,
     picture: IMAGE,
   });
-  return <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} picture />;
+  return <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={() => {}} picture /><PdfMarkupDock markup={markup} page={1} picture /><PdfMarkupUndoConfirm markup={markup} onReload={() => {}} /></>;
 }
 
 const submitButton = () => screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
@@ -101,7 +105,9 @@ describe("desktop picture Mark up", () => {
     expect(screen.queryByRole("menuitem", { name: /Clear page/ })).toBeNull();
     expect(screen.getByRole("menuitem", { name: /Clear all/ })).toBeTruthy();
     fireEvent.keyDown(document.body, { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Mark text" }));
+    fireEvent.click(screen.getByRole("button", { name: "Proofreading marks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Proofreading marks" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Proofreading marks: options" })).getByRole("button", { name: /Highlight/ }));
     expect(await screen.findByText("No text on this page — draw instead")).toBeTruthy();
   });
 });

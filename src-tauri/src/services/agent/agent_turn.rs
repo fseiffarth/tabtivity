@@ -11,7 +11,8 @@
 //! rounds of filtering (drop empty frames, drop braille cells) each fixed one
 //! agent's habit and broke another's reading. The agents themselves know
 //! exactly when a turn starts (`UserPromptSubmit`), pauses on the user
-//! (`Notification` with `permission_prompt`), resumes (`PostToolUse`) and ends
+//! (`PermissionRequest`, then `Notification` with `permission_prompt`), resumes
+//! (`PostToolUse`) and ends
 //! (`Stop`), and both Claude Code and Codex run Tabtivity's hook script on those
 //! events already (see `services::agent_session`). The script writes one small
 //! record per tab, `<live_sessions>/<TABTIVITY_TAB_UID>.turn`, holding the state
@@ -128,6 +129,11 @@ pub struct LeftTurn {
     /// the whole conversation, prompt echoes and numbered lists included —
     /// until the agent's hooks speak again.
     pub resting: bool,
+    /// A turn in flight in a session that still runs — the window reattached
+    /// to a tmux session that outlived it (the headless owner kept it, or the
+    /// window crashed): the record is the agent's current turn, not a
+    /// leftover, so it is kept and the tab starts out in that state.
+    pub live: Option<TurnState>,
 }
 
 /// Remember that the tab whose hooks key by `uid` is the PTY `pty_id`, and
@@ -135,9 +141,11 @@ pub struct LeftTurn {
 /// tab keeps its uid across relaunches, and a `working` written before a crash
 /// or quit would otherwise be the first thing the watcher reports for it.
 ///
-/// Returns what that record said ([`LeftTurn`]).
-pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
-    if uid.is_empty() || uid.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '-')) {
+/// Returns what that record said ([`LeftTurn`]). `session_runs`: the tab's
+/// process still runs (its tmux session is only reattached), so a turn in
+/// flight is its live turn — kept, not read as cut off.
+pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>, session_runs: bool) -> LeftTurn {
+    if !valid_uid(uid) {
         return LeftTurn::default();
     }
     // One PTY, one uid: a respawn under a new uid must not leave the old key
@@ -153,21 +161,56 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>) -> LeftTurn {
     settled().lock_ok().remove(uid);
     turn_ends().lock_ok().remove(uid);
     bg_tasks().lock_ok().remove(uid);
-    let paths = record_paths(uid, project_id);
-    let cut_off = records_hold_turn_in_flight(&paths);
-    let resting = !cut_off && records_hold_finished_turn(&paths);
-    clear_record(uid, project_id);
-    LeftTurn { cut_off, resting }
+    take_left_turn(uid, &record_paths(uid, project_id), session_runs)
 }
 
-/// Whether any of a tab's turn records says `working` or `decision` — a turn
-/// begun and never ended.
-fn records_hold_turn_in_flight(paths: &[PathBuf]) -> bool {
-    paths.iter().any(|p| {
+/// [`bind_tab`]'s read of the tab's turn records at `paths`: a live turn is
+/// seeded and kept, anything else is reported and removed.
+fn take_left_turn(uid: &str, paths: &[PathBuf], session_runs: bool) -> LeftTurn {
+    if session_runs {
+        if let Some((state, path)) = record_in_flight(paths) {
+            // The watcher reports only changes, and this record will not
+            // change until the agent's next hook: seed what a fresh write
+            // would have, so the job poll carries this tab from now on.
+            note_state(uid, state);
+            if let Some(dir) = path.parent() {
+                note_background_tasks(uid, dir);
+            }
+            return LeftTurn { live: Some(state), ..LeftTurn::default() };
+        }
+    }
+    let cut_off = records_hold_turn_in_flight(paths);
+    let resting = !cut_off && records_hold_finished_turn(paths);
+    clear_paths(paths);
+    LeftTurn { cut_off, resting, live: None }
+}
+
+/// A uid a record may be named by: anything else is never a path component.
+fn valid_uid(uid: &str) -> bool {
+    !uid.is_empty() && uid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Whether the tab's turn record says a turn is in flight, read without
+/// touching it: only such a record makes it worth asking, before
+/// [`bind_tab`], whether the tab's session still runs.
+pub fn turn_in_flight(uid: &str, project_id: Option<&str>) -> bool {
+    valid_uid(uid) && records_hold_turn_in_flight(&record_paths(uid, project_id))
+}
+
+/// The first of a tab's turn records that says `working` or `decision` — a
+/// turn begun and never ended — with its state.
+fn record_in_flight(paths: &[PathBuf]) -> Option<(TurnState, &PathBuf)> {
+    paths.iter().find_map(|p| {
         home_io::read_record(p)
             .and_then(|text| parse_turn_record(&text))
-            .is_some_and(|state| matches!(state, TurnState::Working | TurnState::Decision))
+            .filter(|state| matches!(state, TurnState::Working | TurnState::Decision))
+            .map(|state| (state, p))
     })
+}
+
+/// Whether any of a tab's turn records says `working` or `decision`.
+fn records_hold_turn_in_flight(paths: &[PathBuf]) -> bool {
+    record_in_flight(paths).is_some()
 }
 
 /// Whether any of a tab's turn records says `done` — a turn the agent ended.
@@ -274,7 +317,12 @@ fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
 /// a project, the project's own slice (where a fenced or contained agent's
 /// hook writes).
 pub fn clear_record(uid: &str, project_id: Option<&str>) {
-    for p in record_paths(uid, project_id) {
+    clear_paths(&record_paths(uid, project_id));
+}
+
+/// Remove the turn records at `paths` and the background-task record beside each.
+fn clear_paths(paths: &[PathBuf]) {
+    for p in paths {
         let _ = std::fs::remove_file(p.with_extension(&BG_SUFFIX[1..]));
         let _ = std::fs::remove_file(p);
     }
@@ -1066,14 +1114,43 @@ mod tests {
         on_tab_gone(pty);
     }
 
+    /// A window reattaching to a tmux session that outlived it (the headless
+    /// owner kept the agent running) finds the agent's CURRENT turn in the
+    /// record: it is kept and reported live, never read as a cut-off turn. A
+    /// session that died leaves the same record as a leftover.
+    #[test]
+    fn a_turn_in_flight_in_a_running_session_is_live_not_cut_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let uid = "turn-test-uid-live";
+        let rec = tmp.path().join(format!("{uid}{TURN_SUFFIX}"));
+        let paths = [rec.clone()];
+        for (word, state) in [("working 1", TurnState::Working), ("decision 2", TurnState::Decision)] {
+            std::fs::write(&rec, word).unwrap();
+            let left = take_left_turn(uid, &paths, true);
+            assert_eq!(left, LeftTurn { cut_off: false, resting: false, live: Some(state) }, "{word:?}");
+            assert!(rec.exists(), "a live record is kept: {word:?}");
+            assert_eq!(states().lock_ok().get(uid).copied(), Some(state));
+            let left = take_left_turn(uid, &paths, false);
+            assert_eq!(left, LeftTurn { cut_off: true, resting: false, live: None }, "{word:?}");
+            assert!(!rec.exists(), "a leftover is cleared: {word:?}");
+        }
+        // A finished turn reads the same either way: the agent rests.
+        std::fs::write(&rec, "done 3").unwrap();
+        assert_eq!(take_left_turn(uid, &paths, true), LeftTurn { cut_off: false, resting: true, live: None });
+        assert!(!rec.exists());
+        states().lock_ok().remove(uid);
+        turn_ends().lock_ok().remove(uid);
+        settled().lock_ok().remove(uid);
+    }
+
     #[test]
     fn rebinding_a_pty_forgets_its_previous_uid_and_refuses_a_bad_one() {
         let pty = "proj-b:agent-turn-2";
-        bind_tab("old-uid-2", pty, None);
-        bind_tab("new-uid-2", pty, None);
+        bind_tab("old-uid-2", pty, None, false);
+        bind_tab("new-uid-2", pty, None, false);
         assert_eq!(pty_for("old-uid-2"), None);
         assert_eq!(pty_for("new-uid-2").as_deref(), Some(pty));
-        assert_eq!(bind_tab("../escape", pty, None), LeftTurn::default());
+        assert_eq!(bind_tab("../escape", pty, None, false), LeftTurn::default());
         assert_eq!(pty_for("../escape"), None);
         assert_eq!(pty_for("new-uid-2").as_deref(), Some(pty));
         on_tab_gone(pty);
@@ -1160,8 +1237,8 @@ mod tests {
         }
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&bg_uid, bg_pty, None);
-        bind_tab(&fg_uid, fg_pty, None);
+        bind_tab(&bg_uid, bg_pty, None, false);
+        bind_tab(&fg_uid, fg_pty, None, false);
         note_state(&bg_uid, TurnState::Working);
         note_state(&fg_uid, TurnState::Working);
         // The hook recorded the background call's task for one tab only.
@@ -1303,7 +1380,7 @@ mod tests {
         let _guard = scan_lock().lock().unwrap_or_else(|e| e.into_inner());
         let uid = format!("job-none-{}", std::process::id());
         let pty = "proj-j:agent-none";
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         note_state(&uid, TurnState::Working);
         rescan();
         // Nothing carries this uid: the flag starts false and stays false, so
@@ -1328,8 +1405,8 @@ mod tests {
         std::fs::create_dir_all(&snap).unwrap();
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&bg_uid, bg_pty, None);
-        bind_tab(&fg_uid, fg_pty, None);
+        bind_tab(&bg_uid, bg_pty, None, false);
+        bind_tab(&fg_uid, fg_pty, None, false);
         // Both agents are mid-turn: one backgrounded a command, the other is
         // waiting on the tool call in front of it.
         note_state(&bg_uid, TurnState::Working);
@@ -1407,8 +1484,8 @@ mod tests {
         std::fs::create_dir_all(&snap).unwrap();
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&fg_uid, fg_pty, None);
-        bind_tab(&bg_uid, bg_pty, None);
+        bind_tab(&fg_uid, fg_pty, None, false);
+        bind_tab(&bg_uid, bg_pty, None, false);
         note_state(&fg_uid, TurnState::Working);
         note_state(&bg_uid, TurnState::Working);
         note_state(&fg_uid, TurnState::Done);
@@ -1469,7 +1546,7 @@ mod tests {
         std::fs::create_dir_all(&snap).unwrap();
         let snapshot = snap.join("snapshot-bash-test.sh");
         std::fs::write(&snapshot, "").unwrap();
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         note_state(&uid, TurnState::Working);
         // Some reader (sysstat, the fence marker, ui_priority) walks the table…
         let walked = Instant::now();
@@ -1535,7 +1612,7 @@ mod tests {
         let uid = format!("job-settle-{}", std::process::id());
         let pty = "proj-j:agent-settle";
         let is_settled = |uid: &str| settled().lock().unwrap().contains(uid);
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         // Mid-turn the tab is never settled: a job can start at any moment.
         note_state(&uid, TurnState::Working);
         rescan();
@@ -1563,7 +1640,7 @@ mod tests {
     fn a_session_end_forgets_the_tabs_state_and_flag() {
         let uid = format!("job-idle-{}", std::process::id());
         let pty = "proj-j:agent-idle";
-        bind_tab(&uid, pty, None);
+        bind_tab(&uid, pty, None, false);
         note_state(&uid, TurnState::Working);
         jobs().lock().unwrap().insert(uid.clone(), true);
         note_state(&uid, TurnState::Idle);

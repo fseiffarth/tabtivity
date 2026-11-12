@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { getGitOverview, type GitOverview, type GitWorktreeView } from "../api";
@@ -79,7 +80,7 @@ export function GitSheet({ projectId, label, onClose }: { projectId: string; lab
     <section className="option-sheet git-sheet" role="dialog" aria-modal="true" aria-label={t("mobile.gitSheet.title", { label })} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
-        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.gitSheet.close")}>✕</button>
+        <button className="sheet-close" onClick={onClose} aria-label={t("mobile.gitSheet.close")}><CloseIcon size="1em" /></button>
         <h2>{t("mobile.gitSheet.title", { label })} {isUntested("mobile.project.gitOverview") && <small>{t("mobile.newTab.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>

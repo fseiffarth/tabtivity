@@ -18,6 +18,7 @@ import { wordsIn } from "../../../../mobile-web/src/markup/anchors";
 import type { TextRun } from "../../../../mobile-web/src/markup/findText";
 import { markBox, tickBadgeSpot, type Layer, type Mark, type TickGroup } from "../../../../mobile-web/src/markup/layer";
 import { UntestedTag } from "../../common/UntestedTag";
+import { CheckIcon } from "../../common/icons/Icon";
 
 /** A ✓ group's words at Submit and on the page as loaded now. */
 export type TickCaption = { before: string; after: string };
@@ -133,7 +134,7 @@ export function PdfTickBadges({
               if (event.detail <= 1) onApprove(marks);
             }}
           >
-            ✓
+            <CheckIcon />
           </button>,
           // What the words were and are now, beside the badge — on its left
           // where the badge sits at the page's right edge.

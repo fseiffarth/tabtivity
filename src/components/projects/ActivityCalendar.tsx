@@ -137,11 +137,12 @@ export function ActivityCalendar({ data }: Props) {
     <div className="activity-calendar">
       {/* Year selector */}
       {availableYears.length > 1 && (
-        <div className="activity-years">
+        <div className="activity-years seg">
           {availableYears.map((y) => (
             <button
               key={y}
-              className={`activity-year-btn${y === selectedYear ? " selected" : ""}`}
+              type="button"
+              className={y === selectedYear ? "selected" : undefined}
               onClick={() => setSelectedYear(y)}
             >
               {y}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
+import { isProseLang } from "../../../lib/viewers/completion/autocomplete";
 import { useTabsStore, type ViewerState } from "../../../stores/tabs";
 import { useSettingsStore } from "../../../stores/settings";
 import { useExperimental } from "../../../lib/experimental";
@@ -10,7 +11,7 @@ import { languageForPath } from "../../../lib/viewers/highlight";
 import { useOllamaStatus } from "../../../lib/ollamaStatus";
 import { type InternalViewer } from "../../../lib/viewers/fileUtils";
 import { UntestedTag } from "../../common/UntestedTag";
-import { type AutocompleteMode } from "../../../types";
+import { type AutocompleteMode, type AutocompleteTrigger } from "../../../types";
 import { useFileScope } from "../../../lib/files/fileAccess";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { useI18nStore, useT } from "../../../lib/i18n";
@@ -49,14 +50,27 @@ export function useViewerPref(type: InternalViewer) {
 /** What {@link useTabAiPrefs} returns: the effective autocomplete/spelling config
  *  for the editor, plus the current control state + setters for the in-tab UI. */
 export interface TabAiPrefs {
-  ac: { enabled: boolean; preferred?: string; preferredProse?: string; mode: AutocompleteMode };
+  ac: {
+    enabled: boolean; preferred?: string; preferredProse?: string; mode: AutocompleteMode;
+    /** Unset: the provider's default ({@link effectiveAcTrigger}). */
+    trigger?: AutocompleteTrigger;
+  };
   sc: { enabled: boolean; language?: string };
   autocomplete: boolean;
   spelling: boolean;
   mode: AutocompleteMode;
+  trigger?: AutocompleteTrigger;
   toggleAutocomplete: () => void;
   toggleSpelling: () => void;
   setMode: (m: AutocompleteMode) => void;
+  setTrigger: (t: AutocompleteTrigger) => void;
+}
+
+/** A tab's trigger, or the provider's default: Copilot asks only on request
+ *  (each automatic request spends the account's completions), a local model
+ *  after a typing pause (it costs nothing but the machine). */
+export function effectiveAcTrigger(trigger: AutocompleteTrigger | undefined, copilot: boolean): AutocompleteTrigger {
+  return trigger ?? (copilot ? "manual" : "auto");
 }
 
 /**
@@ -96,12 +110,15 @@ export function useTabAiPrefs(tabKey: string | undefined, type: InternalViewer):
     autocomplete?: boolean;
     spelling?: boolean;
     mode?: AutocompleteMode;
+    trigger?: AutocompleteTrigger;
   }>(() => {
     const vs = seedViewerState(tabKey);
     return {
       autocomplete: vs?.autocomplete,
       spelling: vs?.spellCheck,
       mode: vs?.autocompleteMode,
+      trigger: vs?.autocompleteTrigger === "auto" || vs?.autocompleteTrigger === "manual"
+        ? vs.autocompleteTrigger : undefined,
     };
   });
 
@@ -137,16 +154,26 @@ export function useTabAiPrefs(tabKey: string | undefined, type: InternalViewer):
     },
     [persist],
   );
+  const setTrigger = useCallback(
+    (trigger: AutocompleteTrigger) => {
+      persist({ autocompleteTrigger: trigger });
+      setOverride((o) => ({ ...o, trigger }));
+    },
+    [persist],
+  );
+  const trigger = override.trigger;
 
   return {
-    ac: { enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, mode },
+    ac: { enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, mode, trigger },
     sc: { enabled: spelling, language: spellLanguage },
     autocomplete,
     spelling,
     mode,
+    trigger,
     toggleAutocomplete,
     toggleSpelling,
     setMode,
+    setTrigger,
   };
 }
 
@@ -168,11 +195,13 @@ function useLocalModelLoaded(): boolean {
 
 /**
  * In-tab AI-assist controls for the editable viewers (#45): an Autocomplete
- * on/off toggle with a length-mode picker (Sentence/Block/Scope), beside the
- * dictionary Spelling toggle. The state is tab-local (see
- * {@link useTabAiPrefs}) — toggling here affects only this tab. Rendered in the
- * viewer header next to the font/undo/save controls. Autocomplete hides while
- * no local model is loaded (and Copilot doesn't serve the file).
+ * on/off toggle, always shown, and while it is on: the provider (local model
+ * or Copilot, the one `code_completion_provider` setting, offered while the
+ * experimental Copilot flag is on), when to ask (after a pause or only on
+ * Ctrl+Space, tab-local) and the length mode (local only). The dictionary
+ * Spelling toggle sits beside it. When the chosen provider cannot answer here
+ * (no local model loaded, Copilot not allowed for this file), a short note
+ * says why instead of the button vanishing.
  */
 export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string }) {
   const t = useT();
@@ -181,11 +210,22 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
   const scope = useFileScope();
   const enabled = useExperimental("copilot_completion");
   const remote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
-  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, languageForPath(path), path));
+  const language = languageForPath(path);
+  const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, language, path));
+  const provider = useSettingsStore((s) => s.settings?.code_completion_provider ?? "ollama");
+  const policy = useSettingsStore((s) => (scope ? s.settings?.completion_project_policies?.[scope] : undefined));
+  const trigger = effectiveAcTrigger(ai.trigger, copilot);
+  // Why the chosen provider is silent here; the backend gates the same way.
+  const note = !ai.autocomplete ? null
+    : enabled && provider === "copilot" && !copilot
+      ? remote ? t("fileViewer.copilotNoteRemote")
+        : policy?.copilot === true && policy.local_only !== true && isProseLang(language) && policy.copilot_text !== true
+          ? t("fileViewer.copilotNoteText")
+          : t("fileViewer.copilotNoteConsent")
+      : !copilot && !modelLoaded ? t("fileViewer.autocompleteNoteNoModel") : null;
   return (
     <div className="file-viewer-ai-controls" role="group" aria-label={t("fileViewer.aiAssistGroup")}>
-      {/* Dictionary spelling needs no model, so it is offered regardless —
-          only the model-backed autocomplete hides while nothing is loaded. */}
+      {/* Dictionary spelling needs no model, so it is offered regardless. */}
       <button
         type="button"
         className={`file-viewer-ai-btn${ai.spelling ? " active" : ""}`}
@@ -200,22 +240,46 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
         {t("fileViewer.spellingLabel")}
       </button>
       {ai.spelling && <SpellLanguageSelect />}
-      {(modelLoaded || copilot) && (
+      <button
+        type="button"
+        className={`file-viewer-ai-btn${ai.autocomplete ? " active" : ""}`}
+        onClick={ai.toggleAutocomplete}
+        aria-pressed={ai.autocomplete}
+        title={
+          copilot ? chordHint(t("fileViewer.copilotToggleHint"), "editorAutocomplete") : ai.autocomplete
+            ? chordHint(t("fileViewer.autocompleteOnHint"), "editorAutocomplete")
+            : t("fileViewer.autocompleteOffHint")
+        }
+      >
+        {t("fileViewer.autocompleteLabel")} <UntestedTag id="fileViewer.autocompleteLabel" />
+      </button>
+      {ai.autocomplete && (
         <>
-          <button
-            type="button"
-            className={`file-viewer-ai-btn${ai.autocomplete ? " active" : ""}`}
-            onClick={ai.toggleAutocomplete}
-            aria-pressed={ai.autocomplete}
-            title={
-              copilot ? chordHint(t("fileViewer.copilotToggleHint"), "editorAutocomplete") : ai.autocomplete
-                ? chordHint(t("fileViewer.autocompleteOnHint"), "editorAutocomplete")
-                : t("fileViewer.autocompleteOffHint")
-            }
-          >
-            {t("fileViewer.autocompleteLabel")} <UntestedTag id="fileViewer.autocompleteLabel" />
-          </button>
-          {ai.autocomplete && !copilot && (
+          {enabled && (
+            <Dropdown
+              className="file-viewer-ai-mode"
+              value={provider}
+              title={t("fileViewer.autocompleteProviderTitle")}
+              onChange={(v) => void useSettingsStore.getState().updateSettings({
+                code_completion_provider: v as "ollama" | "copilot",
+              })}
+              options={[
+                { value: "ollama", label: t("fileViewer.autocompleteProviderLocal") },
+                { value: "copilot", label: t("fileViewer.autocompleteProviderCopilot") },
+              ]}
+            />
+          )}
+          <Dropdown
+            className="file-viewer-ai-mode"
+            value={trigger}
+            title={chordHint(t("fileViewer.autocompleteTriggerTitle"), "editorAutocomplete")}
+            onChange={(v) => ai.setTrigger(v as AutocompleteTrigger)}
+            options={[
+              { value: "auto", label: t("fileViewer.autocompleteTriggerAuto") },
+              { value: "manual", label: t("fileViewer.autocompleteTriggerManual") },
+            ]}
+          />
+          {!copilot && (
             <Dropdown
               className="file-viewer-ai-mode"
               value={ai.mode}
@@ -228,6 +292,8 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
               ]}
             />
           )}
+          <UntestedTag id="fileViewer.autocompleteProvider" />
+          {note && <span className="file-viewer-ai-note">{note}</span>}
         </>
       )}
     </div>

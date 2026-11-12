@@ -1,8 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useActivityStore, type StatusTab, type TabStatusCounts } from "../../stores/activity";
 import { useTabsStore } from "../../stores/tabs";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { useFastMode } from "../../lib/agents/fastMode";
+import { TabHoverCard } from "../tabs/TabHoverCard";
 
 /** Most status bars the strip will draw. A scope with more busy tabs than this
  *  would overflow a narrow pill, so the strip stops here and the tooltip carries
@@ -54,6 +56,8 @@ export interface StatusBarItem {
   /** What the bar's tooltip calls the tab (a multi-scope strip puts the scope's
    *  own name in front, or every bar would read as an unattributed tab name). */
   label: string;
+  /** The scope's own name, when the strip stands for several scopes. */
+  scopeName?: string;
 }
 
 /** The tally the tooltip spells out. Derived from the untruncated items, so the
@@ -81,17 +85,42 @@ function StatusStrip({
   items,
   interactive = true,
   className,
+  onBarHover,
 }: {
   items: StatusBarItem[];
   interactive?: boolean;
   className?: string;
+  /** A bar's own card opened (true) or closed (false) — the host hides its
+   *  own hover card meanwhile, or the two would stack under the pointer. */
+  onBarHover?: (hovering: boolean) => void;
 }) {
   const t = useT();
+  // Fast mode keeps the plain tooltips: the card ticks a clock and asks the
+  // backend once per hover (`TabBar` drops its card there for the same reason).
+  const fastMode = useFastMode();
+  const [hovered, setHovered] = useState<{ item: StatusBarItem; x: number; y: number } | null>(null);
+  const cards = interactive && !fastMode;
+  const same = (a: StatusBarItem, b: StatusBarItem) => a.scope === b.scope && a.key === b.key;
+  const leave = (item: StatusBarItem) => {
+    if (!hovered || !same(hovered.item, item)) return;
+    setHovered(null);
+    onBarHover?.(false);
+  };
+  // A bar can vanish under the pointer (its tab went idle or closed), and an
+  // unmounted bar fires no mouseleave: drop its card then, or it would stay up.
+  const gone = !!hovered && !items.slice(0, MAX_STATUS_BARS).some((it) => same(it, hovered.item));
+  useEffect(() => {
+    if (!gone) return;
+    setHovered(null);
+    onBarHover?.(false);
+  }, [gone, onBarHover]);
   if (items.length === 0) return null;
   return (
     <span
       className={`pill-status-bars${className ? ` ${className}` : ""}`}
-      title={statusBarTitle(tallyItems(items), t)}
+      // With the cards on, a bar's own card says it; a tally tooltip would pop
+      // up over it, since a bar without a title shows its parent's.
+      title={cards ? undefined : statusBarTitle(tallyItems(items), t)}
     >
       {items.slice(0, MAX_STATUS_BARS).map((item) => {
         const label = t(item.shell ? "pill.statusTabRunning" : BAR_TITLE_KEY[item.state], {
@@ -107,21 +136,39 @@ function StatusStrip({
             type="button"
             key={key}
             className={cls}
-            title={`${label} · ${t("pill.statusTabJump")}`}
+            title={cards ? undefined : `${label} · ${t("pill.statusTabJump")}`}
             aria-label={label}
+            onMouseEnter={(e) => {
+              if (!cards) return;
+              const r = e.currentTarget.getBoundingClientRect();
+              setHovered({ item, x: r.left + r.width / 2, y: r.bottom });
+              onBarHover?.(true);
+            }}
+            onMouseLeave={() => leave(item)}
             // The pill itself starts a reorder drag on pointerdown and switches
             // project on click; a bar is its own control, so it keeps both to
             // itself.
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
+              leave(item);
               jumpToTab(item.scope, item.key);
             }}
           />
         );
       })}
+      {cards && hovered && !gone && <BarHoverCard {...hovered} hint={t("pill.statusTabJump")} />}
     </span>
   );
+}
+
+/** The hovered bar's tab, in the tab strip's own hover card — the bar stands
+ *  for one tab, so the card that says what a tab is doing is the one to show.
+ *  Nothing while the tab is gone (closed under the pointer). */
+function BarHoverCard({ item, x, y, hint }: { item: StatusBarItem; x: number; y: number; hint: string }) {
+  const tab = useTabsStore((s) => s.tabsByScope[item.scope]?.find((tb) => tb.key === item.key));
+  if (!tab) return null;
+  return <TabHoverCard tab={tab} scope={item.scope} scopeName={item.scopeName} hint={hint} anchorX={x} anchorY={y} />;
 }
 
 /** A scope's non-idle tabs as strip items, named by the tab labels the scope
@@ -142,6 +189,7 @@ function itemsForScope(
       state: st.state,
       ...(st.shell ? { shell: true } : {}),
       label: prefix ? `${prefix} · ${label}` : label,
+      ...(prefix ? { scopeName: prefix } : {}),
     };
   });
 }
@@ -176,13 +224,20 @@ function itemsForScope(
  * Positioned absolutely, so the host must be a positioned box (`.project-pill`
  * and `.box-chip` both are).
  */
-export function PillStatusBars({ scope }: { scope: string }) {
+export function PillStatusBars({
+  scope,
+  onBarHover,
+}: {
+  scope: string;
+  /** See `StatusStrip`: the pill hides its project card under a bar's card. */
+  onBarHover?: (hovering: boolean) => void;
+}) {
   // Per-scope subscriptions, not the whole maps: there is one of these per pill,
   // and a tab going busy in one project must not re-render every other pill.
   const statusTabs = useActivityStore((s) => s.statusTabsByScope[scope]);
   const tabs = useTabsStore((s) => s.tabsByScope[scope]);
   const items = useMemo(() => itemsForScope(scope, statusTabs, tabs), [scope, statusTabs, tabs]);
-  return <StatusStrip items={items} />;
+  return <StatusStrip items={items} onBarHover={onBarHover} />;
 }
 
 /**

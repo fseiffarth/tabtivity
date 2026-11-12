@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type ProjectDetail, type ScopeKind } from "./api";
+import { getProjectDetail, type ScopeKind } from "./api";
 
 /**
  * What kind of scope a project id names, as this phone last saw it.
@@ -29,7 +29,7 @@ export function useScopeKind(id: string | undefined): ScopeKind | undefined {
     const remembered = known.get(id);
     if (remembered) { setKind(remembered); return; }
     const controller = new AbortController();
-    api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(id)}`, { signal: controller.signal })
+    getProjectDetail(id, controller.signal)
       .then((detail) => { rememberScopeKind(id, detail.project.kind); setKind(detail.project.kind ?? "project"); })
       .catch(() => {});
     return () => controller.abort();

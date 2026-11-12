@@ -1147,10 +1147,7 @@ pub fn state_path(project_id: &str) -> PathBuf {
 
 /// [`state_path`] under an explicit state dir — see `local_loss::log_path_in`.
 pub fn state_path_in(state_dir: &Path, project_id: &str) -> PathBuf {
-    state_dir
-        .join("remote-projects")
-        .join(project_id)
-        .join("git_peer.json")
+    crate::storage::remote_project_dir_in(state_dir, project_id).join("git_peer.json")
 }
 
 /// Load a project's persisted lockstep state (default/disabled if absent).

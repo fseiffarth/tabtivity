@@ -65,6 +65,7 @@ pub struct OllamaModelInfo {
 // PATH lookups go through the shared, cross-platform `crate::paths::binary_on_path`
 // (`where` on Windows, `which` elsewhere); see that module for the rationale.
 use crate::paths::binary_on_path;
+use crate::services::agent_latest;
 use crate::tauri_host::Ctx;
 use app_core::CoreCtx;
 
@@ -1264,7 +1265,8 @@ fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
 // means the only way to *ask* without transferring gigabytes is to compare
 // manifest digests. `/api/tags` reports the digest of the manifest on disk and
 // the registry answers the same value in the `ollama-content-digest` response
-// header, so one HEAD per model settles it.
+// header, so one HEAD per model settles it. Hugging Face sends no such header,
+// so an `hf.co/` model's manifest is fetched (a few hundred bytes) and hashed.
 //
 // This is the one part of the local-model feature that reaches the network
 // without a model being installed or run, so it is **on demand only** — a
@@ -1298,7 +1300,11 @@ pub struct OllamaModelUpdate {
 /// `validate_model_name` already restricting the characters that reach the
 /// URL); its caller runs it off the async runtime.
 fn registry_head(model: &str) -> Result<(String, Option<i64>), String> {
-    let url = registry_manifest_url(model)?;
+    let at = registry_ref(model)?;
+    if at.hugging_face() {
+        return Ok((hf::manifest_digest(&at.manifest_url())?, None));
+    }
+    let url = at.manifest_url();
     let output = crate::paths::command_no_window("curl")
         .args(["-sSI", "--max-time", "15", &url])
         .output()
@@ -1396,9 +1402,12 @@ fn wanted_updates(models: Vec<(String, String)>) -> Vec<OllamaModelUpdate> {
 // before v0.15, so on an older server that agent is absent from the new-tab
 // menu with nothing anywhere saying why.
 //
-// Same discipline as the model check: the **installed** version is free (a local
-// `ollama --version`) and read whenever the menu opens; the **latest** version
-// is a network request and happens only when the user clicks.
+// The **installed** version is free (a local `ollama --version`) and read
+// whenever the menu opens. The **latest** version is a network request: made on
+// the "Check for updates" click, and once a day by the agent CLIs' daily release
+// check ([`daily_release_check`], `commands::agents::start_daily_update_check`).
+// Either answer is stored beside the CLIs' (`agent_latest`, key
+// [`agent_latest::OLLAMA_KEY`]), and the menu's local read hands it back.
 
 /// Where the newest published version is read from: GitHub's releases rather
 /// than ollama.com (whose `/api/version` answers `0.0.0`) — the same source the
@@ -1449,8 +1458,9 @@ pub struct OllamaVersionStatus {
     /// The installed version, e.g. `"0.14.3"`. Empty when Ollama isn't
     /// installed, or answered something we couldn't parse.
     pub current: String,
-    /// The newest published version, e.g. `"0.32.5"`. Empty whenever the remote
-    /// half didn't run or didn't answer — never a stand-in for `current`.
+    /// The newest published version, e.g. `"0.32.5"`, from the last stored
+    /// check. Empty when no check has answered yet — never a stand-in for
+    /// `current`.
     pub latest: String,
     /// True only when both versions parsed *and* `latest` is genuinely newer.
     /// An unreadable version on either side is not an update.
@@ -1512,12 +1522,12 @@ fn version_is_newer(candidate: &str, current: &str) -> Option<bool> {
     Some(false)
 }
 
-/// The installed Ollama version, and — only when `check_remote` — the newest
-/// published one.
+/// The installed Ollama version against the newest published one.
 ///
 /// `check_remote: false` touches no network at all, so the menu can show what is
-/// installed the moment it opens. `true` is the "Check for updates" click and
-/// costs one unauthenticated GitHub request.
+/// installed the moment it opens; the newest version is then the last stored
+/// check (the daily one or a click), if any. `true` is the "Check for updates"
+/// click and costs one unauthenticated GitHub request.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
     app_core::rt::spawn_blocking(move || {
@@ -1557,23 +1567,59 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
             .to_string(),
             ..Default::default()
         };
-        if !check_remote {
-            return status;
-        }
-
-        match latest_ollama_tag().as_deref().map(parse_version) {
-            Some(Some(latest)) => {
-                status.update_available =
-                    version_is_newer(&latest, &status.current).unwrap_or(false);
-                status.latest = latest;
-            }
-            Some(None) => status.error = Some("couldn't read the latest version".to_string()),
-            None => status.error = Some("couldn't reach the release feed".to_string()),
+        let checked = if check_remote {
+            Some(check_latest_ollama())
+        } else {
+            agent_latest::load().remove(agent_latest::OLLAMA_KEY)
+        };
+        if let Some(checked) = checked {
+            apply_checked(&mut status, &checked);
         }
         status
     })
     .await
     .unwrap_or_default()
+}
+
+/// Ask GitHub for the newest Ollama release and store the answer (a failure
+/// keeps the last release seen, as for a CLI). Blocking: one `curl`.
+fn check_latest_ollama() -> agent_latest::Checked {
+    let found = match latest_ollama_tag().as_deref().map(parse_version) {
+        Some(Some(latest)) => Ok(latest),
+        Some(None) => Err("couldn't read the latest version".to_string()),
+        None => Err("couldn't reach the release feed".to_string()),
+    };
+    agent_latest::remember(agent_latest::OLLAMA_KEY, Some(found))
+}
+
+/// Fold a stored check into `status`, compared against the version installed
+/// now — so an upgrade made since the check never shows as still pending.
+fn apply_checked(status: &mut OllamaVersionStatus, checked: &agent_latest::Checked) {
+    status.latest = checked.latest.clone().unwrap_or_default();
+    status.update_available = !status.latest.is_empty()
+        && version_is_newer(&status.latest, &status.current).unwrap_or(false);
+    status.error = checked.error.clone();
+}
+
+/// Ollama's turn in the daily release check: when Ollama is installed and its
+/// last check (clicked or daily) is a day old, ask once and store the answer.
+/// True when it asked, so the caller tells the windows to re-read.
+pub async fn daily_release_check() -> bool {
+    app_core::rt::spawn_blocking(|| {
+        let due = agent_latest::is_due(
+            &agent_latest::load(),
+            agent_latest::OLLAMA_KEY,
+            crate::clock::now_secs(),
+            agent_latest::DAILY_EVERY_SECS,
+        );
+        if !due || !ollama_installed() {
+            return false;
+        }
+        check_latest_ollama();
+        true
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Permanently delete a locally installed model.
@@ -1583,43 +1629,122 @@ pub async fn delete_ollama_model(model: String) -> Result<(), String> {
     app_core::rt::try_blocking("delete", move || ollama_http("DELETE", "/api/delete", Some(&body)).map(drop)).await
 }
 
-/// Split a model ref into its registry repo path and tag, applying the implicit
-/// `library/` namespace and defaulting the tag to `latest`. Shared by the
-/// manifest and config-blob fetches so both address the exact same repo.
-fn registry_repo_tag(model: &str) -> Result<(String, String), String> {
+/// Ollama's own registry, where every model ref without a host lives.
+const OLLAMA_REGISTRY: &str = "https://registry.ollama.ai/v2";
+
+/// Where one model ref's manifest and blobs are served: the registry's `/v2`
+/// root, the repo path under it and the tag.
+#[derive(Debug, PartialEq)]
+struct RegistryRef {
+    base: &'static str,
+    repo: String,
+    tag: String,
+}
+
+impl RegistryRef {
+    fn manifest_url(&self) -> String {
+        format!("{}/{}/manifests/{}", self.base, self.repo, self.tag)
+    }
+
+    fn blob_url(&self, hex: &str) -> String {
+        format!("{}/{}/blobs/sha256:{hex}", self.base, self.repo)
+    }
+
+    fn hugging_face(&self) -> bool {
+        self.base == hf::REGISTRY
+    }
+}
+
+/// Address a model ref on its registry, applying the implicit `library/`
+/// namespace and defaulting the tag to `latest`. Shared by the manifest and
+/// config-blob fetches so both address the exact same repo. A ref whose first
+/// part is a host (`hf.co/user/repo:Q4_K_M`) is pulled by Ollama from that
+/// host, so its manifest is read there too: Hugging Face is the one such host
+/// answered; any other is refused rather than asked of Ollama's registry,
+/// which would only ever say "not found".
+fn registry_ref(model: &str) -> Result<RegistryRef, String> {
     validate_model_name(model)?;
 
-    let (name, tag) = match model.split_once(':') {
-        Some((n, t)) => (n, t),
-        None => (model, "latest"),
+    // The tag follows the last `:` of the last path part, so a host's port
+    // (`host:5000/ns/m`) is never taken for one.
+    let (name, tag) = match model.rsplit_once(':') {
+        Some((n, t)) if !t.contains('/') => (n, t),
+        _ => (model, "latest"),
     };
+    if let Some((host, rest)) = name.split_once('/').filter(|(host, _)| host.contains('.')) {
+        if !hf::is_hf_host(host) {
+            return Err(format!("{host} is not a registry whose models can be looked up"));
+        }
+        return Ok(RegistryRef {
+            base: hf::REGISTRY,
+            repo: rest.to_string(),
+            tag: tag.to_string(),
+        });
+    }
     // Bare names live under the implicit `library/` namespace on the registry.
     let repo = if name.contains('/') {
         name.to_string()
     } else {
         format!("library/{name}")
     };
-    Ok((repo, tag.to_string()))
+    Ok(RegistryRef {
+        base: OLLAMA_REGISTRY,
+        repo,
+        tag: tag.to_string(),
+    })
 }
 
 fn registry_manifest_url(model: &str) -> Result<String, String> {
-    let (repo, tag) = registry_repo_tag(model)?;
-    Ok(format!(
-        "https://registry.ollama.ai/v2/{repo}/manifests/{tag}"
-    ))
+    Ok(registry_ref(model)?.manifest_url())
 }
 
 /// How long one request to the registry or ollama.com may take, connect
 /// included. A manifest, a config blob and a search page are a few KB each.
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(30);
+/// The largest body [`registry_get`] reads: a manifest, a config blob and an
+/// ollama.com search page are a few KB to a few hundred. A caller that
+/// legitimately needs more passes its own cap to [`registry_response`].
+const REGISTRY_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 /// `GET url` from Ollama's registry or ollama.com: HTTPS only, redirects
 /// followed (the registry hands blobs to a CDN, which `curl -L` followed too),
-/// and bounded by [`REGISTRY_TIMEOUT`]. The `curl` this replaced had no time
-/// limit, so a stalled server held its caller for as long as TCP kept the
-/// connection (code screen B2). `Ok(None)` is an HTTP error status, what
-/// `curl -f` failed on. `headers` are sent as given (fixed names and values).
+/// and bounded by [`REGISTRY_TIMEOUT`] and [`REGISTRY_MAX_BYTES`]. The `curl`
+/// this replaced had no time limit, so a stalled server held its caller for as
+/// long as TCP kept the connection (code screen B2). `Ok(None)` is an HTTP
+/// error status, what `curl -f` failed on. `headers` are sent as given (fixed
+/// names and values).
 async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<u8>>, String> {
+    Ok(registry_response(url, headers, REGISTRY_MAX_BYTES).await?.map(|(_, body)| body))
+}
+
+/// Refuse a body whose declared `Content-Length` is over `cap` before any of
+/// it is read.
+fn declared_len_fits(declared: Option<u64>, cap: usize) -> Result<(), String> {
+    match declared {
+        Some(n) if n > cap as u64 => Err(format!("registry response too large ({n} bytes, at most {cap})")),
+        _ => Ok(()),
+    }
+}
+
+/// Append one streamed `chunk` to `body`, refusing once the total would pass
+/// `cap` — a missing or lying `Content-Length` (or a compressed body that
+/// expands) is caught here.
+fn push_capped(body: &mut Vec<u8>, chunk: &[u8], cap: usize) -> Result<(), String> {
+    if body.len().saturating_add(chunk.len()) > cap {
+        return Err(format!("registry response too large (more than {cap} bytes)"));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+/// [`registry_get`] with the response headers kept, for the Hugging Face
+/// search, which hands its next page out in a `Link` header. The body is
+/// read in chunks and refused past `max_bytes`.
+async fn registry_response(
+    url: &str,
+    headers: &[(&str, &str)],
+    max_bytes: usize,
+) -> Result<Option<(reqwest::header::HeaderMap, Vec<u8>)>, String> {
     crate::services::mail_engine::install_crypto_provider();
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -1632,18 +1757,24 @@ async fn registry_get(url: &str, headers: &[(&str, &str)]) -> Result<Option<Vec<
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
-    let response = request
+    let mut response = request
         .send()
         .await
         .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
     if !response.status().is_success() {
         return Ok(None);
     }
-    let body = response
-        .bytes()
+    declared_len_fits(response.content_length(), max_bytes)?;
+    let head = response.headers().clone();
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?;
-    Ok(Some(body.to_vec()))
+        .map_err(|e| format!("failed to query registry: {}", e.without_url()))?
+    {
+        push_capped(&mut body, &chunk, max_bytes)?;
+    }
+    Ok(Some((head, body)))
 }
 
 /// Fetch the Ollama registry manifest (config + layers) for a model ref, through
@@ -1661,15 +1792,15 @@ async fn fetch_registry_manifest(model: &str) -> Result<serde_json::Value, Strin
 }
 
 /// Fetch a registry blob (here: a manifest's config object) by digest. The
-/// `repo` comes from `registry_repo_tag` (already `validate_model_name`d) and the
+/// repo comes from [`registry_ref`] (already `validate_model_name`d) and the
 /// digest is checked to be a bare `sha256:<hex>`, so nothing user-typed reaches
 /// the URL unvalidated — the same bounded [`registry_get`] the manifest uses.
-async fn fetch_registry_blob(repo: &str, digest: &str) -> Result<serde_json::Value, String> {
+async fn fetch_registry_blob(at: &RegistryRef, digest: &str) -> Result<serde_json::Value, String> {
     let hex = digest
         .strip_prefix("sha256:")
         .filter(|h| !h.is_empty() && h.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or_else(|| "invalid config digest".to_string())?;
-    let url = format!("https://registry.ollama.ai/v2/{repo}/blobs/sha256:{hex}");
+    let url = at.blob_url(hex);
     let body = registry_get(&url, &[])
         .await?
         .ok_or_else(|| "registry returned no config blob".to_string())?;
@@ -1701,7 +1832,7 @@ pub struct RegistryDetails {
 /// though it has nothing to download. Two small HTTP reads, fetched lazily.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, String> {
-    let (repo, _tag) = registry_repo_tag(&model)?;
+    let at = registry_ref(&model)?;
     let manifest = fetch_registry_manifest(&model).await?;
 
     // Only the layer bytes are the download; the config blob is a few hundred
@@ -1718,18 +1849,22 @@ pub async fn ollama_registry_details(model: String) -> Result<RegistryDetails, S
 
     let (mut params, mut quant) = (None, None);
     if let Some(digest) = manifest["config"]["digest"].as_str() {
-        if let Ok(cfg) = fetch_registry_blob(&repo, digest).await {
+        if let Ok(cfg) = fetch_registry_blob(&at, digest).await {
             params = cfg["model_type"]
                 .as_str()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(String::from);
+            // Hugging Face writes `unknown` here: the tag is the quantization.
             quant = cfg["file_type"]
                 .as_str()
                 .map(str::trim)
-                .filter(|s| !s.is_empty())
+                .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("unknown"))
                 .map(String::from);
         }
+    }
+    if quant.is_none() && at.hugging_face() && at.tag != "latest" {
+        quant = Some(at.tag.to_ascii_uppercase());
     }
 
     Ok(RegistryDetails {
@@ -1771,6 +1906,15 @@ pub struct RegistryModel {
     pub pulls: String,
     /// Relative update label, e.g. "1 week ago".
     pub updated: String,
+    /// A Hugging Face GGUF repo (`hf.co/<user>/<repo>`, [`hf`]), whose `sizes`
+    /// are its quantization tags.
+    pub hugging_face: bool,
+    /// Parameter count when the search already says it ("7.6B"): Hugging Face
+    /// only. An Ollama row's sizes are its parameter counts.
+    pub params: Option<String>,
+    /// A gated Hugging Face repo: Ollama's key must be added to the user's
+    /// account before it pulls.
+    pub gated: bool,
 }
 
 /// One page of ollama.com/search results.
@@ -2014,6 +2158,9 @@ fn parse_search_html(html: &str) -> RegistrySearchPage {
                 sizes,
                 pulls: card_pulls(card).unwrap_or_default(),
                 updated: card_updated(card).unwrap_or_default(),
+                hugging_face: false,
+                params: None,
+                gated: false,
             })
         })
         .collect();
@@ -3244,10 +3391,24 @@ pub async fn complete_text(
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
         let settings = crate::storage::load_settings().unwrap_or_default();
-        let local_only = project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
+        // A local-models-only project (`services::agent_privacy`) is completed
+        // by this machine's models only: loopback host, a model the endpoint
+        // lists without a remote (an Ollama cloud model answers on ollama.com).
+        let locked = crate::services::agent_privacy::completion_locked(project_id.as_deref());
+        let local_only = locked || project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
             .is_some_and(|policy| policy.local_only);
         let (host, allow_remote) = host_setting(&settings);
         let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
+        if locked {
+            let (checked_addr, checked_model) = (addr.clone(), model.clone());
+            let refusal = app_core::rt::blocking("Local models only", move || {
+                crate::services::agent_privacy::completion_refusal(true, &checked_addr, &checked_model)
+            })
+            .await?;
+            if let Some(refusal) = refusal {
+                return Err(refusal);
+            }
+        }
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
         let context = context
@@ -3717,15 +3878,11 @@ fn dirs_vibe_config() -> Result<std::path::PathBuf, String> {
 /// out, inside the agent, where the message is somebody else's.
 fn ollama_provider_block() -> String {
     let base = ollama_addr().unwrap_or_else(|_| DEFAULT_OLLAMA_ADDR.to_string());
-    format!(
-        "\n[[providers]]\nname = \"ollama\"\napi_base = \"http://{base}/v1\"\napi_key_env_var = \"\"\napi_style = \"openai\"\nbackend = \"generic\"\nreasoning_field_name = \"reasoning_content\"\nproject_id = \"\"\nregion = \"\"\n\n[providers.extra_headers]\n"
-    )
+    crate::services::local_drivers::vibe_provider_block(&base)
 }
 
 fn ollama_model_block(model: &str, alias: &str) -> String {
-    format!(
-        "\n[[models]]\nname = \"{model}\"\nprovider = \"ollama\"\nalias = \"{alias}\"\ntemperature = 0.2\ninput_price = 0.0\noutput_price = 0.0\nthinking = \"off\"\nauto_compact_threshold = 200000\n"
-    )
+    crate::services::local_drivers::vibe_model_block(model, alias)
 }
 
 #[cfg(all(test, unix))]
@@ -3791,6 +3948,20 @@ mod owned_server_tests {
         // the OS has since handed to somebody else.
         assert!(OWNED_SERVER.lock().unwrap().is_none());
     }
+}
+
+pub mod hf;
+
+/// Search the Hugging Face Hub's GGUF repos, one page at a time (body in
+/// [`hf::search_huggingface_models_in`]). Declared here, not in `hf.rs`, so the
+/// core dispatcher's generator sees it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn search_huggingface_models(
+    query: String,
+    sort: String,
+    cursor: Option<String>,
+) -> Result<hf::HfSearchPage, String> {
+    hf::search_huggingface_models_in(query, sort, cursor).await
 }
 
 #[cfg(test)]

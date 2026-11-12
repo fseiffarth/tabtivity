@@ -1,5 +1,179 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] **Cockpit MCP: rename the calling tab** (implemented 2026-11-06, never live).
+  Plan: `docs/cockpit_mcp_plan.md`. Begin with self-only `tab_rename` on a
+  separate authenticated lane, using versioned workspace edits; later consider
+  own-tab colour/info and scoped aggregate counts. As built:
+  `docs/context/cockpit_mcp.md`; pills `cockpit.mcp.rename` and
+  `agents.tools.group`. Manage CLIs groups all lanes visually under
+  Tabtivity tools; root/web entries link to their existing settings.
+  - [ ] 🖐️ Manual QA: through MCP rename a local agent tab; check strip,
+    cockpit, phone, inactive scope, detached window and restore; repeat for
+    a phone-created tab without a desktop. Check disabled/revoked calls fail,
+    the grouped controls stay independent, and root/web links open their settings.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] Cockpit MCP agent notes (implemented 2026-11-06, never live; plan
+    `docs/cockpit_mcp_extensions_plan.md` steps 1-2, as built
+    `docs/context/cockpit_mcp.md`; pills `cockpit.mcp.activity` and
+    `cockpit.mcp.handoff`). Step 3 (results, 2026-11-06, pill
+    `cockpit.mcp.results`), step 4 (progress/blocker/verification) and step 5
+    (attention, milestones) are implemented below. Phone presentation is open.
+  - [ ] 🖐️ Manual QA, activity: after `npm run backend:stale` is clear (restart
+    when you choose), ask a new local Claude tab to call `tab_get_info`, then
+    `tab_set_activity` with a short line. Check the roster row shows it under
+    the tab name, tagged "Agent says" with a relative time, beside (not in
+    place of) the working/question state; a repeat of the same line changes
+    nothing; a stale `expectedRevision` is refused; after 30 minutes (or a
+    restart of that agent) the line is gone; with the tab's machine down the
+    line is hidden; a hostile line (`<b>`, very long text) renders as text.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, handoff: ask the agent to call `tab_set_handoff` with a
+    summary, checks and remaining. Check the detail pane shows the block
+    marked as written by the agent with its age, newlines kept and markup
+    shown as text; it survives restoring the scope and a restart of the app;
+    a window with an older tab copy (second window or popout) still shows it
+    after a rename elsewhere; the Manage CLIs switch off refuses
+    `tab_get_info` / `tab_set_activity` / `tab_set_handoff` from a running tab.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, results (`tab_set_results`, step 3; `cockpit.mcp.results`):
+    in a local project, ask a new local agent to call `tab_get_info`, then
+    `tab_set_results` with a few project-relative paths (a PNG, a Markdown
+    file, one file that does not exist yet, one with `<b>` in its label). Check
+    the detail pane shows the "Agent results" fold under the handoff with each
+    label and its path as plain text and "Listed by the agent ... ago"; nothing
+    opens or is created by drawing it; clicking an existing file opens its
+    viewer tab in that project (Back returns to the agent tab) and closes the
+    cockpit; clicking the missing one shows "Unavailable" and opens nothing;
+    absolute paths, `..`, `C:\`, `file://` and a symlink out of the project are
+    refused by the tool; replace a listed file by a symlink to a file outside
+    the project and click it: "Not opened: it is outside the project"; the
+    Root console, a box tab, a remote and a worker-hosted project answer
+    `unavailable`; the list survives restoring the scope and a restart, and a
+    second window with an older tab copy still shows it.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, progress (`tab_set_progress`, step 4;
+    `cockpit.mcp.progress`): ask a new local agent to call `tab_get_info`, then
+    `tab_set_progress` with three steps (done, active, pending). Check the
+    detail pane shows "Agent progress" under the results with each label and
+    the words done / in progress / pending, "Reported by the agent ... ago",
+    no spinner; the same steps again change nothing; two active steps, a
+    duplicate id, an id with capitals or spaces and nine steps are refused;
+    after 30 minutes, after restarting that agent (the new run's grant) and
+    while its machine is down the section reads "(past report)" with the
+    active step as "was in progress", never as running; an empty list clears
+    it; it survives restoring the scope and a restart.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, blocker (`tab_set_blocker`, step 4;
+    `cockpit.mcp.blocker`): ask the agent to call `tab_set_blocker` with one
+    line. Check it replaces the activity line under the roster row, tagged
+    "Agent reports blocked" with a relative time, and the detail pane shows
+    "Agent-reported blocker"; the Needs-you count, the row's state mark and
+    the sort do not change (an idle agent that reports a blocker is still
+    idle); text is shown as text (`<b>`), a two-line text is refused;
+    `text: null` restores the activity line; it is gone after 30 minutes and
+    after restarting the agent.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, verification (`tab_set_verification`, step 4;
+    `cockpit.mcp.verification`): ask the agent to call `tab_set_verification`
+    with a passed entry, a failed one with a two-line note and a not_run one.
+    Check the detail pane shows "Agent-reported checks" below the progress
+    with "Reported by the agent at <time> (<ago>). ... did not run or check
+    these." (never "verified"), each outcome as a word, notes keeping their
+    line breaks, markup shown as text; an unknown outcome and nine entries are
+    refused; the list survives a restart and a second window with an older tab
+    copy still shows it; with all the notes full of multi-byte text the write
+    that crosses 32 KiB is refused as too large and nothing changes.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, attention (`tab_request_attention`, step 5;
+    `cockpit.mcp.attention`): ask a local agent that is idle and not asking to
+    call `tab_get_info`, then `tab_request_attention` with a two-line
+    question. Check "Agent asks 1" appears in the Needs-you rail (wide Now,
+    the icon rail's popover in the middle band, the narrow chip and Root's
+    rail), the header badge and its tooltip count it, the question is shown as
+    text (try `<b>x</b>`), clicking the row opens that tab's conversation and
+    answers nothing. Dismiss (rail and detail pane) hides it, the badge falls,
+    and asking the identical question again changes nothing; a changed
+    question is a new item. Make the same tab ask a real question (the CLI's
+    own prompt): it is listed under Asking only, counted once. Options or an
+    answer argument are refused; the question is gone after restarting the
+    agent, after 24 hours (host clock) and when the tab is closed (a reopened
+    tab has none); a second window with an older tab copy cannot bring a
+    dismissed question back.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual QA, milestones (`tab_add_milestone`, step 5;
+    `cockpit.mcp.milestones`): ask the agent to call `tab_add_milestone` with a
+    `requestId` and one line. Check "Agent milestones" in the detail pane
+    (newest first, host time, "Reported by the agent"), the same `requestId`
+    again adds nothing, a 21st milestone drops the oldest, a two-line text is
+    refused, markup shows as text. Close the cockpit, add a milestone from the
+    agent, reopen Tonight: "While you were away" lists it under "Milestones
+    reported by agents" with the "agent-reported" tag and one dated before the
+    window is not listed; after a restart of the app the list survives.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 - [ ] OpenCode 2 credential sharing (2026-10-22): install/Update/remote and
   the latest-release source already moved to V2 (the user's call, same day),
   so until `agent_auth` can share V2's credential records without sharing its
@@ -16,6 +190,19 @@
   folder, `/new`, child agents, restore, local Ollama model launch, Reader
   text/Changes and project export/import. CLI flags and fixture tests do not
   verify the live integration; Tabtivity was not restarted.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ OpenCode permission and `mini` questions from the Chat (`agents.opencode.v2`): in a full and a
+  `--mini` OpenCode tab with `"permission": {"shell": "ask"}`, ask for a command: the tab's lamp turns to
+  decision and the Chat shows the command with Allow once / Always allow / Reject; each answers from the
+  Chat and from the phone (`mini`: Always allow then asks Confirm / Cancel). Run from the checklist §1.5
+  against OpenCode 2.2.5 with a stub model, never in a tab.
   - [ ] ✅ Works on Linux (X11)
   - [ ] ❌ Doesn't work on Linux (X11)
   - [ ] ✅ Works on Linux (Wayland)
@@ -2917,3 +3104,123 @@ unchanged; the new agents are additive.
   the Media Session API (plan step 5); if it does, it toggles talk/stop.
 - [ ] `voice_voices` and a system-voice picker in Settings → Voice (needs a
   per-language filter: espeak-ng lists thousands of variants).
+- [x] Natural voices (plan step 7, `services::voice::piper`): the OS voice
+  sounded terrible on Ubuntu (2026-11-05). Piper MIT binary as a child, one
+  medium voice per app language, install tab from Settings → Voice. Not on
+  macOS (broken build; its own voices are good). Never live.
+- [ ] 🖐️ Natural voice — Settings → Voice: **Natural voice** on, **Install
+  natural voice · N MB** opens a tab that fetches Piper and the voice and
+  verifies both. Turn on Read aloud in a Chat: the next answer is spoken in
+  the neural voice, at the read-aloud speed; Ctrl+Shift+Q silences it at
+  once. Turn Natural voice off: the system voice reads again. Quit: no
+  `piper` process is left (`pgrep -a piper`).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+- [ ] Natural voice in the Chat: offer the install from the Read aloud chip
+  the first time (plan step 7's card), not only in Settings.
+- [ ] Talk over a natural voice through speakers: `webrtc-audio-processing`
+  echo cancellation against the samples `piper.rs` plays (plan step 7);
+  probe the crate on the three CI OSes first.
+
+### Send skill — `docs/context/agent_sessions.md`
+
+- [x] Built 2026-11-08 (uncommitted): `agent_hint::write_skill_in_home`
+  writes a `tabtivity-send` skill into `.claude`/`.codex`/`.copilot`
+  `skills/` of every agent home except the assistant's and the probe's.
+  Folders found by searching Claude 2.1.319, OpenCode 2.2.6, Codex 0.167.0 and
+  Copilot 1.0.107; not live.
+- [ ] 🖐️ Manual test — in a new Claude tab type `/tabtivity-send README.md`:
+  the file goes to the screen you typed from (the desktop chat names it, or
+  the phone gets it). In a new Codex, Copilot and OpenCode tab, `/skills` (or
+  the CLI's skill list) shows `tabtivity-send` **once**. Ask any of them to
+  "send me the output of `ls` on my phone": it pipes through `-n` rather than
+  writing a file first. Tabby's (assistant) chat lists no such skill.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Send skill for the CLIs not installed here (Gemini, Qwen, Auggie,
+  CodeBuddy, Droid, Cursor, Vibe, Pi, Kimi, Crush, Amp, Goose, Kiro): check
+  with `verify-cli` whether each reads user skills from its home, and from
+  which folder; add the ones that do to `agent_hint::SKILL_DIRS`.
+- [ ] Question mark, Claude: decision from `PermissionRequest` at once, and
+  kept while the pane still shows a dialog after an answer (2026-11-10).
+  Claude 2.1.322 sent its `permission_prompt` notice 6 s after the dialog
+  opened and never once a key was pressed in it, so the lamp came late or not
+  at all; ↑/↓ and Enter on question 1 of several retired it. Now the hook maps
+  `PermissionRequest` (plus `elicitation_url_dialog`, `agent_needs_input`) to
+  `decision`, arrow/Tab keys never retire it, and an answering key on a pane
+  on screen waits for `dialogOnScreen` to find no dialog. Backend change: a
+  restart re-registers the hook in each home.
+  - [x] 🤖 Automated test — `AgentTurnHooks` (navigation, next question,
+    hook settles), `hook_script_records_the_turn_state_for_the_tabs_own_session_only`
+  - [ ] 🖐️ Manual test — after a restart into the new dev build: (1) ask Claude
+    for a two-question AskUserQuestion, switch to another tab at once → the
+    question lamp is up within a second. (2) Back in the tab, press ↓ → still
+    up; Enter on question 1 → still up on question 2 and on the review; Submit
+    → working. (3) Again, but Cancel on the review → the lamp clears within a
+    second. (4) A plan approval (ExitPlanMode) lights it too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] Codex `PermissionRequest` hook: Codex 0.167 has the event (and
+  `Interrupt`); its question lamp still comes from the screen after ~2 s quiet.
+  Verify live (does it fire for an exec approval and for `request_user_input`,
+  payload keys, trust hash label) before adding it to `CODEX_HOOK_EVENTS` and
+  `codex_event_label`.
+- [ ] 🖐️ Reader Files · Links section — open an agent tab, have the agent print a
+  claude.ai artifact link, a GitHub PR link and a file path. Reader → Files: the
+  file under Files, the two links under Links (host bold, path dim, who and when),
+  newest first, each once. Click a link: the "Open link?" box names the exact URL;
+  Cancel opens nothing; confirm opens the browser (no network request before
+  that). A Files tab with only a link in the conversation is enabled. On a remote
+  project tab a `localhost:` link forwards instead of opening this machine's port.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+### Agent print MCP — `docs/context/print_mcp.md`
+
+- [ ] Wire every agent CLI into the MCP lanes, not only Claude, Codex and
+  tool-tagged Vibe: `root_mcp::wire_named_cli_args` writes a server only for
+  those, so Gemini, Qwen, OpenCode, Copilot, Droid, Cursor, Auggie, CodeBuddy
+  get the `*_MCP_TOKEN`/`_URL` env pair and no config. One change for all lanes
+  (git, markup, help, cockpit, print): each CLI's own MCP config format
+  (Gemini/Qwen `settings.json` `mcpServers`, OpenCode `opencode.json` `mcp`,
+  Copilot, Droid/Cursor), checked against the real CLI version (`verify-cli`).
+  User decision 2026-11-10: print first, all-CLI wiring as this follow-up.
+- [ ] 🖐️ Agent print request — fresh Claude tab in a local project with a PDF:
+  ask it to print the PDF, 2 copies, pages 1-2, with a note. A bottom-left popup
+  ("An agent asks to print") and a row in the Print Manager tab's "Agent print
+  requests" card appear. Review: the print preview opens titled "Print request
+  from <tab>", the note under it, copies 2 and pages 1-2 preset; Approve & print
+  opens the system print dialog; after printing `print_status` says `printed`
+  and the popup is gone. Again with Reject → `rejected`. Ask for a `.txt` →
+  `not_pdf`. Close the tab with one pending → it disappears. Later hides the
+  popup until the next request.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

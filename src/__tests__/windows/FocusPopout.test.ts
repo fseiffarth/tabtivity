@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { nextPopoutLabel } from "../../lib/window/focusPopout";
+import { nextPopoutLabel, popoutAfter } from "../../lib/window/focusPopout";
+import { useTabsStore } from "../../stores/tabs";
 import { steeringActionFor } from "../../lib/shortcuts/steeringBindings";
 import { steeringKeysFor, type SteeringLegendState } from "../../lib/shortcuts/shortcuts";
 
@@ -12,6 +13,20 @@ describe("steering J — raise a popout", () => {
     // The last one raised was docked back: start over.
     expect(nextPopoutLabel(labels, "detached-gone")).toBe("detached-a");
     expect(nextPopoutLabel([], undefined)).toBeNull();
+  });
+
+  it("a popout's J takes the scope's next popout, wrapping, never the main window", () => {
+    const group = (label: string) => ({ id: label, label, subtree: { type: "group", id: label, tabKeys: [], activeKey: null } });
+    useTabsStore.setState({
+      detachedGroupsByScope: { p: [group("w1"), group("w2"), group("w3")], q: [group("only")] },
+    } as never);
+    expect(popoutAfter("p", "w1")).toBe("w2");
+    expect(popoutAfter("p", "w3")).toBe("w1");
+    // The only popout, or one the scope no longer lists: nowhere to go.
+    expect(popoutAfter("q", "only")).toBeNull();
+    expect(popoutAfter("p", "gone")).toBeNull();
+    expect(popoutAfter("none", "w1")).toBeNull();
+    useTabsStore.setState({ detachedGroupsByScope: {} } as never);
   });
 
   it("J is the popout key on every tab-bar level", () => {

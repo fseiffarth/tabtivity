@@ -6,6 +6,7 @@ import { useT } from "../../lib/i18n";
 import { QUEUED_CONFIRM_DELAY_MS } from "../../lib/queuedConfirm";
 import type { UntestedId } from "../../lib/untested";
 import { ErrorNote } from "./ErrorNote";
+import { CloseIcon } from "./icons/Icon";
 
 /**
  * The three shapes every in-app question takes — ask for a name, ask yes/no,
@@ -113,23 +114,48 @@ export function useConfirmArmed(id: number | null, queued: boolean): boolean {
   return id !== null && (!queued || armed === id);
 }
 
-/** The dialog frame every one of these wears — portaled, backdrop-dismissed.
- *  Exported for a question too specific for the helpers below. */
+/** The one modal dialog frame: portaled, backdrop-dismissed, focus held and
+ *  given back (`useModalFocus`), lifted above an elevated dialog it opens from.
+ *  Every new modal dialog wears it rather than building `.modal-backdrop`
+ *  itself (`theme/DialogShellRatchet.test.ts`; the `add-menu` skill). The
+ *  surface's paint is the floating recipe's (`apps.css`), reached through
+ *  `frame`; the body's text colour comes from it too, so nothing here sets one.
+ *
+ *  - `title` draws the settings-style header: a `.settings-title-row` with the
+ *    title and a close button (`onClose`, else `onDismiss`). Without it, put an
+ *    `<h2>` first in `children`; it labels the dialog either way.
+ *  - `scroll` makes a dialog whose body can overflow: the frame clips
+ *    (`dialog-framed`) and `children` scroll inside a `.dialog-scroll`, the
+ *    title row staying fixed above them. */
 export function DialogShell({
   onDismiss,
   children,
   className,
   frame = "file-delete-dialog",
+  title,
+  onClose,
+  closeDisabled = false,
+  scroll = false,
 }: {
   onDismiss: () => void;
   children: ReactNode;
   /** Extra class beside the frame's (a wider box, say). */
   className?: string;
   /** The family surface the box wears: the short prompt's
-   *  `file-delete-dialog`, or `project-dialog` for a question that keeps the
-   *  settings-style header (title row with a close button). */
-  frame?: "file-delete-dialog" | "project-dialog";
+   *  `file-delete-dialog`, `project-dialog` for a form or a question that keeps
+   *  the settings-style header, `settings-dialog` / `stats-dialog` for those
+   *  two families' wider boxes. */
+  frame?: "file-delete-dialog" | "project-dialog" | "settings-dialog" | "stats-dialog";
+  /** The header's title: renders the title row with a close button. */
+  title?: ReactNode;
+  /** What the header's close button does; `onDismiss` when left out. */
+  onClose?: () => void;
+  /** Holds the close button while the dialog is busy (a save in flight). */
+  closeDisabled?: boolean;
+  /** The body scrolls inside a clipped frame (`dialog-framed` + `.dialog-scroll`). */
+  scroll?: boolean;
 }) {
+  const t = useT();
   // Read before this frame registers itself: a question asked from inside an
   // elevated dialog (a to-do card over its board) must ride above that dialog,
   // or it opens underneath it at the plain modal layer.
@@ -155,12 +181,26 @@ export function DialogShell({
         ref={ref}
         tabIndex={-1}
         aria-labelledby={titleId}
-        className={className ? `${frame} ${className}` : frame}
+        className={[frame, scroll ? "dialog-framed" : "", className ?? ""].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {children}
+        {title !== undefined && (
+          <div className="settings-title-row">
+            <h2>{title}</h2>
+            <button
+              type="button"
+              className="dialog-close-btn"
+              aria-label={t("common.close")}
+              disabled={closeDisabled}
+              onClick={onClose ?? onDismiss}
+            >
+              <CloseIcon />
+            </button>
+          </div>
+        )}
+        {scroll ? <div className="dialog-scroll">{children}</div> : children}
         <UntestedTag id="desktop.modalFocus" />
       </div>
     </div>,
@@ -341,7 +381,7 @@ export function AsyncConfirmDialog({
     <DialogShell frame="project-dialog" onDismiss={dismiss}>
       <div className="settings-title-row">
         <h2>{title}</h2>
-        <button type="button" className="dialog-close-btn" onClick={dismiss}>×</button>
+        <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={dismiss}><CloseIcon /></button>
       </div>
       {typeof children === "function" ? children(confirm) : children}
       {error && <ErrorNote className="project-dialog-error" error={error} />}

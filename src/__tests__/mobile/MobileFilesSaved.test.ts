@@ -9,14 +9,22 @@ import {
   FAVORITES_CAP,
   FOLDER_COLORS_CAP,
   RECENTS_CAP,
+  filesPlaceId,
+  forgetFiles,
   isFavorite,
   onFavorites,
   onFolderColors,
   onRecents,
+  openFileTab,
+  readFavoritePlaces,
   readFavorites,
+  readFileTabs,
+  readFilesPlace,
   readFolderColors,
   readRecents,
   recordRecent,
+  rememberFilesPlace,
+  rememberFilesSide,
   removeFavorite,
   removeRecent,
   savedPlace,
@@ -164,5 +172,50 @@ describe("files library — folder colours", () => {
     expect(() => setFolderColor("p1", "src", "green", refusing)).not.toThrow();
     expect(listener).toHaveBeenCalledTimes(1);
     off();
+  });
+});
+
+describe("every project's favorites at once", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("reads each side back by its project, with its folder colours", () => {
+    const host = filesPlaceId("p1", "host");
+    toggleFavorite("p1", { kind: "dir", name: "src", token: "t1", trail: [] });
+    toggleFavorite(host, { kind: "application/pdf", name: "paper.pdf", token: "t2", trail: [] });
+    setFolderColor("p1", "src", "green", undefined);
+    const places = readFavoritePlaces();
+    expect(places.map(({ projectId, side, items }) => [projectId, side, items.map((item) => item.name)])).toEqual([
+      ["p1", "here", ["src"]],
+      ["p1", "host", ["paper.pdf"]],
+    ]);
+    expect(places[0].colors.get("src")).toBe("green");
+  });
+});
+
+describe("forgetting the device's files", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("leaves no file or folder name behind, and tells what is on screen", () => {
+    const saved = { kind: "text/plain", name: "thesis-draft.tex", token: "t1", trail: [{ token: "t2", name: "secret-grant" }] };
+    toggleFavorite("p1", saved);
+    recordRecent("p1", { ...saved, size: 1, modified: 1 });
+    setFolderColor("p1", "secret-grant", "green", undefined);
+    rememberFilesPlace("p1", saved.trail);
+    rememberFilesSide("p1", "host");
+    openFileTab("p1", { token: "t3", name: "paper.pdf", kind: "application/pdf", size: 1, modified: 1, place: "" });
+    const told = vi.fn();
+    const offs = [onFavorites(told), onRecents(told), onFolderColors(told)];
+
+    forgetFiles();
+
+    offs.forEach((off) => off());
+    expect(told).toHaveBeenCalledTimes(3);
+    expect(readFavorites("p1")).toEqual([]);
+    expect(readRecents("p1")).toEqual([]);
+    expect(readFolderColors("p1").size).toBe(0);
+    expect(readFilesPlace("p1")).toEqual([]);
+    expect(readFileTabs("p1")).toEqual([]);
+    const left = Object.keys(localStorage).filter((key) => key.includes("files") || key.includes("fileTabs"));
+    expect(left).toEqual([]);
   });
 });

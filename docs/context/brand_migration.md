@@ -63,6 +63,9 @@ Rules every step follows:
   state dir and a project's folder are renamed (same parent, so nothing is ever
   half-moved; a failed rename changes nothing). The webview data, IndexedDB
   and git refs are copied, read back, and only then is the old copy removed.
+  The webview-data step runs on Linux only: `state_gc::webview_data_root` is
+  `None` elsewhere, so on macOS and Windows the store stays under the old
+  identifier (todo 2442q).
 - **A failed step leaves the app working.** Every folder lookup tries the
   current name and then the old one (`resolve_named_dir`), so a state dir that
   could not move (a locked executable on Windows, both names present) is simply

@@ -261,7 +261,7 @@ describe(`${BRAND.display} Mobile slash commands — the composer`, () => {
     expect(within(menu).getByText("/review")).toBeTruthy();
   });
 
-  it("puts the keys button after ＋, then Plan, Goal, Clear and Commit, the mic in the field; a tap leads the draft and sends nothing", async () => {
+  it("puts ＋ first, then the Plan | Goal segment, Clear and Commit, the keys button by Send, the mic in the field; a tap leads the draft and sends nothing", async () => {
     render(<Terminal tab={CLAUDE_TAB} back={() => {}} />);
     await settle();
     const field = screen.getByLabelText("Message agent") as HTMLTextAreaElement;
@@ -269,7 +269,8 @@ describe(`${BRAND.display} Mobile slash commands — the composer`, () => {
     const goal = screen.getByRole("button", { name: "Goal" });
     const bar = plan.closest(".composer-bar") as HTMLElement;
     const order = Array.from(bar.querySelectorAll("button")).map((button) => button.className.split(" ")[0]);
-    expect(order).toEqual(["composer-add", "composer-keys", "composer-prefix", "composer-prefix", "composer-prefix", "composer-prefix", "send-icon"]);
+    expect(order).toEqual(["composer-add", "composer-prefix", "composer-prefix", "composer-tool", "composer-tool", "composer-keys", "send-icon"]);
+    expect(screen.getByRole("group", { name: "Lead the message with" }).contains(plan)).toBe(true);
     expect(screen.getByRole("button", { name: "Start a new conversation" }).textContent).toBe("Clear");
     expect(bar.previousElementSibling?.querySelector(".composer-dictate")).toBeTruthy();
 

@@ -189,6 +189,127 @@ describe("OpenCode live questions shared by phone Chat and desktop Reader", () =
     expect(answerRowKeys(review, review.options[0])).toEqual(["\r"]);
   });
 
+  /** The colours of the captures below (2.2.4, 2026-10-30). */
+  const ACCENT = "rgb(250,178,131)";
+  const MUTED = "rgb(128,128,128)";
+  const TEXT = "rgb(238,238,238)";
+  const chips = (labels: string[], chosen: number, hints: string): ReadableLine => {
+    const spans: ReadableSpan[] = [{ text: "  " }];
+    labels.forEach((label, index) => {
+      spans.push(index === chosen ? { text: ` ${label} `, background: ACCENT } : { text: ` ${label} ` });
+      spans.push({ text: " " });
+    });
+    if (hints) spans.push({ text: `     ${hints}`, color: MUTED });
+    return { key: "chips", text: spans.map((span) => span.text).join("").replace(/\s+$/u, ""), spans };
+  };
+  const SHELL = [line("  △ Permission required"), line(""), line("  $ echo probe-output"), line("")];
+
+  it("reads the permission row's chip off its background, and walks to a row with arrows", () => {
+    const hints = "ctrl+f fullscreen  ⇆ select  enter confirm";
+    const once = read([...SHELL, chips(["Allow once", "Always allow", "Reject"], 0, hints)]);
+    expect(once.options.map((option) => option.label)).toEqual(["Allow once", "Always allow", "Reject"]);
+    expect(once.current).toBe(0);
+    expect(once.title).toBe("Permission required · $ echo probe-output");
+    expect(answerKeys(once, once.options[0])).toEqual(["\r"]);
+    expect(answerKeys(once, once.options[2])).toEqual(["\u001b[C", "\u001b[C", "\r"]);
+    const reject = read([...SHELL, chips(["Allow once", "Always allow", "Reject"], 2, hints)]);
+    expect(reject.current).toBe(2);
+    expect(answerKeys(reject, reject.options[0])).toEqual(["\u001b[D", "\u001b[D", "\r"]);
+    expect(questionParts([...SHELL, chips(["Allow once", "Always allow", "Reject"], 2, hints)], reject).context.map((row) => row.text.trim()))
+      .toEqual(["△ Permission required", "", "$ echo probe-output"]);
+  });
+
+  it("keeps the permission row whole on a narrow pane, its hints on the row under it", () => {
+    const prompt = read([...SHELL, chips(["Allow once", "Always allow", "Reject"], 1, ""), line("  ctrl+f fullscreen  ⇆ select  enter confirm")]);
+    expect(prompt.current).toBe(1);
+    expect(prompt.options).toHaveLength(3);
+  });
+
+  it("answers mini's permission: its Reject asks why, and Always allow has a step of its own", () => {
+    const panel = [
+      line("  △ Permission required"), line("   # Shell command                    █"), line("                                      █"),
+      line("  $ echo probe-output                 █"), line("                                      █"),
+      chips(["Allow once", "Always allow", "Reject"], 0, "⇆ select  enter confirm  esc reject"),
+    ];
+    const prompt = read(panel);
+    expect(prompt.title).toBe("Permission required · $ echo probe-output");
+    expect(answerKeys(prompt, prompt.options[2])).toEqual(["\u001b[C", "\u001b[C", "\r", "\r"]);
+    expect(questionParts(panel, prompt).context.map((row) => row.text.trim()))
+      .toEqual(["△ Permission required", "# Shell command", "", "$ echo probe-output"]);
+    const always = read([line("  △ Always allow"), line("  - echo *"), line(""), chips(["Confirm", "Cancel"], 0, "⇆ select  enter confirm  esc cancel")]);
+    expect(always.options.map((option) => option.label)).toEqual(["Confirm", "Cancel"]);
+    expect(always.title).toBe("Always allow · - echo *");
+    expect(answerKeys(always, always.options[1])).toEqual(["\u001b[C", "\r"]);
+  });
+
+  it("keeps mini's permission panel under the echo of its prompt, and its Reject under 56 columns", () => {
+    const panel = [
+      line("› DOBASH one"), line(""), line("  △ Permission required"), line("   # Shell command            █"),
+      line("  $ echo probe-output         █"), line(""),
+    ];
+    const live = readReaderLive(bufferFor([...panel, chips(["Allow once", "Always allow", "Reject"], 0, "⇆ select  enter confirm  esc reject")]), "OpenCode", 100);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["Allow once", "Always allow", "Reject"]);
+    expect(live.context.map((text) => text.trim())).toContain("$ echo probe-output");
+    expect(live.stray).toBe(false);
+    const narrow = read([...panel, chips(["Allow once", "Always allow", "Reject"], 0, ""), line("pgup/pgdn scroll")]);
+    expect(answerKeys(narrow, narrow.options[2])).toEqual(["\u001b[C", "\u001b[C", "\r", "\r"]);
+  });
+
+  it("reads mini's single question under 56 columns, its rows packed under the heading", () => {
+    const prompt = read([line("◆ Questions"), line("Which colour?"), miniRow(1, "Red", "warm", false), miniRow(2, "Blue", "cool", false), miniFooter("enter choose esc dismiss pgup/pgdn scroll")]);
+    expect(prompt.title).toBe("Which colour?");
+    expect(prompt.options.map((option) => option.label)).toEqual(["Red", "Blue"]);
+  });
+
+  it("refuses the chips with no request over them, and on another agent", () => {
+    expect(readSelectPrompt([chips(["Allow once", "Always allow", "Reject"], 0, "⇆ select  enter confirm")], "OpenCode")).toBeNull();
+    expect(readSelectPrompt([...SHELL, chips(["Allow once", "Always allow", "Reject"], 0, "⇆ select  enter confirm")], "Claude")).toBeNull();
+  });
+
+  /** One of mini's option rows: number and label in `color`, its note muted. */
+  const miniRow = (number: number, label: string, note: string | undefined, active: boolean): ReadableLine => {
+    const color = active ? ACCENT : TEXT;
+    const spans: ReadableSpan[] = [
+      { text: "  " },
+      { text: `${number}.`, color, ...(active ? { background: "rgb(10,10,10)" } : {}) },
+      { text: " " }, { text: label, color },
+      ...(note ? [{ text: " " }, { text: note, color: MUTED }] : []),
+    ];
+    return { key: `row${number}`, text: spans.map((span) => span.text).join(""), spans };
+  };
+  const miniFooter = (text: string): ReadableLine => ({ key: "footer", text, spans: [{ text, color: MUTED }] });
+  const MINI_KEYS = "  ↑↓ select   enter choose   tab next   esc dismiss";
+
+  it("reads mini's question: the description beside its label, the row on its own background", () => {
+    const prompt = read([
+      line("› DOASK please"), line(""), line("  ◆ Questions"), line(""), line("  Which colour?"), line(""),
+      miniRow(1, "Red", "warm", false), miniRow(2, "Blue", "cool", true), miniRow(3, "Type your own answer", undefined, false),
+      line(""), miniFooter(MINI_KEYS),
+    ]);
+    expect(prompt.title).toBe("Which colour?");
+    expect(prompt.current).toBe(1);
+    expect(prompt.options.map(({ label, description, keys }) => ({ label, description, keys }))).toEqual([
+      { label: "Red", description: "warm", keys: ["1"] },
+      { label: "Blue", description: "cool", keys: ["2"] },
+      { label: "Type your own answer", description: undefined, keys: ["3"] },
+    ]);
+    expect(prompt.options[2].input).toBe("opencode");
+    expect(prompt.navigation).toBeUndefined();
+  });
+
+  it("walks mini's steps by count, and sends its Review page", () => {
+    const step = read([
+      line("  ◆ Questions 2/2"), line(""), line("  Which sizes? (select all that apply)"), line(""),
+      miniRow(1, "[x] Small", "tiny one", true), miniRow(2, "[ ] Large", "big one", false), line(""), miniFooter(MINI_KEYS),
+    ]);
+    expect(step.options[0].label).toBe("[x] Small");
+    expect(step.navigation).toEqual({ tabs: [{ label: "Q1", answered: false }, { label: "Q2", answered: false }], focus: 1, submit: true, keys: "tabs" });
+    const review = read([line("  ◆ Questions Review"), line(""), line("  Colour: Blue"), line("  Size: (not answered)"), line(""), miniFooter("  enter submit   esc dismiss")]);
+    expect(review.review).toBe(true);
+    expect(review.options.map((option) => option.keys)).toEqual([["\r"]]);
+    expect(questionParts([line("  ◆ Questions Review"), line(""), line("  Colour: Blue"), line(""), miniFooter("  enter submit   esc dismiss")], review).ask.map((row) => row.text)).toContain("Colour: Blue");
+  });
+
   it("ignores earlier numbered prose and refuses ordinary lists, other agents and stale dialogs", () => {
     expect(read([line("1. Earlier item"), line("2. Another item"), line(""), ...screenshot()]).options).toHaveLength(5);
     expect(readSelectPrompt(screenshot(), "Claude Code")).toBeNull();

@@ -3,7 +3,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
-import { CheckboxIcon, CheckIcon, SquareIcon } from "../common/icons/Icon";
+import { CheckboxIcon, CheckIcon, DotIcon, SquareIcon } from "../common/icons/Icon";
 import { isHostPinned, projectHostKind, type ProjectHostKind } from "../../lib/projectTabHost";
 import type { ProjectEntry } from "../../types";
 import { phoneReach, usePairedPhones, type PairedPhone, type PhoneReach } from "./usePairedPhones";
@@ -46,6 +46,39 @@ export function phoneReachLabel(reach: PhoneReach, t: Translate): string {
   }
 }
 
+/**
+ * The compact "All phones ▾" / "2 phones ▾" / "No phones ▾" button beside a row
+ * whose access is on: the opener of {@link MobileAccessPicker}. One button for
+ * Settings → Mobile's rows and the box sheet's phone row. `list` is the scope's
+ * stored per-phone list (`undefined` = every phone); `phones` the paired ones
+ * (`null` while unknown). `onOpen` gets the button's rect to anchor the picker.
+ */
+export function PhoneReachButton({
+  name,
+  list,
+  phones,
+  onOpen,
+}: {
+  name: string;
+  list: unknown;
+  phones: PairedPhone[] | null;
+  onOpen: (rect: DOMRect) => void;
+}) {
+  const t = useT();
+  const reach = phoneReach(true, list, phones);
+  return (
+    <button
+      type="button"
+      className={`settings-btn sm${reach.kind === "none" ? " warning" : ""}`}
+      aria-haspopup="menu"
+      title={t("mobile.phones.buttonTitle", { name })}
+      onClick={(event) => onOpen(event.currentTarget.getBoundingClientRect())}
+    >
+      {phoneReachLabel(reach, t)} ▾
+    </button>
+  );
+}
+
 /** The paired date of a phone row, in the reader's locale. */
 function pairedOn(phone: PairedPhone): string {
   return new Date(phone.created_at * 1000).toLocaleDateString();
@@ -77,7 +110,7 @@ export function MobileAccessPicker({
 }: {
   x: number;
   y: number;
-  kind: "project" | "box" | "assistant";
+  kind: "project" | "box" | "assistant" | "root";
   /** A project's type, so the head says what the phone reaches of it. */
   host?: PhoneReachHost;
   enabled: boolean;
@@ -88,12 +121,15 @@ export function MobileAccessPicker({
 }) {
   const t = useT();
   const { phones } = usePairedPhones();
+  /** Root's list is opt-in: no list is no phone, the list may be empty, and
+   * there is no "all phones" — the switch beside the button is the on/off. */
+  const optIn = kind === "root";
   const scoped = enabled && devices !== undefined && devices !== null;
-  const [only, setOnly] = useState(scoped);
+  const [only, setOnly] = useState(scoped || optIn);
   // Follow what the store holds once a choice lands (All clears the list,
   // the first tick writes one); a bare "Only these" click stays local until
   // a phone is ticked, since an empty list is never written.
-  useEffect(() => setOnly(scoped), [scoped, devices]);
+  useEffect(() => setOnly(scoped || optIn), [scoped, optIn, devices]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -122,7 +158,7 @@ export function MobileAccessPicker({
   };
   const togglePhone = (id: string) => {
     const on = ticked.includes(id);
-    if (on && ticked.length === 1) return;
+    if (on && ticked.length === 1 && !optIn) return;
     void apply(true, on ? ticked.filter((x) => x !== id) : [...ticked, id]);
   };
 
@@ -139,37 +175,42 @@ export function MobileAccessPicker({
               {host === "remote_only" ? <UntestedTag id="mobile.hostReach.remoteOnly" /> : <UntestedTag id="mobile-every-project-type" />}
             </div>
           )}
-          <button
-            type="button"
-            className="context-menu-check"
-            role="menuitemradio"
-            aria-checked={enabled && !only}
-            disabled={busy}
-            onClick={chooseAll}
-          >
-            <span className="context-menu-checkmark" aria-hidden>
-              {enabled && !only ? <CheckIcon /> : null}
-            </span>
-            {t("mobile.phones.all")}
-          </button>
-          <div className="context-menu-note">{t("mobile.phones.allHelp")}</div>
-          <button
-            type="button"
-            className="context-menu-check"
-            role="menuitemradio"
-            aria-checked={only}
-            disabled={busy || paired.length === 0}
-            onClick={() => setOnly(true)}
-          >
-            <span className="context-menu-checkmark" aria-hidden>
-              {only ? <CheckIcon /> : null}
-            </span>
-            {t("mobile.phones.only")}
-          </button>
+          {!optIn && (
+            <>
+              <button
+                type="button"
+                className="context-menu-check"
+                role="menuitemradio"
+                aria-checked={enabled && !only}
+                disabled={busy}
+                onClick={chooseAll}
+              >
+                <span className="context-menu-checkmark" aria-hidden>
+                  {enabled && !only ? <CheckIcon /> : null}
+                </span>
+                {t("mobile.phones.all")}
+              </button>
+              <div className="context-menu-note">{t("mobile.phones.allHelp")}</div>
+              <button
+                type="button"
+                className="context-menu-check"
+                role="menuitemradio"
+                aria-checked={only}
+                disabled={busy || paired.length === 0}
+                onClick={() => setOnly(true)}
+              >
+                <span className="context-menu-checkmark" aria-hidden>
+                  {only ? <CheckIcon /> : null}
+                </span>
+                {t("mobile.phones.only")}
+              </button>
+            </>
+          )}
+          {optIn && <div className="context-menu-note">{t("mobile.phones.rootHint")}</div>}
           {only &&
             paired.map((phone) => {
               const on = ticked.includes(phone.id);
-              const last = on && ticked.length === 1;
+              const last = on && ticked.length === 1 && !optIn;
               return (
                 <button
                   key={phone.id}
@@ -188,20 +229,20 @@ export function MobileAccessPicker({
                   {phone.name}
                   {phone.online && (
                     <span className="tab-new-menu-dot tab-new-menu-dot--accent" title={t("mobile.phones.online")}>
-                      {" "}●
+                      {" "}<DotIcon />
                     </span>
                   )}
                   <span className="tab-menu-hint">{t("mobile.phones.paired", { date: pairedOn(phone) })}</span>
                 </button>
               );
             })}
-          {only && ticked.length === 0 && reach.kind === "none" && (
+          {only && ticked.length === 0 && reach.kind === "none" && (!optIn || paired.length === 0) && (
             <div className="context-menu-note" role="status">{t("mobile.phones.nonePaired")}</div>
           )}
-          {only && ticked.length === 0 && reach.kind !== "none" && paired.length > 0 && (
+          {only && !optIn && ticked.length === 0 && reach.kind !== "none" && paired.length > 0 && (
             <div className="context-menu-note">{t("mobile.phones.tickHint")}</div>
           )}
-          {only && ticked.length === 1 && <div className="context-menu-note">{t("mobile.phones.keepOne")}</div>}
+          {only && !optIn && ticked.length === 1 && <div className="context-menu-note">{t("mobile.phones.keepOne")}</div>}
           {phones !== null && paired.length === 0 && (
             <div className="context-menu-note">{t("mobile.phones.noPhonesYet")}</div>
           )}
@@ -209,7 +250,7 @@ export function MobileAccessPicker({
           {kind === "box" && <div className="context-menu-note">{t("mobile.phones.boxNote")}</div>}
           {error && <ErrorNote className="context-menu-note" role="alert" error={error} />}
         </div>
-        {enabled && (
+        {enabled && !optIn && (
           <button
             type="button"
             className="danger"

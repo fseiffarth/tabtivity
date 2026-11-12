@@ -213,6 +213,28 @@ pub fn require(kind: TrustKind, dir: &Path) -> Result<(), String> {
     require_in(&store_path(), kind, dir, collect(kind, dir))
 }
 
+/// Whether the user has approved running project-supplied code from `dir`, of
+/// any kind, and that approval still matches what would run now. Never asks:
+/// for optional probes with no gate of their own (Poetry's interpreter
+/// discovery), which simply skip a folder this answers `false` for. Only kinds
+/// with a stored approval for `dir` are collected, so an unapproved folder
+/// costs one read of the store.
+pub fn approved_for(dir: &Path) -> bool {
+    approved_for_in(&store_path(), dir, collect)
+}
+
+const KINDS: [TrustKind; 3] = [TrustKind::GitHooks, TrustKind::Latexmkrc, TrustKind::Prettier];
+
+fn approved_for_in(store: &Path, dir: &Path, collect: impl Fn(TrustKind, &Path) -> Vec<Subject>) -> bool {
+    let approvals = load(store);
+    KINDS.into_iter().any(|kind| {
+        approvals.get(&key(kind, dir)).is_some_and(|stored| {
+            let subjects = collect(kind, dir);
+            !subjects.is_empty() && fingerprint(&subjects) == *stored
+        })
+    })
+}
+
 fn require_in(
     store: &Path,
     kind: TrustKind,
@@ -292,10 +314,13 @@ fn collect(kind: TrustKind, dir: &Path) -> Vec<Subject> {
 
 // ── git ─────────────────────────────────────────────────────────────────────
 
-/// Repo-scope config keys whose value is a program git runs during commit or
-/// push. `filter.*`/`diff.*`/`include*` are stripped outright by
-/// `commands::git`'s sanitizer and `core.fsmonitor` is pinned off, so they are
-/// not listed; these stay live because users set them on purpose.
+/// Repo-scope config keys whose value is a program git runs during commit,
+/// push or fetch — or, for `url.*.insteadOf`, that re-points a remote at a
+/// transport which then runs one (a local path's `uploadpack`, an `ssh://`
+/// that `core.sshCommand` answers). `filter.*`/`diff.*`/`include*` are
+/// stripped outright by `commands::git`'s sanitizer and `core.fsmonitor` is
+/// pinned off, so they are not listed; these stay live because users set them
+/// on purpose.
 fn is_exec_config_key(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
     matches!(
@@ -314,6 +339,7 @@ fn is_exec_config_key(key: &str) -> bool {
         || (k.starts_with("credential.") && k.ends_with(".helper"))
         || (k.starts_with("remote.") && (k.ends_with(".receivepack") || k.ends_with(".uploadpack")))
         || (k.starts_with("merge.") && k.ends_with(".driver"))
+        || (k.starts_with("url.") && (k.ends_with(".insteadof") || k.ends_with(".pushinsteadof")))
 }
 
 /// Parse `git config --list --show-scope -z`: `scope\0key\nvalue\0` records.
@@ -810,6 +836,30 @@ mod tests {
         assert_eq!(request_of(err)["changed"], true);
     }
 
+    /// `approved_for` (the silent check optional probes use): false with no
+    /// approval, true once one is stored and still current, false again once
+    /// what it approved has changed — and it never writes the store.
+    #[test]
+    fn approved_for_needs_a_current_approval_and_never_asks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("t.json");
+        let dir = tmp.path();
+        let body = std::cell::RefCell::new("a");
+        let collect = |kind: TrustKind, _: &Path| match kind {
+            TrustKind::Latexmkrc => vec![subj("rc", *body.borrow())],
+            _ => vec![],
+        };
+        assert!(!approved_for_in(&store, dir, collect));
+        assert!(!store.exists());
+
+        let fp = fingerprint(&[subj("rc", "a")]);
+        approve_in(&store, TrustKind::Latexmkrc, dir, vec![subj("rc", "a")], &fp).unwrap();
+        assert!(approved_for_in(&store, dir, collect));
+
+        *body.borrow_mut() = "b";
+        assert!(!approved_for_in(&store, dir, collect), "a changed file is no longer approved");
+    }
+
     #[test]
     fn approval_refuses_what_changed_after_it_was_shown() {
         let tmp = tempfile::tempdir().unwrap();
@@ -830,6 +880,10 @@ mod tests {
             "remote.origin.receivepack",
             "hook.lint.command",
             "merge.ours.driver",
+            "remote.origin.uploadpack",
+            "core.gitProxy",
+            "url./tmp/evil.insteadOf",
+            "url.ssh://x.example/.pushInsteadOf",
         ] {
             assert!(is_exec_config_key(k), "{k}");
         }

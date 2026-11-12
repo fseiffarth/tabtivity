@@ -1,3 +1,4 @@
+import { isTabKey } from "../lib/shortcuts/keyNames";
 import { useLayoutEffect, useRef, useState } from "react";
 
 const modals: HTMLElement[] = [];
@@ -49,7 +50,7 @@ export function useModalFocus(onDismiss: () => void, enabled = true) {
         e.preventDefault();
         e.stopImmediatePropagation();
         dismiss.current();
-      } else if (e.key === "Tab") {
+      } else if (isTabKey(e)) {
         const controls = items();
         const index = controls.indexOf(document.activeElement as HTMLElement);
         if (!controls.length || index < 0 || (e.shiftKey ? index === 0 : index === controls.length - 1)) {

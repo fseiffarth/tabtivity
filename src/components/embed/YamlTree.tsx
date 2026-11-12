@@ -36,6 +36,7 @@ import {
   type YamlValueType,
 } from "../../lib/viewers/yaml";
 import { useT } from "../../lib/i18n";
+import { ChevronLeftIcon, ChevronRightIcon, CloseIcon, GripIcon } from "../common/icons/Icon";
 
 /**
  * The YAML/JSON tree editor (#yaml) — the structured half of the viewer, the way
@@ -214,7 +215,7 @@ export function YamlTree({
             title={t("yamlTree.forgetCopiedTitle")}
             aria-label={t("yamlTree.forgetCopiedLabel")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       )}
@@ -651,7 +652,7 @@ function YamlRow({
               }}
               onPointerCancel={onDragAbort}
             >
-              ⠿
+              <GripIcon />
             </button>
           ) : (
             <span className="yaml-slot yaml-slot-grip" aria-hidden="true" />
@@ -729,7 +730,7 @@ function YamlRow({
               title={isContainer ? t("yamlTree.deleteEntryDeepTitle") : t("yamlTree.deleteEntryTitle")}
               aria-label={t("yamlGrid.deleteLabel", { title: label })}
             >
-              ×
+              <CloseIcon />
             </button>
           ) : (
             <span className="yaml-slot" aria-hidden="true" />
@@ -966,7 +967,7 @@ function YamlRow({
             title={t("yamlTree.removeCursorTitle")}
             aria-label={t("yamlTree.removeCursorTitle")}
           >
-            ×
+            <CloseIcon />
           </button>
         </div>
       )}
@@ -1172,7 +1173,7 @@ function InlineListCell({
           tabIndex={-1}
           aria-label={t("yamlTree.scrollLeftLabel", { label })}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <span className="yaml-list-field">
@@ -1220,7 +1221,7 @@ function InlineListCell({
           tabIndex={-1}
           aria-label={t("yamlTree.scrollRightLabel", { label })}
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
     </span>
@@ -1358,7 +1359,7 @@ function AddRow({
         {t("common.add")}
       </button>
       <button className="yaml-act" onClick={onCancel} aria-label={t("common.cancel")}>
-        ×
+        <CloseIcon />
       </button>
     </div>
   );

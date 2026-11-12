@@ -24,7 +24,7 @@ import {
 } from "../../lib/voice/desktopVoice";
 import { playChime } from "../../lib/voice/chime";
 import { sentTurnOver, useAgentTurn } from "../../lib/voice/agentTurn";
-import { createSendGuard, type GuardPhase, type SendGuard } from "../../../shared/handsFree";
+import { createPickStage, createStagedSendGuard, type GuardPhase, type PickStage, type SendGuard, type VoicePick, type VoicePickResult } from "../../../shared/handsFree";
 import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
@@ -57,7 +57,7 @@ const REOPEN_SETTLE_MS = 800;
  * The mic pauses while the pane is hidden and resumes when it is shown; the
  * session ends with the composer. A browser client offers no mic.
  */
-export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, onSend, hasDraft, pick, readProblem = null }: {
+export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, onSend, hasDraft, pick, commitPick, readProblem = null, note = "" }: {
   tabKey: string;
   ptyId: string;
   visible: boolean;
@@ -75,10 +75,16 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   /** Hands-free's send: the composer's own. */
   onSend: () => void;
   hasDraft: () => boolean;
-  /** Answers the question on screen when `utterance` picks one of its rows. */
-  pick: (utterance: string) => boolean;
+  /** Whether `utterance` picks a row of the question on screen: a staged pick
+   * (answered only when the send guard's window closes, `commitPick`),
+   * `"refused"` (a dialog a voice may not answer: the words are dropped) or null. */
+  pick: (utterance: string) => VoicePickResult;
+  /** The window closed on a staged pick: answer the dialog it was heard on. */
+  commitPick: (pick: VoicePick) => void;
   /** Why read-aloud could not speak: said on the same line. */
   readProblem?: TranslationKey | null;
+  /** What a spoken edit of the draft did ("Removed …"), for a moment. */
+  note?: string;
 }) {
   const t = useT();
   const uiLanguage = useI18nStore((s) => s.lang);
@@ -106,9 +112,9 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const sessionHandsFree = useRef(false);
   /** Bumped by every start and end, so a start that resolves late stops. */
   const attempt = useRef(0);
-  const handlers = useRef({ onText, onSend, hasDraft, pick });
+  const handlers = useRef({ onText, onSend, hasDraft, pick, commitPick });
   useEffect(() => {
-    handlers.current = { onText, onSend, hasDraft, pick };
+    handlers.current = { onText, onSend, hasDraft, pick, commitPick };
   });
   const lastAnswerRef = useRef(lastAnswer);
   lastAnswerRef.current = lastAnswer;
@@ -119,12 +125,25 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
 
   const guard = useRef<SendGuard | null>(null);
   // The voice detector already waited the pause before it closed the segment.
-  guard.current ??= createSendGuard(0, {
+  // A spoken pick waits in `staged` and rides the same guard (gap 80).
+  const staged = useRef<PickStage<VoicePick>>(createPickStage<VoicePick>());
+  const [pickHeard, setPickHeard] = useState("");
+  // A reset or cancel of the guard drops a staged pick with it.
+  guard.current ??= createStagedSendGuard(0, staged.current, {
     hasDraft: () => handlers.current.hasDraft(),
     onWindow: () => playChime(),
-    onSend: () => handlers.current.onSend(),
-    onCancel: () => {},
-    onPhase: setGuardPhase,
+    onSend: (pick) => {
+      if (!pick) {
+        handlers.current.onSend();
+        return;
+      }
+      handlers.current.commitPick(pick);
+      awaitTurnRef.current();
+    },
+    onPhase: (next) => {
+      setGuardPhase(next);
+      if (next === "idle") setPickHeard("");
+    },
   });
 
   const reset = () => {
@@ -198,8 +217,20 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           }
           // Words still on their way from before a send are not the next prompt.
           if (waitingRef.current) return;
-          if (text && handlers.current.pick(text)) {
-            awaitTurn();
+          // Any new utterance supersedes a staged pick ("stop" cancels it).
+          if (text) staged.current.heard();
+          const picked = text ? handlers.current.pick(text) : null;
+          if (picked === "refused") {
+            // A dialog a voice may not answer: nothing is typed or picked.
+            guard.current?.settled("");
+            return;
+          }
+          if (picked) {
+            // "Heard: 2", then the chime and the cancel window; the dialog
+            // is answered only when it closes.
+            staged.current.stage(picked);
+            setPickHeard(picked.heard);
+            guard.current?.settled(text);
             return;
           }
           if (!guard.current?.settled(text)) return;
@@ -225,6 +256,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       reset();
     }
   };
+  const awaitTurnRef = useRef(awaitTurn);
+  awaitTurnRef.current = awaitTurn;
   const startRef = useRef(start);
   startRef.current = start;
 
@@ -262,7 +295,9 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   };
 
   /** The stop key or a click on the line: a send window is cancelled. */
-  const cancelSend = () => guard.current?.cancel();
+  const cancelSend = () => {
+    guard.current?.cancel();
+  };
 
   // A hidden pane is no place to dictate into, nor is a turn still running.
   useEffect(() => {
@@ -377,9 +412,11 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const inWindow = guardPhase === "window" || guardPhase === "holding";
   const shownProblem = problem ?? readProblem;
   const line = shownProblem ? t(shownProblem)
+    : pickHeard && guardPhase !== "idle" ? t(inWindow ? "terminal.reader.voice.pickWindow" : "terminal.reader.voice.pickHeard", { text: pickHeard })
     : inWindow ? t("terminal.reader.voice.sendWindow")
     : waiting ? t(reading ? "terminal.reader.voice.reading" : "terminal.reader.voice.waiting")
     : heard ? t("terminal.reader.voice.heard", { text: heard })
+    : note && listening ? note
     : phase === "preparing" ? t("terminal.reader.voice.preparing")
     : listening ? t(sessionHandsFree.current ? "terminal.reader.voice.listeningHandsFree" : "terminal.reader.voice.listening")
     : "";
@@ -442,7 +479,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       ) : line && (
         <div className={shownProblem ? "terminal-reader-voice-line error" : "terminal-reader-voice-line"} role={shownProblem ? "alert" : "status"} aria-live="polite">
           {line}
-          {listening && !heard && !shownProblem && (sessionHandsFree.current
+          {listening && !heard && !shownProblem && note && <UntestedTag id="terminal.reader.voice.draftEdits" />}
+          {listening && !heard && !shownProblem && !note && (sessionHandsFree.current
             ? <UntestedTag id="terminal.reader.voice.handsFree" />
             : <UntestedTag id="terminal.reader.voice.spokenSend" />)}
           {(heard || phase === "preparing") && !shownProblem && <UntestedTag id="terminal.reader.voice.dictate" />}

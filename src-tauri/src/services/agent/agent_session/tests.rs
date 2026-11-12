@@ -843,6 +843,63 @@ fn phone_hint_only_reaches_a_scoped_claude_or_codex_session_start() {
     }
 }
 
+/// The first prompt of a new conversation (fresh start or `/clear`, never a
+/// resume) in a Claude tab holding the cockpit lane carries the reminder to
+/// name the tab, once; a session command typed first does not spend it.
+#[cfg(unix)]
+#[test]
+fn name_hint_rides_the_first_prompt_of_a_new_claude_conversation() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let script = dir.path().join("hook.sh");
+    std::fs::write(&script, posix_hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "11111111-1111-4111-8111-111111111111";
+    let cleared = "33333333-3333-4333-8333-333333333333";
+    let hint = crate::services::cockpit_mcp::NAME_HINT;
+    let run = |agent: &str, cockpit: bool, payload: String| -> bool {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(&script).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(crate::app_env!("TAB_UID"), uid).env(crate::app_env!("TAB_AGENT"), agent)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+        if cockpit { cmd.env(crate::services::root_mcp::COCKPIT_URL_ENV, "http://127.0.0.1:1/mcp/cockpit"); }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).contains(hint)
+    };
+    let start = |sid: &str, src: &str| format!(r#"{{"session_id":"{sid}","hook_event_name":"SessionStart","source":"{src}","transcript_path":"/t/{sid}.jsonl"}}"#);
+    let prompt = |sid: &str, text: &str| format!(r#"{{"session_id":"{sid}","hook_event_name":"UserPromptSubmit","prompt":"{text}"}}"#);
+
+    assert!(!run("claude", true, start(uid, "startup")), "the start itself stays quiet");
+    assert!(!run("claude", true, prompt(uid, "/clear")), "a session command does not spend it");
+    assert!(run("claude", true, prompt(uid, "fix the tab names")));
+    assert!(!run("claude", true, prompt(uid, "and the phone too")), "once per conversation");
+    // A /clear opens the next conversation.
+    assert!(!run("claude", true, start(cleared, "clear")));
+    assert!(run("claude", true, prompt(cleared, "now something else")));
+    // A resume continues a named conversation; a compact is mid-conversation.
+    assert!(!run("claude", true, start(cleared, "resume")));
+    assert!(!run("claude", true, prompt(cleared, "go on")));
+    assert!(!run("claude", true, start(cleared, "compact")));
+    assert!(!run("claude", true, prompt(cleared, "go on")));
+    // No cockpit lane (switched off, remote, Tabby) or not Claude: never.
+    assert!(!run("claude", false, start(cleared, "clear")));
+    assert!(!run("claude", false, prompt(cleared, "task")));
+    assert!(!run("codex", true, start(cleared, "startup")));
+    assert!(!run("codex", true, prompt(cleared, "task")));
+}
+
+#[test]
+fn name_hint_fits_the_hooks_single_quoted_literals() {
+    let hint = crate::services::cockpit_mcp::NAME_HINT;
+    assert!(!hint.contains('\'') && !hint.contains('\n'));
+    for tool in [crate::services::cockpit_mcp::TOOL_INFO, crate::services::cockpit_mcp::TOOL_RENAME] {
+        assert!(hint.contains(&format!("mcp__{}__{tool}", crate::services::cockpit_mcp::SERVER_NAME)), "{tool}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn hook_script_lets_only_the_tabs_own_session_move_the_record() {
@@ -1297,6 +1354,23 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
     assert_eq!(turn().as_deref(), Some("decision"));
     run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"Bash""#));
     assert_eq!(turn().as_deref(), Some("working"));
+    // The dialog opening (a question, an approval) is the decision at once:
+    // Claude 2.1.322's notice for it comes 6 s later, or never.
+    let ask = r#","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"Red"}]}]},"permission_suggestions":[]"#;
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PermissionRequest", ask));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", r#","tool_name":"AskUserQuestion""#));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // Claude's other dialog notices that wait on the user.
+    for ntype in ["elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"] {
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", ""));
+        run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", &format!(r#","notification_type":"{ntype}""#)));
+        assert_eq!(turn().as_deref(), Some("decision"), "{ntype}");
+    }
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUse", ""));
+    // A nested `claude -p` asking for permission is not this tab's dialog.
+    run_hook(&script, &live, uid, claude, true, &ev(nested, "PermissionRequest", ask));
+    assert_eq!(turn().as_deref(), Some("working"));
     // A Bash call put in the background leaves its task id for the job scan
     // (the result's shape as Claude 2.1.300 records it); a foreground call,
     // even one whose OUTPUT quotes such a field, leaves none.
@@ -1435,7 +1509,7 @@ fn register_hook_is_idempotent_and_preserves_other_keys() {
     };
     assert!(!ours(&stop[0]) && ours(&stop[1]));
     // The turn-state events are registered too, one group each.
-    for ev in ["UserPromptSubmit", "PostToolUse", "Notification", "SessionEnd"] {
+    for ev in ["UserPromptSubmit", "PostToolUse", "PermissionRequest", "Notification", "SessionEnd"] {
         let groups = v["hooks"][ev].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{ev}");
         assert!(ours(&groups[0]), "{ev}");
@@ -2159,6 +2233,31 @@ fn markup_the_user_pasted_stays_their_prompt() {
     );
 }
 
+/// A Tabby chat's inbox picture goes in as a paste beside its reference, and
+/// Claude records an `[Image #N]` chip wherever the cursor stood (2.1.322,
+/// `assistant_attach::picture_pastes_in`): the prompt reads as it was sent.
+#[test]
+fn an_inbox_picture_chip_is_dropped_beside_its_reference() {
+    let inbox = crate::brand::INBOX_DIR;
+    let record = serde_json::json!({
+        "type": "user",
+        "imagePasteIds": [1],
+        "message": {"role": "user", "content": [
+            {"type": "text", "text": format!("@{inbox}/p.jpg Where can I buy this?[Image #1]")},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "AA=="}},
+        ]},
+    });
+    assert_eq!(claude_prompt_in_record(&record), Some(format!("@{inbox}/p.jpg Where can I buy this?")));
+    assert_eq!(claude_prompt_text(&format!("@{inbox}/p.jpg [Image #2] hi")), Some(format!("@{inbox}/p.jpg hi")));
+    assert_eq!(claude_prompt_text(&format!("@{inbox}/p.jpg [Image #12]")), Some(format!("@{inbox}/p.jpg")));
+    // With no inbox reference, a chip the user pasted stays; a look-alike too.
+    assert_eq!(claude_prompt_text("look [Image #1]").as_deref(), Some("look [Image #1]"));
+    assert_eq!(
+        claude_prompt_text(&format!("@{inbox}/p.jpg [Image #x]")),
+        Some(format!("@{inbox}/p.jpg [Image #x]"))
+    );
+}
+
 #[test]
 fn a_compact_summary_is_never_a_prompt() {
     let summary: serde_json::Value = serde_json::from_str(concat!(
@@ -2397,4 +2496,21 @@ fn planted_fifos_links_and_oversized_records_read_as_nothing() {
     std::fs::create_dir_all(agent_home.join(".codex")).unwrap();
     mkfifo(&agent_home.join(".codex/config.toml"));
     within_deadline(move || codex_hook_state_of_home(&agent_home));
+}
+
+/// Gap 93: a warm-up's Codex run in the probe home leaves a `sessions/` folder
+/// and no hook (the probe home registers none by design); that must not read
+/// as "Tabtivity's hook is not registered" for the Codex tabs.
+#[test]
+fn the_probe_home_never_counts_in_the_codex_hook_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let probe = crate::services::agent_home::probe_home_in(tmp.path());
+    std::fs::create_dir_all(probe.join(".codex/sessions")).unwrap();
+    std::fs::write(probe.join(".codex/config.toml"), "").unwrap();
+    assert_eq!(codex_hook_state_across(std::slice::from_ref(&probe)), CodexHookState::NoCodex);
+    // The same folder under a scope's name does count (the control).
+    let scope = crate::services::agent_home::scope_home_in(tmp.path(), "p1");
+    std::fs::create_dir_all(scope.join(".codex/sessions")).unwrap();
+    std::fs::write(scope.join(".codex/config.toml"), "").unwrap();
+    assert_eq!(codex_hook_state_across(&[scope]), CodexHookState::NotRegistered);
 }

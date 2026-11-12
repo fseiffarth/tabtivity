@@ -3,7 +3,8 @@
  * handed (`agent_tab_features`) — sandbox, MCP servers (Tabtivity's first,
  * switched-off ones last and marked off),
  * skills past six collapsed, API key — and a tab the backend did not spawn,
- * or a non-agent tab, shows none of them.
+ * or a non-agent tab, shows none of them. The rows never land on a card already
+ * on screen, and never show on another tab's card.
  */
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-import { TabHoverCard } from "../../components/tabs/TabHoverCard";
+import { TabHoverCard, _clearKnownFeaturesForTest } from "../../components/tabs/TabHoverCard";
 import type { TabEntry } from "../../stores/tabs";
 
 const tab = (over: Partial<TabEntry>): TabEntry =>
@@ -28,8 +29,13 @@ function row(label: string): string | null {
   return hit?.querySelector(".tab-popup-meta")?.textContent ?? null;
 }
 
+const shown = () => document.querySelector<HTMLElement>(".tab-popup")?.style.visibility;
+
+const FENCED = { sandbox: "fenced", appMcp: [], ownMcp: [], skills: [], apiKeys: [] };
+
 afterEach(() => {
   cleanup();
+  _clearKnownFeaturesForTest();
   invoke.mockReset();
   invoke.mockImplementation(() => Promise.resolve(null));
 });
@@ -72,5 +78,54 @@ describe("tab hover card feature rows", () => {
   it("does not ask for a non-agent tab", () => {
     render(<TabHoverCard tab={tab({ kind: "shell", cmd: "" })} scope="p1" anchorX={0} anchorY={0} />);
     expect(invoke).not.toHaveBeenCalledWith("agent_tab_features", expect.anything());
+  });
+
+  it("keeps an agent's card hidden until its rows are in, so it never jumps", async () => {
+    let answer: (f: unknown) => void = () => {};
+    invoke.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    render(<TabHoverCard tab={tab({})} scope="p1" anchorX={0} anchorY={0} />);
+    expect(shown()).toBe("hidden");
+    answer(FENCED);
+    await waitFor(() => expect(row("sandbox")).toBe("inside the agent sandbox"));
+    expect(shown()).toBe("visible");
+  });
+
+  it("shows the card when the backend fails to answer", async () => {
+    invoke.mockImplementation(() => Promise.reject(new Error("no")));
+    render(<TabHoverCard tab={tab({})} scope="p1" anchorX={0} anchorY={0} />);
+    await waitFor(() => expect(shown()).toBe("visible"));
+  });
+
+  it("does not hold back a non-agent tab's card", () => {
+    render(<TabHoverCard tab={tab({ kind: "shell", cmd: "" })} scope="p1" anchorX={0} anchorY={0} />);
+    expect(shown()).toBe("visible");
+  });
+
+  it("paints a tab hovered before at once, rows included", async () => {
+    invoke.mockImplementation(() => Promise.resolve(FENCED));
+    const first = render(<TabHoverCard tab={tab({})} scope="p1" anchorX={0} anchorY={0} />);
+    await waitFor(() => expect(row("sandbox")).not.toBeNull());
+    first.unmount();
+    invoke.mockImplementation(() => new Promise(() => {}));
+    render(<TabHoverCard tab={tab({})} scope="p1" anchorX={0} anchorY={0} />);
+    expect(shown()).toBe("visible");
+    expect(row("sandbox")).toBe("inside the agent sandbox");
+  });
+
+  it("never shows one agent's rows on the next tab's card", async () => {
+    invoke.mockImplementation((_cmd, args) =>
+      Promise.resolve((args as { id: string }).id === "p1:agent-1" ? FENCED : null),
+    );
+    const card = (over: Partial<TabEntry>) => <TabHoverCard tab={tab(over)} scope="p1" anchorX={0} anchorY={0} />;
+    const { rerender } = render(card({}));
+    await waitFor(() => expect(row("sandbox")).not.toBeNull());
+    rerender(card({ key: "shell-1", kind: "shell", cmd: "" }));
+    expect(row("sandbox")).toBeNull();
+    rerender(card({}));
+    await waitFor(() => expect(row("sandbox")).not.toBeNull());
+    rerender(card({ key: "agent-2" }));
+    expect(row("sandbox")).toBeNull();
+    await waitFor(() => expect(shown()).toBe("visible"));
+    expect(row("sandbox")).toBeNull();
   });
 });

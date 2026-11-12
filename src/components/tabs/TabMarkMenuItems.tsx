@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { CheckboxIcon, SquareIcon } from "../common/icons/Icon";
+import { CheckboxIcon, CheckIcon, SquareIcon } from "../common/icons/Icon";
 
 import { useT } from "../../lib/i18n";
 import { TAB_MARKS, tabMarkGlyph } from "../../lib/tabMarks";
@@ -99,7 +99,7 @@ export function TabMarkMenuItems({
               {tabMarkGlyph(mark)}
             </span>
             {t(mark === "urgent" ? "tabMark.urgent" : "tabMark.important")}
-            {on && <span className="tab-mark-menu-check" aria-hidden="true">✓</span>}
+            {on && <span className="tab-mark-menu-check" aria-hidden="true"><CheckIcon /></span>}
           </button>
         );
       })}

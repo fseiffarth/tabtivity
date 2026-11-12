@@ -30,7 +30,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { hostsForProject } from "../../lib/remote/remoteHosts";
 import { PRIMARY_HOST, sshOf, useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { FeatherIcon, MicroscopeIcon } from "../common/icons/Icon";
+import { FeatherIcon, MicroscopeIcon, RefreshIcon } from "../common/icons/Icon";
 
 // ── Backend snapshot shape (mirrors sysstat::SystemSnapshot, snake_case) ──────
 
@@ -905,7 +905,7 @@ export function SystemMonitorPane({ projectId, visible, globalMachine }: Props) 
                     machine: carefulMachineName || t("sysmon.thisMachineLower"),
                   })}
                 >
-                  ↻ {t("common.refresh")}
+                  <RefreshIcon /> {t("common.refresh")}
                 </button>
               )}
             </>

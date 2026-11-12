@@ -504,6 +504,12 @@ impl PushStore {
             bare["project"] = serde_json::json!(target.project);
             bare["tab"] = serde_json::json!(target.tab);
         }
+        // When the turn changed, for the worker to show in the phone's own
+        // clock: the push service may sit on a notice for up to `TTL_SECONDS`.
+        // Sent with details off too; it says nothing about the project.
+        if notice.kind == NoticeKind::Agent {
+            bare["at"] = serde_json::json!(t);
+        }
         let mut full = bare.clone();
         full["title"] = serde_json::json!(clip(&notice.title, MAX_TITLE_CHARS));
         full["body"] = serde_json::json!(clip(&notice.body, MAX_BODY_CHARS));
@@ -963,13 +969,18 @@ mod tests {
             "https://fcm.googleapis.com/1",
             "https://fcm.googleapis.com/2",
         ]);
-        let bare = open(&out[0].body, &phones[1].0, &auth_bytes);
+        let before = now();
+        let mut bare = open(&out[0].body, &phones[1].0, &auth_bytes);
+        // The time is the one thing besides the ids a phone without details gets.
+        let at = bare.as_object_mut().unwrap().remove("at").unwrap().as_u64().unwrap();
+        assert!(at <= before && at + 60 > before);
         assert_eq!(bare, serde_json::json!({
             "kind": "agent", "status": "question", "tag": "k1", "project": "p-opaque", "tab": "t-opaque",
         }));
         let full = open(&out[1].body, &phones[2].0, &auth_bytes);
         assert_eq!(full["title"], "Aurora · Claude");
         assert_eq!(full["body"], "Needs your answer");
+        assert_eq!(full["at"], at);
 
         // Within the cooldown the same tab stays quiet, even for a new edge.
         let done = agent_tab().notice(concat!(crate::app_slug!(), "-raw-tmux"), AgentTurn::Done, Some("fix the\n  tests"));

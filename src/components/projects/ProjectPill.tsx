@@ -35,6 +35,8 @@ import { ProjectHoverCard, projectDescription, useProjectHoverCard } from "./Pro
 import { useFastMode } from "../../lib/agents/fastMode";
 import { ActivityCalendar } from "./ActivityCalendar";
 import { CategoryEditor } from "./CategoryEditor";
+import { AgentPrivacyDialog } from "./AgentPrivacyDialog";
+import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ExtendToRemoteDialog } from "./ExtendToRemoteDialog";
 import { ProjectExportDialog } from "./ProjectExportDialog";
 import { autoConnectEligibility } from "./autoConnectEligibility";
@@ -54,12 +56,13 @@ import { VmSettingsDialog } from "./VmSettingsDialog";
 import { categoryColor, primaryCategoryColor, projectCategories } from "../../lib/theme/categoryColor";
 import { usePillDragStore } from "../../stores/drag/pillDrag";
 import { usePillSelectionStore } from "../../stores/drag/pillSelection";
-import { useBoxEditorStore } from "../../stores/boxEditor";
+import { useBoxSliceStore } from "../../stores/boxSlice";
 import { useBoxesStore } from "../../stores/boxes";
-import { boxColor } from "../../lib/theme/boxColor";
+import { BoxMemberChecklist } from "./BoxMemberChecklist";
+import { useQuickCreateBox } from "./useQuickCreateBox";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useT } from "../../lib/i18n";
-import { BoxSwatch, CheckboxIcon, PauseIcon, SquareIcon, UnlockIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckIcon, CloseIcon, LockIcon, PauseIcon, UnlockIcon } from "../common/icons/Icon";
 import {
   agentFenceInstallCommand,
   agentFenceMarkLevel,
@@ -101,6 +104,15 @@ interface Props {
    *  mode is active). Renders a small overlay chip — absolutely positioned so
    *  showing it never shifts the strip. Absent outside steering mode. */
   station?: number;
+  /** The project is hidden from the "All projects" strip (`lib/projects/barHidden`).
+   *  Absent = the View group offers no hide/show row. */
+  barHidden?: boolean;
+  onToggleBarHidden?: (hide: boolean) => void;
+  /** Hide mode is on (`bar_solo`: the strip shows only the project in scope).
+   *  With `onToggleSolo`, the View group offers "Hide other projects" / "Show
+   *  other projects"; both absent inside a slice, which ignores the mode. */
+  solo?: boolean;
+  onToggleSolo?: () => void;
 }
 
 /** File endings that mark a project as holding Python — the "Python interpreter…"
@@ -142,7 +154,7 @@ function ActivityWindow({
       >
         <div className="activity-window-header">
           <span className="activity-window-title">{t("pill.activityTitle", { name: project.name })}</span>
-          <button className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="activity-window-body">
           {loading ? (
@@ -193,7 +205,7 @@ function EditDescriptionWindow({
       >
         <div className="settings-title-row">
           <h2>{t("pill.descTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <textarea
           value={value}
@@ -316,7 +328,7 @@ function RenameWindow({
       >
         <div className="settings-title-row">
           <h2>{t("pill.renameTitle")}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <input
           type="text"
@@ -483,7 +495,7 @@ function PublishWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.publishTitle", { name: project.name, provider: providerName(provider) })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">
           {t("pill.currentPrefix")} {gitTypeLabel(project.git_type, project.git_provider, t)}
@@ -678,7 +690,7 @@ function GitHostingWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.gitHostingTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">{t("pill.gitHostingDesc")}</div>
 
@@ -815,7 +827,7 @@ function ContainerSettingsWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.containerSettingsTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <p className="settings-help">{t("pill.containerAppliedNote")}</p>
         {/* First, because it decides what the rest of the knobs even apply to.
@@ -1036,7 +1048,7 @@ function VisibilityWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.changeVisibilityTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">
           {t("pill.currentPrefix")} {providerName(project.git_provider)} · {t(current === "public" ? "pill.visPublic" : "pill.visPrivate")}
@@ -1114,7 +1126,7 @@ function MigrateProviderWindow({
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" className="project-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2>{t("pill.moveToProviderTitle", { name: project.name })}</h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>×</button>
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
         </div>
         <div className="project-dialog-path">
           {t("pill.currentPrefix")} {gitTypeLabel(project.git_type, project.git_provider, t)}
@@ -1198,6 +1210,10 @@ export function ProjectPill({
   shiftPx,
   groupHintActive,
   station,
+  barHidden,
+  onToggleBarHidden,
+  solo,
+  onToggleSolo,
 }: Props) {
   const t = useT();
   // Shared hover card (identical popup in the right file-viewer). Owns the
@@ -1207,12 +1223,18 @@ export function ProjectPill({
   // mounted and simply never opens, since it arms nothing until `open`.
   const fastMode = useFastMode();
   const [contextMenu, setContextMenu] = useState<ContextMenuPos | null>(null);
+  // The member pill's box swatches are a door into the box (below): the small
+  // list of its boxes when it is in several, anchored under the swatches.
+  const [swatchMenu, setSwatchMenu] = useState<ContextMenuPos | null>(null);
   // Multi-select (3b): Ctrl/Cmd-click toggles membership in the shared pill
   // selection; the ring (`is-selected`) and the "Box these (N)…" menu entry
   // both read it. A plain activation click clears it (see the switcher).
   const selectedPills = usePillSelectionStore((s) => s.selected);
   const isSelected = selectedPills.includes(project.id);
-  const boxesForMenu = useBoxesStore((s) => s.boxes);
+  // The box whose slice the strip shows, if this pill is one of its members: the
+  // menu then offers the explicit "Remove ⟨project⟩ from ⟨box⟩".
+  const sliceBoxId = useBoxSliceStore((s) => s.sliceBoxId);
+  const sliceBox = useBoxesStore((s) => (sliceBoxId ? (s.boxes.find((b) => b.id === sliceBoxId) ?? null) : null));
   // With `connections_headless` off Tabtivity handles no passwords at all, so neither
   // key auth nor a saved password can ever be the answer — auto-connect there means
   // the login opens in the root terminal instead (see `autoConnectInteractive` in
@@ -1233,6 +1255,7 @@ export function ProjectPill({
   const [showForget, setShowForget] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [editCategories, setEditCategories] = useState(false);
+  const [showAgentPrivacy, setShowAgentPrivacy] = useState(false);
   const [extendRemote, setExtendRemote] = useState(false);
   // Set instead of `extendRemote` alone when a global machine was handed to this
   // (local-only) project from the header's Machines menu — seeds the "Extend to
@@ -1262,6 +1285,8 @@ export function ProjectPill({
   const setProjectScheduleMcp = useProjectsStore((s) => s.setProjectScheduleMcp);
   const setProjectGitPushMcp = useProjectsStore((s) => s.setProjectGitPushMcp);
   const { confirmAction, showMessage, dialogs: pillDialogs } = useDialogs();
+  // "Box these (N)…" and "New box with ⟨project⟩…": the one name prompt, then in.
+  const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const [agentFenceStatus, setAgentFenceStatus] = useState<AgentFenceStatus | null>(null);
   useEffect(() => {
     if (!contextMenu) return;
@@ -1530,6 +1555,9 @@ export function ProjectPill({
     if (!pillRef.current) return;
     void hover.open(pillRef.current.getBoundingClientRect());
   };
+  // A status bar opens its tab's own card: the project card steps aside while
+  // it is up and comes back when the pointer is on the pill again.
+  const handleBarHover = (on: boolean) => (on ? hover.close() : handleMouseEnter());
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1758,6 +1786,36 @@ export function ProjectPill({
       {/* Hover popup — hidden while context menu is open (which calls hover.close). */}
       {!contextMenu && !fastMode && <ProjectHoverCard project={project} state={hover} />}
       {pillDialogs}
+      {quickCreateDialogs}
+
+      {/* The swatch click's list of this member's boxes (it is in several). */}
+      {swatchMenu && boxTags && boxTags.length > 1 && (
+        <ContextMenuPortal
+          x={swatchMenu.x}
+          y={swatchMenu.y}
+          onClose={() => setSwatchMenu(null)}
+          className="context-menu project-pill-box-menu"
+          keepBelow
+        >
+          <div className="context-menu-group">
+            <div className="context-menu-group-label">
+              {t("pill.openBoxHeading")} <UntestedTag id="projectPill.boxSwatch" />
+            </div>
+            {boxTags.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => {
+                  setSwatchMenu(null);
+                  void useBoxSliceStore.getState().selectBox(b.id);
+                }}
+              >
+                <BoxSwatch className="context-menu-box-swatch" color={b.color} />
+                {b.name}
+              </button>
+            ))}
+          </div>
+        </ContextMenuPortal>
+      )}
 
       {/* Right-click context menu */}
       {contextMenu && (
@@ -1784,6 +1842,32 @@ export function ProjectPill({
             >
               {t("pill.showActivity")}
             </button>
+            {barHidden !== undefined && onToggleBarHidden && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  onToggleBarHidden(!barHidden);
+                }}
+                title={t(barHidden ? "pill.showOnAllProjectsTitle" : "pill.hideFromAllProjectsTitle")}
+              >
+                {t(barHidden ? "pill.showOnAllProjects" : "pill.hideFromAllProjects")}
+                <UntestedTag id="pill.hideFromAllProjects" />
+              </button>
+            )}
+            {onToggleSolo && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  onToggleSolo();
+                }}
+                title={t(solo ? "pill.showOtherProjectsTitle" : "pill.hideOtherProjectsTitle")}
+              >
+                {t(solo ? "pill.showOtherProjects" : "pill.hideOtherProjects")}
+                <UntestedTag id="barHidden.solo" />
+              </button>
+            )}
             {!hostPinned && (
               <button
                 onClick={() => {
@@ -1919,68 +2003,50 @@ export function ProjectPill({
             </button>
           </div>
 
-          {/* Boxes (3a): checkbox row per box (toggle add/remove, additive N:M),
-              "Box these (N)…" when a multi-selection includes this pill, "New
-              box with ⟨project⟩…" into the editor, and — past ~6 boxes — an
-              "Edit boxes…" overflow into the same editor. */}
+          {/* Boxes: the shared checklist (a row per box, additive N:M, stays open
+              across toggles, scrolls, filters past 8 rows), "Box these (N)…" when
+              a multi-selection includes this pill, "New box with ⟨project⟩…" — both
+              through the one name prompt, after which you are in the new box — and,
+              inside a box slice, the explicit "Remove ⟨project⟩ from ⟨box⟩". */}
           <div className="context-menu-group">
-            <div className="context-menu-group-label">{t("pill.boxesGroup")}</div>
+            <div className="context-menu-group-label">
+              {t("pill.boxesGroup")} <UntestedTag id="boxMembers.checklist" />
+            </div>
             {selectedPills.length >= 2 && isSelected && (
               <button
                 className="untested"
                 onClick={() => {
                   setContextMenu(null);
-                  useBoxEditorStore.getState().openCreate(selectedPills);
+                  void quickCreateBox(selectedPills);
                 }}
               >
                 {t("pill.boxTheseEllipsis", { count: selectedPills.length })}
                 <UntestedTag id="projectPill.4" />
               </button>
             )}
-            {boxesForMenu.slice(0, 6).map((b) => {
-              const member = b.member_ids.includes(project.id);
-              return (
-                <button
-                  key={b.id}
-                  className="context-menu-check"
-                  onClick={() => {
-                    setContextMenu(null);
-                    const store = useBoxesStore.getState();
-                    if (member) void store.removeFromBox(project.id, b.id);
-                    else void store.addToBox(project.id, b.id);
-                  }}
-                  title={t(member ? "pill.leaveBoxTitle" : "pill.joinBoxTitle", { name: b.name })}
-                >
-                  <span className="context-menu-checkmark" aria-hidden>
-                    {member ? <CheckboxIcon /> : <SquareIcon />}
-                  </span>
-                  <BoxSwatch className="context-menu-box-swatch" color={boxColor(b)} />
-                  {b.name}
-                </button>
-              );
-            })}
+            {sliceBox && sliceBox.member_ids.includes(project.id) && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  void useBoxesStore.getState().removeFromBox(project.id, sliceBox.id);
+                }}
+              >
+                {t("projectSwitcher.removeFromBox", { name: project.name, box: sliceBox.name })}
+                <UntestedTag id="boxMembers.removeFromBox" />
+              </button>
+            )}
+            <BoxMemberChecklist project={project} />
             <button
               className="untested"
               onClick={() => {
                 setContextMenu(null);
-                useBoxEditorStore.getState().openCreate([project.id]);
+                void quickCreateBox([project.id]);
               }}
             >
               {t("pill.newBoxWithEllipsis", { name: project.name })}
               <UntestedTag id="projectPill.5" />
             </button>
-            {boxesForMenu.length > 6 && (
-              <button
-                className="untested"
-                onClick={() => {
-                  setContextMenu(null);
-                  useBoxEditorStore.getState().openEditor(null);
-                }}
-              >
-                {t("pill.editBoxesEllipsis")}
-                <UntestedTag id="projectPill.6" />
-              </button>
-            )}
           </div>
 
           {/* Git */}
@@ -2104,7 +2170,7 @@ export function ProjectPill({
                   }}
                   title={t("pill.containerRunTitle")}
                 >
-                  {project.sandbox?.enabled ? "✓ " : ""}{t("pill.runInContainer")}
+                  {project.sandbox?.enabled ? <><CheckIcon />{" "}</> : ""}{t("pill.runInContainer")}
                 </button>
                 <button
                   onClick={() => {
@@ -2125,7 +2191,7 @@ export function ProjectPill({
                 }}
                 title={t("pill.pythonInterpMenuTitle")}
               >
-                {project.python_interpreter ? "✓ " : ""}{t("pill.pythonInterpreterEllipsis")}
+                {project.python_interpreter ? <><CheckIcon />{" "}</> : ""}{t("pill.pythonInterpreterEllipsis")}
               </button>
             )}
             {/* Per-project override of the global "Claude remote control" setting
@@ -2178,6 +2244,22 @@ export function ProjectPill({
                 </span>
               )}
             </button>
+            {/* Local models only: no cloud model reads this project. Local
+                folders only (the backend refuses a remote, VM or container
+                project and says why). */}
+            {!project.remote && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  setShowAgentPrivacy(true);
+                }}
+                title={t("agentPrivacy.menuTitle")}
+              >
+                {isLocalModelsOnly(project) ? <><CheckIcon />{" "}</> : ""}{t("agentPrivacy.menuItem")}
+                <UntestedTag id="agentPrivacy.menuItem" />
+              </button>
+            )}
             <button
               className="untested"
               onClick={() => {
@@ -2270,7 +2352,7 @@ export function ProjectPill({
                         : "pill.autoConnectTitleNotEligible"
                 )}
               >
-                {project.remote.auto_connect && autoConnectEligible ? "✓ " : ""}
+                {project.remote.auto_connect && autoConnectEligible ? <><CheckIcon />{" "}</> : ""}
                 {t("pill.autoConnectOnLaunch")}
                 {/* Named, not just greyed: a tagged host is never dialled by Tabtivity
                     itself, and the remedy (untag the machine) is nothing like the
@@ -2295,7 +2377,7 @@ export function ProjectPill({
                 }}
                 title={t("pill.persistSessionsMenuTitle")}
               >
-                {project.remote.persist_sessions !== false ? "✓ " : ""}{t("pill.persistentSessionsTmux")}
+                {project.remote.persist_sessions !== false ? <><CheckIcon />{" "}</> : ""}{t("pill.persistentSessionsTmux")}
               </button>
             )}
             {/* Multi-host remote (docs/multi_host_remote_plan.md): manage the extra
@@ -2494,6 +2576,10 @@ export function ProjectPill({
       {/* Per-project git-hosting override window */}
       {showGitHosting && (
         <GitHostingWindow project={project} onClose={() => setShowGitHosting(false)} />
+      )}
+
+      {showAgentPrivacy && (
+        <AgentPrivacyDialog project={project} onClose={() => setShowAgentPrivacy(false)} />
       )}
 
       {/* Category-tag editor */}
@@ -2746,8 +2832,24 @@ export function ProjectPill({
           <span className="project-pill-label">{project.name}</span>
           {boxTags && boxTags.length > 0 && (
             <span
-              className="project-pill-boxdot"
-              title={t("pill.inBoxes", { list: boxTags.map((b) => b.name).join(", ") })}
+              className="project-pill-boxdot is-link"
+              role="button"
+              aria-haspopup={boxTags.length > 1 ? "menu" : undefined}
+              title={t(boxTags.length > 1 ? "pill.openBoxesTitle" : "pill.openBoxTitle", {
+                list: boxTags.map((b) => b.name).join(", "),
+              })}
+              // Inside the pill's own button: its press must neither start a
+              // pill drag (pointer-down) nor activate the project (click).
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (boxTags.length === 1) {
+                  void useBoxSliceStore.getState().selectBox(boxTags[0].id);
+                  return;
+                }
+                const r = e.currentTarget.getBoundingClientRect();
+                setSwatchMenu({ x: r.left, y: r.bottom });
+              }}
             >
               {/* One swatch per box, in the box's colour — the same colour
                   the box's own pill wears in the leading segment, so a
@@ -2793,6 +2895,20 @@ export function ProjectPill({
             {vmRunning ? "▣" : "▢"}
           </button>
         )}
+        {/* Local models only: a lock on the pill, opening the switch. */}
+        {isLocalModelsOnly(project) && (
+          <button
+            className="pill-vm-glyph pill-local-only-glyph"
+            title={t("agentPrivacy.badgeTitle")}
+            aria-label={t("agentPrivacy.badgeLabel")}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowAgentPrivacy(true);
+            }}
+          >
+            <LockIcon size={12} />
+          </button>
+        )}
         {/* Agent-fence marker: red while agents of this project run outside
             the fence right now (measured, so a tab started before the fence
             became the only mode counts). Opens the pill menu, whose fence row
@@ -2813,10 +2929,10 @@ export function ProjectPill({
             title={closeTitle ?? t("pill.closeProject")}
             onClick={(e) => { e.stopPropagation(); onClose(); }}
           >
-            ×
+            <CloseIcon />
           </button>
         )}
-        <PillStatusBars scope={project.id} />
+        <PillStatusBars scope={project.id} onBarHover={handleBarHover} />
       </div>
     </>
   );

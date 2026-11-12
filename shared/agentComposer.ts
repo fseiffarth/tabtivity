@@ -97,6 +97,26 @@ export function agentInputWrites(draft: string, bracketedPaste = false): string[
   return writes;
 }
 
+/** Words Codex's Tab would act on instead of queueing them: a `/command`, or
+ * a last word opening its `@` or `$` picker, whose highlighted row Tab takes. */
+const CODEX_TAB_TAKES = /^\s*\/|(?:^|\s)[@$]\S*\s*$/u;
+
+/**
+ * {@link agentInputWrites} for a prompt that may land while the agent works.
+ * Codex keeps two lists of those (0.166.0): Enter puts one in `Messages to be
+ * submitted after next tool call`, out of anyone's reach, and Tab in `Queued
+ * follow-up inputs`, which can be taken back (`queuePull.ts`), so a chat's
+ * prompt goes in with Tab. Tab on an idle Codex leaves the words in the box
+ * and Enter on an empty one does nothing, so the Enter after it delivers the
+ * prompt either way. Every other CLI queues on Enter.
+ */
+export function agentQueueWrites(writes: readonly string[], agent: string | undefined, message: string): string[] {
+  if (writes.length === 0 || agent === undefined || agentFamily(agent) !== "codex" || CODEX_TAB_TAKES.test(message)) {
+    return [...writes];
+  }
+  return [...writes.slice(0, -1), "\t", "\r"];
+}
+
 /** Which CLI an agent label names: the phone's tab label or the desktop's
  * agent-item label. The families are matched on the label; any other label
  * keys by its first word, so a CLI with no entry here still keeps its own

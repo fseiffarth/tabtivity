@@ -24,9 +24,20 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 ## Gates
 
-Before calling work done, run `scripts/gates.sh`: only the gates below that
-your change (diff vs HEAD + untracked) touches; `--all` runs every one. All
-are CI gates, at zero warnings except `npm run lint`:
+For implementation changes, before calling work done, run `scripts/gates.sh`:
+only the gates below that your change (diff vs HEAD + untracked) touches; `--all` runs every one. Runs
+are one at a time across sessions: a queued run waits, then reuses the
+last result if the tree is unchanged; run it in the background so a
+tool timeout can't kill it while it waits.
+Use `scripts/gates-job.sh start` (add `--all` only for the pre-push/full-check
+routine), finish independent work, then `scripts/gates-job.sh status <printed
+directory>` for the saved summary and exit code. Do not poll each Clippy
+variant, repeatedly tail progress logs, or rerun a passing unchanged tree.
+If only waiting remains, use a blocking tool wait (up to 60 seconds per call)
+without extra progress reads; report the final result once. Inspect full logs
+only for a failure. A read-only review needs no build/test gate run unless the
+user asks for one; other sessions' edits alone are not a reason to run gates.
+All are CI gates, at zero warnings except `npm run lint`:
 
 ```
 npm run build        # the ONLY type-check (tsc + desktop, mobile, web bundles)
@@ -214,7 +225,9 @@ Frontend:
   session can freeze the window.
 - Gate work in hidden panes (`PaneVisibleContext`) and catch up on show.
 - Never animate a blurred `box-shadow` (WebKitGTK software path); use a static
-  shadow pseudo-element and animate opacity.
+  shadow pseudo-element and animate opacity. Opacity is not free there either: a
+  new loop or entry not tied to work in progress stops under
+  `[data-software-paint]` (`docs/context/desktop_ui_system.md`).
 - Viewer features go in the shared `ProjectFilesView`, not one host.
 - YAML/table viewers edit surgically: comments, quoting, line endings survive.
 - Never render a missing sensor reading as zero; omit it.

@@ -8,7 +8,7 @@ import { bindDragRelease } from "../../lib/window/dragPlatform";
 import { fmtModified, fmtSize, type FileEntry } from "../../lib/viewers/fileUtils";
 import { useT } from "../../lib/i18n";
 import { FileIcon } from "../common/icons/FileIcon";
-import { InboxIcon } from "../common/icons/Icon";
+import { CheckIcon, CloseIcon, InboxIcon, RefreshIcon } from "../common/icons/Icon";
 import { useResizableSection } from "./useResizableSection";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
@@ -291,14 +291,14 @@ export function DownloadsSection({
           onClick={() => void refresh()}
           title={t("common.refresh")}
         >
-          ⟳
+          <RefreshIcon />
         </button>
         <button
           className="toolbar-btn toolbar-btn--sm"
           onClick={onClose}
           title={t("downloads.hide")}
         >
-          ×
+          <CloseIcon />
         </button>
       </div>
 
@@ -340,7 +340,7 @@ export function DownloadsSection({
                 </span>
                 {landed ? (
                   <span className="downloads-copied" title={t("downloads.copiedTo", { rel: landed })}>
-                    ✓
+                    <CheckIcon />
                   </span>
                 ) : (
                   !isRemote && (

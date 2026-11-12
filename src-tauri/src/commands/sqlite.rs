@@ -66,9 +66,9 @@ const LIST_TABLES_SQL: &str = "SELECT name FROM sqlite_master \
 /// Open the database file strictly read-only — never create or modify it —
 /// under [`guard`] with `budget`.
 fn open_readonly(path: &str, budget: Duration) -> Result<Connection, String> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let mut conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(sql_err)?;
-    guard(&conn, budget)?;
+    guard(&mut conn, budget)?;
     Ok(conn)
 }
 
@@ -76,7 +76,7 @@ fn open_readonly(path: &str, budget: Duration) -> Result<Connection, String> {
 /// passed (the schema parse, `COUNT(*)` on a view and the page alike), values
 /// past [`MAX_LENGTH`] are an error, and the file's schema may call only
 /// innocuous functions.
-fn guard(conn: &Connection, budget: Duration) -> Result<(), String> {
+fn guard(conn: &mut Connection, budget: Duration) -> Result<(), String> {
     let deadline = Instant::now() + budget;
     conn.progress_handler(PROGRESS_OPS, Some(move || Instant::now() >= deadline))
         .map_err(sql_err)?;
@@ -231,7 +231,7 @@ fn sqlite_page_within(
     let sql = format!("SELECT * FROM {quoted} LIMIT ?1 OFFSET ?2");
     let mut stmt = conn.prepare(&sql).map_err(sql_err)?;
     // Column names must be cloned before stepping (they borrow the statement).
-    let columns: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+    let columns: Vec<String> = stmt.column_names().map(str::to_string).collect();
     let col_count = columns.len();
 
     let mut query_rows = stmt

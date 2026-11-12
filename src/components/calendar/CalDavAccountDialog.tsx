@@ -20,6 +20,7 @@ import { useCalDavStore } from "../../stores/calendar/caldav";
 import { useT } from "../../lib/i18n";
 import type { CalDavAccount, CalDavCollection } from "../../types/caldav";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The CalDAV account editor — `MailAccountDialog`'s structural twin, and
@@ -240,8 +241,8 @@ export function CalDavAccountDialog({
           <h2>
             {account ? t("caldav.dialogEdit") : t("caldav.dialogNew")} <UntestedTag id="caldav.dialogNew" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
         <div className="dialog-scroll">

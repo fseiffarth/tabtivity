@@ -37,6 +37,11 @@ pub struct PtySpawned {
     /// its composer, so the window reads no question off its screen until
     /// the hooks speak again (`agent_turn::LeftTurn`).
     pub resting: bool,
+    /// The tab only reattached a session whose agent is mid-turn right now:
+    /// the state its hooks last wrote (`working`/`decision`), which the tab
+    /// starts out in. Left out of the answer when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<&'static str>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -98,7 +103,10 @@ pub async fn pty_spawn(
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
+    let turn = prepared.live_turn.map(crate::services::agent_turn::TurnState::as_str);
     let drop_dir = prepared.drop_dir.clone();
+    let privacy_check = prepared.privacy_check();
+    let (spawned_id, spawned_seq) = (prepared.opts.id.clone(), prepared.spawn_seq());
     let result = crate::terminal::spawn_pty(
         ctx.0.clone(),
         registry.clone(),
@@ -124,8 +132,18 @@ pub async fn pty_spawn(
             // The MCP session access fold lists live sessions; a new token is one.
             ctx.emit(crate::commands::root_mcp::SESSIONS_EVENT, ());
         }
+        // Local models only switched on while this agent was starting: both gates
+        // ran before the PTY existed, the switch's sweep saw only registered ones.
+        // Judged again now that it is registered; refused, it ends here.
+        if let Err(refusal) = crate::services::launch_prep::recheck_privacy(privacy_check).await {
+            let note = crate::commands::agent_privacy::end_refused_spawn(registry, &spawned_id, spawned_seq).await;
+            return Err(match note {
+                Some(note) => format!("{refusal} {note}"),
+                None => refusal,
+            });
+        }
     }
-    result.map(|()| PtySpawned { named, interrupted, attached: false, resting })
+    result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn })
 }
 
 /// Whether a server client's spawn of `id` would join the tab another client
@@ -182,6 +200,11 @@ pub async fn agent_fence_marks(
 /// kill of a local persistent tab. No-op on Windows / without tmux.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill(session: String) -> Result<(), String> {
+    // As its siblings: a client names a session, never a tmux pattern or a
+    // special target (`*`, `$0`) that could end a session the app never made.
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session) {
+        return Err(format!("invalid tmux session name '{session}'"));
+    }
     if !crate::services::tmux_local::tmux_available() {
         return Ok(());
     }
@@ -345,7 +368,18 @@ pub async fn pty_drop_files(
         .ok_or("no_terminal")?
         .ok_or("remote_tab")?;
     let sizes = sizes.unwrap_or_default();
-    app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await
+    // A file of a local-models-only project is never copied into the inbox of
+    // a tab that is not a verified local-model tab of it (a cloud agent, a
+    // Tabby chat): `services::agent_privacy`.
+    if agent && crate::services::agent_privacy::drop_refused(&id, &paths) {
+        return Ok(PtyDropped { error: Some(crate::services::agent_privacy::DROP_REFUSED.to_string()), ..PtyDropped::default() });
+    }
+    let dropped = app_core::rt::blocking("terminal", move || drop_files(Path::new(&dir), &paths, &sizes, agent)).await?;
+    // A file in a Tabby chat's inbox is an attachment, whatever is typed next.
+    if agent && !dropped.items.is_empty() {
+        crate::services::assistant_attach::note_tab_file(&id);
+    }
+    Ok(dropped)
 }
 
 fn drop_files(dir: &Path, paths: &[String], sizes: &[Option<u64>], agent: bool) -> PtyDropped {
@@ -419,7 +453,11 @@ pub async fn pty_paste_clipboard_image(ctx: Ctx, id: String, agent: bool) -> Res
         .map_err(|_| "no_clipboard_image")?
         .map_err(|_| "no_clipboard_image")??;
     let state_dir = crate::storage::state_dir();
-    app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?
+    let pasted = app_core::rt::blocking("terminal", move || paste_image(Path::new(&dir), &state_dir, &png, agent)).await?;
+    if agent && pasted.is_ok() {
+        crate::services::assistant_attach::note_tab_file(&id);
+    }
+    pasted
 }
 
 fn paste_image(dir: &Path, state_dir: &Path, png: &[u8], agent: bool) -> Result<String, String> {
@@ -443,6 +481,9 @@ pub async fn pty_write(
         let reg = registry.lock_ok();
         (reg.input_sender(&id), reg.is_ai(&id))
     };
+    // A Tabby chat's keystrokes decide, here in the backend, whether the chat
+    // has had an `@` attachment (the web lane then narrows its URLs).
+    crate::services::assistant_attach::note_tab_input(&id, &data);
     // The AI switch: while it is off nothing typed reaches an agent; an
     // interrupt or a key that only steers its screen still does.
     let kept = if ai && crate::services::ai_switch::is_off() {
@@ -456,13 +497,39 @@ pub async fn pty_write(
         }
         return Err(crate::services::ai_switch::AI_OFF.to_string());
     }
-    if let Some(sender) = sender {
-        sender
-            .send(data)
-            .await
-            .map_err(|_| format!("terminal '{id}' is no longer accepting input"))?;
+    let Some(sender) = sender else { return Ok(()) };
+    let closed = || format!("terminal '{id}' is no longer accepting input");
+    // A Tabby chat whose CLI has no file tool gets each inbox picture it is
+    // sent as a paste of the file (`assistant_attach`, Claude); an Enter
+    // straight after one waits for the CLI to take it. Writes to one chat
+    // queue behind that wait, so a key typed meanwhile stays after the Enter.
+    if crate::services::assistant_attach::chat_of_tab(&id).is_some() {
+        let _turn = chat_write_lock(&id).lock_owned().await;
+        let Some(pieces) = crate::services::assistant_attach::tab_picture_pastes(&id, &data) else {
+            return sender.send(data).await.map_err(|_| closed());
+        };
+        for (index, piece) in pieces.into_iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).await;
+            }
+            sender.send(piece).await.map_err(|_| closed())?;
+        }
+        return Ok(());
     }
-    Ok(())
+    sender.send(data).await.map_err(|_| closed())
+}
+
+/// One lock per Tabby chat PTY, held across a `pty_write` that may wait out
+/// [`assistant_attach::PICTURE_SUBMIT_HOLD`](crate::services::assistant_attach::PICTURE_SUBMIT_HOLD).
+fn chat_write_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Default::default).lock_ok();
+    if locks.len() >= 256 && !locks.contains_key(id) {
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+    }
+    locks.entry(id.to_string()).or_default().clone()
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -702,6 +769,16 @@ pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A client can name no tmux pattern or special target: `*`, `$0`, `%1`
+    /// would end a session the app never made (screen 2026-11-12 H9). The
+    /// check runs before tmux is even looked for, so no tmux server is touched.
+    #[test]
+    fn local_tmux_kill_refuses_a_name_that_is_not_a_session_name() {
+        for name in ["*", "$0", "%1", "", "a:b", "x.y", "train*"] {
+            assert!(app_core::rt::block_on(local_tmux_kill(name.to_string())).is_err(), "{name:?}");
+        }
+    }
 
     #[test]
     fn agent_drop_copies_into_the_tab_folders_inbox() {

@@ -681,6 +681,34 @@ fn only_turns_left_out_that_spawned_a_subagent_promise_earlier_ones() {
 }
 
 #[test]
+fn a_claude_subagent_chat_shows_the_follow_up_and_final_handback() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("s.jsonl");
+    let folder = main.with_extension("").join("subagents");
+    std::fs::create_dir_all(&folder).unwrap();
+    let handback = r#"{"type":"assistant","timestamp":"2026-11-10T22:40:55.548Z","message":{"content":[{"type":"tool_use","id":"report","name":"SubagentHandback","input":{"message":"All checks passed.\n\nThe build is ready."}}]}}"#;
+    std::fs::write(&main, handback).unwrap();
+    let records = [
+        r#"{"type":"user","isSidechain":true,"message":{"content":"Check the build."}}"#,
+        r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Running the build."}]}}"#,
+        r#"{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":"Run the tests too.","origin":{"kind":"human"},"isMeta":true}}"#,
+        r#"{"type":"attachment","isSidechain":true,"attachment":{"type":"queued_command","prompt":"Internal notification.","origin":{"kind":"peer"},"isMeta":true}}"#,
+        handback,
+        r#"{"type":"user","isSidechain":true,"message":{"content":[{"type":"tool_result","tool_use_id":"report","content":"Handed back."}]}}"#,
+    ];
+    std::fs::write(folder.join("agent-child.jsonl"), records.join("\n")).unwrap();
+    let read = claude_transcript_at(&main, Some(&subagent_token("child")), None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![
+        ("prompt", "Check the build."),
+        ("answer", "Running the build."),
+        ("prompt", "Run the tests too."),
+        ("answer", "All checks passed.\n\nThe build is ready."),
+    ]);
+    assert_eq!(read.entries[3].at.as_deref(), Some("2026-11-10T22:40:55.548Z"));
+    assert!(claude_transcript_at(&main, None, None, DEFAULT_LIMIT).unwrap().entries.is_empty());
+}
+
+#[test]
 fn a_background_claude_subagent_runs_until_its_task_notification() {
     let dir = tempfile::tempdir().unwrap();
     let main = dir.path().join("s.jsonl");
@@ -1221,4 +1249,83 @@ fn a_copilot_prompt_is_found_by_the_chat_menu_and_the_prompt_history() {
     let recent = agent_session::recent_prompts_in_transcript(&path, TranscriptKind::Copilot).unwrap();
     assert_eq!(recent.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), vec!["patch it", "and now?"]);
     assert_eq!(agent_session::last_model_in_transcript(&path, TranscriptKind::Copilot).as_deref(), Some("gpt-5.4"));
+}
+
+/// Claude 2.1.318: an Esc before the turn answered puts the prompt back in
+/// its input box, and the prompt sent next hangs from the record the first
+/// one hung from (the shape of the session behind this fix). A rewind past
+/// an answered prompt leaves a branch the same way.
+#[test]
+fn a_claude_prompt_taken_back_or_rewound_leaves_the_chat() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let user = |uuid: &str, parent: &str, text: &str| {
+        format!("{{\"type\":\"user\",\"uuid\":\"{uuid}\",\"parentUuid\":\"{parent}\",\"message\":{{\"role\":\"user\",\"content\":\"{text}\"}}}}\n")
+    };
+    let attachment = |uuid: &str, parent: &str| {
+        format!("{{\"type\":\"attachment\",\"uuid\":\"{uuid}\",\"parentUuid\":\"{parent}\",\"attachment\":{{\"type\":\"date\"}}}}\n")
+    };
+    let answer = |uuid: &str, parent: &str, text: &str| {
+        format!("{{\"type\":\"assistant\",\"uuid\":\"{uuid}\",\"parentUuid\":\"{parent}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}}]}}}}\n")
+    };
+    let mut text = user("p0", "root", "start");
+    text += &answer("a0", "p0", "started");
+    // Taken back: no answer under it, and the next prompt hangs from `a0`.
+    text += &user("p1", "a0", "fix the menu style");
+    text += &attachment("x1", "p1");
+    text += &user("p2", "a0", "improve the design");
+    text += &attachment("x2", "p2");
+    text += &answer("a2", "x2", "what design?");
+    // Answered, then rewound past: its answer goes with it.
+    text += &user("p3", "a2", "the header menu");
+    text += &answer("a3", "p3", "done");
+    text += &user("p4", "a2", "the side menu");
+    text += &answer("a4", "p4", "on it");
+    std::fs::write(&path, text).unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(
+        kinds(&read),
+        vec![
+            ("prompt", "start"),
+            ("answer", "started"),
+            ("prompt", "improve the design"),
+            ("answer", "what design?"),
+            ("prompt", "the side menu"),
+            ("answer", "on it"),
+        ]
+    );
+}
+
+/// Records without links (older transcripts, hand-made ones) and the same
+/// words sent twice down one chain stay as they are.
+#[test]
+fn claude_prompts_on_one_chain_all_stay() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    std::fs::write(
+        &path,
+        concat!(
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"one\"}}\n",
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"two\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"p1\",\"parentUuid\":\"r\",\"message\":{\"role\":\"user\",\"content\":\"three\"}}\n",
+            "{\"type\":\"user\",\"uuid\":\"p2\",\"parentUuid\":\"p1\",\"message\":{\"role\":\"user\",\"content\":\"three\"}}\n",
+        ),
+    )
+    .unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(kinds(&read), vec![("prompt", "one"), ("prompt", "two"), ("prompt", "three"), ("prompt", "three")]);
+}
+
+#[test]
+fn only_a_tab_that_runs_remotely_has_its_opencode_store_elsewhere() {
+    // A local-model OpenCode tab of a remote project runs here (`local_only`):
+    // its reader passes `remote: false` and reads the store on this machine,
+    // where the scope reader of a remote project's OpenCode tab answers
+    // `unsupported` (its store is on the host).
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("opencode.db");
+    let tab_dir = dir.path().to_string_lossy().into_owned();
+    let read = |remote| opencode_transcript(&db, remote, Some(&tab_dir), None, None, None, None, 10);
+    assert_eq!(read(true).reason.as_deref(), Some("unsupported"));
+    assert_eq!(read(false).reason.as_deref(), Some("no_transcript"));
 }

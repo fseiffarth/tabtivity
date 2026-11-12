@@ -24,6 +24,7 @@ import {
   planMailDelete,
 } from "../lib/mail";
 import { translateNow } from "../lib/i18n";
+import { isViewShown, useRootOverlayStore, viewShown } from "./rootOverlay";
 import type {
   MailAccount,
   MailBody,
@@ -93,7 +94,7 @@ let composeSeq = 0;
  * belongs to a scope, so a mail tab could only ever show the same mailbox this
  * store already holds while behaving as though it belonged to a project you then
  * switched away from. The single surface is the header overlay
- * (`MailOverlayHost`), and this store is what makes it stateful across it.
+ * (`MailView`), and this store is what makes it stateful across it.
  *
  * Three rules distinguish it from the calendar store, all of them consequences
  * of mail being the app's first *network* store:
@@ -216,10 +217,7 @@ interface MailStore {
   /** The last thing that went wrong, shown as a dismissible strip. */
   error: string | null;
 
-  /** The header button's mail overlay is on screen — the only mail surface
-   *  there is, since the mail tab was retired (`RETIRED_TAB_CMDS`). */
-  overlayOpen: boolean;
-  /** Inbox messages that arrived since the overlay was last opened. Kept as the
+  /** Inbox messages that arrived since the Mail view was last shown. Kept as the
    *  *emphasis* signal only — the header dot's number is `inboxUnread`, which
    *  survives a relaunch and falls as mail is read. This one is what still
    *  distinguishes "something turned up while you were working" from a backlog,
@@ -237,11 +235,16 @@ interface MailStore {
    *  derived from those counts, and a sync path that forgot to reload them
    *  would otherwise leave the dot a message behind. */
   noteArrival: (accountId: string, count: number) => void;
+  /** Show the Mail view of the console window (`rootOverlay.openView`). Whether
+   *  it is shown is the window's state, `useViewShown("mail")` — not a flag of
+   *  this store. Showing it clears `newCount` and refreshes the counts (the
+   *  subscription at the foot of this module). */
   openOverlay: () => void;
-  /** Open the overlay on its Inbox tab — for every "show me this in mail"
+  /** Open the Mail view on its Inbox tab — for every "show me this in mail"
    *  path (a message or folder was just selected for the Inbox to show). The
    *  plain ✉ toggle uses `openOverlay`, which keeps whichever tab was last up. */
   openInbox: () => void;
+  /** Close the window if it is showing Mail. */
   closeOverlay: () => void;
 
   /** The account editor on screen: `{ account: null }` adds one. In the store
@@ -465,7 +468,7 @@ function clearQueuedSearchTimer() {
 }
 
 function resumeQueuedSearch(get: () => MailStore) {
-  if (queuedSearch && get().overlayOpen && get().activeMailTab === MAIL_INBOX_TAB) {
+  if (queuedSearch && isViewShown("mail") && get().activeMailTab === MAIL_INBOX_TAB) {
     void get().loadPage(0);
   }
 }
@@ -499,17 +502,16 @@ export const useMailStore = create<MailStore>((set, get) => ({
   sync: {},
   error: null,
 
-  overlayOpen: false,
   newCount: 0,
 
   setError: (message) => set({ error: message }),
 
   noteArrival: (accountId, count) => {
     set((s) => ({
-      // Opening the overlay is what acknowledges an arrival, so mail that lands
-      // while it is already on screen is read, not announced — a badge on a
-      // button the user is looking through would have to be dismissed by hand.
-      newCount: s.overlayOpen ? 0 : s.newCount + Math.max(0, count),
+      // Showing the Mail view is what acknowledges an arrival, so mail that
+      // lands while it is already on screen is read, not announced — a badge on
+      // a button the user is looking through would have to be dismissed by hand.
+      newCount: isViewShown("mail") ? 0 : s.newCount + Math.max(0, count),
     }));
     // The count the badge actually shows lives in the folder rows the sync just
     // wrote. `checkMail` reloads them too, but an arrival can also come from a
@@ -517,23 +519,13 @@ export const useMailStore = create<MailStore>((set, get) => ({
     void get().loadFolders(accountId, false);
   },
 
-  openOverlay: () => {
-    set({ overlayOpen: true, newCount: 0 });
-    resumeQueuedSearch(get);
-    // Opening mail does not mark anything read, so the badge deliberately stays
-    // — but the pane is about to show folder rows, and both should agree.
-    void get().refreshUnread();
-    // The rail's Important/Urgent badges, likewise local and likewise needed
-    // before anything is clicked.
-    void get().refreshPriorityCounts();
-  },
+  openOverlay: () => useRootOverlayStore.getState().openView("mail"),
   openInbox: () => {
     set({ activeMailTab: MAIL_INBOX_TAB });
     get().openOverlay();
   },
   closeOverlay: () => {
-    clearQueuedSearchTimer();
-    set({ overlayOpen: false });
+    if (isViewShown("mail")) useRootOverlayStore.getState().close();
   },
 
   accountDialog: null,
@@ -880,8 +872,8 @@ export const useMailStore = create<MailStore>((set, get) => ({
       anchorId: null,
       loadingHeaders: true,
     });
-    const { overlayOpen, activeMailTab, selectedPriority, selectedFolderId } = get();
-    if (!overlayOpen || activeMailTab !== MAIL_INBOX_TAB) return;
+    const { activeMailTab, selectedPriority, selectedFolderId } = get();
+    if (!isViewShown("mail") || activeMailTab !== MAIL_INBOX_TAB) return;
     // Clearing the box and local priority searches need no server delay.
     if (!query.trim() || selectedPriority || !selectedFolderId) {
       void get().loadPage(0);
@@ -889,7 +881,7 @@ export const useMailStore = create<MailStore>((set, get) => ({
     }
     queuedSearchTimer = setTimeout(() => {
       queuedSearchTimer = null;
-      if (queuedSearch && get().overlayOpen && get().activeMailTab === MAIL_INBOX_TAB) {
+      if (queuedSearch && isViewShown("mail") && get().activeMailTab === MAIL_INBOX_TAB) {
         void get().loadPage(0);
       }
     }, SEARCH_DEBOUNCE_MS);
@@ -1052,7 +1044,7 @@ export const useMailStore = create<MailStore>((set, get) => ({
   openMessage: (messageId) => {
     set({ selectedMessageId: messageId });
     // The tab reads its own body and marks the message seen once it has it
-    // (`MailOverlay`'s `MailMessageTabBody`).
+    // (`MailView`'s `MailMessageTabBody`).
     const header = get().headers.find((h) => h.id === messageId);
     if (header) get().openMessageTab(header);
   },
@@ -1324,3 +1316,24 @@ export function accountInboxUnread(folders: MailFolder[] | undefined): number {
   }
   return sum;
 }
+
+// The console window showing / leaving the Mail view is what the retired
+// `overlayOpen` flag's `openOverlay` / `closeOverlay` used to do: showing it
+// acknowledges the arrivals and reads the local counts the pane is about to
+// show; leaving it drops a search that was waiting on its debounce.
+useRootOverlayStore.subscribe((s, prev) => {
+  const now = viewShown(s, "mail");
+  if (now === viewShown(prev, "mail")) return;
+  if (!now) {
+    clearQueuedSearchTimer();
+    return;
+  }
+  useMailStore.setState({ newCount: 0 });
+  resumeQueuedSearch(useMailStore.getState);
+  // Showing mail does not mark anything read, so the badge deliberately stays
+  // — but the pane is about to show folder rows, and both should agree.
+  void useMailStore.getState().refreshUnread();
+  // The rail's Important/Urgent badges, likewise local and likewise needed
+  // before anything is clicked.
+  void useMailStore.getState().refreshPriorityCounts();
+});

@@ -700,16 +700,19 @@ pub const ROOT_SCOPE: &str = "root";
 /// `Some` id as a project has to meet this one first (`is_reserved_scope`).
 pub const ASSISTANT_SCOPE: &str = "assistant";
 
-/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`] or
-/// [`ASSISTANT_SCOPE`] — and so can never be a project or box id. Compared
-/// through [`project_key`] and case-insensitively, because the id names a
-/// directory under the state dir and a case-folding filesystem or the key
-/// reduction would otherwise let `Assistant` or `assistant ` share the
-/// reserved scope's state. The one funnel the project/box registries, the
-/// layout sanitiser and the phone's discovery ask.
+/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`], [`ASSISTANT_SCOPE`]
+/// or the Host session's home key (`agent_home::HOST_SCOPE_KEY`) — and so can
+/// never be a project or box id. Compared through [`project_key`] and
+/// case-insensitively, because the id names a directory under the state dir and
+/// a case-folding filesystem or the key reduction would otherwise let
+/// `Assistant` or `assistant ` share the reserved scope's state; a project
+/// `host` would share the unfenced Host session's home. The one funnel the
+/// project/box registries, the layout sanitiser and the phone's discovery ask.
 pub fn is_reserved_scope(id: &str) -> bool {
     let key = project_key(id.trim());
-    [ROOT_SCOPE, ASSISTANT_SCOPE].iter().any(|scope| key.eq_ignore_ascii_case(scope))
+    [ROOT_SCOPE, ASSISTANT_SCOPE, crate::services::agent_home::HOST_SCOPE_KEY]
+        .iter()
+        .any(|scope| key.eq_ignore_ascii_case(scope))
 }
 
 /// Whether `id` names the chat assistant's scope, in any spelling the state
@@ -752,6 +755,27 @@ pub fn project_key(id: &str) -> String {
     } else {
         safe
     }
+}
+
+/// `id` as one path component: unchanged when it already is one, else
+/// [`project_key`]. For folders already named after a raw id, which plain
+/// [`project_key`] would orphan when the id holds a dot or a space.
+pub fn plain_component(id: &str) -> std::borrow::Cow<'_, str> {
+    let mut parts = Path::new(id).components();
+    let one = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None));
+    if one && !id.contains(['/', '\\', '\0']) {
+        id.into()
+    } else {
+        project_key(id).into()
+    }
+}
+
+/// `<state_dir>/remote-projects/<id>/` — a remote project's local state. Every
+/// join goes through here: `git_peer_status` and `local_loss_list` pass on an id
+/// from their arguments unchecked, and on a server those come from a browser, so
+/// an id like `../../x` must stay inside this folder.
+pub fn remote_project_dir_in(state_dir: &Path, project_id: &str) -> std::path::PathBuf {
+    state_dir.join("remote-projects").join(&*plain_component(project_id))
 }
 
 /// `<state_dir>/sessions/` — the root of the per-project session state that used
@@ -878,6 +902,23 @@ pub(crate) fn uuid_v4() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plain id keeps the folder it always had; anything else stays one level
+    /// under `remote-projects/`, wherever it tried to point.
+    #[test]
+    fn a_project_id_cannot_leave_remote_projects() {
+        let state = Path::new("state");
+        let root = state.join("remote-projects");
+        for id in ["0b9d8f3e-2c1a", "with.dot", "with space", "a..b"] {
+            assert_eq!(remote_project_dir_in(state, id), root.join(id), "{id:?}");
+        }
+        for id in ["", ".", "..", "../x", "../../etc", "a/b", "a\\b", "a/", "/abs", "\\abs", "C:x", "a\0b"] {
+            let dir = remote_project_dir_in(state, id);
+            assert_eq!(dir.parent(), Some(root.as_path()), "{id:?}");
+            let name = dir.file_name().and_then(|name| name.to_str()).unwrap();
+            assert!(!name.contains(['/', '\\', '\0']) && name != "..", "{id:?}");
+        }
+    }
 
     // ── FileLock ───────────────────────────────────────────────────────────
 
@@ -1293,11 +1334,16 @@ mod tests {
     // ── reserved scopes ───────────────────────────────────────────────────
 
     #[test]
-    fn reserved_scopes_are_root_and_assistant_under_any_spelling() {
+    fn reserved_scopes_are_root_assistant_and_host_under_any_spelling() {
         for id in ["root", "assistant", "Assistant", "ROOT", " assistant ", "assistant\n"] {
             assert!(is_reserved_scope(id), "{id:?}");
         }
-        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant"] {
+        // The Host session's home key: a project `host` would share the
+        // unfenced Host session's home (screen 2026-11-12 H2).
+        for id in ["host", "Host", "HOST", " host ", "host\n"] {
+            assert!(is_reserved_scope(id), "{id:?}");
+        }
+        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant", "hosts", "box:host"] {
             assert!(!is_reserved_scope(id), "{id:?}");
         }
         assert_eq!(project_key(ASSISTANT_SCOPE), ASSISTANT_SCOPE, "the id names its own directory");

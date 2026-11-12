@@ -39,16 +39,21 @@ const CONTROL_ENV: &[&str] = &[
     crate::app_env!("HOME"),
     crate::app_env!("PUSH_PREFLIGHT"),
     crate::app_env!("GIT_TOKEN"),
+    crate::services::agent_privacy::STAMP_ENV,
     crate::services::root_mcp::TOKEN_ENV,
     crate::services::root_mcp::URL_ENV,
     crate::services::root_mcp::SCHEDULE_TOKEN_ENV,
     crate::services::root_mcp::SCHEDULE_URL_ENV,
     crate::services::root_mcp::GIT_TOKEN_ENV,
     crate::services::root_mcp::GIT_URL_ENV,
+    crate::services::root_mcp::COCKPIT_TOKEN_ENV,
+    crate::services::root_mcp::COCKPIT_URL_ENV,
     crate::services::root_mcp::HELP_TOKEN_ENV,
     crate::services::root_mcp::HELP_URL_ENV,
     crate::services::root_mcp::MARKUP_TOKEN_ENV,
     crate::services::root_mcp::MARKUP_URL_ENV,
+    crate::services::root_mcp::PRINT_TOKEN_ENV,
+    crate::services::root_mcp::PRINT_URL_ENV,
     crate::services::root_mcp::WEB_TOKEN_ENV,
     crate::services::root_mcp::WEB_URL_ENV,
 ];
@@ -108,12 +113,21 @@ fn settings_agent_remote_control() -> bool {
 /// carrier, and `agent_exec` in front of the CLI maps it (the Host session is
 /// tmux-wrapped like any agent tab); on Windows under the CLI's own name.
 fn inject_api_keys(opts: &mut PtyOptions, scope_id: &str) -> Result<(), String> {
+    // A local-models-only project's tab gets no key of any kind
+    // (`services::agent_privacy`).
+    if crate::services::agent_privacy::stamped(opts) {
+        return Ok(());
+    }
     // A hosted server's administrator's key (the Host session), checked
     // against the keeper's offer: a withdrawn key fails the spawn.
     let admin = crate::services::server::agent_keys::admin_for_spawn(&opts.cmd)?;
     let (tab, tmux) = (opts.id.clone(), crate::services::api_proxy::tmux_binding(opts.tmux_session.as_deref()));
     let binding = crate::services::agent_api_keys::Binding { tab: &tab, scope: scope_id, tmux: tmux.as_deref() };
     crate::services::agent_api_keys::inject_launch(opts, admin, binding);
+    // Claude's long-lived token where no shared login holds one.
+    if admin.is_none() {
+        crate::services::claude_token::inject_launch(opts);
+    }
     #[cfg(unix)]
     crate::services::agent_exec::wrap(opts)?;
     Ok(())
@@ -395,6 +409,8 @@ fn assistant_gate(opts: &mut PtyOptions, state_dir: &std::path::Path, enabled: b
         return Err(format!("terminal: refusing to spawn tab '{}': not a plain local {name} chat", opts.id));
     }
     let (chat_dir, chat_dir_existed) = ensure_chat_dir(state_dir, &uid)?;
+    // The web lane finds the chat's attachment record by this tab id (gap 78).
+    crate::services::assistant_attach::note_chat(&opts.id, &uid, launch.cli.takes_pasted_pictures());
     opts.cwd = chat_dir.to_string_lossy().into_owned();
     opts.env = std::collections::HashMap::from([(crate::app_env!("TAB_UID").to_string(), uid.clone())]);
     opts.cmd = launch.cli.bin().to_string();
@@ -601,6 +617,9 @@ pub struct PreparedLaunch {
     pub interrupted: bool,
     /// The tab's previous process left its turn finished (`agent_turn::LeftTurn`).
     pub resting: bool,
+    /// The tab's process still runs mid-turn (a reattach): the state its
+    /// hooks last wrote, `working` or `decision` (`agent_turn::LeftTurn::live`).
+    pub live_turn: Option<crate::services::agent_turn::TurnState>,
     /// The local folder the tab works in, `None` for a remote tab.
     pub drop_dir: Option<String>,
     /// The tab runs an AI ([`is_ai_spawn`]): while the AI switch is off its
@@ -610,10 +629,16 @@ pub struct PreparedLaunch {
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     /// The fence scope the spawn runs in, `None` for an unfenced one.
     fenced_scope: Option<String>,
+    /// What that fence shows, for turning Local models only on under a running
+    /// tab (`agent_privacy::tabs_seeing`).
+    fence_view: Option<crate::services::agent_privacy::FenceView>,
     host_agent_tab: Option<crate::services::agent_fence::HostAgentTab>,
     /// A local agent's sandbox, home and CLI, for the hover card
     /// (`services::agent_features`); its API keys are read off the final env.
     features: Option<LocalAgentFeatures>,
+    /// The agent as the Local models only gate judged it, for the re-check once
+    /// its process is registered ([`recheck_privacy`]); `None` for anything else.
+    privacy_check: Option<crate::services::agent_privacy::SpawnCheck>,
     spawned_tab_id: String,
     generation: SpawnGeneration,
 }
@@ -691,6 +716,27 @@ fn push_fence_scope(
     }
 }
 
+/// Whether a local agent whose fence decision no explicit arm of [`prepare`]
+/// handled may still spawn (screen 2026-11-12 H1). Only a decision whose
+/// boundary really applied passes: "container" when the docker wrap ran,
+/// "remote host" when the ssh wrap ran, the Host session, and a non-agent
+/// ("shell"). Anything else — "container" with no container, a reason added
+/// later — fails closed rather than running the CLI on the host unfenced.
+fn unfenced_local_agent_allowed(
+    decision: &crate::services::agent_fence::FenceDecision,
+    docker_wrapped: bool,
+    ssh_wrapped: bool,
+) -> bool {
+    use crate::services::agent_fence::{FenceDecision, HOST_SESSION_REASON};
+    match decision {
+        FenceDecision::NotApplicable { reason: "shell" } => true,
+        FenceDecision::NotApplicable { reason: HOST_SESSION_REASON } => true,
+        FenceDecision::NotApplicable { reason: "container" } => docker_wrapped,
+        FenceDecision::NotApplicable { reason: "remote host" } => ssh_wrapped,
+        _ => false,
+    }
+}
+
 impl PreparedLaunch {
     /// Whether the spawn was handed a root/push MCP token (the sessions fold
     /// lists live tokens; the window emits its event on that).
@@ -702,6 +748,12 @@ impl PreparedLaunch {
     /// it, so every teardown names the spawn it ends.
     pub fn spawn_seq(&self) -> u64 {
         self.generation.seq
+    }
+
+    /// What [`recheck_privacy`] judges once the process is registered: taken before
+    /// [`Self::commit`], which consumes the launch, and checked after it.
+    pub fn privacy_check(&self) -> Option<crate::services::agent_privacy::SpawnCheck> {
+        self.privacy_check.clone()
     }
 
     /// The process exists: keep the MCP token and the Codex resume claim,
@@ -734,6 +786,13 @@ impl PreparedLaunch {
                 api_keys: crate::services::agent_features::api_keys_in(&self.opts.env),
             }),
             None => crate::services::agent_features::forget_tab(&self.spawned_tab_id),
+        }
+        if let Some(view) = self.fence_view.take() {
+            crate::services::agent_fence::note_live_fence_view(&self.spawned_tab_id, self.generation.seq, view);
+        }
+        // The session a PTY-less spawn (a phone-started headless tab) lives in.
+        if let Some(session) = self.opts.tmux_session.as_deref() {
+            crate::services::agent_fence::note_live_tmux(&self.spawned_tab_id, self.generation.seq, session);
         }
         // A local model's tab: its conversations are not cleared while it runs.
         if let Some(home) = self.opts.env.get("VIBE_HOME") {
@@ -917,6 +976,19 @@ pub async fn prepare(
         }
     }
 
+    // Local-models-only projects (`services::agent_privacy`): an agent in one —
+    // or one whose working directory is inside one — starts only as a verified
+    // local-model launch, else it is refused here, before anything is built
+    // for it. Runs after the authority and cwd checks above, so the project
+    // and folder it judges are the backend's own; it asks the local Ollama,
+    // hence off the async runtime. A chat assistant has no project folder.
+    let mut privacy_check = None;
+    if !assistant {
+        let gated = opts.clone();
+        opts = app_core::rt::try_blocking("Local models only", move || crate::services::agent_privacy::gate(gated)).await?;
+        privacy_check = crate::services::agent_privacy::SpawnCheck::of(&opts);
+    }
+
     // The tab's scope, for the agent shims a shell tab may run
     // (`services::agent_shim`): its project or box, else the root console.
     let scope = crate::services::agent_home::scope_of(opts.project_id.as_deref());
@@ -1098,12 +1170,31 @@ pub async fn prepare(
 
     // The agent's hooks report its turn state under its tab uid; bind that uid
     // to this PTY so the report reaches the tab's own marks, and drop any
-    // record a previous run of the same tab left behind (see agent_turn).
+    // record a previous run of the same tab left behind (see agent_turn). A
+    // turn in flight is a leftover only if its process died: a tab whose tmux
+    // session still runs (the headless owner kept it while no window was
+    // open, or the window crashed) only reattaches, and its agent may well be
+    // mid-turn right now.
     let left = match opts.env.get(crate::app_env!("TAB_UID")).cloned() {
-        Some(uid) => crate::services::agent_turn::bind_tab(&uid, &opts.id, opts.project_id.as_deref()),
+        Some(uid) => {
+            let project = opts.project_id.clone();
+            let session_runs = match opts.tmux_session.clone() {
+                Some(session) if crate::services::agent_turn::turn_in_flight(&uid, project.as_deref()) => {
+                    let (host, local_only) = (opts.remote_host_id.clone(), opts.local_only);
+                    let project = project.clone();
+                    app_core::rt::spawn_blocking(move || {
+                        reattaches_session(project.as_deref(), host.as_deref(), &session, local_only)
+                    })
+                    .await
+                    .unwrap_or(false)
+                }
+                _ => false,
+            };
+            crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs)
+        }
         None => Default::default(),
     };
-    let (interrupted, resting) = (left.cut_off, left.resting);
+    let (interrupted, resting, live_turn) = (left.cut_off, left.resting, left.live);
 
     // Codex resume, without the hook. Codex will not run Tabtivity's SessionStart
     // hook until the user trusts it (`/hooks`), and an untrusted hook fails
@@ -1171,8 +1262,18 @@ pub async fn prepare(
         && resolve_agent_remote_control(opts.project_id.as_deref())
         && !opts.args.iter().any(|a| a == "--remote-control")
         && !local_claude_keyed(&opts, remote_agent_run)
+        // Nor for one that will run on the saved long-lived token
+        // (`claude_token`, no shared login): Claude refuses Remote Control on
+        // an inference-only token.
+        && !crate::services::claude_token::injects_local(&opts, remote_agent_run)
     {
         opts.args.push("--remote-control".to_string());
+    }
+
+    // A local `claude setup-token` tab (Manage CLIs → Generate token): its
+    // token is read off the screen into the keyring once it prints.
+    if !remote_agent_run && !opts.sandbox && crate::services::claude_token::is_setup_token(&opts.cmd, &opts.args) {
+        crate::services::claude_token::watch_setup_tab(opts.id.clone(), opts.tmux_session.clone());
     }
 
     // Container (Docker) and ssh-remote wrapping are mutually exclusive: the
@@ -1205,11 +1306,17 @@ pub async fn prepare(
         || opts.sandbox
         || crate::services::ssh_exec::remote_target_of(&opts).is_none())
     .then(|| opts.cwd.clone());
+    // Which boundary actually wrapped the spawn: the fence match below lets a
+    // local agent's "container" / "remote host" decision through only when
+    // its wrap really ran (screen 2026-11-12 H1).
+    let mut docker_wrapped = false;
+    let mut ssh_wrapped = false;
     if opts.sandbox && !opts.local_only {
         // Every host, Windows included: the mount destinations and `-w` are
         // spelled for the container by `sandbox::container_path`, so a `C:\`
         // project lands at `/c/…` inside the Linux container.
         crate::services::sandbox::wrap_pty_options_docker(&mut opts)?;
+        docker_wrapped = true;
     } else if !opts.local_only {
         // `wrap_pty_options` below spawns a bare `ssh` with no BatchMode and no
         // askpass — it only ever rides an already-authenticated ControlMaster.
@@ -1259,6 +1366,12 @@ pub async fn prepare(
                 let _ = crate::services::remote::connect_host(pool, &project_id, &host_id, None).await;
             }
         }
+        // The saved Claude token for a remote Claude tab, sent over ssh's
+        // environment channel; the host uses it only without its own login.
+        if crate::services::ssh_exec::remote_target_of(&opts).is_some() {
+            crate::services::claude_token::inject_remote(&mut opts);
+        }
+        ssh_wrapped = crate::services::ssh_exec::remote_target_of(&opts).is_some();
         crate::services::ssh_exec::wrap_pty_options(&mut opts)?;
     }
 
@@ -1291,6 +1404,15 @@ pub async fn prepare(
     // tmux server on the host while the command *inside* its session is
     // fenced.  A missing/blocked fence tool fails closed.
     let mut fenced_scope: Option<String> = None;
+    let mut fence_view: Option<crate::services::agent_privacy::FenceView> = None;
+    // An agent in the project's container sees the whole mounted folder, and the
+    // container has no mask (`wrap_pty_options_docker` refuses to start one where a
+    // locked folder is): record that, so turning Local models only on for a folder
+    // inside the mount ends it.
+    if agent_spawn && opts.sandbox && !opts.local_only {
+        let dir = opts.project_id.as_deref().and_then(crate::services::sandbox::project_dir_for).unwrap_or_else(|| opts.cwd.clone());
+        fence_view = Some(crate::services::agent_privacy::container_fence_view(&dir));
+    }
     // Every agent tab that runs on the host, fenced or not, for the pill's
     // live check (`agent_fence::live_unfenced_by_scope`). Taken before the
     // fence and tmux rewrites replace `cmd`.
@@ -1353,6 +1475,7 @@ pub async fn prepare(
                     Some(paths) => crate::services::root_mcp::ProjectsGrant::Paths(paths),
                     None => crate::services::root_mcp::ProjectsGrant::Hidden,
                 };
+                fence_view = crate::services::agent_fence::take_fence_view(&opts.id);
                 fenced_scope = Some(scope_id);
             }
             // The root console's Host session: unfenced, in Tabtivity's own
@@ -1400,7 +1523,17 @@ pub async fn prepare(
             crate::services::agent_fence::FenceDecision::Unavailable => {
                 return Err(crate::services::agent_fence::fence_unavailable_message());
             }
-            _ => {}
+            // An ssh or docker process (`!local_agent`) carries its own
+            // boundary. A local agent no arm above handled runs only where
+            // that boundary really applied; anything else fails closed.
+            other => {
+                if local_agent && !unfenced_local_agent_allowed(&other, docker_wrapped, ssh_wrapped) {
+                    return Err(format!(
+                        "terminal: tab '{}' was not started: no agent fence applies to it ({other:?})",
+                        opts.id
+                    ));
+                }
+            }
         }
         // A chat runs only in the two arms above, each of which takes its home:
         // any other decision (an unforeseen `NotApplicable`) leaves it unused,
@@ -1449,16 +1582,30 @@ pub async fn prepare(
         named,
         interrupted,
         resting,
+        live_turn,
         mcp_spawn_guard,
         resume_claim,
         fenced_scope,
         host_agent_tab,
         features,
+        privacy_check: privacy_check.map(|check| crate::services::agent_privacy::SpawnCheck { view: fence_view.clone(), ..check }),
+        fence_view,
         spawned_tab_id,
         generation,
         drop_dir,
         ai,
     })
+}
+
+/// The Local models only re-check once a spawn is registered (the window's PTY, the
+/// phone's detached session) and committed: both gates read the setting before the
+/// process existed, and the switch's sweep snapshots only registered ones, so a spawn
+/// in between is judged here (`agent_privacy::recheck_spawn`). `Err` is the refusal;
+/// the caller then ends what it started. Nothing to do for a spawn that is no agent;
+/// one registry read off the async runtime otherwise.
+pub async fn recheck_privacy(check: Option<crate::services::agent_privacy::SpawnCheck>) -> Result<(), String> {
+    let Some(check) = check else { return Ok(()) };
+    app_core::rt::try_blocking("Local models only", move || crate::services::agent_privacy::recheck_spawn(&check)).await
 }
 
 /// Whether a launch runs an AI, for the AI switch: an agent by the fence's
@@ -1549,8 +1696,8 @@ mod tests {
             local_model: false, schedule_target_id: None, host_session: false, api_key: None,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, drop_dir: None, ai: true, mcp_spawn_guard: None,
-            resume_claim: None, fenced_scope, host_agent_tab: None, features: None, spawned_tab_id: tab.into(), generation,
+            opts, named: false, interrupted: false, resting: false, live_turn: None, drop_dir: None, ai: true, mcp_spawn_guard: None,
+            resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, privacy_check: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
 
@@ -1569,7 +1716,7 @@ mod tests {
         let new_seq = new.seq;
         let (mcp_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
         let proxy_token = api_proxy::issue_for_test("lp-gen", tab).unwrap();
-        agent_turn::bind_tab(uid, tab, None);
+        agent_turn::bind_tab(uid, tab, None, false);
         assert!(!on_tab_gone(tab, old_seq), "the old spawn's teardown is stale");
         committed(tab, Some("lp-gen".into()), new);
         assert!(!on_tab_gone(tab, old_seq));
@@ -1612,7 +1759,7 @@ mod tests {
         let respawn = SpawnGeneration::begin(tab);
         assert!(!on_tab_gone(tab, old_seq), "the old spawn's kill lands stale");
         let (mcp_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
-        agent_turn::bind_tab(uid, tab, None);
+        agent_turn::bind_tab(uid, tab, None, false);
         drop(respawn);
         assert!(root_mcp::authenticate(Some(&format!("Bearer {mcp_token}"))).is_none());
         assert_eq!(agent_turn::pty_for(uid), None);
@@ -1620,7 +1767,7 @@ mod tests {
         let live = SpawnGeneration::begin(tab);
         committed(tab, None, live);
         let (live_token, _) = root_mcp::test_session_for_tab(root_mcp::Caller::Pusher, tab, Path::new("/nonexistent"));
-        agent_turn::bind_tab(uid, tab, None);
+        agent_turn::bind_tab(uid, tab, None, false);
         drop(SpawnGeneration::begin(tab));
         assert!(root_mcp::authenticate(Some(&format!("Bearer {live_token}"))).is_some());
         assert_eq!(agent_turn::pty_for(uid).as_deref(), Some(tab));
@@ -1642,6 +1789,37 @@ mod tests {
         ] {
             assert_eq!(push_fence_scope(&decision, true, "p1"), None, "{decision:?}");
         }
+    }
+
+    #[test]
+    fn an_unwrapped_local_agent_never_runs_unfenced() {
+        // Screen 2026-11-12 H1: "container" with no docker wrap ran the agent
+        // on the host, unfenced, with the user's `$HOME`.
+        use crate::services::agent_fence::{FenceDecision, HOST_SESSION_REASON};
+        let na = |reason| FenceDecision::NotApplicable { reason };
+        assert!(unfenced_local_agent_allowed(&na("shell"), false, false));
+        assert!(unfenced_local_agent_allowed(&na(HOST_SESSION_REASON), false, false));
+        assert!(unfenced_local_agent_allowed(&na("container"), true, false));
+        assert!(unfenced_local_agent_allowed(&na("remote host"), false, true));
+        assert!(!unfenced_local_agent_allowed(&na("container"), false, false));
+        assert!(!unfenced_local_agent_allowed(&na("container"), false, true));
+        assert!(!unfenced_local_agent_allowed(&na("remote host"), false, false));
+        assert!(!unfenced_local_agent_allowed(&na("remote host"), true, false));
+        assert!(!unfenced_local_agent_allowed(&na("something new"), true, true));
+        for decision in [FenceDecision::Fenced { roots: vec![] }, FenceDecision::PlatformUnaccepted, FenceDecision::Unavailable] {
+            assert!(!unfenced_local_agent_allowed(&decision, true, true), "{decision:?}");
+        }
+    }
+
+    /// The fence match in [`prepare`] ends in the fail-closed arm, never a
+    /// silent `_ => {}`.
+    #[test]
+    fn prepare_fence_match_has_no_silent_catch_all() {
+        let source = include_str!("launch_prep.rs");
+        let start = source.find("pub async fn prepare(").expect("prepare");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+        assert!(body.contains("unfenced_local_agent_allowed("), "prepare must check the unhandled decisions");
+        assert!(!body.contains("_ => {}"), "an unhandled fence decision must not fall through silently");
     }
 
     // ── control variables: Tabtivity's to set, never the tab's (gap 17) ────
@@ -2175,10 +2353,10 @@ mod tests {
             assert!(gate(other, true).unwrap_err().contains("reserved"), "{scope:?}");
         }
         // Not a uuid-shaped uid: it would become a path component.
-        for uid in ["", "..", "../x", "root", "a/b", "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a1"] {
+        for bad in ["", "..", "../x", "root", "a/b", "0b9d8f3e-2c1a-4e7b-9a55-3f6d1c2b7a1"] {
             let mut opts = base();
-            opts.env.insert(crate::app_env!("TAB_UID").into(), uid.into());
-            assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), "{uid:?}");
+            opts.env.insert(crate::app_env!("TAB_UID").into(), bad.into());
+            assert_eq!(gate(opts, true).unwrap_err(), Refusal::BadUid.to_string(), "{bad:?}");
         }
         let mut no_uid = base();
         no_uid.env.clear();

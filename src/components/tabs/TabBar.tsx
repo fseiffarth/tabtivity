@@ -1,9 +1,9 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { ProjectBox, ProjectEntry } from "../../types";
 import {
   BLOB_TAB_CMD,
   BROWSER_TAB_CMD,
-  PROJECT_FILES_TAB_CMD,
   PROMPTCHART_TAB_CMD,
   EMPTY_GROUP_ID,
   isPtyTabKind,
@@ -27,10 +27,13 @@ import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
-import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
+import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
+import { tabTaskName } from "../../lib/agents/autoTabName";
+import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { isHostPinned } from "../../lib/projectTabHost";
-import { AddTabMenuList, type AddMenuEntry, type AddMenuGroup } from "./AddTabMenuList";
+import { cloudRowsOffered, isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
+import { AddTabMenuList, type AddMenuGroup } from "./AddTabMenuList";
 import { localModelMenuGroup, useLocalModelPlacement } from "./localModelGroup";
 import { apiKeyMenuGroups, useKeyableAgents } from "./apiKeyGroup";
 import { TabColorPicker } from "./TabColorPicker";
@@ -38,6 +41,7 @@ import { TabMarkBadge } from "./TabMarkBadge";
 import { TabMarkMenuItems } from "./TabMarkMenuItems";
 import { tabColorCss } from "../../lib/theme/tabColors";
 import { useAddTabMenuData } from "./useAddTabMenuData";
+import { openInMember as openInMemberHelper, startInFlyout, targetHeading, type StartInKind } from "./startIn";
 import {
   NEW_TAB_SHORTCUT_EVENT,
   NEW_TAB_SLOTS_EVENT,
@@ -51,6 +55,7 @@ import { BOX_SCOPE_PREFIX, ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import { useModelsOverlayStore } from "../../stores/modelsOverlay";
 import { reseedDetached, startDetachedDropSession } from "./detachedDropTargets";
 import { TabHoverCard, shellLaunch } from "./TabHoverCard";
+import { TabMemberChip, tabMemberInfo, tabMemberTitle, useScopeMemberTable } from "./TabMemberChip";
 import { TabStackChip, type StackMember } from "./TabStackChip";
 import { stackNames, stripItems } from "../../lib/tabStacks";
 import { useDialogs } from "../common/PromptDialogs";
@@ -79,10 +84,11 @@ import { newDropToken, probeDropTarget } from "../../lib/window/dropClaim";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { bindDragRelease, dragPlatform } from "../../lib/window/dragPlatform";
 import { useProjectsStore } from "../../stores/projects";
+import { newTabTarget, useBoxesStore, type BoxMemberDir } from "../../stores/boxes";
 import { carriesAcrossHosts, switchTabLocation } from "../../stores/agents/agentLocationSwitch";
 import { useSettingsStore } from "../../stores/settings";
 import { useExperimental } from "../../lib/experimental";
-import { closeTabWithConfirm } from "../../lib/remote/closeRemoteTab";
+import { closeTabWithConfirm, closeTabsWithConfirm } from "../../lib/remote/closeRemoteTab";
 import { closedTabSlotHeld, noteTabClose, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
@@ -103,6 +109,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -139,6 +146,9 @@ function openAgentsAndClis(): void {
 }
 
 const NO_BUSY: Record<string, boolean> = {};
+// Constant empties, so a bar outside a box scope subscribes to nothing that changes.
+const NO_BOXES: ProjectBox[] = [];
+const NO_PROJECTS: ProjectEntry[] = [];
 const NO_BUSY_KIND: Record<string, BusyKind> = {};
 const NO_ATTENTION: Record<string, AttentionKind> = {};
 
@@ -234,10 +244,11 @@ function selectOnMount(el: HTMLInputElement | null) {
   if (el) el.select();
 }
 
-/** Fast mode's native tooltip: the label, then a shell's launch lines. */
-function fastModeTitle(tab: TabEntry): string {
+/** Fast mode's native tooltip: the label, an agent tab's task name, then a
+ *  shell's launch lines. */
+function fastModeTitle(tab: TabEntry, member?: string): string {
   const { program, input } = shellLaunch(tab);
-  return [tab.label, program, input].filter(Boolean).join("\n");
+  return [tab.label, tabTaskName(tab), member, program, input].filter(Boolean).join("\n");
 }
 
 /**
@@ -269,6 +280,8 @@ const TabItem = memo(function TabItem({
   const chordHint = useChordHint();
   const stateClass = useTabStateClass(scope, tab, isActive);
   const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
+  // Which member of the box this tab works in (a box scope only), from its cwd.
+  const memberInfo = tabMemberInfo(tab, useScopeMemberTable(scope));
   // This tab's own schedules (none for a non-agent or an unscheduled tab): a
   // store reference, so the next-occurrence sort below runs once per change
   // of the list rather than per render of the bar.
@@ -321,7 +334,7 @@ const TabItem = memo(function TabItem({
       // Fast mode has no card, so the label becomes a plain tooltip —
       // otherwise a tab whose name is ellipsized would have no way at all
       // to read it out. A shell Tabtivity opened adds what it was started with.
-      title={fastMode ? fastModeTitle(tab) : undefined}
+      title={fastMode ? fastModeTitle(tab, memberInfo ? tabMemberTitle(memberInfo, t) : undefined) : undefined}
       // Styled hover card (mirrors the project pill's popup) anchored to
       // this tab's bottom-center. Skipped while inline-renaming.
       onMouseEnter={(e) => {
@@ -367,6 +380,7 @@ const TabItem = memo(function TabItem({
       ) : (
         <span className="tab-label">{tab.label}</span>
       )}
+      {!editing && <TabMemberChip info={memberInfo} label={tab.label} />}
       <TabMarkBadge tab={tab} />
       <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
       <TabContinueButton tab={tab} stateClass={stateClass} />
@@ -384,7 +398,7 @@ const TabItem = memo(function TabItem({
             ? t("agentSchedule.indicatorNext", { count: schedule.count, value: schedule.next.toLocaleString() })
             : t("agentSchedule.indicator", { count: schedule.count })}
         >
-          ◷
+          <ClockIcon />
         </span>
       )}
       {/* A paired phone holds this tab open (stores/phonePresence). */}
@@ -428,7 +442,7 @@ const TabItem = memo(function TabItem({
         onClick={(e) => {
           e.stopPropagation();
           noteTabClose(e.currentTarget);
-          closeTabWithConfirm(tab.key);
+          void closeTabWithConfirm(tab.key);
         }}
         // The chord closes the ACTIVE tab, so only the active tab's ×
         // claims it — on any other it would name a key that closes a
@@ -439,7 +453,7 @@ const TabItem = memo(function TabItem({
             : t("tabBar.closeTabTitle")
         }
       >
-        ×
+        <CloseIcon />
       </button>
     </div>
   );
@@ -515,6 +529,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const browserHome = useSettingsStore((s) => s.settings?.browser_home_url);
   const closeGroup = useTabsStore((s) => s.closeGroup);
   const hideGroup = useTabsStore((s) => s.hideGroup);
+  const setGroupName = useTabsStore((s) => s.setGroupName);
   // Per-subwindow right file viewer: toggle state lives on the group node.
   const filesOpen = !!group?.filesOpen;
   const setGroupFiles = useTabsStore((s) => s.setGroupFiles);
@@ -530,6 +545,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // A VM or remote-only project's tabs are pinned to its hosts: no Local row
   // in the badge's menu or the agents' machine list.
   const hostPinned = useProjectsStore((s) => isHostPinned(s.projects.find((p) => p.id === scope)));
+  // Local models only (`services::agent_privacy`): this menu offers the local
+  // model rows alone; the backend refuses a cloud agent here regardless.
+  const localModelsOnly = useProjectsStore((s) => isLocalModelsOnly(s.projects.find((p) => p.id === scope)));
+  const cutNetwork = useProjectsStore((s) => isCutNetwork(s.projects.find((p) => p.id === scope)));
   const scopeProject = useProjectsStore((s) => s.projects.find((p) => p.id === scope));
   // Per-tab file source (remote-native vs local mirror), published by the file
   // viewers. Lets the Remote/Local badge ride on the viewer tab itself rather
@@ -590,8 +609,25 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     customAgents,
     agentOrder,
     installedCustom,
-    boxMembers,
+    memberTable,
   } = useAddTabMenuData(scope);
+
+  // Decision 3 (box redesign): inside a box a new tab starts in the active tab's
+  // member (its root folder, never the tab's own cwd: a viewer's is its file's
+  // folder), else the box folder. Every path of this bar reads this one value —
+  // the "+" menu, the chords (Ctrl+Shift+N, Ctrl+1-9, steering) and the empty
+  // subwindow's start buttons — so they cannot disagree. `projectCwd` stays what
+  // the kinds without a launch directory (monitor, disk usage, …) use: the box
+  // folder, or their "already open" match would open one per member.
+  const inBoxScope = scope.startsWith(BOX_SCOPE_PREFIX);
+  const scopeBoxes = useBoxesStore((s) => (inBoxScope ? s.boxes : NO_BOXES));
+  const scopeProjects = useProjectsStore((s) => (inBoxScope ? s.projects : NO_PROJECTS));
+  const activeTabCwd = tabs.find((tb) => tb.key === group?.activeKey)?.cwd;
+  const boxTarget = useMemo(
+    () => newTabTarget(scope, activeTabCwd, scopeBoxes, scopeProjects),
+    [scope, activeTabCwd, scopeBoxes, scopeProjects],
+  );
+  const launchCwd = boxTarget?.cwd || projectCwd;
 
   // Active project's name, used to name an agent's own session on launch.
   const projectName = useProjectsStore(
@@ -601,8 +637,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Local projects only: a local agent on a remote project has its cwd pinned
   // to the mirror root at spawn, so a worktree there could not be honored.
   const worktreePicker = useAgentWorktreePicker({
-    projectCwd,
-    projectName,
+    projectCwd: launchCwd,
+    // In a box the session is named after what it starts in, not after whichever
+    // project happens to be the active one.
+    projectName: boxTarget ? (boxTarget.member?.name ?? memberTable?.box.name ?? projectName) : projectName,
     enabled: !isRemoteScope,
   });
 
@@ -647,6 +685,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   const [editingKey, setEditingKey] = useState<string | null>(null);
   // Right-click on a tab-group chip: its own menu (rename / ungroup / close).
   const [stackMenu, setStackMenu] = useState<{ x: number; y: number; name: string } | null>(null);
+  // Right-click on the bar itself: the one place a subwindow's name is set.
+  const [nameMenu, setNameMenu] = useState<{ x: number; y: number } | null>(null);
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
   const { promptText, showMessage, dialogs } = useDialogs();
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
@@ -824,8 +864,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     // click, which would otherwise leave no way to get the project root back.
     if (isFileTabKind(item.kind)) {
       ensureTab(
-        { label: itemLabel(item, t), cmd: item.cmd, cwd: projectCwd, kind: item.kind },
-        (tab) => tab.kind === item.kind && tab.cwd === projectCwd && !tab.folder,
+        { label: itemLabel(item, t), cmd: item.cmd, cwd: launchCwd, kind: item.kind },
+        (tab) => tab.kind === item.kind && tab.cwd === launchCwd && !tab.folder,
       );
       setMenuPos(null);
       return;
@@ -840,7 +880,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     void worktreePicker.specFor(item).then((spec) => {
       if (!spec) return;
       focusGroup(groupId);
-      addTab(location ? { ...spec, location } : spec, place);
+      const launch = location ? { ...spec, location } : spec;
+      // An agent of this very launch that has not been asked anything yet is
+      // taken over instead of opening a second blank one.
+      const empty = findEmptyAgentTab(scope, useTabsStore.getState().tabs, launch);
+      if (empty) setActive(empty.key);
+      else addTab(launch, place);
     });
   }
 
@@ -860,48 +905,35 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         }
       : undefined;
 
-  /** Box "+" menu: a Files (Project) tab rooted at ONE member (the viewer
-   *  resolves the member's identity from the cwd — see ProjectFilesTab). */
-  function handleAddBoxMemberFiles(m: { id: string; name: string; dir: string }) {
-    focusGroup(groupId);
-    addTab({
-      label: t("newTabMenu.boxMemberFiles", { name: m.name }),
-      cmd: PROJECT_FILES_TAB_CMD,
-      args: [],
-      env: {},
-      cwd: m.dir,
-      kind: "projectfiles",
+  /** "Start in…" (box "+" menu) and a plain Files pick in a box: `kind` rooted at
+   *  one member, or the whole box for `null` — the one helper (`startIn.ts`) with
+   *  this bar's way of landing a tab. */
+  function openInMember(kind: StartInKind, member: BoxMemberDir | null, item?: StaticMenuItem) {
+    if (!memberTable) return;
+    openInMemberHelper({
+      kind,
+      member,
+      item,
+      table: memberTable,
+      launchCwd,
+      t,
+      viaRow: handleAdd,
+      add: (spec) => {
+        focusGroup(groupId);
+        addTab(spec);
+        setMenuPos(null);
+      },
+      addUnique: (spec) => {
+        focusGroup(groupId);
+        ensureTab(spec, (tab) => tab.kind === spec.kind && tab.cwd === spec.cwd && !tab.folder);
+        setMenuPos(null);
+      },
     });
-    setMenuPos(null);
   }
 
-  /** Box "+" menu: a shell rooted in ONE member's tree (legal after the spawn
-   *  gate's box branch; cwd = the member root, so tools/paths resolve there). */
-  function handleAddBoxMemberShell(m: { id: string; name: string; dir: string }) {
-    focusGroup(groupId);
-    addTab({
-      label: t("newTabMenu.boxMemberShell", { name: m.name }),
-      cmd: "",
-      args: [],
-      env: {},
-      cwd: m.dir,
-      kind: "shell",
-    });
-    setMenuPos(null);
-  }
-
-  /** Box "+" menu: an agent tab rooted in ONE member's tree — resume-safe,
-   *  since Claude keys its per-cwd history by that root. */
-  function handleAddBoxMemberAgent(m: { id: string; name: string; dir: string }) {
-    focusGroup(groupId);
-    const claude = AGENT_ITEMS.find((i) => i.cmd === "claude");
-    if (!claude) return;
-    addTab({
-      ...buildStaticTabSpec(claude, m.dir, m.name, t),
-      label: t("newTabMenu.boxMemberAgent", { name: m.name }),
-    });
-    setMenuPos(null);
-  }
+  /** The ▾ "Start in…" list of an Agents/Shell/Files row; none outside a box. */
+  const startInFor = (kind: StartInKind, what: string, item?: StaticMenuItem) =>
+    startInFlyout({ what, table: memberTable, open: (member) => openInMember(kind, member, item), t });
 
   function handleAddNetwork() {
     focusGroup(groupId);
@@ -1065,7 +1097,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     setMenuPos(null);
     const place = placement();
     try {
-      const spec = await vibeLocalTabSpec(scope, model, projectCwd);
+      const spec = await vibeLocalTabSpec(scope, model, launchCwd);
       focusGroup(groupId);
       addTab(spec, place);
     } catch {
@@ -1079,7 +1111,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     setMenuPos(null);
     const place = placement();
     try {
-      const spec = await localLaunchTabSpec(scope, agentId, label, model, projectCwd);
+      const spec = await localLaunchTabSpec(scope, agentId, label, model, launchCwd);
       focusGroup(groupId);
       addTab(spec, place);
     } catch {
@@ -1214,6 +1246,31 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     if (label) renameTab(key, label);
   }
 
+  function onBarContextMenu(event: React.MouseEvent) {
+    if (groupId === EMPTY_GROUP_ID) return;
+    // A dialog or menu portaled out of this bar still bubbles here in React.
+    if (!event.currentTarget.contains(event.target as Node)) return;
+    if ((event.target as HTMLElement).closest(".tab, button, input")) return;
+    event.preventDefault();
+    setMenuPos(null);
+    setTabMenu(null);
+    setStackMenu(null);
+    setNameMenu({ x: event.clientX, y: event.clientY });
+  }
+  async function nameSubwindow() {
+    setNameMenu(null);
+    const current = group?.name ?? "";
+    const name = await promptText({
+      title: t(current ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow"),
+      label: t("tabBar.subwindowNameLabel"),
+      body: current ? t("tabBar.nameRemoveHint") : undefined,
+      initial: current,
+      unchanged: current,
+      allowEmpty: true,
+    });
+    if (name !== null) setGroupName(groupId, name);
+  }
+
   function onTabContextMenu(event: React.MouseEvent, key: string, index: number) {
     event.preventDefault();
     event.stopPropagation();
@@ -1228,17 +1285,18 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     setTabMenu({ x: event.clientX, y: event.clientY, key, index });
   }
 
-  // Bulk-close helpers built on `closeTabWithConfirm` (`removeTab` plus the
+  // Bulk-close helpers built on `closeTabsWithConfirm` (one close at a time, each
+  // asking first when its tab holds unsaved work; `removeTab` plus the
   // tab's local tmux session) over this group's ordered `tabs`. Each close reads fresh store state and repicks the active
   // tab / collapses empty groups, so looping over a render-time snapshot is safe.
   function closeToLeft(index: number) {
-    tabs.slice(0, index).forEach((tb) => closeTabWithConfirm(tb.key));
+    void closeTabsWithConfirm(tabs.slice(0, index).map((tb) => tb.key));
   }
   function closeToRight(index: number) {
-    tabs.slice(index + 1).forEach((tb) => closeTabWithConfirm(tb.key));
+    void closeTabsWithConfirm(tabs.slice(index + 1).map((tb) => tb.key));
   }
   function closeOthers(key: string) {
-    tabs.filter((tb) => tb.key !== key).forEach((tb) => closeTabWithConfirm(tb.key));
+    void closeTabsWithConfirm(tabs.filter((tb) => tb.key !== key).map((tb) => tb.key));
   }
 
   // Start a pointer-based tab drag once the pointer crosses a 5px threshold.
@@ -1610,6 +1668,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
       data-group-id={groupId}
       data-tab-count={tabs.length}
       onPointerDown={onBarPointerDown}
+      onContextMenu={onBarContextMenu}
     >
       {/* Move grip — the handle for rearranging this whole subwindow (⧉ pops
           it out). Always pinned at the far left (outside the scrolling strip) so
@@ -1621,8 +1680,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         title={t("tabBar.dragGripTitle")}
         aria-hidden="true"
       >
-        ⠿
+        <GripIcon />
       </div>
+      {group?.name && (
+        <span className="subwindow-name" title={group.name}>{group.name}</span>
+      )}
       <button
         className="tab-scroll-btn tab-popout-btn"
         title={t("tabBar.popOutTitle")}
@@ -1643,7 +1705,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(-1)}
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <div className="tab-strip" ref={stripRef} onWheel={onStripWheel}>
@@ -1739,7 +1801,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           onMouseLeave={stopHoverScroll}
           onClick={() => scrollStrip(1)}
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
       {/* The + lives OUTSIDE the scrolling strip, beside the grip, the chevrons
@@ -1812,7 +1874,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); closeGroup(groupId); }}
           >
-            ×
+            <CloseIcon />
           </button>
         )}
       </div>
@@ -1828,8 +1890,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           keepBelow
         >
           <AddTabMenuList
+            heading={memberTable && boxTarget ? targetHeading(boxTarget.member, memberTable, t) : undefined}
             groups={[
-              {
+              ...(!cloudRowsOffered(localModelsOnly) ? [] : [{
                 label: t("newTabMenu.groupAgents"),
                 moreLabel: t("newTabMenu.moreAgents"),
                 entries: agentMenuEntries({
@@ -1839,6 +1902,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   pick: handleAdd,
                   pickCloud: handleAddCloud,
                   machines: addMenuMachines,
+                  startIn: memberTable ? (what, item) => startInFor("agent", what, item) : undefined,
                   defaultAgentBin,
                   agentOrder,
                   onAddCustom: () => {
@@ -1855,6 +1919,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     pick: handleAdd,
                     pickCloud: handleAddCloud,
                     machines: addMenuMachines,
+                    startIn: memberTable ? (what, item) => startInFor("agent", what, item) : undefined,
                     defaultAgentBin,
                     agentOrder,
                     onAddCustom: () => {
@@ -1865,11 +1930,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   }),
                   compactAgentBins,
                 ),
-              },
+              }]),
               // A host-pinned scope (VM, remote-only) has no local tree: its
               // API-key and local-model rows, which start on this machine,
-              // are not offered.
-              ...(hostPinned
+              // are not offered. Nor are the API-key rows of a local-models-only
+              // project: they start a cloud agent.
+              ...(hostPinned || !cloudRowsOffered(localModelsOnly)
                 ? []
                 : apiKeyMenuGroups({
                     keyable: keyableAgents,
@@ -1878,40 +1944,6 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     pick: handleAdd,
                     t,
                   })),
-              // Box scope: one row-trio per member — files view, shell, and a
-              // (resume-safe, member-cwd) Claude tab. Empty members list (or a
-              // non-box scope) contributes no group at all.
-              ...(boxMembers.length > 0
-                ? [{
-                    label: t("newTabMenu.groupBoxMembers"),
-                    // Typed here and on the browser group below: through a
-                    // flatMap or a conditional spread the `untested` ids
-                    // otherwise widen to string and fail the whole list.
-                    entries: boxMembers.flatMap((m): AddMenuEntry[] => [
-                      {
-                        key: `boxfiles:${m.id}`,
-                        label: t("newTabMenu.boxMemberFiles", { name: m.name }),
-                        dot: "▤",
-                        color: TAB_ACCENT.projectfiles,
-                        onPick: () => handleAddBoxMemberFiles(m),
-                      },
-                      {
-                        key: `boxshell:${m.id}`,
-                        label: t("newTabMenu.boxMemberShell", { name: m.name }),
-                        color: TAB_ACCENT.shell,
-                        onPick: () => handleAddBoxMemberShell(m),
-                      },
-                      ...(enabledAgents?.has("claude")
-                        ? [{
-                            key: `boxagent:${m.id}`,
-                            label: t("newTabMenu.boxMemberAgent", { name: m.name }),
-                            color: TAB_ACCENT.agent,
-                            onPick: () => handleAddBoxMemberAgent(m),
-                          } satisfies AddMenuEntry]
-                        : []),
-                    ]),
-                  }]
-                : []),
               // Only offer agents whose binary is actually installed: Mistral/vibe
               // (checked against `vibeForLocalModel`) and the drivers the backend
               // already marks `available` — and only once the model is on the GPU.
@@ -1921,6 +1953,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     localModel,
                     localModelOffInRoot,
                     localDrivers,
+                    lockedProject: localModelsOnly,
+                    cutNetwork,
                     vibeForLocalModel,
                     gpu: localModelGpu,
                     onVibe: (model) => void handleOllamaModel(model),
@@ -1935,6 +1969,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   color: TAB_ACCENT.shell,
                   shortcut: "newShellTab",
                   onPick: () => handleAdd(SHELL_ITEM),
+                  ...startInFor("shell", itemLabel(SHELL_ITEM, t), SHELL_ITEM),
                 }],
               },
               {
@@ -1943,8 +1978,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                   key: item.cmd,
                   label: itemLabel(item, t),
                   color: TAB_ACCENT[item.kind],
-                  disabled: !projectCwd,
-                  onPick: () => handleAdd(item),
+                  disabled: !launchCwd,
+                  // In a box the plain row follows the target: a member's Files is
+                  // the project-files tab, the whole box's the plain one.
+                  onPick: () => (boxTarget?.cwd ? openInMember("files", boxTarget.member) : handleAdd(item)),
+                  ...startInFor("files", itemLabel(item, t)),
                 })),
               },
               // All three are offered in every scope. System Monitor is
@@ -2046,9 +2084,20 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               {
                 label: t("newTabMenu.groupProject"),
                 entries: [{
+                  key: "search-everything",
+                  label: t("palette.menuRow"),
+                  dot: <SearchIcon />,
+                  color: "var(--text-secondary)",
+                  disabled: false,
+                  shortcut: "commandPalette",
+                  onPick: () => {
+                    window.dispatchEvent(new Event("app:open-palette"));
+                    setMenuPos(null);
+                  },
+                }, {
                   key: "close-all",
                   label: t("newTabMenu.itemCloseAllTabs"),
-                  dot: "×",
+                  dot: <CloseIcon />,
                   color: "var(--danger)",
                   disabled: !hasAnyTabs,
                   shortcut: "closeAllTabs",
@@ -2126,7 +2175,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               else setEditingKey(key);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("common.rename")}
           </button>
           {/* The picker keeps the menu OPEN after a pick: the tab recolours behind
@@ -2180,7 +2229,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                       setTabMenu(null);
                     }}
                   >
-                    <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+                    <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
                     {t("tabStack.remove")}
                   </button>
                 )}
@@ -2205,7 +2254,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                 setTabMenu(null);
               }}
             >
-              <span className="tab-new-menu-dot tab-new-menu-dot--accent">◷</span>
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ClockIcon /></span>
               {t("agentSchedule.menu")}
               <UntestedTag id="tabBar.2" />
             </button>
@@ -2213,11 +2262,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           <button
             className="tab-new-menu-item"
             onClick={() => {
-              closeTabWithConfirm(tabMenu.key);
+              void closeTabWithConfirm(tabMenu.key);
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("common.close")}
             <MenuShortcut chord="closeTab" />
           </button>
@@ -2229,7 +2278,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeOthers")}
           </button>
           <button
@@ -2240,7 +2289,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeToLeft")}
           </button>
           <button
@@ -2251,7 +2300,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               setTabMenu(null);
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabBar.closeToRight")}
           </button>
           {closedAgentTabs.length > 0 && (
@@ -2271,6 +2320,20 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           )}
         </ContextMenuPortal>
       )}
+      {nameMenu && (
+        <ContextMenuPortal
+          x={nameMenu.x}
+          y={nameMenu.y}
+          onClose={() => setNameMenu(null)}
+          className="tab-new-menu"
+        >
+          <button className="tab-new-menu-item" onClick={() => void nameSubwindow()}>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
+            {t(group?.name ? "tabBar.renameSubwindow" : "tabBar.nameSubwindow")}
+            <UntestedTag id="tabBar.nameSubwindow" />
+          </button>
+        </ContextMenuPortal>
+      )}
       {stackMenu && (
         <ContextMenuPortal
           x={stackMenu.x}
@@ -2282,14 +2345,14 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             className="tab-new-menu-item"
             onClick={() => void renameStack(stackMenu.name)}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">✎</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><PencilIcon /></span>
             {t("tabStack.rename")}
           </button>
           <button
             className="tab-new-menu-item"
             onClick={() => ungroupStack(stackMenu.name)}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--accent">▭</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--accent"><WindowIcon /></span>
             {t("tabStack.ungroup")}
           </button>
           <button
@@ -2297,10 +2360,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
             onClick={() => {
               const name = stackMenu.name;
               setStackMenu(null);
-              tabs.filter((tb) => tb.stack === name).forEach((tb) => closeTabWithConfirm(tb.key));
+              void closeTabsWithConfirm(tabs.filter((tb) => tb.stack === name).map((tb) => tb.key));
             }}
           >
-            <span className="tab-new-menu-dot tab-new-menu-dot--danger">×</span>
+            <span className="tab-new-menu-dot tab-new-menu-dot--danger"><CloseIcon /></span>
             {t("tabStack.closeAll")}
           </button>
         </ContextMenuPortal>

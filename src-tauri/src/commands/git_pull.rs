@@ -22,7 +22,9 @@
 //! `run_git_hooked`; everything else — the fetch, the branch fast-forward, the
 //! merge-state probes, the abort — runs with hooks pinned off like every other
 //! Tabtivity git call (#862: the conflicted-file probe rewrites the index and would
-//! fire `post-index-change` on merely opening the Git panel).
+//! fire `post-index-change` on merely opening the Git panel). The local fetch
+//! still passes the same trust gate: it runs no hook, but it honours the repo's
+//! program-naming config keys (see [`fetch_local`]).
 
 use std::path::{Path, PathBuf};
 
@@ -217,7 +219,14 @@ pub async fn git_fetch(
 }
 
 /// `git fetch` in a local directory with push's scoped token auth.
+///
+/// Gated like push (`exec_trust`, `GitHooks`): fetch runs no hook, but it
+/// honours the repo's program-naming keys (`core.sshCommand`,
+/// `credential.helper`, `remote.*.uploadpack`, `url.*.insteadOf`), which a
+/// downloaded or imported repo can carry — and the gate's fingerprint covers
+/// exactly those.
 fn fetch_local(dir: &Path, token: Option<&str>, project_id: Option<&str>) -> Result<std::process::Output, String> {
+    crate::services::exec_trust::require(crate::services::exec_trust::TrustKind::GitHooks, dir)?;
     let mut args: Vec<String> = Vec::new();
     if token.is_some() {
         let origins = crate::commands::git_hosting::token_origins(project_id, None);
@@ -608,6 +617,29 @@ mod tests {
         assert_eq!(parse_track("behind 3"), (0, 3));
         assert_eq!(parse_track("[gone]"), (0, 0));
         assert_eq!(parse_track(""), (0, 0));
+    }
+
+    /// A repo whose own config names a program fetch would run (here the
+    /// remote's `uploadpack`) is refused until approved — the program never
+    /// runs. A plain clone fetches without asking.
+    #[cfg(unix)]
+    #[test]
+    fn fetch_is_gated_on_the_repos_program_keys() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some((tmp, _up, clone)) = behind_pair() else { return };
+        let dir = clone.to_string_lossy().to_string();
+        assert!(git_fetch_blocking(dir.clone(), None).is_ok());
+
+        let marker = tmp.path().join("ran");
+        let script = tmp.path().join("pack.sh");
+        fs::write(&script, format!("#!/bin/sh\ntouch '{}'\nexec git-upload-pack \"$@\"\n", marker.display()))
+            .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        git(&clone, &["config", "remote.origin.uploadpack", &script.to_string_lossy()]);
+
+        let err = git_fetch_blocking(dir, None).unwrap_err();
+        assert!(err.starts_with(crate::services::exec_trust::TRUST_REQUIRED_PREFIX), "{err}");
+        assert!(!marker.exists(), "the repo's program must not run unapproved");
     }
 
     #[test]

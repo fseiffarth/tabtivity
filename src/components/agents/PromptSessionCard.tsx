@@ -5,6 +5,7 @@ import { useUse24h } from "../../lib/timeFormat";
 import type { PromptChartCard } from "../../lib/agents/prompt/chart";
 import { formatTimelineInstant } from "../../lib/agents/prompt/timeline";
 import { CARD_OWN_KEYS, PromptPhoneChip } from "./PromptCard";
+import { CheckIcon } from "../common/icons/Icon";
 
 interface Props {
   /** The session's sent prompts inside the window, oldest first. */
@@ -147,7 +148,7 @@ export function PromptSessionCard({
                 setTimeout(() => setCopied(false), 1200);
               }}
             >
-              {copied ? "✓ " : "⧉ "}{t("promptChart.session", { id: sessionId })}
+              {copied ? <><CheckIcon />{" "}</> : "⧉ "}{t("promptChart.session", { id: sessionId })}
             </button>
           )}
           <ol className="agent-prompt-session-list">

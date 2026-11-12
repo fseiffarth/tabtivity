@@ -203,6 +203,37 @@ impl HomeDir {
         self.subdir_in(name, true).ok()
     }
 
+    /// Create the child directory `name` (`0700`) and open it: `AlreadyExists`
+    /// when anything is at that name already (a folder, a file, a link), so
+    /// a caller never writes into a folder someone else made or filled. It is
+    /// opened without following a link, and a non-empty directory swapped in
+    /// between the create and the open is refused (`AlreadyExists`) as well.
+    pub fn create_subdir(&self, name: &str) -> io::Result<Self> {
+        components(name)
+            .filter(|p| p.len() == 1)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        #[cfg(unix)]
+        {
+            let c = cstr(OsStr::new(name))?;
+            // SAFETY: valid descriptor and C string; `mkdirat` never follows
+            // a link at the final component and fails on any existing name.
+            if unsafe { libc::mkdirat(self.fd.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        #[cfg(not(unix))]
+        std::fs::create_dir(self.path.join(name))?;
+        let dir = self.subdir_in(name, false)?;
+        #[cfg(unix)]
+        let empty = dir.entries()?.is_empty();
+        #[cfg(not(unix))]
+        let empty = std::fs::read_dir(&dir.path)?.next().is_none();
+        if !empty {
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        Ok(dir)
+    }
+
     /// [`HomeDir::subdir`] without creating anything: `None` when missing or
     /// not a directory (a link included).
     pub fn open_subdir(&self, name: &str) -> Option<Self> {
@@ -250,6 +281,18 @@ impl HomeDir {
             .collect();
         names.sort();
         (names, odd)
+    }
+
+    /// [`HomeDir::names`] reading at most `limit` entries (in directory order,
+    /// then sorted): a folder an agent filled with hundreds of thousands of
+    /// names costs `limit` reads, not all of them.
+    pub fn names_capped(&self, limit: usize) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.path) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries.flatten().take(limit).filter_map(|e| e.file_name().to_str().map(str::to_string)).collect();
+        names.sort();
+        names
     }
 
     /// Open the child directory `name` without creating it: `None` when
@@ -520,6 +563,15 @@ impl HomeFile {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).ok()?;
         Some(bytes)
+    }
+
+    /// [`read`](Self::read), but `None` for a file over `cap` bytes — never more
+    /// than `cap + 1` bytes are read, whatever an agent left there.
+    pub fn read_capped(&self, cap: u64) -> Option<Vec<u8>> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        self.open_read()?.take(cap + 1).read_to_end(&mut bytes).ok()?;
+        (bytes.len() as u64 <= cap).then_some(bytes)
     }
 
     /// The link's target, for a symlink.
@@ -998,6 +1050,30 @@ pub(crate) fn mkfifo(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// H3: an exclusive create fails on anything already at the name and
+    /// lands a fresh, empty folder otherwise.
+    #[test]
+    fn an_exclusive_subdir_is_new_and_empty_or_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = HomeDir::open(tmp.path(), "").unwrap();
+        let fresh = root.create_subdir("fresh").unwrap();
+        assert!(tmp.path().join("fresh").is_dir());
+        fresh.file("a.txt").unwrap().write(b"x").unwrap();
+        assert_eq!(root.create_subdir("fresh").unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        std::fs::write(tmp.path().join("plain"), b"x").unwrap();
+        assert_eq!(root.create_subdir("plain").unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        for bad in ["", "..", "a/b"] {
+            assert!(root.create_subdir(bad).is_err(), "{bad:?}");
+        }
+        #[cfg(unix)]
+        {
+            let elsewhere = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(elsewhere.path(), tmp.path().join("link")).unwrap();
+            assert_eq!(root.create_subdir("link").unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+            assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

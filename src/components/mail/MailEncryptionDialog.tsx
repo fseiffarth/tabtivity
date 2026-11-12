@@ -45,6 +45,7 @@ import {
 import type { MailEncryptionState } from "../../types/mail";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
+import { CloseIcon } from "../common/icons/Icon";
 
 export interface MailEncryptionDialogProps {
   state: MailEncryptionState;
@@ -117,8 +118,8 @@ export function MailEncryptionDialog({ state, onChanged, onClose }: MailEncrypti
           <h2>
             {t("mail.encryption.title")} <UntestedTag id="mail.encryption.title" />
           </h2>
-          <button type="button" className="dialog-close-btn" onClick={onClose}>
-            ×
+          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}>
+            <CloseIcon />
           </button>
         </div>
 

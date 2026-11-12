@@ -25,8 +25,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 
 | Default | Action |
 |---|---|
-| Ctrl+Shift+Tab | Next project |
-| Alt+Shift+← | Previous project |
+| AltGr+Tab / AltGr+Shift+Tab | Next / previous project (AltGr = the right Alt key) — from a focused terminal too; Alt+Shift+→ / ← work as well, and are the default on macOS |
 | Ctrl+Shift+PageDown / PageUp | Next / previous box |
 | Ctrl+Shift+R | Open / close the root console |
 | Shift+Space | Enter Tabtivity navigation |
@@ -37,6 +36,7 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 | Default | Action |
 |---|---|
 | Ctrl+Shift+← / Ctrl+Shift+→ | Previous / next tab in the pane — from a focused terminal too (a program in it then never gets these keys; plain Shift+←/→ is left to it, e.g. an agent CLI's own use of it) |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab of the project, through all its panes in order (focus moves to the pane that holds it, wrapping) — from a focused terminal too |
 | Shift+Tab | Cycle tabs in the pane |
 | Ctrl+Shift+↑ / Ctrl+Shift+↓ | Cycle pane focus up / down |
 | Ctrl+Enter | Toggle the focused pane's fullscreen |
@@ -49,8 +49,8 @@ place of Ctrl. **F1** opens the cheat sheet with every effective binding.
 
 ## New tabs
 
-Each opens a tab in the focused pane of the main window and puts the cursor
-in it — from a focused terminal too. The + menu shows each chord beside its
+Each opens a tab in the focused pane of the window you're in — the main window
+or a popped-out one — and puts the cursor in it, from a focused terminal too. The + menu shows each chord beside its
 entry.
 
 | Default | Action |
@@ -72,42 +72,137 @@ the **Root** chip). See `mail-calendar`.
 
 ## Tabtivity navigation
 
-Press **Shift+Space**. A legend appears at the bottom and the app answers
-single keys, even while a terminal has focus. (Mid-word, with Shift still held
+Press **Shift+Space**. A bar docks under the panes (the level ladder
+Projects › Subwindows › Tabs › Inside — Top bar leads it on the project level,
+Subwindows is left out with one subwindow — the move keys, the jumps, and the keys
+that leave) and every other key shows as a small coloured cap on the control it
+fires: W on the tab, N O 1–9 + above the + button, Space L G K on the prompt line,
+M C T , on the top bar, B P on the side rail. **H** folds the bar down to its
+ladder. The app answers single keys, even while a terminal has focus. (Mid-word, with Shift still held
 from a capital, Shift+Space stays a plain space.) The mode opens on the
 current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 
 | Key | Action |
 |---|---|
-| S F / ← → | Previous / next tab (on the subwindow level: subwindow; on the project level: project) |
-| E / ↑ | Up a level: tabs → subwindows → projects → the top bar |
+| (unbound) | Next / previous tab (Shift: back), running on into the next subwindow past the last one, on the subwindow level too. No default key — Tab cycles the Reader views; bind one in Settings → Keyboard |
+| S F / ← → | Previous / next tab within the subwindow, wrapping — never into another one; Shift+←/→ switches the subwindow (on the subwindow level: subwindow; on the project level: project) |
+| E / ↑ | Up a level: tabs → subwindows → projects → the top bar (the subwindow level only exists with two or more subwindows; with one, ↑/↓ skip it) |
 | D / ↓ | Back down a level |
-| 1–9 | Tabs: new agent tab. Projects: jump to a station (1 = root, 2 = first pill) |
+| 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option opens the Chat view's field, or on the Terminal view moves the highlight there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
+| K / L | On an agent tab whose Chat shows prompts still queued behind a busy turn: **K** Send now (stops the turn so the queue goes at once; steering stays on), **L** Cancel and edit (takes the queued prompts back into the text box and hands you the keyboard). Shown only while the bubbles' buttons are |
 | N / M | New shell / System Monitor tab (projects: new project / mail) |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
+| , | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the wheel, their digit (1–9, 0) opens one at once |
 | V | Toggle the pane's file viewer |
-| W | Close the active tab |
+| Tab / Shift+Tab | On an agent tab with a view strip: the next / previous view, Chat → Diffs → Files → Terminal (wraps; views with nothing to show are skipped). Works on the subwindow, tab and Inside levels and keeps the level |
+| W | Close the active tab: it asks first; W again (or Y, Enter) closes, Esc keeps it |
 | A | Walk the card over the active tab (Undo clear, a sign-in link) |
+| G | On an agent tab whose Chat lists subagents: open its Subagents list and walk it — E D move, Enter opens a subagent's conversation and the highlight moves to its bar (‹ back, ‹ › previous / next); with one already open, G lands on its bar. Esc closes the list |
 | . | The right-click menu of the active tab (projects: of the project; in a panel: of the highlighted row) |
 | B | Open the side panel |
 | P | Toggle the side panels |
 | Q / R / X | Next tab waiting for an answer / working / done (Shift: previous) |
-| , | Open Settings and walk it: ← → pages, E D controls |
+| Backspace | Back to the tab you were on before Q / R / X (again: return). Answering a question you jumped to with Q brings you back by itself |
+| / | Open Settings and walk it: ← → pages, E D controls |
 | ? | Open the cheat sheet: E D scroll it |
-| Space / Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it) |
+| Space | On an agent tab: with its Chat view shown, the Chat's own input field appears (hidden while steering) and takes the keys; Enter sends and hides it, Esc hides it without sending. In the Terminal view (or while a dialog is up): a prompt box in the window's middle; Enter sends, Esc returns. Its chips (Alt+M model, Alt+E effort, Alt+C clear, Alt+P / Alt+G plan / goal) include Alt+T Commit: a list of the three commit prompts (↑/↓, Enter or a digit sends one), as the Chat box's Commit chip |
+| Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |
+
+**D** from the tab level steps *Inside* the active tab: the arrows stop
+switching tabs and move through what the tab shows. The ladder names what you
+are in (the terminal, the document, the chat). Space, K / L, the answer digits,
+Tab and Enter keep working there as on the tab level; a tab that starts
+asking puts you back on the tab level.
+
+| Key | Terminal or the Chat view | Document |
+|---|---|---|
+| S F / ← → | Scroll back / forward half a screen, as the mouse wheel does (Shift: a whole screen) | Scroll up / down half a screen (Shift: a whole screen) |
+| D / ↓ | Back to the live end (the newest message) | Jump to the end |
+| E / ↑ | Back to the tabs; the terminal returns to its live end | Back to the tabs; the document keeps its place |
+
+The Diffs and Files views have their own keys Inside:
+
+Inside an agent tab's **Diffs** view (D from the tab level while it shows), a
+highlighted card is the cursor:
+
+| Key | What it does |
+| --- | --- |
+| E / D (↑ / ↓) | Previous / next change card; E on the first card steps back to the tabs (holding E does not) |
+| Shift+E / Shift+D | Previous / next changed file (All files first; after the last, back to All) |
+| S / F (← / →) | Scroll the diff (Shift: a whole screen) |
+| Z | Fold / unfold the card |
+| N | Jump to the next New card |
+| U | Switch between split and unified |
+| O | Open the file in a tab (Shift+O: in a new subwindow) |
+| V | Open the card's whole file in the diff viewer |
+| Enter / Space | Work here (leave navigation, the keys stay in the view) / the Chat's input field (else the prompt box) |
 
 Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
 New project dialog, a right-click menu, a top-bar menu, the root console — gets
 the highlight: E D go row to row, S F along a row, Enter presses, and Esc closes
 it the way its own Escape would. The mode then returns to where the dialog was
 opened. On the top bar, S F walk its buttons and D drops a button's menu.
-Enter on a text field leaves the mode so you can type there; Shift+Space brings
-it back on the same dialog.
+A text field takes your typing whenever the caret is in it: a dialog that
+opens with one focused (New Folder, Rename project), an inline field a menu
+pick opened (a tab's or box's rename), or Enter on any text field. Esc in a
+dialog's field brings the highlight back to the dialog; an inline field's Esc
+is its own (a rename cancels) and the mode comes back after it. The mode also
+resumes by itself once the field or its dialog goes away (Enter submitted it);
+a click elsewhere leaves it off.
+
+In the new-tab menu (+), highlight **More agents**, **Cloud session**, or a row's
+**▾** button and press Enter. E/D or ↑/↓ move through the submenu. Esc closes
+one submenu at a time and returns the highlight to the button that opened it.
+
+In the side panel (B) the highlight starts in the list, on the row you were last
+on in that view. E D move one line (Shift: a screenful) and stop at the first and
+last line; S F move along a row's own buttons, and on a folder F opens it and S
+goes back up to its parent. On the view tabs S F switch the view; 1–9 switch to
+that view from anywhere in the panel (the tabs show their number) and land in
+its list. Enter on a file opens it and takes you to its tab — a panel that B
+opened closes; Shift+Enter opens it and stays in the panel.
+
+Inside an agent's Reader **Files** view (Tab to it, then D) the files and then
+the links are one list: E D move the highlight (E on the first row goes back to
+the tabs), Shift+E / Shift+D jump to the other section, S F scroll the shown
+file half a screen (Shift: a whole one), **O** opens the highlighted file as a
+tab (Shift+O: in a new subwindow) or the link after the usual "Open link?" ask,
+and **V** shows the file in the viewer beside the list. Moving the highlight
+opens nothing; Enter stays Work here and Space the prompt box.
+
+**In a popped-out window** the mode works the same on that window's own
+subwindows and tabs: Shift+Space there docks the bar at its bottom, and the
+tab, prompt, close and new-tab keys act in it. There are no projects in a
+popout: **E / ↑** from its tabs (or its subwindows) walks its title bar — dock
+back, hide and the window buttons, **Enter** presses one; **↑** stops there. The
+ladder reads Title bar › Subwindows › Tabs › Inside (without Subwindows when the
+window has one). One key always goes back to the main window: **Home** (or
+**0**), the first key in the popout's bar, from any level, the title bar
+included. It hands the keyboard over with steering on the main window's tabs
+(the main window has no such key and ignores it); both keys are rebindable.
+Only one window steers at a time, and steering follows the keyboard:
+
+- **J** in the main window raises the next popout with steering on in it; J in
+  a popout goes to the next popout, after the last one back to the first, and
+  never to the main window (with a single popout it does nothing).
+- Keys whose target is only in the main window — the project jump, mail,
+  calendar, to-do, the cockpit, settings, the side panel and the panels — are
+  listed in the popout's bar under *Main window*: pressing one brings the main
+  window forward and runs it there.
+- **Q R X** and Back walk the same tabs from either window and land on the tab
+  wherever it lives, bringing its window forward.
+
+If the desktop does not let a window take the keyboard (some Wayland
+compositors refuse it), steering stays in the window you were in.
+
+The phone has the same mode for a Bluetooth keyboard (Shift+Space, E S D F, Q R X, M C T,
+digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per
-level. A letter can mean one thing on the projects level and another inside a
-pane; the legend and the cheat sheet always show the keys you have.
+level (*Inside a view* holds the letters that act once you are inside a Diffs or Files
+view: fold, layout, open, other view, next new). A letter can mean one thing on the
+projects level and another inside a pane; the bar, the caps and the cheat sheet always show the keys you have.
 
 ## In editors and viewers
 
@@ -149,3 +244,12 @@ in the settings page's *Terminal* list.
   Hold **Shift** while moving (or press **v**) to select, **V** for whole lines.
   **Enter**, **y** or Ctrl+C copies (with nothing selected: the cursor's line),
   **Esc** or **q** leaves. While it is on, no key reaches the program.
+
+
+Cockpit steering: open Now with U while steering, or enter steering in an open
+cockpit. Tab / Shift+Tab moves between its visible areas. In the roster, E/D or
+up/down (also J/K) moves the selection; Enter jumps to its tab; Space/right
+shows its detail; C continues; / opens its filter. Escape from the filter
+resumes steering. In detail, steer to a question or composer and press Enter.
+Escape returns a narrow detail to the roster before closing the cockpit.
+Sliders take native keyboard control on Enter; the steering chord returns.

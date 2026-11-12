@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { UntestedTag } from "../common/UntestedTag";
 import { usePresentationStore } from "../../stores/viewers/presentation";
 import { useT, type TranslationKey } from "../../lib/i18n";
-import { TrashIcon } from "../common/icons/Icon";
+import { CloseIcon, TrashIcon } from "../common/icons/Icon";
 import { type LaserPoint, paintLaserFrame } from "./laserPaint";
 
 /**
@@ -444,7 +444,7 @@ export function PresentationOverlay() {
                 setOpen(false);
               }}
             >
-              ✕
+              <CloseIcon />
             </button>
             <UntestedTag id="presentationOverlay.1" />
           </div>

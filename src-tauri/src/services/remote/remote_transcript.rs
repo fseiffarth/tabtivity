@@ -26,8 +26,14 @@
 //! relaunch under a fresh id, and a tab moved onto the host, which runs on
 //! the id of its local run. With no running CLI to ask (it exited, or the host
 //! has no readable `/proc`), the file named after the locally recorded live id
-//! or the launch id is read. A Claude subagent's own conversation is not
-//! copied. Other CLIs keep stores Tabtivity cannot name without a hook (Codex
+//! or the launch id is read.
+//!
+//! Subagents: the session's `subagents` folder on the host is copied beside
+//! the local copy, where the local reader looks — every subagent's
+//! `.meta.json` with each read of the conversation (it ties an `Agent` call
+//! to the subagent it spawned: the call's card gets its handle), and a
+//! subagent's own conversation (or a `Workflow` run's journal) only when that
+//! subagent is opened ([`copy_subagents`]). Other CLIs keep stores Tabtivity cannot name without a hook (Codex
 //! mints its thread id itself) and answer `unsupported`.
 
 use std::collections::HashMap;
@@ -57,8 +63,15 @@ const SESSIONS: &str = ".claude/sessions";
 /// The most session records one ask reads, and the largest one it reads.
 const MAX_SESSION_RECORDS: usize = 200;
 const MAX_SESSION_RECORD_BYTES: u64 = 64 * 1024;
+/// A running CLI's `/proc/<pid>/environ` is read for one variable; a real environment
+/// is far below this (it is limited by the stack), a host's stream is not.
+const MAX_ENVIRON_BYTES: u64 = 2 * 1024 * 1024;
 /// The most slug folders one scan looks into.
 const MAX_SEARCHED_DIRS: usize = 400;
+/// The most subagent records one read copies, and the most workflow runs a
+/// subagent is looked for in.
+const MAX_SUBAGENTS: usize = 500;
+const MAX_WORKFLOW_RUNS: usize = 64;
 /// The largest transcript copied. A longer one answers `read_failed`.
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 /// One SFTP read of the copy loop.
@@ -79,6 +92,24 @@ struct Mirror {
     session: Option<String>,
     /// When the host's running sessions were last asked.
     asked: Option<Instant>,
+    /// The local copy of the session's `subagents` folder.
+    subagents: SubagentsCopy,
+}
+
+/// What the local copy of a host session's `subagents` folder holds.
+#[derive(Default)]
+struct SubagentsCopy {
+    /// The host transcript ([`Mirror::remote`]) the folder is a copy of.
+    /// Another one — a `/clear` there, or a copy an earlier run left whose
+    /// bytes this one does not know — empties the folder first.
+    of: Option<String>,
+    /// Per file below the folder (`agent-<id>.jsonl`, `workflows/<run>/…`):
+    /// the bytes copied of a conversation or journal, or the size and stamp
+    /// a `.meta.json` was copied at.
+    files: HashMap<String, (u64, Option<u64>)>,
+    /// When the host was last asked for the folder's records (`""`) or for
+    /// one subagent's conversation (its handle).
+    checked: HashMap<String, Instant>,
 }
 
 /// One entry per `(project, host, launch id)`, behind one lock so two Readers
@@ -127,7 +158,7 @@ pub async fn host_tab_transcript(
     limit: usize,
 ) -> Option<AgentTranscript> {
     crate::services::remote::remote_target_for_host(project_id, host_id)?;
-    if agent == "claude" && subagent.is_some() {
+    if subagent.is_some_and(|token| !crate::services::agent_transcript::is_subagent_token(token)) {
         return Some(AgentTranscript::unavailable("no_subagent"));
     }
     let local = match host_tab_copy(pool, agent, project_id, host_id, launch_id).await? {
@@ -139,14 +170,178 @@ pub async fn host_tab_transcript(
         }
         HostCopy::At(local) => local,
     };
-    let version = version.map(str::to_string);
+    copy_subagents(pool, project_id, host_id, launch_id, &local, subagent).await;
+    let (version, token) = (version.map(str::to_string), subagent.map(str::to_string));
     let read = app_core::rt::spawn_blocking(move || {
-        crate::services::agent_transcript::claude_transcript_at(&local, None, version.as_deref(), limit)
+        crate::services::agent_transcript::claude_transcript_at(&local, token.as_deref(), version.as_deref(), limit)
     })
     .await
     .ok()
     .flatten();
-    Some(read.unwrap_or_else(|| AgentTranscript::unavailable("read_failed")))
+    Some(read.unwrap_or_else(|| AgentTranscript::unavailable(if subagent.is_some() { "no_subagent" } else { "read_failed" })))
+}
+
+/// Grow the local copy of the host session's `subagents` folder, beside the
+/// conversation's copy `local` — where
+/// [`crate::services::agent_transcript::claude_transcript_at`] looks: every
+/// subagent's `.meta.json`, and with `subagent` (a handle) that subagent's
+/// own conversation, or the journal of the `Workflow` run it names. Asked of
+/// the host at most as often as the conversation is, per handle; a failed ask
+/// leaves what was copied before as what is read.
+async fn copy_subagents(
+    pool: &RemotePoolState,
+    project_id: &str,
+    host_id: &str,
+    launch_id: &str,
+    local: &std::path::Path,
+    subagent: Option<&str>,
+) {
+    let Some(target) = crate::services::remote::remote_target_for_host(project_id, host_id) else {
+        return;
+    };
+    let every = if crate::services::hpc_mode::is_careful_host(&target.spec) { CAREFUL_CHECK_EVERY } else { CHECK_EVERY };
+    let mut mirrors = MIRRORS.lock().await;
+    let Some(mirror) = mirrors.get_mut(&mirror_key(project_id, host_id, launch_id)) else {
+        return;
+    };
+    let Some(remote) = mirror.remote.clone() else {
+        return;
+    };
+    let Some(base) = remote.strip_suffix(".jsonl") else {
+        return;
+    };
+    let folder = local.with_extension("").join("subagents");
+    let copy = &mut mirror.subagents;
+    if copy.of.as_deref() != Some(remote.as_str()) {
+        // Absent is fine: nothing was copied yet.
+        let _ = tokio::fs::remove_dir_all(&folder).await;
+        *copy = SubagentsCopy { of: Some(remote.clone()), ..Default::default() };
+    }
+    let key = subagent.unwrap_or_default().to_string();
+    if copy.checked.get(&key).is_some_and(|at| at.elapsed() < every) {
+        return;
+    }
+    let Some(sftp) = crate::services::remote::pooled_sftp_host(pool, project_id, host_id).await else {
+        return;
+    };
+    copy.checked.insert(key, Instant::now());
+    // Polled: a failure is answered by the read (`no_subagent`), not logged.
+    let _ = grow_subagents(&sftp, copy, &format!("{base}/subagents"), &folder, subagent).await;
+}
+
+/// The id in a subagent file's name `agent-<id><suffix>`.
+fn agent_id<'a>(name: &'a str, suffix: &str) -> Option<&'a str> {
+    name.strip_prefix("agent-")?.strip_suffix(suffix).filter(|id| !id.is_empty())
+}
+
+/// [`copy_subagents`]' copy of the host folder `remote` into `folder`.
+async fn grow_subagents(
+    sftp: &Sftp,
+    copy: &mut SubagentsCopy,
+    remote: &str,
+    folder: &std::path::Path,
+    subagent: Option<&str>,
+) -> Result<(), String> {
+    use crate::services::agent_transcript::subagent_token;
+    // No folder yet: the session has spawned no subagent.
+    let Ok(entries) = crate::services::sftp::list_dir_raw_on(sftp, remote).await else {
+        return Ok(());
+    };
+    let files = || entries.iter().filter(|entry| matches!(entry.kind, SyncKind::File));
+    let records = files().filter(|entry| agent_id(&entry.name, ".meta.json").is_some() && entry.size <= MAX_SESSION_RECORD_BYTES);
+    for entry in records.take(MAX_SUBAGENTS) {
+        let stamp = (entry.size, entry.modified_secs);
+        let to = folder.join(&entry.name);
+        if copy.files.get(&entry.name) == Some(&stamp) && to.is_file() {
+            continue;
+        }
+        // The listing said `entry.size <= MAX_SESSION_RECORD_BYTES`; the read holds the host to it.
+        let Some(bytes) =
+            crate::services::sftp::read_file_up_to(sftp, &format!("{remote}/{}", entry.name), MAX_SESSION_RECORD_BYTES).await?
+        else {
+            continue;
+        };
+        tokio::fs::create_dir_all(folder).await.map_err(|e| e.to_string())?;
+        tokio::fs::write(&to, &bytes).await.map_err(|e| e.to_string())?;
+        copy.files.insert(entry.name.clone(), stamp);
+    }
+    let Some(token) = subagent else {
+        return Ok(());
+    };
+    let named = |entry: &&crate::services::sftp::RawEntry| agent_id(&entry.name, ".jsonl").is_some_and(|id| subagent_token(id) == token);
+    if let Some(entry) = files().find(named) {
+        return grow_file(sftp, copy, remote, folder, "", entry).await;
+    }
+    // A `Workflow` run, or one of its agents (`workflows/<run id>/`).
+    if !entries.iter().any(|entry| entry.name == "workflows" && matches!(entry.kind, SyncKind::Dir)) {
+        return Ok(());
+    }
+    let runs_remote = format!("{remote}/workflows");
+    let runs = crate::services::sftp::list_dir_raw_on(sftp, &runs_remote).await?;
+    for run in runs.iter().filter(|run| matches!(run.kind, SyncKind::Dir)).take(MAX_WORKFLOW_RUNS) {
+        let (run_remote, rel) = (format!("{runs_remote}/{}", run.name), format!("workflows/{}", run.name));
+        let run_local = folder.join("workflows").join(&run.name);
+        let listed = crate::services::sftp::list_dir_raw_on(sftp, &run_remote).await?;
+        let run_files = || listed.iter().filter(|entry| matches!(entry.kind, SyncKind::File));
+        if subagent_token(&run.name) == token {
+            // The run read as a conversation: its journal, and which of its
+            // agents have a file yet — only those open. Each gets an empty
+            // one here, filled when it is opened.
+            tokio::fs::create_dir_all(&run_local).await.map_err(|e| e.to_string())?;
+            for entry in run_files() {
+                if entry.name == "journal.jsonl" {
+                    grow_file(sftp, copy, &run_remote, &run_local, &rel, entry).await?;
+                } else if agent_id(&entry.name, ".jsonl").is_some() {
+                    // Append: a copy already held stays as it is.
+                    tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(run_local.join(&entry.name))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            return Ok(());
+        }
+        if let Some(entry) = run_files().find(named) {
+            return grow_file(sftp, copy, &run_remote, &run_local, &rel, entry).await;
+        }
+    }
+    Ok(())
+}
+
+/// Grow the copy in `local_dir` of the append-only host file `entry` of
+/// `remote_dir`, recorded under `rel_dir` in [`SubagentsCopy::files`].
+async fn grow_file(
+    sftp: &Sftp,
+    copy: &mut SubagentsCopy,
+    remote_dir: &str,
+    local_dir: &std::path::Path,
+    rel_dir: &str,
+    entry: &crate::services::sftp::RawEntry,
+) -> Result<(), String> {
+    if entry.size > MAX_BYTES {
+        return Err(format!("{} is too large to copy", entry.name));
+    }
+    let key = if rel_dir.is_empty() { entry.name.clone() } else { format!("{rel_dir}/{}", entry.name) };
+    let copied = copy.files.get(&key).map_or(0, |(bytes, _)| *bytes);
+    let remote = format!("{remote_dir}/{}", entry.name);
+    let copied = grow(sftp, &remote, &local_dir.join(&entry.name), entry.size, copied).await?;
+    copy.files.insert(key, (copied, None));
+    Ok(())
+}
+
+/// Bring `local`, holding `copied` bytes of the append-only host file
+/// `remote`, to its `size`: the new bytes appended, or the whole file afresh
+/// when the copy is not what this process last wrote (another run's, trimmed
+/// since) or the host file shrank. Answers the bytes the copy holds.
+async fn grow(sftp: &Sftp, remote: &str, local: &std::path::Path, size: u64, copied: u64) -> Result<u64, String> {
+    let held = std::fs::metadata(local).map(|m| m.len()).ok();
+    let from = if held == Some(copied) && size >= copied { copied } else { 0 };
+    if held == Some(size) && from == size {
+        return Ok(size);
+    }
+    copy_range(sftp, remote, local, from, size).await
 }
 
 /// The local copy of the conversation of the `agent` tab with launch id
@@ -221,13 +416,16 @@ pub(crate) async fn running_session(sftp: &Sftp, launch_id: &str) -> Option<(Str
     });
     let mut best: Option<SessionRecord> = None;
     for pid in pids.take(MAX_SESSION_RECORDS) {
-        let Ok(environ) = crate::services::sftp::read_file_on(sftp, &format!("/proc/{pid}/environ")).await else {
+        // `/proc` files list as size 0, so only the read can bound them.
+        let Ok(Some(environ)) = crate::services::sftp::read_file_up_to(sftp, &format!("/proc/{pid}/environ"), MAX_ENVIRON_BYTES).await else {
             continue;
         };
         if !runs_tab(&environ, launch_id) {
             continue;
         }
-        let Ok(bytes) = crate::services::sftp::read_file_on(sftp, &format!("{SESSIONS}/{pid}.json")).await else {
+        let Ok(Some(bytes)) =
+            crate::services::sftp::read_file_up_to(sftp, &format!("{SESSIONS}/{pid}.json"), MAX_SESSION_RECORD_BYTES).await
+        else {
             continue;
         };
         let Some(record) = session_record(&bytes) else {
@@ -325,14 +523,7 @@ async fn sync(
     if size > MAX_BYTES {
         return Err("read_failed");
     }
-    let held = std::fs::metadata(local).map(|m| m.len()).ok();
-    // A copy that is not what this process last wrote (another run's, or
-    // trimmed since) is started over, as is a host file that shrank.
-    let from = if held == Some(mirror.copied) && size >= mirror.copied { mirror.copied } else { 0 };
-    if held.is_some() && from == size {
-        return Ok(());
-    }
-    mirror.copied = copy_range(sftp, &remote, local, from, size).await.map_err(|_| "read_failed")?;
+    mirror.copied = grow(sftp, &remote, local, size, mirror.copied).await.map_err(|_| "read_failed")?;
     Ok(())
 }
 
@@ -434,6 +625,15 @@ mod tests {
         assert!(session_record(br#"{"sessionId":"../../etc/passwd"}"#).is_none());
         assert!(session_record(br#"{"cwd":"/srv/p"}"#).is_none());
         assert!(session_record(b"not json").is_none());
+    }
+
+    #[test]
+    fn a_subagent_file_names_its_agent() {
+        assert_eq!(agent_id("agent-a79f6867.jsonl", ".jsonl"), Some("a79f6867"));
+        assert_eq!(agent_id("agent-a79f6867.meta.json", ".meta.json"), Some("a79f6867"));
+        assert_eq!(agent_id("agent-a79f6867.meta.json", ".jsonl"), None, "a record is not a conversation");
+        assert_eq!(agent_id("agent-.jsonl", ".jsonl"), None);
+        assert_eq!(agent_id("journal.jsonl", ".jsonl"), None);
     }
 
     #[test]

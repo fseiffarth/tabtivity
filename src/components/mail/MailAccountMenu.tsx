@@ -3,6 +3,7 @@ import { accountInboxUnread, useMailStore } from "../../stores/mail";
 import { useT } from "../../lib/i18n";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
+import { PencilIcon } from "../common/icons/Icon";
 
 /**
  * The mail window's account switcher: a ▾ pill in the title bar, right of the
@@ -107,7 +108,7 @@ export function MailAccountMenu() {
                       useMailStore.getState().openAccountDialog(a);
                     }}
                   >
-                    ✎
+                    <PencilIcon />
                   </button>
                 </div>
               );

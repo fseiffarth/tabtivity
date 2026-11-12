@@ -9,6 +9,7 @@ import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../../stores/head
 import { UntestedTag } from "../common/UntestedTag";
 import { InboxGlyph } from "./HeaderGlyphs";
 import { usePoll } from "../../lib/usePoll";
+import { CloseIcon } from "../common/icons/Icon";
 
 const MENU_ID = "inbox";
 
@@ -31,6 +32,8 @@ export type PhoneUpload = {
   /** Unix seconds. */
   at: number;
   phone?: string;
+  /** `"folder"` for a New folder line (size 0); absent for a file. */
+  kind?: string;
 };
 
 /** Ids of upload rows this viewer pressed **Keep** on (a JSON string array). */
@@ -305,7 +308,7 @@ export function InboxIndicator() {
                         armed === file.name ? void remove(file.name) : setArmed(file.name)
                       }
                     >
-                      {armed === file.name ? t("inbox.deleteConfirm") : "✕"}
+                      {armed === file.name ? t("inbox.deleteConfirm") : <CloseIcon />}
                     </button>
                   </div>
                 ))}
@@ -326,7 +329,7 @@ export function InboxIndicator() {
                       <div className="inbox-menu-open inbox-menu-upload" title={where}>
                         <span className="inbox-menu-name">{where}</span>
                         <span className="inbox-menu-size">
-                          {[formatBytes(upload.size), age(upload.at), upload.phone].filter(Boolean).join(" · ")}
+                          {[upload.kind === "folder" ? t("inbox.uploads.folder") : formatBytes(upload.size), age(upload.at), upload.phone].filter(Boolean).join(" · ")}
                         </span>
                       </div>
                       <button

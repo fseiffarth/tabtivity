@@ -895,7 +895,7 @@ async fn count_added_lines_remote(
     let Ok(path) = crate::commands::fs::remote_join_confined(&target.spec.remote_path, rel) else {
         return (0, false);
     };
-    match crate::commands::fs::remote_read(pool, target, &path).await {
+    match crate::commands::fs::remote_read(pool, target, &path, crate::services::remote_sync::MAX_SYNC_FILE_BYTES).await {
         Ok(bytes) => count_lines_in_bytes(&bytes),
         Err(_) => (0, false),
     }
@@ -1806,6 +1806,11 @@ fn git_reword_head_blocking_selected(
     Ok(())
 }
 
+/// What `git_diff_file` answers for a file that is not under git — the diff
+/// viewer matches on this phrase (git's own `fatal: not a git repository`
+/// carries it too).
+const NOT_A_REPO: &str = "not a git repository";
+
 /// Returns the unified diff for a single file relative to `project_dir`.
 ///
 /// Runs `git diff -- <rel_path>` (working-tree changes against the index/HEAD).
@@ -1814,6 +1819,10 @@ fn git_reword_head_blocking_selected(
 /// <rel_path>`, which renders the whole file as added. `--no-index` exits
 /// non-zero whenever there are differences, so for the fallback we treat any
 /// non-empty stdout as success regardless of exit status.
+///
+/// A tracked file whose only change is staged (`git add`) has no working-tree
+/// diff; the index diff stands in. A file outside any repository answers
+/// [`NOT_A_REPO`].
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_diff_file(project_dir: String, rel_path: String) -> Result<String, String> {
     app_core::rt::try_blocking("git", move || git_diff_file_blocking(project_dir, rel_path)).await
@@ -1823,6 +1832,12 @@ fn git_diff_file_blocking(project_dir: String, rel_path: String) -> Result<Strin
     let target = remote_target_for_dir(&project_dir);
     let out = run_git(target.as_ref(), &project_dir, &["diff", "--", &rel_path])?;
     if !out.status.success() {
+        // Outside a repository `git diff` falls back to its two-path
+        // `--no-index` mode and answers with a usage text; say what is wrong.
+        let inside = run_git(target.as_ref(), &project_dir, &["rev-parse", "--git-dir"])?;
+        if !inside.status.success() {
+            return Err(NOT_A_REPO.to_string());
+        }
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1830,12 +1845,21 @@ fn git_diff_file_blocking(project_dir: String, rel_path: String) -> Result<Strin
         return Ok(stdout);
     }
 
-    // Tracked diff is empty. A tracked file is simply unchanged; an untracked
-    // one shows whole, as added. `--no-index` exits non-zero when differences
-    // exist, which is the normal case here, so treat any non-empty stdout as
-    // success.
+    // Tracked diff is empty. A tracked file is simply unchanged — unless its
+    // change is staged (`git add`ed, or a staged rename): the index diff shows
+    // that. An untracked one shows whole, as added. `--no-index` exits
+    // non-zero when differences exist, which is the normal case here, so treat
+    // any non-empty stdout as success.
     let tracked = run_git(target.as_ref(), &project_dir, &["ls-files", "--", &rel_path])?;
     if tracked.status.success() && !tracked.stdout.is_empty() {
+        let staged = run_git(
+            target.as_ref(),
+            &project_dir,
+            &["diff", "--cached", "--", &rel_path],
+        )?;
+        if staged.status.success() && !staged.stdout.is_empty() {
+            return Ok(String::from_utf8_lossy(&staged.stdout).to_string());
+        }
         return Ok(stdout);
     }
     let fallback = run_git(

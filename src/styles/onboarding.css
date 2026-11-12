@@ -14,7 +14,7 @@
   gap: 12px;
   text-align: center;
   max-width: 360px;
-  padding: 0 16px;
+  padding: 0 var(--space-4);
 }
 
 /* Section divider inside the Connect modal (SSH / OpenVPN groups). */
@@ -30,14 +30,14 @@
 .center-placeholder-title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 600;
 }
 
 .center-placeholder-action {
   margin-top: 8px;
   min-height: 36px;
-  padding: 7px 16px;
+  padding: 7px var(--space-4);
   border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--accent) 14%, var(--bg-panel));
@@ -50,9 +50,58 @@
   background: color-mix(in srgb, var(--accent) 24%, var(--bg-panel));
 }
 
+.start-here {
+  max-width: 420px;
+}
+
+.start-here-starts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-self: stretch;
+}
+
+.start-here-start {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 0;
+  text-align: left;
+}
+
+.start-here-start > span {
+  flex: 1;
+}
+
+.start-here-key {
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+
+.start-here-last {
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.start-here-last:hover {
+  color: var(--text-primary);
+}
+
+.start-here-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
 .center-placeholder-hint {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-md);
   line-height: 1.5;
 }
 
@@ -90,7 +139,7 @@
   border-radius: 50%;
   background: var(--accent);
   color: var(--accent-contrast);
-  font-size: 12px;
+  font-size: var(--text-md);
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -125,7 +174,7 @@
 .intro-rail .how-to-start-num {
   width: 18px;
   height: 18px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .intro-rail .settings-btn:not([aria-current]) .how-to-start-num {
   background: var(--control-bg);
@@ -238,7 +287,7 @@
 }
 .intro-goal-icon {
   flex: none;
-  font-size: 20px;
+  font-size: var(--text-xl);
   line-height: 1.2;
 }
 .intro-goal-text {
@@ -255,7 +304,7 @@
   border: 1px solid var(--control-border);
   background: var(--control-bg);
   color: var(--accent-contrast);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -274,33 +323,25 @@
     grid-template-columns: 1fr;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .settings-card.intro-goal-card {
-    transition: none;
-  }
-}
-
 /* Contextual hint coachmark/banner. z-index 90: above the header (80) so it can
    point at chrome, but below true modals (.modal-backdrop, 100) so a dialog is
    never pierced by a stray hint. Portaled to body (see HintBubble). */
 .hint-bubble {
   position: fixed;
   z-index: var(--z-hint);
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border-radius: var(--radius);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-3);
+  border: 0;
+  box-shadow: var(--shadow-2);
   color: var(--text-primary);
-  font-size: 12px;
-  /* Fade in on appearance, then keep a slow accent breathing on the border so a
-     freshly-surfaced hint draws the eye without nagging. Opacity-only entry so it
+  font-size: var(--text-md);
+  /* Fade in on appearance, then keep a slow accent breathing so a freshly
+     surfaced hint draws the eye without nagging. Opacity-only entry so it
      never fights the inline/class positioning transforms (translateY/translateX).
      Shares the pulse vocabulary of tab-new-hint-pulse / side-panel-drop-pulse.
-     The breathing glow is the static shadow of ::after, whose opacity pulses in
-     step — never an animated blurred box-shadow (WebKitGTK software path). */
-  animation: hint-bubble-in 0.24s ease-out,
-    hint-bubble-breathe 2.4s ease-in-out 0.24s infinite;
+     The breathing glow is the static shadow of ::after, whose opacity pulses —
+     never an animated blurred box-shadow (WebKitGTK software path). */
+  animation: hint-bubble-in 0.24s ease-out;
 }
 
 .hint-bubble::after {
@@ -331,16 +372,6 @@
   }
   to {
     opacity: 1;
-  }
-}
-
-@keyframes hint-bubble-breathe {
-  0%,
-  100% {
-    border-color: var(--border-color);
-  }
-  50% {
-    border-color: var(--accent);
   }
 }
 
@@ -376,7 +407,6 @@
      the scale pulse starts when it ends (matched delay), so they never overlap on
      the transform property. */
   animation: hint-banner-in 0.24s ease-out,
-    hint-bubble-breathe 2.4s ease-in-out 0.24s infinite,
     hint-banner-pulse 1.8s ease-in-out 0.24s infinite;
 }
 
@@ -401,15 +431,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .hint-bubble,
-  .hint-bubble--banner,
-  .hint-bubble::after,
-  .hint-target,
-  .tour-target {
-    animation: none;
-  }
-}
 
 .hint-bubble-close {
   position: absolute;
@@ -418,7 +439,7 @@
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
 }
@@ -448,7 +469,7 @@
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
   padding: 0;
 }
@@ -464,8 +485,8 @@
   border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--accent-contrast);
-  font-size: 11px;
-  padding: 4px 12px;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-3);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -494,6 +515,45 @@
   content: none;
 }
 
+/* The server chips (TerminalServerChips): the sign-in card's look, stacked at the
+   pane's bottom-left so the two never overlap. Static cards like the sign-in
+   one: a fade in, no breathing glow. */
+.terminal-server-chips {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100% - 32px));
+  pointer-events: none;
+}
+.hint-bubble.terminal-server-chip {
+  position: relative;
+  pointer-events: auto;
+}
+.hint-bubble.terminal-server-chip::after {
+  content: none;
+}
+.terminal-server-chip-name {
+  font-weight: 600;
+  margin: 0 16px 0 0;
+  overflow-wrap: anywhere;
+}
+.terminal-server-chip-forward {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  margin-top: 2px;
+}
+.terminal-server-chip .hint-bubble-actions {
+  margin-top: 6px;
+}
+.terminal-server-chip .hint-bubble-actions .hint-bubble-got-it {
+  margin-left: 0;
+}
+
 /* The version-drift and undo-clear cards sit over a running agent, whose input
    box and footer fill the pane's last rows: lift them clear of it. The % caps
    the lift in a short pane, where 120px would push the card off the top. */
@@ -515,13 +575,13 @@
 .terminal-sign-in-code input {
   flex: 1;
   min-width: 0;
-  padding: 5px 8px;
+  padding: 5px var(--space-2);
   border-radius: var(--radius);
   border: 1px solid var(--border-color);
   background: var(--bg-input);
   color: var(--text-primary);
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+  font-size: var(--text-md);
 }
 
 .terminal-sign-in-code .hint-bubble-got-it {
@@ -675,7 +735,7 @@
   border-radius: 0;
   background-color: color-mix(in srgb, var(--accent) 6%, var(--bg-side-panel));
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
   transition: color var(--transition), background-color var(--transition);
@@ -686,7 +746,7 @@
 }
 
 .side-panel-reveal-handle:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -765,13 +825,13 @@
   position: fixed;
   z-index: 201;
   pointer-events: auto;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   border-radius: var(--radius);
   background: var(--bg-elevated);
   border: 1px solid var(--accent);
   box-shadow: var(--shadow-3);
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-md);
   animation: hint-bubble-in 0.22s ease-out;
 }
 
@@ -802,7 +862,7 @@
 
 .tour-bubble-count {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -811,7 +871,7 @@
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--text-sm);
   cursor: var(--cur-pointer, pointer);
   padding: 0;
 }
@@ -826,8 +886,8 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-primary);
-  font-size: 11px;
-  padding: 4px 12px;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-3);
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -841,8 +901,8 @@
   border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--accent-contrast);
-  font-size: 11px;
-  padding: 4px 14px;
+  font-size: var(--text-sm);
+  padding: var(--space-1) 14px;
   cursor: var(--cur-pointer, pointer);
 }
 
@@ -885,7 +945,7 @@
 
 .tour-task-label {
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -947,7 +1007,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--text-sm);
   padding: 3px 9px;
   cursor: var(--cur-pointer, pointer);
 }
@@ -975,15 +1035,53 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .tour-spotlight,
-  .tour-bubble,
-  .tour-reward,
-  .tour-hint,
-  .tour-hint-btn.nudge {
-    animation: none;
-  }
+/* Hints stay up until dismissed, so a loop here repaints at 60 Hz for as long as
+   one is ignored: renderer 0% of a core at rest, 16–18% with a hint up, on a page
+   far lighter than the app (measured 2026-11-02). On the CPU paint path
+   (`lib/window/softwarePaint`) and in a quiesced window each loop rests on its
+   peak, which still marks the target. The energy-saver attribute also covers a
+   blurred window, where a loop would otherwise freeze mid-pulse. */
+:root[data-software-paint] .hint-bubble::after,
+:root[data-energy-saver="on"] .hint-bubble::after {
+  animation: none;
+  opacity: 1;
 }
+
+:root[data-software-paint] .hint-target,
+:root[data-energy-saver="on"] .hint-target {
+  animation: none;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+:root[data-software-paint] .tour-target,
+:root[data-energy-saver="on"] .tour-target {
+  animation: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+:root[data-software-paint] .tour-hint-btn.nudge,
+:root[data-energy-saver="on"] .tour-hint-btn.nudge {
+  animation: none;
+}
+
+/* Only the pulse goes: the entry keeps running, so a banner neither replays it
+   when the window regains focus nor sits paused at `opacity: 0` while blurred. */
+:root[data-energy-saver="on"] .hint-bubble--banner {
+  animation: hint-banner-in 0.24s ease-out;
+}
+
+/* One-shots, on the CPU path only and after the rule above so they win over it:
+   each lands in one paint, as a hover card does. The spotlight's entry would
+   otherwise animate a 9999px shadow, which is the whole window every frame. */
+:root[data-software-paint] .hint-bubble,
+:root[data-software-paint] .tour-spotlight,
+:root[data-software-paint] .tour-bubble,
+:root[data-software-paint] .tour-reward,
+:root[data-software-paint] .tour-hint {
+  animation: none;
+}
+
 
 /* Lesson picker (LessonsMenu): a vertical list of task walkthroughs. */
 .lessons-list {
@@ -1118,7 +1216,7 @@
 .typewriter {
   margin: 0 0 12px;
   font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
-  font-size: 15px;
+  font-size: var(--text-lg);
   line-height: 1.55;
   color: var(--text-primary);
   /* Room for the finished line up front, so the text below never jumps. */

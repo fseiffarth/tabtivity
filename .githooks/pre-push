@@ -5,17 +5,21 @@
 #   1. Privacy scan. This repo is public, so every push is scanned for secrets
 #      and personal data first — running it before the bump means a hit aborts
 #      the push without leaving a stray version-bump commit behind.
-#   2. Auto-bump the patch version on every push of a branch, so each pushed
-#      build is a distinct version. Releases stay manual: release.yml cuts
-#      one from a commit whose ci-cd run passed — dispatched, or on a pushed
-#      v* tag, which this hook deliberately doesn't bump.
+#   2. Auto-bump the patch version on every push of the checked-out branch, so
+#      each pushed build is a distinct version. Releases stay manual:
+#      release.yml cuts one from a commit whose ci-cd run passed — dispatched,
+#      or on a pushed v* tag, which this hook deliberately doesn't bump. A push
+#      of any other branch (`git push origin feature` from develop) goes out
+#      as it is, un-bumped: the bump commits onto HEAD, which is not that
+#      branch.
 #
 # git can't add a commit to a push that is already in flight, so this hook:
 #   1. bumps package.json / package-lock.json / Cargo.toml / tauri.conf.json /
 #      Cargo.lock,
 #   2. commits the bump onto the current branch — those five files only, from
 #      a private index, whatever else is staged,
-#   3. re-runs the push (which carries the bump), and
+#   3. re-runs the push (which carries the bump) with every ref the original
+#      push named, each to the remote ref it named, and
 #   4. aborts the original push, now superseded by the re-push.
 #
 # Enable once with:  git config core.hooksPath .githooks
@@ -124,10 +128,22 @@ warn_if_ci_red() {
 }
 ci_branches=()
 
+# The checked-out branch (empty on a detached HEAD): the one branch a bump can
+# go onto, since the bump commits onto HEAD.
+head_ref="$(git -C "$repo_root" symbolic-ref -q HEAD || true)"
+
 bump=0
+# The re-push after a bump must carry everything the aborted original push
+# carried, each ref to the remote ref it named: the checked-out branch as HEAD
+# (now holding the bump), every other ref as the exact object it was going to
+# publish, a deletion as a deletion.
+repush_refspecs=()
 while read -r local_ref local_sha remote_ref remote_sha; do
   # A deletion publishes nothing.
-  [[ "$local_sha" =~ ^0+$ ]] && continue
+  if [[ "$local_sha" =~ ^0+$ ]]; then
+    repush_refspecs+=(":$remote_ref")
+    continue
+  fi
   if [[ "$remote_ref" == refs/heads/* ]]; then
     ci_branches+=("${remote_ref#refs/heads/}")
   fi
@@ -135,8 +151,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # What gets scanned is decided by what is PUBLISHED, never by the local ref's
   # name: `git push origin HEAD:develop` and a detached HEAD arrive with the
   # local ref `HEAD`, and a filter on that name once let them through unscanned.
-  # Tags publish their commits too. Only a branch push is version-bumped, as
-  # before (the bump re-pushes HEAD, which only makes sense from a branch).
+  # Tags publish their commits too. Only a push of the checked-out branch is
+  # version-bumped: the bump commits onto HEAD, so for any other ref it would
+  # land on (and publish) the wrong branch.
   bumpable=0
   case "$remote_ref" in
     refs/tags/v*)
@@ -153,8 +170,18 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         exit 1
       fi ;;
     refs/tags/*) : ;;
-    *) [[ "$local_ref" == refs/* && "$local_ref" != refs/tags/* ]] && bumpable=1 ;;
+    *)
+      if [ -n "$head_ref" ] && [ "$local_ref" = "$head_ref" ]; then
+        bumpable=1
+      elif [[ "$local_ref" == refs/* && "$local_ref" != refs/tags/* ]]; then
+        echo "pre-push: not bumping ${local_ref#refs/heads/}: only a push of the checked-out branch${head_ref:+ (${head_ref#refs/heads/})} is version-bumped." >&2
+      fi ;;
   esac
+  if [ "$bumpable" -eq 1 ]; then
+    repush_refspecs+=("HEAD:$remote_ref")
+  else
+    repush_refspecs+=("$local_sha:$remote_ref")
+  fi
 
   # Scan exactly what this ref is about to publish. The remote tip is the base
   # when the ref already exists there; for a brand-new remote ref, walk back to
@@ -327,7 +354,10 @@ if [ -n "$(app_var PUSH_PREFLIGHT)" ]; then
 fi
 
 echo "pre-push: bumped version to v${new}; pushing with the bump included…" >&2
-TABTIVITY_BUMPING=1 git push "$remote" HEAD
+# Every ref the original push named, not bare `HEAD`: that pushed HEAD to
+# wherever push.default pointed and dropped the rest (a tag or a second branch
+# pushed alongside never left).
+TABTIVITY_BUMPING=1 git push "$remote" "${repush_refspecs[@]}"
 echo "pre-push: pushed v${new}. The 'failed to push' line below is the original" >&2
 echo "          pre-bump push being intentionally aborted — the push succeeded." >&2
 

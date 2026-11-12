@@ -13,6 +13,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { TerminalReaderChats } from "./TerminalReaderChats";
 import { chatsOffered } from "../../lib/agents/agentChats";
 import { insertIntoReader } from "../../lib/terminal/terminalDrop";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
 
 /** Prompt history under a terminal; readable agents use the same controls
  * as a top toolbar with resource/action slots and Chat / Diffs / Terminal tabs.
@@ -74,7 +75,7 @@ export function TerminalPromptStrip({
    * lists (`TerminalReaderChats`). */
   /** `onHost`: the tab runs on a remote project's host, whose copy of the
    * conversation the chat reads. */
-  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void; empty?: boolean }; cwd?: string; onHost?: boolean };
+  reader?: { open: boolean; onToggle: () => void; changes?: { open: boolean; onToggle: () => void; empty?: boolean }; files?: { open: boolean; onToggle: () => void; empty?: boolean }; cwd?: string; onHost?: boolean };
 }) {
   const t = useT();
   const use24h = useUse24h();
@@ -202,7 +203,7 @@ export function TerminalPromptStrip({
                 aria-label={t("terminal.promptStrip.older")}
                 title={t("terminal.promptStrip.older")}
               >
-                ‹
+                <ChevronLeftIcon />
               </button>
               <span className="prompt-strip-count">{t("terminal.promptStrip.count", { n: index + 1, total: trail.length })}</span>
               <button
@@ -214,7 +215,7 @@ export function TerminalPromptStrip({
                 aria-label={t("terminal.promptStrip.newer")}
                 title={t("terminal.promptStrip.newer")}
               >
-                ›
+                <ChevronRightIcon />
               </button>
             </span>
             <button
@@ -225,7 +226,7 @@ export function TerminalPromptStrip({
               aria-label={t("terminal.promptStrip.copy")}
               title={t(copied ? "terminal.promptStrip.copied" : "terminal.promptStrip.copy")}
             >
-              {copied ? "✓" : "⧉"}
+              {copied ? <CheckIcon /> : "⧉"}
             </button>
           </>
         )}
@@ -292,9 +293,9 @@ export function TerminalPromptStrip({
             tabs[next]?.focus();
             tabs[next]?.click();
           }}>
-            <button type="button" role="tab" aria-selected={reader.open && !reader.changes?.open}
-              tabIndex={reader.open && !reader.changes?.open ? 0 : -1}
-              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (!reader.open) reader.onToggle(); }}>
+            <button type="button" role="tab" aria-selected={reader.open && !reader.changes?.open && !reader.files?.open}
+              tabIndex={reader.open && !reader.changes?.open && !reader.files?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.files?.open) reader.files.onToggle(); if (!reader.open) reader.onToggle(); }}>
               {t("terminal.reader.showReader")}
             </button>
             {reader.changes && <button type="button" role="tab" aria-selected={reader.changes.open}
@@ -304,9 +305,17 @@ export function TerminalPromptStrip({
               onClick={() => { if (!reader.changes?.open) reader.changes?.onToggle(); }}>
               {t("terminal.reader.changes")}
             </button>}
-            <button type="button" role="tab" aria-selected={!reader.open && !reader.changes?.open}
-              tabIndex={!reader.open && !reader.changes?.open ? 0 : -1}
-              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.open) reader.onToggle(); }}>
+            {reader.files && <button type="button" role="tab" aria-selected={reader.files.open}
+              tabIndex={reader.files.open ? 0 : -1}
+              disabled={!reader.files.open && reader.files.empty}
+              title={!reader.files.open && reader.files.empty ? t("terminal.reader.filesNone") : undefined}
+              onClick={() => { if (!reader.files?.open) reader.files?.onToggle(); }}>
+              {t("terminal.reader.filesTab")}
+              <UntestedTag id="terminal.reader.files" />
+            </button>}
+            <button type="button" role="tab" aria-selected={!reader.open && !reader.changes?.open && !reader.files?.open}
+              tabIndex={!reader.open && !reader.changes?.open && !reader.files?.open ? 0 : -1}
+              onClick={() => { if (reader.changes?.open) reader.changes.onToggle(); if (reader.files?.open) reader.files.onToggle(); if (reader.open) reader.onToggle(); }}>
               {t("terminal.reader.showTerminal")}
             </button>
             <UntestedTag id="terminal.reader.topbar" />

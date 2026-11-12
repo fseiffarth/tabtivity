@@ -4,7 +4,7 @@
  * `box_id` denormalization is gone (stale persisted keys are stripped in-memory
  * on load). addToBox is additive (other memberships survive), removeFromBox
  * never dissolves (a 1/0-member box lives on), deleteBox touches no project,
- * and boxProjects is the multi-select commit (new box, or append to one).
+ * and boxProjects is the multi-select commit (a new box).
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ProjectBox, ProjectEntry } from "../../types";
@@ -95,6 +95,20 @@ describe("boxes store — addToBox (additive)", () => {
     expect(invoke).not.toHaveBeenCalledWith("patch_box", expect.anything());
   });
 
+  it("a CLOSED project joins and leaves like any other: one singular patch, status untouched", async () => {
+    // The membership checklists list closed projects (a box slice shows them
+    // already); toggling one is the same additive add/remove, never a whole list.
+    useBoxesStore.setState({ boxes: [box("boxA", [])] });
+    useProjectsStore.setState({ projects: [{ ...proj("shelf"), status: "inactive" }] });
+
+    await useBoxesStore.getState().addToBox("shelf", "boxA");
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { addMember: "shelf" } });
+    await useBoxesStore.getState().removeFromBox("shelf", "boxA");
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { removeMember: "shelf" } });
+    expect(invoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
+    expect(useProjectsStore.getState().projects[0].status).toBe("inactive");
+  });
+
   it("refreshes the agent docs of a box that already has a folder", async () => {
     useBoxesStore.setState({ boxes: [{ ...box("boxA", []), folder: "/b/boxA" }] });
 
@@ -144,39 +158,68 @@ describe("boxes store — removeFromBox (no silent dissolve)", () => {
 });
 
 describe("boxes store — boxProjects (multi-select commit)", () => {
-  it("creates a new box holding the selection", async () => {
-    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === "create_box") return Promise.resolve(box("boxNew", [], 20));
-      if (cmd === "set_box_members") {
-        return Promise.resolve(box("boxNew", args?.memberIds as string[], 20));
-      }
-      return Promise.resolve(undefined);
-    });
+  it("creates a new box holding the selection in one create_box", async () => {
+    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+      cmd === "create_box" ? Promise.resolve(box("boxNew", (args?.memberIds as string[]) ?? [], 20)) : Promise.resolve(undefined),
+    );
 
     const created = await useBoxesStore.getState().boxProjects(["p1", "p2"], { name: "Pair" });
 
     expect(created?.member_ids).toEqual(["p1", "p2"]);
-    expect(invoke).toHaveBeenCalledWith("create_box", { name: "Pair" });
-    expect(invoke).toHaveBeenCalledWith("set_box_members", {
-      boxId: "boxNew",
-      memberIds: ["p1", "p2"],
-    });
+    expect(invoke).toHaveBeenCalledWith("create_box", { name: "Pair", memberIds: ["p1", "p2"] });
+    expect(invoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
   });
 
-  it("appends the selection to an existing box, deduplicated", async () => {
+  it("has no append branch: a stale existing-box target never writes a whole member list", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
-    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
-      cmd === "set_box_members"
-        ? Promise.resolve(box("boxA", args?.memberIds as string[]))
-        : Promise.resolve(undefined),
+    invoke.mockImplementation(() => Promise.resolve(undefined));
+
+    // Adding to an existing box is `addToBox` / `saveBox` (one patch); the
+    // multi-select commit only ever makes a new box, so this is refused as an
+    // unnamed new box and nothing is sent.
+    await expect(
+      useBoxesStore.getState().boxProjects(["p1", "p3"], { boxId: "boxA" } as never),
+    ).rejects.toThrow();
+
+    expect(invoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("create_box", expect.anything());
+  });
+});
+
+describe("boxes store — reorderBoxMembers", () => {
+  it("sends an order-only patch, never the whole list", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p2", "late"])] });
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "patch_box" ? Promise.resolve(box("boxA", ["p2", "p1", "late"])) : Promise.resolve(undefined),
     );
 
-    await useBoxesStore.getState().boxProjects(["p1", "p3"], { boxId: "boxA" });
+    await useBoxesStore.getState().reorderBoxMembers("boxA", ["p2", "p1"]);
 
-    expect(invoke).toHaveBeenCalledWith("set_box_members", {
-      boxId: "boxA",
-      memberIds: ["p1", "p3"],
-    });
+    expect(invoke).toHaveBeenCalledWith("patch_box", { boxId: "boxA", patch: { order: ["p2", "p1"] } });
+    expect(invoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
+    expect(useBoxesStore.getState().boxes[0].member_ids).toEqual(["p2", "p1", "late"]);
+  });
+
+  it("falls back to the whole list, slot-wise, on a backend that refuses the field", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "ghost", "p2"])] });
+    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+      cmd === "patch_box"
+        ? Promise.reject(new Error("unknown field `order`, expected one of `name`"))
+        : cmd === "set_box_members"
+          ? Promise.resolve(box("boxA", args?.memberIds as string[]))
+          : Promise.resolve(undefined),
+    );
+
+    await useBoxesStore.getState().reorderBoxMembers("boxA", ["p2", "p1"]);
+
+    expect(invoke).toHaveBeenCalledWith("set_box_members", { boxId: "boxA", memberIds: ["p2", "ghost", "p1"] });
+  });
+
+  it("another refusal is thrown, not retried as a whole-list write", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p2"])] });
+    invoke.mockImplementation(() => Promise.reject(new Error("disk full")));
+    await expect(useBoxesStore.getState().reorderBoxMembers("boxA", ["p2", "p1"])).rejects.toThrow("disk full");
+    expect(invoke).not.toHaveBeenCalledWith("set_box_members", expect.anything());
   });
 });
 

@@ -104,7 +104,9 @@ function toolbarBtn(glyph: string): HTMLButtonElement {
   const btn = [...toolbar!.querySelectorAll("button")].find((b) =>
     glyph === "🔍"
       ? /^(Show|Hide) search$/.test(b.getAttribute("aria-label") ?? "")
-      : (b.textContent ?? "").includes(glyph),
+      : glyph === "↻"
+        ? (b.getAttribute("title") ?? b.getAttribute("aria-label") ?? "").startsWith("Refresh")
+        : (b.textContent ?? "").includes(glyph),
   );
   expect(btn).toBeTruthy();
   return btn as HTMLButtonElement;

@@ -1,9 +1,12 @@
+import { PdfFileCover } from "./PdfFileCover";
 import { useState } from "react";
 import { ArrowUpRightIcon, TrashIcon } from "../../../src/components/common/icons/Icon";
 
 import { useT } from "../../../src/lib/i18n";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
-import { shareAs, useOutboxShare } from "../outboxShare";
+import { fileBadge, viewableFile } from "./InboxPreview";
+import { shareAs, shareSize, useOutboxShare } from "../outboxShare";
+import { ShareSizeSheet } from "./ShareSizeSheet";
 import { ageLabel } from "../terminal/fileLabels";
 import { formatBytes } from "../../../src/lib/formatBytes";
 
@@ -64,13 +67,13 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
   return <div className="outbox-gallery-grid">
     {files.map((file) => {
       const isImage = file.kind.startsWith("image/");
-      const download = !isImage && !file.kind.startsWith("text/") && file.kind !== "application/pdf";
+      const download = !viewableFile(file);
       const label = t("mobile.outbox.open", { name: sentName(file) });
       const meta = `${ageLabel(Math.max(0, now - file.modified))} · ${formatBytes(file.size)}`;
       const content = <>
         {isImage
           ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
-          : <span aria-hidden="true">{file.kind === "application/pdf" ? "PDF" : file.kind.startsWith("text/") ? "≡" : "↓"}</span>}
+          : file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
         <strong>{sentName(file)}</strong>
         <span>{meta}</span>
       </>;
@@ -85,7 +88,7 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
               was to open it full screen first and find Save there. The link is
               the same `?download=1` byte stream the sheet's Save uses. */}
           <a className="outbox-save" href={outboxFileUrl(scope, file, true)} download={sentName(file)} aria-label={t("mobile.outbox.saveFile", { name: sentName(file) })}><span aria-hidden="true">⤓</span>{t("mobile.outbox.save")}</a>
-          {shareAs(file) && <button
+          {shareAs(file) && shareSize(scope, file.size) && <button
             className="outbox-save"
             disabled={sharing.busy === file.name}
             onClick={() => void sharing.share(file)}
@@ -103,5 +106,6 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
         {sharing.failed === file.name && <span className="outbox-entry-error" role="alert">{t("mobile.outbox.shareError")}</span>}
       </div>;
     })}
+    <ShareSizeSheet files={sharing.asking} onShare={sharing.confirm} onClose={sharing.cancel} />
   </div>;
 }

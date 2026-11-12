@@ -15,6 +15,7 @@ import { useT } from "../../lib/i18n";
 import { TimeField } from "../common/TimeField";
 import { useDialogs } from "../common/PromptDialogs";
 import { useListReorder } from "../../hooks/useListReorder";
+import { CloseIcon, GripIcon } from "../common/icons/Icon";
 
 interface Props {
   task: CalendarTask;
@@ -240,7 +241,7 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
               aria-label={t("common.close")}
               onClick={onClose}
             >
-              ×
+              <CloseIcon />
             </button>
           </div>
 
@@ -455,7 +456,7 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
                         patch({ tags: (draft.tags ?? []).filter((x) => x !== tag) })
                       }
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   </span>
                 ))}
@@ -502,7 +503,7 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
                       aria-label={t("todoCard.stepGripAria", { title: step.title })}
                       {...reorder.gripProps(step.id)}
                     >
-                      ⠿
+                      <GripIcon />
                     </button>
                     <input
                       type="checkbox"
@@ -560,7 +561,7 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
                 half is: what it was, and the two things that can be done about it.
                 "Open" is the calendar overlay rather than a jump to the day — the
                 calendar store has no per-date target to aim at — so it is offered
-                only where `CalendarOverlayHost` would actually raise something, the
+                only where the Calendar view would actually open, the
                 agenda rail's rule. */}
             {draft.event && (
               <div className="todo-field todo-mail-link">
@@ -589,7 +590,6 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
                         className="cal-link-btn"
                         onClick={() => {
                           onClose();
-                          useTodoStore.getState().closeOverlay();
                           useCalendarStore.getState().openOverlay();
                         }}
                       >

@@ -189,7 +189,7 @@ bound over the home path. A local-model tab (`PtyOptions.local_model`) gets
 the scope's second home, `<project_key(scope)>.local` — no scope key can
 contain a `.` — so the config an `ollama launch` writes into its agent and
 the sessions a local model runs stay apart from the scope's own agents';
-same fence, same roots, seeded with only `.claude.json`. The owning project is mounted read-write. If it
+same fence, same roots, seeded with only `.claude.json`. A third kind, the **probe home** `agent-homes/probe.cli` (`prepare_probe_home`), is not a scope's: `/usage`, the `--version` probes and the scheduled warm-up run the CLI there (`HOME` set, `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`XDG_*_HOME` dropped) so the usage shown comes from the stored login and the user's own `~/.claude` is never touched (gap 93). It gets the shared logins, folder trust for `agent-cron` and the onboarding flag; no `agent_global` layer, no session hooks, no Copilot setting, nothing seeded. No fence mounts it, the login keeper sweeps it like every home, and `codex_hook_state` skips it. An update (`update_command`) keeps `HOME` = the install home and refuses a binary outside it. The owning project is mounted read-write. If it
 belongs to project boxes, every box folder and member root is added
 read-write; membership in several boxes produces the union. A `box:<id>` tab
 receives that box's roots directly. Claude also receives `--add-dir` and
@@ -212,7 +212,10 @@ must not be able to plant an MCP server, hook or skill that runs in project
 B or in the root console (which holds the root MCP token) — the threat-model
 gap 7 class — so the homes are per scope and other scopes' homes are
 unreachable (the state dir is masked inside the fence; on macOS the whole
-`agent-homes/` tree is denied and only the own home re-allowed). The user's
+`agent-homes/` tree is denied and only the own home re-allowed). Two files
+pierce the Linux mask read-only so an agent can diagnose a crash:
+`crash.log` and the frozen dev build's log (`agent_fence::diagnostic_logs`;
+regular files only, never through a symlink; Seatbelt still hides both). The user's
 own `~/.claude`, `~/.codex`, `~/.gemini` and the rest are never mounted, so
 the whole apparatus that used to protect them — the per-entry deny lists,
 the staged shadow copies of hook-registration files, the credential mirror,
@@ -368,7 +371,9 @@ installer honours the prefixes is not verified per installer.
 
 **Shell tabs.** They are still the user's terminals and are never fenced —
 but a CLI typed into one now reaches the same fence: `<state_dir>/bin` holds
-one shim per registry CLI at the front of every tab's PATH
+one shim per registry CLI at the front of every tab's PATH, plus any second
+name a vendor's installer leaves beside it (`VENDOR_ALIASES`: OpenCode's
+`opencode2` execs the real binary next to it, so it needs the same shim)
 (`services::agent_bin`), a script that execs `tabtivity --agent-shim <cli>`
 (`services::agent_shim`), which builds the calling tab's fence from
 `TABTIVITY_SCOPE` — same scope home, same shared logins — and runs it as its
@@ -423,6 +428,16 @@ keyring entry and hands it to each fenced Copilot as `COPILOT_GITHUB_TOKEN`
 (its `~/.copilot` of the scope home gets Copilot's `storeTokenPlaintext`, the
 keeper moves a `/login` token out of the file within seconds). A harvested
 token replaces a stored one only once GitHub rejects the stored one.
+
+Claude's long-lived token (`claude setup-token`, `services::claude_token`)
+is a fallback, not a second login: kept in the keyring (`agent-token:claude`),
+handed to a Claude spawn as `CLAUDE_CODE_OAUTH_TOKEN` (through its carrier)
+only while `agent_auth` holds no shared Claude login. The token is
+inference-only — Claude refuses Remote Control and Claude in Chrome on it —
+so a full login always wins, and a token spawn gets no `--remote-control`.
+Unlike an API key it reaches the agent process, as the shared credentials
+file already does. Remote tabs get it over ssh's `SendEnv` channel, used only
+by a host without its own `~/.claude/.credentials.json`.
 
 Provider API keys (`services::agent_api_keys`, `docs/api_chat_plan.md` Parts
 A and C) take the same keychain route: one key per provider under

@@ -4,9 +4,66 @@
 import type { TabColor } from "../../lib/theme/tabColors";
 import type { TabMark } from "../../lib/tabMarks";
 import type { InternalViewer } from "../../lib/viewers/fileUtils";
-import type { AutocompleteMode } from "../../types";
+import type { AutocompleteMode, AutocompleteTrigger } from "../../types";
 import type { LoginTarget } from "../../lib/remote/loginTarget";
 import type { AssistantLaunch } from "../../lib/assistant";
+
+/**
+ * Notes an agent published about its own tab through the cockpit MCP — a
+ * read-only mirror of the backend's `services::cockpit_meta`. The host writes
+ * it and a window never sends it back (`toSavedTabEntry` leaves it out; the
+ * workspace merge ignores what a client sends). The `spawn` generation markers
+ * are backend-only; the mirror omits them.
+ * Plain text by the agent, stamped with the host's clock (ms since the epoch).
+ */
+export interface CockpitMeta {
+  v: 1;
+  /** Bumped by every change the host commits; never reused. */
+  revision: number;
+  activity?: { text: string; setAt: number };
+  handoff?: { summary: string; checks: string; remaining: string; setAt: number };
+  /** Project-relative references the agent listed (`tab_set_results`); a
+   *  label and a path to show, never something to read: only the host opens one. */
+  results?: { items: { label: string; relativePath: string }[]; setAt: number };
+  /** The agent's plan steps (`tab_set_progress`), kept as history: it counts as
+   *  running only while the agent is live, `ended` is unset and it is under
+   *  30 minutes old (`lib/cockpit/agentNotes::progressReport`). `ended` is the
+   *  host's mark that a later spawn took the tab over. */
+  progress?: { steps: ProgressStep[]; setAt: number; ended?: true };
+  /** What the agent says is in its way (`tab_set_blocker`); transient like `activity`. */
+  blocker?: { text: string; setAt: number };
+  /** Checks the agent *reports* (`tab_set_verification`); `setAt` is when it
+   *  reported them, never when anything ran. */
+  verification?: { entries: VerificationEntry[]; setAt: number };
+  /** A question the agent says it needs the user for (`tab_request_attention`).
+   *  `id` is the host's, new for every changed question; `dismissed` is the
+   *  user's, written by the narrow dismissal command only. It asks nothing of
+   *  the app: no answer, no approval. The spawn that issued it is not mirrored
+   *  (a new spawn's grant removes it). */
+  attention?: { id: string; question: string; setAt: number; dismissed?: true };
+  /** The agent's finished milestones (`tab_add_milestone`), oldest first, at
+   *  most 20; `at` is the host's clock. */
+  milestones?: AgentMilestone[];
+}
+
+export interface AgentMilestone {
+  requestId: string;
+  text: string;
+  at: number;
+}
+
+export type ProgressState = "pending" | "active" | "done";
+export interface ProgressStep {
+  id: string;
+  label: string;
+  state: ProgressState;
+}
+export type VerificationOutcome = "passed" | "failed" | "pending" | "not_run";
+export interface VerificationEntry {
+  label: string;
+  outcome: VerificationOutcome;
+  note?: string;
+}
 
 export type TabKind =
   | "agent"
@@ -66,6 +123,9 @@ export interface ViewerState {
   // to the per-type setting. Toggled from the in-tab AI-assist controls.
   autocomplete?: boolean;
   autocompleteMode?: AutocompleteMode;
+  // When suggestions are asked for: "auto" after a typing pause, "manual" only
+  // on Ctrl+Space. Absent → Copilot asks on request, a local model on a pause.
+  autocompleteTrigger?: AutocompleteTrigger;
   spellCheck?: boolean;
   // The TeX editor's hover-preview and beamer switches are NOT here: they are
   // the project's, in `stores/viewers/texViewPref` (a tab of a deck is not where "this
@@ -196,6 +256,12 @@ export interface ViewerState {
   texEngine?: string;
   texOutDir?: string;
   texExtraFlags?: string;
+  // A remote project's file tab flipped to the OTHER side of its path with the
+  // Local/Remote switch (`FileViewerPane`). Absent = follow the path's own side.
+  // Persisted per tab so the flip survives a popout, a dock-back and a restart —
+  // the pane remounts in each, and session state alone came back on the path's
+  // side. Dropped when the tab is pointed at another path (`setTabEmbedPath`).
+  fileSide?: "local" | "remote";
 }
 
 export interface TabEntry {
@@ -362,6 +428,24 @@ export interface TabEntry {
   // by searching for this id. Persisted; dropped by `duplicateSpec` (one card,
   // one tab).
   todoId?: string;
+  // Named by its task (`lib/agents/autoTabName`): `autoLabel` is the label
+  // Tabtivity gave this agent tab itself (its CLI's name at open), and
+  // `taskName` the name its first prompt gave it. The label itself never
+  // changes: the desktop shows the task name only in the tab's hover card,
+  // the phone shows it as the tab's name. It counts only while
+  // `label === autoLabel`, so a rename by the user from any route ends it for
+  // good. `autoNamed`: the first prompt already named it (set once, not every
+  // turn). All persisted, so a relaunch neither renames a named tab again nor
+  // forgets an unnamed one; all dropped by `duplicateSpec` (a copy is its own
+  // conversation).
+  autoLabel?: string;
+  autoNamed?: boolean;
+  taskName?: string;
+  // What the agent said about its own tab (`tab_set_activity` /
+  // `tab_set_handoff` on the cockpit MCP lane). Host-owned: taken from the
+  // saved record on restore and from every workspace sync/patch answer, never
+  // saved from here, and dropped by `duplicateSpec` (a copy is another agent).
+  cockpitMeta?: CockpitMeta;
   // The root console's **Host session** (`docs/context/agent_authority.md`):
   // this agent tab runs unfenced, with the user's full rights, in Tabtivity's
   // `host` agent home. Only ever set by the console's own "Host session" menu
@@ -454,6 +538,10 @@ export interface GroupNode {
   // and width — so it persists with the layout, travels with a detach, and is
   // freed when the group (subwindow) is dropped.
   filesFolder?: string;
+  // The name the user gave this subwindow, shown beside its grip. Lives on the
+  // node, so it persists with the layout and travels through detach, dock and
+  // hide without being copied anywhere. Unset, the subwindow has no label.
+  name?: string;
   // Emptied by closing its last tab while `close_subwindow_on_last_tab` is off:
   // the subwindow stays standing, empty with its +, instead of collapsing away.
   // Session-only (never persisted); dropped once a tab lands in the group.
@@ -513,6 +601,10 @@ export interface DetachedGroup {
   // streamed back over DETACHED_ZOOM. Persisted (via the saved tree) and shipped
   // in the popout's seed so it reopens at the zoom it was left at. Undefined = 100%.
   zoom?: number;
+  // The name of a popout that is more than one pane. A single-pane popout's name
+  // is its group's (`GroupNode.name`), so docking needs no hand-off; read either
+  // through `subtreeName`, write through `nameSubtree`.
+  name?: string;
 }
 
 /**
@@ -530,8 +622,10 @@ export interface HiddenGroup {
   // a multi-pane split was hidden whole.
   subtree: LayoutNode;
   label: string; // debug/label tag, mirrors DetachedGroup.label
-  // The name the user gave it in the side panel's Hidden list. Unset, the list
-  // calls it "Hidden <n>" by its position.
+  // The name of a hidden subtree of several panes, given in the side panel's
+  // Hidden list (or carried over from a popout). A single pane's lives on its
+  // group, as `DetachedGroup.name` explains. Unnamed, the list calls it
+  // "Hidden <n>" by its position.
   name?: string;
 }
 
@@ -588,6 +682,9 @@ export type DetachedEditPayload =
   // right file viewer), or record the folder it browsed to. Applied to the group
   // node inside the popout's subtree.
   | { kind: "files"; groupId: string; open?: boolean; width?: number; folder?: string }
+  // Name one pane of the popout (`groupId`), or the whole popout without it. An
+  // empty name removes it.
+  | { kind: "name"; groupId?: string; name: string }
   // Group B #231 — pane writes forwarded from a popout's empty store. Each is the
   // popout-side twin of one payload write the main store already knows how to
   // make; the seam in the store actions below emits them instead of touching the
@@ -662,6 +759,12 @@ export interface SavedTabEntry {
   mark?: TabMark;
   // Persisted to-do card link (see TabEntry.todoId).
   todoId?: string;
+  // Persisted task-name state (see TabEntry.autoLabel).
+  autoLabel?: string;
+  autoNamed?: boolean;
+  taskName?: string;
+  // Host-written agent notes (see TabEntry.cockpitMeta); read here, never sent.
+  cockpitMeta?: unknown;
   mobileRequestHash?: string;
   // Sign-in tab marker (see TabEntry.signIn); load drops such a tab.
   signIn?: boolean;
@@ -691,6 +794,8 @@ export type SavedLayoutTree =
       bounds?: WindowBounds;
       // A detached popout's own per-window zoom (see DetachedGroup.zoom).
       zoom?: number;
+      // A multi-pane popout's own name (DetachedGroup.name).
+      detachedName?: string;
       // When true, this split subtree was HIDDEN (parked out of the tiled layout).
       // Persisted as a docked node so its tabs survive, but tagged so restore
       // routes it back into `hiddenGroupsByScope` instead of the live tree.
@@ -711,6 +816,8 @@ export type SavedLayoutTree =
       bounds?: WindowBounds;
       // A detached popout's own per-window zoom (see DetachedGroup.zoom).
       zoom?: number;
+      // A multi-pane popout's name, kept by the pane a prune left alone.
+      detachedName?: string;
       // When true, this group was HIDDEN (see the split variant's note). Restore
       // moves it into `hiddenGroupsByScope` rather than docking it live.
       hidden?: boolean;
@@ -719,6 +826,8 @@ export type SavedLayoutTree =
       filesOpen?: boolean;
       filesWidth?: number;
       filesFolder?: string;
+      // The subwindow's name (GroupNode.name).
+      name?: string;
     };
 
 /**

@@ -65,11 +65,13 @@ export function rememberFilesPlace(projectId: string, trail: FilesCrumb[], stora
   writeJson(KEY, saved.length ? saved : undefined, storage);
 }
 
+const HOST_SUFFIX = "\u0000host";
+
 /** The id a project's remote side (`FilesSide` `host`) is kept under — its
  * trail here, its favorites, recents and folder colours — so the two sides'
  * sealed tokens and places never mix. */
 export function filesPlaceId(projectId: string, side: FilesSide): string {
-  return side === "host" ? `${projectId}\u0000host` : projectId;
+  return side === "host" ? `${projectId}${HOST_SUFFIX}` : projectId;
 }
 
 const SIDE_KEY = storageKey("mobile.filesSide");
@@ -308,6 +310,15 @@ function projectLists<T>(key: string, cap: number, valid: (value: unknown) => va
     read(projectId: string, storage?: FilesPlaceStorage): T[] {
       return load(storage)[projectId] ?? [];
     },
+    /** Every project's list, by the id it is kept under. */
+    all(storage?: FilesPlaceStorage): Record<string, T[]> {
+      return load(storage);
+    },
+    /** All of it gone: the store, and whatever on this page shows it. */
+    forget(storage?: FilesPlaceStorage): void {
+      writeJson(key, undefined, storage);
+      listeners.forEach((listener) => listener());
+    },
     write(projectId: string, change: (items: T[]) => T[], storage?: FilesPlaceStorage): void {
       // See rememberFilesPlace: without storage nothing is kept.
       const saved = load(storage);
@@ -410,4 +421,35 @@ export function setFolderColor(projectId: string, place: string, color: string |
 /** Called whenever a project's folder colours change, on this page. */
 export function onFolderColors(listener: () => void): () => void {
   return folderColors.listen(listener);
+}
+
+/** One side of a project with favorites, as the Favorites page lists it. */
+export type FavoritePlace = { placeId: string; projectId: string; side: FilesSide; items: FilesSaved[]; colors: Map<string, string> };
+
+/** Every project side this phone starred something on, with its folder
+ * colours: `favorites`' ids read back through `filesPlaceId`. */
+export function readFavoritePlaces(storage?: FilesPlaceStorage): FavoritePlace[] {
+  return Object.entries(favorites.all(storage)).map(([placeId, items]) => {
+    const onHost = placeId.endsWith(HOST_SUFFIX);
+    return {
+      placeId,
+      projectId: onHost ? placeId.slice(0, -HOST_SUFFIX.length) : placeId,
+      side: onHost ? "host" : "here",
+      items,
+      colors: readFolderColors(placeId, storage),
+    };
+  });
+}
+
+/** Everything in this module, gone — this device was unpaired
+ * (`forgetDeviceData`). These stores hold the names of the desktop's files
+ * and folders, and sealed tokens no later pairing could open. */
+export function forgetFiles(storage?: FilesPlaceStorage): void {
+  writeJson(KEY, undefined, storage);
+  writeJson(SIDE_KEY, undefined, storage);
+  writeJson(TABS_KEY, undefined, storage);
+  tabListeners.forEach((listener) => listener());
+  favorites.forget(storage);
+  recents.forget(storage);
+  folderColors.forget(storage);
 }

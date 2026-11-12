@@ -13,6 +13,7 @@ import {
 } from "../../lib/agents/agentPrefaces";
 import { ErrorNote } from "../common/ErrorNote";
 import type { AgentInfo } from "./agentTypes";
+import { CloseIcon } from "../common/icons/Icon";
 
 /**
  * The prefix chips and model names the side panel's per-tab agent composer
@@ -130,7 +131,7 @@ export function AgentComposerCard({ agents }: { agents: AgentInfo[] | null }) {
               title={t("agents.composerRemove")}
               onClick={() => write(entries.filter((_, at) => at !== index))}
             >
-              ✕
+              <CloseIcon />
             </button>
           </div>
         ))}

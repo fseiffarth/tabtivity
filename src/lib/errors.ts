@@ -42,6 +42,9 @@ const RULES: { test: RegExp; key: TranslationKey }[] = [
   { test: /CONFLICT \(|Automatic merge failed|you have unmerged files/i, key: "errors.mergeConflict" },
   { test: /Authentication failed|could not read Username|401 Unauthorized/i, key: "errors.authFailed" },
   { test: /: command not found|is not recognized as an internal or external command/i, key: "errors.programMissing" },
+  // A manual pull whose listed total exceeds the local disk's free space (`sync_pull_needs_space`,
+  // `remote_sync::pull_space_refusal`): its English tail carries the sizes as the Details.
+  { test: /\bsync_pull_needs_space\b/, key: "errors.pullNeedsSpace" },
   { test: /No space left on device|os error 28\b|ENOSPC|Disk quota exceeded|os error 122\b/i, key: "errors.diskFull" },
   { test: /Permission denied|os error 13\b|EACCES|Operation not permitted|os error 1\b|EPERM|Access is denied/i, key: "errors.permission" },
   { test: /File exists|os error 17\b|EEXIST/i, key: "errors.exists" },

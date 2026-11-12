@@ -394,14 +394,17 @@ const ALERT_TITLE: Record<string, string> = {
   caution: "Caution",
 };
 
-function renderBlockquote(rawLines: string[]): string {
+/** `renderBody` renders the quote's inner lines as full Markdown blocks, so a
+ *  table, list, code fence or nested quote inside `>` lines renders as one
+ *  instead of being flattened into a single inline run. */
+function renderBlockquote(rawLines: string[], renderBody: (src: string) => string): string {
   // GitHub alert syntax: first line is `[!NOTE]` (or TIP/IMPORTANT/WARNING/CAUTION),
   // the remainder is the body. Anything else is a plain blockquote.
   const first = rawLines[0]?.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i);
   if (first) {
     const kind = ALERT_KINDS[first[1].toUpperCase()];
-    const body = rawLines.slice(1).join(" ").trim();
-    const bodyHtml = body ? `<p>${renderInline(body)}</p>` : "";
+    const body = rawLines.slice(1).join("\n");
+    const bodyHtml = body.trim() ? renderBody(body) : "";
     return (
       `<div class="md-alert md-alert-${kind}">` +
       `<p class="md-alert-title">${ALERT_TITLE[kind]}</p>` +
@@ -409,7 +412,7 @@ function renderBlockquote(rawLines: string[]): string {
       `</div>`
     );
   }
-  return `<blockquote>${renderInline(rawLines.join(" "))}</blockquote>`;
+  return `<blockquote>${renderBody(rawLines.join("\n"))}</blockquote>`;
 }
 
 // ── Tables ──────────────────────────────────────────────────────────────────
@@ -569,6 +572,9 @@ function renderBlocks(
   src: string,
   breaks: boolean,
   onHeading?: (heading: MarkdownHeading) => void,
+  // Shared with nested blockquote bodies, so a heading inside a quote gets an
+  // id unique across the whole document (and the TOC sees the same ids).
+  headingId: (text: string) => string = headingIdAllocator(),
 ): string {
   // Drop NUL up front — it is the inline placeholder delimiter (`mark`), and
   // stripping it here is what makes a marker impossible to forge from document
@@ -577,7 +583,6 @@ function renderBlocks(
   const out: string[] = [];
   let i = 0;
 
-  const headingId = headingIdAllocator();
   const pushHeading = (level: number, text: string) => {
     const id = headingId(text);
     onHeading?.({ level, text, id });
@@ -681,7 +686,7 @@ function renderBlocks(
         quote.push(lines[i].replace(/^\s*>\s?/, ""));
         i++;
       }
-      out.push(renderBlockquote(quote));
+      out.push(renderBlockquote(quote, (body) => renderBlocks(body, breaks, onHeading, headingId)));
       continue;
     }
 

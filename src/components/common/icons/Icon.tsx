@@ -141,6 +141,16 @@ export function CommentIcon(p: IconProps) {
   );
 }
 
+/** A speech bubble with ＋ — a new conversation (the old one kept). */
+export function NewChatIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M4.5 6A1.5 1.5 0 016 4.5h12A1.5 1.5 0 0119.5 6v9a1.5 1.5 0 01-1.5 1.5h-8l-4 3.5v-3.5A1.5 1.5 0 014.5 15z" />
+      <path d="M12 7.5v6M9 10.5h6" />
+    </Frame>
+  );
+}
+
 /** A push pin — keep docked / pinned. */
 export function PinIcon(p: IconProps) {
   return (
@@ -732,6 +742,262 @@ export function AssistantIcon(props: IconProps) {
       <circle cx="15" cy="9.6" r="1" fill="currentColor" stroke="none" />
       <path d="M12 10.8v2.4h-.9" />
       <path d="M8.7 15.2q3.3 2.4 6.6 0" />
+    </Frame>
+  );
+}
+
+/* The chrome glyphs the phone app drew as text (‹ ✕ ⋯ ◷ ⎇ ± ⠿ ◇ ? ■): a
+ * phone takes those from whatever symbol font it has, so their weight and
+ * baseline differ per device. Drawn here they follow the family above. */
+
+/** ✕ — close, dismiss, forget. */
+export function CloseIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </Frame>
+  );
+}
+
+/** ⋯ — more: a row's own menu. */
+export function MoreIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="5" cy="12" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none" />
+      <circle cx="19" cy="12" r="1.7" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ＋ — new. */
+export function PlusIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 5v14M5 12h14" />
+    </Frame>
+  );
+}
+
+/** ‹ — back, one level up. */
+export function ChevronLeftIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M15 18l-6-6 6-6" />
+    </Frame>
+  );
+}
+
+/** ⌄ — a control that drops something below it. */
+export function ChevronDownIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="m6 9 6 6 6-6" />
+    </Frame>
+  );
+}
+
+/** › — a row that opens something. */
+export function ChevronRightIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="m9 6 6 6-6 6" />
+    </Frame>
+  );
+}
+
+/** ⎇ — a git branch or worktree. */
+export function BranchIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="6" cy="18" r="2" />
+      <circle cx="18" cy="8" r="2" />
+      <path d="M6 8v8M18 10c0 3-3 4-6 4.5S6 15 6 16" />
+    </Frame>
+  );
+}
+
+/** ± — diverged: added and removed. */
+export function DiffIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 4v8M8 8h8M8 18h8" />
+    </Frame>
+  );
+}
+
+/** ⠿ — a drag handle. */
+export function GripIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="9" cy="6" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="6" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="12" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="18" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="18" r="1.6" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ◇ — a project, the phone's section glyph in an empty list. */
+export function DiamondIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 3l9 9-9 9-9-9z" />
+    </Frame>
+  );
+}
+
+/** ? — an agent waiting on a decision. */
+export function QuestionIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M9.5 9a2.5 2.5 0 1 1 4 2c-1 .7-1.5 1.3-1.5 2.5" />
+      <circle cx="12" cy="17" r="1.1" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** A question mark in a ring — the header's help agent. */
+export function HelpIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.3 9.75a2.7 2.7 0 114.05 2.33c-.83.47-1.35 1.12-1.35 2.02v.52" />
+      <circle cx="12" cy="17" r="1.05" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ■ — a turn the user cut off. */
+export function StopIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ⟳ — reload, reconnect, run again. */
+export function RefreshIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M19.5 12a7.5 7.5 0 11-2.2-5.3L19.5 9" />
+      <path d="M19.5 4.5V9H15" />
+    </Frame>
+  );
+}
+
+/** − — take away, fold down, minimise. */
+export function MinusIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M6 12h12" />
+    </Frame>
+  );
+}
+
+/** ▦ — the apps grid. */
+export function GridIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="4" y="4" width="7" height="7" rx="1" />
+      <rect x="13" y="4" width="7" height="7" rx="1" />
+      <rect x="4" y="13" width="7" height="7" rx="1" />
+      <rect x="13" y="13" width="7" height="7" rx="1" />
+    </Frame>
+  );
+}
+
+/** ☰ with bullets — a list of rows (the phone Home's list layout). */
+export function ListIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+    </Frame>
+  );
+}
+
+/** ☆ — a starred place (the phone's Favorites). */
+export function StarIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z" />
+    </Frame>
+  );
+}
+
+/** A gauge — CPU, RAM and GPU folded into one mark (`AppResourceDisplay`). */
+export function MeterIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M4 18a9 9 0 1116 0" />
+      <path d="M12 15l4-5.5" />
+      <circle cx="12" cy="15.5" r="1.1" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** A brain — the Models & agents hub, hosted and local. */
+export function BrainIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 6a3 3 0 00-5.85-.9 3.75 3.75 0 00-3 5.85 4.05 4.05 0 00.75 7.05A3.75 3.75 0 0012 18V6z" />
+      <path d="M12 6a3 3 0 015.85-.9 3.75 3.75 0 013 5.85 4.05 4.05 0 01-.75 7.05A3.75 3.75 0 0112 18V6z" />
+      <path d="M6.15 5.1v2.7M17.85 5.1v2.7M3.15 10.95h2.1A2.25 2.25 0 017.5 13.2M20.85 10.95h-2.1a2.25 2.25 0 00-2.25 2.25" />
+    </Frame>
+  );
+}
+
+/** A processor chip — the Local models section. */
+export function ChipIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <rect x="9.5" y="9.5" width="5" height="5" rx="0.8" />
+      <path d="M9 2.5V6M12 2.5V6M15 2.5V6M9 18v3.5M12 18v3.5M15 18v3.5M2.5 9H6M2.5 12H6M2.5 15H6M18 9h3.5M18 12h3.5M18 15h3.5" />
+    </Frame>
+  );
+}
+
+/** Two stacked server units — the global machines. */
+export function MachinesIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="3" y="3" width="18" height="7.5" rx="1.8" />
+      <rect x="3" y="13.5" width="18" height="7.5" rx="1.8" />
+      <path d="M6.75 6.75h.01M6.75 17.25h.01M12 6.75h5.25M12 17.25h5.25" />
+    </Frame>
+  );
+}
+
+/** A shield with a keyhole — the machine-wide OpenVPN tunnel. */
+export function ShieldIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M12 3l7.5 2.7v5.7c0 4.5-3.15 7.95-7.5 9.6-4.35-1.65-7.5-5.1-7.5-9.6V5.7z" />
+      <circle cx="12" cy="10.65" r="1.8" />
+      <path d="M12 12.45v3.3" />
+    </Frame>
+  );
+}
+
+/** ● — a lit status dot; its colour is the row's `currentColor`. */
+export function DotIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="5" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** ○ — the {@link DotIcon}'s unlit twin. */
+export function RingIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="4.4" />
     </Frame>
   );
 }

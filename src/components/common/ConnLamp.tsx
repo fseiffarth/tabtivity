@@ -28,15 +28,22 @@ import type { ConnState } from "../../stores/remote/remoteStatus";
  * stays solid rather than being demoted to an outline by a fact nobody measured.
  * The distinction is only honoured for `connected`; a hollow red or orange would
  * read as a state of the *connection*, which is what the colour already says.
+ *
+ * `tooltip={false}` keeps the label for screen readers but drops the native
+ * `title`: on a button that opens a hover menu, WebKitGTK's tooltip is a window
+ * of its own under the resting pointer, and a pointer leaving across it is not
+ * seen leaving the page until it is past it — the menu stays up meanwhile.
  */
 export function ConnLamp({
   status,
   label,
   busy,
+  tooltip = true,
 }: {
   status: ConnState;
   label: string;
   busy?: boolean;
+  tooltip?: boolean;
 }) {
   const isBusy = busy === true && status === "connected";
   // Up, and known to have nothing running — only claimable when the caller
@@ -54,7 +61,7 @@ export function ConnLamp({
       }`}
       role="img"
       aria-label={title}
-      title={title}
+      title={tooltip ? title : undefined}
     />
   );
 }

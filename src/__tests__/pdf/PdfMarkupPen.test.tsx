@@ -45,11 +45,12 @@ const line = (x0: number, x1: number, y: number, extra: Partial<InkMark> = {}): 
 });
 
 describe("pen prefs", () => {
-  it("remembers a colour per tool and offers yellow only to the highlighters", () => {
+  it("remembers a colour per tool and offers yellow and pink only to the highlighters", () => {
     expect(colorsFor("box", "pen")).toContain("yellow");
+    expect(colorsFor("highlight", "pen")).toEqual(["yellow", "green", "pink", "blue"]);
     expect(colorsFor("ink", "marker")).toContain("yellow");
-    expect(colorsFor("ink", "pen")).not.toContain("yellow");
-    expect(colorsFor("text", "pen")).not.toContain("yellow");
+    expect(colorsFor("ink", "pen")).toEqual(["red", "blue", "black", "green", "orange", "purple"]);
+    expect(colorsFor("text", "pen")).not.toContain("pink");
     let prefs: PenPrefs = { ...DEFAULT_PEN_PREFS, tool: "ink", style: "marker" };
     prefs = withColor(prefs, "yellow");
     expect(colorOf(prefs)).toBe("yellow");
@@ -65,43 +66,55 @@ describe("pen prefs", () => {
 
   it("parses a stored record field by field and falls back on the rest", () => {
     expect(parsePenPrefs(null)).toEqual(DEFAULT_PEN_PREFS);
-    expect(parsePenPrefs({ tool: "laser", size: 7, style: "dashed", colors: { ink: "pink", box: "red" }, eraser: "area" })).toEqual({
+    // A current record (v 2): slider sizes; "pink" is a colour now.
+    expect(parsePenPrefs({ v: 2, tool: "laser", size: 7, style: "dashed", colors: { ink: "pink", box: "red" }, eraser: "area" })).toEqual({
       ...DEFAULT_PEN_PREFS,
+      size: 7,
       style: "dashed",
-      colors: { ...DEFAULT_PEN_PREFS.colors, box: "red" },
+      colors: { ...DEFAULT_PEN_PREFS.colors, ink: "pink", box: "red" },
       eraser: "area",
     });
     const store = new Map<string, string>();
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
-    const mine: PenPrefs = { ...DEFAULT_PEN_PREFS, tool: "eraser", size: 2, eraser: "large" };
+    const mine: PenPrefs = { ...DEFAULT_PEN_PREFS, tool: "eraser", size: 9, eraser: "partial", eraseHighlights: true, lasso: "rect", proof: "swap" };
     writePenPrefs(mine, storage);
     expect(readPenPrefs(storage)).toEqual(mine);
     expect(readPenPrefs({ getItem: () => "{not json", setItem: () => {} })).toEqual(DEFAULT_PEN_PREFS);
   });
 
-  it("never starts on the arrow: a stored arrow style and the old default arrow preset read as the plain pen", () => {
-    expect(parsePenPrefs({ style: "arrow" }).style).toBe("pen");
-    expect(DEFAULT_PEN_PREFS.presets.some((preset) => preset.style === "arrow")).toBe(false);
-    const old = DEFAULT_PEN_PREFS.presets.map((preset, i) => (i === 2 ? { ...preset, style: "arrow" } : preset));
-    expect(parsePenPrefs({ presets: old }).presets).toEqual(DEFAULT_PEN_PREFS.presets);
-    // An arrow preset the user saved is theirs and stays.
-    const mine = [{ tool: "ink", color: "red", style: "arrow", size: 2 }];
-    expect(parsePenPrefs({ presets: mine }).presets).toEqual(mine);
+  it("reads a record from before the dock: three sizes, the marker pen, the eraser's reaches", () => {
+    const old = parsePenPrefs({ tool: "ink", style: "marker", size: 2, eraser: "large", presets: [{ tool: "ink", color: "yellow", style: "marker", size: 0 }] });
+    expect(old.tool).toBe("highlight");
+    expect(old.style).toBe("pen");
+    expect(old.size).toBe(6);
+    expect(old.eraser).toBe("partial");
+    expect(old.presets).toEqual([{ tool: "highlight", color: "yellow", style: "pen", size: 2 }]);
+    expect(parsePenPrefs({ size: 1 }).size).toBe(3);
+    expect(parsePenPrefs({ v: 2, size: 1 }).size).toBe(1);
   });
 
-  it("sizes strokes by page width, size and style, and steps the size or the eraser's reach", () => {
-    expect(strokeWidth(700, { size: 1, style: "pen" })).toBe(2);
-    expect(strokeWidth(700, { size: 0, style: "pen" })).toBeLessThan(2);
-    expect(strokeWidth(700, { size: 2, style: "pen" })).toBeGreaterThan(2);
-    expect(strokeWidth(700, { size: 1, style: "marker" })).toBe(10);
-    expect(strokeWidth(1e6, { size: 2, style: "marker" })).toBe(100);
+  it("never starts on the arrow: a stored arrow style reads as the plain pen", () => {
+    expect(parsePenPrefs({ style: "arrow" }).style).toBe("pen");
+    expect(DEFAULT_PEN_PREFS.presets.some((preset) => preset.style === "arrow")).toBe(false);
+    // An arrow preset the user saved is theirs and stays.
+    const mine = [{ tool: "ink", color: "red", style: "arrow", size: 4 }];
+    expect(parsePenPrefs({ v: 2, presets: mine }).presets).toEqual(mine);
+  });
+
+  it("sizes strokes by page width, size and style, and steps the size", () => {
+    expect(strokeWidth(700, { size: 3, style: "pen" })).toBe(2);
+    expect(strokeWidth(700, { size: 1, style: "pen" })).toBeLessThan(2);
+    expect(strokeWidth(700, { size: 12, style: "pen" })).toBe(8);
+    expect(strokeWidth(700, { size: 3, style: "marker" })).toBe(10);
+    expect(strokeWidth(700, { size: 3, style: "pen", tool: "highlight" })).toBe(10);
+    expect(strokeWidth(1e6, { size: 12, style: "marker" })).toBe(100);
     expect(strokePressure("pen", 0.9)).toBe(0.9);
     expect(strokePressure("dashed", 0.9)).toBe(0.5);
-    expect(stepSize({ ...DEFAULT_PEN_PREFS, size: 2 }, 1).size).toBe(2);
-    expect(stepSize({ ...DEFAULT_PEN_PREFS, size: 1 }, -1).size).toBe(0);
-    expect(stepSize({ ...DEFAULT_PEN_PREFS, tool: "eraser", eraser: "medium" }, 1).eraser).toBe("large");
-    expect(stepSize({ ...DEFAULT_PEN_PREFS, tool: "eraser", eraser: "area" }, 1).eraser).toBe("area");
-    expect(nextStyle("pen")).toBe("marker");
+    expect(stepSize({ ...DEFAULT_PEN_PREFS, size: 12 }, 1).size).toBe(12);
+    expect(stepSize({ ...DEFAULT_PEN_PREFS, size: 3 }, -1).size).toBe(2);
+    expect(stepSize({ ...DEFAULT_PEN_PREFS, size: 1 }, -1).size).toBe(1);
+    expect(stepSize({ ...DEFAULT_PEN_PREFS, tool: "eraser", size: 3 }, 1).size).toBe(3);
+    expect(nextStyle("pen")).toBe("dashed");
     expect(nextStyle("arrow")).toBe("pen");
   });
 
@@ -203,6 +216,11 @@ function stubEdit(over: Partial<MarkupEdit> = {}, base: Layer = EMPTY_LAYER): Ma
     select: vi.fn(),
     clearSelection: vi.fn(),
     commitSelection: vi.fn(),
+    restyleSelection: vi.fn(),
+    deleteSelection: vi.fn(),
+    copySelection: vi.fn(),
+    canComment: false,
+    openComment: vi.fn(),
     comment: null,
     editComment: vi.fn(),
     saveComment: vi.fn(),

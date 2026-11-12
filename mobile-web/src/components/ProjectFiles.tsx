@@ -21,13 +21,16 @@ export { FileGlyph, asViewerFile } from "./FilesLibrary";
  * here.
  *
  * With no menu of its own (a tab's Focus view) the drawer would hold Files
- * alone, so the library opens straight away and closing it closes both.
+ * alone, so the library opens straight away and closing it closes both; the
+ * project screen's 🔍 (`search`) goes straight to it too, with its search box
+ * in focus. While only the desktop's switch keeps the files away (`filesOff`)
+ * the drawer says so.
  *
  * A remote project's library may have two sides (`here`, `host`): with both,
  * it opens on the one it was last put away on (`readFilesSide`), and its
  * root's switch moves between them.
  */
-export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true, here = true, host = false, hostLabel }: {
+export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true, search = false, filesOff = false, here = true, host = false, hostLabel, docked = false }: {
   projectId: string;
   /** The project's name, the drawer's heading and the library root's title. */
   label: string;
@@ -46,6 +49,10 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   /** False while the desktop's "Project files on the phone" switch is off:
    * the drawer holds `menu` alone, with no Files row. */
   browse?: boolean;
+  /** Straight to the library, its search box in focus. */
+  search?: boolean;
+  /** `browse` is false because of the desktop's switch: the drawer says so. */
+  filesOff?: boolean;
   /** This computer's folder is there to browse (a remote project's mirror
    * may not be yet). */
   here?: boolean;
@@ -53,6 +60,9 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   host?: boolean;
   /** What the root's switch calls the remote side (`host_label`). */
   hostLabel?: string;
+  /** Standing as a pane beside the chat (a landscape tablet): the chat behind
+   * stays usable, so the library is no modal dialog. */
+  docked?: boolean;
 }) {
   const t = useT();
   const both = here && host;
@@ -61,7 +71,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
     rememberFilesSide(projectId, next);
     setSide(next);
   }, [projectId]);
-  const direct = !menu && browse;
+  const direct = (!menu || search) && browse;
   const [library, setLibrary] = useState(direct);
   const closeLibrary = useCallback(() => setLibrary(false), []);
   const drawer = useRef<HTMLElement | null>(null);
@@ -71,7 +81,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
 
   useEffect(() => {
     if (libraryShown) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [libraryShown, onClose]);
@@ -85,7 +95,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
 
   if (libraryShown) {
     return <FilesLibrary key={side} projectId={projectId} label={label} onClose={direct ? onClose : closeLibrary}
-      markup={markup} showTab={showTab} linked={linked} side={side} onSide={both ? pickSide : undefined} hostLabel={hostLabel} />;
+      markup={markup} showTab={showTab} linked={linked} side={side} onSide={both ? pickSide : undefined} hostLabel={hostLabel} focusSearch={search} docked={docked} />;
   }
 
   return <div className="sheet-backdrop files-drawer-backdrop" role="presentation" onClick={onClose}>
@@ -96,6 +106,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
         <span className="files-close" aria-hidden="true" />
       </header>
       {menu}
+      {filesOff && <p className="sheet-note">{t("mobile.project.filesOff")}{isUntested("mobile.project.filesOff") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</p>}
       {browse && <div className="option-list drawer-menu">
         <button className="drawer-files" onClick={() => setLibrary(true)} aria-label={t("mobile.files.library.open")}>
           <span aria-hidden="true" className="project-menu-icon"><FolderIcon /></span>

@@ -15,6 +15,7 @@ import type { TabEntry } from "../../../stores/tabs";
 import { UntestedTag } from "../../common/UntestedTag";
 import { isOpenCodeTab } from "../../../../mobile-web/src/terminal/openCodeMini";
 import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../../mobile-web/src/terminal/openCodeModelGroups";
+import { CloseIcon } from "../../common/icons/Icon";
 
 export function PdfMarkupModel({ tab, ptyId, label, model, agent, disabled }: {
   tab: TabEntry;
@@ -79,7 +80,7 @@ export function PdfMarkupModel({ tab, ptyId, label, model, agent, disabled }: {
         >
           <div className="terminal-reader-picker-head">
             <strong>{shownStep?.title ?? t("terminal.reader.modelTitle")}</strong>
-            <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t("terminal.reader.modelClose")} title={t("terminal.reader.modelClose")}>✕</button>
+            <button type="button" className="terminal-reader-picker-close" onClick={close} aria-label={t("terminal.reader.modelClose")} title={t("terminal.reader.modelClose")}><CloseIcon /></button>
           </div>
           {shownStep ? (
             <div className="terminal-reader-options">

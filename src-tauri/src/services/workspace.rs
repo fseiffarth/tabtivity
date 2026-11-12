@@ -34,6 +34,7 @@ use serde_json::Value;
 
 use crate::schema::project::TabEntry;
 use crate::schema::session::TerminalSession;
+use crate::services::cockpit_meta;
 use crate::services::terminal_service;
 use crate::storage;
 
@@ -273,8 +274,20 @@ pub struct Snapshot {
     pub session: TerminalSession,
 }
 
-/// The tab minus the service's own bookkeeping — what "changed" compares.
+/// The tab minus the service's own bookkeeping — what "changed" compares —
+/// and minus the host-owned `cockpitMeta`: a client never authors it, so a
+/// difference in it alone is never a client edit.
 fn comparable(tab: &TabEntry) -> Value {
+    let mut value = comparable_with_meta(tab);
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove(cockpit_meta::KEY);
+    }
+    value
+}
+
+/// [`comparable`] including `cockpitMeta`: what a backend edit stamps
+/// `updatedVersion` by, so an agent's metadata write moves the tab's version.
+fn comparable_with_meta(tab: &TabEntry) -> Value {
     let mut value = serde_json::to_value(tab).unwrap_or(Value::Null);
     if let Some(obj) = value.as_object_mut() {
         obj.remove(TAB_CREATED_KEY);
@@ -297,6 +310,9 @@ fn comparable(tab: &TabEntry) -> Value {
 ///   (`createdVersion <= base`) and **kept** if it was created after the
 ///   client's base, in its place next to the neighbour it had.
 /// - The client's order applies to the tabs it knows.
+/// - `cockpitMeta` is the host's, not the client's: a kept tab always takes
+///   the held copy's (inserted or removed to match, whatever the client sent
+///   and whether or not its base was stale), and a created tab has it stripped.
 ///
 /// An empty snapshot without `allow_clear` is a client with nothing loaded:
 /// nothing changes.
@@ -330,6 +346,7 @@ fn merge(scope: &str, session: &TerminalSession, client: &ClientSync) -> (Vec<Ta
                 let held = current_by_id[id.as_str()];
                 next.extra.insert(TAB_CREATED_KEY.to_string(), Value::from(created_version(held)));
                 next.extra.insert(TAB_UPDATED_KEY.to_string(), Value::from(updated_version(held)));
+                cockpit_meta::carry(&mut next, held);
                 if comparable(&next) != comparable(held) {
                     if updated_version(held) > base {
                         // Changed by someone after this client last looked: the
@@ -354,6 +371,7 @@ fn merge(scope: &str, session: &TerminalSession, client: &ClientSync) -> (Vec<Ta
                 taken.insert(id.clone());
                 next.extra.insert(TAB_CREATED_KEY.to_string(), Value::from(next_version));
                 next.extra.insert(TAB_UPDATED_KEY.to_string(), Value::from(next_version));
+                cockpit_meta::strip(&mut next);
                 mint_for_created(scope, &mut next);
                 stones.retain(|s| s.id != id);
                 ops.push(Op::Created { id });
@@ -366,6 +384,7 @@ fn merge(scope: &str, session: &TerminalSession, client: &ClientSync) -> (Vec<Ta
                 next.extra.insert(TAB_ID_KEY.to_string(), Value::String(id.clone()));
                 next.extra.insert(TAB_CREATED_KEY.to_string(), Value::from(next_version));
                 next.extra.insert(TAB_UPDATED_KEY.to_string(), Value::from(next_version));
+                cockpit_meta::strip(&mut next);
                 mint_for_created(scope, &mut next);
                 ops.push(Op::Created { id });
                 result.push(next);
@@ -492,6 +511,18 @@ pub fn edit_in(
     scope: &str,
     edit: impl FnOnce(&mut TerminalSession) -> Result<(), String>,
 ) -> Result<TerminalSession, String> {
+    edit_in_if(path, scope, |session| edit(session).map(|()| true))?
+        .ok_or_else(|| "edit: nothing stored".to_string())
+}
+
+/// [`edit_in`] for an edit that may find nothing to do: `edit` answers
+/// whether to write. `Ok(false)` writes nothing, moves no version and
+/// answers `None`; `Ok(true)` is an [`edit_in`] and answers what was stored.
+pub fn edit_in_if(
+    path: &Path,
+    scope: &str,
+    edit: impl FnOnce(&mut TerminalSession) -> Result<bool, String>,
+) -> Result<Option<TerminalSession>, String> {
     let _lock = storage::FileLock::exclusive(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
     let mut session = read_session(path)?;
     adopt(&mut session);
@@ -499,9 +530,11 @@ pub fn edit_in(
     let before: HashMap<String, Value> = session
         .tab_layout
         .iter()
-        .filter_map(|t| tab_id(t).map(|id| (id.to_string(), comparable(t))))
+        .filter_map(|t| tab_id(t).map(|id| (id.to_string(), comparable_with_meta(t))))
         .collect();
-    edit(&mut session)?;
+    if !edit(&mut session)? {
+        return Ok(None);
+    }
     let mut ids: HashSet<String> = session.tab_layout.iter().filter_map(tab_id).map(str::to_string).collect();
     for tab in session.tab_layout.iter_mut() {
         match tab_id(tab).map(str::to_string) {
@@ -519,7 +552,7 @@ pub fn edit_in(
                 }
                 // A field the edit changed: stamped, so a client holding the
                 // old copy does not write it back.
-                if before.get(&id).is_none_or(|was| *was != comparable(tab)) {
+                if before.get(&id).is_none_or(|was| *was != comparable_with_meta(tab)) {
                     tab.extra.insert(TAB_UPDATED_KEY.to_string(), Value::from(version + 1));
                 }
             }
@@ -532,7 +565,7 @@ pub fn edit_in(
     set_tombstones(&mut session, stones);
     set_version(&mut session, version + 1);
     write_session(path, &session)?;
-    Ok(session)
+    Ok(Some(session))
 }
 
 /// What the sidecar's headless create answers with: the tab as stored, with
@@ -550,25 +583,25 @@ pub struct CreatedTab {
 /// later merges it in rather than overwriting it. When a tab already carries
 /// `request_hash` under `mobileRequestHash`, that tab is answered instead and
 /// nothing is written: the phone retries a create until it sees the tab.
-pub fn create_tab_in(path: &Path, scope: &str, tab: TabEntry, request_hash: Option<&str>) -> Result<CreatedTab, String> {
+pub fn create_tab_in(path: &Path, scope: &str, mut tab: TabEntry, request_hash: Option<&str>) -> Result<CreatedTab, String> {
+    // A new tab carries no agent metadata, whoever built the record.
+    cockpit_meta::strip(&mut tab);
     // The closure runs under the lock, so the check and the append are one
-    // step; a hit aborts the edit (nothing written) and is answered below.
-    const EXISTS: &str = "\u{0}exists";
+    // step; a hit writes nothing and is answered below.
     let mut found: Option<TabEntry> = None;
-    let stored = edit_in(path, scope, |session| {
+    let stored = edit_in_if(path, scope, |session| {
         if let Some(hash) = request_hash {
             if let Some(existing) = session.tab_layout.iter().find(|t| extra_str(t, "mobileRequestHash") == Some(hash)) {
                 found = Some(existing.clone());
-                return Err(EXISTS.to_string());
+                return Ok(false);
             }
         }
         session.tab_layout.push(tab);
-        Ok(())
-    });
-    match (stored, found) {
-        (Err(e), Some(tab)) if e == EXISTS => Ok(CreatedTab { tab, existed: true }),
-        (Err(e), _) => Err(e),
-        (Ok(stored), _) => {
+        Ok(true)
+    })?;
+    match stored {
+        None => found.map(|tab| CreatedTab { tab, existed: true }).ok_or_else(|| "create: tab not stored".to_string()),
+        Some(stored) => {
             let tab = stored.tab_layout.last().cloned().ok_or_else(|| "create: tab not stored".to_string())?;
             Ok(CreatedTab { tab, existed: false })
         }
@@ -634,7 +667,18 @@ fn edit_tab_in(
     tmux: &str,
     edit: impl FnOnce(&mut TerminalSession, usize) -> Result<(), String>,
 ) -> Result<TerminalSession, String> {
-    edit_in(path, scope, |session| {
+    edit_tab_in_if(path, scope, tmux, |session, index| edit(session, index).map(|()| true))?
+        .ok_or_else(|| "edit: nothing stored".to_string())
+}
+
+/// [`edit_tab_in`] through [`edit_in_if`]: `edit` answers whether to write.
+fn edit_tab_in_if(
+    path: &Path,
+    scope: &str,
+    tmux: &str,
+    edit: impl FnOnce(&mut TerminalSession, usize) -> Result<bool, String>,
+) -> Result<Option<TerminalSession>, String> {
+    edit_in_if(path, scope, |session| {
         let index = session
             .tab_layout
             .iter()
@@ -642,6 +686,58 @@ fn edit_tab_in(
             .ok_or_else(|| TAB_NOT_FOUND.to_string())?;
         edit(session, index)
     })
+}
+
+/// The label accepted by both the phone and the cockpit MCP. Display text only.
+pub fn clean_tab_label(raw: &str) -> Option<String> {
+    let label = raw.trim();
+    (!label.is_empty()
+        && label.chars().count() <= super::mobile_control::protocol::MAX_TAB_LABEL
+        && !label.chars().any(char::is_control)
+        && super::root_mcp_mail::strip_invisible(label) == label)
+        .then(|| label.to_string())
+}
+
+/// Rename one saved identity without changing any other tab fields but what
+/// `stamp` adds to the renamed record (the cockpit's note of who named it).
+/// The check runs inside the workspace lock; a no-op does not advance the
+/// version and runs no stamp.
+pub fn rename_tab_id_in(
+    path: &Path, scope: &str, id: &str, label: &str, expected: Option<&str>,
+    check: impl FnOnce() -> Result<(), String>, stamp: impl FnOnce(&mut TabEntry),
+) -> Result<(bool, u64), String> {
+    let mut version = 0;
+    let stored = edit_in_if(path, scope, |session| {
+        check()?;
+        version = version_of(session);
+        let tab = session.tab_layout.iter_mut().find(|t| tab_id(t) == Some(id))
+            .ok_or_else(|| TAB_NOT_FOUND.to_string())?;
+        if expected.is_some_and(|old| old != tab.label) { return Err("conflict".into()); }
+        if tab.label == label { return Ok(false); }
+        tab.label = label.to_string();
+        stamp(tab);
+        Ok(true)
+    })?;
+    Ok(match stored {
+        Some(session) => (true, version_of(&session)),
+        None => (false, version),
+    })
+}
+
+/// One saved tab by stable id, read under the shared lock. `check` runs inside
+/// it (revocation); an absent file or id is [`TAB_NOT_FOUND`]. Writes nothing.
+pub fn read_tab_in(path: &Path, id: &str, check: impl FnOnce() -> Result<(), String>) -> Result<TabEntry, String> {
+    if !path.exists() {
+        check()?;
+        return Err(TAB_NOT_FOUND.to_string());
+    }
+    let _lock = storage::FileLock::shared(path).map_err(|e| format!("lock {}: {e}", path.display()))?;
+    check()?;
+    read_session(path)?
+        .tab_layout
+        .into_iter()
+        .find(|t| tab_id(t) == Some(id))
+        .ok_or_else(|| TAB_NOT_FOUND.to_string())
 }
 
 /// Rename the tab behind `tmux`. `label` is already cleaned by the caller.
@@ -696,7 +792,6 @@ fn pane_keys_mut<'a>(node: &'a mut Value, out: &mut Vec<&'a mut Vec<Value>>) {
 /// panes has no slot to land in, as in the window's own reorder, and leaves
 /// everything as it is.
 pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after: bool) -> Result<TerminalSession, String> {
-    const NO_SLOT: &str = "\u{0}no-slot";
     let place = |keys: &mut Vec<Value>, key: &str, anchor_key: &str| {
         let Some(from) = keys.iter().position(|k| k.as_str() == Some(key)) else { return };
         let moved = keys.remove(from);
@@ -704,7 +799,7 @@ pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after:
             keys.insert(if after { at + 1 } else { at }, moved);
         }
     };
-    let edited = edit_tab_in(path, scope, tmux, |session, i| {
+    let edited = edit_tab_in_if(path, scope, tmux, |session, i| {
         let key = session.tab_layout[i].key.clone();
         let anchor_key = session
             .tab_layout
@@ -726,7 +821,7 @@ pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after:
                 let pane_of = |k: &str| panes.iter().position(|p| p.iter().any(|v| v.as_str() == Some(k)));
                 let (from, to) = (pane_of(&key), pane_of(&anchor_key));
                 if from != to {
-                    return Err(NO_SLOT.to_string());
+                    return Ok(false);
                 }
                 if let Some(pane) = from {
                     place(panes[pane], &key, &anchor_key);
@@ -740,11 +835,11 @@ pub fn reorder_tab_in(path: &Path, scope: &str, tmux: &str, anchor: &str, after:
             .position(|t| tmux_of(t) == Some(anchor))
             .ok_or_else(|| TAB_NOT_FOUND.to_string())?;
         session.tab_layout.insert(if after { at + 1 } else { at }, tab);
-        Ok(())
-    });
+        Ok(true)
+    })?;
     match edited {
-        Err(e) if e == NO_SLOT => read_session(path),
-        other => other,
+        Some(stored) => Ok(stored),
+        None => read_session(path),
     }
 }
 
@@ -776,30 +871,29 @@ pub fn close_tab_in(path: &Path, scope: &str, tmux: &str, now_ms: u64) -> Result
 /// reopen. The record keeps its `sessionId`, so the launch resumes the
 /// conversation.
 pub fn reopen_tab_in(path: &Path, scope: &str, closed_id: Option<&str>) -> Result<Option<TabEntry>, String> {
-    const NOTHING: &str = "\u{0}nothing";
-    let stored = edit_in(path, scope, |session| {
+    let stored = edit_in_if(path, scope, |session| {
         let mut closed = closed_tabs(session);
         let index = match closed_id {
             Some(id) => closed.iter().position(|c| c.id == id),
             None => (!closed.is_empty()).then_some(0),
         };
         let Some(index) = index else {
-            return Err(NOTHING.to_string());
+            return Ok(false);
         };
         let mut tab = closed.remove(index).tab;
         set_closed_tabs(session, closed);
         for key in [TAB_ID_KEY, TAB_CREATED_KEY, TAB_UPDATED_KEY, TMUX_SESSION_KEY, "mobileRequestHash", "launchedAt"] {
             tab.extra.remove(key);
         }
+        // A new identity: the old spawn's activity and blocker are not its
+        // own and its progress is a past report (the handoff, results and
+        // verification stay, as historical notes).
+        cockpit_meta::drop_transient(&mut tab);
         tab.key = format!("headless-{}", crate::storage::uuid_v4());
         session.tab_layout.push(tab);
-        Ok(())
-    });
-    match stored {
-        Err(e) if e == NOTHING => Ok(None),
-        Err(e) => Err(e),
-        Ok(stored) => Ok(stored.tab_layout.last().cloned()),
-    }
+        Ok(true)
+    })?;
+    Ok(stored.and_then(|stored| stored.tab_layout.last().cloned()))
 }
 
 /// Bump the version of a session held as raw JSON (the path rewrite keeps
@@ -1299,5 +1393,132 @@ mod tests {
 
         let closed = close_tab_in(&path, "box:paper", concat!(crate::app_slug!(), "-box_paper--shell-mine"), 2).unwrap();
         assert!(owns_tmux_session(&closed), "a minted session ends with its tab");
+    }
+    // ── cockpitMeta ownership (docs/cockpit_mcp_extensions_plan.md, decision 2) ──
+
+    const META: &str = cockpit_meta::KEY;
+
+    fn meta_value(revision: u64, summary: &str) -> Value {
+        serde_json::json!({"v":1,"revision":revision,"handoff":{"summary":summary,"checks":"","remaining":"","setAt":7}})
+    }
+
+    /// A scope with tabs `a` and `b`, and `a` holding agent metadata written the
+    /// way the cockpit lane writes it. Returns the file, the seeded answer and
+    /// the sync answer a client would hold after adopting that write.
+    fn with_meta() -> (tempfile::TempDir, std::path::PathBuf, SyncOutcome, SyncOutcome) {
+        let (dir, path) = file();
+        let seeded = sync_in(&path, "p", client(0, vec![tab("a", "A"), tab("b", "B")])).unwrap();
+        let id = tab_id(&seeded.tabs[0]).unwrap().to_string();
+        edit_in(&path, "p", |session| {
+            let held = session.tab_layout.iter_mut().find(|t| tab_id(t) == Some(id.as_str())).unwrap();
+            held.extra.insert(META.into(), meta_value(1, "agent note"));
+            Ok(())
+        })
+        .unwrap();
+        let adopted = sync_in(&path, "p", client(0, seeded.tabs.clone())).unwrap();
+        (dir, path, seeded, adopted)
+    }
+
+    fn held_meta(out: &SyncOutcome) -> Option<&Value> {
+        out.tabs.iter().find(|t| t.label.starts_with('A')).and_then(|t| t.extra.get(META))
+    }
+
+    #[test]
+    fn a_stale_base_client_sync_keeps_the_agents_metadata() {
+        let (_dir, path, seeded, adopted) = with_meta();
+        assert!(held_meta(&adopted).is_some());
+        // The desktop's copy predates the write and carries no metadata.
+        let before = version_of(&read_session(&path).unwrap());
+        let out = sync_in(&path, "p", client(seeded.version, seeded.tabs.clone())).unwrap();
+        assert_eq!(held_meta(&out), Some(&meta_value(1, "agent note")));
+        assert!(out.ops.is_empty(), "a metadata-only difference is not a client edit: {:?}", out.ops);
+        assert_eq!(out.version, before, "and writes nothing");
+        // A real edit from the same stale client still lands next to the metadata.
+        let mut renamed = seeded.tabs.clone();
+        renamed[1].label = "B renamed".into();
+        let out = sync_in(&path, "p", client(seeded.version, renamed)).unwrap();
+        assert_eq!(labels(&out.tabs), ["A", "B renamed"]);
+        assert_eq!(held_meta(&out), Some(&meta_value(1, "agent note")));
+        assert_eq!(held_meta(&sync_in(&path, "p", client(out.version, out.tabs.clone())).unwrap()), Some(&meta_value(1, "agent note")));
+    }
+
+    #[test]
+    fn a_current_base_client_sync_keeps_the_agents_metadata_even_with_an_edit_of_its_own() {
+        let (_dir, path, _seeded, adopted) = with_meta();
+        // The client holds the adopted copy and edits another field: the tab is
+        // kept with the client's fields and the held metadata.
+        let mut tabs = adopted.tabs.clone();
+        tabs[0].extra.insert("color".into(), Value::String("blue".into()));
+        let out = sync_in(&path, "p", client(adopted.version, tabs)).unwrap();
+        assert_eq!(out.tabs[0].extra["color"], "blue");
+        assert_eq!(held_meta(&out), Some(&meta_value(1, "agent note")));
+        // A client that never had the key (the desktop's whitelist drops it)
+        // and edits: the metadata stays.
+        let mut bare = out.tabs.clone();
+        bare[0].extra.remove(META);
+        bare[0].label = "A2".into();
+        let out = sync_in(&path, "p", client(out.version, bare)).unwrap();
+        assert_eq!(out.tabs[0].label, "A2");
+        assert_eq!(held_meta(&out), Some(&meta_value(1, "agent note")));
+    }
+
+    #[test]
+    fn a_client_cannot_author_or_alter_the_metadata() {
+        let (_dir, path, _seeded, adopted) = with_meta();
+        // Alter: a forged copy of the held key, on a current base, with an edit.
+        let mut tabs = adopted.tabs.clone();
+        tabs[0].extra.insert(META.into(), meta_value(99, "forged"));
+        tabs[0].label = "A edited".into();
+        let out = sync_in(&path, "p", client(adopted.version, tabs)).unwrap();
+        assert_eq!(out.tabs[0].label, "A edited");
+        assert_eq!(held_meta(&out), Some(&meta_value(1, "agent note")), "held value wins");
+        // Forged alone does nothing at all.
+        let mut tabs = out.tabs.clone();
+        tabs[0].extra.insert(META.into(), meta_value(5, "forged again"));
+        let again = sync_in(&path, "p", client(out.version, tabs)).unwrap();
+        assert!(again.ops.is_empty());
+        assert_eq!(again.version, out.version);
+        // Author: a tab with none cannot be given any.
+        let mut tabs = again.tabs.clone();
+        tabs[1].extra.insert(META.into(), meta_value(3, "forged on B"));
+        let out = sync_in(&path, "p", client(again.version, tabs)).unwrap();
+        assert!(!out.tabs[1].extra.contains_key(META));
+        assert_eq!(read_session(&path).unwrap().tab_layout[1].extra.get(META), None);
+        // Create: a created tab, with or without an id, is stripped.
+        let mut forged = tab("c", "C");
+        forged.extra.insert(META.into(), meta_value(2, "forged on C"));
+        let mut with_id = tab("d", "D");
+        with_id.extra.insert(TAB_ID_KEY.into(), Value::String("client-minted".into()));
+        with_id.extra.insert(META.into(), meta_value(2, "forged on D"));
+        let mut tabs = out.tabs.clone();
+        tabs.extend([forged, with_id]);
+        let out = sync_in(&path, "p", client(out.version, tabs)).unwrap();
+        assert_eq!(out.tabs.len(), 4);
+        assert!(out.tabs[2..].iter().all(|t| !t.extra.contains_key(META)));
+        // Remove: a client that drops the key cannot clear what the agent wrote.
+        let mut tabs = out.tabs.clone();
+        tabs[0].extra.remove(META);
+        tabs[0].label = "A final".into();
+        let out = sync_in(&path, "p", client(out.version, tabs)).unwrap();
+        assert_eq!(held_meta(&out), Some(&meta_value(1, "agent note")));
+    }
+
+    #[test]
+    fn the_hosts_own_writes_stamp_the_tab_and_the_headless_create_strips_forged_metadata() {
+        let (_dir, path, seeded, _adopted) = with_meta();
+        // The metadata write (an `edit_in`) stamped the tab, so the stale
+        // copy of the seeded answer is "older knowledge", never an edit.
+        let a = read_session(&path).unwrap().tab_layout[0].clone();
+        assert!(updated_version(&a) > seeded.version);
+        // The phone's create path never lands metadata.
+        let mut forged = pty_tab("k", "Phone", concat!(crate::app_slug!(), "-p--agent-k"));
+        forged.extra.insert(META.into(), meta_value(4, "forged"));
+        let created = create_tab_in(&path, "p", forged, None).unwrap();
+        assert!(!created.tab.extra.contains_key(META));
+        assert!(!read_session(&path).unwrap().tab_layout[2].extra.contains_key(META));
+        // A rename through the phone's path keeps it.
+        let tmux = tmux_of(&created.tab).unwrap().to_string();
+        rename_tab_in(&path, "p", &tmux, "Renamed").unwrap();
+        assert_eq!(read_session(&path).unwrap().tab_layout[0].extra.get(META), Some(&meta_value(1, "agent note")));
     }
 }

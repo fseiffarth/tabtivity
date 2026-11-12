@@ -198,7 +198,7 @@ export function LocalUnlock({ setup, onUnlocked }: { setup: boolean; onUnlocked:
           {busy ? t("mobile.lock.checking") : t("mobile.lock.unlock")}
         </button>}
     <p className="local-unlock-note">{t("mobile.lock.note")}</p>
-    <p className="splash-version">{t("mobile.title")} {BUNDLE_VERSION}{isUntested("mobile.lock.version") && <small className="untested"> {t("mobile.newTab.untested")}</small>}</p>
+    <p className="splash-version">{t("mobile.title")} {BUNDLE_VERSION}{(isUntested("mobile.lock.version") || isUntested("mobile.design.pair")) && <small className="untested"> {t("mobile.newTab.untested")}</small>}</p>
   </>;
   // Setup runs once, right after pairing, with no project data to stand
   // behind it yet — its own full screen. The lock met on every later cold
