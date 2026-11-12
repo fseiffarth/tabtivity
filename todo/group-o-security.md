@@ -1457,6 +1457,145 @@ was reproduced against a live mailbox.
     and read a `-wal` only from the Thunderbird profile scan, not from beside
     a picked file. (Gap 73.)
 
+### Threat-model recheck follow-ups (2026-11-12)
+
+From the new-feature review in `docs/threat_model.md` ("Gaps found
+2026-11-12", gaps 105–110) and its evidence file
+`docs/threat_recheck_2026_11_12_handoff.md`. Read from the code and checked
+with synthetic inputs; nothing was run live.
+
+2431. **TensorBoard viewer: hostile tag names and unbounded accumulated
+    tags. (Fixed 2026-11-12, uncommitted · 🧪 Untested)** A scalar tag named `__proto__`/`constructor`/`toString` throws in
+    `applyRead` and leaves the view loading; distinct tags accumulate across
+    reads and files with no total budget. Safe dictionaries, a per-view
+    budget with a visible drop count, and a `pollAll` that survives a bad
+    fold. (Gaps 105, 106.)
+    - [x] 🤖 Automated test
+    - [ ] 🖐️ Open an event file with a tag called `__proto__` and one with
+      more than 2,000 distinct tags: the charts load, the notice names what
+      was left out, the window stays responsive.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+2432. **Agent print request: claim before printing. (Fixed 2026-11-12,
+    uncommitted · 🧪 Untested)** Approve & print checks
+    Pending, lays the PDF out and prints with no claim, so `print_cancel`,
+    expiry or the tab closing in between still prints and is recorded as
+    withdrawn. A Printing state claimed before the side effect; only the
+    winner of two windows dispatches. (Gap 107.)
+    - [x] 🤖 Automated test
+    - [ ] 🖐️ Approve a request and have the agent cancel it while the
+      layout runs: either nothing prints and the card says it is gone, or it
+      prints and the agent is told it printed. Cancel the system print
+      dialog: the request is pending again.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+2433. **Sync hand-over: Load resolved is not bound to the export. (Fixed
+    2026-11-12, uncommitted · 🧪 Untested)** It
+    returns the newest-by-name `conflicts-*` folder that has the file: an
+    older export's result is shown as the current one, and any agent of the
+    project can plant a folder that wins from then on. Bind the readback to
+    the export id the window made and to the exported texts; offer an older
+    result only as older. (Gaps 108, 108b.)
+    - [x] 🤖 Automated test
+    - [ ] 🖐️ Hand a conflict over twice, the second time before the agent
+      answered: Load resolved says none yet (or offers the older result as
+      older), never the first answer as the second's.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+2434. **Local models only: activation reports success when the cleanup did
+    not happen. (Fixed 2026-11-12, uncommitted · 🧪 Untested)** A failed tmux listing reads as "nothing to end", kill
+    results are dropped, and nothing checks the sessions are gone. Keep the
+    policy, tell "no tmux server" from a failed listing, verify the ends and
+    show an incomplete activation. (Gap 109.)
+    - [x] 🤖 Automated test
+    - [ ] 🖐️ Switch Local models only on with a cloud agent running in a
+      detached session: it ends and is listed. With no tmux server at all the
+      switch still succeeds without a warning.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+2435. **Local models only: an agent that is starting while the switch turns
+    on survives. (Fixed 2026-11-12, uncommitted)** The spawn checks the policy before it is registered and
+    the switch sweeps once; re-check after registration and end an agent the
+    switch now forbids. (Gap 110.)
+    - [x] 🤖 Automated test
+2436. **Hardening from the 2026-11-12 recheck. (Fixed 2026-11-12,
+    uncommitted; the tab-exit revoke in `terminal/mod.rs` still lists the
+    tokens by hand)** (H1) cap the body
+    `registry_response` reads; (H2) one table of lane-token variable names
+    for the pre-push hook scrub, `SpawnTokenGuard` and the tab-exit revoke;
+    (H3) create a hand-over export folder exclusively; (H4) bound Muse's
+    session listing before sorting.
+    - [x] 🤖 Automated test
+2438. **Diff viewer: a crafted patch freezes the window.** A quadratic
+    `Binary files … differ` regex on uncapped lines (gap 111), and no cap on
+    the number of file rows and index entries (gap 112). Linear parse of the
+    binary line, a length guard before `parseMeta`, capped or virtualised
+    file rows.
+    - [ ] 🤖 Automated test
+2439. **Agent print request: bound the cost of a hostile PDF.** No page
+    limit, flate-expansion bound or `copies × sheets` ceiling before Review
+    renders and Approve lays out (gap 113). Refuse at the request and before
+    layout.
+    - [ ] 🤖 Automated test
+2440. **Hardening from the 2026-11-12 follow-up reviewers.** (H5)
+    `sync_handoff_load_resolved` and `sync_handoff_reveal` require a remote
+    project, as the export does; (H6) the Cut-network relay's `/api/show`
+    answer leaves out the host's blob path.
+    - [ ] 🤖 Automated test
+2441. **A pasted `file://` address must not copy a file into an agent's
+    inbox.** Paste into the Chat composer or a typed answer takes files only
+    from the clipboard's file list or `text/uri-list`, never from plain text
+    or HTML; an agent-tab drop refuses paths under the state directory and
+    credential directories. (Gap 114.)
+    - [ ] 🤖 Automated test
+    - [ ] 🖐️ Copy a sentence containing a `file://` address from a browser
+      and paste it into an agent's Chat composer: the sentence is pasted as
+      text and nothing appears in the tab's inbox. Copy a file in the file
+      manager and paste it: it is attached as before.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+2437. **Decisions and unread surfaces left by the 2026-11-12 recheck.**
+    - [ ] Decide: should a background host TeX build ask before running a
+      project's `latexmkrc` on the remote login, as the local build does?
+    - [ ] Decide: should the Claude fallback token go to remote hosts by
+      default, or only after opting in per host?
+    - [ ] Settle what the follow-up reviewers left unresolved (handoff,
+      section G): a forwarded remote page's reach to local loopback services,
+      Ollama's URL-valued image fields behind the relay, pdf.js memory on a
+      flate-bomb page, look-alike dialog text in `readReaderLive`, the Copilot
+      language server across activation, the Windows admin pipe, phone
+      steering's K/L queue keys.
+
 ### Safe for everyone — non-expert users (2026-09-24)
 
 Plan: `docs/safe_for_everyone_plan.md`. Goal: every "⚠️ yours" row in
