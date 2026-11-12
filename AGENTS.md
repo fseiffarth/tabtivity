@@ -24,12 +24,20 @@ frontend, `src-tauri/` Rust backend, `mobile-web/` phone PWA).
 
 ## Gates
 
-Before calling work done, run `scripts/gates.sh`: only the gates below that
-your change (diff vs HEAD + untracked) touches; `--all` runs every one. Runs
+For implementation changes, before calling work done, run `scripts/gates.sh`:
+only the gates below that your change (diff vs HEAD + untracked) touches; `--all` runs every one. Runs
 are one at a time across sessions: a queued run waits, then reuses the
 last result if the tree is unchanged; run it in the background so a
-tool timeout can't kill it while it waits. All
-are CI gates, at zero warnings except `npm run lint`:
+tool timeout can't kill it while it waits.
+Use `scripts/gates-job.sh start` (add `--all` only for the pre-push/full-check
+routine), finish independent work, then `scripts/gates-job.sh status <printed
+directory>` for the saved summary and exit code. Do not poll each Clippy
+variant, repeatedly tail progress logs, or rerun a passing unchanged tree.
+If only waiting remains, use a blocking tool wait (up to 60 seconds per call)
+without extra progress reads; report the final result once. Inspect full logs
+only for a failure. A read-only review needs no build/test gate run unless the
+user asks for one; other sessions' edits alone are not a reason to run gates.
+All are CI gates, at zero warnings except `npm run lint`:
 
 ```
 npm run build        # the ONLY type-check (tsc + desktop, mobile, web bundles)
