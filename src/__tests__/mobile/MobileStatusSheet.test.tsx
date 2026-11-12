@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentStatusReport, TabRow } from "../../../mobile-web/src/api";
 import { StatusSheet, resetCountdown, resetText } from "../../../mobile-web/src/screens/StatusSheet";
 import { BRAND } from "../../lib/brand";
+import { dateLocale } from "../../lib/i18n";
 
 // `fetch` rather than the api module: `getAgentStatus` calls `api` through its
 // own module-local binding, which a module mock never reaches — and stubbing
@@ -81,7 +82,7 @@ describe(`${BRAND.display} Mobile agent status sheet`, () => {
     // whatever zone the test runs in.
     const now = new Date("2026-09-15T20:00:00Z");
     const text = resetText("Sep 17, 2pm (Europe/Berlin)", now);
-    const clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" })
+    const clock = new Intl.DateTimeFormat(dateLocale(), { hour: "numeric", minute: "2-digit" })
       .format(new Date("2026-09-17T12:00:00Z"));
     expect(text).toContain(clock);
     expect(text).toMatch(/ · in 1d 16h$/u);
