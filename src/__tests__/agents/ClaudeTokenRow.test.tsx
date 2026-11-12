@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import { ClaudeTokenRow } from "../../components/settings/ClaudeTokenRow";
+import { BRAND } from "../../lib/brand";
 import { enSource as en } from "../../lib/i18n/en";
 import { BRAND } from "../../lib/brand";
 

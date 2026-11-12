@@ -4103,10 +4103,12 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-muted);
   white-space: nowrap;
   overflow-x: auto;
+  /* Scrolls, shows no bar: the path below gives way first, so it rarely
+     scrolls, and a bar would take a third of this line's height. */
   scrollbar-width: none;
-  /* Scrolls, shows nothing: an app-painted thumb over the text hid the dotted
-     underlines, and the path below gives way first so it rarely scrolls. */
-  --app-scrollbar: none;
+}
+.terminal-reader-facts::-webkit-scrollbar {
+  display: none;
 }
 .terminal-reader-fact { flex: none; }
 /* The one elastic fact: in a narrow pane (a file viewer beside the chat) the
@@ -4227,8 +4229,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 .terminal-reader-picker-steps > .terminal-reader-options {
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  /* `scroll` keeps the bar's 8px whether or not the options overflow, so they
+     do not reflow between steps (`scrollbar-gutter` would keep 21px). */
+  overflow-y: scroll;
 }
 .terminal-reader-picker-steps > :not(.terminal-reader-options) {
   flex-shrink: 0;

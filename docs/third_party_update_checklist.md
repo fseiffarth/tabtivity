@@ -668,6 +668,18 @@ tab and resume/fork remain tagged for live verification.
 
 **Assumes**
 
+- **0.167.2 (2026-11-12), outside Tabtivity, beside 0.167.1** — same setup as
+  0.167.1 below. Upstream's three commits are core only: incremental tool
+  declarations on by default for GCP Vertex (new `[features]` key
+  `incremental_tools_legacy_gcp`, which Tabtivity never sets). `--help` of the
+  top level, `exec`, `resume`, `fork`, `mcp`, `login` and `queue` is identical.
+  Both real-binary probes pass on both versions. `tui.py` walked the trust
+  question, idle, both `/model` steps and Shift+Tab's `Plan mode` at 100 and 60
+  columns. The text is the same except 0.167.1's "Update available" box, which
+  shifts the picker five rows and hides the welcome logo. Replayed, options,
+  current row and title read the same. `writer_lock.py`: same lock screen and
+  release on both. Hooks, a real model turn, an approval and the window were
+  not exercised.
 - **0.167.1 (2026-11-11), outside Tabtivity, beside 0.167.0** — both from the
   agent install's `releases/` folder, private `CODEX_HOME`, a work folder that is
   its own git root, `--no-daemon` and the local Ollama provider. Upstream's

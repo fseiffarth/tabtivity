@@ -403,8 +403,11 @@
   /* Overflow is conveyed solely by the left/right chevron buttons (toggled from
      JS via the overflow-* classes); a vertical mouse wheel also scrolls this
      horizontally in the webview, so no edge fade or visible scrollbar is used. */
-  --app-scrollbar: none; /* no native bar, and no app-painted thumb either */
+  scrollbar-width: none;
   -ms-overflow-style: none;
+}
+.project-pills-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 /* Relative track holding the scrollable pill row plus the edge chevrons. */
@@ -1051,8 +1054,8 @@
    the tint, and no solid colour could match a background PLUS a ::before wash —
    let alone the glass themes' translucent surface over a backdrop blur. The
    answer was a `transparent` track, so the gutter showed the true surface
-   through it. The app's own thumbs made the whole question moot: there is no
-   track any more, only a thumb floating over the surface itself. */
+   through it. Every bar has that now: the baseline in `base.css` paints no
+   track at all, only a thumb over the surface itself. */
 
 .project-dialog {
   width: min(680px, calc(100vw - 32px));
@@ -1269,11 +1272,9 @@
    only needs its own inset.
 
    It is a SIBLING of `.dialog-scroll`, never a child, and that is the whole
-   point: the app paints its own overlay scrollbar thumb over a container's
-   right edge (`lib/theme/customScrollbar.ts`), spanning the scroll box's full height
-   — so a header inside the scroll had the thumb running up over the accent
-   band and across the ✕ in the corner. Outside it, the thumb starts beneath
-   the header, which is the same split `.menu-scroll-region` makes for the
+   point: a scrollbar spans its scroll box's full height on the right edge — so
+   a header inside the scroll had the bar running up beside the accent band and
+   the ✕ in the corner. Outside it, the bar starts beneath the header, which is the same split `.menu-scroll-region` makes for the
    hover menus and `.dialog-framed` for every other scrolling dialog. It must
    not shrink when the body is long, so the flex column gives only below it. */
 .settings-dialog > .settings-title-row {
@@ -1395,14 +1396,12 @@
 }
 .settings-navigation-search:focus { outline: none; border-color: var(--accent); }
 /* Only the page list scrolls: the search box above it stays pinned at the top of
-   the rail (a scrolling nav carried it away with the list). */
-.settings-navigation-links { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-/* The app-painted thumb (lib/theme/customScrollbar.ts) sits on the container's
-   right edge, which was the buttons' right edge: it drew over every entry. Once
-   the list actually scrolls, reach into the rail's 10px side padding and keep
-   that strip as the gutter, so the thumb runs beside the divider and the
-   buttons stay as wide as the search box above them. */
-.settings-navigation-links[data-app-scrollbar] { margin-right: -10px; padding-right: 10px; }
+   the rail (a scrolling nav carried it away with the list).
+   The bar's 8px is always kept (`scroll`, not `auto`) and comes out of the
+   rail's 10px side padding, which the negative margin reaches into: the bar
+   runs beside the divider and the buttons stay as wide as the search box above
+   them whether the list scrolls or not. */
+.settings-navigation-links { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; overflow-y: scroll; margin-right: -10px; padding-right: 2px; }
 /* One topic group: a small-caps title (the section-header voice, one size
    down) over its entries. */
 .settings-navigation-group { display: flex; flex-direction: column; gap: 4px; }

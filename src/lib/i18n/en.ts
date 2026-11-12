@@ -1661,7 +1661,7 @@ export const enSource = {
   "theme.var.activity-4": "Activity heatmap — the busiest days",
   "theme.var.logo-color": "The star mark in the top bar and popout title strips",
   "theme.var.helix-orange": "The project name on a pill in the top bar",
-  "theme.var.scrollbar-thumb": "The scrollbar thumb {app} paints itself",
+  "theme.var.scrollbar-thumb": "The scrollbar thumb",
   "theme.var.scrollbar-thumb-hover": "The scrollbar thumb under the pointer",
   "theme.var.glass-panel": "Frosted chrome fill — the two glass themes only",
   "theme.var.glass-subheader": "Frosted tab bars — the two glass themes only",

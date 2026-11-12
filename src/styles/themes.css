@@ -162,10 +162,8 @@
      <html> element — so `var()`'s lazy resolution gives every theme a neutral
      thumb without per-theme scrollbar rules. It was the accent until
      2026-11-04, which drew a full-height accent bar down every scrolled pane.
-     Both are SOLID on purpose (a mix of two solid tokens): a `transparent` track
-     makes some WebKitGTK builds fall back to the native light GTK scrollbar
-     (white trough + grey slider), and a low-alpha thumb over that washes to
-     grey — the bug this replaces. */
+     Both are SOLID on purpose (a mix of two solid tokens), so the thumb reads
+     the same over any surface. The rules that use them are in `base.css`. */
   --scrollbar-thumb: color-mix(in srgb, var(--text-muted) 45%, var(--bg-panel));
   --scrollbar-thumb-hover: color-mix(in srgb, var(--text-muted) 80%, var(--bg-panel));
   --control-bg: #151d2c;
@@ -732,13 +730,6 @@
   --z-modal-elevated: 110;
   --z-menu-catcher: 999;
   --z-menu: 1000;
-  /* The custom scrollbar layer (lib/theme/customScrollbar): above menus and dialogs,
-     whose own scrolling lists need their thumbs, but below the project/tab
-     hover cards (9999) and tooltips — a bar is chrome of the panel under a
-     popup and must not paint through it. A menu covering only part of a
-     panel's gutter (a header dropdown) is handled by the module itself: it
-     hit-tests along the gutter and clips the thumb to what is uncovered. */
-  --z-scrollbar: 9990;
   --z-tooltip: 10000;
   /* Width of the closed side panel's edge rail — the vertical Files/Git/Apps/
      Agents bar. `.app-body` reserves exactly this much padding on the panel's
