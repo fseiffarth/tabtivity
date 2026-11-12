@@ -663,3 +663,191 @@ describe("installCustomScrollbars discovering late overflow", () => {
     clock.restore();
   });
 });
+
+/**
+ * What a geometry pass may ask the document. Each gutter probe is an
+ * `elementFromPoint`, one per 16px of every gutter on screen, and a pass that
+ * repeated them all for any node added anywhere made a list filling in row by
+ * row (the Machines dropdown, as each host answers) cost a whole window of hit
+ * tests per row: 1 068 a pass with 40 lists on screen, 76ms each, measured on
+ * WebKitGTK 2.52.6. jsdom has no hit testing, so the document's answer is a spy
+ * and what is counted is how often it is asked.
+ */
+describe("installCustomScrollbars probing gutters", () => {
+  function frameClock() {
+    let queue: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      queue.push(cb);
+      return queue.length;
+    });
+    const caf = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    return {
+      tick() {
+        const due = queue;
+        queue = [];
+        for (const cb of due) cb(performance.now());
+      },
+      restore() {
+        raf.mockRestore();
+        caf.mockRestore();
+      },
+    };
+  }
+
+  /** A 100x200 list with rows under a holder, and the document's hit test. */
+  function mountList(over: { scrollHeight: number; scrollWidth: number }) {
+    const panel = document.createElement("div");
+    const list = document.createElement("div");
+    const holder = document.createElement("div");
+    list.style.overflowY = "auto";
+    list.style.overflowX = "auto";
+    const metrics: Record<string, number> = {
+      clientHeight: 200,
+      clientWidth: 100,
+      offsetWidth: 100,
+      ...over,
+    };
+    for (const [key, value] of Object.entries(metrics)) {
+      Object.defineProperty(list, key, { value, configurable: true });
+    }
+    const box = { top: 0, left: 0, width: 100, height: 200 };
+    list.getBoundingClientRect = () => ({ ...box }) as DOMRect;
+    list.appendChild(holder);
+    panel.appendChild(list);
+    document.body.appendChild(panel);
+    const hits = vi.fn((_x: number, _y: number): Element | null => list);
+    (document as unknown as { elementFromPoint: typeof hits }).elementFromPoint = hits;
+    return { panel, list, holder, hits, box };
+  }
+
+  /** Install, and let the first pass and the thumbs' own mutations go by. */
+  async function settled(clock: ReturnType<typeof frameClock>, hits: ReturnType<typeof vi.fn>) {
+    const uninstall = installCustomScrollbars();
+    clock.tick();
+    await Promise.resolve();
+    clock.tick();
+    expect(hits).toHaveBeenCalled();
+    hits.mockClear();
+    return uninstall;
+  }
+
+  /** One DOM change delivered and its frame run. */
+  async function frameAfter(clock: ReturnType<typeof frameClock>, change: () => void) {
+    change();
+    await Promise.resolve(); // MutationObserver delivers on a microtask.
+    clock.tick();
+  }
+
+  it("asks the document nothing when rows change inside a list", async () => {
+    const clock = frameClock();
+    const { panel, holder, hits } = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const uninstall = await settled(clock, hits);
+    try {
+      const row = document.createElement("div");
+      await frameAfter(clock, () => holder.appendChild(row));
+      await frameAfter(clock, () => row.appendChild(document.createElement("span")));
+      await frameAfter(clock, () => row.remove());
+      expect(hits).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+      panel.remove();
+      clock.restore();
+    }
+  });
+
+  it("probes again for the list whose box moved, on the same change", async () => {
+    const clock = frameClock();
+    const { panel, holder, hits, box } = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const uninstall = await settled(clock, hits);
+    try {
+      // A banner landing above pushes the list down: its gutter is elsewhere now.
+      box.top = 40;
+      await frameAfter(clock, () => holder.appendChild(document.createElement("div")));
+      expect(hits).toHaveBeenCalled();
+      expect(hits.mock.calls.every(([, y]) => y >= 40)).toBe(true);
+    } finally {
+      uninstall();
+      panel.remove();
+      clock.restore();
+    }
+  });
+
+  it("probes at once when a floating surface arrives or leaves", async () => {
+    const clock = frameClock();
+    const { panel, hits } = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const uninstall = await settled(clock, hits);
+    try {
+      // A dropdown, and a dialog whose positioned box sits under a plain wrapper.
+      const menu = document.createElement("div");
+      menu.style.position = "absolute";
+      await frameAfter(clock, () => document.body.appendChild(menu));
+      expect(hits).toHaveBeenCalled();
+      hits.mockClear();
+
+      const wrapper = document.createElement("div");
+      const dialog = document.createElement("div");
+      dialog.style.position = "fixed";
+      wrapper.appendChild(dialog);
+      await frameAfter(clock, () => document.body.appendChild(wrapper));
+      expect(hits).toHaveBeenCalled();
+      hits.mockClear();
+
+      // A row landing in the dropdown may have grown it over more of a gutter.
+      await frameAfter(clock, () => menu.appendChild(document.createElement("div")));
+      expect(hits).toHaveBeenCalled();
+      hits.mockClear();
+
+      await frameAfter(clock, () => wrapper.remove());
+      expect(hits).toHaveBeenCalled();
+      hits.mockClear();
+      await frameAfter(clock, () => menu.remove());
+      expect(hits).toHaveBeenCalled();
+    } finally {
+      uninstall();
+      panel.remove();
+      clock.restore();
+    }
+  });
+
+  it("probes only the gutter of an axis that overflows", async () => {
+    const clock = frameClock();
+    // `overflow: auto` on both axes, content taller than the box but no wider.
+    const { panel, hits } = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const uninstall = installCustomScrollbars();
+    try {
+      clock.tick();
+      // The vertical gutter is the column 10px in from the right edge (8 + 2).
+      expect(hits).toHaveBeenCalled();
+      expect(hits.mock.calls.every(([x]) => x === 90)).toBe(true);
+    } finally {
+      uninstall();
+      panel.remove();
+      clock.restore();
+    }
+  });
+
+  it("probes every gutter again once the changes have gone quiet", async () => {
+    vi.useFakeTimers();
+    const clock = frameClock();
+    const { panel, holder, hits } = mountList({ scrollHeight: 1000, scrollWidth: 100 });
+    const uninstall = await settled(clock, hits);
+    try {
+      await frameAfter(clock, () => holder.appendChild(document.createElement("div")));
+      expect(hits).not.toHaveBeenCalled();
+      // Whatever the cheap pass could not see (a class flip floating a box, a
+      // surface that grew) is caught up with here, once, not per change.
+      vi.advanceTimersByTime(5_000);
+      clock.tick();
+      expect(hits).toHaveBeenCalled();
+      hits.mockClear();
+      vi.advanceTimersByTime(60_000);
+      clock.tick();
+      expect(hits).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+      panel.remove();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+});

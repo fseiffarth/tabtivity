@@ -38,11 +38,19 @@
  *     cannot move while it is merely scrolling — the cached rect stays valid.
  *     This is the path a terminal takes on every line of output, so it must not
  *     force a layout read of anything but the element itself.
- *   - a GEOMETRY update re-measures rects, re-tests visibility and prunes dead
- *     entries. It runs on resize, on DOM mutation and on an ancestor scrolling,
- *     never per frame of scrolling.
+ *   - a GEOMETRY update re-measures rects and prunes dead entries. It runs on
+ *     resize, on DOM mutation and on an ancestor scrolling, never per frame of
+ *     scrolling.
  * Both coalesce into a single rAF, and neither runs while the document is
  * hidden (a background window paints nothing worth measuring).
+ *
+ * A geometry update is cheap only while it leaves the GUTTER PROBES alone: one
+ * `elementFromPoint` per 16px of every gutter on screen is what finds a menu
+ * lying over a thumb, and it is the expensive half by far. So a pass repeats
+ * them for every container only when something may have come to lie over a
+ * gutter (see `queueGeometry`); nodes changing inside a list re-probe just the
+ * containers whose own box moved, and a catch-up probe follows once the
+ * changes have gone quiet.
  */
 
 /** Gutter width/height in px. Matches the `*::-webkit-scrollbar` size it replaces. */
@@ -65,6 +73,22 @@ const INSTALL_KEY = "__appCustomScrollbars";
  * no end event at all, and this is what stops following it.
  */
 const MOTION_FOLLOW_CAP_MS = 2000;
+/**
+ * The catch-up probe after passes that left the gutters alone: this long after
+ * the last of them, and no later than the cap after the first. It covers what
+ * such a pass cannot see coming — a box floated by a class flip, a dropdown
+ * that grew by a row over the gutter beneath it.
+ */
+const PROBE_QUIET_MS = 1000;
+const PROBE_MAX_WAIT_MS = 4000;
+/**
+ * How many added elements one batch of mutations is asked for their `position`,
+ * and how many removed ones are looked up, before the batch is taken for one
+ * that floats something. A row or a message is a handful; a whole view
+ * mounting is worth one full probe anyway.
+ */
+const FLOAT_STYLE_BUDGET = 400;
+const FLOAT_LOOKUP_BUDGET = 2000;
 
 /**
  * Does a transition on this property move or resize the element's box (and so
@@ -161,6 +185,12 @@ export function clipBox(box: Box, clip: Box): Box | null {
   const right = Math.min(box.left + box.width, clip.left + clip.width);
   if (bottom <= top || right <= left) return null;
   return { top, left, width: right - left, height: bottom - top };
+}
+
+/** The same box, or both none. */
+function sameBox(a: Box | null, b: Box | null): boolean {
+  if (!a || !b) return a === b;
+  return a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height;
 }
 
 /** A run along one axis, `[start, end)` in viewport px. */
@@ -313,6 +343,12 @@ interface Entry {
   openV: Span[];
   openH: Span[];
   /**
+   * What the spans above were probed for: the visible box and which axes
+   * overflowed. While both still hold, a pass that only follows what moved
+   * keeps the spans. Null until the first probe.
+   */
+  probed: { box: Box | null; v: boolean; h: boolean } | null;
+  /**
    * True when another registered container lives inside this one, i.e. when
    * scrolling THIS element moves someone else's cached rect. Scrolling an
    * element never moves its own box, so without this flag every scroll would
@@ -337,6 +373,18 @@ export function installCustomScrollbars(): () => void {
 
   const entries = new Map<HTMLElement, Entry>();
   let geometryQueued = false;
+  /** The queued geometry pass probes every gutter again, not only the moved ones. */
+  let probeQueued = false;
+  /** The catch-up probe's timer, and the latest it may fire. */
+  let catchUpTimer = 0;
+  let catchUpBy = 0;
+  /**
+   * Boxes out of the flow (`position: fixed`/`absolute`) seen arriving: the
+   * things that can come to lie over a gutter. Weak, so a closed menu is not
+   * kept; an element floated before the install, or by a later class flip, is
+   * not in here, which is what the catch-up probe is for.
+   */
+  const floaters = new WeakSet<Element>();
   let scrollQueued = false;
   const dirtyScroll = new Set<HTMLElement>();
   /**
@@ -404,6 +452,7 @@ export function installCustomScrollbars(): () => void {
       visible: false,
       openV: [],
       openH: [],
+      probed: null,
       nested: false,
     });
     resizeObserver.observe(el);
@@ -618,12 +667,21 @@ export function installCustomScrollbars(): () => void {
    * probe lines run just inside the gutter, so a thumb can never be the answer
    * to its own question.
    */
-  function measureReach(entry: Entry): void {
+  function measureReach(entry: Entry, all: boolean): void {
     // Probed inside the CLIPPED box, not the container's own: a list scrolled
     // so that only its top strip is still inside the dialog would otherwise be
     // probed outside it, answer "covered" for a container the user can plainly
     // see, and hide a thumb that belongs on screen.
     const visible = clipBox(entry, entry.clip);
+    // Only an axis that overflows has a thumb to place. `overflow: auto` makes
+    // both axes scrollable, and probing the bottom gutter of every list that
+    // only ever scrolls down was half the hit tests of a pass.
+    const { el } = entry;
+    const v = entry.axisV && el.scrollHeight - el.clientHeight > 1;
+    const h = entry.axisH && el.scrollWidth - el.clientWidth > 1;
+    const last = entry.probed;
+    if (!all && last && last.v === v && last.h === h && sameBox(last.box, visible)) return;
+    entry.probed = { box: visible, v, h };
     entry.openV = [];
     entry.openH = [];
     if (!visible) {
@@ -632,13 +690,13 @@ export function installCustomScrollbars(): () => void {
     }
     const maxX = window.innerWidth - 1;
     const maxY = window.innerHeight - 1;
-    if (entry.axisV) {
+    if (v) {
       const x = clamp(visible.left + visible.width - SIZE - 2, 0, maxX);
       entry.openV = openSpans(visible.top, visible.top + visible.height, (y) =>
         ownsPoint(entry, x, clamp(y, 0, maxY)),
       );
     }
-    if (entry.axisH) {
+    if (h) {
       const y = clamp(visible.top + visible.height - SIZE - 2, 0, maxY);
       entry.openH = openSpans(visible.left, visible.left + visible.width, (x) =>
         ownsPoint(entry, clamp(x, 0, maxX), y),
@@ -647,7 +705,7 @@ export function installCustomScrollbars(): () => void {
     entry.visible = entry.openV.length > 0 || entry.openH.length > 0;
   }
 
-  function runGeometry(): void {
+  function runGeometry(probeAll: boolean): void {
     for (const [el] of entries) {
       if (!el.isConnected) unregister(el);
     }
@@ -662,7 +720,7 @@ export function installCustomScrollbars(): () => void {
       entry.width = rect.width;
       entry.height = rect.height;
       entry.clip = ancestorClip(entry.el, clipCache);
-      measureReach(entry);
+      measureReach(entry, probeAll);
     }
     // Finish the bounding-box reads and hit tests before drawing any thumb:
     // thumb writes can dirty layout in WebKitGTK. applyScroll still reads the
@@ -697,7 +755,8 @@ export function installCustomScrollbars(): () => void {
       entry.width = rect.width;
       entry.height = rect.height;
       entry.clip = ancestorClip(entry.el, clipCache);
-      measureReach(entry);
+      // In motion, so what lies over it changes with every frame too.
+      measureReach(entry, true);
       applyScroll(entry);
     }
   }
@@ -722,6 +781,7 @@ export function installCustomScrollbars(): () => void {
     rafHandle = 0;
     if (document.hidden) {
       geometryQueued = false;
+      probeQueued = false;
       scrollQueued = false;
       dirtyScroll.clear();
       // `visibilitychange` rescans the whole document on the way back.
@@ -729,11 +789,18 @@ export function installCustomScrollbars(): () => void {
       return;
     }
     if (geometryQueued) {
+      const probeAll = probeQueued;
       geometryQueued = false;
+      probeQueued = false;
       scrollQueued = false;
       dirtyScroll.clear();
+      // Every gutter is about to be probed: nothing is left to catch up on.
+      if (probeAll && catchUpTimer) {
+        window.clearTimeout(catchUpTimer);
+        catchUpTimer = 0;
+      }
       scanAncestors();
-      runGeometry();
+      runGeometry(probeAll);
       return;
     }
     if (scrollQueued) {
@@ -751,9 +818,87 @@ export function installCustomScrollbars(): () => void {
     rafHandle = requestAnimationFrame(flush);
   }
 
-  function queueGeometry(): void {
+  /**
+   * Queue a geometry pass. Every container's box is read again either way;
+   * `probe` says how much of the hit testing is repeated with it:
+   *
+   *   - `"all"` (the default): every gutter. For anything that may have put a
+   *     box over a gutter or moved one there — a floating surface arriving or
+   *     leaving, a container resizing, a slide ending, the window resizing.
+   *   - `"moved"`: only the containers whose own box or overflow changed. For
+   *     changes that stay inside the boxes already measured: rows landing in a
+   *     list, an ancestor scrolling its containers along.
+   *
+   * A `"moved"` pass never downgrades an `"all"` already queued for the frame.
+   */
+  function queueGeometry(probe: "all" | "moved" = "all"): void {
     geometryQueued = true;
+    if (probe === "all") probeQueued = true;
     schedule();
+  }
+
+  /** Arm the catch-up probe behind a pass that left the gutters alone. */
+  function queueCatchUp(): void {
+    const now = performance.now();
+    if (catchUpTimer) window.clearTimeout(catchUpTimer);
+    else catchUpBy = now + PROBE_MAX_WAIT_MS;
+    catchUpTimer = window.setTimeout(
+      () => {
+        catchUpTimer = 0;
+        queueGeometry();
+      },
+      Math.max(0, Math.min(PROBE_QUIET_MS, catchUpBy - now)),
+    );
+  }
+
+  /** Out of the flow, so free to lie over a gutter that is not its own. */
+  function floats(el: Element): boolean {
+    const { position } = getComputedStyle(el);
+    return position === "fixed" || position === "absolute";
+  }
+
+  /**
+   * Does this added subtree bring a floating box (a menu, a dialog under its
+   * portal wrapper)? Each one found is remembered for the day it leaves. Out
+   * of budget counts as yes.
+   */
+  function bringsFloater(root: Element, budget: { left: number }): boolean {
+    let found = false;
+    // A live collection, read in order: a capped walk must not first build the
+    // list of everything under a view that just mounted.
+    const below = root.getElementsByTagName("*");
+    for (let i = -1, el: Element | undefined = root; el; el = below[++i]) {
+      if (budget.left-- <= 0) return true;
+      if (floats(el)) {
+        floaters.add(el);
+        found = true;
+      }
+    }
+    return found;
+  }
+
+  /** Did this removed subtree hold a floating box seen arriving? Out of budget counts as yes. */
+  function tookFloater(root: Element, budget: { left: number }): boolean {
+    const below = root.getElementsByTagName("*");
+    for (let i = -1, el: Element | undefined = root; el; el = below[++i]) {
+      if (budget.left-- <= 0 || floaters.has(el)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Is `node` inside a floating box with no scroll container of ours between
+   * them? Then a change at `node` can resize that box over the gutters beneath
+   * it. Under a container the change is the container's to absorb: its box
+   * either stays (nothing moved) or resizes, and a resize probes on its own.
+   */
+  function insideBareFloater(node: Node): boolean {
+    let el: Element | null = node instanceof Element ? node : node.parentElement;
+    for (; el && el !== document.body; el = el.parentElement) {
+      if (entries.has(el as HTMLElement)) return false;
+      if (floaters.has(el)) return true;
+    }
+    return false;
   }
 
   function queueScroll(el: HTMLElement): void {
@@ -838,12 +983,20 @@ export function installCustomScrollbars(): () => void {
     // An ancestor scrolling moves its descendants' containers without any of
     // them firing a scroll of their own, so their cached rects are now stale.
     // Only an ancestor: an element's own scroll never moves its own box, which
-    // is what keeps the common case one transform write.
-    if (entries.get(target)?.nested) queueGeometry();
+    // is what keeps the common case one transform write. What it moves is
+    // clipped to its own box, so only the containers riding along are probed.
+    if (entries.get(target)?.nested) queueGeometry("moved");
   };
 
   const mutationObserver = new MutationObserver((records) => {
     let changed = false;
+    // Whether this batch may have put a box over a gutter, or taken one away:
+    // a floating surface arrived, left, or changed inside with nothing but
+    // itself to absorb it. Anything else — rows filling a list, a reply
+    // streaming into the chat — moves at most the containers it pushes along.
+    let floated = false;
+    const styles = { left: FLOAT_STYLE_BUDGET };
+    const lookups = { left: FLOAT_LOOKUP_BUDGET };
     for (const record of records) {
       // Creating/removing our own thumbs changes no content geometry. Feeding
       // those mutations back into discovery adds another full-window pass.
@@ -851,10 +1004,23 @@ export function installCustomScrollbars(): () => void {
       changed = true;
       for (const node of record.addedNodes) {
         if (node instanceof HTMLElement) scan(node);
+        // Asked even once the batch is known to float something: every
+        // floating box in it is remembered, so that its leaving is seen too.
+        if (node instanceof Element && bringsFloater(node, styles)) floated = true;
       }
+      for (const node of record.removedNodes) {
+        if (!floated && node instanceof Element) floated = tookFloater(node, lookups);
+      }
+      if (!floated) floated = insideBareFloater(record.target);
       if (record.addedNodes.length > 0) grownParents.add(record.target);
     }
-    if (changed) queueGeometry();
+    if (!changed) return;
+    if (floated) {
+      queueGeometry();
+    } else {
+      queueGeometry("moved");
+      queueCatchUp();
+    }
   });
 
   // A container can move without the tree changing: the side panel slides in
@@ -961,6 +1127,7 @@ export function installCustomScrollbars(): () => void {
     resizeObserver.disconnect();
     if (rafHandle) cancelAnimationFrame(rafHandle);
     if (followHandle) cancelAnimationFrame(followHandle);
+    if (catchUpTimer) window.clearTimeout(catchUpTimer);
     movers.clear();
     for (const el of [...entries.keys()]) unregister(el);
     layer.remove();
