@@ -81,3 +81,99 @@ All ten gates (`scripts/gates-job.sh`) on the final tree: brand PASS, whitespace
 - **Codex tab**: capture needs its hooks to be trusted (`/hooks`); an untrusted Codex never reports a turn, so it gets none. Worth checking on the Codex click-through.
 - **Generic help text** now mentions the feature in the `ask-tabtivity` Topics list (a test requires it).
 - Not live-verified anywhere; every control wears an `UntestedTag` (`settings.turnCheckpoints`, `checkpoints.now|bubble|restore|scope`).
+
+## Reviewer notes (review of a8b8d2b1b + 1346f3af1, rebased on develop)
+
+Merge resolution verified: `ChangeCard` is exported with the diff-notes props
+optional (no `onStartNote` means no note gutter: `DiffLineRow onNote` and
+`SplitRows notes` are undefined, so the checkpoint scope draws no `+`); the
+agent's-edits scope passes every note prop and is unchanged. `npm run build`
+(tsc 7 and the bundles) passes; `ReaderDiffNotes`, `DiffNotes`, the five
+`SteeringReader*`/`SteeringDiffs*` files and `Checkpoints.test.tsx` pass. Both
+filemap rows are present. i18n: 44 keys in each of the five dictionaries, real
+translations.
+
+Checked and found sound: the store's git environment (every `GIT_*` that can
+redirect or inject config is dropped; `GIT_CONFIG_GLOBAL`/`NOSYSTEM`, hooks,
+fsmonitor, attributes and the excludes file are pinned; the folder is only the
+work tree, never discovered), pathspec/leading-dash handling (the work tree is
+passed as `cwd` and environment, never as an argument; restore uses
+`:(literal)` chunks), `plain_path` and the `-z` parsing, the `pre-restore`
+snapshot before any write (and its failure aborting the restore), the refusal
+while the tab's agent works, the fence (state dir masked, `checkpoints` and
+`checkpoints.json` named, nothing binds back), the command classes (generated
+TS current), `async` over `*_blocking`, no lock held by `agent_turn` during a
+hand-off, the per-folder serial worker plus a cross-process `flock` that also
+excludes threads, prune removing refs and log rows together with a `gc` that
+frees the unreachable commits, and `purge_project` on forget and archive.
+
+### Fixed (commit 69eac26dd)
+
+- **A restore overwrote a file that had outgrown the 25 MiB cap, with no way
+  back.** Such a tracked file is dropped from the store's index
+  (`update-index --force-remove`), so `diff-index` reported the checkpoint's
+  copy as "deleted since"; the restore checked it out over the bigger file, and
+  the `pre-restore` snapshot (which also leaves it out) could not undo that.
+  Same for a tracked file that became a pipe. `restore::left_alone` now keeps
+  them out of `since` and `restore` (they count as "left out", as the dialog
+  text already promised). Test:
+  `a_file_that_outgrew_the_cap_is_left_alone_by_a_restore` (fails before).
+- **A swapped worktree folder redirected the host's snapshot.** A linked
+  worktree's folder (`<root>/<worktrees dir>/<name>`) lies inside the project;
+  `Store::for_folder` re-canonicalized the bound folder on every call, so an
+  agent that replaced it with a link made the host snapshot (into a store of
+  its own) whatever the link names, and later rows in that store would restore
+  there. `Store::for_bound` (used by `snapshot`, `list`, `store_row`) refuses a
+  folder that no longer resolves to itself. Test (unix):
+  `a_bound_folder_swapped_for_a_link_is_not_snapshotted_as_the_place_it_points_to`
+  (fails before).
+
+### Flagged for the user (not changed)
+
+- **Old git.** `GIT_ATTR_SOURCE` needs git 2.40+ (`markup_rounds` gates on
+  `MIN_GIT = (2, 40)`; the checkpoints do not) and `GIT_CONFIG_GLOBAL` 2.32+.
+  On an older git the folder's `.gitattributes` still applies (end-of-line
+  conversion, `ident`, `working-tree-encoding`: the stored bytes are no longer
+  the bytes on disk) and the user's global config is read, so a global filter
+  driver (Git LFS) that a `.gitattributes` binds would run on the files. No
+  folder-defined program can run (nothing defines one), but the snapshot would
+  hold pointers instead of content. Suggest: refuse to enable (or snapshot)
+  below 2.40, with a line in the settings card.
+- **A named pipe as `.gitignore`** (or any nested `.gitignore`) blocks git's
+  listing until `git_bounded`'s timeout (2 min), under the store lock, on every
+  snapshot, `since` and restore of that folder. The agent can thereby switch off
+  its own undo history. Bounded, and a log line on stderr, but silent in the UI.
+- **Non-UTF-8 file names** are decoded lossily: the size cap and the budget do
+  not see them (`look` finds no such path) and a restore that "removes" one
+  counts a success for a path that does not exist.
+- **`repo_ignore` walks up four ancestors** for a plain folder too, so a
+  dotfiles-style repo above the project can exclude its files from the store;
+  the context doc says only the folder's own rules apply. Should be limited to
+  the linked-worktree case.
+- **A panic in a snapshot** strands the folder's queue (map entry never
+  removed, `active` never decremented): later jobs for that folder are never run
+  until restart. Wrapping `run_job` in `catch_unwind` (or a drop guard) would
+  close it.
+- **No total store cap**: 14 days / 300 rows / 25 MiB per file / 256 MiB new per
+  snapshot, but a large folder that changes a lot grows without a byte cap.
+- **Window flag vs backend switch**: the card sets both; editing
+  `settings.json` or a Debug-mode profile can leave the flag on with the backend
+  off (the card says so, controls hidden: safe) or the flag off with the backend
+  still capturing (invisible but running).
+- **Codex with untrusted hooks** reports no turn state, so the "agent is
+  working" refusal cannot see it; a restore is then allowed mid-turn.
+- `remove_store` drops the store lock before `remove_dir_all`; a snapshot
+  starting in between fails or recreates the store. `restore`/`since` read the
+  row before taking the lock; a row pruned in that window (14 days old, plus a
+  gc) makes the checkout fail with every path listed as failed (nothing lost).
+- The authorization is the tab's launch uid (the same credential
+  `agent_turn` uses); the commands are `core`, so any client that can call
+  commands and knows a uid can list or restore that tab's folder.
+
+### Review gates
+
+`scripts/gates-job.sh start --all` on the tree after 69eac26dd: all ten PASS
+(brand, whitespace, lint, clippy ×3 at zero warnings, `npm run build`, vitest
+with no timeouts, `cargo test --workspace`, the daemon's `--no-default-features`
+lib and `server_secrets`). The `services::checkpoints` module has 40 tests (the
+two new ones included).
