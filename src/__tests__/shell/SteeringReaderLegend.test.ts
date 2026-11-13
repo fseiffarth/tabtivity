@@ -122,6 +122,7 @@ describe("the table", () => {
       "steering.viewOpen.label",
       "steering.viewOpenAlt.label",
       "steering.viewNew.label",
+      "steering.viewNote.label",
     ]);
   });
 });

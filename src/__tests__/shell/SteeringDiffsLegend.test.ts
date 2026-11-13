@@ -20,7 +20,7 @@ const diffsRows = (s: Partial<SteeringLegendState> = {}) =>
   steeringKeysFor({ ...base, ...s }).filter((k) => k.labelKey.startsWith("steering.changes."));
 
 describe("the Diffs Inside legend rows", () => {
-  it("lists the eight rows with their default keys on the Inside level of a Diffs view", () => {
+  it("lists the nine rows with their default keys on the Inside level of a Diffs view", () => {
     const shown = diffsRows().map((k) => [k.labelKey, steeringRowLabel(k, null)]);
     expect(shown).toEqual([
       ["steering.changes.scroll.label", "S F / ← →"],
@@ -31,6 +31,7 @@ describe("the Diffs Inside legend rows", () => {
       ["steering.changes.layout.label", "U"],
       ["steering.changes.open.label", "O"],
       ["steering.changes.openDiff.label", "V"],
+      ["steering.changes.note.label", "C"],
     ]);
   });
 

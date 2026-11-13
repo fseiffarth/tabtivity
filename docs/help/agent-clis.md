@@ -284,6 +284,12 @@ open Claude tab, and new Claude tabs open the same way, while Codex and
 OpenCode tabs keep their own choice. Agents without a chat view keep their
 terminal.
 
+**Diffs** lists the files the conversation changed, newest first. Click the **+**
+in the gutter of a diff line (Shift+click another line of the same hunk for a
+range) to write the agent a note; **Add to draft** in the header puts all your
+notes, each with the lines it is about, into the Chat's text box for you to
+read, edit and send. Nothing is sent for you.
+
 Beside Chat and Terminal, **Files** lists the files the conversation names
 (files its answers mention, pictures and PDFs it shows, files your phone
 sent), newest first, and shows the one you pick in its viewer. Clicking a

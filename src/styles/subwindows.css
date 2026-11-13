@@ -3660,6 +3660,68 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 .terminal-changes-diff .diff-hunk + .diff-hunk { border-top: 1px dashed var(--border-subtle); }
 .terminal-changes-diff .diff-line { width: max-content; min-width: 100%; }
+/* Notes to the agent (`lib/agents/diffNotes`): a "+" in the gutter of a row on
+   hover or focus, a static tint on the rows under a note (an overlay, so the
+   add/del backgrounds under it stay), the note box and saved notes below. */
+.terminal-changes-diff .diff-line, .terminal-changes-split-row { position: relative; }
+.diff-note-add {
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font: inherit;
+  line-height: 1;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: var(--cur-pointer, pointer);
+  opacity: 0;
+}
+.diff-line:hover > .diff-note-add, .terminal-changes-split-row:hover > .diff-note-add, .diff-note-add:focus-visible { opacity: 1; }
+.diff-line.noted::after, .terminal-changes-split-row.noted::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.terminal-changes-notebox, .terminal-changes-savednote {
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  white-space: normal;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.terminal-changes-notebox { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2) var(--space-3); }
+.terminal-changes-notebox .terminal-changes-notefield { padding-right: var(--space-3); }
+.terminal-changes-notebox-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+.terminal-changes-notebox-actions > small { margin-right: auto; color: var(--text-muted); }
+.terminal-changes-notebox-actions .btn-primary { padding: var(--space-1) var(--space-3); }
+.terminal-changes-savednote { display: flex; align-items: flex-start; gap: var(--space-1); padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3); }
+.terminal-changes-savednote > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--text-primary); }
+.terminal-changes-notechip {
+  flex: none;
+  padding: 0 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-full);
+}
+/* The Diffs header's "N notes · Add to draft · Clear". */
+.terminal-changes-notes { display: flex; align-items: center; gap: var(--space-2); }
+.terminal-changes-notes .btn-primary { padding: var(--space-1) var(--space-3); }
+.terminal-changes-notice { color: var(--danger); }
 .terminal-reader-empty {
   margin: auto;
   max-width: 420px;
@@ -3765,7 +3827,8 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   min-width: 0;
   display: flex;
 }
-.terminal-reader-composer textarea {
+.terminal-reader-composer textarea,
+.terminal-changes-notebox textarea {
   flex: 1;
   box-sizing: border-box;
   min-height: calc(3 * 1.4em + 10px);
@@ -3781,7 +3844,8 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-radius: var(--radius);
 }
 /* Focus is the accent edge plus a soft static ring (no blur, never animated). */
-.terminal-reader-composer textarea:focus {
+.terminal-reader-composer textarea:focus,
+.terminal-changes-notebox textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);

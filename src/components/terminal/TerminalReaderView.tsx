@@ -2813,6 +2813,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     {changesOpen && shown && tab && (
       <TerminalReaderChanges
         scope={scope}
+        ptyId={ptyId}
         tab={tab}
         cwd={cwd}
         visible={visible}

@@ -135,6 +135,7 @@ highlighted card is the cursor:
 | U | Switch between split and unified |
 | O | Open the file in a tab (Shift+O: in a new subwindow) |
 | V | Open the card's whole file in the diff viewer |
+| C | Start a note to the agent on the card's first changed line (the box takes the keyboard; Ctrl+Enter saves, Esc cancels) |
 | Enter / Space | Work here (leave navigation, the keys stay in the view) / the Chat's input field (else the prompt box) |
 
 Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
@@ -201,7 +202,7 @@ digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per
 level (*Inside a view* holds the letters that act once you are inside a Diffs or Files
-view: fold, layout, open, other view, next new). A letter can mean one thing on the
+view: fold, layout, open, other view, next new, add a note). A letter can mean one thing on the
 projects level and another inside a pane; the bar, the caps and the cheat sheet always show the keys you have.
 
 ## In editors and viewers

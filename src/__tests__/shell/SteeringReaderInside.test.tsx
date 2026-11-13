@@ -162,8 +162,8 @@ describe("steering Inside a Reader view", () => {
     stepInside();
     key.mockClear();
     const tabs = useTabsStore.getState().tabs.length;
-    press({ key: "c" });
-    expect(key.mock.calls[0][0]).toBe("calendar");
+    press({ key: "m" });
+    expect(key.mock.calls[0][0]).toBe("mail");
     expect(useTabsStore.getState().tabs.length).toBe(tabs);
   });
 
