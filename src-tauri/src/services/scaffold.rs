@@ -123,16 +123,18 @@ pub struct DocStatus {
 /// session, and it is the user's file from the first write on — rewritten only
 /// while still byte-identical to a template Tabtivity shipped (`history`). So
 /// nothing about Tabtivity itself goes here (the `tabtivity-send` hint comes
-/// from `services::agent_hint` and the session hook).
+/// from `services::agent_hint` and the session hook), and no pointer files or
+/// other docs are named: every CLI Tabtivity wraps reads this file by itself
+/// (Gemini through the `context.fileName` Tabtivity sets in its own agent
+/// homes).
 ///
 /// Changing this text? Add the old one to `commands/scaffold_history/` first
 /// and list it in [`AGENTS_HISTORY`] — a test pins the text.
 pub const AGENTS_SCAFFOLD: &str = r#"# Agents
 
-Canonical instructions for every AI coding agent in this project;
-`CLAUDE.md` and `GEMINI.md` import this file. Write guidance **here**, and
-keep it to what an agent would otherwise get wrong: it is loaded into every
-session. [PROJECT.md](./PROJECT.md) maps the rest of the project.
+Canonical instructions for every AI coding agent in this project. Write
+guidance **here**, and keep it to what an agent would otherwise get wrong: it
+is loaded into every session.
 
 ## Project
 
@@ -145,6 +147,14 @@ _Build, run and test commands._
 ## Conventions
 
 _Layout, style, and anything an agent must not do._
+
+## Boundaries
+
+_What an agent must never touch, and what to ask about first._
+
+## Verify
+
+_How to check that work is done: the tests, linters or build that must pass._
 "#;
 
 /// Every earlier `AGENTS_SCAFFOLD`, byte for byte, oldest first, after the
@@ -158,6 +168,7 @@ pub const AGENTS_HISTORY: &[&str] = &[
     include_str!("../commands/scaffold_history/AGENTS.2026-09-05.md"),
     include_str!("../commands/scaffold_history/AGENTS.2026-09-14.md"),
     include_str!("../commands/scaffold_history/AGENTS.2026-09-28.md"),
+    include_str!("../commands/scaffold_history/AGENTS.2026-11-13.md"),
 ];
 
 /// The Claude Code pointer an older build wrote. Never written any more:

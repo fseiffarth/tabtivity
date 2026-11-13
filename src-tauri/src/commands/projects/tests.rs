@@ -2117,7 +2117,28 @@ fn the_agents_template_is_pinned_so_its_predecessor_stays_upgradable() {
     let fnv1a = scaffold::AGENTS_SCAFFOLD.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     });
-    assert_eq!(fnv1a, 0x75197758527454ff, "AGENTS_SCAFFOLD changed; see this test's doc");
+    assert_eq!(fnv1a, 0xa764492c21a88621, "AGENTS_SCAFFOLD changed; see this test's doc");
+
+    // The text shipped before this one is kept byte for byte (its hash is what
+    // the pin above held until 2026-11-13).
+    let previous = scaffold::AGENTS_HISTORY.last().unwrap();
+    let old = previous.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    assert_eq!(old, 0x75197758527454ff, "scaffold_history/AGENTS.2026-11-13.md drifted");
+}
+
+/// The lean template names no other file: nothing it points at is
+/// scaffolded any more, and it asks for the two sections agents need most.
+#[test]
+fn the_agents_template_names_no_pointer_or_map_and_has_boundaries_and_verify() {
+    let t = scaffold::AGENTS_SCAFFOLD;
+    for gone in ["CLAUDE.md", "GEMINI.md", "PROJECT.md", "import this file"] {
+        assert!(!t.contains(gone), "template still mentions {gone}");
+    }
+    for section in ["## Project", "## Running", "## Conventions", "## Boundaries", "## Verify"] {
+        assert!(t.lines().any(|l| l == section), "missing {section}");
+    }
 }
 
 #[test]
