@@ -12147,6 +12147,8 @@ export const dict: Dict = {
   "settings.turnCheckpoints": "Puntos de control por turno",
   "settings.turnCheckpointsHelp": "Guarda los archivos del proyecto de una pestaña de agente al empezar y al terminar cada turno, en un almacén propio al que los agentes no llegan, y te deja devolverlos desde el Chat o la pestaña Cambios. Se omiten los archivos ignorados y los de más de 25 MiB. Solo proyectos locales; necesita los hooks del agente, es decir, Claude y Codex.",
   "settings.checkpointsBackendOff": "El guardado está desactivado. Apaga y vuelve a encender el interruptor.",
+  "settings.checkpointsGitOld": "Los puntos de control necesitan git 2.40 o posterior; este equipo tiene git {version}. Actualiza git para activarlos.",
+  "settings.checkpointsNoGit": "Los puntos de control necesitan git 2.40 o posterior y no se encontró git. Instala git para activarlos.",
   "settings.checkpointsEmpty": "Aún no hay nada guardado.",
   "settings.checkpointsSize": "{size} · {n} puntos de control",
   "settings.checkpointsClear": "Vaciar",

@@ -85,6 +85,10 @@ export interface CheckpointStoreInfo {
 export interface CheckpointSettings {
   enabled: boolean;
   stores: CheckpointStoreInfo[];
+  /** The local git can run checkpoints (2.40 or later). */
+  gitOk: boolean;
+  /** The local git's `major.minor`; null without git. */
+  gitVersion: string | null;
 }
 
 /** The event a finished snapshot is announced with. */

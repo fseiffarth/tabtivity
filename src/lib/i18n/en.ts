@@ -12243,6 +12243,8 @@ export const enSource = {
   "settings.turnCheckpoints": "Per-turn checkpoints",
   "settings.turnCheckpointsHelp": "Saves the files of an agent tab's project as each turn begins and ends, in a store of its own that agents cannot reach, and lets you put them back from the Chat or the Diffs tab. Ignored files are left out, and so are files over 25 MiB. Local projects only; it needs the agent's hooks, so Claude and Codex.",
   "settings.checkpointsBackendOff": "Saving is off. Turn the switch off and on again.",
+  "settings.checkpointsGitOld": "Checkpoints need git 2.40 or later; this computer has git {version}. Update git to turn them on.",
+  "settings.checkpointsNoGit": "Checkpoints need git 2.40 or later, and no git was found. Install git to turn them on.",
   "settings.checkpointsEmpty": "Nothing saved yet.",
   "settings.checkpointsSize": "{size} · {n} checkpoints",
   "settings.checkpointsClear": "Clear",

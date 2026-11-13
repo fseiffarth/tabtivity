@@ -12147,6 +12147,8 @@ export const dict: Dict = {
   "settings.turnCheckpoints": "Checkpoint per turno",
   "settings.turnCheckpointsHelp": "Salva i file del progetto di una scheda agente all'inizio e alla fine di ogni turno, in un archivio a parte che gli agenti non raggiungono, e permette di rimetterli dalla Chat o dalla scheda Modifiche. I file ignorati e quelli oltre 25 MiB restano fuori. Solo progetti locali; servono gli hook dell'agente, quindi Claude e Codex.",
   "settings.checkpointsBackendOff": "Il salvataggio è disattivato. Spegni e riaccendi l'interruttore.",
+  "settings.checkpointsGitOld": "I checkpoint richiedono git 2.40 o successivo; questo computer ha git {version}. Aggiorna git per attivarli.",
+  "settings.checkpointsNoGit": "I checkpoint richiedono git 2.40 o successivo e non è stato trovato git. Installa git per attivarli.",
   "settings.checkpointsEmpty": "Ancora nulla di salvato.",
   "settings.checkpointsSize": "{size} · {n} checkpoint",
   "settings.checkpointsClear": "Svuota",

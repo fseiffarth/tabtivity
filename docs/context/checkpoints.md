@@ -27,6 +27,9 @@ filter driver (`git-lfs`) or an fsmonitor, so a store call reads none of it:
 every inherited `GIT_*` that could redirect or inject config, and points
 `GIT_ATTR_SOURCE` at the empty tree so the folder's `.gitattributes` is not
 read: the bytes stored are the bytes on disk (no end-of-line conversion).
+Both need a recent git (`GIT_ATTR_SOURCE` 2.40, `GIT_CONFIG_GLOBAL` 2.32), so
+`checkpoints::MIN_GIT` is 2.40: below it checkpoints can't be turned on and
+every store call refuses, rather than storing bytes an old git converted.
 The folder's own `.git` is never discovered. The repo's `info/exclude` is the
 one thing read from it, through `git_guard::read_info_exclude`, copied into the
 store's own ignore file; the folder's `.gitignore` files apply as git applies

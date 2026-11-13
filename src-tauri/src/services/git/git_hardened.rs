@@ -937,6 +937,16 @@ pub fn git_available_blocking() -> bool {
         .unwrap_or(false)
 }
 
+/// The local git's `(major, minor)`, or `None` when there is no git or its
+/// banner doesn't parse. Bare on purpose, as [`git_available_blocking`].
+pub fn local_git_version_blocking() -> Option<(u32, u32)> {
+    let out = crate::paths::command_no_window("git").arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_git_version(&String::from_utf8_lossy(&out.stdout))
+}
+
 /// `-c` pairs for an ephemeral inline credential helper that answers an https
 /// challenge with the effective token — **only for `origins`** (from
 /// `git_hosting::token_origins`). The token is read from the child's env INSIDE

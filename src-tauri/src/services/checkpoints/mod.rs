@@ -21,6 +21,7 @@ pub mod worker;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use app_core::sync::LockExt;
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,62 @@ struct AddedPayload {
     kind: Kind,
 }
 
+// ── Git version ───────────────────────────────────────────────────────────
+
+/// The oldest git the store runs on. 2.40 brought `attr.tree`, which keeps the
+/// folder's own `.gitattributes` (filters, `eol`, `ident`, encodings) from
+/// touching what is stored or restored; 2.32 brought `GIT_CONFIG_GLOBAL`, which
+/// keeps the user's global config (a Git LFS filter) out. An older git would
+/// silently store something other than the bytes on disk, so it gets none.
+pub const MIN_GIT: (u32, u32) = (2, 40);
+/// How long a probe of the local git's version is trusted (an upgrade while
+/// the app runs is picked up after this).
+const GIT_PROBE_TTL: Duration = Duration::from_secs(60);
+
+/// Whether a git of `version` may run checkpoints. Pure.
+pub fn git_supported_by(version: Option<(u32, u32)>) -> bool {
+    version.is_some_and(|v| v >= MIN_GIT)
+}
+
+/// A probe of the local git: when, and the `(major, minor)` it found.
+type GitProbe = (Instant, Option<(u32, u32)>);
+
+/// The local git's version, probed at most once per [`GIT_PROBE_TTL`].
+fn git_version() -> Option<(u32, u32)> {
+    static CACHE: OnceLock<Mutex<Option<GitProbe>>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(|| Mutex::new(None)).lock_ok();
+    if let Some((at, version)) = *cache {
+        if at.elapsed() < GIT_PROBE_TTL {
+            return version;
+        }
+    }
+    let version = crate::services::git_hardened::local_git_version_blocking();
+    *cache = Some((Instant::now(), version));
+    version
+}
+
+/// Why checkpoints can't run on a git of `version`, or `None`.
+pub fn git_refusal(version: Option<(u32, u32)>) -> Option<String> {
+    if git_supported_by(version) {
+        return None;
+    }
+    let (major, minor) = MIN_GIT;
+    Some(match version {
+        Some((have_major, have_minor)) => {
+            format!("checkpoints need git {major}.{minor} or later; this git is {have_major}.{have_minor}")
+        }
+        None => format!("checkpoints need git {major}.{minor} or later; no git was found"),
+    })
+}
+
+/// Checkpoints are on and the local git can run them.
+fn ready() -> Result<(), String> {
+    if !enabled_in(&state_root()) {
+        return Err("checkpoints are off".into());
+    }
+    git_refusal(git_version()).map_or(Ok(()), Err)
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────
 
 /// `<state_dir>/checkpoints.json`. Off until the user turns it on: capture
@@ -68,6 +125,22 @@ fn settings_path(state_dir: &Path) -> PathBuf {
 /// Whether checkpoints are on. A missing or unreadable file reads as off.
 pub fn enabled_in(state_dir: &Path) -> bool {
     crate::storage::read_json::<Settings>(&settings_path(state_dir)).map(|s| s.enabled).unwrap_or(false)
+}
+
+/// [`set_enabled_in`], refusing to turn checkpoints on over a git of
+/// `version` that can't run them. Turning them off always works.
+pub fn set_enabled_checked_in(state_dir: &Path, enabled: bool, version: Option<(u32, u32)>) -> Result<(), String> {
+    if enabled {
+        if let Some(refusal) = git_refusal(version) {
+            return Err(refusal);
+        }
+    }
+    set_enabled_in(state_dir, enabled)
+}
+
+/// Turn checkpoints on or off for the local git (`checkpoint_settings_set`).
+pub fn set_enabled(enabled: bool) -> Result<(), String> {
+    set_enabled_checked_in(&state_root(), enabled, git_version())
 }
 
 pub fn set_enabled_in(state_dir: &Path, enabled: bool) -> Result<(), String> {
@@ -207,7 +280,7 @@ pub fn kind_for(prev: Option<TurnState>, state: TurnState) -> Option<Kind> {
 /// worker. Not under `agent_turn`'s locks.
 pub fn on_turn(uid: &str, prev: Option<TurnState>, state: TurnState, prompt_at: Option<u64>) {
     let Some(kind) = kind_for(prev, state) else { return };
-    if !enabled_in(&state_root()) {
+    if !enabled_in(&state_root()) || !git_supported_by(git_version()) {
         return;
     }
     let Ok(bound) = bound(uid) else { return };
@@ -252,9 +325,7 @@ fn store_row(uid: &str, id: &str) -> Result<(Bound, Store, Row), String> {
 /// What differs in the tab's folder from checkpoint `id`. `paths`: only those
 /// files' diff text is read.
 pub fn since(uid: &str, id: &str, paths: Option<&[String]>) -> Result<SinceView, String> {
-    if !enabled_in(&state_root()) {
-        return Err("checkpoints are off".into());
-    }
+    ready()?;
     let (bound, store, row) = store_row(uid, id)?;
     let since = restore::since(&store, &row, &who_for(uid, &bound, None), paths)?;
     Ok(SinceView { since, others_working: other_tabs_working(uid, &bound.folder), raced: row.raced, partial: row.partial })
@@ -286,9 +357,7 @@ fn other_tabs_working(uid: &str, folder: &Path) -> bool {
 /// = every differing file). Refused while this tab's agent works, and while
 /// another tab's does unless `confirm_others`.
 pub fn restore(uid: &str, id: &str, paths: Option<&[String]>, confirm_others: bool) -> Result<Restored, String> {
-    if !enabled_in(&state_root()) {
-        return Err("checkpoints are off".into());
-    }
+    ready()?;
     let (bound, store, row) = store_row(uid, id)?;
     if matches!(crate::services::agent_turn::state_of(uid), Some(TurnState::Working | TurnState::Decision)) {
         return Err("the agent in this tab is working; restore when it has finished".into());
@@ -304,9 +373,7 @@ pub fn restore(uid: &str, id: &str, paths: Option<&[String]>, confirm_others: bo
 /// A checkpoint now, for the tab (the Reader's and the tab menu's
 /// "Checkpoint now"). Waits for the folder's worker.
 pub fn now(uid: &str, label: Option<&str>) -> Result<Row, String> {
-    if !enabled_in(&state_root()) {
-        return Err("checkpoints are off".into());
-    }
+    ready()?;
     let bound = bound(uid)?;
     let (tx, rx) = std::sync::mpsc::channel();
     worker::submit(worker::Job {
@@ -341,6 +408,10 @@ pub struct StoreInfo {
 pub struct SettingsView {
     pub enabled: bool,
     pub stores: Vec<StoreInfo>,
+    /// The local git can run checkpoints (at least [`MIN_GIT`]).
+    pub git_ok: bool,
+    /// The local git's `major.minor`, `None` without git.
+    pub git_version: Option<String>,
 }
 
 pub fn settings_view_in(state_dir: &Path) -> SettingsView {
@@ -358,7 +429,13 @@ pub fn settings_view_in(state_dir: &Path) -> SettingsView {
         })
         .collect();
     stores.sort_by_key(|a| std::cmp::Reverse(a.bytes));
-    SettingsView { enabled: enabled_in(state_dir), stores }
+    let version = git_version();
+    SettingsView {
+        enabled: enabled_in(state_dir),
+        stores,
+        git_ok: git_supported_by(version),
+        git_version: version.map(|(major, minor)| format!("{major}.{minor}")),
+    }
 }
 
 pub fn settings_view() -> SettingsView {

@@ -12151,6 +12151,8 @@ export const dict: Dict = {
   "settings.turnCheckpoints": "Checkpoints pro Durchgang",
   "settings.turnCheckpointsHelp": "Sichert die Dateien des Projekts eines Agent-Tabs zu Beginn und am Ende jedes Durchgangs in einem eigenen Speicher, den Agenten nicht erreichen, und lässt dich sie im Chat oder im Tab „Änderungen“ zurückholen. Ignorierte Dateien und Dateien über 25 MiB bleiben außen vor. Nur lokale Projekte; es braucht die Hooks des Agenten, also Claude und Codex.",
   "settings.checkpointsBackendOff": "Das Sichern ist aus. Schalter aus- und wieder einschalten.",
+  "settings.checkpointsGitOld": "Checkpoints brauchen git 2.40 oder neuer; dieser Rechner hat git {version}. Aktualisiere git, um sie einzuschalten.",
+  "settings.checkpointsNoGit": "Checkpoints brauchen git 2.40 oder neuer, und es wurde kein git gefunden. Installiere git, um sie einzuschalten.",
   "settings.checkpointsEmpty": "Noch nichts gesichert.",
   "settings.checkpointsSize": "{size} · {n} Checkpoints",
   "settings.checkpointsClear": "Leeren",

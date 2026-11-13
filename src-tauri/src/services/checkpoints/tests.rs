@@ -827,6 +827,35 @@ fn the_switch_is_off_until_turned_on_and_a_broken_file_reads_as_off() {
 }
 
 #[test]
+fn checkpoints_need_git_2_40() {
+    assert!(git_supported_by(Some((2, 40))));
+    assert!(git_supported_by(Some((2, 53))));
+    assert!(git_supported_by(Some((3, 0))));
+    assert!(!git_supported_by(Some((2, 39))));
+    assert!(!git_supported_by(Some((1, 99))));
+    assert!(!git_supported_by(None));
+    assert!(git_refusal(Some((2, 40))).is_none());
+    assert!(git_refusal(Some((2, 39))).unwrap().contains("2.39"));
+    assert!(git_refusal(None).unwrap().contains("no git"));
+}
+
+#[test]
+fn turning_checkpoints_on_is_refused_over_an_old_git_and_off_always_works() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = set_enabled_checked_in(tmp.path(), true, Some((2, 39))).unwrap_err();
+    assert!(err.contains("2.40"), "{err}");
+    assert!(!enabled_in(tmp.path()));
+    assert!(set_enabled_checked_in(tmp.path(), true, None).is_err());
+    assert!(!enabled_in(tmp.path()));
+
+    set_enabled_checked_in(tmp.path(), true, Some((2, 40))).unwrap();
+    assert!(enabled_in(tmp.path()));
+    // A git that went old (or away) never traps the switch on.
+    set_enabled_checked_in(tmp.path(), false, Some((2, 30))).unwrap();
+    assert!(!enabled_in(tmp.path()));
+}
+
+#[test]
 fn settings_list_each_store_and_clear_and_purge_remove_them() {
     let tmp = tempfile::tempdir().unwrap();
     let state = tmp.path().join("state");

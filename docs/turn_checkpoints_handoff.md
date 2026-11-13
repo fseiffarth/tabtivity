@@ -130,7 +130,10 @@ frees the unreachable commits, and `purge_project` on forget and archive.
 
 ### Flagged for the user (not changed)
 
-- **Old git.** `GIT_ATTR_SOURCE` needs git 2.40+ (`markup_rounds` gates on
+- **Old git — resolved 2026-11-14:** `checkpoints::MIN_GIT = (2, 40)`; turning
+  them on is refused, snapshots/since/restore/now refuse, and the settings
+  card greys the switch with a line naming the local git. Original note:
+  `GIT_ATTR_SOURCE` needs git 2.40+ (`markup_rounds` gates on
   `MIN_GIT = (2, 40)`; the checkpoints do not) and `GIT_CONFIG_GLOBAL` 2.32+.
   On an older git the folder's `.gitattributes` still applies (end-of-line
   conversion, `ident`, `working-tree-encoding`: the stored bytes are no longer

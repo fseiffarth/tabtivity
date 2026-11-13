@@ -8,7 +8,8 @@ related: [agent-clis, claude-code, codex, git, talking-to-an-agent]
 An agent's turn can leave a project in a state you do not want. Per-turn
 checkpoints save the project's files as each turn begins and ends, so you can
 put them back. It is an experiment: off until you turn it on in **Settings →
-Experimental → Per-turn checkpoints**.
+Experimental → Per-turn checkpoints**. They need git 2.40 or later; with an
+older git the switch stays off and says which version it found.
 
 ## What is saved, and where
 

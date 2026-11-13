@@ -12149,6 +12149,8 @@ export const dict: Dict = {
   "settings.turnCheckpoints": "Points de contrôle par tour",
   "settings.turnCheckpointsHelp": "Enregistre les fichiers du projet d'un onglet d'agent au début et à la fin de chaque tour, dans un stockage à part auquel les agents n'ont pas accès, et permet de les remettre depuis le Chat ou l'onglet Modifications. Les fichiers ignorés et ceux de plus de 25 Mio sont laissés de côté. Projets locaux uniquement ; il faut les hooks de l'agent, donc Claude et Codex.",
   "settings.checkpointsBackendOff": "L'enregistrement est désactivé. Éteignez puis rallumez l'interrupteur.",
+  "settings.checkpointsGitOld": "Les points de contrôle nécessitent git 2.40 ou plus récent ; cet ordinateur a git {version}. Mettez git à jour pour les activer.",
+  "settings.checkpointsNoGit": "Les points de contrôle nécessitent git 2.40 ou plus récent, et aucun git n'a été trouvé. Installez git pour les activer.",
   "settings.checkpointsEmpty": "Rien d'enregistré pour l'instant.",
   "settings.checkpointsSize": "{size} · {n} points de contrôle",
   "settings.checkpointsClear": "Vider",

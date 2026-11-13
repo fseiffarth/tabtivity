@@ -56,10 +56,11 @@ pub async fn checkpoint_settings_get() -> Result<SettingsView, String> {
 }
 
 /// Turn checkpoints on or off. Off stops new snapshots; what is stored stays.
+/// Turning them on is refused over a git older than `checkpoints::MIN_GIT`.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn checkpoint_settings_set(enabled: bool) -> Result<SettingsView, String> {
     app_core::rt::spawn_blocking(move || {
-        checkpoints::set_enabled_in(&crate::storage::state_dir(), enabled)?;
+        checkpoints::set_enabled(enabled)?;
         Ok(checkpoints::settings_view())
     })
     .await

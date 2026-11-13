@@ -23,8 +23,8 @@ export function CheckpointsSettings() {
   const [backend, setBackend] = useState<CheckpointSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Read even while off: the switch needs to know whether git can run them.
   useEffect(() => {
-    if (!on) return;
     let cancelled = false;
     checkpointSettingsGet().then(
       (next) => {
@@ -64,19 +64,32 @@ export function CheckpointsSettings() {
     }
   };
 
+  // An old git can't turn them on; one that is already on can still go off.
+  const gitTooOld = backend !== null && !backend.gitOk;
+  const gitNote = gitTooOld
+    ? backend.gitVersion
+      ? t("settings.checkpointsGitOld", { version: backend.gitVersion })
+      : t("settings.checkpointsNoGit")
+    : null;
+
   return (
     <>
       {dialogs}
       <ToggleCard
         label={<>{t("settings.turnCheckpoints")} <UntestedTag id="settings.turnCheckpoints" /></>}
         checked={on}
+        disabled={gitTooOld && !on}
         onChange={(event) => void toggle(event.target.checked)}
-        help={t("settings.turnCheckpointsHelp")}
+        help={<>
+          {t("settings.turnCheckpointsHelp")}
+          {gitNote && <><br /><span role="note">{gitNote}</span></>}
+          {!on && error && <><br /><span role="alert">{error}</span></>}
+        </>}
       />
       {on && (
         <SettingsCard className="checkpoint-stores">
           {error && <p className="settings-help" role="alert">{error}</p>}
-          {backend && !backend.enabled && <p className="settings-help">{t("settings.checkpointsBackendOff")}</p>}
+          {backend && !backend.enabled && backend.gitOk && <p className="settings-help">{t("settings.checkpointsBackendOff")}</p>}
           {backend && backend.stores.length === 0 && <p className="settings-help">{t("settings.checkpointsEmpty")}</p>}
           {backend?.stores.map((store) => (
             <div className="settings-card-row" key={store.key}>
