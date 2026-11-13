@@ -2993,10 +2993,12 @@ export const dict: Dict = {
 
   "agents.googleCliChoice":
     "Antigravity passt zu privaten und kostenlosen Google-Konten; Google Gemini zu Gemini Enterprise, Code Assist Standard/Enterprise und API-Schlüssel-Setups.",
-  "agents.lead": "Agent-CLIs, die {app} als Tabs öffnen kann. Installierte erscheinen im +-Menü.",
+  "agents.lead": "Agent-CLIs, die {app} als Tabs öffnen kann. Installierte, eingeschaltete erscheinen im +-Menü, in der Reihenfolge der Pfeile.",
   "agents.settingsHeading": "Einstellungen",
-  "agents.autoTabName": "Neue Agent-Tabs auf dem Handy nach ihrem ersten Prompt benennen; der Desktop zeigt den Namen, wenn du über den Tab fährst (ein umbenannter Tab behält seinen Namen)",
-  "agents.dailyReleaseCheck": "Neue CLI- und Ollama-Versionen einmal täglich von selbst nachschlagen (aus: nur die Schaltflächen „Nach Update suchen“ fragen an)",
+  "agents.autoTabName": "Agent-Tabs nach ihrem ersten Prompt benennen",
+  "agents.autoTabNameHelp": "Auf dem Handy bekommt der Tab diesen Namen; der Desktop behält den CLI-Namen und zeigt die Aufgabe, wenn du über den Tab fährst. Ein umbenannter Tab behält seinen Namen.",
+  "agents.dailyReleaseCheck": "Täglich nach neuen Versionen suchen",
+  "agents.dailyReleaseCheckHelp": "Fragt einmal am Tag den Release-Feed jeder installierten CLI und von Ollama, ob es eine neuere Version gibt. Installiert wird nichts. Aus: nur „Nach Update suchen“ fragt an.",
   "agents.groupAccounts": "Konten & Schlüssel",
   "agents.sumAccounts": "Anmeldungen, API-Schlüssel, gemeinsame Agent-Konfiguration",
   "agents.sumSandbox": "Was Agenten lesen und ändern dürfen",

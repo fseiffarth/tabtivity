@@ -2990,10 +2990,12 @@ export const dict: Dict = {
 
   "agents.googleCliChoice":
     "Antigravity è adatto agli account Google personali e gratuiti; Google Gemini a Gemini Enterprise, Code Assist Standard/Enterprise e alle configurazioni con chiave API.",
-  "agents.lead": "CLI di agenti che {app} può aprire come schede. Quelle installate compaiono nel menu +.",
+  "agents.lead": "CLI di agenti che {app} può aprire come schede. Quelle installate e attivate compaiono nel menu +, nell'ordine fissato dalle frecce.",
   "agents.settingsHeading": "Impostazioni",
-  "agents.autoTabName": "Dai alle nuove schede agente il nome del loro primo prompt sul telefono; il desktop lo mostra al passaggio sulla scheda (una scheda rinominata mantiene il suo nome)",
-  "agents.dailyReleaseCheck": "Cercare da solo una volta al giorno le nuove versioni delle CLI e di Ollama (disattivato: chiedono solo i pulsanti di controllo aggiornamenti)",
+  "agents.autoTabName": "Dai alle schede agente il nome del loro primo prompt",
+  "agents.autoTabNameHelp": "Sul telefono la scheda prende quel nome; il desktop mantiene il nome della CLI e mostra il compito al passaggio sulla scheda. Una scheda rinominata mantiene il suo nome.",
+  "agents.dailyReleaseCheck": "Cerca nuove versioni ogni giorno",
+  "agents.dailyReleaseCheckHelp": "Una volta al giorno chiede al feed delle versioni di ogni CLI installata e a quello di Ollama se c'è una versione più nuova. Non installa nulla. Disattivato: chiede solo Cerca aggiornamento.",
   "agents.groupAccounts": "Account e chiavi",
   "agents.sumAccounts": "Accessi, chiavi API, configurazione condivisa degli agenti",
   "agents.sumSandbox": "Cosa gli agenti possono leggere e modificare",

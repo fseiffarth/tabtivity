@@ -2992,10 +2992,12 @@ export const dict: Dict = {
 
   "agents.googleCliChoice":
     "Antigravity convient aux comptes Google personnels et gratuits ; Google Gemini à Gemini Enterprise, Code Assist Standard/Enterprise et aux usages par clé API.",
-  "agents.lead": "CLI d'agents que {app} peut ouvrir comme onglets. Les CLI installés apparaissent dans le menu +.",
+  "agents.lead": "CLI d'agents que {app} peut ouvrir comme onglets. Les CLI installés et activés apparaissent dans le menu +, dans l'ordre fixé par les flèches.",
   "agents.settingsHeading": "Réglages",
-  "agents.autoTabName": "Nommer les nouveaux onglets d'agent d'après leur premier prompt sur le téléphone ; le bureau l'affiche au survol de l'onglet (un onglet renommé garde son nom)",
-  "agents.dailyReleaseCheck": "Rechercher d’elle-même une fois par jour les nouvelles versions des CLI et d’Ollama (désactivé : seuls les boutons de recherche de mise à jour interrogent)",
+  "agents.autoTabName": "Nommer les onglets d'agent d'après leur premier prompt",
+  "agents.autoTabNameHelp": "Sur le téléphone, l'onglet prend ce nom ; le bureau garde le nom du CLI et affiche la tâche au survol de l'onglet. Un onglet renommé garde son nom.",
+  "agents.dailyReleaseCheck": "Chercher les nouvelles versions chaque jour",
+  "agents.dailyReleaseCheckHelp": "Une fois par jour, demande au flux de versions de chaque CLI installé et à celui d'Ollama si une version plus récente existe. Rien n'est installé. Désactivé : seul Rechercher une mise à jour interroge.",
   "agents.groupAccounts": "Comptes et clés",
   "agents.sumAccounts": "Connexions, clés d'API, configuration d'agent partagée",
   "agents.sumSandbox": "Ce que les agents peuvent lire et modifier",

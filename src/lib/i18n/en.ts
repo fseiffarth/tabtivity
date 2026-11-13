@@ -1486,8 +1486,10 @@ export const enSource = {
   "errors.timeout": "The other side took too long to answer. Check your network or VPN, then try again.",
   "errors.connectionLost": "The connection dropped midway. Try again; if it keeps happening, check the network.",
   "errors.certificate": "The server's security certificate isn't trusted. Check the address; a self-hosted server needs its certificate trusted first.",
-  "agents.autoTabName": "Name new agent tabs after their first prompt on the phone; the desktop shows it when you hover the tab (a tab you renamed keeps its name)",
-  "agents.dailyReleaseCheck": "Look up new CLI and Ollama releases once a day on its own (off: only the Check for update buttons ask)",
+  "agents.autoTabName": "Name agent tabs after their first prompt",
+  "agents.autoTabNameHelp": "On the phone the tab takes that name; the desktop keeps the CLI's name and shows the task when you hover the tab. A tab you renamed keeps its name.",
+  "agents.dailyReleaseCheck": "Check for new releases daily",
+  "agents.dailyReleaseCheckHelp": "Once a day, asks each installed CLI's release feed and Ollama's whether a newer version is out. Nothing is installed. Off: only Check for update asks.",
   "terminal.limitHandoff.title": "CLI usage limit reached",
   "terminal.limitHandoff.body": "{agent} has reached its usage limit. Continue with {next} in a new tab? Recent conversation text will be sent to that CLI; the original session stays open.",
   "terminal.limitHandoff.line": "Screen line that matched: {line}",
@@ -3007,7 +3009,7 @@ export const enSource = {
   // Settings — Manage Agents panel.
   "agents.googleCliChoice":
     "Antigravity suits personal and free Google accounts; Google Gemini suits Gemini Enterprise, Code Assist Standard/Enterprise and API-key setups.",
-  "agents.lead": "Agent CLIs {app} can open as tabs. Installed ones appear in the + menu.",
+  "agents.lead": "Agent CLIs {app} can open as tabs. Installed ones that are switched on appear in the + menu, in the order the arrows set.",
   "agents.settingsHeading": "Settings",
   "agents.groupAccounts": "Accounts & keys",
   "agents.sumAccounts": "Sign-ins, API keys, shared agent config",

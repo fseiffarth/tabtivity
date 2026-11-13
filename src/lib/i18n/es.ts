@@ -2990,10 +2990,12 @@ export const dict: Dict = {
 
   "agents.googleCliChoice":
     "Antigravity va bien con cuentas de Google personales y gratuitas; Google Gemini, con Gemini Enterprise, Code Assist Standard/Enterprise y configuraciones con clave API.",
-  "agents.lead": "CLIs de agentes que {app} puede abrir como pestañas. Los instalados aparecen en el menú +.",
+  "agents.lead": "CLIs de agentes que {app} puede abrir como pestañas. Los instalados y activados aparecen en el menú +, en el orden que fijan las flechas.",
   "agents.settingsHeading": "Ajustes",
-  "agents.autoTabName": "Nombrar las nuevas pestañas de agente según su primer prompt en el teléfono; el escritorio lo muestra al pasar sobre la pestaña (una pestaña renombrada conserva su nombre)",
-  "agents.dailyReleaseCheck": "Buscar por sí sola una vez al día las versiones nuevas de las CLI y de Ollama (desactivado: solo preguntan los botones de buscar actualización)",
+  "agents.autoTabName": "Nombrar las pestañas de agente según su primer prompt",
+  "agents.autoTabNameHelp": "En el teléfono la pestaña toma ese nombre; el escritorio conserva el nombre de la CLI y muestra la tarea al pasar sobre la pestaña. Una pestaña renombrada conserva su nombre.",
+  "agents.dailyReleaseCheck": "Buscar versiones nuevas cada día",
+  "agents.dailyReleaseCheckHelp": "Una vez al día pregunta a la fuente de versiones de cada CLI instalada y a la de Ollama si hay una versión más nueva. No instala nada. Desactivado: solo pregunta Buscar actualización.",
   "agents.groupAccounts": "Cuentas y claves",
   "agents.sumAccounts": "Inicios de sesión, claves de API, configuración de agentes compartida",
   "agents.sumSandbox": "Lo que los agentes pueden leer y cambiar",

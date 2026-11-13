@@ -927,14 +927,26 @@ export function AgentsPanel({
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
       <p className="settings-help agents-lead">{t("agents.lead")}</p>
-      <label className="settings-help"><input type="checkbox" checked={settings?.daily_release_check !== false}
-        onChange={(event) => void useSettingsStore.getState().updateSettings({ daily_release_check: event.target.checked })} />
-        {t("agents.dailyReleaseCheck")} <UntestedTag id="agents.dailyReleaseCheck" />
-      </label>
-      <label className="settings-help"><input type="checkbox" checked={settings?.agent_tab_auto_name !== false}
-        onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })} />
-        {t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" />
-      </label>
+      {/* The two panel-wide switches, as the shared settings card: a short
+          title on the row, what it does on the help line beneath. */}
+      <div className="settings-card agents-top-settings">
+        <label className="settings-toggle-card-row">
+          <span>{t("agents.dailyReleaseCheck")} <UntestedTag id="agents.dailyReleaseCheck" /></span>
+          <Toggle
+            checked={settings?.daily_release_check !== false}
+            onChange={(event) => void useSettingsStore.getState().updateSettings({ daily_release_check: event.target.checked })}
+          />
+        </label>
+        <p className="settings-help">{t("agents.dailyReleaseCheckHelp")}</p>
+        <label className="settings-toggle-card-row">
+          <span>{t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" /></span>
+          <Toggle
+            checked={settings?.agent_tab_auto_name !== false}
+            onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })}
+          />
+        </label>
+        <p className="settings-help">{t("agents.autoTabNameHelp")}</p>
+      </div>
       {node.status && !node.status.npm && (
         <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
       )}
