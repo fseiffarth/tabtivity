@@ -10,7 +10,11 @@ import {
   advanceDictation,
   DICTATION_START,
   dictationPreview,
+  dictationProvisional,
+  draftFromField,
+  fieldWithProvisional,
   scanDictation,
+  scanSeen,
   settleDictation,
   settleUtterances,
   stepUtterances,
@@ -251,6 +255,8 @@ class Session {
   offered: string[] = [];
   bare = 0;
   preview = "";
+  /** The provisional words the field would show after the last reading. */
+  provisional = "";
   scan: DictationScan | undefined;
   constructor(private options: Partial<UtteranceOptions> & { take?: (text: string) => boolean } = {}, private lang: "en" | "de" = "en") {}
   private opts(extra: Partial<UtteranceOptions>): UtteranceOptions {
@@ -271,6 +277,7 @@ class Session {
     this.scan = scanDictation(listing(...items));
     const step = this.take(stepUtterances(this.ledger, this.progress, this.scan, startLexicon(this.lang), this.opts({})));
     this.preview = step.preview;
+    this.provisional = step.provisional;
     return step.insert;
   }
   /** The timer ran out, or the recognizer restarted: the live utterance is whole. */
@@ -600,5 +607,151 @@ describe(`${BRAND.display} Mobile utterance layer`, () => {
     navigate.hear([`${T} navigiere`, true]);
     navigate.settle();
     expect(navigate.offered).toEqual([`${T} navigiere`]);
+  });
+
+  describe("provisional text in the field", () => {
+    const lex = startLexicon("en");
+    /** The field after each reading, as the composer shows it: the draft the
+     * finals made, then the provisional guess. */
+    const field = (session: Session) => fieldWithProvisional(session.draft, session.provisional);
+
+    it("shows the live words after the draft and replaces them by every newer reading", () => {
+      const session = new Session();
+      session.hear(["fix the", false]);
+      expect(field(session)).toBe("fix the");
+      session.hear(["fix the login", false]);
+      expect(field(session)).toBe("fix the login");
+      // The recognizer revises a guess: the field follows, nothing piles up.
+      session.hear(["fix their log in", false]);
+      expect(field(session)).toBe("fix their log in");
+      expect(session.draft).toBe("");
+    });
+
+    it("is committed by the final result, without doubling", () => {
+      const session = new Session();
+      session.hear(["fix the login", false]);
+      session.hear(["fix the login", true]);
+      expect(session.draft).toBe("fix the login");
+      expect(session.provisional).toBe("");
+      expect(field(session)).toBe("fix the login");
+      // Android finalizes the same utterance again as it grows.
+      session.hear(["fix the login", true], ["fix the login bug", false]);
+      expect(field(session)).toBe("fix the login bug");
+      session.hear(["fix the login", true], ["fix the login bug", true]);
+      expect(session.draft).toBe("fix the login bug");
+      expect(field(session)).toBe("fix the login bug");
+    });
+
+    it("follows an utterance that goes on after its final, and the next one", () => {
+      const session = new Session();
+      session.hear(["add a test", true], ["and run", false]);
+      expect(session.draft).toBe("add a test");
+      expect(field(session)).toBe("add a test and run");
+      session.hear(["add a test", true], ["and run it", true]);
+      expect(field(session)).toBe("add a test and run it");
+      expect(session.draft).toBe("add a test and run it");
+    });
+
+    it("does not bring back what a clear discarded, nor its final", () => {
+      const session = new Session();
+      session.hear(["fix the login", false]);
+      // The composer's ✕ while the guess is on screen.
+      session.progress = settleDictation(session.progress, true);
+      session.hear(["fix the login bug", false]);
+      expect(session.provisional).toBe("bug");
+      session.hear(["fix the login bug", true]);
+      expect(session.draft).toBe("bug");
+    });
+
+    it("keeps an emptied list's first guess for the new list (nothing final yet)", () => {
+      const session = new Session();
+      session.hear(["fix the login", true]);
+      // Chrome starts a new result list after a pause: the first reading is a guess.
+      session.hear(["add", false]);
+      expect(session.draft).toBe("fix the login");
+      expect(field(session)).toBe("fix the login add");
+      session.hear(["add a test", true]);
+      expect(session.draft).toBe("fix the login add a test");
+    });
+
+    it("never shows words held back as a possible command or spoken edit", () => {
+      const session = new Session();
+      session.hear([`${T} scr`, false]);
+      expect(session.provisional).toBe("");
+      session.hear([`${T} scratch that`, false]);
+      expect(session.provisional).toBe("");
+      const nav = new Session();
+      nav.hear([`${T} navi`, false]);
+      expect(nav.provisional).toBe("");
+      nav.hear([`${T} navigate to`, false]);
+      expect(nav.provisional).toBe("");
+      // Not a command: shown once it cannot be one.
+      const plain = new Session();
+      plain.hear([`${T} fix the login`, false]);
+      expect(plain.provisional).toBe(`${T} fix the login`);
+    });
+
+    it("shows nothing of what the gate drops, nor the start word", () => {
+      const session = new Session({ gate: true });
+      session.hear(["so I was thinking", false]);
+      expect(session.provisional).toBe("");
+      session.hear([`${T} fix the login`, false]);
+      expect(session.provisional).toBe("fix the login");
+      session.hear([`${T} fix the login`, true], ["and add", false]);
+      expect(session.draft).toBe("fix the login");
+      // The next utterance has no start word: dropped, so not shown either.
+      expect(session.provisional).toBe("");
+      session.hear([`${T} fix the login`, true], ["and add", true], [`${T} and then`, false]);
+      expect(session.provisional).toBe("and then");
+    });
+
+    it("shows nothing in navigation mode", () => {
+      const session = new Session({ capture: true, take: () => true });
+      session.hear(["go to project alpha", false]);
+      expect(session.provisional).toBe("");
+      session.hear(["go to project alpha", true], ["next", false]);
+      expect(session.provisional).toBe("");
+    });
+
+    it("scans one reading for the non-layered path", () => {
+      const scan = scanDictation(listing(["fix the login", true], ["and", false]));
+      const step = advanceDictation(DICTATION_START, scan.heard, scanSeen(scan));
+      expect(step.insert).toBe("fix the login");
+      expect(dictationProvisional(step.progress, scan, lex)).toBe("and");
+      expect(step.progress.seen).toBe(4);
+      const edit = scanDictation(listing([`${T} scratch that`, false]));
+      expect(dictationProvisional(advanceDictation(DICTATION_START, edit.heard, scanSeen(edit)).progress, edit, lex)).toBe("");
+    });
+  });
+
+  describe("the field", () => {
+    it("joins the draft and the guess with one space", () => {
+      expect(fieldWithProvisional("", "fix it")).toBe("fix it");
+      expect(fieldWithProvisional("fix", "it")).toBe("fix it");
+      expect(fieldWithProvisional("fix ", "it")).toBe("fix it");
+      expect(fieldWithProvisional("fix", "")).toBe("fix");
+    });
+
+    it("never commits the guess when the reader types next to it", () => {
+      // untouched
+      expect(draftFromField("fix it", "fix", "it")).toBe("fix");
+      // typed at the end, after the guess
+      expect(draftFromField("fix it!", "fix", "it")).toBe("fix!");
+      // typed before the guess
+      expect(draftFromField("fix, it", "fix", "it")).toBe("fix,");
+      // edited earlier in the draft
+      expect(draftFromField("fox it", "fix", "it")).toBe("fox");
+      expect(draftFromField("hello", "", "")).toBe("hello");
+      expect(draftFromField("a b c", "a", "b c")).toBe("a");
+    });
+  });
+
+  it("starts a new result list that opens with a guess, not final words", () => {
+    // Before: the first final of the new list lost as many words as the old
+    // list had inserted.
+    const old = advanceDictation(DICTATION_START, ["fix", "the", "login"]);
+    const guess = advanceDictation(old.progress, []);
+    expect(guess.progress.inserted).toBe(0);
+    expect(advanceDictation(guess.progress, ["add", "a", "test"]).insert).toBe("add a test");
   });
 });

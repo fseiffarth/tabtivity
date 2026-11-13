@@ -155,6 +155,11 @@ export interface DictationProgress {
   inserted: number;
   /** Where the "Heard:" preview starts: the words before it were sent or cleared. */
   shownFrom: number;
+  /** How many words the last reading held in all: the finalized ones and the
+   * live guess after them. A clear that discards the live words counts them
+   * as inserted (`settleDictation`), so they do not come back as the guess is
+   * repeated. */
+  seen?: number;
 }
 
 export const DICTATION_START: DictationProgress = { heard: [], inserted: 0, shownFrom: 0 };
@@ -280,6 +285,9 @@ export function scanDictation(event: MobileSpeechRecognitionResultEvent): Dictat
 /** Whether `heard` is a result list starting over (Chrome on Android starts
  * one after a pause), against the last reading `prev`. */
 function resultListRestarted(prev: string[], heard: string[]): boolean {
+  // A result list only ever grows: one that came back with no final at all
+  // (a first guess of the next list) is a list starting over.
+  if (prev.length > 0 && heard.length === 0) return true;
   return prev.length > 0 && heard.length > 0
     && (sharedHead(heard, prev) === 0 || heard.length < prev.length)
     && wordsInOrder(prev, heard) * 5 < prev.length * 3;
@@ -298,19 +306,79 @@ function resultListRestarted(prev: string[], heard: string[]): boolean {
 export function advanceDictation(
   progress: DictationProgress,
   heard: string[],
+  seen = heard.length,
 ): { progress: DictationProgress; insert: string } {
   const restarted = resultListRestarted(progress.heard, heard);
   const inserted = restarted ? 0 : progress.inserted;
   return {
     insert: heard.slice(inserted).join(" "),
-    progress: { heard, inserted: Math.max(inserted, heard.length), shownFrom: restarted ? 0 : progress.shownFrom },
+    progress: { heard, inserted: Math.max(inserted, heard.length), shownFrom: restarted ? 0 : progress.shownFrom, seen },
   };
 }
 
 /** After a send or a clear. The heard words stay counted as inserted — the
- * recognizer will read them back — but the preview stops quoting them. */
-export function settleDictation(progress: DictationProgress): DictationProgress {
-  return { ...progress, shownFrom: progress.inserted };
+ * recognizer will read them back — but the preview stops quoting them. With
+ * `discardLive` (the composer's ✕) the words still being guessed at go too:
+ * they are counted as inserted, so neither the guess repeated nor its final
+ * brings them back into the emptied field. */
+export function settleDictation(progress: DictationProgress, discardLive = false): DictationProgress {
+  const inserted = discardLive ? Math.max(progress.inserted, progress.seen ?? 0) : progress.inserted;
+  return { ...progress, inserted, shownFrom: inserted };
+}
+
+/** The words of `scan` still being guessed at, as a count into the whole
+ * reading (finalized and live): where the live utterance's words end. */
+export function scanSeen(scan: DictationScan): number {
+  return scan.tail === "none" ? scan.heard.length : liveBase(scan) + scan.live.length;
+}
+
+/** Where `scan.live` begins in the whole reading (finalized words, then live
+ * ones): a new utterance's guess follows all the finals; one that extends the
+ * last utterance restates it from its start. */
+function liveBase(scan: DictationScan): number {
+  if (scan.tail === "new") return scan.heard.length;
+  return scan.starts.length > 0 ? scan.starts[scan.starts.length - 1] : 0;
+}
+
+/** The live words of `scan` that are not in the composer: the provisional text
+ * the field shows in grey-area terms — replaced by every newer reading and
+ * committed (or not) by the final one. Never part of the draft itself. Words
+ * that may be a command or a spoken edit ("Tabby scratch that …") are not
+ * shown, so they cannot leave their text in the field. */
+function liveTail(scan: DictationScan, from: number, lex: StartLexicon): string {
+  if (scan.tail === "none") return "";
+  const words = scan.live.slice(Math.max(0, from - liveBase(scan)));
+  if (words.length === 0 || lex.start(scan.live) > 0 || lex.mayNavigate(scan.live)) return "";
+  return words.join(" ");
+}
+
+/** Without the utterance layer: the provisional words after `progress`. */
+export function dictationProvisional(progress: DictationProgress, scan: DictationScan, lex: StartLexicon): string {
+  return liveTail(scan, progress.inserted, lex);
+}
+
+/** What the composer field shows: the draft, then the provisional words. */
+export function fieldWithProvisional(draft: string, provisional: string): string {
+  if (!provisional) return draft;
+  return `${draft}${draft && !/\s$/u.test(draft) ? " " : ""}${provisional}`;
+}
+
+/**
+ * The draft after the reader edited the field, which showed `draft` with
+ * `provisional` words after it. The provisional words are not the reader's:
+ * they are taken out again (where they stood, else where they turn up last),
+ * so typing next to them never commits a guess.
+ */
+export function draftFromField(value: string, draft: string, provisional: string): string {
+  if (!provisional) return value;
+  const shown = fieldWithProvisional(draft, provisional);
+  if (value === shown) return draft;
+  const tail = shown.slice(draft.length);
+  if (value.startsWith(draft) && value.slice(draft.length).startsWith(tail)) {
+    return draft + value.slice(draft.length + tail.length);
+  }
+  const at = value.lastIndexOf(provisional);
+  return at < 0 ? value : (value.slice(0, at).replace(/ $/u, "") + value.slice(at + provisional.length));
 }
 
 /** What "Heard:" quotes: the words since the last send or clear, then the live guess. */
@@ -409,6 +477,10 @@ export interface UtteranceStep {
   /** Words are being held back (a possible command, or a first word that
    * cannot tell yet): speech is still open as far as hands-free's pause goes. */
   held: boolean;
+  /** The live words the draft would take if they were final, for the field to
+   * show provisionally: none for what is held, dropped by the gate, captured
+   * by navigation mode, or already in the composer. */
+  provisional: string;
 }
 
 /** A flag that may be asked late. */
@@ -550,6 +622,7 @@ export function stepUtterances(
       bare: closed.bare || next.bare,
       opened: closed.opened || next.opened,
       held: next.held,
+      provisional: next.provisional,
     };
   }
   const run = runUtterances(prev, progress, scan, lex, opts);
@@ -558,13 +631,39 @@ export function stepUtterances(
     : scan.tail === "extends" && !run.hideLive ? scan.interim.split(" ").filter(Boolean) : [];
   return {
     ledger: { records: run.records, starts: scan.starts },
-    progress: { heard: scan.heard, inserted: run.cursor, shownFrom: progress.shownFrom },
+    progress: { heard: scan.heard, inserted: run.cursor, shownFrom: progress.shownFrom, seen: scanSeen(scan) },
     insert: run.inserts.join(" "),
     preview: [...run.kept, ...tailQuote].join(" "),
     bare: run.bare,
     opened: run.opened,
     held: run.held,
+    provisional: layerProvisional(run, scan, lex, opts),
   };
+}
+
+/** `UtteranceStep.provisional`: the live utterance's words, when the layer
+ * would keep and type them. A new live utterance (no final yet) is judged as
+ * the gate would judge it; one that extends an utterance of the ledger is
+ * judged by that utterance's record. */
+function layerProvisional(run: Run, scan: DictationScan, lex: StartLexicon, opts: UtteranceOptions): string {
+  if (scan.tail === "none" || flag(opts.capture)) return "";
+  const base = liveBase(scan);
+  let from = run.cursor;
+  if (scan.tail === "new") {
+    from = Math.max(from, base);
+    if (flag(opts.gate) && opts.open !== true) {
+      const skip = lex.start(scan.live);
+      if (skip === 0) return "";
+      from = Math.max(from, base + skip);
+    }
+  } else {
+    const rec = run.records[base];
+    if (!rec || rec.keep !== true || rec.captured || rec.handled) return "";
+    from = Math.max(from, base + rec.skip);
+  }
+  const words = scan.live.slice(Math.max(0, from - base));
+  if (words.length === 0 || (opts.holdBack && lex.mayNavigate(scan.live))) return "";
+  return words.join(" ");
 }
 
 /** The live utterance is whole: the timer ran out, the recognizer restarted or

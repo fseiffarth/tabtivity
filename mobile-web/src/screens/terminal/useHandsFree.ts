@@ -175,6 +175,17 @@ export function useHandsFree({
     awaitReading();
     return "done";
   };
+  /** Whether words still being said may be shown in the composer provisionally
+   * (`useVoiceInput`): not while a question on screen is waiting for a spoken
+   * pick, not inside the send guard's cancel window (a "stop" is no text), and
+   * not an empty draft's reading command ("next answer"). */
+  const previewOkRef = useRef<(words: string) => boolean>(() => true);
+  previewOkRef.current = (words) => {
+    const phase = sendGuard.current?.phase();
+    if (phase === "window" || phase === "holding") return false;
+    if (liveQuestion && !questionHeld) return false;
+    return draftRef.current.trim() !== "" || !hasReadPosition(tab.id) || matchReading(words, speechLanguage()) === null;
+  };
   /** The user's stop ends the loop until the mic is tapped again. */
   const stopLoop = () => {
     sendGuard.current?.reset();
@@ -311,7 +322,7 @@ export function useHandsFree({
   );
 
   return {
-    handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, stopLoop,
+    handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, previewOkRef, stopLoop,
     toggleHandsFree, handsFreeLine,
   };
 }

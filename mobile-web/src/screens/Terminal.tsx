@@ -23,7 +23,7 @@ import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
-import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   ANY_FILE_ACCEPT,
@@ -124,6 +124,8 @@ import {
   speechRecognitionConstructor,
   speechRecognitionSupported,
   DICTATION_START,
+  draftFromField,
+  fieldWithProvisional,
   type DictationProgress,
 } from "../voiceInput";
 import { type DictationSession } from "../voiceSession";
@@ -773,6 +775,23 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * re-subscribe per keystroke. */
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  /** What dictation has heard: the "Heard:" line, and the provisional words
+   * the composer shows after the draft while they are still being guessed at
+   * (`interim`). The provisional words are never part of `draft`: the next
+   * reading replaces them, the final one commits them, and a send, clear or
+   * edit of the field drops them. */
+  const [voiceHeard, setVoiceHeard] = useState({ preview: "", interim: "" });
+  const voicePreview = voiceHeard.preview;
+  /** A new "Heard:" line (or none) drops the provisional words too: every
+   * place that clears the line — a send, the ✕, a spoken edit, a new mic —
+   * is one where the guess must not stay in the field. */
+  const setVoicePreview: Dispatch<SetStateAction<string>> = (next) => setVoiceHeard((heard) => ({
+    preview: typeof next === "function" ? next(heard.preview) : next, interim: "",
+  }));
+  const setVoiceInterim = (interim: string) => setVoiceHeard((heard) => (heard.interim === interim ? heard : { ...heard, interim }));
+  /** The composer field: the draft, then the provisional words. A send takes
+   * what the field shows. */
+  const fieldDraft = fieldWithProvisional(draft, voiceHeard.interim);
   /** The files beside the composer (`uploads` below), for the same writers. */
   const uploadsRef = useRef<InboxUpload[]>([]);
   /** A held prompt being rewritten in the composer (`startEdit`), by its
@@ -801,7 +820,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (!input) return;
     input.style.height = "auto";
     input.style.height = `${input.scrollHeight}px`;
-  }, [draft]);
+  }, [fieldDraft]);
   const [lines, setLines] = useState<ReadableLine[]>([]);
   const [clipped, setClipped] = useState(false);
   /** The screen the live readers look at: the scrollback's tail, or — while a
@@ -952,7 +971,6 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [speechAvailable] = useState(() => speechOutputSupported());
   const [listening, setListening] = useState(false);
   const [preparingVoice, setPreparingVoice] = useState(false);
-  const [voicePreview, setVoicePreview] = useState("");
   const [voiceStatus, setVoiceStatus] = useState<VoiceNote | null>(null);
   const [voiceFailure, setVoiceFailure] = useState<VoiceNote | null>(null);
   /** Whether the model sheet is up. It opens on the tap that sends `/model`,
@@ -1428,7 +1446,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
     dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, sendGuard, voiceOpen, sendTimers, commandSentAt,
     lastOutputAt, settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt,
-    aiOffRef, ctrl, setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing,
+    aiOffRef, ctrl, setCtrl, setSendFailed, setDraft, draft: fieldDraft, uploadsRef, editing, setEditing,
     editingRef, editSending, setEditSending, liveScreen, setLastSent, slashCliKey, agentKey,
     usedSlash, setUsedSlash, setListening, setPreparingVoice, setVoicePreview, setVoiceStatus,
     setUploads, transcript, setPending, pending, pendingId, setClearedAt, clearedAt, setUndoable,
@@ -2267,7 +2285,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   /** Spoken navigation is open (`useVoiceNav`): hands-free leaves the mic to it. */
   const [navOpen, setNavOpen] = useState(false);
   const {
-    handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, stopLoop,
+    handsFree, handsFreeRef, speaking, handsFreeGuard, awaitTurnRef, voicePickRef, previewOkRef, stopLoop,
     toggleHandsFree, handsFreeLine: handsFreeLineFor,
   } = useHandsFree({
     tab, t, sendGuard, voiceOpen, recognition, draftRef, submitDraftRef, startVoiceRef, endDictation, tabbyGate,
@@ -2276,11 +2294,11 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   });
   const { stopVoice, cancelVoicePrep, startVoice } = useVoiceInput({
     tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, setDraft, draftRef,
-    setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus,
+    setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceInterim, setVoiceStatus,
     setVoiceFailure, forgetDictation, submitSpokenRef, tabbyGate, utterances: utteranceHooks, prefixCommands,
     handsFree: {
       on: handsFreeRef, guard: handsFreeGuard, sendGuard, voiceOpen, voiceStopping,
-      pick: voicePickRef, awaitTurn: awaitTurnRef, stopLoop,
+      pick: voicePickRef, previewOk: previewOkRef, awaitTurn: awaitTurnRef, stopLoop,
     },
   });
   startVoiceRef.current = startVoice;
@@ -2940,7 +2958,12 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
         {/* An untouched suggestion reads greyed in the field itself, as the
             CLI dims it; the first edit makes it the reader's own text. */}
         <div className="composer-field">
-          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t("terminal.reader.suggestion") : undefined} value={draft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => { tabbyGate.clear(); setDraft(event.target.value); }} onFocus={(event) => { setComposerTyping(true); if (draft && draft === suggestionRef.current.filled) event.currentTarget.select(); }} onBlur={typingStopped} onKeyDown={(event) => {
+          <textarea ref={composerInput} className={suggested ? "suggested" : undefined} aria-description={suggested ? t("terminal.reader.suggestion") : undefined} value={fieldDraft} disabled={!connected || chatInputBlocked} rows={1} aria-label={t(tab.kind === "agent" ? "mobile.composer.messageAgent" : "mobile.composer.shellCommand")} placeholder={connected ? (tab.kind === "agent" ? (subagentTarget ? t("mobile.subagent.placeholder") : t("mobile.composer.placeholderAgent")) : t("mobile.composer.placeholderShell")) : t("mobile.indReconnecting")} onChange={(event) => {
+            tabbyGate.clear();
+            // The guess after the draft is the recognizer's, not the reader's.
+            setDraft(draftFromField(event.target.value, draft, voiceHeard.interim));
+            setVoiceInterim("");
+          }} onFocus={(event) => { setComposerTyping(true); if (draft && draft === suggestionRef.current.filled) event.currentTarget.select(); }} onBlur={typingStopped} onKeyDown={(event) => {
             if (event.key !== "Enter" || event.shiftKey) return;
             // Enter confirms a candidate inside an IME composition (CJK keyboards,
             // and 229 is what Android keyboards report mid-composition); that
@@ -2952,7 +2975,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {penWriting && isUntested("mobile.composer.penWriting") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(draft.includes("\n") || draft.length > 60) && isUntested("mobile.composer.autoGrow") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {suggested && isUntested("mobile.composer.promptSuggestion") && <em className="composer-suggested-untested">{t("mobile.focus.untested")}</em>}
-          {draft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
+          {fieldDraft && <button className="composer-clear" onClick={clearDraft} aria-label={t("mobile.composer.clear")} title={t("mobile.composer.clear")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}
           {tab.kind === "agent" && <button className={`composer-dictate${listening ? " listening" : ""}`} disabled={!connected || !voiceAvailable} title={t(voiceAvailable ? "mobile.voice.hint" : "mobile.voice.hintUnavailable")} aria-label={dictateLabel} aria-pressed={listening} ref={dictateButton} onClick={() => {
             // A tap ends spoken navigation, whatever else it does. A stop reads the
             // mode its in-flight words were said in, so it comes first.
@@ -3008,7 +3031,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
             <button className={`composer-keys${keysShown ? " open" : ""}`} onPointerDown={(event) => event.preventDefault()} onClick={toggleKeys} aria-label={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")} aria-expanded={keysShown} aria-controls="terminal-keys" title={t(keysShown ? "mobile.composer.keysHide" : "mobile.composer.keysShow")}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M11 10h.01M15 10h.01M8 14h8" /></svg></button>
             <span className="composer-spacer" />
           </>}
-          <button className="send-icon" disabled={!connected || chatInputBlocked || (!draft.trim() && !attached) || uploading || editSending} {...(tab.kind === "agent" && !editing ? sendHoldHandlers : {})} onClick={() => {
+          <button className="send-icon" disabled={!connected || chatInputBlocked || (!fieldDraft.trim() && !attached) || uploading || editSending} {...(tab.kind === "agent" && !editing ? sendHoldHandlers : {})} onClick={() => {
             if (sendHold.current.fired) {
               sendHold.current.fired = false;
               return;
