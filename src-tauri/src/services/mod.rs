@@ -121,6 +121,9 @@ pub mod process_lease;
 pub mod project_runtime;
 // The projects.json write side: serialized read-modify-write + entry patches.
 pub mod project_registry;
+// The project scaffold catalog: the root docs a project can hold, their
+// templates and their three states (missing / template / edited).
+pub mod scaffold;
 // The boxes.json store and the box tab scope (`box:<id>`, its allowed roots).
 pub mod box_store;
 // Which roots the absolute-path file commands may touch, and the

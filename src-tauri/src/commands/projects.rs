@@ -13,6 +13,7 @@ use crate::schema::project::{
 };
 use crate::schema::projects::{ProjectEntry, ProjectsList};
 use crate::services::remote_sync::SyncManifestState;
+use crate::services::scaffold::{self, write_scaffold_file};
 use crate::storage;
 use crate::tauri_host::Ctx;
 pub(crate) use crate::paths::sanitize_name;
@@ -3389,120 +3390,8 @@ pub fn move_remote_mirror_blocking(
 
 // ── Scaffold new project ───────────────────────────────────────────────────
 
-/// The one file that carries real instructions. Every agent-specific doc is a
-/// pointer to it (see `CLAUDE_SCAFFOLD`/`GEMINI_SCAFFOLD`), so guidance is
-/// written once and every agent reads the same text instead of three stubs
-/// drifting apart.
-///
-/// Kept to placeholders: agents load it every session, and it is the user's
-/// file from the first write on — never rewritten unless still byte-identical
-/// to a template Tabtivity shipped (`AGENTS_HISTORY`). So nothing about Tabtivity
-/// itself goes here (the `tabtivity-send` hint comes from `services::agent_hint`
-/// and the session hook), and the map of the other files is `PROJECT.md`'s.
-/// Changing this text? Add the old one to `scaffold_history/` first — a test
-/// pins it.
-const AGENTS_SCAFFOLD: &str = r#"# Agents
-
-Canonical instructions for every AI coding agent in this project;
-`CLAUDE.md` and `GEMINI.md` import this file. Write guidance **here**, and
-keep it to what an agent would otherwise get wrong: it is loaded into every
-session. [PROJECT.md](./PROJECT.md) maps the rest of the project.
-
-## Project
-
-_What this project is, in a sentence or two._
-
-## Running
-
-_Build, run and test commands._
-
-## Conventions
-
-_Layout, style, and anything an agent must not do._
-"#;
-
-/// Claude Code pointer. `@AGENTS.md` on its own line is Claude Code's import
-/// syntax, so the canonical text is actually *loaded*, not merely referenced —
-/// a plain "see AGENTS.md" line would leave the agent to decide whether to open
-/// it.
-const CLAUDE_SCAFFOLD: &str = r#"# Claude Context
-
-This project's instructions live in [AGENTS.md](./AGENTS.md); the import below
-pulls them in. Write project guidance there, not here — keep this file for
-Claude-specific overrides only.
-
-@AGENTS.md
-
-Other agent files: [AGENTS.md](./AGENTS.md) · [GEMINI.md](./GEMINI.md)
-"#;
-
-/// Gemini CLI pointer — same shape as `CLAUDE_SCAFFOLD`; the Gemini CLI honors
-/// the same `@file` import syntax in its context file.
-const GEMINI_SCAFFOLD: &str = r#"# Gemini Context
-
-This project's instructions live in [AGENTS.md](./AGENTS.md); the import below
-pulls them in. Write project guidance there, not here — keep this file for
-Gemini-specific overrides only.
-
-@AGENTS.md
-
-Other agent files: [AGENTS.md](./AGENTS.md) · [CLAUDE.md](./CLAUDE.md)
-"#;
-
-/// The navigation hub: one file linking every other scaffold file with a line
-/// on what it is for, so a fresh project can be walked from a single entry
-/// point — the links are relative, so the markdown viewer's link-following
-/// (#49/#50) opens each target in-app. Scaffolded like the rest (never
-/// overwritten), and listed first so previews show the map before the mapped.
-const PROJECT_SCAFFOLD: &str = concat!(r#"# Project Map
-
-Start here. This file links every scaffold file with what it is for, so the
-project can be navigated from one place. The links are relative and open
-in "#, crate::app_name!(), r#"'s markdown viewer.
-
-## Docs
-
-- [README.md](./README.md) — overview: what this project is and how to use it
-- [DOCUMENTATION.md](./DOCUMENTATION.md) — reference documentation
-- [ROADMAP.md](./ROADMAP.md) — planned direction
-- [STATUS.md](./STATUS.md) — current state
-- [TODO.md](./TODO.md) — open work items
-- [REMARKS.md](./REMARKS.md) — project-wide remarks attached to files and lines
-
-## Agent instructions
-
-- [AGENTS.md](./AGENTS.md) — canonical instructions for every AI coding agent
-- [CLAUDE.md](./CLAUDE.md) — Claude Code pointer; imports AGENTS.md
-- [GEMINI.md](./GEMINI.md) — Gemini CLI pointer; imports AGENTS.md
-
-## Config
-
-- [.claude/settings.json](./.claude/settings.json) — Claude Code permissions for this project
-- [.gitignore](./.gitignore) — patterns git ignores (git-backed projects only)
-
-_Add links to your own key files and folders here so this stays the map of
-the project._
-"#);
-
-const REMARKS_SCAFFOLD: &str = r#"# Remarks
-
-Per-file remarks. One bullet per remark:
-`- [ ] [<path>:<line>](./<path>:<line>) — text`. Line optional, a hint only.
-Tick a box to resolve a remark. Everything else in this file is yours.
-"#;
-
-pub const SCAFFOLD_FILES: &[(&str, &str)] = &[
-    ("PROJECT.md", PROJECT_SCAFFOLD),
-    ("AGENTS.md", AGENTS_SCAFFOLD),
-    ("CLAUDE.md", CLAUDE_SCAFFOLD),
-    ("GEMINI.md", GEMINI_SCAFFOLD),
-    ("TODO.md", "# TODO\n"),
-    ("REMARKS.md", REMARKS_SCAFFOLD),
-    ("ROADMAP.md", "# Roadmap\n"),
-    ("STATUS.md", "# Status\n"),
-    ("README.md", "# Project\n"),
-    ("DOCUMENTATION.md", "# Documentation\n"),
-];
+// The scaffold's docs and their templates live in `services::scaffold` (the
+// catalog); this module keeps the callers.
 
 /// The folder a saved screen grab lands in. `tabtivity-` prefixed because the
 /// plain name is one a *project* plausibly owns — a repo with its own
@@ -3578,8 +3467,6 @@ fn project_generated_dir_blocking(project_dir: String, kind: String) -> Result<S
 // the list for good.
 pub const GITIGNORE_DEFAULT: &str = concat!("__pycache__/\n*.pyc\n.venv/\nnode_modules/\ntarget/\ndist/\nbuild/\n.env\n.env.local\n.DS_Store\n*.log\n*.swp\n*.swo\n.idea/\n.", crate::app_slug!(), "/\n", crate::app_slug!(), "-screenshots/\n", crate::app_slug!(), "-emails/\n", crate::legacy_slug!(), "-screenshots/\n", crate::legacy_slug!(), "-emails/\nscreenshots/\nemails/\nproject.json\n");
 
-pub const CLAUDE_SETTINGS: &str = r#"{"permissions":{"allow":[],"deny":[]}}"#;
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScaffoldPreviewItem {
@@ -3588,7 +3475,9 @@ pub struct ScaffoldPreviewItem {
     pub kind: String,
 }
 
-/// Write the standard Tabtivity project scaffold into a directory.
+/// Write the standard Tabtivity project scaffold into a directory: the
+/// catalog's `default` docs (`services::scaffold`) and, for git projects, the
+/// `.gitignore`. Never over anything already there.
 ///
 /// When `with_git` is false the scaffold files are still written but no git
 /// repository is initialized — used for "local, no git" projects (git_type
@@ -3596,72 +3485,25 @@ pub struct ScaffoldPreviewItem {
 pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
 
-    for (name, content) in SCAFFOLD_FILES {
-        write_scaffold_file(&dir.join(name), content)?;
+    for doc in scaffold::defaults() {
+        scaffold::create_doc_at(dir, doc)?;
     }
     if with_git {
         write_scaffold_file(&dir.join(".gitignore"), GITIGNORE_DEFAULT)?;
     }
-    if let Some(dot_claude) = scaffold_claude_dir(dir)? {
-        write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)?;
-    }
     if with_git && !dir.join(".git").exists() {
         let _ = crate::services::git_init::init_repo(dir);
-        // Give the fresh repo an initial commit so the scaffold (`.claude`, docs,
+        // Give the fresh repo an initial commit so the scaffold (docs,
         // `.gitignore`) is TRACKED, not merely present. This is what makes a later
         // remote `extend` seed the host: git lockstep pairs by transferring
         // *committed* state (`init_pairing` → `reset --hard`), so an unborn HEAD
         // would leave the freshly-paired remote empty and untracked files (like
-        // `.claude/settings.json`) never ride the bundle. Only runs for a repo we
+        // `AGENTS.md`) never ride the bundle. Only runs for a repo we
         // just created — an imported repo already has `.git`, so its history is
         // never touched.
         git_scaffold_commit(dir);
     }
     Ok(())
-}
-
-/// The most of a scaffold doc read to tell a legacy stub from the user's own.
-const MAX_SCAFFOLD_DOC_BYTES: u64 = 4 << 20;
-
-/// A scaffold doc (`CLAUDE.md`, …) in the project tree as text, `None` for
-/// anything else: missing, a link, a FIFO (never waited on — the project
-/// list asks this of every project), too large or not UTF-8. `None` is never
-/// a stub, so nothing that is not a plain file of ours is rewritten.
-fn read_scaffold_doc(path: &Path) -> Option<String> {
-    crate::services::home_io::read_record_capped(path, MAX_SCAFFOLD_DOC_BYTES)
-}
-
-/// Create one scaffold file unless something — a file, a folder, a symlink,
-/// dangling or not — is already at `path`. Returns whether it was written.
-///
-/// The never-overwrite rule in one place. An imported tree is attacker-controlled
-/// and the user's own, so an `exists()`-then-write pair was two holes: a dangling
-/// `CLAUDE.md -> ~/somewhere` passed the check and the write then created the
-/// link's target outside the project, and a file appearing between the check and
-/// the write was truncated. `create_new` + `O_NOFOLLOW` decide in the one open.
-fn write_scaffold_file(path: &Path, content: &str) -> std::io::Result<bool> {
-    match write_no_follow(path, content.as_bytes(), true) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(e) => Err(e),
-    }
-}
-
-/// `dir/.claude`, created when absent. `None` when something other than a real
-/// folder is already there — a file, or a symlink the tree shipped — and the
-/// scaffold then leaves `.claude/settings.json` alone rather than write through
-/// it or fail the whole import on it.
-fn scaffold_claude_dir(dir: &Path) -> std::io::Result<Option<PathBuf>> {
-    let dot_claude = dir.join(".claude");
-    match fs::symlink_metadata(&dot_claude) {
-        Ok(meta) if meta.is_dir() => Ok(Some(dot_claude)),
-        Ok(_) => Ok(None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&dot_claude)?;
-            Ok(Some(dot_claude))
-        }
-        Err(e) => Err(e),
-    }
 }
 
 /// `skip_scaffold`'s half of `scaffold_project`: no template files, but a project
@@ -3908,49 +3750,9 @@ impl ScaffoldRepairReport {
     }
 }
 
-/// The stubs the agent docs used to be scaffolded with, before `AGENTS.md`
-/// became the canonical file and `CLAUDE.md`/`GEMINI.md` became pointers to it.
-/// A repair upgrades an agent doc whose content is still byte-identical to its
-/// legacy stub (or empty): that text is provably untouched, so replacing it
-/// loses nothing. Anything a user or an agent actually wrote fails the match and
-/// is left alone — the never-overwrite rule still holds for every other file.
-const LEGACY_AGENT_STUBS: &[(&str, &str)] = &[
-    ("AGENTS.md", "# Agents\n"),
-    ("CLAUDE.md", "# Claude Context\n"),
-    ("GEMINI.md", "# Gemini Context\n"),
-];
-
-/// Every earlier `AGENTS_SCAFFOLD`, byte for byte, oldest first (2026-08-26 to
-/// 2026-09-28). A project scaffolded with one of them still holds that text
-/// until someone edits it, and only this list lets a repair tell such an
-/// untouched copy from the user's own words: the never-overwrite rule meant
-/// the 09-05 copy kept telling agents the outbox takes images only.
-const AGENTS_HISTORY: &[&str] = &[
-    include_str!("scaffold_history/AGENTS.2026-08-26.md"),
-    include_str!("scaffold_history/AGENTS.2026-08-30.md"),
-    include_str!("scaffold_history/AGENTS.2026-09-05.md"),
-    include_str!("scaffold_history/AGENTS.2026-09-14.md"),
-    include_str!("scaffold_history/AGENTS.2026-09-28.md"),
-];
-
-/// True when `content` is the untouched legacy stub for the agent doc `name`
-/// (or empty), or an untouched earlier `AGENTS.md` template. Line endings are
-/// ignored — a checkout may have turned them to CRLF. Pure, so the upgrade rule
-/// is unit-testable without touching disk.
-fn is_legacy_agent_stub(name: &str, content: &str) -> bool {
-    let Some((_, stub)) = LEGACY_AGENT_STUBS.iter().find(|(n, _)| *n == name) else {
-        return false;
-    };
-    if content.trim().is_empty() || content.trim() == stub.trim() {
-        return true;
-    }
-    let content = content.replace("\r\n", "\n");
-    name == "AGENTS.md" && AGENTS_HISTORY.contains(&content.as_str())
-}
-
 /// Like `scaffold_project`, but for an **already-scaffolded** project whose
-/// scaffold has drifted behind current defaults (e.g. it predates a scaffold
-/// file or a `.gitignore` pattern being added). Fills in whatever is missing —
+/// scaffold has drifted behind current defaults (e.g. a default doc was
+/// deleted or a `.gitignore` pattern was added since). Fills in whatever is missing —
 /// same never-overwrite rule for existing files — and additionally merges any
 /// missing `GITIGNORE_DEFAULT` pattern into an already-present `.gitignore`
 /// (plain `scaffold_project` leaves a pre-existing `.gitignore` untouched).
@@ -3958,31 +3760,16 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
     fs::create_dir_all(dir)?;
 
     let mut report = ScaffoldRepairReport::default();
-    for (name, content) in SCAFFOLD_FILES {
-        let p = dir.join(name);
-        if write_scaffold_file(&p, content)? {
-            report.created_files.push((*name).to_string());
-            continue;
-        }
-        // Only an agent doc still holding its untouched legacy stub is rewritten.
-        let Some(existing) = read_scaffold_doc(&p) else {
-            continue;
-        };
-        if existing != *content && is_legacy_agent_stub(name, &existing) {
-            write_no_follow(&p, content.as_bytes(), false)?;
-            report.updated_files.push((*name).to_string());
+    for doc in scaffold::defaults() {
+        if scaffold::create_doc_at(dir, doc)? {
+            report.created_files.push(doc.name.to_string());
+        } else if scaffold::upgrade_doc_at(dir, doc)? {
+            // Only `AGENTS.md` still holding an untouched earlier template.
+            report.updated_files.push(doc.name.to_string());
         }
     }
     if with_git {
         report.gitignore_lines_added = ensure_gitignore_defaults(dir)?;
-    }
-
-    if let Some(dot_claude) = scaffold_claude_dir(dir)? {
-        if write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)? {
-            report
-                .created_files
-                .push(".claude/settings.json".to_string());
-        }
     }
     if with_git && !dir.join(".git").exists() {
         let _ = crate::services::git_init::init_repo(dir);
@@ -4023,33 +3810,14 @@ fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
 /// Tauri command so the exact warning rule can be covered without depending on
 /// the user's persisted project list.
 fn scaffold_is_missing_at(target: &Path, with_git: bool) -> bool {
-    SCAFFOLD_FILES.iter().any(|(name, _)| {
-        let p = target.join(name);
-        // An agent doc still holding its untouched legacy stub counts as
-        // missing: a repair would change it, so the tag must not claim the
-        // scaffold is complete (see `is_legacy_agent_stub`).
-        // Anything at the name counts as present — a dangling link too —
-        // because that is what `write_scaffold_file` keeps: `exists()` would
-        // call it missing for good, as no repair ever writes it.
-        match read_scaffold_doc(&p) {
-            Some(existing) => is_legacy_agent_stub(name, &existing),
-            None => fs::symlink_metadata(&p).is_err(),
-        }
-    }) || (with_git && fs::symlink_metadata(target.join(".gitignore")).is_err())
-        || !claude_settings_present(target)
-}
-
-/// Whether `.claude/settings.json` is there by the rule the scaffold keeps
-/// (`scaffold_claude_dir`, `write_scaffold_file`): a `.claude` that is not a
-/// plain folder (a link, dangling or not) is left alone, and so is anything at
-/// `settings.json`. Either counts as present, or no repair would ever clear it.
-fn claude_settings_present(target: &Path) -> bool {
-    let dot_claude = target.join(".claude");
-    match fs::symlink_metadata(&dot_claude) {
-        Ok(meta) if meta.is_dir() => fs::symlink_metadata(dot_claude.join("settings.json")).is_ok(),
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    // Only a `default` doc counts, and anything at its name counts as present
+    // (`scaffold::present_at`: a dangling link too). A template-state
+    // `AGENTS.md` is *not* missing: every existing project holds an earlier
+    // template, and the tag must not nag for a file the user never touched
+    // (a repair still upgrades it, `scaffold::upgrade_doc_at`). `.git` is the
+    // separate `git_type` axis and not counted.
+    !scaffold::missing_defaults_at(target).is_empty()
+        || (with_git && !scaffold::present_at(target, ".gitignore"))
 }
 
 /// A single project's scaffold-repair outcome, for the "Repair scaffold
@@ -4063,9 +3831,8 @@ pub struct ProjectScaffoldRepair {
     pub report: ScaffoldRepairReport,
 }
 
-/// Repair one project's scaffold: fill in any scaffold doc, `.gitignore`
-/// pattern, or `.claude/settings.json` that is missing relative to current
-/// defaults. Safe to run repeatedly — every step is additive/idempotent.
+/// Repair one project's scaffold: fill in any default doc or `.gitignore`
+/// pattern that is missing relative to current defaults. Safe to run repeatedly — every step is additive/idempotent.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn repair_project_scaffold(project_id: String) -> Result<ProjectScaffoldRepair, String> {
     app_core::rt::try_blocking("project", move || repair_project_scaffold_blocking(project_id)).await
@@ -4131,7 +3898,7 @@ pub fn repair_all_project_scaffolds_blocking() -> Result<Vec<ProjectScaffoldRepa
 /// 2. Every legacy entry additionally gets its on-disk scaffold refreshed (the
 ///    same additive, never-overwrite repair as the manual "Repair scaffold
 ///    files" action), since a legacy project also predates current scaffold
-///    defaults (`.claude/settings.json`, newer docs, `.gitignore` patterns).
+///    defaults (newer docs, `.gitignore` patterns).
 ///
 /// The normalized list is persisted once if anything changed, so the migration
 /// is durable rather than re-derived on every load. Runs best-effort at startup
@@ -4184,12 +3951,11 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
     // Anything at the path counts — a dangling symlink too — because that is
     // what `write_scaffold_file` keeps; `exists()` would call such a link
     // missing and promise a file the import then doesn't write.
-    let present = |rel: &str| fs::symlink_metadata(dir.join(rel)).is_ok();
-    let mut items = SCAFFOLD_FILES
-        .iter()
-        .map(|(name, _)| ScaffoldPreviewItem {
-            path: (*name).to_string(),
-            exists: present(name),
+    let present = |rel: &str| scaffold::present_at(dir, rel);
+    let mut items = scaffold::defaults()
+        .map(|doc| ScaffoldPreviewItem {
+            path: doc.name.to_string(),
+            exists: present(doc.name),
             kind: "file".to_string(),
         })
         .collect::<Vec<_>>();
@@ -4206,11 +3972,6 @@ fn scaffold_preview(dir: &Path) -> Vec<ScaffoldPreviewItem> {
         // repository inside somebody else's worktree.
         exists: dir.join(".git").exists(),
         kind: "directory".to_string(),
-    });
-    items.push(ScaffoldPreviewItem {
-        path: ".claude/settings.json".to_string(),
-        exists: present(".claude/settings.json"),
-        kind: "file".to_string(),
     });
     items
 }
@@ -4231,14 +3992,11 @@ fn preview_project_scaffold_blocking(source_dir: String) -> Result<Vec<ScaffoldP
 }
 
 /// True when the scaffold target's `AGENTS.md` still holds no project guidance:
-/// missing, empty, the untouched legacy stub, or an untouched earlier template
-/// (all `is_legacy_agent_stub` answers). Pure, so the rule is unit-testable
-/// without touching the project list.
+/// missing, empty, or an untouched template of any build
+/// (`scaffold::agents_empty_at`, on the capped no-follow reader: a link or FIFO
+/// planted as `AGENTS.md` is read as missing, never followed).
 fn agents_empty_at(target: &Path) -> bool {
-    match fs::read_to_string(target.join("AGENTS.md")) {
-        Ok(existing) => is_legacy_agent_stub("AGENTS.md", &existing),
-        Err(_) => !target.join("AGENTS.md").exists(),
-    }
+    scaffold::agents_empty_at(target)
 }
 
 /// True when a project's `AGENTS.md` still holds no project guidance (see
@@ -4265,9 +4023,8 @@ fn project_agents_empty_blocking(project_id: String) -> Result<bool, String> {
     Ok(agents_empty_at(&target))
 }
 
-/// True when a project is missing one or more scaffold pieces (any scaffold
-/// doc, `.claude/settings.json`, or — for git-backed projects only —
-/// `.gitignore`) — drives the "no scaffold" tag in the pill hover overlay.
+/// True when a project is missing one or more scaffold pieces (a default doc
+/// or — for git-backed projects only — `.gitignore`) — drives the "no scaffold" tag in the pill hover overlay.
 /// `.gitignore` is a git-axis artifact, so it is not required of `git_type:
 /// "none"` projects (which never get one written, see `scaffold_project`).
 /// `.git` is likewise excluded: git presence is the separate `git_type` axis. A
@@ -4360,38 +4117,30 @@ fn entry_migration_details(entry: &ProjectEntry) -> Vec<String> {
 /// step per piece so each can be accepted or declined on its own.
 fn migration_steps_at(dir: &Path, with_git: bool) -> std::io::Result<Vec<MigrationStep>> {
     let mut steps = Vec::new();
-    for (name, content) in SCAFFOLD_FILES {
-        let p = dir.join(name);
-        match read_scaffold_doc(&p) {
+    for doc in scaffold::defaults() {
+        let name = doc.name;
+        match scaffold::read_scaffold_doc(&dir.join(name)) {
             Some(existing) => {
-                if existing != *content && is_legacy_agent_stub(name, &existing) {
+                if doc.upgradable() && existing != doc.template && doc.is_untouched(&existing) {
                     steps.push(MigrationStep {
                         id: format!("stub:{name}"),
                         kind: "upgradeStub".to_string(),
-                        path: Some((*name).to_string()),
+                        path: Some(name.to_string()),
                         details: vec![],
                     });
                 }
             }
             None => {
-                if !p.exists() {
+                if !scaffold::present_at(dir, name) {
                     steps.push(MigrationStep {
                         id: format!("file:{name}"),
                         kind: "createFile".to_string(),
-                        path: Some((*name).to_string()),
+                        path: Some(name.to_string()),
                         details: vec![],
                     });
                 }
             }
         }
-    }
-    if !dir.join(".claude/settings.json").exists() {
-        steps.push(MigrationStep {
-            id: "claude_settings".to_string(),
-            kind: "createFile".to_string(),
-            path: Some(".claude/settings.json".to_string()),
-            details: vec![],
-        });
     }
     if with_git {
         let missing = missing_gitignore_lines_at(dir)?;
@@ -4428,28 +4177,14 @@ fn apply_migration_steps_at(
 ) -> std::io::Result<ScaffoldRepairReport> {
     fs::create_dir_all(dir)?;
     let mut report = ScaffoldRepairReport::default();
-    for (name, content) in SCAFFOLD_FILES {
-        let p = dir.join(name);
+    for doc in scaffold::defaults() {
+        let name = doc.name;
         if accepted.contains(&format!("file:{name}")) {
-            if write_scaffold_file(&p, content)? {
-                report.created_files.push((*name).to_string());
+            if scaffold::create_doc_at(dir, doc)? {
+                report.created_files.push(name.to_string());
             }
-        } else if accepted.contains(&format!("stub:{name}")) {
-            if let Some(existing) = read_scaffold_doc(&p) {
-                if existing != *content && is_legacy_agent_stub(name, &existing) {
-                    write_no_follow(&p, content.as_bytes(), false)?;
-                    report.updated_files.push((*name).to_string());
-                }
-            }
-        }
-    }
-    if accepted.contains("claude_settings") {
-        if let Some(dot_claude) = scaffold_claude_dir(dir)? {
-            if write_scaffold_file(&dot_claude.join("settings.json"), CLAUDE_SETTINGS)? {
-                report
-                    .created_files
-                    .push(".claude/settings.json".to_string());
-            }
+        } else if accepted.contains(&format!("stub:{name}")) && scaffold::upgrade_doc_at(dir, doc)? {
+            report.updated_files.push(name.to_string());
         }
     }
     if with_git && accepted.contains("gitignore") {
