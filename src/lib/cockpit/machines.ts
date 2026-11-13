@@ -111,3 +111,45 @@ export function buildMachineRows(hosts: readonly MachineProjectHost[], globals: 
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * What a row of the Machines view says about its machine: a session state
+ * (`ConnState`) or, for a global machine, the honest read from both of its maps
+ * (`header/MachinesIndicator`'s `RowState`: a probe answer is not a session).
+ */
+export type MachineState = ConnState | "stale" | "reachable" | "unreachable" | "unknown";
+
+/** The view's groups, in the order they are listed. */
+export type MachineGroup = "connected" | "connecting" | "failed" | "up" | "off";
+export const MACHINE_GROUPS: readonly MachineGroup[] = ["connected", "connecting", "failed", "up", "off"];
+
+const GROUP_OF: Record<MachineState, MachineGroup> = {
+  connected: "connected",
+  connecting: "connecting",
+  error: "failed",
+  // A session we opened on a host that stopped answering: it needs a look.
+  stale: "failed",
+  reachable: "up",
+  unreachable: "off",
+  unknown: "off",
+  off: "off",
+};
+
+export const machineGroupOf = (state: MachineState): MachineGroup => GROUP_OF[state];
+
+/** Sorted by state (`MACHINE_GROUPS`' order), then by name. */
+export function sortByStateThenName<T extends { group: MachineGroup; name: string }>(rows: readonly T[]): T[] {
+  const rank = (g: MachineGroup) => MACHINE_GROUPS.indexOf(g);
+  return [...rows].sort((a, b) => rank(a.group) - rank(b.group) || a.name.localeCompare(b.name));
+}
+
+/** Idle: off, and no project uses it — folded into one strip of names. */
+export const isIdleMachine = (row: { group: MachineGroup; projects: readonly unknown[] }): boolean =>
+  row.group === "off" && row.projects.length === 0;
+
+/** The view's filter box: a machine's name, its address, or a project using it. */
+export function machineMatches(row: { name: string; target?: string; projects: readonly { name: string }[] }, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return [row.name, row.target ?? "", ...row.projects.map((p) => p.name)].some((s) => s.toLowerCase().includes(q));
+}

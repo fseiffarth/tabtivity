@@ -73,8 +73,7 @@ re-attaches a terminal. Projects is one ~34 px row per open project (actions on
 hover / focus; Today and Last active drop under the mid band, the actions move into
 ⋯ under narrow) with the not-open projects as one line per box; a project's
 `run_host` is shown by name (`runHostLabel`), never as `host:<id>`. Tonight is one
-centred column; Usage is a top strip (CLIs, this machine) over `CockpitMachineList`,
-one row per machine with project hosts and global machines merged by host name.
+centred column.
 
 ## The detail pane is the real Chat
 
@@ -210,10 +209,11 @@ construction. The pieces:
   with `AgentChips`, `CliOverviewBody`, the personal skills library); Models:
   `models/ModelsView` (the Local models section, Settings' `OllamaPanel`); Machines:
   `header/MachinesIndicator`'s `MachinesSurface surface="view"` in
-  `header/MachinesView`'s frame, under this machine's meters and the machine list
-  the Usage view used to show (`cockpit/CockpitMachineList`, `lib/cockpit/machines`:
-  one row per machine, project hosts and global machines merged by host name, the
-  stores' lamps, one Connect per row). The Usage view is deleted: its CLI overview
+  `header/MachinesView`'s frame: this machine's meters as one band, then one list
+  (`header/MachinesTable`, `lib/cockpit/machines`): one row per machine, project
+  hosts and global machines merged by host name, sorted by state then name, the
+  global machines' tiles folded into their rows (actions, ⋯ menu, forms) and off
+  machines no project uses folded into an idle strip. The Usage view is deleted: its CLI overview
   went to Agents, the running models (with Unload) were already in Models, the
   meters and the machine list went to Machines.
 - **Sub-bar.** Mail's inbox/message/composer tabs and the Agents and Models

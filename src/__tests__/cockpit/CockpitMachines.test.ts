@@ -4,7 +4,17 @@
  * the lamp the declutter plan names.
  */
 import { describe, expect, it } from "vitest";
-import { buildMachineRows, machineLamp, type GlobalMachineInput, type MachineProjectHost } from "../../lib/cockpit/machines";
+import {
+  buildMachineRows,
+  isIdleMachine,
+  machineGroupOf,
+  machineLamp,
+  machineMatches,
+  sortByStateThenName,
+  type GlobalMachineInput,
+  type MachineGroup,
+  type MachineProjectHost,
+} from "../../lib/cockpit/machines";
 
 const host = (projectId: string, hostName: string, extra: Partial<MachineProjectHost> = {}): MachineProjectHost => ({
   projectId,
@@ -68,5 +78,37 @@ describe("buildMachineRows", () => {
   it("carries the run host label of a project's primary", () => {
     const rows = buildMachineRows([host("a", "m.example", { runHost: "Big box" })], []);
     expect(rows[0].projects[0].runHost).toBe("Big box");
+  });
+});
+
+describe("the Machines view's order", () => {
+  const row = (name: string, group: MachineGroup, projects: { name: string }[] = []) => ({ name, group, projects });
+
+  it("groups each state the way the view lists it", () => {
+    expect(machineGroupOf("connected")).toBe("connected");
+    expect(machineGroupOf("stale")).toBe("failed");
+    expect(machineGroupOf("error")).toBe("failed");
+    expect(machineGroupOf("reachable")).toBe("up");
+    expect(machineGroupOf("unknown")).toBe("off");
+    expect(machineGroupOf("unreachable")).toBe("off");
+  });
+
+  it("sorts by state, then by name", () => {
+    const sorted = sortByStateThenName([row("b", "off"), row("z", "connected"), row("a", "off"), row("m", "failed"), row("c", "up")]);
+    expect(sorted.map((r) => r.name)).toEqual(["z", "m", "c", "a", "b"]);
+  });
+
+  it("folds only off machines no project uses", () => {
+    expect(isIdleMachine(row("a", "off"))).toBe(true);
+    expect(isIdleMachine(row("a", "off", [{ name: "P" }]))).toBe(false);
+    expect(isIdleMachine(row("a", "up"))).toBe(false);
+  });
+
+  it("filters by name, address or project", () => {
+    const r = { name: "GPU box", target: "ada@gpu1.example.org", projects: [{ name: "SimpleGNN" }] };
+    expect(machineMatches(r, "gpu1")).toBe(true);
+    expect(machineMatches(r, "simple")).toBe(true);
+    expect(machineMatches(r, "  ")).toBe(true);
+    expect(machineMatches(r, "other")).toBe(false);
   });
 });

@@ -116,9 +116,10 @@ describe("adding a global machine to a remote project", () => {
     const worker = { ...MACHINE, id: "w1", remote_path: "/work/proj", shared_fs: true } as ComputeHost;
     useProjectsStore.setState({ projects: [{ ...project, compute_hosts: [worker] }] });
 
-    // The Machines menu's picker: the project is there, but disabled.
+    // The Machines view's picker (the row's ⋯): the project is there, but disabled.
     render(<MachinesView />);
-    fireEvent.click(screen.getByRole("button", { name: "Add this machine to a project" }));
+    fireEvent.click(screen.getByRole("button", { name: /^More actions for / }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add to a project…" }));
     const pick = screen.getByRole("button", { name: /Proj/ }) as HTMLButtonElement;
     expect(pick.disabled).toBe(true);
     expect(within(pick).getByText(/Already added/)).toBeTruthy();
