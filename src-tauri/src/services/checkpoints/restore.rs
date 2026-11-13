@@ -25,7 +25,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::snapshot::{snapshot_locked, stage, Who};
+use super::snapshot::{snapshot_locked, stage, Who, MAX_FILE_BYTES};
 use super::store::{new_id, Kind, Row, Store};
 
 /// The most stdout read of a listing.
@@ -87,8 +87,27 @@ pub struct Failure {
     pub error: String,
 }
 
+/// Whether a restore leaves `path` alone: on disk it is now a file over the
+/// snapshot cap or not an ordinary file. Such a file is dropped from the
+/// store's index, so git reports the checkpoint's copy as "deleted since", but
+/// the `pre-restore` snapshot did not capture it either: writing the old
+/// version over it could not be undone. (The dialog counts these as left out.)
+fn left_alone(folder: &Path, path: &str) -> bool {
+    match std::fs::symlink_metadata(folder.join(path)) {
+        Ok(meta) => {
+            let kind = meta.file_type();
+            if kind.is_file() {
+                meta.len() > MAX_FILE_BYTES
+            } else {
+                !(kind.is_dir() || kind.is_symlink())
+            }
+        }
+        Err(_) => false,
+    }
+}
+
 /// `git diff-index --cached --name-status` of `row`'s tree against the
-/// (already staged) index.
+/// (already staged) index, without what [`left_alone`] names.
 fn name_status(store: &Store, tree: &str) -> Result<Vec<(char, String)>, String> {
     let out = store.run_ok(
         &["diff-index", "--cached", "--name-status", "-z", "-r", "--no-renames", "--ignore-submodules=all", tree],
@@ -102,7 +121,11 @@ fn name_status(store: &Store, tree: &str) -> Result<Vec<(char, String)>, String>
         if !matches!(status, 'A' | 'D' | 'M' | 'T') {
             continue;
         }
-        changes.push((status, String::from_utf8_lossy(path).into_owned()));
+        let path = String::from_utf8_lossy(path).into_owned();
+        if left_alone(&store.folder, &path) {
+            continue;
+        }
+        changes.push((status, path));
     }
     Ok(changes)
 }

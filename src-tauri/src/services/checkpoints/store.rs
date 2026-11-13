@@ -168,6 +168,19 @@ impl Store {
         Ok(Self { dir: root.join(key_of(&folder)), folder })
     }
 
+    /// [`Self::for_folder`] for the folder a tab was bound to, which is already
+    /// canonical: refused when it now resolves somewhere else. A linked
+    /// worktree's folder lies inside the project, where an agent can swap it
+    /// for a link, and the host's snapshot would then read whatever the link
+    /// names (into a store of its own) and a restore could write there.
+    pub fn for_bound(root: &Path, folder: &Path) -> Result<Self, String> {
+        let store = Self::for_folder(root, folder)?;
+        if store.folder != folder {
+            return Err(format!("{} now resolves to {}: not checkpointed", folder.display(), store.folder.display()));
+        }
+        Ok(store)
+    }
+
     /// An existing store folder `dir` (its meta names the folder).
     pub fn at(dir: PathBuf) -> Option<Self> {
         let meta: Meta = crate::storage::read_json(&dir.join("meta.json")).ok()?;

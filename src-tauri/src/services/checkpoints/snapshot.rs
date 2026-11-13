@@ -68,7 +68,7 @@ pub struct Staged {
 
 /// One snapshot of `folder` for `who`: the row it logged.
 pub fn snapshot(root: &Path, folder: &Path, kind: Kind, who: &Who, prompt_at: Option<u64>) -> Result<Row, String> {
-    let store = Store::for_folder(root, folder)?;
+    let store = Store::for_bound(root, folder)?;
     let _lock = store.lock()?;
     store.ensure(who.project_id.as_deref())?;
     snapshot_locked(&store, kind, who, prompt_at)

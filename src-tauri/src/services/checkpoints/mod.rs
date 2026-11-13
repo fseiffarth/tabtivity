@@ -236,7 +236,7 @@ pub struct Listing {
 pub fn list(uid: &str) -> Listing {
     let enabled = enabled_in(&state_root());
     let Ok(bound) = bound(uid) else { return Listing { enabled, bound: false, rows: Vec::new() } };
-    let mut rows = Store::for_folder(&root(), &bound.folder).map(|s| s.rows()).unwrap_or_default();
+    let mut rows = Store::for_bound(&root(), &bound.folder).map(|s| s.rows()).unwrap_or_default();
     let skip = rows.len().saturating_sub(LIST_ROWS);
     rows.drain(..skip);
     Listing { enabled, bound: true, rows }
@@ -244,7 +244,7 @@ pub fn list(uid: &str) -> Listing {
 
 fn store_row(uid: &str, id: &str) -> Result<(Bound, Store, Row), String> {
     let bound = bound(uid)?;
-    let store = Store::for_folder(&root(), &bound.folder)?;
+    let store = Store::for_bound(&root(), &bound.folder)?;
     let row = store.row(id).filter(Row::has_snapshot).ok_or("that checkpoint is gone")?;
     Ok((bound, store, row))
 }

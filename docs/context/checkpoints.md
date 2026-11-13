@@ -52,6 +52,13 @@ a filter on what git's diff reports. Before any write each path is checked
 check and write remains a race with another process in the same folder; the
 restore refuses while this tab's agent works and the dialog confirms for other
 tabs'. A restore takes a `pre-restore` snapshot first: that is Undo restore.
+A file that is now over the snapshot cap (or not an ordinary file) is dropped
+from the store's index, so git would call the checkpoint's copy "deleted since";
+`restore::left_alone` keeps it out of the list and of the restore, since the
+`pre-restore` snapshot does not hold it and the write could not be undone.
+The folder a tab is bound to is canonical; `Store::for_bound` refuses it once it
+resolves elsewhere (a linked worktree's folder lies in the project, where the
+agent can swap it for a link).
 
 ## Limits worth knowing
 

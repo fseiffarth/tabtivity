@@ -493,6 +493,54 @@ fn a_leading_folder_that_became_a_link_is_never_written_through() {
     assert_eq!(read(&fx.folder, "keep.txt").as_deref(), Some("keep"));
 }
 
+// A file that outgrew the cap drops out of the store's index, so it reads as
+// "deleted since"; the `pre-restore` snapshot does not hold it either, so a
+// restore must leave it as it is.
+#[test]
+fn a_file_that_outgrew_the_cap_is_left_alone_by_a_restore() {
+    let fx = fixture();
+    put(&fx.folder, "big.bin", "small");
+    put(&fx.folder, "keep.txt", "keep");
+    let ckpt = snap(&fx, Kind::Pre, "t1");
+    let big = std::fs::OpenOptions::new().write(true).open(fx.folder.join("big.bin")).unwrap();
+    big.set_len(super::snapshot::MAX_FILE_BYTES + 1).unwrap();
+    drop(big);
+    put(&fx.folder, "keep.txt", "changed");
+
+    let st = store(&fx);
+    let listed = since(&st, &ckpt, &who("t1"), None).unwrap();
+    assert_eq!(listed.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["keep.txt"]);
+    assert_eq!(listed.left_out, 1);
+    let done = restore(&st, &ckpt, &who("t1"), None).unwrap();
+    assert!(done.failed.is_empty(), "{:?}", done.failed);
+    assert_eq!(std::fs::metadata(fx.folder.join("big.bin")).unwrap().len(), super::snapshot::MAX_FILE_BYTES + 1);
+    assert_eq!(read(&fx.folder, "keep.txt").as_deref(), Some("keep"));
+}
+
+// A linked worktree's folder lies inside the project, where the fenced agent
+// can replace it with a link: the host must not then snapshot (or restore
+// into) whatever the link names.
+#[cfg(unix)]
+#[test]
+fn a_bound_folder_swapped_for_a_link_is_not_snapshotted_as_the_place_it_points_to() {
+    let fx = fixture();
+    let bound = fx.folder.join("wt");
+    put(&bound, "a.txt", "mine");
+    let bound = bound.canonicalize().unwrap();
+    snapshot(&fx.root, &bound, Kind::Pre, &who("t1"), None).unwrap();
+
+    let elsewhere = fx.folder.parent().unwrap().join("elsewhere");
+    put(&elsewhere, "secret.txt", "not the project's");
+    let elsewhere = elsewhere.canonicalize().unwrap();
+    std::fs::remove_dir_all(&bound).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &bound).unwrap();
+
+    let err = snapshot(&fx.root, &bound, Kind::Post, &who("t1"), None).unwrap_err();
+    assert!(err.contains("now resolves"), "{err}");
+    assert!(!fx.root.join(store::key_of(&elsewhere)).exists(), "a store was made for the link's target");
+    assert!(Store::for_bound(&fx.root, &elsewhere).is_ok(), "a folder that is itself canonical is fine");
+}
+
 #[test]
 fn plain_path_refuses_what_is_not_a_path_inside_the_folder() {
     let fx = fixture();
