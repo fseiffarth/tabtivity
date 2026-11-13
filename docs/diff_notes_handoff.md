@@ -119,7 +119,7 @@ Run with `scripts/gates-job.sh start` (frontend scope, 24 files against a2a5ecb4
 
 ## Reviewer notes (2026-11-13)
 
-Reviewed `develop..HEAD` (1288b3b1e, 5ad50fdde): prompt builder, store, UI,
+Reviewed `develop..HEAD` (1288b3b1e, 5ad50fdde); fixes in aceb58445: prompt builder, store, UI,
 steering, i18n, CSS, docs. Two confirmed bugs, both fixed with a test:
 
 - **`C` opened a note box that could not be typed into while steering was on.**
