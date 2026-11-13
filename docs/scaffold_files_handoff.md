@@ -221,6 +221,91 @@ no diff once committed). Frontend gates skipped (no frontend change).
 
 ## R1
 
+Reviewer R1 of `08e549f87..scaffold-files` (I1 + I2). Branch `worktree-agent-a6275b33ada467acc`
+(on top of `scaffold-files` 0fa966b29). Catalog API for I3 is unchanged.
+
+### Checked and found sound
+
+- Writes into the project tree: `create_doc_at` / `write_scaffold_file` are create-new + `O_NOFOLLOW`
+  (`write_no_follow`); the only overwrite is `upgrade_doc_at` (AGENTS.md, only while untouched, also
+  `O_NOFOLLOW`; link/FIFO/oversize never reach it). Reads all go through `read_record_capped`
+  (4 MiB, no-follow, `O_NONBLOCK` + regular-file check).
+- `AGENTS.2026-11-13.md` is byte-identical to the AGENTS.md text on `08e549f87`; every history copy
+  (also CRLF) still upgrades; the pin test holds both hashes.
+- "No scaffold" tag: a project holding the old 10 files + `.claude/settings.json` is not tagged
+  (`a_project_holding_all_ten_old_files_reports_nothing_missing`); a missing default (or missing
+  `.gitignore` on git projects) still tags; dangling links count as present.
+- `migrate_legacy_projects` / import call sites / `migration_steps_at` / `apply_migration_steps_at`
+  go through the catalog; step ids `file:` / `stub:` unchanged, `claude_settings` gone.
+- `remote_scaffold.rs`: plan only creates catalog defaults + `.gitignore`, create-new over SFTP,
+  `committable_paths` stages only scaffold paths that are plain files. No `.claude` logic left.
+- I2: `merge_json` over-cap file is left alone for all five callers (`register_in_home` hook merges,
+  Gemini, OpenCode config, both `opencode_session` merges); a link at the name is replaced
+  (HomeFile rename), never followed; Gemini/Aider merges are append-only and idempotent, a user's
+  entries and order stay; non-object `context`, odd `fileName`, non-mapping YAML, bad UTF-8, over-cap
+  files are untouched. A 14-level YAML alias bomb (< 1 MiB) is refused by serde_norway quickly
+  (now pinned by a test).
+- Brand rule: no app-name literal in code in the range (comments only). No `AppHandle` in
+  `services/scaffold.rs`.
+
+### Fixed
+
+- `a75485ff1` `agents_empty_at` read a real `AGENTS.md` that is not UTF-8 or is over 4 MiB as
+  `Missing`, i.e. "empty": `TerminalAgentsEmptyCard` then invited an agent to fill (overwrite) a file
+  with real guidance (the old `read_to_string` said "not empty" for these). A plain file the reader
+  cannot take is now not empty; links, FIFOs and absent stay "empty" as the plan says. Test:
+  `scaffold::tests::an_unreadable_plain_agents_md_is_not_empty` (failed before).
+- `54e314311` `merge_aider_read`: a config that parses to `Null` because it is the scalar `null` / `~`
+  (not just comments) got `read:` appended under it, producing invalid YAML. Now left alone. Test: two
+  more rows in `an_aider_config_that_is_not_what_we_expect_is_left_alone` (failed before). Same commit
+  adds `an_over_cap_or_bomb_config_is_left_exactly_as_it_is` (over-cap JSON for Gemini/OpenCode,
+  YAML alias bomb; a pin, passed before too).
+
+### Flagged for user (not changed)
+
+- `docs_status_at` reports a symlinked / non-UTF-8 / over-cap *existing* doc as `missing` with
+  `creatable: true`, so it shows a "create" ghost row that `create_doc_at` then refuses (`false`).
+  Not harmful (nothing is written), but I3/I4 should either hide the ghost row when
+  `present_at` is true or word the refusal; the status API would need a `present` bit for that.
+- `upgrade_doc_at` reads, then truncates and writes through a second open: a user save between the
+  two (microseconds) would be lost. Pre-existing shape; a single-fd read-check-write would close it.
+- `git_scaffold_commit` (new local git project) runs `git add -A`, so an *imported* folder without
+  `.git` gets its whole tree committed. Pre-existing and unchanged by this range (the old scaffold
+  was in that tree too); the remote path stages only scaffold paths.
+- `tests/projects_commands.rs` joins `".claude/settings.json"` as one literal (AGENTS.md wants per
+  component; works on Windows anyway).
+- Aider/Gemini: nothing new beyond I2's flags.
+
+### For I4 (frontend references to dropped items; not touched)
+
+- i18n, all five dictionaries (`en/de/es/fr/it`): the migration-repair text near `en.ts:2875`
+  and `pill.repairScaffoldTitle` (`en.ts:5166`) still name `CLAUDE.md` / `.claude/settings.json`.
+- `src/components/projects/ProjectDialog.tsx:69,1202` `AGENT_POINTER_DOCS` + `projectDialog.scaffoldPointsAtAgents`:
+  `scaffold_preview` never lists `CLAUDE.md` / `GEMINI.md` now, so that branch is dead.
+- `src/lib/projects/scaffold.ts:147,150` (`buildScaffoldFillPrompt`) still tells the agent that
+  PROJECT.md maps "the other scaffold files" / pointers.
+- `src/lib/viewers/fileUtils.ts:17` `STANDARD_PROJECT_FILES` (+ `FileBrowser.tsx:488`,
+  `useFileTreeRows.ts:74`, `mobile-web/.../FilesLibrary.tsx:106`) still hardcode the ten names.
+- Fixtures only (string fixtures, no behaviour): `src/__tests__/projects/ScaffoldRepair.test.ts`,
+  `ProjectMigration.test.ts`, `agents/ScaffoldAgentFill.test.ts`. No frontend code reads the
+  `claude_settings` step id or a `.claude/settings.json` preview item.
+- `docs/filemap_backend.md`: `remote/remote_scaffold.rs` row still says `.claude/settings.json`;
+  no row yet for `services/scaffold.rs` (I5).
+
+### Gates
+
+`scripts/gates-job.sh start --base 08e549f87` (frontend gates skipped: no frontend change).
+- PASS: brand, whitespace, clippy `-p tabtivity -p app-serverd --all-targets`, daemon-lib clippy,
+  `-p app-serverd` clippy: zero warnings.
+- `cargo test -p tabtivity -p app-serverd` lib: 5606 passed, 1 failed = the known
+  `git_push_mcp` YAML alias-bomb 5 s bound; alone it passes (0.14 s), and a second full run
+  (`--tests`) was 5607 passed, 0 failed. Integration: `projects_commands` 144, 39, 1, 1 passed, 0 failed.
+- test-dlib (`cargo test -p tabtivity --no-default-features --lib --test server_secrets`), run by hand
+  because the job stops after a lib failure: 5421 + 1 passed. One earlier run of it failed my new
+  `an_over_cap_or_bomb_config_...` once under heavy parallel load (it carried a 5 s wall-clock bound
+  I had added); it passes alone and in the next full run, and I removed the bound in the last commit.
+- The last commit changes only that test (a deleted timing assert); re-ran `agent_hint` filter (20 passed).
+
 ## I3 Commands
 
 ## R2
