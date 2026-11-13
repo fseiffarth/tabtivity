@@ -1388,6 +1388,24 @@ in `~/.config/opencode/opencode.json` `instructions` (its global `AGENTS.md`
 would shadow the `~/.claude/CLAUDE.md` fallback). All but Copilot are from the vendors'
 docs, not live.
 
+"Reads the project's `AGENTS.md`" (new projects scaffold no `CLAUDE.md` /
+`GEMINI.md` pointer; re-check yes/no per CLI on update, table in
+`docs/scaffold_files_plan.md` §3a). Two CLIs do not by default, so
+`agent_hint::register_in_home` sets it in Tabtivity's own agent homes, after
+the global layer: **Gemini** `~/.gemini/settings.json` `context.fileName`
+(string or array; `["GEMINI.md","AGENTS.md"]` union, the user's entries kept,
+the first name is where `save_memory` writes), **Aider** `~/.aider.conf.yml`
+`read:` (string or list, resolved against the cwd; a project without
+`AGENTS.md` only prints "Read-only file … does not exist. Skipping." per
+`aider/coders/base_coder.py`, read 2026-11-13, not live: no real Aider is
+installed here to run `verify-cli` on). Re-check the key names and that the
+default file lists did not change. Native readers (nothing to set): Codex,
+Antigravity, Vibe, Kiro, Cline, OpenCode, Cursor, Copilot, Droid, Grok, Qwen
+(since 0.11.1), Auggie, Kilo, Junie, Goose, Pi, Crush, Amp, Kimi, Qoder; Claude
+only when no `CLAUDE.md` sits in or above the project; CodeBuddy only without a
+`CODEBUDDY.md`. No way found: Plandex, SWE-agent, mini-SWE-agent, Continue,
+OpenClaw (own workspace file by design); Muse unverified.
+
 The `tabtivity-send` skill (`agent_hint::SKILL_DIRS`, 2026-11-08) leans on
 each CLI's user-skill folder, found by searching the installed builds, not
 live: Claude 2.1.319 `~/.claude/skills`, OpenCode 2.2.6 `~/.claude` and
