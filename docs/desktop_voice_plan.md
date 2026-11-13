@@ -586,8 +586,8 @@ connecting SSIP there would freeze the window). Each gets a `Client` row in
     `temperature_inc = 0`. Text is read lossily.
   - Each finished segment comes back as `final` text, or an empty `final` when
     dropped. A due final aborts a running partial through the abort callback.
-  - Partials: about once a second while a segment is open, over only its last
-    ~5 s, skipped while one is still running.
+  - Partials: the whole open segment, adaptive (history: once a second over
+    the last 5 s until 2026-11-13); see `docs/context/voice.md` "Live preview".
   - Language: the desktop speech language (step 3); auto-detect only if picked
     explicitly. An optional initial prompt for step 9's name hints.
 - **Phantom text filter** (pure, `fn(text, no_speech, lang, prompt)`): drop a
