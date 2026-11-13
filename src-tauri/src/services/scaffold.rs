@@ -404,10 +404,16 @@ pub fn upgrade_doc_at(dir: &Path, doc: &ScaffoldDoc) -> io::Result<bool> {
 
 /// True when `dir`'s `AGENTS.md` holds no project guidance: missing, empty or
 /// an untouched template of any build. A link or FIFO there is `Missing`, so
-/// also "empty" — and never followed.
+/// also "empty" — and never followed. A plain file this module cannot read
+/// (over the cap, not UTF-8) is somebody's text, not an empty doc, so it is not
+/// "empty" either (the card this drives asks an agent to fill the file in).
 pub fn agents_empty_at(dir: &Path) -> bool {
     let agents = doc(AGENTS_MD).expect("AGENTS.md is in the catalog");
-    matches!(state_at(dir, agents), DocState::Missing | DocState::Template)
+    match state_at(dir, agents) {
+        DocState::Template => true,
+        DocState::Missing => !std::fs::symlink_metadata(dir.join(agents.name)).is_ok_and(|m| m.is_file()),
+        DocState::Edited | DocState::Pointer => false,
+    }
 }
 
 /// The catalog as the project's file listing shows it, in catalog order: every

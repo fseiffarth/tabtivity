@@ -228,3 +228,19 @@ fn missing_defaults_names_what_a_repair_would_create() {
     std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n").unwrap();
     assert!(missing_defaults_at(tmp.path()).is_empty(), "a template-state doc is not missing");
 }
+
+/// A real `AGENTS.md` this module cannot read (not UTF-8, over the cap) holds
+/// somebody's guidance: it is not "empty", or the fill-in card would invite an
+/// agent to write over it. Nothing at the name, or an untouched template, is.
+#[test]
+fn an_unreadable_plain_agents_md_is_not_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    assert!(agents_empty_at(dir), "nothing there");
+    std::fs::write(dir.join("AGENTS.md"), [0xff, 0xfe, b'#', b' ', b'x']).unwrap();
+    assert!(!agents_empty_at(dir), "not UTF-8");
+    std::fs::write(dir.join("AGENTS.md"), vec![b'x'; (MAX_SCAFFOLD_DOC_BYTES + 1) as usize]).unwrap();
+    assert!(!agents_empty_at(dir), "over the cap");
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    assert!(agents_empty_at(dir), "an untouched template");
+}
