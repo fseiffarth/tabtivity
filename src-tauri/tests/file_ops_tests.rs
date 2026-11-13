@@ -353,4 +353,3 @@ fn scaffold_project_gitignore_contains_app() {
         ".gitignore must exclude .{SLUG}/: {gitignore}"
     );
 }
-
