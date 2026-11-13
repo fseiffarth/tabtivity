@@ -387,18 +387,97 @@ pub fn create_doc_at(dir: &Path, doc: &ScaffoldDoc) -> io::Result<bool> {
 /// provably nobody's, so replacing it loses nothing. Returns whether it was
 /// rewritten. A link, a FIFO, an edited file: left alone.
 ///
+/// The old file is never opened for writing. The template goes into an
+/// exclusively created temporary beside it, the doc is read again, and only if
+/// it is still the same inode holding an untouched text does the temporary
+/// replace it by `rename` (so a save made in between is kept, not truncated
+/// away). The window left is the gap between that last read and the rename.
+///
 /// [`upgradable`]: ScaffoldDoc::upgradable
 pub fn upgrade_doc_at(dir: &Path, doc: &ScaffoldDoc) -> io::Result<bool> {
+    upgrade_doc_with(dir, doc, || {})
+}
+
+/// [`upgrade_doc_at`] with `between` run after the temporary is written and
+/// before the doc is read again: where a test plays the user's save.
+fn upgrade_doc_with(dir: &Path, doc: &ScaffoldDoc, between: impl FnOnce()) -> io::Result<bool> {
     if !doc.upgradable() {
         return Ok(false);
     }
     let path = dir.join(doc.name);
-    match read_scaffold_doc(&path) {
-        Some(existing) if existing != doc.template && doc.is_untouched(&existing) => {
-            write_no_follow(&path, doc.template.as_bytes(), false)?;
-            Ok(true)
+    let untouched = |read: Option<(String, FileId)>| match read {
+        Some((text, id)) if doc.is_untouched(&text) => Some((text, id)),
+        _ => None,
+    };
+    let Some((existing, id)) = untouched(read_with_id(&path)) else {
+        return Ok(false);
+    };
+    if existing == doc.template {
+        return Ok(false);
+    }
+    let tmp = dir.join(temp_name(doc.name));
+    // Create-new + no-follow: a name somebody planted is an error, not a target.
+    write_no_follow(&tmp, doc.template.as_bytes(), true)?;
+    let swapped = (|| {
+        copy_permissions(&path, &tmp);
+        between();
+        if untouched(read_with_id(&path)).is_none_or(|(_, now)| now != id) {
+            return Ok(false);
         }
-        _ => Ok(false),
+        std::fs::rename(&tmp, &path).map(|()| true)
+    })();
+    if !matches!(swapped, Ok(true)) {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    swapped
+}
+
+/// Which file a read saw: `(device, inode)`, so a doc replaced by another file
+/// with the same bytes still reads as changed. Where the platform has no inode
+/// (Windows) length and modification time stand in.
+type FileId = (u64, u128);
+
+/// [`read_scaffold_doc`] with the identity of the file that was read, taken
+/// from the opened descriptor.
+fn read_with_id(path: &Path) -> Option<(String, FileId)> {
+    use std::io::Read;
+    let file = crate::services::home_io::open_regular(path)?;
+    let id = file_id(&file.metadata().ok()?);
+    let mut bytes = Vec::new();
+    file.take(MAX_SCAFFOLD_DOC_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAX_SCAFFOLD_DOC_BYTES {
+        return None;
+    }
+    Some((String::from_utf8(bytes).ok()?, id))
+}
+
+#[cfg(unix)]
+fn file_id(meta: &std::fs::Metadata) -> FileId {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino() as u128)
+}
+
+#[cfg(not(unix))]
+fn file_id(meta: &std::fs::Metadata) -> FileId {
+    let nanos = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    (meta.len(), nanos)
+}
+
+/// A name for the upgrade's temporary: dot-led, in the doc's own folder.
+fn temp_name(name: &str) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!(".{name}.{}-{}-{n}.tmp", crate::brand::SLUG, std::process::id())
+}
+
+/// The replaced file's permission bits onto its replacement; best effort.
+fn copy_permissions(from: &Path, to: &Path) {
+    if let Ok(meta) = std::fs::symlink_metadata(from) {
+        let _ = std::fs::set_permissions(to, meta.permissions());
     }
 }
 
@@ -419,10 +498,24 @@ pub fn agents_empty_at(dir: &Path) -> bool {
 /// The catalog as the project's file listing shows it, in catalog order: every
 /// entry that is there, plus the `creatable` ones that are not (ghost rows).
 /// An absent `REMARKS.md` or pointer file is left out.
+///
+/// Something *there* is never `Missing`, so it never gets a ghost row that a
+/// create would refuse: a link (also a dangling one), a FIFO, a non-UTF-8 or
+/// over-cap file — anything [`read_scaffold_doc`] cannot take — is reported as
+/// `Edited` ("somebody's, not ours to judge"), with `creatable` as the
+/// catalog says; the listing keys its ghost row on `Missing` alone. A folder
+/// named like a doc gets no row: the tree already shows the folder.
 pub fn docs_status_at(dir: &Path) -> Vec<DocStatus> {
     DOCS.iter()
         .filter_map(|d| {
-            let state = state_at(dir, d);
+            let mut state = state_at(dir, d);
+            if state == DocState::Missing {
+                match std::fs::symlink_metadata(dir.join(d.name)) {
+                    Ok(meta) if meta.is_dir() => return None,
+                    Ok(_) => state = DocState::Edited,
+                    Err(_) => {}
+                }
+            }
             (state != DocState::Missing || d.creatable).then(|| DocStatus {
                 name: d.name,
                 state,
