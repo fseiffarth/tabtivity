@@ -1141,6 +1141,20 @@ Antigravity's newest release comes from the manifest its installer reads
 `install.ps1` exit 0 at "already installed". Inside a fence the binary's folder
 is read-only, so neither `agy update` nor its background self-update can work.
 
+Cursor is on no public registry and `cursor-agent update` asks Cursor's
+signed-in API, so its newest build is read out of the download URL in
+`cursor.com/install` (`agent_latest::Source::InstallScript`, marker
+`downloads.cursor.com/lab/`), and the installed build from the
+`~/.local/share/cursor-agent/versions/<build>/` folder its launcher links into.
+Running the installer again always fetches the newest build and relinks, so
+Update is the installer. Its only auto-update switch is the hidden top-level
+`--disable-auto-update` flag (read in 2026.09.28 and 2026.11.11; no environment
+variable), so every fenced Cursor session gets it first in its argv
+(`agent_install::AUTOUPDATE_OFF_ARGS`, `apply_fence_args`) — only on a build at
+least that old, read from its `versions/` folder, and never before a
+subcommand. Without it a fenced Cursor downloaded every new build into the
+agent home and could never link it in. Re-check the flag with each new build.
+
 Vibe's `install.sh` (Manage CLIs' Install and Update) picks upgrade over
 install when it finds *any* `vibe` on its PATH, then runs `uv tool upgrade
 mistral-vibe` against the install home's `UV_TOOL_DIR`, where a host-only
