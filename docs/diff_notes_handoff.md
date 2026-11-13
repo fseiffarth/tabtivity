@@ -5,7 +5,8 @@ Never run live: the feature wears the `diff-notes` `UntestedTag`.
 
 ## Commits
 
-- feat(reader): the feature, tests, docs (this commit; its sha is in the follow-up commit below)
+- `1288b3b1e` feat(reader): notes on diff lines, added to the Chat draft (the whole feature, tests, docs)
+- the commit after it: this file with that sha filled in
 
 ## What was built
 
