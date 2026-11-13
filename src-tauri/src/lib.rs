@@ -1733,6 +1733,8 @@ pub fn run() {
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
+            // Per-turn checkpoints announce a finished snapshot as `checkpoint-added`.
+            services::checkpoints::start(tauri_host::system_ctx(_app.handle()));
             {
                 // The Reader's transcript watches (`services::transcript_watch`)
                 // announce a change as `transcript-changed` with the watch id.
@@ -2564,6 +2566,13 @@ pub fn run() {
             // Local-loss warnings (#28q): what lockstep/sync destroyed in the mirror.
             commands::local_loss::local_loss_list,
             commands::local_loss::local_loss_ack,
+            commands::checkpoints::checkpoint_list,
+            commands::checkpoints::checkpoint_diff,
+            commands::checkpoints::checkpoint_restore,
+            commands::checkpoints::checkpoint_now,
+            commands::checkpoints::checkpoint_settings_get,
+            commands::checkpoints::checkpoint_settings_set,
+            commands::checkpoints::checkpoint_clear,
             commands::git::git_diff_file,
             commands::git::git_blame,
             commands::git::git_file_log,
@@ -2929,6 +2938,8 @@ pub fn run() {
                 // bounded by its own wall clock, ended here so none outlives
                 // the quit.
                 services::sheet_reader::kill_all_for_exit();
+                // A checkpoint snapshot in flight finishes (bounded); no new one starts.
+                services::checkpoints::stop_for_exit();
                 // The fenced Copilot language servers (one per consented project).
                 tauri::async_runtime::block_on(commands::copilot::stop_all_for_exit());
                 // Let the machine sleep again if a talk was on: the presenter's

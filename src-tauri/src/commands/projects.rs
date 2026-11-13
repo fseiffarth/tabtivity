@@ -1157,6 +1157,8 @@ pub fn archive_project_blocking(project_id: String, archived_at: String) -> Resu
         }
         Ok(())
     })?;
+    // The folder moved into the archive; its checkpoints name the old place.
+    crate::services::checkpoints::purge_project(&project_id);
     Ok(())
 }
 
@@ -1227,6 +1229,8 @@ fn forget_project_state(project_id: &str, remote: bool) -> Result<(), String> {
         dirs.push(remote_project_state_dir(project_id));
     }
     remove_dirs_if_present(&dirs)?;
+    // Its per-turn checkpoints (`services::checkpoints`).
+    crate::services::checkpoints::purge_project(project_id);
     purge_project_time(project_id)
 }
 

@@ -578,6 +578,14 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("detect_project_ides", Client),
     ("open_project_in_ide", Client),
     ("set_ide_launcher", Client),
+    // commands/checkpoints.rs
+    ("checkpoint_clear", Core),
+    ("checkpoint_diff", Core),
+    ("checkpoint_list", Core),
+    ("checkpoint_now", Core),
+    ("checkpoint_restore", Core),
+    ("checkpoint_settings_get", Core),
+    ("checkpoint_settings_set", Core),
     // commands/local_loss.rs
     ("local_loss_ack", Core),
     ("local_loss_list", Core),

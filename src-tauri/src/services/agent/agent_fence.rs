@@ -194,7 +194,7 @@ pub struct AgentFenceStatus {
 /// Default read-only host paths made visible inside the otherwise-empty home.
 pub const DEFAULT_PATHS: &[&str] = crate::schema::settings::DEFAULT_AGENT_FENCE_PATHS;
 
-fn basename(cmd: &str) -> &str {
+pub(crate) fn basename(cmd: &str) -> &str {
     let base = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
     base.strip_suffix(".exe").unwrap_or(base)
 }
@@ -1450,6 +1450,7 @@ pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
     // A private store may itself be a symlink outside the state tree.
     for name in ["calendar.json", "projects.json", "settings.json", "boxes.json", "root_mcp", "mail",
         "time_summary.json", "usage_stats.json", "remote-projects", "sessions",
+        crate::services::checkpoints::store::DIR, "checkpoints.json",
         crate::services::agent_global::GLOBAL_DIR] {
         paths.push(state_dir.join(name));
         if let Ok(real) = state_dir.join(name).canonicalize() { paths.push(real); }

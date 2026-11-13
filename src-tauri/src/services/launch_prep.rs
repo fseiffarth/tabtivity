@@ -1190,7 +1190,19 @@ pub async fn prepare(
                 }
                 _ => false,
             };
-            crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs)
+            let left = crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs);
+            // Per-turn checkpoints (`services::checkpoints`): only a local
+            // project's agent tab gets a folder; remote, root, Host-session
+            // and assistant tabs are unbound. The folder is found among the
+            // fence roots (`projects.json` / `boxes.json`), never from the tab.
+            let local_project = !project
+                .as_deref()
+                .is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
+            let checkpoint_roots = fence_roots
+                .as_deref()
+                .filter(|_| agent_spawn && !assistant && !remote_agent_run && !opts.host_session && local_project);
+            crate::services::checkpoints::bind(&uid, &opts.cwd, project.as_deref(), &opts.cmd, checkpoint_roots);
+            left
         }
         None => Default::default(),
     };

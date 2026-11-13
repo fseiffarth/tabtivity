@@ -75,6 +75,9 @@ pub mod port_forward;
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// Per-turn checkpoints: a snapshot of an agent tab's folder as each turn begins and
+// ends, in a store of its own under the state dir, and a restore with its own undo.
+pub mod checkpoints;
 // The way a fenced agent with no network reaches the local Ollama and a few of
 // Tabtivity's tools (Local models only + Cut network, docs/context/local_models_only.md).
 #[cfg(unix)]

@@ -35,6 +35,7 @@ pub mod hpc_ws;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod ide;
+pub mod checkpoints;
 pub mod local_loss;
 pub mod mail;
 pub mod markdown;

@@ -8659,6 +8659,7 @@ fn start_background_relays(core_ctx: &app_core::CoreCtx, state_dir: &std::path::
     }
     if browser_clients || server {
         crate::services::agent_turn::start(core_ctx.clone());
+        crate::services::checkpoints::start(core_ctx.clone());
         // The browser Reader's transcript watches (`transcript-changed`), as
         // the window installs its own: this process's `agent_tab_transcript`
         // arms them, and without a sink the panel would only poll.

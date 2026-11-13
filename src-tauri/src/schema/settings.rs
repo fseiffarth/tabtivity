@@ -747,6 +747,12 @@ pub struct Settings {
     /// listen mode is the same session as dictation's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_hands_free: Option<bool>,
+    /// EXPERIMENTAL, default OFF. Per-turn checkpoints of an agent tab's
+    /// folder (`services::checkpoints`). The frontend gate for the controls;
+    /// the capture switch itself is the backend's `checkpoints.json`, which
+    /// the Settings card sets in the same click.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_checkpoints: Option<bool>,
     /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the

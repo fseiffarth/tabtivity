@@ -237,6 +237,7 @@ pub fn on_tab_gone(pty_id: &str) {
     let mut bg = bg_tasks().lock_ok();
     let mut projects = bound_projects().lock_ok();
     for uid in gone {
+        crate::services::checkpoints::unbind(&uid);
         projects.remove(&uid);
         states.remove(&uid);
         jobs.remove(&uid);
@@ -537,17 +538,29 @@ fn last_scan() -> &'static Mutex<Option<Instant>> {
     L.get_or_init(|| Mutex::new(None))
 }
 
-/// Record what the hooks just said about `uid`. `Idle` is the session's end:
-/// its state and job flag go with it.
-fn note_state(uid: &str, state: TurnState) {
+/// The state `uid`'s hooks last reported, if the tab has spoken and not ended.
+pub fn state_of(uid: &str) -> Option<TurnState> {
+    states().lock_ok().get(uid).copied()
+}
+
+/// When the turn record at `path` was written, in milliseconds since the
+/// epoch (never read through a link: the agent can write the record's folder).
+fn record_written_ms(path: &Path) -> Option<u64> {
+    let modified = std::fs::symlink_metadata(path).ok()?.modified().ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
+}
+
+/// Record what the hooks just said about `uid`; the state it had before.
+/// `Idle` is the session's end: its state and job flag go with it.
+fn note_state(uid: &str, state: TurnState) -> Option<TurnState> {
     // Whatever the agent just did, the next timer tick must look again.
     settled().lock_ok().remove(uid);
     if state == TurnState::Idle {
-        states().lock_ok().remove(uid);
+        let prev = states().lock_ok().remove(uid);
         jobs().lock_ok().remove(uid);
         turn_ends().lock_ok().remove(uid);
         bg_tasks().lock_ok().remove(uid);
-        return;
+        return prev;
     }
     let mut states = states().lock_ok();
     let prev = states.insert(uid.to_string(), state);
@@ -562,6 +575,7 @@ fn note_state(uid: &str, state: TurnState) {
             None => ends.remove(uid),
         };
     }
+    prev
 }
 
 /// Whether a shell of `uid`'s agent was running at the last scan.
@@ -944,7 +958,10 @@ pub fn start(ctx: CoreCtx) {
                         continue;
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {
-                        note_state(&uid, state);
+                        let prev = note_state(&uid, state);
+                        // A turn's edges are checkpointed (`services::checkpoints`),
+                        // queued on its folder's worker: no lock is held here.
+                        crate::services::checkpoints::on_turn(&uid, prev, state, record_written_ms(&path));
                         if let Some(dir) = path.parent() {
                             note_background_tasks(&uid, dir);
                         }
