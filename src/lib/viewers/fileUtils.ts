@@ -14,6 +14,12 @@ export interface FileEntry {
   mime: string | null;
 }
 
+/**
+ * The root entries the "Project docs" group holds. The backend owns the truth
+ * (`project_docs_status`); this is the fallback before its answer arrives. A
+ * Rust test (`services::scaffold` `the_ts_fallback_list_is_the_catalog`) keeps
+ * it equal to the catalog's names plus `.gitignore` and `.git`.
+ */
 export const STANDARD_PROJECT_FILES = new Set([
   "PROJECT.md",
   "README.md",
@@ -26,7 +32,6 @@ export const STANDARD_PROJECT_FILES = new Set([
   "STATUS.md",
   "DOCUMENTATION.md",
   ".gitignore",
-  ".claude",
   ".git",
 ]);
 

@@ -124,6 +124,9 @@ pub mod project_registry;
 // The project scaffold catalog: the root docs a project can hold, their
 // templates and their three states (missing / template / edited).
 pub mod scaffold;
+// The agent CLIs' own per-project memories (Claude's auto memory, Codex's
+// memories), listed and read through agent-home handles, read-only.
+pub mod agent_memory;
 // The boxes.json store and the box tab scope (`box:<id>`, its allowed roots).
 pub mod box_store;
 // Which roots the absolute-path file commands may touch, and the

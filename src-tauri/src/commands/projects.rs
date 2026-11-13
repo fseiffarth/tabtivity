@@ -3788,7 +3788,7 @@ fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<Sca
 /// there is no local target to repair (e.g. a remote project with no mirror
 /// recorded yet, or a remote-only one, whose leftover `mirror` pointer is not a
 /// copy it keeps and must not be written into).
-fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
+pub(crate) fn scaffold_target_for_entry(entry: &ProjectEntry) -> Option<(PathBuf, bool)> {
     if crate::services::remote::entry_is_remote_only(entry) {
         return None;
     }

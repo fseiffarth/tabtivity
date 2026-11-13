@@ -66,6 +66,7 @@ pub mod print_native;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod printing;
+pub mod project_docs;
 pub mod project_runtime;
 // Full project export/import — move a project to another computer
 // (docs/context/project_transfer.md).
