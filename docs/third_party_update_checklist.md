@@ -611,6 +611,22 @@ Claude's `/fast` — different thing.
   The `… +N models` note counts it among the rows below. Hook payloads (19
   events, `cmp.py`, `sedcheck.py` 0 mismatches), `/usage` envelope and panel
   lines, `--help` and the permission prompt's rows read the same as 2.1.319.
+- **2.1.323 (2026-11-13), outside Tabtivity, beside 2.1.322** (both from the
+  agent install's `versions/`, tab variables unset): `hooks.sh` 19 events with
+  the same keys (`cmp.py`), `sedcheck.py` 0 mismatches over 23 payloads,
+  transcript record types unchanged (`meta.py`), `-p --resume` of a `plan`
+  session still the default mode; `/usage` three meters, every reset placed;
+  `--help` differs only in `claude rm`'s wording (the conversation is kept).
+  `send_now.py` with the chord: tool, typed, stream and early read as on
+  2.1.322. The changelog's "last key of a chord acting on a dialog's text
+  field" fix does not touch the Chat's Ctrl+X Ctrl+S. `prompt.py` and `model.py`
+  (both widths, `expand`): rows and highlight the same. The dialog's `▔` edge
+  carries a notice more often now (`▔▔▔ ● high · /effort ▔`, tmux hints);
+  2.1.322 drew it too. `readableScreen` kept such an edge as text, glued the
+  heading under it onto it, and the `/model` sheet went untitled. It now reads
+  as the bare edge (`LABELLED_DIALOG_EDGE`, `MobileReadableScreen.test.ts`),
+  and all 77 picker frames are titled. Not exercised: a live tab, the phone, a
+  real sign-in.
 
 **Verify**
 
@@ -674,6 +690,20 @@ tab and resume/fork remain tagged for live verification.
 
 **Assumes**
 
+- **0.169.0 (2026-11-13), outside Tabtivity, beside 0.167.2** — same setup as
+  0.167.1 below; release notes of 0.168.0 and 0.169.0 read. `--help` of the top
+  level, `resume`, `fork`, `mcp`, `login` and `queue` is identical; `exec` adds
+  `--trust`. 0.169.0's `exec` keeps project config and MCP off in an untrusted
+  folder; the warm-up's `exec --skip-git-repo-check` passes no `--trust` and
+  still answers there (`codex_cli_talks_to_the_proxy`, a temp folder). Both
+  real-binary probes pass. `screens.sh`: options, current row and titles read
+  the same. The footer moved Shift+Tab's `Plan mode (shift+tab to cycle)` from
+  its own row onto the `← for agents · ? for shortcuts` row, before `⚠ N
+  warning`; `sessionStatus` still reads `plan` at 100 and 60 columns.
+  `writer_lock.py`: the same lock screen and release (upstream reworked the lock
+  coordination, #59969). The rollout's first line is still `session_meta`, with
+  one new key, `account_scoped` (unread). Hooks, a real model turn, an approval
+  and the window were not exercised.
 - **0.167.2 (2026-11-12), outside Tabtivity, beside 0.167.1** — same setup as
   0.167.1 below. Upstream's three commits are core only: incremental tool
   declarations on by default for GCP Vertex (new `[features]` key
@@ -1329,6 +1359,19 @@ now only on a session's first report (not read), and a `sessionStart`
 `additionalContext: null` treated as absent (the hint hook prints text).
 Real sign-in, model pickers and a model's own output were not exercised.
 
+Re-checked **1.0.110** (2026-11-13, `npm pack @github/copilot-linux-x64`, beside
+1.0.109): all 13 `copilot-events-probe.py` checks pass on both. `--help` only
+drops `--plain-diff`, which Tabtivity never passes; `login --help` is
+identical. The unpacked runtimes hold `authTokens`, `lastLoggedInUser` and
+`storeTokenPlaintext` in as many files. `scripts/verify-cli/copilot/screens.sh`
+(new: trust, idle, the stub's `create` approval at 110 and 60 columns, the Esc
+after it) reads the same on both, the hangless wrap included. Changelog items
+near what Tabtivity reads: a session reopened with `--resume` is marked in use
+at once, so a second writer is kept out; Tabtivity spawns by `--session-id`
+and runs no `-p --resume` beside a tab. Enter pressed twice on a permission
+prompt no longer warns. Real sign-in, model pickers and a model's own output
+were not exercised.
+
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
 Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
@@ -1639,6 +1682,25 @@ not break the exercised session plugin or remote MCP pin. This does not
 verify Console/provider sign-in, real provider calls, fencing, the running
 desktop window or a phone; their existing untested tags remain.
 
+Run again on **2.3.0** (2026-11-13, official npm binary, beside a 2.2.7 rerun of
+the same turns): `turns.py` full, mini and `ask`, `tabby.py` and `resume.py`
+print the same lines, except the subagent. **Subagents now always run in the
+background.** The spawn call's result comes back at once (`The subagent is
+working in the background (sessionID: …)`). The finished report arrives later
+in the parent session as a `session_message` row of type `synthetic`
+(`metadata.source: "subagent"`, text `<subagent … state="completed">`), and the
+model answers it in a turn of its own. The store reader skips `synthetic`, so
+no report shows up as a prompt. `opencode_store`'s new opt-in probe
+(`verify_cli_reads_a_captured_store`) reads 2.3.0's store as 2.2.7's: 18
+entries against 17 (the one extra is the answer to the report), the subagent
+read through its handle, two completed `w.txt` changes. The plugin still
+records the parent, not the child. OpenCode's agent entries never claim
+`running`/`finished`, so a background child is not called done early. The
+TUI's new default verbosity (`low`, tool runs folded into one activity row)
+only moves rows: of 55 frames, the question form, permission chips and lamp
+read the same, mini's palette differs in raw text only, and the free-model
+catalog changed its order upstream. Help is unchanged.
+
 Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
 run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
 install -g @opencode/cli`, as both link `opencode`), and the update check
@@ -1843,6 +1905,22 @@ moves the footer the model reader takes. The conversation store gained a
 `conversation_parents` table (the search index's companion, joined to
 `conversations_fts` in the binary); `conversation_summaries` and its
 `parent_conversation_id` are unchanged.
+1.5.8 on 2026-11-13 (the updater manifest's tarball, sha512 checked, in a
+read-only directory, beside 1.5.6): `main.py` prints the same lines at 80 and 42
+columns, apart from the model a fresh home starts on (Gemini 4 Hydrogen, was
+Gemini 3.8 Flash). `second.py` shows the notice with the history, and
+`store.py` reads the same three turns with identical schemas. `--help` and
+`models --help` are identical. The sign-in frames differ only in the PKCE state
+and challenge. `/model` now lists seven models: Gemini 4 Hydrogen (Low to
+XHigh) and Gemini 4 Carbon (Low to High) are new to API-key sign-ins (1.5.8).
+At 80×24 the dialog windows them with `[1-6 of 7 items]` / `[2-7 of 7 items]`,
+and the reader numbers the rows and counts the hidden one from that note.
+Carbon's effort slider adds an `xhigh` stop, read as such. 1.5.7 made **Auto**
+the default `Agent Mode` (headless `-p` too) wherever Auto is available.
+Tabtivity neither reads nor sets Antigravity's mode, so a tab now asks less
+by Antigravity's own choice. 1.5.8 also adds click-to-expand in the altscreen
+rendering mode (not the default) and `agy acp` context updates. Not reached:
+swarms and a real sign-in.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
