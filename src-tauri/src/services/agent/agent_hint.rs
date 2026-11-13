@@ -460,6 +460,11 @@ fn merge_aider_read(file: &HomeFile, name: &str) -> io::Result<()> {
         Y::Mapping(map) => map,
         // Empty, or comments only: keep the text and add the key under it.
         Y::Null => {
+            // A document that is the scalar `null` / `~` is not "empty":
+            // a mapping appended under it would not parse. Left alone.
+            if text.lines().any(|l| !matches!(l.trim(), "" | "---") && !l.trim_start().starts_with('#')) {
+                return Ok(());
+            }
             let mut out = text;
             if !out.is_empty() && !out.ends_with('\n') {
                 out.push('\n');
@@ -878,7 +883,7 @@ mod tests {
     #[test]
     fn an_aider_config_that_is_not_what_we_expect_is_left_alone() {
         let big = format!("# {}\nmodel: x\n", "a".repeat(2 << 20));
-        for text in ["- just\n- a list\n", "read: {a: 1}\n", "read: 5\n", "a: [unclosed\n", "a: 1\na: 2\n", "plain scalar", big.as_str()] {
+        for text in ["- just\n- a list\n", "read: {a: 1}\n", "read: 5\n", "a: [unclosed\n", "a: 1\na: 2\n", "plain scalar", "null\n", "# mine\n~\n", big.as_str()] {
             let tmp = tempfile::tempdir().unwrap();
             put(tmp.path(), AIDER_CONFIG, text);
             register_in_home(tmp.path());
@@ -888,6 +893,28 @@ mod tests {
         std::fs::write(tmp.path().join(AIDER_CONFIG), [0xff, 0xfe, b'x']).unwrap();
         register_in_home(tmp.path());
         assert_eq!(std::fs::read(tmp.path().join(AIDER_CONFIG)).unwrap(), [0xff, 0xfe, b'x']);
+    }
+
+    /// A config an agent made huge is never read whole nor replaced: JSON over
+    /// the cap (any caller of `merge_json`) and a YAML alias bomb under it.
+    #[test]
+    fn an_over_cap_or_bomb_config_is_left_exactly_as_it_is() {
+        let pad = "a".repeat(2 << 20);
+        let big_json = format!(r#"{{"context":{{"fileName":"MINE.md"}},"pad":"{pad}"}}"#);
+        let mut bomb = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..14 {
+            bomb.push_str(&format!("a{i}: &a{i} [{}]\n", vec![format!("*a{}", i - 1); 10].join(", ")));
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), GEMINI_SETTINGS, &big_json);
+        put(tmp.path(), OPENCODE_CONFIG, &big_json);
+        put(tmp.path(), AIDER_CONFIG, &bomb);
+        let start = std::time::Instant::now();
+        register_in_home(tmp.path());
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "the alias bomb must not be expanded");
+        for (rel, text) in [(GEMINI_SETTINGS, &big_json), (OPENCODE_CONFIG, &big_json), (AIDER_CONFIG, &bomb)] {
+            assert_eq!(&std::fs::read_to_string(tmp.path().join(rel)).unwrap(), text, "{rel}");
+        }
     }
 
     #[cfg(unix)]
