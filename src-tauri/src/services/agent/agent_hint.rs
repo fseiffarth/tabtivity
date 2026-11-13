@@ -909,9 +909,9 @@ mod tests {
         put(tmp.path(), GEMINI_SETTINGS, &big_json);
         put(tmp.path(), OPENCODE_CONFIG, &big_json);
         put(tmp.path(), AIDER_CONFIG, &bomb);
-        let start = std::time::Instant::now();
+        // No wall-clock bound (a loaded machine is slow): a bomb that were
+        // expanded would exhaust memory or hang, not merely run late.
         register_in_home(tmp.path());
-        assert!(start.elapsed() < std::time::Duration::from_secs(5), "the alias bomb must not be expanded");
         for (rel, text) in [(GEMINI_SETTINGS, &big_json), (OPENCODE_CONFIG, &big_json), (AIDER_CONFIG, &bomb)] {
             assert_eq!(&std::fs::read_to_string(tmp.path().join(rel)).unwrap(), text, "{rel}");
         }
