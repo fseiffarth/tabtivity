@@ -34,8 +34,9 @@ Tabtivity is a project-centric desktop layer that swaps your entire working cont
 1. **Install.** Grab a package from the
    [latest release](https://github.com/fseiffarth/tabtivity/releases/latest)
    (see [Download](#download)) or [build from source](#building-from-source).
-   Nothing else is required; [optional tools](#optional-tools) unlock single
-   features.
+   On Linux, agent tabs also need `bubblewrap` (the first agent tab offers a
+   one-click install if it is missing); beyond that, [optional tools](#optional-tools)
+   unlock single features.
 2. **Add a project.** Click **+** in the project bar. **New project** creates
    `~/tabtivity/projects/<name>/` with Git and agent docs (`AGENTS.md`,
    `CLAUDE.md`, `GEMINI.md`) already in place; **Import project** registers an
@@ -46,7 +47,8 @@ Tabtivity is a project-centric desktop layer that swaps your entire working cont
 4. **Add your favorite CLI.** **Settings → Manage CLIs** lists the agent CLIs
    Tabtivity knows (Claude, Codex, Gemini, Vibe, Qwen, OpenCode, Copilot, ...):
    install one with a single click, no administrator rights needed, and it shows
-   up in every tab's **+** menu. One that isn't listed? Choose **＋ Add agent…**
+   up in every tab's **+** menu; **Check all for updates** and **Update all**
+   keep the installed ones current. One that isn't listed? Choose **＋ Add agent…**
    in that menu and give it a label and its command (a binary name or full
    path), optionally arguments, a resume flag so the tab survives a restart, and
    an install command ([details](docs/guide/features.md#agent-clis-resume-and-tools)).
@@ -86,7 +88,8 @@ whether or not its vendor ships a phone app for it, and without any vendor's
 relay in between.
 
 Built with **Tauri 2 + React + TypeScript** for Linux (X11 / KDE Wayland),
-Windows, and macOS. Linux X11 is the reference platform; see
+Windows, and macOS. Linux X11 is the reference platform and is used
+regularly on Ubuntu; Windows is partially tested and macOS untested. See
 [Platforms and current limits](docs/guide/platforms.md) for the rest.
 
 ## Why Tabtivity
@@ -128,8 +131,11 @@ every agent — and runs alongside an orchestrator rather than replacing it.
   with a finger or the Apple Pencil that goes straight back to the agent.
 - **[Agents and terminals](docs/guide/features.md#agents-and-terminals)**:
   30 built-in agent CLIs plus your own and local Ollama models, per-tab
-  session resume, scheduled prompts and chains, and a tiling, pop-out tab
-  layout. Local agents run inside a default-on sandbox (the agent fence).
+  session resume, a Chat view over the running terminal (with diffs, earlier
+  chats and subagents), on-device dictation and read-aloud, scheduled prompts
+  and chains, and a tiling, pop-out tab layout. Local agents always run inside
+  a sandbox (the agent fence). **Tabby**, a chat assistant that can search the
+  web but cannot reach your files, sits in the side panel.
 - **[Projects, boxes and isolation tiers](docs/guide/features.md#projects-and-boxes)**:
   boxes that join projects for a while, one-click publishing to GitHub or
   GitLab, and [container and VM projects](docs/guide/features.md#isolation-tiers-container-and-vm).
@@ -142,22 +148,29 @@ every agent — and runs alongside an orchestrator rather than replacing it.
   workspaces with SyncTeX, PDF (with real redaction), images, tables,
   notebooks, spreadsheets, SQLite, and more.
 - **[Interface and learning](docs/guide/features.md#interface-and-learning)**:
-  a theme customizer, a guided tour with ~30 lessons, and five languages.
+  a theme customizer, a guided tour with 30-plus lessons, keyboard navigation
+  where every key can be rebound, built-in help your agents can look things up
+  in, and five languages (English, German, French, Spanish, Italian).
 
 ### Which agent CLIs resume and have a chat view
 
 Every built-in CLI runs in a terminal tab. These CLIs do more:
 
-| CLI | Resumes after a restart | Chat view (desktop) | Chat on the phone | Earlier chats (Resume menu) | Diffs |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| Claude | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
-| Codex | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
-| Copilot | ✓ own session | ✓ | | ✓ | ✓ |
-| OpenCode | ✓ folder's latest | ✓ | ✓ | ✓ | ✓ |
-| Antigravity | ✓ folder's latest | ✓ | ✓ | ✓ | |
-| Meta Muse Code | ✓ folder's latest | ✓ | ✓ | ✓ | |
-| Gemini | ✓ folder's latest | | ✓ | | |
-| Vibe, Qwen, Cursor, Grok, Droid | ✓ folder's latest | | | | |
+| CLI | Regularly updated | Resumes after a restart | Chat view (desktop) | Chat on the phone | Earlier chats (Resume menu) | Diffs |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Claude | ✓ | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
+| Codex | ✓ | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
+| Copilot | ✓ | ✓ own session | ✓ | | ✓ | ✓ |
+| OpenCode | ✓ | ✓ folder's latest | ✓ | ✓ | ✓ | ✓ |
+| Antigravity | ✓ | ✓ folder's latest | ✓ | ✓ | ✓ | |
+| Meta Muse Code | ✓ | ✓ folder's latest | ✓ | ✓ | ✓ | |
+| Mistral Vibe | ✓ | ✓ folder's latest | | | | |
+| Gemini | | ✓ folder's latest | | ✓ | | |
+| Qwen, Cursor, Grok, Droid | | ✓ folder's latest | | | | |
+
+*Regularly updated*: only these seven CLIs are kept in step with their new
+releases. Every other built-in CLI still installs and runs, but its support may
+lag behind its newest release.
 
 *Own conversation* or *own session*: each tab comes back to the exact chat it
 had. *Folder's latest*: the tab continues the newest chat in its folder, so
@@ -199,8 +212,10 @@ other package manager) downloads the new build but leaves installing it to you.
 
 ### Optional tools
 
-A release build needs nothing beyond the OS. Each of these unlocks one
-feature, and every one of them is optional:
+A release build needs nothing beyond the OS, with one exception: on Linux,
+local agent tabs run inside a bubblewrap sandbox and refuse to start without
+it (`sudo apt install bubblewrap`; the `.deb` recommends it, and the app offers
+the install in a tab). Each of the rest unlocks one feature and is optional:
 
 - Remote/SSH and HPC projects: nothing to install locally beyond OpenSSH — no
   `sshfs`, no FUSE. On the host: `tmux` for persistent sessions, plus
@@ -208,6 +223,8 @@ feature, and every one of them is optional:
 - Containerized projects: Docker. VM projects: QEMU/KVM
 - Print manager: CUPS on Linux/macOS — nothing to install on Windows
 - Tabtivity Mobile: Tailscale on this machine and on the phone or iPad
+- Reading agent answers aloud on Linux: speech-dispatcher (dictation needs
+  nothing: the speech model installs from inside the app)
 - Local model features — Vibe tabs, autocomplete, the mail
   assistant, the root console's agent tools (all off by default): Ollama
 
@@ -215,11 +232,11 @@ feature, and every one of them is optional:
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| **Linux — X11** | Yes | Reference platform; two-desktop window parking. |
+| **Linux — X11** | Yes (used regularly on Ubuntu) | Reference platform; two-desktop window parking. |
 | **Linux — KDE Wayland** | Yes | Per-project virtual desktops via KWin (KDE 5 and 6). |
 | **Linux — other Wayland** | Partial | No workspace switching; terminals and files work. |
-| **Windows** | Yes (alpha) | No agent fence and no tmux session persistence. |
-| **macOS** | Yes (lightly tested) | Parks whole applications, not single windows. |
+| **Windows** | Partially tested | No agent fence and no tmux session persistence. |
+| **macOS** | Untested | Builds and passes tests in CI; parks whole applications, not single windows. |
 | **Phone / iPad** | Yes | Tabtivity Mobile, a web app over your own tailnet. |
 
 Per-platform details and the current limits are in

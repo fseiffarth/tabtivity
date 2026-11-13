@@ -987,6 +987,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_resolve_if_identical", Core),
     ("sync_scan_host_new", Core),
     ("sync_set_auto", Core),
+    ("sync_take_newer_get", Core),
+    ("sync_set_take_newer", Core),
     ("sync_set_excluded", Core),
     ("sync_status", Core),
     ("sync_transfer_preview", Core),

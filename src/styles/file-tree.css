@@ -999,6 +999,27 @@
   border-bottom: 1px solid var(--border-color);
 }
 
+/* "Take the newer copy automatically": a per-project switch above the list,
+   shown even when the list is empty so it can be turned off again. */
+.orange-take-newer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 3px 0 6px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.orange-take-newer > .tmux-scope-toggle {
+  padding: 0;
+}
+
+.orange-take-newer-note {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
 /* The bar's "exclude changed on both" tick: the shared tmux-scope toggle,
    flush with the bar's own padding. */
 .orange-bulk-exclude {

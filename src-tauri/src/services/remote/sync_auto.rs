@@ -20,7 +20,9 @@
 //! the recorded bases:
 //!   - host moved, local unchanged  → PULL host→local
 //!   - local moved, host unchanged  → PUSH local→host (guarded by `push_decision`)
-//!   - both moved (AMBER/orange)    → SKIP, left for manual resolution
+//!   - both moved (AMBER/orange)    → SKIP, left for manual resolution — unless the
+//!     project's "take the newer copy" switch is on (`services::sync_take_newer`):
+//!     then the copy with the newer mtime wins, after the other is backed up
 //!   - neither moved (green)        → no-op
 //!
 //! Deletions are intentionally NOT propagated in v1 (a gone host side reads as
@@ -44,6 +46,7 @@ use crate::services::remote_sync::{
     self, ensure_loaded, mirror_dir, Manifest, PushDecision, SyncManifestState,
 };
 use crate::services::sftp;
+use crate::services::sync_take_newer;
 
 /// Host re-stat cadence: how often a connected project's auto paths are checked
 /// for incoming host changes (the local side is also caught near-instantly by the
@@ -673,6 +676,12 @@ async fn reconcile_pass(
     let mut pushed = 0usize;
     let mut skipped = 0usize;
     let mut notice_changed = false;
+    // "Take the newer copy" (read once a pass): the backup folder is made on the
+    // first conflict it resolves, and the losers are logged after the loop.
+    let take_newer = sync_take_newer::enabled(project_id);
+    let mut backup: Option<std::path::PathBuf> = None;
+    let mut replaced_local: Vec<String> = Vec::new();
+    let mut replaced_host: Vec<String> = Vec::new();
     for rel in candidates {
         if stopping.load(Ordering::SeqCst) {
             break; // stopped: end after the file in flight, not after the whole tree
@@ -821,8 +830,82 @@ async fn reconcile_pass(
                     skipped += 1; // host raced → treat as a conflict, leave for manual
                 }
             }
-            (true, true) => skipped += 1, // AMBER/orange → never auto-synced
+            (true, true) => {
+                // AMBER/orange: left for manual resolution, unless the project
+                // takes the newer copy and the two copies say which one that is.
+                let winner = take_newer
+                    .then(|| sync_take_newer::winner(host, local))
+                    .flatten()
+                    .filter(|_| sync_take_newer::within_cap(host, local))
+                    .filter(|_| sync_take_newer::worth_trying(project_id, &rel, host, local));
+                let Some(winner) = winner else {
+                    skipped += 1;
+                    continue;
+                };
+                let root = backup
+                    .get_or_insert_with(|| sync_take_newer::backup_root(project_id, crate::clock::now_secs()))
+                    .clone();
+                let conflict = Conflict {
+                    sftp: &sftp,
+                    manifest,
+                    project_id,
+                    mirror_root: &mirror_root,
+                    backup_root: &root,
+                    rel: &rel,
+                    host_abs: &host_abs,
+                    host,
+                    host_mode,
+                    local,
+                };
+                let outcome = take_newer_copy(&conflict, winner).await;
+                // A try cut short for a waiting manual sync is not a failure to
+                // remember: the next pass tries again.
+                if outcome.is_ok() || !crate::services::sync_op::manual_waiting(project_id) {
+                    sync_take_newer::note_outcome(project_id, &rel, host, local, outcome.is_ok());
+                }
+                match outcome {
+                    Ok(()) => match winner {
+                        sync_take_newer::Winner::Host => {
+                            pulled += 1;
+                            replaced_local.push(rel.clone());
+                        }
+                        sync_take_newer::Winner::Local => {
+                            pushed += 1;
+                            replaced_host.push(rel.clone());
+                        }
+                    },
+                    Err(remote_sync::PushError::Skipped(skip)) => {
+                        eprintln!("auto-sync: take-newer skip {skip}");
+                        notice_changed |= remote_sync::note_mirror_skip(project_id, skip);
+                        skipped += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("auto-sync: take-newer skip '{rel}': {e}");
+                        skipped += 1;
+                    }
+                }
+            }
         }
+    }
+
+    if let Some(root) = &backup {
+        let recovery = Some(sync_take_newer::recovery_note(root));
+        crate::services::local_loss::record_paths(
+            project_id,
+            crate::services::local_loss::LossSource::Sync,
+            crate::services::local_loss::LossKind::Overwritten,
+            "Auto-sync took the newer host copy of a file both sides had changed",
+            replaced_local,
+            recovery.clone(),
+        );
+        crate::services::local_loss::record_paths(
+            project_id,
+            crate::services::local_loss::LossSource::Sync,
+            crate::services::local_loss::LossKind::OverwrittenOnHost,
+            "Auto-sync took the newer local copy of a file both sides had changed",
+            replaced_host,
+            recovery,
+        );
     }
 
     if pulled + pushed > 0 || notice_changed {
@@ -839,6 +922,91 @@ async fn reconcile_pass(
             );
         }
     }
+}
+
+/// One both-sides-changed file the "take the newer copy" switch resolves, with the
+/// facts the pass already holds about it.
+struct Conflict<'a> {
+    sftp: &'a openssh_sftp_client::Sftp,
+    manifest: &'a SyncManifestState,
+    project_id: &'a str,
+    mirror_root: &'a std::path::Path,
+    backup_root: &'a std::path::Path,
+    rel: &'a str,
+    host_abs: &'a str,
+    host: Option<(u64, Option<u64>)>,
+    host_mode: Option<u32>,
+    local: Option<(u64, Option<u64>)>,
+}
+
+/// Resolve a conflict to `winner`: back up the losing copy, check it has not moved
+/// since the pass looked, then transfer and record the new base. Any failure before
+/// the transfer leaves both sides untouched; the file then stays in the orange list.
+async fn take_newer_copy(c: &Conflict<'_>, winner: sync_take_newer::Winner) -> Result<(), remote_sync::PushError> {
+    let Some((host_size, host_mtime)) = c.host else {
+        return Err("no host copy".to_string().into());
+    };
+    match winner {
+        sync_take_newer::Winner::Host => {
+            sync_take_newer::back_up_mirror_copy(c.mirror_root, c.backup_root, c.rel)?;
+            // The local copy saved must be the one the pull replaces.
+            let now = match remote_sync::mirror_lstat(c.mirror_root, c.rel)? {
+                remote_sync::MirrorStat::File(m) => Some(remote_sync::local_meta(&m)),
+                _ => None,
+            };
+            if now != c.local {
+                return Err("the local copy changed during the pass".to_string().into());
+            }
+            let (ls, lm) = run_bounded(remote_sync::pull_file(
+                c.sftp,
+                c.host_abs,
+                host_size,
+                c.host_mode,
+                c.mirror_root,
+                c.rel,
+            ))
+            .await?;
+            let mut g = c.manifest.lock().await;
+            let m = ensure_loaded(&mut g, c.project_id);
+            remote_sync::record_pull(m, c.rel, host_size, host_mtime, ls, lm);
+            if let Err(e) = remote_sync::save_manifest_or_mark_stale(c.project_id, m, &[c.rel.to_string()]) {
+                eprintln!("auto-sync: took the host copy of '{}' but could not record it: {e}", c.rel);
+            }
+            net_usage::record_files(c.project_id, 1, 0);
+        }
+        sync_take_newer::Winner::Local => {
+            // The host copy goes into the backup folder first, by the same
+            // confined, size-capped download a pull uses.
+            run_bounded(remote_sync::pull_file(
+                c.sftp,
+                c.host_abs,
+                host_size,
+                c.host_mode,
+                c.backup_root,
+                c.rel,
+            ))
+            .await?;
+            // …and must still be the host's copy when the push replaces it.
+            let now = match unless_manual(c.project_id, sftp::metadata_opt_on(c.sftp, c.host_abs)).await {
+                None => return Err("a manual sync is waiting".to_string().into()),
+                Some(r) => r?,
+            };
+            if now != c.host {
+                return Err("the host copy changed during the pass".to_string().into());
+            }
+            let done = run_bounded(remote_sync::push_file_atomic(c.sftp, c.mirror_root, c.rel, c.host_abs)).await?;
+            let (hs, hm) = done.host;
+            let (ls, lm) = done.local;
+            let mut g = c.manifest.lock().await;
+            let m = ensure_loaded(&mut g, c.project_id);
+            remote_sync::record_push(m, c.rel, hs, hm, ls, lm);
+            if let Err(e) = remote_sync::save_manifest_or_mark_stale(c.project_id, m, &[c.rel.to_string()]) {
+                eprintln!("auto-sync: took the local copy of '{}' but could not record it: {e}", c.rel);
+            }
+            net_usage::record_files(c.project_id, 0, 1);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

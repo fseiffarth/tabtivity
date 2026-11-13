@@ -121,6 +121,25 @@ describe(`${BRAND.display} Mobile shows what the phone sent in its prompt's bubb
     expect(viewer.querySelector("img")?.getAttribute("src")).toBe(`/api/v1/tabs/tab-7/inbox/${PHOTO}`);
   });
 
+  it("draws a slash command's inbox picture in the bubble under its rule", async () => {
+    vi.stubGlobal("fetch", sidecarFetch({
+      available: true,
+      version: "1:1",
+      truncated: false,
+      entries: [{ kind: "prompt", text: `/design redesign ugly menu @${NAMES.inboxDir}/${PHOTO}`, at: "2026-10-03T10:15:05Z" }],
+    }, { [PHOTO]: { kind: "image/jpeg", size: 3 } }));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    await settle();
+
+    const chat = screen.getByTestId("session-transcript");
+    expect(chat.querySelector(".readable-command-text")?.textContent).toBe("/design");
+    const bubble = chat.querySelector(".readable-turn.user.command-args")!;
+    expect(bubble.classList.contains("with-files")).toBe(true);
+    expect(bubble.querySelector(".transcript-md")?.textContent?.trim()).toBe("redesign ugly menu");
+    expect(bubble.querySelector("img")?.getAttribute("src")).toBe(`/api/v1/tabs/tab-7/inbox/${PHOTO}`);
+  });
+
   it("draws a markup prompt's pictures each under its own caption, uncropped", async () => {
     const MARKED = "20261024-191900-corner-marked.png";
     const LAYER = "20261024-191900-corner-layer.png";

@@ -1669,7 +1669,9 @@ export function LocalModelsSection({
  * it is what the machine has left for whichever of them you pick. The overlay
  * shows it below the overview tiles and above its Local models tab.
  */
-export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "gpus" | "machine">; layout?: "menu" | "overlay" }) {
+/** `strip`: the bare meters, for a caller that frames them itself (the Machines
+ *  view lays them side by side under its own label). */
+export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "gpus" | "machine">; layout?: "menu" | "overlay" | "strip" }) {
   const t = useT();
   const { gpus, machine } = hub;
   const { used: gpuUsed, total: gpuTotal } = gpuTotals(gpus);
@@ -1772,6 +1774,7 @@ export function MachineMeters({ hub, layout = "menu" }: { hub: Pick<ModelsHub, "
   );
   const showStats = showMachine || gpus.length > 0;
 
+  if (layout === "strip") return showStats ? stats : null;
   if (layout === "overlay") {
     return showStats ? (
       <section className="lm-section">

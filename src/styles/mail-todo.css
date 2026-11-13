@@ -703,123 +703,485 @@ svg.alerts-toggle-icon {
   border-style: dashed;
 }
 
-/* ── Global machines: the Machines view's tile grid (header/MachinesView) ────
-   The Machines dropdown's own rows (`header/MachinesIndicator`,
-   `surface="view"`), laid out as tiles on the `.models-home` page with a
-   `.models-tile` card and icon box — but a tile is not one button: it holds the
-   row's actions, toggles and forms, so it keeps a plain cursor and loses the
-   menu row's hairline. Selectors are two classes deep so they outrank
-   `.vpn-indicator-row + .vpn-indicator-row` and the grab cursor in
-   header-menus.css whatever the @import order. */
+/* ── Machines view (header/MachinesView + header/MachinesTable) ─────────────
+   A toolbar, this machine's meters as one band, then one list of every machine
+   sorted by state then name. The list is a table: the same five columns in the
+   head and every row, so the eye runs down a column. Off is a hollow ring — a
+   filled grey dot reads as a list bullet — and green belongs to a session only;
+   a host that answers without one is the info colour. */
 .machines-home-inner {
   max-width: 1320px;
+  gap: var(--space-4);
 }
-/* As many 280px columns as fit: a fleet is a list of peers, not four fixed
-   sections, so it takes the auto-fill a two-up would waste. */
-.machines-home .machines-grid {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+.machines-view-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
 }
-.machines-grid > .machines-tile {
-  gap: 8px;
+.machines-view-toolbar > .models-home-lead {
+  flex: 1 1 320px;
   min-width: 0;
-  min-height: 0;
-  padding: 14px var(--space-4);
-  border: 1px solid var(--control-border);
-  cursor: var(--cur-default, default);
 }
-.machines-grid > .machines-tile:hover {
+.machines-view-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.machines-add-btn {
+  padding: 6px var(--space-3);
+  font-size: var(--text-base);
+}
+.machines-add-btn svg {
+  width: 14px;
+  height: 14px;
+}
+/* The add / import / export forms and the disconnect-all confirm keep the
+   dropdown's markup; here they are a card of readable width above the list. */
+.machines-view-form {
+  max-width: 560px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+}
+.machines-view-form > .vpn-indicator-row,
+.machines-view-form > .vpn-indicator-note {
+  padding: 0;
+  border: 0;
+}
+.machines-view-form > .tab-new-menu-group-label {
+  padding: 0 0 var(--space-2);
+}
+
+/* This machine: CPU · RAM · GPU side by side under one label. */
+.machines-meters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  overflow: hidden;
+}
+.machines-meters-label {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.machines-meters > .local-model-stats {
+  flex: 1 1 480px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0;
+}
+.machines-meters .local-model-stat {
+  flex: 1 1 220px;
+  gap: 6px;
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--border-subtle);
+}
+.machines-meters .local-model-stat:last-child {
+  border-right: 0;
+}
+.machines-meters .local-model-stat-value {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.machines-meters .local-model-meter {
+  height: 6px;
+}
+
+/* The filter box and the state chips. */
+.machines-table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.machines-filter-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 240px;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--control-border, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-muted);
+}
+.machines-filter-box svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.machines-filter-box input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+.machines-filter-box:focus-within {
   border-color: var(--accent);
 }
-/* The row's buttons sit above the hover wash. */
-.machines-grid > .machines-tile > * {
-  position: relative;
-  z-index: 1;
-}
-.machines-grid > .machines-tile .vpn-indicator-head {
-  gap: 8px;
-  flex-wrap: nowrap;
-}
-.machines-tile .machines-tile-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-}
-.machines-tile .machines-tile-glyph {
-  width: 20px;
-  height: 20px;
-}
-.machines-grid > .machines-tile .vpn-indicator-head .vpn-indicator-config {
-  font-family: inherit;
-  font-size: var(--text-lg);
-  font-weight: 600;
-}
-.machines-tile-desc {
-  gap: 4px;
-}
-.machines-tile .machines-tile-target {
-  overflow: hidden;
-  font-family: var(--mono-font, monospace);
-  font-size: var(--text-md);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.machines-tile .machines-tile-stat {
+.machines-filter-chips {
+  display: flex;
   flex-wrap: wrap;
-  font-size: var(--text-md);
-  font-weight: 400;
-  line-height: 1.4;
-  color: var(--text-secondary);
-}
-.machines-tile-busy {
-  max-width: 100%;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  padding: 0 7px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--success) 16%, transparent);
-  color: var(--text-primary);
-  font-size: var(--text-sm);
-}
-.machines-grid > .machines-tile .machines-util {
-  padding: 0;
-}
-/* The icon actions at the tile's foot, so the tiles of one row line them up
-   (the chips' rule in `.models-tile-chips`). */
-.machines-grid > .machines-tile .machines-row-actions {
-  /* The dropdown's 100% basis is a row break; here the flex axis is vertical. */
-  flex-basis: auto;
-  flex-wrap: wrap;
-  margin-top: auto;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-color);
-}
-/* The page's own rows — the note, the fleet bar, add / import / export and
-   their forms — keep the dropdown's markup; on a page they are a left-aligned
-   column of readable width rather than a 280px menu's full-bleed strips. */
-.machines-home-inner > .vpn-indicator-note {
-  padding: 0;
-  border-bottom: 0;
-}
-.machines-home-inner > .vpn-indicator-row {
-  padding: 0;
-  border-top: 0;
-}
-.machines-home-inner > .machines-fleet-icons {
-  justify-content: flex-start;
   gap: 6px;
 }
-.machines-home-inner > .machines-fleet-icons .untested-tag {
-  position: static;
+.machines-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
 }
-.machines-home-inner > .menu-form,
-.machines-home-inner > .machines-io-panel {
-  max-width: 520px;
+.machines-filter-chip:hover {
+  background: var(--control-hover-bg);
 }
-.machines-home-inner > .tab-new-menu-group-label {
-  margin-top: 6px;
+.machines-filter-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 600;
+}
+
+/* The lamp: one 9px dot, its colour from the state class around it. */
+.machines-lamp {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--text-muted);
+}
+.is-connected > .machines-lamp {
+  background: var(--success);
+  box-shadow: none;
+}
+.is-connecting > .machines-lamp {
+  background: color-mix(in srgb, var(--warning) 35%, transparent);
+  box-shadow: inset 0 0 0 2px var(--warning);
+}
+.is-error > .machines-lamp,
+.is-failed > .machines-lamp {
+  background: var(--danger);
+  box-shadow: none;
+}
+.is-up > .machines-lamp {
+  background: var(--info);
+  box-shadow: none;
+}
+
+/* The table. */
+.machines-table {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  overflow-x: auto;
+}
+.machines-table-row {
+  display: grid;
+  grid-template-columns: 128px minmax(150px, 210px) minmax(0, 1fr) minmax(140px, 200px) auto;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 860px;
+  min-height: 50px;
+  padding: 6px var(--space-4);
+  box-sizing: border-box;
+}
+.machines-table-head {
+  min-height: 34px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-panel, var(--bg-secondary));
+  font-size: var(--text-sm);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.machines-table-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 860px;
+  padding: 6px var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-panel, var(--bg-secondary)) 50%, transparent);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.machines-table-group:first-of-type .machines-table-group-head,
+.machines-table-head + .machines-table-group .machines-table-group-head {
+  border-top: 0;
+}
+.machines-table-group-count {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.machines-table-item + .machines-table-item {
+  border-top: 1px solid var(--border-subtle);
+}
+.machines-table-item:hover {
+  background: var(--control-hover-bg);
+}
+.machines-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.machines-state.is-connected {
+  color: var(--success);
+}
+.machines-state.is-connecting {
+  color: var(--warning);
+}
+.machines-state.is-error {
+  color: var(--danger);
+}
+.machines-state.is-up {
+  color: var(--text-primary);
+}
+.machines-state-word {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.machines-table-machine {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.machines-table-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.machines-table-name {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+button.machines-table-name {
+  cursor: var(--cur-pointer, pointer);
+}
+button.machines-table-name:hover {
+  text-decoration: underline;
+}
+.machines-table-target {
+  overflow: hidden;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* Project chips: one line; "+N" unfolds the rest onto more lines. */
+.machines-table-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.machines-table-chips.is-open {
+  flex-wrap: wrap;
+}
+.machines-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  max-width: 260px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  white-space: nowrap;
+}
+.machines-chip.is-connected {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.machines-chip.is-error {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.machines-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.machines-chip-runs {
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.machines-chip-more {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: var(--cur-pointer, pointer);
+}
+.machines-table-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+.machines-table-sessions {
+  color: var(--text-primary);
+}
+.machines-table-activity .machines-util {
   padding: 0;
 }
+.machines-table-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 168px;
+}
+.machines-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+.machines-icon-btn:hover {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.machines-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+/* A failure's reason, and an open form, under the row from the machine column. */
+.machines-table-error,
+.machines-table-detail {
+  min-width: 860px;
+  padding: 0 var(--space-4) var(--space-3) calc(128px + 2 * var(--space-4));
+  box-sizing: border-box;
+}
+.machines-table-error {
+  font-size: var(--text-md);
+  color: var(--danger);
+}
+.machines-table-detail > .vpn-indicator-row,
+.machines-table-detail > .vpn-indicator-actions {
+  max-width: 560px;
+  padding: 0;
+  border: 0;
+}
+.machines-table-empty {
+  margin: 0;
+  padding: var(--space-4);
+  font-size: var(--text-base);
+  color: var(--text-muted);
+}
+/* Off machines no project uses: one strip of names at the foot. */
+.machines-idle-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 860px;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-color);
+  box-sizing: border-box;
+}
+.machines-idle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+  color: var(--text-secondary);
+}
+.machines-idle-label strong {
+  color: var(--text-primary);
+}
+.machines-idle-tag {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  cursor: var(--cur-pointer, pointer);
+}
+.machines-idle-tag:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+/* The shared EntryMenu's rule and destructive entries (a machine row's ⋯). */
+.cockpit-view-menu .entry-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-color);
+}
+.cockpit-view-menu .tab-new-menu-item.is-danger {
+  color: var(--danger);
+}
+.cockpit-view-menu .tab-new-menu-item:disabled {
+  opacity: 0.5;
+  cursor: var(--cur-default, default);
+}
+
 /* The dropdown's door into the overlay, beside its ×. */
 .machines-open-overlay {
   margin-left: auto;

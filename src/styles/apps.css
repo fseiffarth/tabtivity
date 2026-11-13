@@ -2594,6 +2594,17 @@
   margin: 0;
   max-width: 880px;
 }
+/* The panel-wide switches under the lead: one card, each switch row followed
+   by its help line, a divider between the two settings. */
+.agents-top-settings {
+  max-width: 880px;
+  margin-top: var(--space-2);
+}
+.agents-top-settings > .settings-help + .settings-toggle-card-row {
+  margin-top: 4px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
 .agents-section-head {
   display: flex;
   align-items: center;

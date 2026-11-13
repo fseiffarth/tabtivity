@@ -24,7 +24,7 @@ export interface LocalLoss {
   ts: number;
   /** Which transport destroyed it — the two have different recovery stories. */
   source: "git" | "sync";
-  kind: "deleted" | "overwritten";
+  kind: "deleted" | "overwritten" | "overwrittenOnHost";
   /** The operation, as a user-facing phrase. */
   op: string;
   /** Project-relative paths (truncated; `total` carries the real count). */

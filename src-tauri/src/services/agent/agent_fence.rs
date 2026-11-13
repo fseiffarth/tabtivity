@@ -1822,6 +1822,13 @@ pub fn wrap_pty_options_bwrap(
             crate::services::claude_token::inject_launch(opts);
         }
     }
+    // A self-updater switched off only by a flag (Cursor), like the env ones below.
+    let agent_exe = if agent_cmd.contains('/') {
+        Some(PathBuf::from(&agent_cmd))
+    } else {
+        search_dirs.iter().map(|dir| dir.join(&agent_cmd)).find(|cand| cand.is_file())
+    };
+    crate::services::agent_install::apply_fence_args(&agent_cmd, agent_exe.as_deref(), &mut opts.args);
     let mut args = bwrap_args(
         &paths::home_dir_string(),
         Some(&scope_home.to_string_lossy()),
@@ -2304,6 +2311,7 @@ pub fn wrap_pty_options_sandbox_exec(
             crate::services::claude_token::inject_launch(opts);
         }
     }
+    crate::services::agent_install::apply_fence_args(&agent_cmd, Some(&resolved), &mut opts.args);
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),

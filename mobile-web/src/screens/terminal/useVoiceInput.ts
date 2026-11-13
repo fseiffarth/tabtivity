@@ -11,7 +11,7 @@ import { leadDraft } from "../../slashCommands";
 import { loadDict } from "../../../../src/lib/i18n";
 import {
   prepareOnDeviceSpeech, speechRecognitionConstructor, advanceDictation, DICTATION_START,
-  dictationPreview, scanDictation, settleUtterances, stepUtterances, UTTERANCES_START, UTTERANCE_SETTLE_MS,
+  dictationPreview, dictationProvisional, scanDictation, scanSeen, settleUtterances, stepUtterances, UTTERANCES_START, UTTERANCE_SETTLE_MS,
   type DictationProgress, type DictationScan, type UtteranceLedger, type UtteranceOptions, type UtteranceStep,
 } from "../../voiceInput";
 import { startLexicon } from "../../startLexicon";
@@ -19,7 +19,7 @@ import { matchDraftEdit, matchNavigate, type SpokenDraftEdit } from "../../../..
 import { DraftVoiceHistory, type DraftEditNote } from "../../../../src/lib/voice/draftEdit";
 import { type TabbyGate } from "./useTabbyGate";
 import { startDictation, type DictationSession } from "../../voiceSession";
-import { paintMicLevel, spokenSend } from "../../../../shared/voice";
+import { paintMicLevel, spokenSend, isStopWord } from "../../../../shared/voice";
 import { type SendGuard } from "../../../../shared/handsFree";
 import { type VoiceNote } from "./terminalShared";
 
@@ -40,6 +40,10 @@ export interface HandsFreeHooks {
    * may not answer: the words are dropped), "done" (a reading command ran),
    * false (dictation). */
   pick: MutableRefObject<(utterance: string) => "done" | "staged" | "refused" | false>;
+  /** Whether words still being said may show in the composer as provisional
+   * text: false while the words may be a spoken pick, a "stop" in the send
+   * guard's window or a reading command. */
+  previewOk: MutableRefObject<(words: string) => boolean>;
   /** A send went out: wait for its turn before listening again. */
   awaitTurn: MutableRefObject<() => void>;
   /** The user's stop ends the loop until the mic is tapped again. */
@@ -72,7 +76,7 @@ const EDIT_NOTE_MS = 4_000;
  * its end with the tab. */
 export function useVoiceInput({
   tab, recognition, dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, setDraft, draftRef,
-  setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceStatus, setVoiceFailure,
+  setListening, setPreparingVoice, preparingVoice, setVoicePreview, setVoiceInterim, setVoiceStatus, setVoiceFailure,
   forgetDictation, submitSpokenRef, tabbyGate, utterances, prefixCommands, handsFree,
 }: {
   tab: TabRow;
@@ -88,7 +92,11 @@ export function useVoiceInput({
   setListening: Dispatch<SetStateAction<boolean>>;
   setPreparingVoice: Dispatch<SetStateAction<boolean>>;
   preparingVoice: boolean;
+  /** Clears the "Heard:" line, and with it any provisional words. */
   setVoicePreview: Dispatch<SetStateAction<string>>;
+  /** The words still being guessed at, shown after the draft in the field
+   * (never in the draft): replaced by every reading, "" once none. */
+  setVoiceInterim: (text: string) => void;
   setVoiceStatus: Dispatch<SetStateAction<VoiceNote | null>>;
   setVoiceFailure: Dispatch<SetStateAction<VoiceNote | null>>;
   forgetDictation: () => void;
@@ -274,12 +282,12 @@ export function useVoiceInput({
       const live = ended ? undefined : lastScan.current;
       const step = settleUtterances(ledger.current, voiceProgress.current, lexicon, utteranceOptions(true), live);
       took(step);
-      consume(step.insert, live?.interim ?? "", step.preview, step.held);
+      consume(step.insert, live?.interim ?? "", step.preview, step.held, step.provisional);
     };
     settleNow.current = () => settle();
     /** What the words of one reading do: the hands-free guard, a spoken send,
      * the draft, the "Heard:" line. */
-    const consume = (insert: string, interim: string, preview: string, held: boolean) => {
+    const consume = (insert: string, interim: string, preview: string, held: boolean, guess: string) => {
       // Navigation mode owns the mic: every word is a command (never typed),
       // and none of it may start the send guard's pause.
       if (utterances.capture.current) {
@@ -359,6 +367,16 @@ export function useVoiceInput({
         guard.settled("");
       }
       setVoicePreview(preview);
+      // The live words go into the field as provisional text, replaced by the
+      // next reading and committed by the final one (the draft takes them
+      // above, as `insert`). Nothing a command may take is ever shown.
+      setVoiceInterim(provisional(guess));
+    };
+    /** `guess` if it may show in the field now. */
+    const provisional = (guess: string): string => {
+      if (!guess || voiceStopping.current) return "";
+      if (!layered()) return guess;
+      return !isStopWord(guess) && handsFree.previewOk.current(guess) ? guess : "";
     };
     const session: DictationSession = startDictation(Recognition, { lang: language, local: mode === "local" }, {
       onStart: () => {
@@ -376,14 +394,14 @@ export function useVoiceInput({
           lastScan.current = scan;
           const step = stepUtterances(ledger.current, voiceProgress.current, scan, lexicon, utteranceOptions(false));
           took(step);
-          consume(step.insert, scan.interim, step.preview, step.held);
+          consume(step.insert, scan.interim, step.preview, step.held, step.provisional);
           settleTimer.current = window.setTimeout(() => settle(), UTTERANCE_SETTLE_MS);
           return;
         }
         tabbyGate.clear();
-        const step = advanceDictation(voiceProgress.current, scan.heard);
+        const step = advanceDictation(voiceProgress.current, scan.heard, scanSeen(scan));
         voiceProgress.current = step.progress;
-        consume(step.insert, scan.interim, dictationPreview(step.progress, scan.interim), false);
+        consume(step.insert, scan.interim, dictationPreview(step.progress, scan.interim), false, dictationProvisional(step.progress, scan, lexicon));
       },
       // A new recognizer's result list starts empty: everything the last one
       // heard is in the draft already, and none of it is read back. Words it
@@ -391,6 +409,8 @@ export function useVoiceInput({
       onRestart: () => {
         // The utterance in flight ends here, whole.
         settle(true);
+        // The guess was not finalized: it is not text.
+        setVoiceInterim("");
         lastScan.current = undefined;
         voiceProgress.current = DICTATION_START;
         ledger.current = UTTERANCES_START;
@@ -404,6 +424,7 @@ export function useVoiceInput({
       onEnd: () => {
         // The last words the recognizer finalized for a stop are still held.
         settle(true);
+        setVoiceInterim("");
         window.clearTimeout(settleTimer.current);
         settleNow.current = () => {};
         tabbyGate.clear();

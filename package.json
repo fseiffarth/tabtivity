@@ -1,7 +1,7 @@
 {
   "name": "tabtivity",
   "private": true,
-  "version": "0.2.70",
+  "version": "0.2.73",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "engines": {
@@ -76,6 +76,9 @@
   "overrides": {
     "mermaid": {
       "katex": "$katex"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
     }
   }
 }

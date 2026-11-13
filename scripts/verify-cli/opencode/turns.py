@@ -66,7 +66,10 @@ def turn(tag, tool, a, widths=False):
         time.sleep(0.3)
     time.sleep(1.5)
     t.cap(f"after_{tag}")
-    q = calls()[n0:]
+    # The call that carried the tool's result, not simply the last call: from
+    # 2.3.0 a subagent answers at once and its report comes back as a later
+    # turn of its own, with no tool result in it.
+    q = [x for x in calls()[n0:] if x.get("tool_results")]
     res = q[-1]["tool_results"] if q else None
     print(label, run, tag, "perm" if seen else "noperm", "->", json.dumps(res)[:330])
 

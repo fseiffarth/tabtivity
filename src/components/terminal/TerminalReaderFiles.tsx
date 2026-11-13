@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { dirname } from "../../lib/paths";
@@ -16,12 +16,34 @@ import { ArrowUpRightIcon, CloseIcon, LinkIcon } from "../common/icons/Icon";
 import type { ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 
+/** How a file came into the conversation, the phone's Files groups
+ * (`SentFilesIndex`) without its Changed one (that is the Diffs tab): the
+ * agent sent it (a project-outbox file — a desktop send only names the
+ * project file, so it lands in `named`), an answer names it, or a prompt of
+ * yours carried it (an inbox attachment or a path you named). */
+export type ReaderFileFrom = "agent" | "named" | "you";
+
 /** A file the conversation on screen names: a resolved path link, a picture
  * or PDF an answer shows, a file the phone sent into the inbox. */
 export interface ReaderFile {
   entry: FileEntry;
   /** Its path as the list shows it (relative to the tab's folder). */
   label: string;
+  from: ReaderFileFrom;
+}
+
+/** The list's groups in drawing order, the agent's own work first (the
+ * phone's order): heading and hint keys are the phone's. */
+export const READER_FILE_GROUPS = [
+  ["agent", "mobile.sentIndex.out", "mobile.sentIndex.outHint"],
+  ["named", "mobile.sentIndex.named", "mobile.sentIndex.namedHint"],
+  ["you", "mobile.sentIndex.in", "mobile.sentIndex.inHint"],
+] as const;
+
+/** `files` in group order, each group keeping its own order (newest first):
+ *  the order the view draws and steering walks. */
+export function groupReaderFiles(files: readonly ReaderFile[]): ReaderFile[] {
+  return READER_FILE_GROUPS.flatMap(([from]) => files.filter((file) => file.from === from));
 }
 
 const NO_LINKS: readonly ChatLink[] = [];
@@ -84,7 +106,9 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
   const viewer = picked ? internalViewerFor(picked, disabled) : null;
   const linkRows = onOpenLink ? links : NO_LINKS;
   const steering = useSteeringInside(steerId);
-  const rows = rowsOf(files, linkRows);
+  // Grouped here so the drawn order and the steering walk are one order.
+  const grouped = groupReaderFiles(files);
+  const rows = rowsOf(grouped, linkRows);
   // The cursor is a key (path / URL), so rows arriving above it do not move it;
   // one whose row vanished snaps back to the start (the shown file's row).
   const [cursorSet, setCursorSet] = useState<string | null>(null);
@@ -165,10 +189,17 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
       <div className="terminal-changes-body" ref={bodyRef}>
         {(files.length > 0 || linkRows.length > 0) && (
           <div className="terminal-changes-files">
-            {files.length > 0 && <>
-              <div className="terminal-files-heading">{t("terminal.readerFiles.filesHeading")}</div>
-              <div className="terminal-files-group" role="listbox" aria-label={t("terminal.readerFiles.list")}>
-                {files.map((file) => {
+            {READER_FILE_GROUPS.map(([from, heading, hint]) => {
+              const group = grouped.filter((file) => file.from === from);
+              if (group.length === 0) return null;
+              const title = t(heading, { count: group.length });
+              return <Fragment key={from}>
+              <div className="terminal-files-heading" title={t(hint)}>
+                {title}
+                {from === grouped[0]?.from && <UntestedTag id="terminal.reader.fileGroups" />}
+              </div>
+              <div className="terminal-files-group" role="listbox" aria-label={title}>
+                {group.map((file) => {
                   const active = picked?.path === file.entry.path;
                   const here = steering && cursor === file.entry.path;
                   return (
@@ -181,7 +212,8 @@ export function TerminalReaderFiles({ tabKey, files, links = NO_LINKS, picked, p
                   );
                 })}
               </div>
-            </>}
+              </Fragment>;
+            })}
             {linkRows.length > 0 && onOpenLink && <>
               <div className="terminal-files-heading">
                 {t("terminal.readerFiles.linksHeading")}

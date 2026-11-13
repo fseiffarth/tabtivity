@@ -97,19 +97,119 @@ describe("dictating into the Chat's composer", () => {
     emit("voice:state", { session: 11, state: "listening" });
   }
 
-  it("puts each settled sentence into the draft and shows what it hears meanwhile", async () => {
+  it("writes what it hears into the draft as it is said, and the final replaces it", async () => {
     const box = await composer(host);
     fireEvent.change(box, { target: { value: "please" } });
     await startMic();
     expect(screen.getByRole("button", { name: "Stop dictating" })).toBeTruthy();
     emit("voice:partial", { session: 11, segment: 1, text: "fix the" });
-    expect(screen.getByText("Heard: fix the")).toBeTruthy();
+    expect(box.value).toBe("please fix the");
+    // Each partial is the segment so far (or its last seconds): it replaces the last.
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the log in" });
+    expect(box.value).toBe("please fix the log in");
+    // The words are in the field, so no Heard line repeats them.
+    expect(screen.queryByText(/^Heard:/)).toBeNull();
     emit("voice:final", { session: 11, segment: 1, text: "fix the login" });
     expect(box.value).toBe("please fix the login");
     // A dropped segment settles without touching the draft.
+    emit("voice:partial", { session: 11, segment: 2, text: "uh" });
+    expect(box.value).toBe("please fix the login uh");
     emit("voice:final", { session: 11, segment: 2, text: "" });
     expect(box.value).toBe("please fix the login");
     expect(sendSteeringPrompt).not.toHaveBeenCalled();
+  });
+
+  it("undoes a settled sentence as one step, never its partials", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "fix" });
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the login" });
+    emit("voice:final", { session: 11, segment: 1, text: "Fix the login." });
+    emit("voice:partial", { session: 11, segment: 2, text: "and the" });
+    emit("voice:final", { session: 11, segment: 2, text: "And the logout." });
+    expect(box.value).toBe("Fix the login. And the logout.");
+    emit("voice:final", { session: 11, segment: 3, text: "Tabby, scratch that." });
+    expect(box.value).toBe("Fix the login.");
+    fireEvent.keyDown(box, { key: "z", code: "KeyZ", ctrlKey: true });
+    expect(box.value).toBe("Fix the login. And the logout.");
+    fireEvent.keyDown(box, { key: "z", code: "KeyZ", ctrlKey: true });
+    expect(box.value).toBe("Fix the login.");
+    fireEvent.keyDown(box, { key: "z", code: "KeyZ", ctrlKey: true });
+    expect(box.value).toBe("");
+  });
+
+  it("keeps the words of a spoken edit out of the draft, on the Heard line instead", async () => {
+    const box = await composer(host);
+    fireEvent.change(box, { target: { value: "Fix the login." } });
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "Tabby" });
+    expect(box.value).toBe("Fix the login.");
+    expect(screen.getByText("Heard: Tabby")).toBeTruthy();
+    emit("voice:partial", { session: 11, segment: 1, text: "Tabby, clear" });
+    expect(box.value).toBe("Fix the login.");
+    emit("voice:final", { session: 11, segment: 1, text: "Tabby, clear all." });
+    expect(box.value).toBe("");
+    expect(screen.queryByText(/^Heard:/)).toBeNull();
+  });
+
+  it("shows a spoken send's words nowhere, and sends without them", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "Fix the login. Go on" });
+    expect(box.value).toBe("Fix the login.");
+    await act(async () => {
+      emit("voice:final", { session: 11, segment: 1, text: "Fix the login. Go on." });
+    });
+    expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "Fix the login.");
+    // A late partial never lands in the emptied draft.
+    emit("voice:partial", { session: 11, segment: 2, text: "late" });
+    expect(box.value).toBe("");
+  });
+
+  it("leaves what the user types meanwhile alone", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the" });
+    // Typed after the live words, then before them.
+    fireEvent.change(box, { target: { value: "fix the (now)" } });
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the login" });
+    expect(box.value).toBe("fix the login (now)");
+    fireEvent.change(box, { target: { value: "Please, fix the login (now)" } });
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the login page" });
+    expect(box.value).toBe("Please, fix the login page (now)");
+    emit("voice:final", { session: 11, segment: 1, text: "Fix the login page." });
+    // The final lands where the live words stood.
+    expect(box.value).toBe("Please, Fix the login page. (now)");
+  });
+
+  it("takes an edit inside the live words as the user's own, and does not type the final again", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the lock in" });
+    fireEvent.change(box, { target: { value: "fix the login" } });
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the lock in page" });
+    expect(box.value).toBe("fix the login");
+    emit("voice:final", { session: 11, segment: 1, text: "Fix the login page." });
+    expect(box.value).toBe("fix the login");
+  });
+
+  it("drops the open segment's live words when the mic is paused", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:vad", { session: 11, segment: 1, state: "start" });
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the" });
+    expect(box.value).toBe("fix the");
+    emit("voice:state", { session: 11, state: "paused" });
+    expect(box.value).toBe("");
+  });
+
+  it("removes the live words of a segment that ended without a final text when the session ends", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the" });
+    expect(box.value).toBe("fix the");
+    emit("voice:state", { session: 11, state: "stopped" });
+    expect(box.value).toBe("");
   });
 
   it("sends on a spoken \"go on\", without those words, and ends the dictation", async () => {

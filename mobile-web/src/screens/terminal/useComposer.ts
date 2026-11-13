@@ -353,8 +353,8 @@ export function useComposerSend({
   /** Once dictated words have left the composer by its ✕, "Heard:" stops
    * quoting them. They stay counted as inserted: the recognizer, still
    * listening, reads them back, and they must not return to the draft. */
-  const forgetDictation = () => {
-    voiceProgress.current = settleDictation(voiceProgress.current);
+  const forgetDictation = (discardLive = false) => {
+    voiceProgress.current = settleDictation(voiceProgress.current, discardLive);
     setVoicePreview("");
   };
   /** Send ends the dictation, and a start still being prepared with it. It is
@@ -946,7 +946,7 @@ export function useComposerTools({
   setUsedSlash: Dispatch<SetStateAction<string[]>>;
   setCommitSheet: Dispatch<SetStateAction<boolean>>;
   uploads: InboxUpload[];
-  forgetDictation: () => void;
+  forgetDictation: (discardLive?: boolean) => void;
   submitDraft: (text?: string, fromComposer?: boolean, interrupt?: boolean) => boolean;
 }) {
   /** The Commit chip's pick: its prompt goes as the reader's own would —
@@ -992,7 +992,8 @@ export function useComposerTools({
   /** The composer's ✕: an empty draft, and the dictation transcript with it. */
   const clearDraft = () => {
     setDraft("");
-    forgetDictation();
+    // The words still being guessed at go with it: they must not come back.
+    forgetDictation(true);
     composerInput.current?.focus();
   };
   /** Keep the draft a moment after the typing stops. Per keystroke would put a

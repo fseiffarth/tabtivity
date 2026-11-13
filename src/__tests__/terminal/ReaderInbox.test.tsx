@@ -23,18 +23,20 @@ const ref = (leaf: string) => `@${NAMES.inboxDir}/${leaf}`;
 
 const tab: TabEntry = { key: "agent-1", label: "Claude", cmd: "claude", cwd: "/p", kind: "agent", sessionId: "s-1", launchedAt: 1000 };
 const prompt = `look at these ${ref(PNG)} ${ref(PDF)} ${ref(GONE)} `;
+let sent = prompt;
 
 describe("the Reader's inbox previews", () => {
   let host: HTMLElement;
   beforeEach(() => {
     localStorage.clear();
     resetInboxFiles();
+    sent = prompt;
     invoke.mockReset();
     openFileEntry.mockReset();
     Object.assign(URL, { createObjectURL: vi.fn(() => "blob:shot"), revokeObjectURL: vi.fn() });
     invoke.mockImplementation((command: string, args?: { names?: string[] }) => {
       if (command === "agent_tab_transcript") {
-        return Promise.resolve({ available: true, version: "v1", truncated: false, entries: [{ kind: "prompt", text: prompt, at: "2026-10-15T08:00:00Z" }] });
+        return Promise.resolve({ available: true, version: "v1", truncated: false, entries: [{ kind: "prompt", text: sent, at: "2026-10-15T08:00:00Z" }] });
       }
       if (command === "project_inbox_describe") {
         const known: Record<string, { kind: string; size: number }> = { [PNG]: { kind: "image/png", size: 10 }, [PDF]: { kind: "application/pdf", size: 2048 } };
@@ -68,6 +70,17 @@ describe("the Reader's inbox previews", () => {
     expect(document.querySelector(".terminal-reader-md")?.textContent).not.toContain(NAMES.inboxDir);
     expect(invoke).toHaveBeenCalledWith("project_inbox_describe", { projectId: "p", names: [PNG, PDF, GONE] });
     expect(invoke).toHaveBeenCalledWith("read_file_bytes", { path: `/p/${NAMES.inboxDir}/${PNG}`, projectId: "p" });
+  });
+
+  it("draws a slash command's inbox picture in the bubble under its rule", async () => {
+    sent = `/design redesign ugly menu ${ref(PNG)}`;
+    mount();
+    const open = await screen.findByRole("button", { name: /shot\.png/u });
+    expect(open.querySelector("img")?.getAttribute("src")).toBe("blob:shot");
+    expect(document.querySelector(".terminal-reader-command")?.textContent).toBe("/design");
+    const bubble = document.querySelector(".terminal-reader-turn.user.with-files");
+    expect(bubble?.textContent).toContain("redesign ugly menu");
+    expect(bubble?.textContent).not.toContain(NAMES.inboxDir);
   });
 
   it("opens a file in its viewer tab on a click", async () => {

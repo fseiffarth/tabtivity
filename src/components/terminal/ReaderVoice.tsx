@@ -28,7 +28,8 @@ import { createPickStage, createStagedSendGuard, type GuardPhase, type PickStage
 import { useSettingsStore } from "../../stores/settings";
 import { Dropdown } from "../common/Dropdown";
 import { UntestedTag } from "../common/UntestedTag";
-import { paintMicLevel } from "../../../shared/voice";
+import { isStopWord, paintMicLevel } from "../../../shared/voice";
+import type { LiveDictation } from "./useLiveDictation";
 
 type Phase = "off" | "starting" | "preparing" | "listening";
 
@@ -39,10 +40,14 @@ const REOPEN_SETTLE_MS = 800;
 /**
  * Dictation for the Chat's composer (`ReaderComposer`, docs/desktop_voice_plan.md
  * step 3): the mic button beside Send, the "Heard:" line, the pickers of the
- * speech model it listens with and the language it listens in, and the install card, on the backend's speech engine (`lib/voice/desktopVoice`). A settled segment
- * goes to `onText`; the composer puts it in the draft and sends on a spoken
- * "go on". One mic per machine: starting it here stops it in any other tab,
- * whose session then ends.
+ * speech model it listens with and the language it listens in, and the install card, on the backend's speech engine (`lib/voice/desktopVoice`). The
+ * words of a segment still being said are written into the draft as they are
+ * heard (`live`, provisional text the segment's next partial and its final
+ * replace); a settled segment goes to `onText`, which swaps them for the
+ * final, and the composer sends on a spoken "go on". The "Heard:" line is for
+ * words that cannot go in the draft yet: a spoken edit in the making, a stop
+ * word, an answer to a dialog. One mic per machine: starting it here stops it
+ * in any other tab, whose session then ends.
  *
  * Hands-free (step 4, `handsFree`): the session listens in the backend's
  * `handsFree` mode, whose voice detector closes a segment only after the
@@ -57,7 +62,7 @@ const REOPEN_SETTLE_MS = 800;
  * The mic pauses while the pane is hidden and resumes when it is shown; the
  * session ends with the composer. A browser client offers no mic.
  */
-export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, onSend, hasDraft, pick, commitPick, readProblem = null, note = "" }: {
+export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, reading, questionOpen, lastAnswer, onText, live, onSend, hasDraft, pick, commitPick, readProblem = null, note = "" }: {
   tabKey: string;
   ptyId: string;
   visible: boolean;
@@ -70,8 +75,11 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   questionOpen: boolean;
   /** The newest answer's key in the conversation. */
   lastAnswer: string | null;
-  /** A settled segment's text (never empty). */
-  onText: (text: string) => void;
+  /** A settled segment's text (empty when it was dropped): the composer takes
+   * the segment's provisional text out of the draft and puts the words in. */
+  onText: (text: string, segment: number) => void;
+  /** The composer's provisional text for a segment still being said. */
+  live: LiveDictation;
   /** Hands-free's send: the composer's own. */
   onSend: () => void;
   hasDraft: () => boolean;
@@ -112,10 +120,14 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const sessionHandsFree = useRef(false);
   /** Bumped by every start and end, so a start that resolves late stops. */
   const attempt = useRef(0);
-  const handlers = useRef({ onText, onSend, hasDraft, pick, commitPick });
+  const handlers = useRef({ onText, live, onSend, hasDraft, pick, commitPick });
   useEffect(() => {
-    handlers.current = { onText, onSend, hasDraft, pick, commitPick };
+    handlers.current = { onText, live, onSend, hasDraft, pick, commitPick };
   });
+  /** The segment whose speech is open: the one a pause drops. */
+  const openSegment = useRef<number | null>(null);
+  const questionOpenRef = useRef(questionOpen);
+  questionOpenRef.current = questionOpen;
   const lastAnswerRef = useRef(lastAnswer);
   lastAnswerRef.current = lastAnswer;
   const offered = voiceInputOffered();
@@ -149,6 +161,8 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const reset = () => {
     session.current = null;
     guard.current?.reset();
+    handlers.current.live.removeAll();
+    openSegment.current = null;
     paintMicLevel(buttonRef.current, null);
     setPhase("off");
     setHeard("");
@@ -160,6 +174,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
   const awaitTurn = () => {
     guard.current?.reset();
     answerAtSend.current = lastAnswerRef.current;
+    handlers.current.live.removeAll();
     setHeard("");
     setWaitingSince(Date.now());
   };
@@ -168,6 +183,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
    * `lang`: the language choice to listen in, else the setting's. */
   const start = async (use: string = model, lang: VoiceLangChoice = langChoice) => {
     const mine = ++attempt.current;
+    handlers.current.live.removeAll();
     setProblem(null);
     setInstall(null);
     setPhase("starting");
@@ -204,40 +220,68 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
           setProblem(null);
           setPhase("listening");
         },
-        onSegment: (open) => {
-          if (!open) setHeard("");
-          else if (sessionHandsFree.current && !waitingRef.current) guard.current?.speechStarted();
+        onSegment: (open, segment) => {
+          if (!open) {
+            openSegment.current = null;
+            setHeard("");
+          } else {
+            openSegment.current = segment;
+            if (sessionHandsFree.current && !waitingRef.current) guard.current?.speechStarted();
+          }
         },
-        onPartial: (text) => { if (!waitingRef.current) setHeard(text); },
-        onFinal: (text) => {
+        onPartial: (text, segment) => {
+          if (waitingRef.current) return;
+          // Hands-free keeps what may be a stop word or a dialog's answer out
+          // of the draft until it has settled; the Heard line says it.
+          const held = loop && (isStopWord(text) || questionOpenRef.current);
+          const written = !held && handlers.current.live.show(segment, text);
+          setHeard(written ? "" : text);
+        },
+        onFinal: (text, segment) => {
           setHeard("");
+          if (openSegment.current === segment) openSegment.current = null;
           if (!sessionHandsFree.current) {
-            if (text) handlers.current.onText(text);
+            handlers.current.onText(text, segment);
             return;
           }
           // Words still on their way from before a send are not the next prompt.
-          if (waitingRef.current) return;
+          if (waitingRef.current) {
+            handlers.current.live.remove(segment);
+            return;
+          }
           // Any new utterance supersedes a staged pick ("stop" cancels it).
           if (text) staged.current.heard();
           const picked = text ? handlers.current.pick(text) : null;
           if (picked === "refused") {
             // A dialog a voice may not answer: nothing is typed or picked.
+            handlers.current.live.remove(segment);
             guard.current?.settled("");
             return;
           }
           if (picked) {
             // "Heard: 2", then the chime and the cancel window; the dialog
             // is answered only when it closes.
+            handlers.current.live.remove(segment);
             staged.current.stage(picked);
             setPickHeard(picked.heard);
             guard.current?.settled(text);
             return;
           }
-          if (!guard.current?.settled(text)) return;
-          if (text) handlers.current.onText(text);
+          if (!guard.current?.settled(text)) {
+            // A stop word is no text.
+            handlers.current.live.remove(segment);
+            return;
+          }
+          handlers.current.onText(text, segment);
         },
         onLevel: (level) => paintMicLevel(buttonRef.current, level),
-        onPaused: () => {},
+        // Pausing drops the open segment: no final comes for it.
+        onPaused: (paused) => {
+          if (!paused || openSegment.current === null) return;
+          handlers.current.live.remove(openSegment.current);
+          openSegment.current = null;
+          setHeard("");
+        },
         onError: (key) => setProblem(key),
         onEnd: () => {
           if (session.current === dictation) reset();
@@ -479,6 +523,7 @@ export function useReaderVoice({ tabKey, ptyId, visible, disabled, handsFree, re
       ) : line && (
         <div className={shownProblem ? "terminal-reader-voice-line error" : "terminal-reader-voice-line"} role={shownProblem ? "alert" : "status"} aria-live="polite">
           {line}
+          {listening && !heard && !shownProblem && <UntestedTag id="terminal.reader.voice.liveDraft" />}
           {listening && !heard && !shownProblem && note && <UntestedTag id="terminal.reader.voice.draftEdits" />}
           {listening && !heard && !shownProblem && !note && (sessionHandsFree.current
             ? <UntestedTag id="terminal.reader.voice.handsFree" />

@@ -63,7 +63,8 @@ import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useRea
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
-import { relativePathWithin } from "../../lib/paths";
+import { isPathWithin, relativePathWithin, resolvePath } from "../../lib/paths";
+import { NAMES } from "../../lib/brand";
 import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
@@ -74,6 +75,7 @@ import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, 
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu, slashMenuKey } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
+import { useLiveDictation } from "./useLiveDictation";
 import { useReaderVoice } from "./ReaderVoice";
 import { matchDraftEdit } from "../../lib/voice/voiceCommands";
 import { DraftVoiceHistory, type DraftEditNote } from "../../lib/voice/draftEdit";
@@ -555,7 +557,11 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
       <div className="terminal-reader-command" role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
         <span>{inline && turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}</span>
       </div>
-      {!inline && <div className="terminal-reader-turn user"><p>{turn.command.args}</p>{time}</div>}
+      {/* A `/design @inbox-picture` prompt's picture shows as in any prompt. */}
+      {!inline && <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"}>
+        <ReaderPromptBody text={turn.command.args}>{(words) => <p>{words}</p>}</ReaderPromptBody>
+        {time}
+      </div>}
     </>;
   }
   if (turn.kind === "prompt") {
@@ -702,10 +708,22 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const undo = useRef(new DraftUndo());
   const draftRef = useRef(draft);
   const caretAt = useRef<number | null>(null);
+  /** Spoken edits are matched in the language listened in; with the
+   * recognizer left to detect it, in the app's. */
+  const uiLanguage = useI18nStore((s) => s.lang);
+  const voiceLangChoice = useSettingsStore((s) => s.settings?.voice_lang);
+  const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
+  /** Dictation writes the words of a segment still being said into the draft
+   * (`useLiveDictation`); it keeps the caret where the user had it. */
+  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguage });
+  const renderedRef = useRef(dictation.rendered);
+  renderedRef.current = dictation.rendered;
   useLayoutEffect(() => {
     draftRef.current = draft;
+    const moved = caretAt.current !== null;
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
+    renderedRef.current(draft, moved);
   }, [draft]);
   // Three lines until the text needs more: the box grows with it (upward, the
   // composer stays on the pane's last row) up to its CSS max-height.
@@ -903,16 +921,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const timer = window.setTimeout(() => setEditNote(null), EDIT_NOTE_MS);
     return () => window.clearTimeout(timer);
   }, [editNote]);
-  /** Spoken edits are matched in the language listened in; with the
-   * recognizer left to detect it, in the app's. */
-  const uiLanguage = useI18nStore((s) => s.lang);
-  const voiceLangChoice = useSettingsStore((s) => s.settings?.voice_lang);
-  const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
-  /** A dictated segment (`useReaderVoice`) joins the draft as typed text
-   * would, undoable; one that ends in the spoken send ("go on" / "los")
-   * sends the draft without those words. "Tabby scratch that", "Tabby
-   * replace X by Y", "Tabby plan" … edit the draft instead. */
-  const dictated = (heard: string) => {
+  /** A dictated segment's final (`useReaderVoice`) joins the draft as typed
+   * text would, undoable, in the place its provisional text held (else at the
+   * end); one that ends in the spoken send ("go on" / "los") sends the draft
+   * without those words. "Tabby scratch that", "Tabby replace X by Y",
+   * "Tabby plan" … edit the draft instead. The provisional text of the segment
+   * leaves the draft first, so none of that is ever left behind in it and the
+   * undo history only sees the settled step. An empty `heard` only settles. */
+  const dictated = (heard: string, segment: number) => {
+    const { at, taken } = dictation.settle(segment);
     const clean = sanitizeVoiceTranscript(heard);
     if (!clean) return;
     const edit = matchDraftEdit(clean, editLanguage);
@@ -923,12 +940,26 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       if (edit.send) void send();
       return;
     }
+    // The user edited the provisional words into their own: not typed twice.
+    if (taken) {
+      if (spokenSend(clean) !== null) void send();
+      return;
+    }
     const current = draftRef.current;
-    const next = spliceSpaced(current, current.length, clean);
-    const spoken = spokenSend(next);
-    if (spoken === null) voiceEdits.piece(current, next, clean);
-    editDraft(spoken ?? next);
-    if (spoken !== null) void send();
+    const where = at === null ? current.length : Math.min(at, current.length);
+    // Mid-draft the spoken send is judged on the dictated words alone.
+    const appended = where === current.length;
+    const sendless = appended ? spokenSend(spliceSpaced(current, where, clean)) : spokenSend(clean);
+    const spoken = sendless !== null;
+    const next = appended ? sendless ?? spliceSpaced(current, where, clean)
+      : sendless === null ? spliceSpaced(current, where, clean)
+      : sendless ? spliceSpaced(current, where, sendless) : current;
+    if (!spoken) {
+      voiceEdits.piece(current, next, clean);
+      dictation.inserted(current, next, where);
+    }
+    if (next !== current) editDraft(next);
+    if (spoken) void send();
   };
   const voice = useReaderVoice({
     tabKey,
@@ -940,8 +971,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     questionOpen,
     lastAnswer: voiceLoop.lastAnswer,
     onText: dictated,
+    live: dictation.live,
     onSend: () => void send(),
-    hasDraft: () => draftRef.current.trim() !== "",
+    // Words still being said are not a draft a send could go out with.
+    hasDraft: () => dictation.settledDraft().trim() !== "",
     pick: voiceLoop.pick,
     commitPick: voiceLoop.commitPick,
     readProblem: voiceLoop.readProblem,
@@ -2439,25 +2472,38 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const filesOffered = !!onShowFiles;
   const readerFiles = useMemo(() => {
     if (!filesOffered) return [];
-    const found = new Map<string, ReaderFile>();
-    const add = (entry: FileEntry) => {
-      if (!found.has(entry.path)) found.set(entry.path, { entry, label: relativePathWithin(tabDir, entry.path) || entry.path });
-    };
+    const found = new Map<string, FileEntry>();
+    // Where each file came from (`ReaderFileFrom`): an outbox file is the
+    // agent's send, an inbox one your attachment; any other path is the
+    // answers' when one names it, else your prompt's.
+    const attached = new Set<string>();
+    const answered = new Set<string>();
+    const outbox = pathContext.projectDir ? resolvePath(pathContext.projectDir, NAMES.outboxDir) : null;
     for (let index = levelEntries.length - 1; index >= 0; index -= 1) {
-      const text = levelEntries[index].text;
+      const { text, kind } = levelEntries[index];
       const named: FileEntry[] = [];
       for (const candidate of findPathCandidates(text)) {
         const file = pathLinks.get(candidate.path);
         if (file && !file.is_dir) named.push(file);
       }
+      if (kind !== "prompt") for (const entry of named) answered.add(entry.path);
       if (readerInbox) for (const leaf of inboxLeaves(text)) {
         const file = readerInbox.files.get(leaf);
-        if (file) named.push(inboxEntry(pathContext.projectDir, file));
+        if (!file) continue;
+        const entry = inboxEntry(pathContext.projectDir, file);
+        attached.add(entry.path);
+        named.push(entry);
       }
       // Within one message, first mention first.
-      for (const entry of named) add(entry);
+      for (const entry of named) if (!found.has(entry.path)) found.set(entry.path, entry);
     }
-    return [...found.values()];
+    return [...found.values()].map((entry): ReaderFile => ({
+      entry,
+      label: relativePathWithin(tabDir, entry.path) || entry.path,
+      from: outbox && isPathWithin(entry.path, outbox) ? "agent"
+        : attached.has(entry.path) ? "you"
+          : answered.has(entry.path) ? "named" : "you",
+    }));
   }, [filesOffered, levelEntries, pathLinks, tabDir, readerInbox, pathContext.projectDir]);
   const onFilesKnownRef = useRef(onFilesKnown);
   onFilesKnownRef.current = onFilesKnown;

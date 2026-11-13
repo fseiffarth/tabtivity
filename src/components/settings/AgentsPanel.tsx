@@ -113,6 +113,10 @@ export function AgentsPanel({
   const [updates, setUpdates] = useState<Record<string, AgentUpdateReport>>({});
   /** The CLIs whose own "Check for update" is in flight. */
   const [checkingUpdates, setCheckingUpdates] = useState<Record<string, true>>({});
+  /** The section head's "Check all" is in flight. */
+  const [checkingAll, setCheckingAll] = useState(false);
+  /** The section head's "Update all" is running its queue. */
+  const [updatingAll, setUpdatingAll] = useState(false);
   // Filter over the *not installed* half only (see the two sections below).
   const [search, setSearch] = useState("");
   const node = useNodeRuntimeStatus();
@@ -242,11 +246,43 @@ export function AgentsPanel({
       .finally(() => setCheckingUpdates(({ [id]: _drop, ...rest }) => rest));
   };
 
+  // The section head's twin of the per-card button: one `check_agent_updates`
+  // without an id asks every installed CLI's registry at once (in parallel on
+  // the backend). Explicit only, like the per-card one.
+  const checkAllUpdates = (ids: string[]) => {
+    setCheckingAll(true);
+    invoke<AgentUpdateReport[]>("check_agent_updates", { id: null })
+      .then((rows) => {
+        setUpdates((u) => ({ ...u, ...Object.fromEntries(rows.map((row) => [row.agent, row])) }));
+        loadVersions(false);
+      })
+      .catch(() =>
+        setUpdates((u) => ({
+          ...u,
+          ...Object.fromEntries(
+            ids.map((id) => [
+              id,
+              {
+                agent: id,
+                current: null,
+                latest: null,
+                updateAvailable: false,
+                checkable: true,
+                error: t("agents.updateCheckNoBackend"),
+              },
+            ]),
+          ),
+        })),
+      )
+      .finally(() => setCheckingAll(false));
+  };
+
   // Run the CLI's own installer again, which fetches the newest release (into
   // Tabtivity's install home, ahead of a host copy on PATH), or its own update
   // verb where the installer cannot. Same live log as an install; the card stays
-  // in the installed list throughout.
-  const updateAgent = async (id: string) => {
+  // in the installed list throughout. Returns whether it succeeded; the caller
+  // re-reads the list and versions (once, for a whole "Update all" queue).
+  const runAgentUpdate = async (id: string): Promise<boolean> => {
     setInstalling(id);
     setErrors(({ [id]: _drop, ...rest }) => rest);
     setLogs((l) => ({ ...l, [id]: "" }));
@@ -258,13 +294,34 @@ export function AgentsPanel({
       );
       setUpdates(({ [id]: _drop, ...rest }) => rest);
       setLogs(({ [id]: _drop, ...rest }) => rest);
-      refresh();
-      notifyAgentRegistryChanged();
-      loadVersions(true);
+      return true;
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
+      return false;
     } finally {
       setInstalling(null);
+    }
+  };
+  const afterUpdates = () => {
+    refresh();
+    notifyAgentRegistryChanged();
+    loadVersions(true);
+  };
+  const updateAgent = async (id: string) => {
+    if (await runAgentUpdate(id)) afterUpdates();
+  };
+  // One installer at a time (`installing` holds one id), so the queue runs in
+  // order; a failure stays on its card and the rest still run.
+  const updateAllAgents = async (ids: string[]) => {
+    setUpdatingAll(true);
+    let any = false;
+    try {
+      for (const id of ids) {
+        if (await runAgentUpdate(id)) any = true;
+      }
+    } finally {
+      setUpdatingAll(false);
+      if (any) afterUpdates();
     }
   };
 
@@ -700,11 +757,11 @@ export function AgentsPanel({
             <button
               type="button"
               className="settings-btn sm"
-              disabled={!!checkingUpdates[a.id] || installing === a.id}
+              disabled={!!checkingUpdates[a.id] || checkingAll || installing === a.id}
               title={t("agents.checkUpdatesTitle", { label: a.label })}
               onClick={() => checkUpdate(a.id)}
             >
-              {checkingUpdates[a.id] ? t("agents.checkingUpdates") : t("agents.checkUpdates")}
+              {checkingUpdates[a.id] || checkingAll ? t("agents.checkingUpdates") : t("agents.checkUpdates")}
             </button>
             <UntestedTag id="settingsSubPanels.agentUpdates" />
             <UntestedTag id="settingsSubPanels.3" />
@@ -912,6 +969,18 @@ export function AgentsPanel({
   };
 
   const installedAgents = sortByAgentOrder(installedList, (a) => a.bin, agentOrder);
+  // "Update all" takes only a definite update (installed version read and older
+  // than the newest release); an unreadable one keeps its own card's button.
+  const updatableIds = adminInstalls
+    ? []
+    : installedAgents
+        .filter((a) => {
+          const update = updates[a.id];
+          const current = versions[a.id]?.version ?? update?.current ?? null;
+          return !!(update?.updateAvailable && current && update.latest);
+        })
+        .map((a) => a.id);
+  const anyInstallBusy = installing !== null || removing !== null;
   const availableAgents = (agents ?? []).filter((a) => !a.installed);
   const query = search.trim().toLowerCase();
   // Matched on the label, the id and the binary name, because a CLI is looked
@@ -927,14 +996,26 @@ export function AgentsPanel({
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
       <p className="settings-help agents-lead">{t("agents.lead")}</p>
-      <label className="settings-help"><input type="checkbox" checked={settings?.daily_release_check !== false}
-        onChange={(event) => void useSettingsStore.getState().updateSettings({ daily_release_check: event.target.checked })} />
-        {t("agents.dailyReleaseCheck")} <UntestedTag id="agents.dailyReleaseCheck" />
-      </label>
-      <label className="settings-help"><input type="checkbox" checked={settings?.agent_tab_auto_name !== false}
-        onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })} />
-        {t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" />
-      </label>
+      {/* The two panel-wide switches, as the shared settings card: a short
+          title on the row, what it does on the help line beneath. */}
+      <div className="settings-card agents-top-settings">
+        <label className="settings-toggle-card-row">
+          <span>{t("agents.dailyReleaseCheck")} <UntestedTag id="agents.dailyReleaseCheck" /></span>
+          <Toggle
+            checked={settings?.daily_release_check !== false}
+            onChange={(event) => void useSettingsStore.getState().updateSettings({ daily_release_check: event.target.checked })}
+          />
+        </label>
+        <p className="settings-help">{t("agents.dailyReleaseCheckHelp")}</p>
+        <label className="settings-toggle-card-row">
+          <span>{t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" /></span>
+          <Toggle
+            checked={settings?.agent_tab_auto_name !== false}
+            onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })}
+          />
+        </label>
+        <p className="settings-help">{t("agents.autoTabNameHelp")}</p>
+      </div>
       {node.status && !node.status.npm && (
         <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
       )}
@@ -946,6 +1027,37 @@ export function AgentsPanel({
           <div className="agents-section-head" role="heading" aria-level={3}>
             {t("agents.installedGroup")}
             <span className="agents-count">{installedAgents.length}</span>
+            {installedAgents.length > 0 && (
+              <>
+                <span className="agents-spacer" />
+                <UntestedTag id="agents.updateAll" />
+                {updatableIds.length > 0 && (
+                  <button
+                    type="button"
+                    className="settings-btn sm primary"
+                    disabled={anyInstallBusy}
+                    title={t("agents.updateAllTitle", {
+                      labels: installedAgents
+                        .filter((a) => updatableIds.includes(a.id))
+                        .map((a) => a.label)
+                        .join(", "),
+                    })}
+                    onClick={() => void updateAllAgents(updatableIds)}
+                  >
+                    {updatingAll ? t("agents.updatingAll") : t("agents.updateAll", { count: updatableIds.length })}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  disabled={checkingAll || anyInstallBusy}
+                  title={t("agents.checkAllUpdatesTitle")}
+                  onClick={() => checkAllUpdates(installedAgents.map((a) => a.id))}
+                >
+                  {checkingAll ? t("agents.checkingUpdates") : t("agents.checkAllUpdates")}
+                </button>
+              </>
+            )}
           </div>
           {installedAgents.length === 0 ? (
             <p className="settings-help">{t("agents.noneInstalled")}</p>

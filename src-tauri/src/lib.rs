@@ -2291,6 +2291,8 @@ pub fn run() {
             commands::sync::sync_push,
             commands::sync::sync_mark_selected,
             commands::sync::sync_set_auto,
+            commands::sync::sync_take_newer_get,
+            commands::sync::sync_set_take_newer,
             commands::sync::sync_auto_preview,
             commands::sync::sync_transfer_preview,
             commands::sync::sync_big_folders,

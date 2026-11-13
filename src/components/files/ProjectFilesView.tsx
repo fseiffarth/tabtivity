@@ -701,6 +701,18 @@ export function ProjectFilesView({
     [excludeBothChanged, syncMap, orangeFiles],
   );
   const newerSplit = useMemo(() => splitByNewerSide(syncMap, bulkFiles), [syncMap, bulkFiles]);
+  // "Take the newer copy automatically" (`services::sync_take_newer`): the auto-sync
+  // engine resolves a file both sides changed by the newer mtime, backing up the
+  // other. Read whenever the orange view shows, so two surfaces agree.
+  const takeNewer = useSyncStore((s) => (projectId ? s.takeNewerByProject[projectId] : undefined));
+  const anyAutoSync = useMemo(() => Object.values(syncMap ?? {}).some((e) => e.auto), [syncMap]);
+  useEffect(() => {
+    if (!projectId || !active || view !== "orange") return;
+    useSyncStore
+      .getState()
+      .loadTakeNewer(projectId)
+      .catch(() => {});
+  }, [projectId, active, view]);
   const deleteSplit = useMemo(() => splitByDeleteSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // The true conflicts (both sides changed since the last sync), for "Hand to an agent".
   const conflictFiles = useMemo(() => bothChangedPaths(syncMap, orangeFiles), [syncMap, orangeFiles]);
@@ -2105,6 +2117,30 @@ export function ProjectFilesView({
               </button>
             </div>
           )}
+          <div className="orange-take-newer">
+            <label className="tmux-scope-toggle" title={t("projectFilesView.takeNewerAutoTitle")}>
+              <input
+                type="checkbox"
+                checked={takeNewer ?? false}
+                disabled={!projectId || takeNewer === undefined}
+                onChange={(e) => {
+                  if (!projectId) return;
+                  const on = e.target.checked;
+                  useSyncStore
+                    .getState()
+                    .setTakeNewer(projectId, on)
+                    .catch((err: unknown) =>
+                      setOrangeError(t("projectFilesView.takeNewerAutoFailed", { error: String(err) })),
+                    );
+                }}
+              />
+              {t("projectFilesView.takeNewerAuto")}
+              <UntestedTag id="projectFilesView.takeNewerAuto" />
+            </label>
+            {takeNewer && !anyAutoSync && (
+              <span className="orange-take-newer-note">{t("projectFilesView.takeNewerAutoNoAuto")}</span>
+            )}
+          </div>
           {orangeFiles.length === 0 && newLocalFiles.length === 0 ? (
             <div className="side-panel-orange-empty">{t("projectFilesView.noDivergedFiles")}</div>
           ) : (

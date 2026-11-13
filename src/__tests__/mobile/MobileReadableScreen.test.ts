@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { inputFrameStart } from "../../../mobile-web/src/terminal/statusLine";
+import { readSelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
 import {
   MAX_LINES,
   dedentLines,
@@ -478,6 +479,34 @@ describe(`${BRAND.display} Mobile side panel`, () => {
     const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
     expect(lines.join("\n")).not.toMatch(/No changes|│/u);
     expect(lines.slice(-3)).toEqual(["   Select login method:   (a row that runs past the divider column)", "   ❯ 1. Claude account with subscription", "   Esc to cancel"]);
+  });
+
+  it("reads 2.1.323's dialog edge with a notice in it as the bare edge: the /model sheet keeps its title", () => {
+    // `/model` at 80×24 (verify-cli claude/2.1.323/model/w80_09): the edge fills
+    // the row, so xterm marks the heading under it wrapped.
+    const rows = [
+      "❯ /model ",
+      "  ⎿  Kept model as Opus 5.5",
+      "",
+      `${"▔".repeat(61)} ● high · /effort ▔`,
+      `${WRAP}   Select model`,
+      "   Switch between Claude models. Your pick becomes the default for new ",
+      "   sessions. For other/previous model names, specify with --model.",
+      "",
+      "   ↑ 3.  Fable 5.2              For your toughest challenges",
+      "     4.  Sonnet 5.5             Most efficient for simpler tasks",
+      "   ❯ 5.  Haiku 5.5              Fastest for quick answers",
+      "      … +1 model",
+      "",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines;
+    const heading = lines.find((line) => line.text.includes("Select model"));
+    expect(heading).toMatchObject({ text: "   Select model", afterRule: true });
+    expect(lines.map((line) => line.text).join("\n")).not.toContain("/effort");
+    const picker = readSelectPrompt(lines, "Claude");
+    expect(picker?.title).toBe("Select model");
+    expect(picker?.options.map((option) => option.label)).toEqual(["Fable 5.2", "Sonnet 5.5", "Haiku 5.5"]);
   });
 
   it("leaves a table's columns whole above the input box: its bottom is a junction, not the box's rule", () => {

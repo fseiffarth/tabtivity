@@ -22,7 +22,11 @@ the *why*.
   because it happens during background passes nobody triggered. Each site now files a
   warning that `LocalLossDialog` raises. The exception that is **not** recoverable, and is
   labelled as such: a confirmed manual pull overwriting a mirror file that held
-  unsynced local edits (resolving amber by choosing the host). It is a **log file**, not an
+  unsynced local edits (resolving amber by choosing the host). The one opt-in break with
+  "never picks a winner" is the orange view's **take the newer copy** switch
+  (`services::sync_take_newer`): it lets the engine resolve a both-sides-changed file on
+  an auto path by mtime, the one place byte-sync trusts the two clocks, so it is off by
+  default, backs up the losing copy first and logs it here. It is a **log file**, not an
   event: the services are `AppHandle`-free and a background pass can delete with no window
   listening, so a loss recorded while the app was closed still surfaces on next launch.
 - **Every manual transfer asks first** (`stores/remote/syncConfirm` → `SyncConfirmDialog`,

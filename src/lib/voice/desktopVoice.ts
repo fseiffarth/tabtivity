@@ -234,8 +234,9 @@ export interface DesktopDictationHandlers {
   onStart(): void;
   /** Speech started (`open`) or ended; until its final, the segment is unsettled. */
   onSegment(open: boolean, segment: number): void;
-  /** The live guess at the open segment. */
-  onPartial(text: string): void;
+  /** The live guess at the open segment: its transcript so far (older
+   * backends sent only its last seconds). Each replaces the segment's last. */
+  onPartial(text: string, segment: number): void;
   /** A settled segment: its text, or empty when it was dropped. */
   onFinal(text: string, segment: number): void;
   onLevel(level: number | null): void;
@@ -302,7 +303,7 @@ export async function startDesktopDictation(
         break;
       }
       case VOICE_EVENTS.partial:
-        handlers.onPartial((payload as TextEvent).text);
+        handlers.onPartial((payload as TextEvent).text, (payload as TextEvent).segment);
         break;
       case VOICE_EVENTS.final: {
         const final = payload as TextEvent;

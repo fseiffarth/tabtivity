@@ -27,6 +27,10 @@ const FLOOR_MAX_DB: f32 = -30.0;
 /// Audio kept from before a segment opens, so its first syllable is not
 /// cut (on top of the speech that opened it).
 const PRE_ROLL_MS: u32 = 200;
+/// A silence this long inside an open segment (shorter than the one that
+/// ends it) is a natural seam: the session's live preview commits the text
+/// before it and re-transcribes only what follows ([`Vad::pause_marks`]).
+pub const SEAM_SILENCE_MS: u32 = 400;
 
 /// How a listening session segments speech.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +79,9 @@ pub struct Vad {
     /// The open segment's audio, and the silent frames at its end.
     open: Option<Vec<f32>>,
     silent_frames: u32,
+    /// Offsets into `open` where a [`SEAM_SILENCE_MS`] silence had just been
+    /// heard, one per silence, oldest first.
+    seams: Vec<usize>,
 }
 
 /// RMS of `frame` in dBFS.
@@ -97,6 +104,7 @@ impl Vad {
             pre_roll: Vec::new(),
             open: None,
             silent_frames: 0,
+            seams: Vec::new(),
         }
     }
 
@@ -110,6 +118,19 @@ impl Vad {
         self.open.as_deref()
     }
 
+    /// Seams of the open segment: offsets into [`Vad::open_audio`] at which
+    /// a [`SEAM_SILENCE_MS`] silence had just been heard inside it. Empty
+    /// when the segment's end silence is no longer than that (it would end
+    /// at the seam).
+    pub fn pause_marks(&self) -> &[usize] {
+        &self.seams
+    }
+
+    /// Samples of silence at the end of the open segment so far.
+    pub fn trailing_silence(&self) -> usize {
+        self.silent_frames as usize * FRAME
+    }
+
     /// Forget everything but the noise floor: after a pause, or while the
     /// voice speaks. An open segment is dropped, not ended.
     pub fn reset(&mut self) {
@@ -119,11 +140,13 @@ impl Vad {
         self.pre_roll.clear();
         self.open = None;
         self.silent_frames = 0;
+        self.seams.clear();
     }
 
     /// End the open segment now, if any (the session stops).
     pub fn flush(&mut self) -> Option<Vec<f32>> {
         self.silent_frames = 0;
+        self.seams.clear();
         self.open.take()
     }
 
@@ -151,6 +174,9 @@ impl Vad {
             open.extend_from_slice(frame);
             let keep = db > (self.floor_db + KEEP_OVER_FLOOR_DB).max(ABS_MIN_DB);
             self.silent_frames = if keep { 0 } else { self.silent_frames + 1 };
+            if self.silent_frames == frames(SEAM_SILENCE_MS) && self.silent_frames < frames(self.cfg.end_silence_ms) {
+                self.seams.push(open.len());
+            }
             let too_long = open.len() as u64 * 1000 >= self.cfg.max_segment_ms as u64 * RATE as u64;
             if self.silent_frames >= frames(self.cfg.end_silence_ms) || too_long {
                 let mut audio = self.open.take().unwrap_or_default();
@@ -158,6 +184,7 @@ impl Vad {
                 let trailing = (self.silent_frames as usize).saturating_sub(frames(200) as usize) * FRAME;
                 audio.truncate(audio.len().saturating_sub(trailing));
                 self.silent_frames = 0;
+                self.seams.clear();
                 events.push(VadEvent::End(audio));
             }
             return;
@@ -171,6 +198,7 @@ impl Vad {
                 audio.append(&mut self.candidate);
                 self.candidate_frames = 0;
                 self.silent_frames = 0;
+                self.seams.clear();
                 self.open = Some(audio);
                 events.push(VadEvent::Start);
             }
@@ -261,6 +289,40 @@ pub(crate) mod tests {
         let events = run(&mut vad, &audio);
         assert_eq!(events.iter().filter(|e| **e == VadEvent::Start).count(), 1, "{events:?}");
         assert_eq!(events.iter().filter(|e| matches!(e, VadEvent::End(_))).count(), 1);
+    }
+
+    #[test]
+    fn a_pause_inside_speech_leaves_one_seam_and_none_when_it_ends_the_segment() {
+        let mut vad = Vad::new(VadConfig::new(700));
+        let mut audio = hiss(500);
+        audio.extend(tone(800, 220.0, 0.2));
+        audio.extend(hiss(500));
+        audio.extend(tone(800, 300.0, 0.2));
+        // A 300 ms dip is no seam.
+        audio.extend(hiss(300));
+        audio.extend(tone(800, 300.0, 0.2));
+        run(&mut vad, &audio);
+        assert!(vad.is_open());
+        let marks = vad.pause_marks().to_vec();
+        assert_eq!(marks.len(), 1, "{marks:?}");
+        let len = vad.open_audio().unwrap().len();
+        // The seam sits 400 ms into the pause, well inside the audio so far.
+        assert!(marks[0] < len - RATE as usize, "{} of {len}", marks[0]);
+        assert_eq!(vad.trailing_silence(), 0);
+        // The closing silence adds no seam of its own, and the End clears them.
+        let events = run(&mut vad, &hiss(1000));
+        assert!(matches!(events[..], [VadEvent::End(_)]));
+        assert!(vad.pause_marks().is_empty());
+    }
+
+    #[test]
+    fn an_end_silence_no_longer_than_the_seam_makes_none() {
+        let mut vad = Vad::new(VadConfig::new(SEAM_SILENCE_MS));
+        let mut audio = hiss(500);
+        audio.extend(tone(800, 220.0, 0.2));
+        audio.extend(hiss(200));
+        run(&mut vad, &audio);
+        assert!(vad.pause_marks().is_empty());
     }
 
     #[test]
