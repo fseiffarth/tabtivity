@@ -286,7 +286,7 @@ hmac = "0.12"
 argon2 = "0.5"
 # Nonces, salts and the master key itself. Already in the tree transitively;
 # named directly so the one place randomness enters the crypto path is explicit.
-getrandom = "0.3"
+getrandom = "0.4"
 # OpenPGP. `default-features = false` drops `bzip2`, and that is deliberate: a
 # decompressor nobody asked for is the same decompression-bomb channel that
 # keeps `COMPRESS=DEFLATE` off in `async-imap` above. Chosen over
