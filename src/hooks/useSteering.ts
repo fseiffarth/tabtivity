@@ -554,7 +554,9 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         if (regionForLayer(layer) !== "overlay" || !focusedTypingField(layer)) return false;
         syncLayer(); // the dialog is where Esc comes back to
       } else {
-        if (!afterKey || field.closest(".center-pane")) return false;
+        // A pane's own field stays its own, except one a steering key opened
+        // for typing (`data-steering-field`: the Diffs note box).
+        if (!afterKey || (field.closest(".center-pane") && !field.hasAttribute("data-steering-field"))) return false;
         if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return false;
         if (!focusedTypingField(document.body)) return false;
       }

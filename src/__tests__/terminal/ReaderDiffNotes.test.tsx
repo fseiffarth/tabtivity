@@ -115,6 +115,22 @@ describe("notes on the Reader's Diffs tab", () => {
     expect(useDiffNotesStore.getState().byTab[ID]).toBeUndefined();
   });
 
+  it("keeps what was typed when Shift+click moves the box to a later row", async () => {
+    await shown();
+    press("viewMode");
+    const rows = () => [...host.querySelectorAll<HTMLElement>(".terminal-changes-card:nth-of-type(3) .diff-line .diff-note-add")];
+    press("down");
+    press("down");
+    press("viewToggle");
+    await waitFor(() => expect(rows().length).toBe(4));
+    fireEvent.click(rows()[1]);
+    fireEvent.change(field() as HTMLTextAreaElement, { target: { value: "Half a thought" } });
+    fireEvent.click(rows()[3], { shiftKey: true });
+    expect(field()?.value).toBe("Half a thought");
+    fireEvent.keyDown(field() as HTMLTextAreaElement, { key: "Enter", ctrlKey: true });
+    expect(useDiffNotesStore.getState().byTab[ID]?.[0]).toMatchObject({ text: "Half a thought", lines: [2, 3, 4] });
+  });
+
   it("clears the notes at once when there is one", async () => {
     await shown();
     fireEvent.click(host.querySelector(".terminal-changes-card .diff-note-add") as HTMLElement);

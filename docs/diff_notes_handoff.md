@@ -116,3 +116,45 @@ Run with `scripts/gates-job.sh start` (frontend scope, 24 files against a2a5ecb4
   line-number gutter) and the sticky note box with a horizontally scrolled diff.
 - Phone `ChatChanges` and the git-panel `DiffView` are not covered (plan: later).
 - No backend change, so `npm run backend:stale` does not apply.
+
+## Reviewer notes (2026-11-13)
+
+Reviewed `develop..HEAD` (1288b3b1e, 5ad50fdde): prompt builder, store, UI,
+steering, i18n, CSS, docs. Two confirmed bugs, both fixed with a test:
+
+- **`C` opened a note box that could not be typed into while steering was on.**
+  Steering's `handToField` never lends the keyboard to a field inside a
+  `.center-pane` (a tab's own editor must not grab it), and the Reader lives in
+  one, so after `C` the box had focus but every key was swallowed by the mode.
+  The new `ReaderDiffNotes`-level test had called the Inside target directly and
+  never went through `useSteering`. Fix: `DiffNoteBox`'s textarea carries
+  `data-steering-field`, and `handToField` admits such a field after a steering
+  key (then Esc / Ctrl+Enter-and-unmount bring steering back as for any inline
+  field). Test: `shell/SteeringReaderInside.test.tsx` "hands the keyboard to a
+  marked text field".
+- **Shift+click lost the typed text** when it moved the box to a later row (the
+  box remounts under another row, its text started from the empty draft). The
+  text is now kept in a ref as it is typed and carried by the extend. Test:
+  `terminal/ReaderDiffNotes.test.tsx` "keeps what was typed when Shift+click
+  moves the box to a later row".
+
+Checked and fine: side/range/quote logic (deleted, added, context, mixed,
+split pairs), grouping, 12-line cap, 8000-char cap (`included` is exactly what
+is inserted and removed), fence escaping, path relative to the tab's folder;
+store lifetime and sweep; card keys stable as `agent_tab_changes` refreshes
+(`at|path|n`; a diff is immutable once written); `insertIntoReader` fallback;
+`c` collision (no other Inside binding uses it; the `c` -> `m` test fixture
+change was right, `c` was only ever a swallowed dead key Inside); all five
+dictionaries translated; `UntestedTag` row, filemap rows, help lines.
+
+Flagged for the user (not changed):
+
+- Notes of a card that is not on screen (another subagent / chat) count in the
+  header and go into the prompt, but cannot be edited or deleted one by one
+  until that card is shown again; Clear removes them all.
+- Starting a note on another line while a box holds unsaved text discards that
+  text without asking (documented above as a decision).
+- The prompt lead line and "removed lines" wording follow the UI language, not
+  the language the user writes to the agent in.
+- A single note longer than 8000 characters is still inserted whole (the first
+  note always goes in).

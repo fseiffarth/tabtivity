@@ -11,8 +11,10 @@ import { PencilIcon, TrashIcon } from "../common/icons/Icon";
 
 /** The inline box under the last selected row: a text area, Save (Ctrl+Enter)
  * and Cancel (Esc). It takes the keyboard when it opens. */
-export function DiffNoteBox({ initial, onSave, onCancel }: {
+export function DiffNoteBox({ initial, onChange, onSave, onCancel }: {
   initial: string;
+  /** The text as it is typed. */
+  onChange?: (text: string) => void;
   onSave: (text: string) => void;
   onCancel: () => void;
 }) {
@@ -41,12 +43,16 @@ export function DiffNoteBox({ initial, onSave, onCancel }: {
     <div className="terminal-changes-notebox">
       <textarea
         ref={field}
+        data-steering-field=""
         className="terminal-changes-notefield"
         value={text}
         rows={3}
         placeholder={t("diffNotes.placeholder")}
         aria-label={t("diffNotes.placeholder")}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => {
+          setText(event.target.value);
+          onChange?.(event.target.value);
+        }}
         onKeyDown={onKey}
       />
       <div className="terminal-changes-notebox-actions">

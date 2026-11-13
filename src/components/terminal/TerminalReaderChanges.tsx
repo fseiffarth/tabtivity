@@ -132,13 +132,16 @@ interface NoteActions {
   onStartNote: (card: string, hunk: number, rows: number[][], index: number, extend: boolean) => void;
   onSaveNote: (fields: NoteFields, editing: string | undefined) => void;
   onCancelNote: () => void;
+  /** The box's text as it is typed, kept so a Shift+click that moves the box
+   * to another row carries it along. */
+  onNoteText: (text: string) => void;
   onEditNote: (id: string) => void;
   onDeleteNote: (id: string) => void;
 }
 
 /** One change, with its time and diff. The first existing edit opens on entry;
  * newly arriving edits stay folded and marked new until opened. */
-const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold, notes, draft, onStartNote, onSaveNote, onCancelNote, onEditNote, onDeleteNote }: {
+const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold, notes, draft, onStartNote, onSaveNote, onCancelNote, onNoteText, onEditNote, onDeleteNote }: {
   change: FileChange;
   cardKey: string;
   fresh: boolean;
@@ -207,7 +210,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
     }
     if (draft && draft.hunk === hunkIndex) {
       draft.lines.forEach((index) => noted.add(index));
-      hang(draft.lines, <DiffNoteBox key={`box-${draft.serial}`} initial={draft.text} onSave={save} onCancel={onCancelNote} />);
+      hang(draft.lines, <DiffNoteBox key={`box-${draft.serial}`} initial={draft.text} onChange={onNoteText} onSave={save} onCancel={onCancelNote} />);
     }
     const start = (index: number, event: MouseEvent<HTMLButtonElement>) =>
       onStartNote(cardKey, hunkIndex, rows[hunkIndex] ?? [], index, event.shiftKey);
@@ -509,6 +512,7 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
   const [draft, setDraft] = useState<NoteDraft | null>(null);
   const [noteNotice, setNoteNotice] = useState<string | null>(null);
   const serial = useRef(0);
+  const noteText = useRef("");
   const cardNotes = useRef(new Map<string, DiffNote[]>());
   /** Each card's notes, an unchanged list keeping its identity so the other
    * cards' memo holds when one note changes. */
@@ -527,9 +531,10 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
     setNoteNotice(null);
     setDraft((previous) => {
       if (extend && previous && previous.card === card && previous.hunk === hunk) {
-        return { ...previous, lines: rangeLines(rows, previous.anchor, index) };
+        return { ...previous, lines: rangeLines(rows, previous.anchor, index), text: noteText.current };
       }
       serial.current += 1;
+      noteText.current = "";
       return { card, hunk, anchor: index, lines: rangeLines(rows, index, index), text: "", serial: serial.current };
     });
   }, []);
@@ -540,10 +545,14 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
     setDraft(null);
   }, [ptyId]);
   const cancelNote = useCallback(() => setDraft(null), []);
+  const typeNote = useCallback((text: string) => {
+    noteText.current = text;
+  }, []);
   const editNote = useCallback((id: string) => {
     const note = useDiffNotesStore.getState().byTab[ptyId]?.find((n) => n.id === id);
     if (!note) return;
     serial.current += 1;
+    noteText.current = note.text;
     setDraft({ card: note.card, hunk: note.hunk, anchor: note.lines[0] ?? 0, lines: note.lines, text: note.text, editing: id, serial: serial.current });
   }, [ptyId]);
   const deleteNote = useCallback((id: string) => {
@@ -737,6 +746,7 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
               onStartNote={startNote}
               onSaveNote={saveNote}
               onCancelNote={cancelNote}
+              onNoteText={typeNote}
               onEditNote={editNote}
               onDeleteNote={deleteNote}
             />
