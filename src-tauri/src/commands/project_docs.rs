@@ -55,8 +55,10 @@ fn create_project_doc_blocking(project_id: &str, name: &str) -> Result<bool, Str
     scaffold::create_doc_at(&dir, doc).map_err(|e| e.to_string())
 }
 
-/// The agent homes of a project's scope that exist, with the project folder.
-fn memory_sources(project_id: &str) -> Result<Option<(Vec<Source>, Vec<PathBuf>)>, String> {
+/// The agent homes of a project's scope and the project folders to look under.
+type MemorySources = (Vec<Source>, Vec<PathBuf>);
+
+fn memory_sources(project_id: &str) -> Result<Option<MemorySources>, String> {
     let Some(dir) = local_dir(project_id)? else {
         return Ok(None);
     };
