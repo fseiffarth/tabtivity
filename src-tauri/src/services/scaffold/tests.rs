@@ -24,7 +24,7 @@ fn the_catalog_has_unique_names_and_the_lean_default_set() {
     assert!(!remarks.default && !remarks.creatable && !remarks.pointer);
     for d in DOCS {
         assert!(!d.name.contains('/') && !d.name.contains('\\'), "{} is a leaf name", d.name);
-        assert!(d.default.then_some(d.creatable).unwrap_or(true), "a default doc is creatable");
+        assert!(!d.default || d.creatable, "a default doc is creatable");
         assert!(!d.pointer || !d.creatable, "a pointer is never offered for creation");
         for old in d.history {
             assert_ne!(*old, d.template, "{}: history must hold earlier texts only", d.name);
