@@ -65,7 +65,8 @@ describe("desktop conversation toolbar", () => {
       if (command === "agent_tab_transcript") return Promise.resolve({ available: true, entries, truncated: false, version: "1" });
       if (command === "agent_tab_changes") return Promise.resolve({ available: true, changes: [], truncated: false, version: "1" });
       if (command === "resolve_text_paths") return Promise.resolve(args?.candidates?.map((path) => path === "src/result.ts"
-        ? { name: "result.ts", path: "/project/src/result.ts", is_dir: false, size: 10, extension: ".ts" } : null));
+        ? { name: "result.ts", path: "/project/src/result.ts", is_dir: false, size: 10, extension: ".ts" }
+        : path === "src/input.ts" ? { name: "input.ts", path: "/project/src/input.ts", is_dir: false, size: 10, extension: ".ts" } : null));
       return Promise.resolve([]);
     });
     send.mockResolvedValue(undefined);
@@ -132,7 +133,7 @@ describe("desktop conversation toolbar", () => {
     const filesTab = screen.getByRole("tab", { name: /^Data/ }) as HTMLButtonElement;
     await waitFor(() => expect(filesTab.disabled).toBe(false));
     fireEvent.click(filesTab);
-    const option = within(screen.getByRole("listbox", { name: "Files this conversation names" })).getByRole("option", { name: "src/result.ts" });
+    const option = within(screen.getByRole("listbox", { name: "Mentioned in its answers (1)" })).getByRole("option", { name: "src/result.ts" });
     // Nothing picked yet: the newest file is shown.
     expect(option.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByTestId("file-viewer").textContent).toBe("/project/src/result.ts");
@@ -143,6 +144,22 @@ describe("desktop conversation toolbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
     expect(screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected")).toBe("true");
     expect(host.querySelector(".terminal-files")).toBeNull();
+  });
+
+  it("groups the Data tab's files by who brought them, as the phone does", async () => {
+    entries.push(
+      { kind: "prompt", text: "Read src/input.ts and src/result.ts", at: "2026-10-25T09:01:00Z" },
+      { kind: "answer", text: "Updated src/result.ts", at: "2026-10-25T09:02:00Z" },
+    );
+    render(<Pane host={host} />);
+    const filesTab = screen.getByRole("tab", { name: /^Data/ }) as HTMLButtonElement;
+    await waitFor(() => expect(filesTab.disabled).toBe(false));
+    fireEvent.click(filesTab);
+    // Your prompt names both; an answer names result.ts too, so it is the answers'.
+    const named = await screen.findByRole("listbox", { name: "Mentioned in its answers (1)" });
+    expect(within(named).getAllByRole("option").map((el) => el.textContent)).toEqual(["src/result.ts"]);
+    const yours = screen.getByRole("listbox", { name: "Sent by you (1)" });
+    expect(within(yours).getAllByRole("option").map((el) => el.textContent)).toEqual(["src/input.ts"]);
   });
 
   it("enables the Files tab on a link alone and lists it, opening only through onOpenUrl", async () => {

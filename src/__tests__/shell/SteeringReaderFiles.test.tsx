@@ -66,7 +66,7 @@ const entryOf = (name: string, extension = ".md"): FileEntry => ({
   extension,
   mime: "text/markdown",
 });
-const fileOf = (entry: FileEntry): ReaderFile => ({ entry, label: entry.name });
+const fileOf = (entry: FileEntry): ReaderFile => ({ entry, label: entry.name, from: "named" });
 const a = entryOf("a.md");
 const b = entryOf("b.md");
 // No in-app viewer: the ↗ button is hidden for it, so `o` does nothing.

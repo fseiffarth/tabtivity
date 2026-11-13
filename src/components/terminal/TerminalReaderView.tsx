@@ -63,7 +63,8 @@ import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useRea
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
-import { relativePathWithin } from "../../lib/paths";
+import { isPathWithin, relativePathWithin, resolvePath } from "../../lib/paths";
+import { NAMES } from "../../lib/brand";
 import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
@@ -2443,25 +2444,38 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const filesOffered = !!onShowFiles;
   const readerFiles = useMemo(() => {
     if (!filesOffered) return [];
-    const found = new Map<string, ReaderFile>();
-    const add = (entry: FileEntry) => {
-      if (!found.has(entry.path)) found.set(entry.path, { entry, label: relativePathWithin(tabDir, entry.path) || entry.path });
-    };
+    const found = new Map<string, FileEntry>();
+    // Where each file came from (`ReaderFileFrom`): an outbox file is the
+    // agent's send, an inbox one your attachment; any other path is the
+    // answers' when one names it, else your prompt's.
+    const attached = new Set<string>();
+    const answered = new Set<string>();
+    const outbox = pathContext.projectDir ? resolvePath(pathContext.projectDir, NAMES.outboxDir) : null;
     for (let index = levelEntries.length - 1; index >= 0; index -= 1) {
-      const text = levelEntries[index].text;
+      const { text, kind } = levelEntries[index];
       const named: FileEntry[] = [];
       for (const candidate of findPathCandidates(text)) {
         const file = pathLinks.get(candidate.path);
         if (file && !file.is_dir) named.push(file);
       }
+      if (kind !== "prompt") for (const entry of named) answered.add(entry.path);
       if (readerInbox) for (const leaf of inboxLeaves(text)) {
         const file = readerInbox.files.get(leaf);
-        if (file) named.push(inboxEntry(pathContext.projectDir, file));
+        if (!file) continue;
+        const entry = inboxEntry(pathContext.projectDir, file);
+        attached.add(entry.path);
+        named.push(entry);
       }
       // Within one message, first mention first.
-      for (const entry of named) add(entry);
+      for (const entry of named) if (!found.has(entry.path)) found.set(entry.path, entry);
     }
-    return [...found.values()];
+    return [...found.values()].map((entry): ReaderFile => ({
+      entry,
+      label: relativePathWithin(tabDir, entry.path) || entry.path,
+      from: outbox && isPathWithin(entry.path, outbox) ? "agent"
+        : attached.has(entry.path) ? "you"
+          : answered.has(entry.path) ? "named" : "you",
+    }));
   }, [filesOffered, levelEntries, pathLinks, tabDir, readerInbox, pathContext.projectDir]);
   const onFilesKnownRef = useRef(onFilesKnown);
   onFilesKnownRef.current = onFilesKnown;
