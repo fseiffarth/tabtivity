@@ -29,8 +29,8 @@ import { useHeaderStatusReport } from "../../stores/headerStatus";
 import type { ConnState } from "../../stores/remote/remoteStatus";
 import type { GlobalMachine, MachineImportEntry, ProjectEntry } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
-import { useMachinesOverlayStore } from "../../stores/machinesOverlay";
-import { MachinesOverlayFrame } from "./MachinesOverlay";
+import { isViewShown, useRootOverlayStore } from "../../stores/rootOverlay";
+import { MachinesViewFrame } from "./MachinesView";
 import { MachinesGlyph } from "./HeaderGlyphs";
 import { BRAND } from "../../lib/brand";
 import { usePoll } from "../../lib/usePoll";
@@ -151,6 +151,22 @@ const UTIL_POLL_MS = 10_000;
  *  it. It also means a pointer merely crossing the header logs in nowhere. */
 const SWEEP_SETTLE_MS = 150;
 
+/** How long the pointer rests on the header button before the dropdown opens.
+ *  This list is the heaviest thing on the bar (every row, its lamps and
+ *  readings), so a pointer only crossing it on the way to another icon must not
+ *  mount it: with a fast sweep each crossing was a full mount and unmount, the
+ *  window stalled on it, and the close came late enough to read as a hang.
+ *  Focus still opens it at once. */
+const HOVER_INTENT_MS = 100;
+
+/** When each machine's utilization read last started (module level, like
+ *  `probeBrakes`, so the dropdown and the overlay share it). The poll's own
+ *  period is the floor: reopening the menu within `UTIL_POLL_MS` reuses the
+ *  bars it already has instead of logging into every Detailed machine again.
+ *  The slack keeps a tick that fires a little early from skipping a round. */
+const utilLastAt = new Map<string, number>();
+const UTIL_SLACK_MS = 1_000;
+
 /** The open-sweep's two brakes, one pair for both surfaces (the dropdown and
  *  the overlay). In flight: a second open while the first sweep is still
  *  running must not stack a second round trip per host (`stores/remote/hostBusy`'s
@@ -258,10 +274,10 @@ export { targetLabel };
  * since no sweep writes `status` any more.
  *
  * **Two surfaces, one list.** A hover shows the dropdown; a click on the button
- * (or the dropdown's ⤢ door) opens the Machines overlay (`MachinesOverlayHost`,
- * framed by `header/MachinesOverlay`), where the same rows are tiles in a grid
- * — the Models & agents overlay's `.models-tile` look. Both are this component
- * (`surface`), so every rule above holds in both; the overlay only drops what
+ * (or the dropdown's ⤢ door) opens the Machines view of the console window
+ * (`MachinesView`, framed by `header/MachinesView`), where the same rows are
+ * tiles in a grid — the `.models-tile` look. Both are this component
+ * (`surface`), so every rule above holds in both; the view only drops what
  * belongs to a narrow pop-up: the ▸ fold (a tile has the room to show its
  * details). Reordering is in both: the grip drags a row up and down the
  * dropdown, and a tile across the grid.
@@ -270,17 +286,15 @@ export function MachinesIndicator() {
   return <MachinesSurface surface="menu" />;
 }
 
-/** The Machines overlay, at the shell (`layout/AppShell`). Renders nothing
- *  while closed, so none of its probes or polls run then. */
-export function MachinesOverlayHost() {
-  const open = useMachinesOverlayStore((s) => s.open);
-  if (!open) return null;
-  return <MachinesSurface surface="overlay" />;
+/** The Machines view of the console window (`layout/RootOverlay`). Mounted only
+ *  while the view is shown, so none of its probes or polls run otherwise. */
+export function MachinesView() {
+  return <MachinesSurface surface="view" />;
 }
 
-function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
+function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
   const t = useT();
-  const isOverlay = surface === "overlay";
+  const isView = surface === "view";
   // On by default (Settings' "Remote features"); switched off, this fleet-wide
   // SSH list leaves the header.
   const enabled = useSettingsStore((s) => s.settings?.machines_enabled ?? true);
@@ -349,22 +363,23 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     (p.compute_hosts ?? []).some((h) => sameTarget(h, m));
 
   // The shared menu store makes the status controls mutually exclusive.
-  // The overlay is open for as long as it is mounted (its host renders nothing
-  // while closed), so every "while open" effect below simply runs in it.
+  // The view is open for as long as it is mounted (the window mounts only the
+  // shown view), so every "while open" effect below simply runs in it.
   const menuOpen = useHeaderHoverMenuStore((s) => s.openId === MENU_ID);
-  const open = isOverlay || menuOpen;
+  const open = isView || menuOpen;
   const openMenu = useHeaderHoverMenuStore((s) => s.open);
   const closeMenu = useHeaderHoverMenuStore((s) => s.close);
   /** Before a hand-off to a window of its own (the usage report, a project's
    *  machine picker, the extend dialog): the hover dropdown is put away, the
-   *  overlay is not. It is a window the user opened, and each of those dialogs
-   *  lands on top of it (portaled, or mounted after it at the shell), so closing
-   *  it left the user nowhere to come back to once the dialog was done. */
+   *  view is not. It is a window the user opened, and each of those dialogs
+   *  lands on top of it (portaled, or mounted after the window at the shell), so
+   *  closing it left the user nowhere to come back to once the dialog was done. */
   const dismiss = () => {
-    if (!isOverlay) closeMenu(MENU_ID);
+    if (!isView) closeMenu(MENU_ID);
   };
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const closeTimer = useRef<number | undefined>(undefined);
+  const openTimer = useRef<number | undefined>(undefined);
   // While an import/export panel is up — or a native file dialog is open, which
   // takes the focus and the pointer away from the menu — it must NOT close under
   // the user mid-flow. A ref (read synchronously by the dismiss handlers) rather
@@ -433,21 +448,37 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
 
   const reveal = useCallback(() => {
     window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
     openMenu(MENU_ID);
   }, [openMenu]);
+  /** The pointer's way in (`HOVER_INTENT_MS`). Back in while the list is still
+   *  up (inside the close grace) it simply stays up. */
+  const revealOnRest = useCallback(() => {
+    window.clearTimeout(closeTimer.current);
+    window.clearTimeout(openTimer.current);
+    if (useHeaderHoverMenuStore.getState().openId === MENU_ID) return;
+    openTimer.current = window.setTimeout(() => openMenu(MENU_ID), HOVER_INTENT_MS);
+  }, [openMenu]);
   const scheduleClose = useCallback((e?: { clientY: number }) => {
+    window.clearTimeout(openTimer.current);
     window.clearTimeout(closeTimer.current);
     if (keepOpenRef.current || reorderDragRef.current) return;
     closeTimer.current = window.setTimeout(() => closeMenu(MENU_ID), headerMenuCloseDelay(e));
   }, [closeMenu]);
 
-  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(closeTimer.current);
+      window.clearTimeout(openTimer.current);
+    },
+    [],
+  );
 
   /** Where the dragged row would land, from the pointer's Y: the number of OTHER
    *  rows whose midpoint the cursor has passed — i.e. an index into the list
    *  without the dragged row, which is exactly what `commitMove` splices at. */
   const dropSlot = (id: string, clientX: number, clientY: number) => {
-    if (isOverlay) {
+    if (isView) {
       // A grid has no single axis to pass midpoints on: the slot is the tile
       // whose centre is nearest the pointer (an index into the full list, which
       // is the dragged tile's final index once `commitMove` splices it there).
@@ -602,7 +633,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     setIoMode("idle");
     setIoBusy(false);
     setIoError("");
-    setImportEntries([]);
+    // Same-value writes bail out; a fresh `[]` would not, and this runs on
+    // every close of the hover menu.
+    setImportEntries((prev) => (prev.length ? [] : prev));
     setImportUser("");
     setImportPassword("");
     setImportSave(false);
@@ -765,9 +798,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     const gm = useGlobalMachinesStore.getState();
     const s = useSettingsStore.getState().settings;
     const recheck = useRemoteUsageStore.getState().recheck;
+    const now = Date.now();
     for (const m of gm.machines) {
       if ((gm.status[m.id] ?? "off") !== "connected") continue;
       if (!showsUtilization(s, m) || !mayAutoTouch(s, targetOfSpec(m))) continue;
+      if (now - (utilLastAt.get(m.id) ?? 0) < UTIL_POLL_MS - UTIL_SLACK_MS) continue;
+      utilLastAt.set(m.id, now);
       void recheck(
         { kind: "machine", key: machineKey(m.id), label: m.label || m.host, user: m.user, host: m.host, port: m.port },
         { background: true },
@@ -821,7 +857,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
 
   const moveReorderDrag = (e: React.PointerEvent<HTMLElement>) => {
     if (!reorderDrag) return;
-    const dx = isOverlay ? e.clientX - dragStartX.current : 0;
+    const dx = isView ? e.clientX - dragStartX.current : 0;
     const dy = e.clientY - dragStartY.current;
     const to = dropSlot(reorderDrag.id, e.clientX, e.clientY);
     if (dx !== reorderDrag.dx || dy !== reorderDrag.dy || to !== reorderDrag.to) {
@@ -851,7 +887,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
           ? idx + 1
           : idx;
     if (dest === idx) return { x: 0, y: 0 };
-    if (isOverlay) {
+    if (isView) {
       const a = dragRects.current[idx];
       const b = dragRects.current[dest];
       return a && b ? { x: b.left - a.left, y: b.top - a.top } : { x: 0, y: 0 };
@@ -892,10 +928,10 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // Escape and an outside click close a keyboard-opened menu immediately.
   // `keepOpenRef` still wins for native dialogs, and a reorder drag cannot
   // unmount rows underneath its pointer capture.
-  // The dropdown's only: the overlay has its own Escape and backdrop
-  // (`MachinesOverlayFrame`), and a press anywhere in it is not "outside".
+  // The dropdown's only: the view is the window's, with its own Escape and
+  // backdrop (`layout/RootOverlay`), and a press anywhere in it is not "outside".
   useEffect(() => {
-    if (isOverlay || !menuOpen) return;
+    if (isView || !menuOpen) return;
     const onPointerDown = (e: PointerEvent) => {
       if (keepOpenRef.current || reorderDragRef.current) return;
       const el = anchorRef.current;
@@ -912,7 +948,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKey);
     };
-  }, [isOverlay, menuOpen, closeMenu]);
+  }, [isView, menuOpen, closeMenu]);
 
   // Group the machines by COLOUR so each lamp is drawn once, with a count —
   // exactly like a project pill's `RemoteConnMenu` aggregates its hosts. No
@@ -969,7 +1005,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // The header's instance reports; the overlay's is a second reader of the
   // same fleet and must not clear the key when it unmounts.
   useHeaderStatusReport(
-    isOverlay ? null : "machines",
+    isView ? null : "machines",
     !enabled
       ? null
       : {
@@ -1489,7 +1525,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
   // The rows as they sit in each surface: straight in the dropdown's column,
   // one tile grid in the overlay (the Models overlay's `.models-home-grid`).
   const tileGrid = (rows: ReactNode) =>
-    isOverlay ? <div className="models-home-grid machines-grid">{rows}</div> : rows;
+    isView ? <div className="models-home-grid machines-grid">{rows}</div> : rows;
 
   const addControls = (
     <>
@@ -1682,7 +1718,10 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
 
   // The list itself, shared by both surfaces: the dropdown scrolls it under
   // its pinned title, the overlay lays it out as a page of tiles.
-  const body = (
+  // Built only where it is placed (the open dropdown, the overlay): a closed
+  // header button re-renders on every probe answer, lamp and reading, and must
+  // not build every row each time.
+  const renderBody = () => (
     <>
           {ioMode === "export" ? (
             <div className="vpn-indicator-row menu-form machines-io-panel">
@@ -1861,7 +1900,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               row's grip, which reorders. */}
           <div className="vpn-indicator-note">
             <strong>{t("machines.note.strong")}</strong>{" "}
-            {t(isOverlay ? "machines.note.overlay" : "machines.note.rest")}
+            {t(isView ? "machines.note.overlay" : "machines.note.rest")}
             <UntestedTag id="machinesIndicator.5" />
           </div>
 
@@ -2133,7 +2172,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                   if (el) rowRefs.current.set(m.id, el);
                   else rowRefs.current.delete(m.id);
                 }}
-                className={`vpn-indicator-row machines-indicator-row${isOverlay ? " models-tile machines-tile" : ""}${
+                className={`vpn-indicator-row machines-indicator-row${isView ? " models-tile machines-tile" : ""}${
                   reorderDrag?.id === m.id ? " reorder-dragging" : reorderDrag ? " reorder-parting" : ""
                 }`}
                 style={
@@ -2165,7 +2204,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     <GripIcon />
                   </button>
                   {/* The Models overlay tile's icon box. */}
-                  {isOverlay && (
+                  {isView && (
                     <span className="models-tile-icon machines-tile-icon" aria-hidden="true">
                       <MachinesGlyph className="machines-tile-glyph" />
                     </span>
@@ -2210,7 +2249,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                       {t(badge)}
                     </span>
                   )}
-                  {!isOverlay && (
+                  {!isView && (
                     <button
                       type="button"
                       className="machines-row-expand-btn"
@@ -2225,12 +2264,12 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                       {expandedIds.has(m.id) ? "▾" : "▸"}
                     </button>
                   )}
-                  {!isOverlay && rowActions}
+                  {!isView && rowActions}
                 </div>
                 {/* A tile's second line, the Models overlay's `.models-tile-desc`:
                     where the machine is and what its lamp means, in words — the
                     dropdown keeps both in the name's tooltip. */}
-                {isOverlay && (
+                {isView && (
                   <div className="models-tile-desc machines-tile-desc">
                     <span className="models-tile-intro machines-tile-target">{targetLabel(m)}</span>
                     <span className="models-tile-stat machines-tile-stat">
@@ -2278,9 +2317,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                 {rowError && !rowFormOpen && (
                   <div className="vpn-indicator-error machines-row-error">{rowError}</div>
                 )}
-                {(isOverlay || expandedIds.has(m.id)) && (
+                {(isView || expandedIds.has(m.id)) && (
                   <>
-                    {!isOverlay && <div className="vpn-indicator-holders">{targetLabel(m)}</div>}
+                    {!isView && <div className="vpn-indicator-holders">{targetLabel(m)}</div>}
                     <button
                       type="button"
                       className="vpn-indicator-connect machines-monitor-btn"
@@ -2348,7 +2387,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
                     </label>
                   </>
                 )}
-                {isOverlay && rowActions}
+                {isView && rowActions}
                 {attachId === m.id ? (
                   <div className="vpn-indicator-row menu-form machines-attach-form">
                     <div className="vpn-indicator-hint">
@@ -2615,13 +2654,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
     </>
   );
 
-  if (isOverlay) return <MachinesOverlayFrame>{body}</MachinesOverlayFrame>;
+  if (isView) return <MachinesViewFrame>{renderBody()}</MachinesViewFrame>;
 
   return (
     <div
       ref={anchorRef}
       className="global-apps-menu header-status-menu-anchor no-drag"
-      onMouseEnter={reveal}
+      onMouseEnter={revealOnRest}
       onMouseLeave={scheduleClose}
     >
       <button
@@ -2630,23 +2669,31 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
         aria-label={t("machines.ariaLabel")}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        title={t("machines.triggerTitle")}
-        // A click opens the Machines overlay — the Models & agents button's
+        // No native `title` on this button, nor on its lamps (`tooltip={false}`):
+        // the tooltip, a long sentence and every machine's name, is a GTK window
+        // under the resting pointer, and a pointer leaving the button straight
+        // down crossed it unseen, so the list stayed up 2–3 s. The list itself is
+        // the explanation; the sentence stays for screen readers.
+        aria-description={t("machines.triggerTitle")}
+        // A click opens the Machines view — the Models button's
         // pattern (`layout/LocalModelMenu`): hover is the glance, click is the
         // room. The dropdown goes with the click rather than staying up over
-        // the overlay it just raised. Focus alone still reveals the dropdown,
+        // the window it just raised. Focus alone still reveals the dropdown,
         // the keyboard's way to the glance.
         onClick={() => {
           window.clearTimeout(closeTimer.current);
           closeMenu(MENU_ID);
-          useMachinesOverlayStore.getState().openOverlay();
+          // A click while the view is up closes the window (the other header
+          // apps' toggle).
+          if (isViewShown("machines")) useRootOverlayStore.getState().close();
+          else useRootOverlayStore.getState().openView("machines");
         }}
         onFocus={reveal}
       >
         <span className="header-conn-lamps">
           {lampGroups.map((g) => (
             <span key={g.lamp} className="conn-lamp-count">
-              <ConnLamp status={g.lamp} busy={g.working.length > 0} label={lampLabel(g)} />
+              <ConnLamp status={g.lamp} busy={g.working.length > 0} label={lampLabel(g)} tooltip={false} />
               {g.machines.length > 1 && (
                 <span className="conn-lamp-count-num">{g.machines.length}</span>
               )}
@@ -2672,7 +2719,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
               title={t("machines.openOverlayTitle")}
               onClick={() => {
                 closeMenu(MENU_ID);
-                useMachinesOverlayStore.getState().openOverlay();
+                useRootOverlayStore.getState().openView("machines");
               }}
             >
               ⤢
@@ -2688,7 +2735,7 @@ function MachinesSurface({ surface }: { surface: "menu" | "overlay" }) {
             </button>
           </div>
           <div className="menu-scroll-region">
-            {body}
+            {renderBody()}
           </div>
         </div>
       )}

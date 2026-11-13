@@ -27,6 +27,8 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 
 import { useMailStore } from "../../stores/mail";
 import type { MailHeader } from "../../types/mail";
+import { useRootOverlayStore } from "../../stores/rootOverlay";
+import { useSettingsStore } from "../../stores/settings";
 
 function header(over: Partial<MailHeader> & { id: string }): MailHeader {
   return {
@@ -59,6 +61,8 @@ const searchPage = (items: MailHeader[], remote: boolean, partial = false) => ({
 beforeEach(() => {
   invoked.length = 0;
   answers = {};
+  useRootOverlayStore.setState({ open: false, view: "root" });
+  useSettingsStore.setState({ settings: { mail_client: true } as never });
   useMailStore.setState({
     selectedAccountId: "a1",
     selectedFolderId: "a1|INBOX",
@@ -87,7 +91,7 @@ describe("folder search", () => {
   it("waits for typing to pause before asking the server", async () => {
     vi.useFakeTimers();
     answers["mail_search"] = searchPage([header({ id: "m9" })], true);
-    useMailStore.setState({ overlayOpen: true });
+    useRootOverlayStore.setState({ open: true, view: "mail" });
     useMailStore.getState().queueQuery("i");
     useMailStore.getState().queueQuery("in");
     useMailStore.getState().queueQuery("invoice");
@@ -103,7 +107,8 @@ describe("folder search", () => {
   it("clears typed search immediately without an IMAP request", async () => {
     vi.useFakeTimers();
     answers["mail_headers"] = localPage([header({ id: "m1" })]);
-    useMailStore.setState({ overlayOpen: true, query: "invoice" });
+    useRootOverlayStore.setState({ open: true, view: "mail" });
+    useMailStore.setState({ query: "invoice" });
     useMailStore.getState().queueQuery("");
     expect(useMailStore.getState().query).toBe("");
     expect(cmds()).toContain("mail_headers");
@@ -114,7 +119,7 @@ describe("folder search", () => {
   it("holds a queued search while mail is hidden and resumes on show", async () => {
     vi.useFakeTimers();
     answers["mail_search"] = searchPage([], true);
-    useMailStore.setState({ overlayOpen: true });
+    useRootOverlayStore.setState({ open: true, view: "mail" });
     useMailStore.getState().queueQuery("invoice");
     useMailStore.getState().closeOverlay();
     await vi.advanceTimersByTimeAsync(300);
@@ -126,7 +131,7 @@ describe("folder search", () => {
   it("resumes a queued search when closing a composer back to the Inbox", async () => {
     vi.useFakeTimers();
     answers["mail_search"] = searchPage([], true);
-    useMailStore.setState({ overlayOpen: true });
+    useRootOverlayStore.setState({ open: true, view: "mail" });
     useMailStore.getState().queueQuery("invoice");
     const tabId = useMailStore.getState().openComposeTab({ mode: "new", accountId: "a1" });
     await vi.advanceTimersByTimeAsync(300);

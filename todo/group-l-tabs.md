@@ -407,6 +407,157 @@ correctness/UX work atop the same layout model #42 detaches.*
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
 
+213g. **Live-QA steering's rows-first side panel.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-10). B lands in the panel's list (the row last
+    on in that view, else the first control) instead of its header; E D move
+    one line per press without wrapping, up through the head to the view tabs
+    (Shift: a screenful); on a folder row F opens it and on a tree row S goes
+    to the parent with the cursor on the folder just left; elsewhere S F step
+    through the row's own buttons; on the view tabs S F switch the view and
+    1–9 (the slot keys, shown as caps on the tabs) switch to that view from
+    anywhere in the panel; Enter on a file opens it and goes to its tab (a
+    panel B opened closes), Shift+Enter opens it and stays, a .zip extracts
+    and stays. Verify: Shift+Space, B; D D, F on a folder, S back; 2 for Git;
+    E up to the view row, S F; 1; Enter on a file; B again, Shift+Enter on a
+    second; Esc. *Files: `src/lib/shortcuts/steeringSidePanel.ts`,
+    `src/components/files/SideViewKey.tsx`, `src/hooks/useKeyboard.ts`.*
+    - [x] 🤖 Automated test — `SteeringSidePanel`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+213h. **Live-QA steering's Reader view cycle.** ✅ Implemented · 🧪 Awaiting
+    live QA (2026-11-10). In steering (Shift+Space), Tab / Shift+Tab switch an
+    agent tab's Reader view Chat → Diffs → Files → Terminal and back, from the
+    subwindow, tab and Inside levels; the level is kept, views greyed in the
+    strip are skipped, a tab with no strip (shell, viewer, Tabby, root console)
+    swallows the key and the legend row is hidden there. The Inside rung reads
+    "Inside the chat / Diffs / Files". Verify: on an agent tab that has edited
+    files, Shift+Space, Tab: Diffs, Tab: Files, Tab: Terminal, Tab: Chat;
+    Shift+Tab goes back; on a fresh tab Tab skips Diffs and Files; D (inside),
+    Tab switches the view and the ladder follows; Enter leaves steering with the
+    keys in the shown view; Settings → Shortcuts lists *Inside a view*.
+    *Files: `src/lib/agents/readerSteering.ts`,
+    `src/components/terminal/TerminalView.tsx`, `src/hooks/useKeyboard.ts`.*
+    - [x] 🤖 Automated test — `SteeringReaderView`, `SteeringReaderInside`,
+      `ReaderSteering`, `SteeringReaderLegend`, `TerminalReaderSteerViews`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+213i. **Live-QA steering inside the Reader's Diffs view.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-10). On an agent tab whose Diffs view shows
+    edits, Shift+Space, D: the ladder reads "Inside Diffs" and the newest card's
+    head is highlighted. E/D walk the cards (the viewport follows), Shift+D
+    narrows to the next changed file (past the last back to All files), Z folds
+    or unfolds the card, N jumps to the next New card (edit again while
+    watching), U flips split/unified, O opens the file in a tab, Shift+O in a
+    new subwindow, V the diff viewer (none for a deleted or moved file); S/F
+    scroll a long diff. E on the first card steps back to the tabs, holding E
+    does not run out of the view. Tab inside Diffs switches to Files and the
+    legend follows. Enter leaves steering with the keys in the view; Space opens
+    the prompt. Settings → Shortcuts → *Inside a view* lists Z U O V N.
+    *Files: `src/components/terminal/TerminalReaderChanges.tsx`,
+    `src/lib/shortcuts/shortcuts.ts`.*
+    - [x] 🤖 Automated test — `ReaderChangesSteering`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+213j. **Live-QA steering inside the Reader's Files view.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-10). Inside Files (Tab to Files, then D) the
+    files and then the links are one list with a highlight: E/D walk it
+    (E on the first row returns to the tabs, a held E does not), Shift+E/D jump
+    between Files and Links, S/F scroll the shown file half a screen (Shift: a
+    whole one; the terminal behind is not touched), O opens the file as a tab
+    (Shift+O: new subwindow) or, on a link, asks "Open link?" first, V shows
+    the file in the viewer; moving the highlight opens nothing; Enter stays
+    Work here, Space the prompt. Verify: an agent tab whose chat names a file
+    and two links: Shift+Space, Tab (Diffs/Files), D: the legend reads Inside
+    Files and a row is outlined; E/D walk files then links, Shift+D lands on
+    the first link, Shift+E on the first file; V shows a file, S/F scroll a
+    long Markdown file; O opens it as a tab, Shift+O in a new subwindow; O on a
+    link shows the confirm naming the exact URL (Cancel opens nothing); Enter
+    leaves steering with the keys in the view; E on the first row goes back to
+    the tabs; a remote project tab's `localhost:` link is forwarded, not opened
+    on this machine.
+    *Files: `src/components/terminal/TerminalReaderFiles.tsx`,
+    `src/lib/terminal/readerFilesSteer.ts`,
+    `src/lib/shortcuts/documentScroll.ts`.*
+    - [x] 🤖 Automated test — `ReaderFilesSteer`, `SteeringReaderFiles`,
+      `SteeringScroll` (`largestScroller`).
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
+213k. **Live-QA steering inside popout windows.** ✅ Implemented · 🧪
+    Awaiting live QA (2026-11-11). Steering runs in a popout on its own
+    subwindows and tabs, and hands over between windows (one steers at a time,
+    steering follows the keyboard). Plan: `docs/steering_popout_plan.md`;
+    handoff log: `docs/steering_popout_handoff.md`. Verify, after the dev build
+    with these commits: (1) pop a subwindow with two tabs out, click into it,
+    Shift+Space: the bar is at the popout's bottom, the active tab outlined, the
+    main window shows nothing; (2) S/F switch its tabs, D goes inside the
+    terminal and scrolls, E comes back; (3) N opens a shell beside the active
+    tab, + opens the menu under the cursor, W asks then closes; (4) Space on an
+    agent tab opens the prompt box in the popout, Enter sends; (5) E from the
+    tabs: the cursor is on the title bar, Enter on ⤓ docks back; E again stays
+    on the title bar (it is the top); Home (or 0), from the tabs, from inside a
+    terminal and from the title bar, brings the main window forward with the
+    keyboard and the bar on its tabs, and the popout's bar goes only then (the
+    key is the first item of the popout's bar; the main window ignores it and
+    does not list it); (6) J in the main window: the popout has the bar; J
+    again with one popout: nothing happens, steering stays in the popout; with
+    two popouts first → second → first, never the main window (Home goes
+    there); (7) / in a popout:
+    settings open in the main window, steering on its pages; (8) an agent in
+    the main window asks, Q in the popout: the main window comes forward on
+    that tab; answer with a digit: back in the popout; (9) split the popout:
+    E from the tabs reaches the subwindows level with ↓/↑ badges, Shift+S/F
+    jump between them; (10) on Wayland repeat 5 (Home) and 6: a refused focus move
+    must leave steering where the keyboard is, never the bar in one window and
+    the keys in another.
+    *Files: `src/hooks/useSteering.ts`, `src/stores/popoutView.ts`,
+    `src/lib/shortcuts/steeringScope.ts`, `src/lib/shortcuts/steeringPopout.ts`,
+    `src/components/layout/DetachedApp.tsx`,
+    `src/components/layout/DetachedCenterPanel.tsx`,
+    `src/lib/shortcuts/tabJump.ts`, `src/lib/window/focusPopout.ts`.*
+    - [x] 🤖 Automated test — `SteeringPopout`, `SteeringScopePopout`,
+      `SteeringHandover`, `SteeringFromPopout`, `DetachedTwoHeap`.
+    - [ ] 🖐️ Manual test
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+
 215. **Live-QA one-click installs in the root console.** ✅ Implemented · 🧪
     Awaiting live QA. Every one-click install (`runInstallInTab`: Ollama/agent
     CLI installs, the LaTeX/MiKTeX prompt, `gh`/`glab` install + auth login,
@@ -986,3 +1137,121 @@ correctness/UX work atop the same layout model #42 detaches.*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+
+- [ ] **Cockpit + root console: one window (2026-11-04, ✅ Built · 🧪 Untested).**
+  The cockpit's four views and the root console are views of one window (no
+  longer an experiment since the follow-up round, F2).
+  Plan `docs/cockpit_root_merge_plan.md`, design `docs/cockpit_root_merge_design.md`,
+  log `docs/cockpit_root_merge_handoff.md` (Click-through). Pills: `cockpit.*`,
+  `rootConsole.*`, `overlayApprovals.button`; clear them with `npm run untested`
+  once confirmed. *Files: `src/components/layout/{RootOverlay,RootView}.tsx`,
+  `src/components/cockpit/*`, `src/lib/window/{floatingFrame,frameBand}.ts`,
+  `src/lib/shortcuts/{tabJump,steeringScope}.ts`.*
+  - [ ] 🖐️ Manual test — One window with five views: the title bar
+    reads Cockpit, then Now / Projects / Tonight / Usage │ ★ Root. Switching
+    views never moves or resizes the window. Ctrl+Shift+R from closed opens
+    Root, from Now switches to Root, from Root closes. The header gauge,
+    steering U and the box chip's "Open cockpit" open Now. ✓ Approvals is the
+    one pill in every view. Root's strip, ⚿ badge and ◫ sit in a sub-bar under
+    the title bar; split the console and the sub-bar goes (each subwindow
+    carries its strip).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Root's chrome: the star tab wears an amber count while a
+    root tab asks and the working ring while one works. The empty Root card has
+    "Start <agent> in Root" (one click opens the default agent; with no allowed
+    agent it says so). A 40 px icon rail beside the console shows asking /
+    interrupted / approvals / finished / alerts with counts (amber, red);
+    clicking the top button or an icon opens the full Needs-you rail beside it
+    scrolled to that group, ‹ folds it, and it remembers the fold after a
+    restart. A mouse press on it never takes the keyboard from the terminal.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Root agents in Now: with root restored (open Root once), a
+    root agent is a roster row with the ★ Root chip. Space or → draws it in the
+    detail pane (no "console is open" note); the head button reads "Open in
+    Root" and Enter switches to Root with that tab in front, the workspace stays
+    on the same project. Dock the same agent in the mail overlay (Ctrl+1): Now
+    shows "Shown in the Mail overlay." and draws nothing. Opening Projects or
+    Usage does not wake sleeping root terminals.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Narrow windows: drag the window to
+    about 1000 px wide: Now's rail becomes the icon rail (click opens the full
+    rail in a popover; picking a row selects it), roster and detail side by
+    side. Under 820 px (minimum window): the label goes, the box filter becomes
+    a ▾ icon, Now shows the roster alone with a "Needs you N" chip (popover), a
+    click or Space on a row opens the detail with an Agents back bar (Escape on
+    it returns), Tonight and Usage stack and scroll, Root has no icon rail.
+    Above 1180 px nothing differs from the wide layout.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Steering in Root: with the Root view up press Shift+Space,
+    then Q (next asking agent) or ←/→. The arrows walk Root's tabs, not the
+    project tab bar behind the window; after leaving steering (Space) typing
+    goes to the root terminal. A key to a project's tab closes the window.
+    Rebind a steering key in Settings: the new key walks Root too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Steering in Root, window bar and new tabs: with the Root
+    view up press Shift+Space, then ↑ (once with several subwindows to reach the
+    tabs level first). The highlight lands on the Root view tab; ←/→ walk the
+    view tabs, ✓/⚿/fill/✕ and the rail's fold toggle, never Root's own tabs;
+    Enter on Now opens that view; ↓ drops a menu or goes back to Root's tabs; ↑
+    goes on to the projects, where 1 or ←/→ onto the root station open the Root
+    view and leave the workspace on its project. N, O, 1-9 and + (and
+    Ctrl+Shift+N / M, Ctrl+1-9) open the tab in Root's focused subwindow, the
+    same one the + menu would; the window stays up. With the Root view in front
+    Ctrl+W and Ctrl+Shift+←/→ close and step Root's tabs, not the project's; on
+    the Now view they do nothing to the project's tabs.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — Root's Prompt chart: with no project open (the root
+    scope in the center) press ⧗ Prompt chart in the side panel's Agents view,
+    or Tonight → Open chart on a root item: the Root view opens with the chart
+    tab in front and the active scope does not change; a second press focuses
+    the same tab.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

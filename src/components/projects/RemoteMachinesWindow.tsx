@@ -33,6 +33,7 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import type { ComputeHost, GlobalMachine, ProjectEntry } from "../../types";
 import { useT } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { PortForwardList } from "./PortForwardList";
 import { useDialogs } from "../common/PromptDialogs";
 import { CloseIcon } from "../common/icons/Icon";
 
@@ -64,6 +65,8 @@ interface WorkerSyncReport {
   head?: string;
   ok: boolean;
   skipped: boolean;
+  /** A sync to this worker was already running and will run once more for this ask. */
+  queued?: boolean;
   error?: string;
 }
 
@@ -763,6 +766,7 @@ export function RemoteMachinesWindow({
                   {ssh === "connected" ? t("remoteMachines.manage") : t("remoteMachines.connectEllipsis")}
                 </button>
               </div>
+              <PortForwardList project={project} hostId={PRIMARY_HOST} connected={ssh === "connected"} />
             </div>
           );
         })()}
@@ -854,7 +858,7 @@ export function RemoteMachinesWindow({
               ? `${t("remoteMachines.syncFailedLabel")} ${rep.error}`
               : rep?.head
                 ? `${t("remoteMachines.lastSyncedLabel")} ${rep.head}${rep.skipped ? ` ${t("remoteMachines.alreadyCurrent")}` : ""}`
-                : rep && !rep.ok
+                : rep && (!rep.ok || rep.queued)
                   ? t("remoteMachines.syncingEllipsis")
                   : t("remoteMachines.notSyncedYet");
           return (
@@ -937,6 +941,7 @@ export function RemoteMachinesWindow({
                   />
                 </label>
               )}
+              <PortForwardList project={project} hostId={w.id} connected={ssh === "connected"} />
               {pullNote[w.id] && <div className="settings-help">{pullNote[w.id]}</div>}
             </div>
           );

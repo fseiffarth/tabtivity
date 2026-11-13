@@ -297,7 +297,7 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 // ── Transcript ──────────────────────────────────────────────────────────────
 
 /// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy"];
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy", "muse"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
@@ -331,7 +331,7 @@ pub fn transcript(
         );
     }
     let session_id = tab.session_id.as_deref().filter(|id| !id.is_empty());
-    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy").then_some("")) else {
+    let Some(session_id) = session_id.or(matches!(tab.cmd.as_str(), "opencode" | "gemini" | "agy" | "muse").then_some("")) else {
         let reason = if TRANSCRIPT_AGENTS.contains(&tab.cmd.as_str()) { "no_session" } else { "unsupported" };
         return AgentTranscript::unavailable(reason);
     };
@@ -769,6 +769,7 @@ fn tab_record(kind: &CreateTabKind, agent: Option<&AgentChoice>, cwd: &Path, req
             } else {
                 Vec::new()
             };
+            extra.insert("autoLabel".into(), json!(agent.public.label));
             extra.insert("kind".into(), json!("agent"));
             extra.insert("args".into(), json!(args));
             extra.insert("env".into(), json!({ crate::app_env!("TAB_UID"): uuid }));
@@ -2121,6 +2122,7 @@ mod tests {
         };
         let before = crate::clock::now_ms() as i64;
         let record = tab_record(&CreateTabKind::Agent, Some(&agent), Path::new("/p"), "h");
+        assert_eq!(record.extra.get("autoLabel"), Some(&json!(agent.public.label)));
         let stamped = record.extra.get("launchedAt").and_then(serde_json::Value::as_i64).expect("stamped");
         assert!(stamped >= before && stamped <= crate::clock::now_ms() as i64);
         let shell = tab_record(&CreateTabKind::Shell, None, Path::new("/p"), "h");
@@ -2248,11 +2250,14 @@ mod tests {
                 kind: ScopeKind::Assistant,
                 host: super::super::discovery::ProjectHost::Local,
                 remote_only: false,
+                local_models_only: false,
+                cut_network: false,
                 live_sessions: 0,
                 last_activity: None,
                 pending_reviews: None,
                 git: None,
                 agents: None,
+                members: None,
             },
             raw_id: "assistant".into(),
             root: state.path().to_path_buf(),
@@ -2457,11 +2462,14 @@ mod tests {
                 kind: ScopeKind::Project,
                 host,
                 remote_only: false,
+                local_models_only: false,
+                cut_network: false,
                 live_sessions: 0,
                 last_activity: None,
                 pending_reviews: None,
                 git: None,
                 agents: None,
+                members: None,
             },
             raw_id: raw_id.into(),
             root: root.to_path_buf(),

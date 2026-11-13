@@ -19,7 +19,7 @@ export type ProjectHost = "local" | "remote" | "container" | "vm";
  * agents alone (a remote project's shell would run on the remote host), or
  * nothing. Absent from an older desktop is `all`. */
 export type CreateVerdict = "all" | "agents" | "none";
-export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; /** A `remote` project that keeps no copy on the desktop: its tabs run and its files live on its machines alone. Absent otherwise. */ remote_only?: boolean; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot }
+export interface ProjectRow { id: string; label: string; status: string; kind?: ScopeKind; host?: ProjectHost; /** A `remote` project that keeps no copy on the desktop: its tabs run and its files live on its machines alone. Absent otherwise. */ remote_only?: boolean; /** The project is set to Local models only: the ＋ sheet offers the local model's agents and shells, no cloud rows. Absent otherwise (and from an older host). */ local_models_only?: boolean; /** With `local_models_only`: Cut network is on. Absent otherwise. */ cut_network?: boolean; live_sessions: number; /** How many of its agent tabs are working, waiting on a decision, or done; absent when none is. */ agents?: AgentCounts; last_activity?: number; /** Root only: staged root-agent proposals awaiting a decision — which is made at the desk, never here. */ pending_reviews?: number; git?: GitDot; /** A box row only: the row ids of its member projects this phone may list, in the box's order (Home's box layout); absent from an older host. */ members?: string[] }
 export type AgentStatus = "working" | "question" | "interrupted" | "done";
 /** The desktop's own one-line summary of a tab's scheduled prompts: what the
  * Agents view prints under an agent tab, so the project overview says the same
@@ -159,14 +159,22 @@ const SYNC_RESOLVE_TIMEOUT = 130_000;
 export function getDiverged(projectId: string, signal?: AbortSignal): Promise<DivergedList> {
   return api<DivergedList>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged`, { signal }, DIVERGED_READ_TIMEOUT);
 }
-/** `POST …/diverged/preview` — what moving these files would do. */
-export async function previewDiverged(projectId: string, direction: SyncDirection, files: string[]): Promise<SyncPreview> {
-  const { preview } = await api<{ preview: SyncPreview }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/preview`, { method: "POST", body: JSON.stringify({ direction, files }) }, SYNC_PREVIEW_TIMEOUT);
-  return preview;
+/** `POST …/diverged/preview` — what this act would do to these files. `token`
+ * is the preview's receipt: every act but forgetting must echo it to `resolve`
+ * within ten minutes, over exactly these files, or it is refused
+ * (`preview_required`, `preview_stale`). For a deletion `preview` only lists
+ * the files it would remove. */
+export async function previewDiverged(projectId: string, op: Exclude<SyncOp, "forget">, files: string[]): Promise<{ preview: SyncPreview; token: string }> {
+  const { preview, token } = await api<{ preview: SyncPreview; token?: string }>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/preview`, { method: "POST", body: JSON.stringify({ op, files }) }, SYNC_PREVIEW_TIMEOUT);
+  // A desktop older than the token answers without one; the resolve would be
+  // refused, so say so now rather than after the confirmation.
+  if (!token) throw new ApiError(409, "preview_required");
+  return { preview, token };
 }
-/** `POST …/diverged/resolve` — never sent twice: a timeout is an unknown outcome. */
-export function resolveDiverged(projectId: string, op: SyncOp, files: string[]): Promise<SyncOutcome> {
-  return api<SyncOutcome>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/resolve`, { method: "POST", body: JSON.stringify({ op, files }) }, SYNC_RESOLVE_TIMEOUT);
+/** `POST …/diverged/resolve` — never sent twice: a timeout is an unknown outcome.
+ * `token`: the preview's, for every op but `forget`. */
+export function resolveDiverged(projectId: string, op: SyncOp, files: string[], token?: string): Promise<SyncOutcome> {
+  return api<SyncOutcome>(`/api/v1/projects/${encodeURIComponent(projectId)}/diverged/resolve`, { method: "POST", body: JSON.stringify(token ? { op, files, token } : { op, files }) }, SYNC_RESOLVE_TIMEOUT);
 }
 /** `GET …/diverged/diff?file=` — the local copy against the host's. */
 export function getDivergedDiff(projectId: string, file: string): Promise<{ diff: string; cut: boolean }> {
@@ -185,6 +193,11 @@ export interface ActivityList { tabs: ActivityTab[]; desktop_available: boolean;
  * The desktop classifies; with none open the list is empty rather than wrong. */
 export function getActivity(signal?: AbortSignal): Promise<ActivityList> {
   return api<ActivityList>("/api/v1/activity", { signal });
+}
+
+/** `GET /api/v1/projects/{id}` — the project's row, tabs, agents and file sides. */
+export function getProjectDetail(projectId: string, signal?: AbortSignal): Promise<ProjectDetail> {
+  return api<ProjectDetail>(`/api/v1/projects/${encodeURIComponent(projectId)}`, signal ? { signal } : undefined);
 }
 export type ScheduleRule =
   | { type: "once"; at: string }
@@ -852,29 +865,6 @@ export function rememberModelRows(tabId: string, rows: ModelRows): Promise<{ kep
   return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/model-rows`, { method: "POST", body: JSON.stringify(rows) });
 }
 
-/** One CLI's startup defaults and what it can take (`services::agent_defaults`). */
-export interface LaunchDefaults {
-  saved: { model: string; effort: string };
-  capabilities: { model: boolean; efforts: string[]; effort_requires_model: boolean };
-  /** The tab's CLI command and the user's own model names for it (Settings →
-   * Agents); absent from a host build older than the dropdown. */
-  cli?: string;
-  models?: string[] | null;
-}
-
-/** `GET /api/v1/tabs/{id}/launch-defaults` — the model and effort new sessions
- * of the tab's CLI start on (Manage CLIs → Default model and effort). `409
- * no_launch_defaults` for a local-model, Tabby or host tab. */
-export function getLaunchDefaults(tabId: string): Promise<LaunchDefaults> {
-  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`);
-}
-
-/** `PUT /api/v1/tabs/{id}/launch-defaults` — keep them for the tab's CLI;
- * both blank hands the choice back to the CLI. This session keeps its own. */
-export function saveLaunchDefaults(tabId: string, saved: LaunchDefaults["saved"]): Promise<{ saved: boolean }> {
-  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/launch-defaults`, { method: "PUT", body: JSON.stringify(saved) });
-}
-
 /** `POST /api/v1/tabs/{id}/assistant-model` — switch the chat to that model:
  * the desktop restarts its CLI on it and resumes the conversation (so the wait
  * is `WORKTREE_MOVE_TIMEOUT`'s). `409 tab_busy` while the chat is at work. */
@@ -1122,7 +1112,8 @@ export interface SessionTranscript {
    * Claude Code's own subagent row shows — read off a subagent's own file. */
   tokens?: number;
   /** The shells the agent is running now — Claude's `Bash` calls still
-   * without a result, and background ones still running. */
+   * without a result, and background ones still running. The phone's API
+   * empties each `command` (command lines never cross it). */
   shells?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
@@ -1132,12 +1123,14 @@ export interface SessionTranscript {
   watched?: boolean;
 }
 
-/** A shell command the agent started and is waiting on. */
+/** A shell command the agent started and is waiting on. The phone's API
+ * empties `command` and drops `cut` (command lines never cross it); only the
+ * desktop's Reader sees them. */
 export interface RunningShell {
   command: string;
   description?: string;
   at?: string;
-  /** The command was cut at the desktop's bound. */
+  /** The command was cut at the desktop's bound (desktop Reader only). */
   cut?: boolean;
   /** Sent to the background: it can run on past the turn. */
   background?: boolean;
@@ -1277,6 +1270,37 @@ export interface InboxAttachment { name: string; reference: string; size: number
 /** Mirrors the desktop's `inbox::MAX_INBOX_FILE`; checked here first so an
  * oversized pick fails before any bytes leave the phone. */
 export const MAX_INBOX_FILE = 24 * 1024 * 1024;
+/** The largest file the phone fetches whole into its memory (Share), and the
+ * largest a drop box or a remote host hands over whole
+ * (`outbox::MAX_OUTBOX_FILE`, `host_files::read_on`); past it the remote
+ * side's raw route answers `file_too_large` unless asked for a range. This
+ * computer's files stream with no cap (`serve::from_file`). A longer text is
+ * answered with its head. */
+export const MAX_VIEW_FILE = 24 * 1024 * 1024;
+/** The largest picture or PDF of this computer's the viewer draws: the file
+ * streams, but an `<img>` or pdf.js holds the whole of it in the phone. */
+export const MAX_LOCAL_VIEW = 200 * 1024 * 1024;
+
+/** A film or a sound: played by the phone's own player, which asks for
+ * ranges, so it streams from either side whatever its size. */
+export const isMedia = (kind: string) => kind.startsWith("video/") || kind.startsWith("audio/");
+
+/** A picture every phone can draw to mark up: not a GIF, and not a HEIC or
+ * HEIF, which an Android phone cannot decode. */
+export const markablePicture = (kind: string) => kind.startsWith("image/") && !["image/gif", "image/heic", "image/heif"].includes(kind);
+
+/** What the viewer may do with a file from `scope`: `show` it (draw, play,
+ * read its head) and `save` it whole. This computer's side streams any size;
+ * a remote host or a drop box hands over at most `MAX_VIEW_FILE` whole —
+ * though a film or a sound plays from either by ranges. */
+export function viewLimits(scope: ViewerScope, kind: string, size: number): { show: boolean; save: boolean } {
+  const local = "files" in scope && scope.on !== "host";
+  const text = kind.startsWith("text/");
+  return {
+    show: text || isMedia(kind) || size <= (local ? MAX_LOCAL_VIEW : MAX_VIEW_FILE),
+    save: text || local || size <= MAX_VIEW_FILE,
+  };
+}
 /** The `accept` of the fallback `<input>` behind every "a file from this
  * phone" picker (see `pickPhoneFiles`). The wildcards cover every type between
  * them — an unknown file is `application/octet-stream`. An iPhone or iPad
@@ -1534,19 +1558,57 @@ export async function listProjectFiles(projectId: string, dir: string | undefine
   return api<ProjectFileListing>(`/api/v1/projects/${encodeURIComponent(projectId)}/files${query ? `?${query}` : ""}`, { signal });
 }
 
+/** What looking one file or folder up answers: its row; `null` when it is no
+ * longer there; `unlisted` when an older desktop (no `files/entry` route) was
+ * asked by listing the folder, which was cut at its cap before the name. */
+export type ProjectFileLookup = ProjectFileEntry | null | "unlisted";
+
+/** `GET /api/v1/projects/{id}/files/entry?name=<leaf>[&dir=<token>][&on=host]`
+ * — one file or folder of the folder `dir` seals (none: the root), as its
+ * listing rows it, without listing the folder: what favorites, recents and
+ * Mark up's Reload ask. The same path always carries the same token. An older
+ * desktop has no such route (a bodiless 404 or 405): the folder is listed
+ * instead, as before. */
+export async function lookUpProjectFile(projectId: string, dir: string | undefined, name: string, side?: FilesSide, signal?: AbortSignal): Promise<ProjectFileLookup> {
+  const query = [`name=${encodeURIComponent(name)}`, dir ? `dir=${encodeURIComponent(dir)}` : "", sideQuery(side)].filter(Boolean).join("&");
+  try {
+    const answer = await api<{ entry?: ProjectFileEntry }>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/entry?${query}`, { signal });
+    if (!answer.entry?.token) throw new ApiError(200, "malformed_response");
+    return answer.entry;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.code === "file_not_found") return null;
+    const olderHost = reason instanceof ApiError && reason.code === "request_failed" && (reason.status === 404 || reason.status === 405);
+    if (!olderHost) throw reason;
+  }
+  const listing = await listProjectFiles(projectId, dir, signal, side);
+  return listing.entries.find((entry) => entry.name === name) ?? (listing.truncated ? "unlisted" : null);
+}
+
 /** A file or folder whose name matched a search: its row, and the sealed
  * folders from the project root down to its own (empty at the root) — the
  * drawer's trail to stand in when it is opened. */
 export interface ProjectFileHit extends ProjectFileEntry { trail: { token: string; name: string }[] }
 export interface ProjectFileSearch { hits: ProjectFileHit[]; truncated: boolean }
 
-/** `GET /api/v1/projects/{id}/files/search?q=<words>` — the project's files
- * and folders whose names hold every word, any case, the closest first. In a
- * git repo what git ignores is not searched. Behind the same switch as the
- * listing. */
-export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide): Promise<ProjectFileSearch> {
+/** Where a search looks: inside the folder `dir` seals (the whole project
+ * without one), and with `ignored` what git ignores too (this computer's side;
+ * the host's walk has no git listing to leave things out). An older desktop
+ * ignores both. */
+export interface FileSearchScope { dir?: string; ignored?: boolean }
+
+/** `GET /api/v1/projects/{id}/files/search?q=<words>[&dir=<token>][&ignored=1]`
+ * — the project's files and folders whose names hold every word, any case,
+ * the closest first. In a git repo what git ignores is not searched unless
+ * `ignored` asks for it. Behind the same switch as the listing. */
+export async function searchProjectFiles(projectId: string, query: string, signal?: AbortSignal, side?: FilesSide, scope: FileSearchScope = {}): Promise<ProjectFileSearch> {
   const on = sideQuery(side);
-  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?q=${encodeURIComponent(query)}${on ? `&${on}` : ""}`, { signal }, on ? HOST_SEARCH_TIMEOUT : undefined);
+  const params = [
+    `q=${encodeURIComponent(query)}`,
+    scope.dir ? `dir=${encodeURIComponent(scope.dir)}` : "",
+    scope.ignored && !on ? "ignored=1" : "",
+    on,
+  ].filter(Boolean).join("&");
+  return api<ProjectFileSearch>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/search?${params}`, { signal }, on ? HOST_SEARCH_TIMEOUT : undefined);
 }
 
 /** `POST /api/v1/projects/{id}/files/upload?name=…[&dir=<token>]` — the
@@ -1563,6 +1625,45 @@ export async function uploadProjectFile(projectId: string, dir: string | undefin
   return body.file;
 }
 
+/** The largest file **Upload here** takes from the files library: the desktop
+ * stages the body on disk as it arrives (`uploads::MAX_UPLOAD_FILE`). The
+ * chat's sends keep `MAX_INBOX_FILE`. */
+export const MAX_UPLOAD_FILE = 1024 * 1024 * 1024;
+
+/** `POST /api/v1/projects/{id}/files/folder?name=&dir=` — **New folder** in the
+ * folder at `dir` (none: the root), behind the upload switch; answers the new
+ * folder's row. A taken name is `already_exists`. */
+export async function makeProjectFolder(projectId: string, dir: string | undefined, name: string): Promise<ProjectFileEntry> {
+  const folder = dir ? `&dir=${encodeURIComponent(dir)}` : "";
+  const body = await api<{ entry?: ProjectFileEntry }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/files/folder?name=${encodeURIComponent(name)}${folder}`,
+    { method: "POST" },
+  );
+  if (!body?.entry?.token) throw new ApiError(200, "malformed_response");
+  return body.entry;
+}
+
+/** `DELETE /api/v1/projects/{id}/files/folder?f=<token>` — Undo of a **New
+ * folder**: only one this phone made in the last hour, and only while empty. */
+export async function undoProjectFolder(projectId: string, token: string): Promise<void> {
+  await api<{ removed: boolean }>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/folder?f=${encodeURIComponent(token)}`, { method: "DELETE" });
+}
+
+/** Where **Download as zip** loads the folder at `dir` from (none: the root);
+ * same origin, so the download rides the session cookie. */
+export function projectFolderZipUrl(projectId: string, dir: string | undefined): string {
+  return `/api/v1/projects/${encodeURIComponent(projectId)}/files/zip${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`;
+}
+
+/** Whether the folder at `dir` can be zipped (`folder_too_large` thrown when
+ * not): asked before the download, which could otherwise only save the
+ * refusal. `skipped` counts the files left out for a name that is unsafe to
+ * write into a zip (backslash, control character, leading `-` or `~`). */
+export async function checkProjectFolderZip(projectId: string, dir: string | undefined): Promise<{ files: number; bytes: number; skipped?: number }> {
+  const url = projectFolderZipUrl(projectId, dir);
+  return api<{ files: number; bytes: number; skipped?: number }>(`${url}${url.includes("?") ? "&" : "?"}check=1`);
+}
+
 /** `DELETE /api/v1/projects/{id}/files/upload?f=<token>` — Undo of an
  * upload: the desktop deletes the file only while it is one this feature
  * wrote and still unchanged (`file_not_found` else). */
@@ -1570,14 +1671,20 @@ export async function undoProjectUpload(projectId: string, token: string): Promi
   await api<{ undone: boolean }>(`/api/v1/projects/${encodeURIComponent(projectId)}/files/upload?f=${encodeURIComponent(token)}`, { method: "DELETE" });
 }
 
+/** A file looked up again (`lookUpProjectFile`) as the viewer takes it:
+ * `null` when it is gone, is a folder now, or could not be found unlisted. */
+export async function lookUpFileRow(projectId: string, folder: string | undefined, name: string, side?: FilesSide): Promise<ProjectFileEntry | null> {
+  const found = await lookUpProjectFile(projectId, folder, name, side);
+  return found && found !== "unlisted" && found.kind !== "dir" ? found : null;
+}
+
 /** Mark up's Reload for a project file opened by its sealed row rather than
  * from the drawer (the Focus banner's question, an outbox copy's origin):
- * its folder (`folder`, the row's token; none at the root) listed again, for
- * the file's fresh token, size and time — `null` when it is gone. */
+ * the file looked up again in its folder (`folder`, the row's token; none at
+ * the root), for its fresh token, size and time — `null` when it is gone. */
 export function refreshProjectFile(projectId: string, folder: string | undefined): (file: OutboxFile) => Promise<OutboxFile | null> {
   return async (file) => {
-    const fresh = await listProjectFiles(projectId, folder);
-    const entry = fresh.entries.find((candidate) => candidate.kind !== "dir" && candidate.name === file.name);
+    const entry = await lookUpFileRow(projectId, folder, file.name);
     return entry ? { name: entry.name, kind: entry.kind, size: entry.size, modified: entry.modified, ref: entry.token } : null;
   };
 }

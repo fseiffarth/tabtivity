@@ -204,4 +204,26 @@ export GTK_OVERLAY_SCROLLING=0
 ulimit -S -c unlimited 2>/dev/null || true
 
 cd "$HOME"
-exec "$BINARY"
+# Not `exec`: the window's way out is only readable by its parent. Since
+# 2026-11-05 the main process has died with nothing in crash.log, no core and
+# its children left running (a SIGKILL to it alone, or a library's `_exit`
+# past every hook); the status this records says which. Signals sent to the
+# launcher are passed on, so a `kill` of it or a session logout still reaches
+# the app's own SIGTERM teardown.
+"$BINARY" &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null || true' TERM HUP
+trap 'kill -INT "$child" 2>/dev/null || true' INT
+# A trapped signal interrupts `wait`; go on waiting while the app runs. Bash
+# keeps a reaped child's status, so the last `wait` reads the real one.
+while kill -0 "$child" 2>/dev/null; do wait "$child" || true; done
+status=0
+wait "$child" || status=$?
+if [ "$status" -gt 128 ] && sig="$(kill -l "$((status - 128))" 2>/dev/null)"; then
+  how="killed by SIG$sig"
+else
+  how="exit status $status"
+fi
+printf '=== EXITED %s pid=%s %s ===\n' "$(date -u -Iseconds)" "$child" "$how" >>"$APP_SHARE_DIR/crash.log"
+printf '=== %s (dev) EXITED %s pid=%s %s ===\n' "$APP_UPPER" "$(date -Is)" "$child" "$how"
+exit "$status"

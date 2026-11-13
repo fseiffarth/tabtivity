@@ -438,6 +438,61 @@ describe(`${BRAND.display} Mobile Focus — the question an agent is waiting on`
     expect(FakeWebSocket.sent).toEqual([DOWN, DOWN, "Push only my fix", "\r"]);
   });
 
+  it("puts a file pasted or picked for the free-text answer in the inbox and its @ reference in the words", async () => {
+    const posted: string[] = [];
+    const upstream = sidecarFetch();
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.includes("/inbox?name=")) {
+        posted.push(decodeURIComponent(url.split("name=")[1]));
+        const name = decodeURIComponent(url.split("name=")[1]);
+        return Promise.resolve(jsonResponse(200, { attachment: { reference: `inbox/${name}` } }));
+      }
+      return upstream(url);
+    }));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    await paint(AGENT_QUESTION);
+
+    fireEvent.click(within(question()).getByText("Type something."));
+    const field = within(question()).getByRole("textbox", { name: "Your answer…" });
+    fireEvent.change(field, { target: { value: "like this" } });
+    const shot = new File(["png"], "shot.png", { type: "image/png" });
+    const pasted = fireEvent.paste(field, { clipboardData: { files: [shot], getData: () => "", types: ["Files"] } });
+    expect(pasted).toBe(false);
+    await settle(50);
+    expect(posted).toEqual(["shot.png"]);
+    expect((field as HTMLTextAreaElement).value).toBe("like this @inbox/shot.png ");
+    // A text paste is the field's own.
+    expect(fireEvent.paste(field, { clipboardData: { files: [], getData: () => "words", types: ["text/plain"] } })).toBe(true);
+    // The 📎 picks from the phone (the fallback input where no system picker is).
+    within(question()).getByRole("button", { name: "Attach a file" });
+    const input = screen.getByTestId("question-file-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["pdf"], "notes.pdf", { type: "application/pdf" })] } });
+    await settle(50);
+    expect((field as HTMLTextAreaElement).value).toBe("like this @inbox/shot.png @inbox/notes.pdf ");
+
+    FakeWebSocket.sent = [];
+    fireEvent.click(within(question()).getByRole("button", { name: "Send" }));
+    await settle(600);
+    expect(FakeWebSocket.sent).toEqual([DOWN, DOWN, "like this @inbox/shot.png @inbox/notes.pdf", "\r"]);
+  });
+
+  it("says why a file for the free-text answer did not make it, and keeps the words", async () => {
+    const upstream = sidecarFetch();
+    vi.stubGlobal("fetch", vi.fn((url: string) =>
+      url.includes("/inbox?name=") ? Promise.resolve(jsonResponse(507, { error: "inbox_full" })) : upstream(url)));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await act(async () => {});
+    await paint(AGENT_QUESTION);
+    fireEvent.click(within(question()).getByText("Type something."));
+    const field = within(question()).getByRole("textbox", { name: "Your answer…" });
+    fireEvent.change(field, { target: { value: "see" } });
+    fireEvent.paste(field, { clipboardData: { files: [new File(["png"], "shot.png", { type: "image/png" })], getData: () => "", types: ["Files"] } });
+    await settle(50);
+    expect(within(question()).getByRole("alert").textContent).toMatch(/^shot\.png: /);
+    expect((field as HTMLTextAreaElement).value).toBe("see");
+  });
+
   it("gives the list back when the answer never lands", async () => {
     render(<Terminal tab={TAB} back={() => {}} />);
     await act(async () => {});

@@ -55,6 +55,9 @@ export type HintActionId = "codex-hooks";
 export interface HintCtx {
   /** Number of active project pills. */
   projectCount: number;
+  /** Number of boxes. Optional: absent means "not known", which never makes a
+   *  box-dependent hint eligible. */
+  boxCount?: number;
   /** The current project scope, or null at root / no active project. */
   activeId: string | null;
   /** A Codex tab is open and Codex is refusing to run Tabtivity's session hook, so
@@ -69,7 +72,11 @@ export interface HintDef {
    *  onboarding ones — a per-session cap and a long gap, see `HintHost` — and
    *  surface only while their anchor is on screen. Absent means onboarding. */
   tier?: "feature";
-  /** Higher wins when several hints are eligible at once (shown one at a time). */
+  /** Says something about the state right now rather than teaching a feature,
+   *  so it keeps its rank and its pace however often it has come up. */
+  situational?: boolean;
+  /** Higher wins when several hints are eligible at once (shown one at a time)
+   *  and came up equally long ago. */
   priority: number;
   /** `document.querySelector` selector for the element to point at, or null to
    *  render as a centered top banner (no anchor). */
@@ -94,6 +101,7 @@ const CORE_HINTS: HintDef[] = [
     // Actionable and situational rather than onboarding filler, so it outranks
     // everything but the empty-workspace prompt.
     id: "codex-hook-trust",
+    situational: true,
     priority: 90,
     anchor: null,
     placement: "top",
@@ -104,6 +112,7 @@ const CORE_HINTS: HintDef[] = [
   },
   {
     id: "create-project",
+    situational: true,
     priority: 100,
     anchor: '[data-hint-anchor="add-project"]',
     placement: "bottom",
@@ -152,7 +161,7 @@ export const HINTS: HintDef[] = [
       placement: spec.placement ?? "bottom",
       titleKey: featureTitleKey(spec.id),
       bodyKey: featureBodyKey(spec.id),
-      when: () => true,
+      when: spec.when ?? (() => true),
     }),
   ),
 ];
@@ -171,16 +180,36 @@ export interface PickOptions {
    *  eligible only while this says yes; feature hints also need it to be given
    *  at all (a caller that cannot look at the DOM never gets one). */
   anchorOnScreen?: (selector: string) => boolean;
-  /** False holds every feature hint back (session cap / gap not yet over). */
+  /** False holds every paced hint back (session cap / gap not yet over):
+   *  see `isPacedHint`. */
   allowFeature?: boolean;
+  /** When each hint last came up (ms epoch; `settings.hints_shown`). The hint
+   *  that came up longest ago goes first, so closing one without reading it
+   *  still lets the next have its turn. Absent means none has. */
+  shownAt?: Readonly<Record<string, number>>;
   /** Whether a hint won its draw for this sitting (`stores/hints` `hintDrawn`:
    *  each Read halves the chance). Asked last, so only a hint that would
    *  otherwise show is drawn. Absent means every hint is drawn. */
   drawn?: (id: HintId) => boolean;
 }
 
-/** Pure selection: the highest-priority unseen hint eligible for this context,
- *  or null. Returns null when hints are disabled. Exported for unit tests. */
+/** When `def` last came up, 0 when it never has or the hint is situational. */
+function lastShown(def: HintDef, shownAt: PickOptions["shownAt"]): number {
+  const at = shownAt?.[def.id];
+  return !def.situational && typeof at === "number" ? at : 0;
+}
+
+/** Whether `def` is held to the sitting's cap and gap: every feature tip, and
+ *  any other hint coming back for another turn. Without the second half the
+ *  onboarding hints, which have no cap, would replay at every start. */
+export function isPacedHint(def: HintDef, shownAt: PickOptions["shownAt"]): boolean {
+  return def.tier === "feature" || lastShown(def, shownAt) > 0;
+}
+
+/** Pure selection: of the unseen hints eligible for this context, the one that
+ *  came up longest ago, priority deciding among equals (so never-shown hints go
+ *  first, by rank), or null. Returns null when hints are disabled. Exported for
+ *  unit tests. */
 export function pickHint(
   ctx: HintCtx,
   seen: ReadonlySet<string>,
@@ -188,12 +217,13 @@ export function pickHint(
   opts: PickOptions = {},
 ): HintId | null {
   if (!enabled) return null;
-  const { anchorOnScreen, allowFeature = true, drawn } = opts;
+  const { anchorOnScreen, allowFeature = true, shownAt, drawn } = opts;
   const eligible = HINTS.filter((h) => !seen.has(h.id) && h.when(ctx)).sort(
-    (a, b) => b.priority - a.priority,
+    (a, b) => lastShown(a, shownAt) - lastShown(b, shownAt) || b.priority - a.priority,
   );
   for (const h of eligible) {
-    if (h.tier === "feature" && (!allowFeature || !anchorOnScreen)) continue;
+    if (!allowFeature && isPacedHint(h, shownAt)) continue;
+    if (h.tier === "feature" && !anchorOnScreen) continue;
     if (h.anchor && anchorOnScreen && !anchorOnScreen(h.anchor)) continue;
     if (drawn && !drawn(h.id)) continue;
     return h.id;

@@ -339,6 +339,15 @@ mod proc {
         found
     }
 
+    /// Drop the cached holders of `inode`, so the next look walks `/proc`
+    /// again.
+    #[cfg(test)]
+    pub fn forget(inode: u64) {
+        if let Some(map) = HOLDERS.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            map.remove(&inode);
+        }
+    }
+
     pub fn placement_of(inode: u64, trusted_pids: &[u32]) -> Placement {
         let holders = holders_of(inode);
         if holders.is_empty() {
@@ -506,10 +515,26 @@ mod tests {
         // The same listener, but this process's pid namespace is pretended away.
         let theirs: Vec<Listener> = listeners(&read_tables().join("\n")).into_iter().filter(|l| l.port == port).collect();
         assert_eq!(theirs.len(), 1);
-        assert_eq!(proc::placement_of(theirs[0].inode, &[]), Placement::Here);
+        let inode = theirs[0].inode;
+        // Other tests of this binary fork children all the time. Between fork
+        // and exec a child holds a copy of every descriptor, this listener's
+        // too, and may already be in a new pid namespace (a fence probe) or
+        // be switching program, so a single walk can see a second, foreign
+        // holder. That window is brief: look again, uncached, until it closes.
+        fn settled<T: PartialEq + std::fmt::Debug>(inode: u64, want: &T, mut look: impl FnMut() -> T) -> T {
+            let mut seen = look();
+            for _ in 0..100 {
+                if &seen == want { break; }
+                proc::forget(inode);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                seen = look();
+            }
+            seen
+        }
+        assert_eq!(settled(inode, &Placement::Here, || proc::placement_of(inode, &[])), Placement::Here);
         assert_eq!(proc::placement_of(u64::MAX - 1, &[]), Placement::Unknown, "no holder is not a pass");
-        let seen = occupants(port);
-        assert_eq!(seen, vec![Occupant { uid: own_uid(), fenced: false, same_program: true, identified: true }]);
+        let want = vec![Occupant { uid: own_uid(), fenced: false, same_program: true, identified: true }];
+        assert_eq!(settled(inode, &want, || occupants(port)), want);
         assert!(occupants(1).is_empty());
     }
 }

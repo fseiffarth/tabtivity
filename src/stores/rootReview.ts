@@ -48,11 +48,6 @@ interface RootReviewState {
    *  succeeded but whose staged copy could not be removed stays on the list
    *  until the next refresh drops it, and its ✓ must not import it twice. */
   imported: string[];
-  /** Whether the console's ✓ Approvals button has its panel dropped. It lives
-   *  here rather than in `RootOverlay` so a flow that floats the console can
-   *  open it *at* the rows; the console clears it when it closes. */
-  panel: boolean;
-  setPanel: (panel: boolean) => void;
   refresh: () => Promise<void>;
   decide: (proposal: RootProposal, action: "apply" | "reject" | "undo") => Promise<void>;
   applyAll: (proposals: RootProposal[]) => Promise<void>;
@@ -93,8 +88,7 @@ async function action(command: string, args: Record<string, unknown>) {
   }
 }
 export const useRootReviewStore = create<RootReviewState>((set) => ({
-  proposals: [], imports: [], count: 0, error: null, busy: false, imported: [], panel: false,
-  setPanel: (panel) => set({ panel }),
+  proposals: [], imports: [], count: 0, error: null, busy: false, imported: [],
   refresh: async () => {
     const version = ++refreshVersion;
     try {

@@ -85,7 +85,7 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     vi.restoreAllMocks();
   });
 
-  it("splits the files into In and Out in the strip over the chat, and opens a row in the viewer", async () => {
+  it("groups the files by who sent them in the strip over the chat, and opens a row in the viewer", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
       { name: "board.md", kind: "text/markdown", size: 900, modified: secs("2026-10-04T10:16:10Z"), from_tab: true },
       { name: "theirs.png", kind: "image/png", size: 9_000, modified: secs("2026-10-04T10:17:00Z") },
@@ -105,8 +105,9 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     // Another tab's file stays in the gallery; this chat's two, split by side.
     const names = (region: HTMLElement) => within(region).getAllByRole("listitem").map((row) => row.querySelector(".sent-index-name")?.textContent);
     const sections = within(index).getAllByRole("region");
-    expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["In · from you (1)", "Out · from the agent (1)"]);
-    const [inbound, outbound] = sections;
+    expect(sections.map((section) => section.getAttribute("aria-label"))).toEqual(["Sent by the agent (1)", "Sent by you (1)"]);
+    expect(sections.map((section) => section.querySelector(".sent-index-hint")?.textContent)).toEqual(["Sent to you from this chat", "Attached to your prompts"]);
+    const [outbound, inbound] = sections;
     expect(names(inbound)).toEqual(["photo.jpg"]);
     expect(names(outbound)).toEqual(["board.md"]);
     expect(within(outbound).getByRole("button").getAttribute("aria-label")).toContain("From the agent");
@@ -116,7 +117,7 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     expect(screen.getByRole("dialog", { name: "photo.jpg" })).toBeTruthy();
   });
 
-  it("keeps one list open at a time beside the subagent index", async () => {
+  it("keeps one list open at a time across Subagents, Files and Links", async () => {
     vi.stubGlobal("fetch", sidecarFetch([
       { name: "plot.png", kind: "image/png", size: 9_000, modified: secs("2026-10-04T10:16:10Z"), from_tab: true },
     ], {
@@ -124,6 +125,7 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
       entries: [
         ...TRANSCRIPT.entries,
         { kind: "agent", role: "Explore", text: "Find the data", at: "2026-10-04T10:15:30Z" },
+        { kind: "answer", text: "[The data](https://example.com/data)" },
       ],
     }));
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -131,12 +133,45 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
 
     const agents = within(screen.getByRole("navigation", { name: "Subagents in this conversation" })).getByRole("button", { name: /^Subagents \(1\)/ });
     const files = within(screen.getByRole("navigation", { name: "Files in this conversation" })).getByRole("button", { name: /^Files \(1\)/ });
+    const links = within(screen.getByRole("navigation", { name: "Links in this conversation" })).getByRole("button", { name: /^Links \(1\)/ });
     fireEvent.click(agents);
     fireEvent.click(files);
     expect(files.getAttribute("aria-expanded")).toBe("true");
     expect(agents.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(agents);
+    fireEvent.click(links);
     expect(files.getAttribute("aria-expanded")).toBe("false");
+    expect(links.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(agents);
+    expect(links.getAttribute("aria-expanded")).toBe("false");
+    expect(agents.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("lists links without any files and confirms the destination before opening", async () => {
+    vi.stubGlobal("fetch", sidecarFetch([], {
+      ...TRANSCRIPT,
+      entries: [
+        { kind: "prompt", text: "Compare https://example.com/release with https://example.org/docs" },
+        { kind: "answer", text: "[Latest release](https://example.com/release#notes)" },
+      ],
+    }));
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+
+    expect(screen.queryByRole("navigation", { name: "Files in this conversation" })).toBeNull();
+    const index = within(screen.getByRole("navigation", { name: "Links in this conversation" }));
+    fireEvent.click(index.getByRole("button", { name: /^Links \(2\)/ }));
+    const rows = index.getAllByRole("listitem");
+    expect(rows.map((row) => row.querySelector("bdi")?.textContent)).toEqual(["example.com/release", "example.org/docs"]);
+    expect(rows[1].textContent).toContain("From you");
+    expect(open).not.toHaveBeenCalled();
+
+    fireEvent.click(within(rows[0]).getByRole("button", { name: /Latest release.*example\.com\/release.*From the agent/ }));
+    expect(open).not.toHaveBeenCalled();
+    const dialog = within(screen.getByRole("dialog", { name: "Open this link?" }));
+    expect(dialog.getByTestId("link-sheet-url").textContent).toBe("https://example.com/release#notes");
+    fireEvent.click(dialog.getByRole("button", { name: "Open link" }));
+    expect(open).toHaveBeenCalledWith("https://example.com/release#notes", "_blank", "noopener,noreferrer");
   });
 
   it("shuts the open list on a tap anywhere else, but not on a scroll or inside it", async () => {
@@ -182,7 +217,20 @@ describe(`${BRAND.display} Mobile lists the files a conversation carried`, () =>
     await settle();
     const index = screen.getByRole("navigation", { name: "Files in this conversation" });
     fireEvent.click(within(index).getByRole("button", { name: /^Files \(1\)/ }));
-    expect(within(index).getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["Out · from the agent (1)"]);
+    expect(within(index).getAllByRole("region").map((section) => section.getAttribute("aria-label"))).toEqual(["Sent by the agent (1)"]);
+  });
+
+  it("lists only this conversation's sends, not the tab's earlier conversations'", async () => {
+    vi.stubGlobal("fetch", sidecarFetch([
+      { name: "plot.png", kind: "image/png", size: 9_000, modified: secs("2026-10-04T10:16:10Z"), from_tab: true },
+      { name: "before.png", kind: "image/png", size: 9_000, modified: secs("2026-10-03T09:00:00Z"), from_tab: true },
+    ], TRANSCRIPT));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    const index = screen.getByRole("navigation", { name: "Files in this conversation" });
+    fireEvent.click(within(index).getByRole("button", { name: /^Files \(1\)/ }));
+    const [outbound] = within(index).getAllByRole("region");
+    expect(within(outbound).getAllByRole("listitem").map((row) => row.querySelector(".sent-index-name")?.textContent)).toEqual(["plot.png"]);
   });
 
   it("shows no list when the conversation carried no file", async () => {

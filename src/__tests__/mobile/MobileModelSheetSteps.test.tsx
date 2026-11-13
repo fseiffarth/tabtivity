@@ -216,14 +216,14 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
   });
 
   it("lists every model of a picker that draws only a window of them", async () => {
-    // Claude Code 2.1.278's `/model` in an 80×24 pane: three rows of five,
-    // the window following the highlight.
-    const claudeWindow = (rows: string[]) => [
+    // Claude Code's `/model` in an 80×24 pane: three rows of five, the
+    // window following the highlight, the note counting the rows below it.
+    const claudeWindow = (rows: string[], below?: number) => [
       "   Select model",
       "   Switch between Claude models.",
       "",
       ...rows,
-      "      … +2 models",
+      ...(below ? [`      … +${below} models`] : []),
       "",
       "   Enter to set as default · s to use this session only · Esc to cancel",
     ].join("\n");
@@ -240,17 +240,15 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     fireEvent.click(screen.getByRole("button", { name: "Fable 5.1" }));
     expect((await keysSent(() => FakeWebSocket.sent, 2, 400)).slice(-2)).toEqual(["/model", "\r"]);
     FakeWebSocket.sent = [];
-    await paint(claudeWindow([`     ${DEFAULT}`, `     ${OPUS}`, `   ❯ ${FABLE}`]));
-    // The highlight is walked onto the first hidden row — arrows only.
-    expect(await keysSent(() => FakeWebSocket.sent, 1, 300)).toEqual([DOWN]);
-    FakeWebSocket.sent = [];
-    await paint(claudeWindow([`   ↑ ${OPUS}`, `     ${FABLE}`, `   ❯ ${SONNET}`]));
-    expect(await keysSent(() => FakeWebSocket.sent, 1, 300)).toEqual([DOWN]);
+    await paint(claudeWindow([`     ${DEFAULT}`, `     ${OPUS}`, `   ❯ ${FABLE}`], 2));
+    // The highlight is walked to the last hidden row in one run — arrows only.
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 500)).toEqual([DOWN, DOWN]);
     FakeWebSocket.sent = [];
     await paint(claudeWindow([`   ↑ ${FABLE}`, `     ${SONNET}`, `   ❯ ${HAIKU}`]));
     // Every row seen: back to where the highlight was.
-    expect(await keysSent(() => FakeWebSocket.sent, 2, 300)).toEqual([UP, UP]);
-    await paint(claudeWindow([`   ❯ ${FABLE}`, `     ${SONNET}`, `     ${HAIKU}`]));
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 500)).toEqual([UP, UP]);
+    // Walking up, the window keeps a row above the highlight (2.1.317).
+    await paint(claudeWindow([`   ↑ ${OPUS}`, `   ❯ ${FABLE}`, `   ↓ ${SONNET}`], 1));
 
     expect(Array.from(document.querySelectorAll(".option-list strong"), (label) => label.textContent))
       .toEqual(["Default (recommended)", "Opus (1M context)", "Fable ✔", "Sonnet", "Haiku"]);
@@ -265,12 +263,12 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
   it("drops the rest of a reveal walk when the sheet is closed mid-walk", async () => {
     // The walk's arrows go one at a time; any still queued after the Esc
     // reached the empty composer, where ↑ recalled old prompts from history.
-    const claudeWindow = (rows: string[]) => [
+    const claudeWindow = (rows: string[], below?: number) => [
       "   Select model",
       "   Switch between Claude models.",
       "",
       ...rows,
-      "      … +2 models",
+      ...(below ? [`      … +${below} models`] : []),
       "",
       "   Enter to set as default · s to use this session only · Esc to cancel",
     ].join("\n");
@@ -283,10 +281,8 @@ describe(`${BRAND.display} Mobile — a multi-step /model picker`, () => {
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "Fable 5.1" }));
     await settle(400);
-    await paint(claudeWindow([`     ${DEFAULT}`, `     ${OPUS}`, `   ❯ ${FABLE}`]));
-    await settle(300);
-    await paint(claudeWindow([`   ↑ ${OPUS}`, `     ${FABLE}`, `   ❯ ${SONNET}`]));
-    await settle(300);
+    await paint(claudeWindow([`     ${DEFAULT}`, `     ${OPUS}`, `   ❯ ${FABLE}`], 2));
+    await settle(400);
     FakeWebSocket.sent = [];
     // The last hidden row lands: the walk back (↑ ↑) starts, and the sheet is
     // closed before its second key went.

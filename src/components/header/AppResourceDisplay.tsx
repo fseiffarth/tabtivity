@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "../../stores/settings";
-import { useQuiesce, saverInterval } from "../../stores/power";
+import { usePoll, type PollRun } from "../../lib/usePoll";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { useHeaderStatusReport } from "../../stores/headerStatus";
 import {
@@ -62,38 +62,23 @@ export function AppResourceDisplay({ folded = false, peek = 0 }: { folded?: bool
   const fastMode = useFastMode();
   const anyShown = (showCpu || showRam || showGpu) && !fastMode;
   const [usage, setUsage] = useState<AppResourceUsage | null>(null);
-  const quiesce = useQuiesce();
-
   useEffect(() => {
-    if (!anyShown) {
-      setUsage(null);
-      return;
+    if (!anyShown) setUsage(null);
+  }, [anyShown]);
+
+  const poll = useCallback(async (run: PollRun) => {
+    try {
+      // Skip GPU and Ollama reads when their row is hidden.
+      const next = await invoke<AppResourceUsage>("debug_app_resource_usage", { gpu: showGpu });
+      if (!run.stopped) setUsage(next);
+    } catch {
+      if (!run.stopped) setUsage(null);
     }
-    // Folded keeps the last reading rather than clearing it: the cluster
-    // counts this member by its report, and a member that vanished on fold
-    // could drop the count below the fold threshold and unfold the row again.
-    if (folded) return;
-
-    let cancelled = false;
-    // `gpu: false` with the GPU row hidden: the backend then skips its GPU and
-    // Ollama reads instead of sampling what nobody will see.
-    const poll = () => {
-      invoke<AppResourceUsage>("debug_app_resource_usage", { gpu: showGpu })
-        .then((next) => {
-          if (!cancelled) setUsage(next);
-        })
-        .catch(() => {
-          if (!cancelled) setUsage(null);
-        });
-    };
-
-    poll();
-    const id = window.setInterval(poll, saverInterval(RESOURCE_POLL_MS, quiesce));
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [anyShown, showGpu, quiesce, folded]);
+  }, [showGpu]);
+  // Folded stops the poll but keeps the last reading: the cluster counts this
+  // member by its report, and one that vanished on fold could drop the count
+  // below the fold threshold and unfold the row again.
+  usePoll(poll, RESOURCE_POLL_MS, { enabled: anyShown && !folded, onBlur: "widen" });
 
   // One reading for the folded tooltip. It shows CPU and RAM only, so the GPU
   // and Ollama reads are skipped and the last GPU figures carried over until

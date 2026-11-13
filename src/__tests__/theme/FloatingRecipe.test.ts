@@ -36,20 +36,68 @@ describe("the floating recipe", () => {
     expect(wash).toContain(`.${member}::before`);
   });
 
+  // One token reaches every member: the recipe reads --float-fill, and the
+  // glass pair sets it on the theme, so no member can miss the glass fill.
   it("every member takes the glass fill in both glass themes", () => {
-    const glassRules = [...css.matchAll(/([^{}]+)\{\s*--surface-fill: var\(--glass-elevated\)/g)]
-      .map((m) => m[1])
-      .join(",");
-    for (const member of MEMBERS) {
-      expect(glassRules).toContain(`[data-theme="fancy_dark"] .${member}`);
-      expect(glassRules).toContain(`[data-theme="light_lavender"] .${member}`);
-    }
+    expect(css).toMatch(/--surface-fill: var\(--float-fill, var\(--bg-elevated\)\);\s*--surface-rail: 2px/);
+    expect(css).toMatch(
+      /\[data-theme="fancy_dark"\],\s*\[data-theme="light_lavender"\]\s*\{[^}]*--float-fill: var\(--glass-elevated\)/,
+    );
+    expect(css).not.toMatch(/--surface-fill: var\(--glass-elevated\)/);
   });
 
   it("no member paints a background of its own over the recipe", () => {
     for (const member of MEMBERS) {
       expect(css).not.toMatch(new RegExp(`(^|[\\s,}])\\.${member}\\s*\\{(?![^}]*--surface-fill)[^}]*\\bbackground(-color)?:`));
     }
+  });
+
+  // Paused at its first frame by the blurred-window rule, an entry from
+  // `opacity: 0` would leave the surface invisible until focus returns.
+  it.each(["project-switch-toast", "hint-bubble"])("%s keeps its entry running in a blurred window", (member) => {
+    expect(css).toMatch(new RegExp(`:root\\[data-blurred\\] \\.${member}\\s*[,{]`));
+  });
+
+  // On a small card the accent rail read as a fat violet top bar: messages and
+  // hover cards carry none, and hold no transparent border for its room either.
+  it.each(["project-pill-popup", "project-switch-toast", "hint-bubble"])("%s carries no top rail", (member) => {
+    expect(selectorsOf("--surface-rail: 0px")).toContain(`.${member}`);
+    expect(css).not.toMatch(new RegExp(`(^|[\\s,}])\\.${member}\\s*\\{[^}]*border-top:`));
+  });
+
+  // The Add/Commit/Push change tree is a big list over the panel: rail and wash
+  // made it a lavender slab with a thick top bar (user, 2026-11-06). It opts
+  // out after the group rules, so the later rule wins the cascade.
+  it("the change tree drops the rail and the wash after the recipe", () => {
+    const optOut = css.search(/(^|[\s,}])\.git-change-tree\s*\{\s*--surface-rail: 0px;\s*border-top: 0;/);
+    const noWash = css.search(/(^|[\s,}])\.git-change-tree::before\s*\{\s*content: none;/);
+    expect(optOut).toBeGreaterThan(css.indexOf("--surface-rail: 2px"));
+    expect(noWash).toBeGreaterThan(css.indexOf("inset: calc(-1 * var(--surface-rail)) 0 0"));
+  });
+
+  // The dropdown menus keep the rail but no wash: a wash behind a column of
+  // row cards read as a lavender slab (user, 2026-11-06). Rows rest flat.
+  it("the dropdown menus drop the wash after the recipe and rest their rows flat", () => {
+    const noWash = css.search(/(^|[\s,}])\.box-chip-menu::before\s*\{\s*content: none;/);
+    expect(noWash).toBeGreaterThan(css.indexOf("inset: calc(-1 * var(--surface-rail)) 0 0"));
+    expect(css).toMatch(/\.tab-new-menu-item\s*\{[^}]*background: transparent;/);
+    expect(css).toMatch(/\.context-menu button\s*\{[^}]*background: transparent;/);
+    expect(css).toMatch(/\.project-switcher-add-menu button\s*\{[^}]*background: transparent;/);
+  });
+
+  // The accent edge runs round every side (user, 2026-11-10), dialogs and the
+  // header hover menus alike; a top-only rail is what it replaced.
+  const RAIL_LESS = ["git-change-tree", "project-pill-popup", "project-switch-toast", "hint-bubble"];
+  const ring = selectorsOf("border: var(--surface-rail) solid var(--accent)");
+  it.each(MEMBERS.filter((m) => !RAIL_LESS.includes(m)))("%s carries the accent ring on every side", (member) => {
+    expect(ring).toMatch(/^\s*:root :is\(/);
+    expect(ring).toContain(`.${member}`);
+  });
+  it.each(RAIL_LESS)("%s carries no ring", (member) => {
+    expect(ring).not.toContain(`.${member}`);
+  });
+  it("paints no top-only rail any more", () => {
+    expect(css).not.toMatch(/linear-gradient\(var\(--accent\), var\(--accent\)\) 0 0 \/ 100% var\(--surface-rail\)/);
   });
 
   it("never clips with a clip-path, which would take the shadow", () => {

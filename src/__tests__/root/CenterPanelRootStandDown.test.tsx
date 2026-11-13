@@ -94,6 +94,15 @@ describe("CenterPanel root stand-down", () => {
     expect(visible(docked.key)).toBe("false");
   });
 
+  it("hides the whole root scope for a cockpit view too (the window owns the keyboard)", async () => {
+    render(<CenterPanel />);
+    await act(async () => {
+      useRootOverlayStore.setState({ open: true, view: "tonight" });
+    });
+    expect(visible(other.key)).toBe("false");
+    expect(visible(docked.key)).toBe("false");
+  });
+
   it("hides only the key a docked column draws, and shows it again on unmark", async () => {
     render(<CenterPanel />);
     await act(async () => {

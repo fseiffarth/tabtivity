@@ -26,3 +26,15 @@ export interface RowActions {
   /** Right-click on ▶: the run-arguments popover. */
   openRunArgs: (ev: React.MouseEvent<HTMLButtonElement>, entry: FileEntry) => void;
 }
+
+/** A search the HOST owns, for a tree that draws no search chrome of its own: the
+ *  box side panel keeps one field above its member sections and hands its state
+ *  to the one expanded member's tree. The tree lists matches under the project
+ *  root and calls `onSettled` when a result is revealed, so the host can clear
+ *  its field (the tree's own box does the same with its private query). */
+export interface SharedTreeSearch {
+  query: string;
+  mode: "name" | "content";
+  caseSensitive: boolean;
+  onSettled: () => void;
+}

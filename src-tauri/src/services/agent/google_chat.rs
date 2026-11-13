@@ -3,7 +3,7 @@
 //! folder, created since launch for a fresh tab. Never read the user's home.
 //!
 //! Gemini writes JSON (newer versions JSONL with patches/rewinds) under
-//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.4.12) writes SQLite
+//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.5.6) writes SQLite
 //! trajectories: `steps.step_payload` is a CortexStep protobuf, not plain
 //! text. Its embedded descriptor defines user_input (19).user_response (2),
 //! planner_response (20).response (1), and metadata (5).created_at (1). Only
@@ -223,7 +223,7 @@ fn agy_store(home: &Path) -> Option<AgyStore> {
 
 /// The main conversations Antigravity ran in `directory`, newest first.
 fn agy_folder(store: &AgyStore, directory: &str) -> Option<Vec<String>> {
-    let canonical = std::fs::canonicalize(directory).ok();
+    let canonical = std::fs::canonicalize(directory).ok().map(crate::paths::without_verbatim_prefix);
     let mut query = store.summaries.prepare("SELECT conversation_id, workspace_uris FROM conversation_summaries WHERE parent_conversation_id = '' ORDER BY last_modified_time DESC LIMIT 512").ok()?;
     let rows = query.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).ok()?;
     let mut ids = Vec::new();

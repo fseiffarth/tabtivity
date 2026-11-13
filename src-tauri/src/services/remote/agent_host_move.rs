@@ -51,6 +51,10 @@ use crate::services::sftp::SyncKind;
 const PROJECTS: &str = ".claude/projects";
 /// The largest transcript (and the largest file of its folder) taken along.
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// The most bytes one move reads from the side the tab leaves, in all: every
+/// transcript and side file of every conversation counts. A host that holds many
+/// large files (or a home an agent filled) cannot make the move hold more.
+const MOVE_BUDGET: u64 = 1024 * 1024 * 1024;
 /// The most files of a session's own folder taken along.
 const MAX_SIDE_FILES: usize = 4000;
 /// How deep a session's own folder is walked (`subagents/`, `tool-results/`).
@@ -62,6 +66,31 @@ const MAX_SEARCHED_DIRS: usize = 400;
 const ASIDE: &str = ".replaced";
 /// How long a CLI whose tmux session was ended gets to exit.
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// What is left of [`MOVE_BUDGET`]. Every read asks it for its limit first, so a
+/// file is cut off at the least of [`MAX_BYTES`] and the budget, whatever the
+/// listing or the stat said it would be.
+struct Budget(u64);
+
+impl Budget {
+    fn new() -> Self {
+        Budget(MOVE_BUDGET)
+    }
+
+    /// The most the next file may hold.
+    fn limit(&self) -> u64 {
+        self.0.min(MAX_BYTES)
+    }
+
+    /// Count `read` bytes taken.
+    fn spend(&mut self, read: usize) {
+        self.0 = self.0.saturating_sub(read as u64);
+    }
+}
+
+fn too_large() -> String {
+    "the conversation is too large to take along".into()
+}
 
 /// One conversation read off the side the tab leaves.
 struct Session {
@@ -219,15 +248,17 @@ async fn read_sessions(side: &Side, ids: &[String]) -> Result<Vec<Session>, Stri
         Side::Here { home, folder } => {
             let (home, folder, ids) = (home.clone(), folder.clone(), ids.to_vec());
             app_core::rt::spawn_blocking(move || {
-                ids.iter().filter_map(|id| read_here(&home, &folder, id).transpose()).collect::<Result<Vec<_>, _>>()
+                let mut budget = Budget::new();
+                ids.iter().filter_map(|id| read_here(&home, &folder, id, &mut budget).transpose()).collect::<Result<Vec<_>, _>>()
             })
             .await
             .map_err(|e| e.to_string())?
         }
         Side::Host { sftp, folder } => {
             let mut out = Vec::new();
+            let mut budget = Budget::new();
             for id in ids {
-                if let Some(session) = read_host(sftp, folder, id).await? {
+                if let Some(session) = read_host(sftp, folder, id, &mut budget).await? {
                     out.push(session);
                 }
             }
@@ -238,7 +269,7 @@ async fn read_sessions(side: &Side, ids: &[String]) -> Result<Vec<Session>, Stri
 
 /// `id`'s conversation in the agent home `home`: in `folder`, else in any
 /// slug folder (by handle; a linked folder is another scope's, not this one's).
-fn read_here(home: &Path, folder: &str, id: &str) -> Result<Option<Session>, String> {
+fn read_here(home: &Path, folder: &str, id: &str, budget: &mut Budget) -> Result<Option<Session>, String> {
     let Some(projects) = HomeDir::open_existing(home, PROJECTS) else {
         return Ok(None);
     };
@@ -249,9 +280,11 @@ fn read_here(home: &Path, folder: &str, id: &str) -> Result<Option<Session>, Str
     for dir in folders.iter().take(MAX_SEARCHED_DIRS).filter_map(|f| projects.open_subdir(f)) {
         let Some(file) = dir.file(&name).filter(|f| f.is_file()) else { continue };
         if file.metadata().is_some_and(|m| m.len > MAX_BYTES) {
-            return Err("the conversation is too large to take along".into());
+            return Err(too_large());
         }
-        let transcript = file.read().ok_or("reading the conversation")?;
+        // Capped on the read itself: the agent that owns this home can grow the file after the stat.
+        let transcript = file.read_capped(budget.limit()).ok_or_else(too_large)?;
+        budget.spend(transcript.len());
         let modified = std::fs::symlink_metadata(file.path())
             .and_then(|m| m.modified())
             .ok()
@@ -259,7 +292,7 @@ fn read_here(home: &Path, folder: &str, id: &str) -> Result<Option<Session>, Str
             .map_or(0, |d| d.as_secs());
         let mut files = Vec::new();
         if let Some(own) = dir.open_subdir(id) {
-            collect_here(&own, &mut Vec::new(), &mut files)?;
+            collect_here(&own, &mut Vec::new(), &mut files, budget)?;
         }
         return Ok(Some(Session { id: id.to_string(), transcript, files, modified }));
     }
@@ -267,20 +300,26 @@ fn read_here(home: &Path, folder: &str, id: &str) -> Result<Option<Session>, Str
 }
 
 /// The files below `dir` (a session's own folder), links and the rest skipped.
-fn collect_here(dir: &HomeDir, at: &mut Vec<String>, out: &mut Vec<(Vec<String>, Vec<u8>)>) -> Result<(), String> {
+fn collect_here(dir: &HomeDir, at: &mut Vec<String>, out: &mut Vec<(Vec<String>, Vec<u8>)>, budget: &mut Budget) -> Result<(), String> {
     for name in dir.names() {
         let Some(entry) = dir.file(&name) else { continue };
         let Some(meta) = entry.metadata() else { continue };
         at.push(name.clone());
         if meta.is_dir && at.len() < MAX_DEPTH {
             if let Some(sub) = dir.open_subdir(&name) {
-                collect_here(&sub, at, out)?;
+                collect_here(&sub, at, out, budget)?;
             }
         } else if meta.is_file && meta.len <= MAX_BYTES {
             if out.len() >= MAX_SIDE_FILES {
                 return Err("the conversation's folder has too many files to take along".into());
             }
-            if let Some(bytes) = entry.read() {
+            if meta.len > budget.limit() {
+                return Err(too_large());
+            }
+            // Capped on the read as well: the file can have grown since the stat. An
+            // unreadable one is left behind, as before.
+            if let Some(bytes) = entry.read_capped(budget.limit()) {
+                budget.spend(bytes.len());
                 out.push((at.clone(), bytes));
             }
         }
@@ -290,8 +329,8 @@ fn collect_here(dir: &HomeDir, at: &mut Vec<String>, out: &mut Vec<(Vec<String>,
 }
 
 /// `id`'s conversation on the host: in `folder`, else in any slug folder.
-async fn read_host(sftp: &Sftp, folder: &str, id: &str) -> Result<Option<Session>, String> {
-    use crate::services::sftp::{list_dir_raw_on, metadata_opt_on, read_file_on};
+async fn read_host(sftp: &Sftp, folder: &str, id: &str, budget: &mut Budget) -> Result<Option<Session>, String> {
+    use crate::services::sftp::{list_dir_raw_on, metadata_opt_on, read_file_up_to};
     let name = format!("{id}.jsonl");
     let mut found = None;
     let own = format!("{PROJECTS}/{folder}/{name}");
@@ -309,17 +348,19 @@ async fn read_host(sftp: &Sftp, folder: &str, id: &str) -> Result<Option<Session
         return Ok(None);
     };
     if size > MAX_BYTES {
-        return Err("the conversation is too large to take along".into());
+        return Err(too_large());
     }
-    let transcript = read_file_on(sftp, &format!("{PROJECTS}/{dir}/{name}")).await?;
+    // The size above is the host's word; the read is what holds it to the limit.
+    let transcript = read_file_up_to(sftp, &format!("{PROJECTS}/{dir}/{name}"), budget.limit()).await?.ok_or_else(too_large)?;
+    budget.spend(transcript.len());
     let mut files = Vec::new();
-    collect_host(sftp, &format!("{PROJECTS}/{dir}/{id}"), &mut Vec::new(), &mut files).await?;
+    collect_host(sftp, &format!("{PROJECTS}/{dir}/{id}"), &mut Vec::new(), &mut files, budget).await?;
     Ok(Some(Session { id: id.to_string(), transcript, files, modified: modified.unwrap_or(0) }))
 }
 
 /// The files below the host folder `path` (a session's own folder). A missing
 /// folder has none; links and the rest are skipped.
-async fn collect_host(sftp: &Sftp, path: &str, at: &mut Vec<String>, out: &mut Vec<(Vec<String>, Vec<u8>)>) -> Result<(), String> {
+async fn collect_host(sftp: &Sftp, path: &str, at: &mut Vec<String>, out: &mut Vec<(Vec<String>, Vec<u8>)>, budget: &mut Budget) -> Result<(), String> {
     let Ok(entries) = crate::services::sftp::list_dir_raw_on(sftp, path).await else {
         return Ok(());
     };
@@ -327,12 +368,14 @@ async fn collect_host(sftp: &Sftp, path: &str, at: &mut Vec<String>, out: &mut V
         let child = format!("{path}/{}", entry.name);
         at.push(entry.name.clone());
         match entry.kind {
-            SyncKind::Dir if at.len() < MAX_DEPTH => Box::pin(collect_host(sftp, &child, at, out)).await?,
+            SyncKind::Dir if at.len() < MAX_DEPTH => Box::pin(collect_host(sftp, &child, at, out, budget)).await?,
             SyncKind::File if entry.size <= MAX_BYTES => {
                 if out.len() >= MAX_SIDE_FILES {
                     return Err("the conversation's folder has too many files to take along".into());
                 }
-                out.push((at.clone(), crate::services::sftp::read_file_on(sftp, &child).await?));
+                let bytes = crate::services::sftp::read_file_up_to(sftp, &child, budget.limit()).await?.ok_or_else(too_large)?;
+                budget.spend(bytes.len());
+                out.push((at.clone(), bytes));
             }
             _ => {}
         }
@@ -377,12 +420,14 @@ fn write_here(home: &Path, folder: &str, id: &str, transcript: &[u8], files: &[(
 }
 
 async fn write_host(sftp: &Sftp, folder: &str, session: &Session) -> Result<(), String> {
-    use crate::services::sftp::{metadata_opt_on, read_file_on, rename_on, write_file_on};
+    use crate::services::sftp::{metadata_opt_on, read_file_up_to, rename_on, write_file_on};
     let base = format!("{PROJECTS}/{folder}");
     let path = format!("{base}/{}.jsonl", session.id);
     if metadata_opt_on(sftp, &path).await?.is_some() {
-        let held = read_file_on(sftp, &path).await?;
-        if !session.transcript.starts_with(&held) {
+        // Only a prefix of the transcript brought over is left in place: a longer file there
+        // cannot be one, so it is not read past that length.
+        let held = read_file_up_to(sftp, &path, session.transcript.len() as u64).await?;
+        if !held.is_some_and(|held| session.transcript.starts_with(&held)) {
             rename_on(sftp, &path, &free_name(sftp, &format!("{path}{ASIDE}")).await?).await?;
         }
     }
@@ -461,10 +506,31 @@ mod tests {
         let h = home();
         put(h.path(), &["-elsewhere", &format!("{ID}.jsonl")], b"a\n");
         put(h.path(), &["-elsewhere", ID, "subagents", "agent-1.jsonl"], b"s\n");
-        let session = read_here(h.path(), "-mirror", ID).unwrap().unwrap();
+        let session = read_here(h.path(), "-mirror", ID, &mut Budget::new()).unwrap().unwrap();
         assert_eq!(session.transcript, b"a\n");
         assert_eq!(session.files, vec![(vec!["subagents".to_string(), "agent-1.jsonl".to_string()], b"s\n".to_vec())]);
-        assert!(read_here(h.path(), "-mirror", "66666666-7777-8888-9999-000000000000").unwrap().is_none());
+        assert!(read_here(h.path(), "-mirror", "66666666-7777-8888-9999-000000000000", &mut Budget::new()).unwrap().is_none());
+    }
+
+    /// The whole move shares one byte budget: files that each fit `MAX_BYTES` stop
+    /// the move once together they pass it, and what was read is counted.
+    #[test]
+    fn a_move_stops_once_its_files_pass_the_total_budget() {
+        let h = home();
+        put(h.path(), &["-mirror", &format!("{ID}.jsonl")], b"12345");
+        put(h.path(), &["-mirror", ID, "tool-results", "a.txt"], b"123456");
+        put(h.path(), &["-mirror", ID, "tool-results", "b.txt"], b"123456");
+        let mut roomy = Budget(5 + 6 + 6);
+        assert!(read_here(h.path(), "-mirror", ID, &mut roomy).unwrap().is_some());
+        assert_eq!(roomy.0, 0, "every byte read is spent");
+        assert_eq!(read_here(h.path(), "-mirror", ID, &mut Budget(5 + 6 + 5)).err(), Some(too_large()));
+        assert_eq!(read_here(h.path(), "-mirror", ID, &mut Budget(4)).err(), Some(too_large()));
+        // One budget for several conversations: the second sees only what the first left.
+        let mut shared = Budget(5 + 12 + 5);
+        assert!(read_here(h.path(), "-mirror", ID, &mut shared).unwrap().is_some());
+        assert_eq!(read_here(h.path(), "-mirror", ID, &mut shared).err(), Some(too_large()));
+        assert!(Budget::new().limit() <= MAX_BYTES);
+        assert_eq!(Budget(7).limit(), 7);
     }
 
     #[test]
@@ -472,7 +538,7 @@ mod tests {
         let h = home();
         put(h.path(), &["-a", &format!("{ID}.jsonl")], b"other\n");
         put(h.path(), &["-mirror", &format!("{ID}.jsonl")], b"own\n");
-        assert_eq!(read_here(h.path(), "-mirror", ID).unwrap().unwrap().transcript, b"own\n");
+        assert_eq!(read_here(h.path(), "-mirror", ID, &mut Budget::new()).unwrap().unwrap().transcript, b"own\n");
     }
 
     #[test]
@@ -498,7 +564,7 @@ mod tests {
         std::fs::write(outside.path().join("secret"), b"x").unwrap();
         put(h.path(), &["-mirror", &format!("{ID}.jsonl")], b"a\n");
         std::os::unix::fs::symlink(outside.path(), h.path().join(".claude").join("projects").join("-mirror").join(ID)).unwrap();
-        let session = read_here(h.path(), "-mirror", ID).unwrap().unwrap();
+        let session = read_here(h.path(), "-mirror", ID, &mut Budget::new()).unwrap().unwrap();
         assert!(session.files.is_empty());
     }
 }

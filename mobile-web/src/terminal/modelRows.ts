@@ -21,11 +21,15 @@ function plainLabel(label: string): string {
   return label.replace(/\s*[✔✓]\s*$/u, "").trim();
 }
 
-/** What to remember off a live model step, current-model marks dropped. */
+/** What to remember off a live model step, current-model marks dropped. Only
+ * the rows above an expander (Claude Code's `More models`, 2.1.321): the
+ * picker opens folded, so a remembered row under it would be a tap the live
+ * list cannot answer, and the expander itself has no number to store. */
 export function modelRowsOf(step: SelectStep): ModelRows {
+  const fold = step.options.findIndex((option) => option.expander);
   return {
     ...(step.title ? { title: step.title } : {}),
-    rows: step.options.map((option) => ({
+    rows: (fold < 0 ? step.options : step.options.slice(0, fold)).map((option) => ({
       label: plainLabel(option.label),
       ...(option.description ? { description: option.description } : {}),
       number: option.number,

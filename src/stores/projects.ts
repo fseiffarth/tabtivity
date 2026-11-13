@@ -41,6 +41,7 @@ import {
 import { restorableSavedTabs, savedLayoutTreeOf } from "./tabs/savedLayout";
 import type { LocalLaunch } from "./tabs/types";
 import { useRunHostPrefStore } from "./remote/runHostPref";
+import type { AgentPrivacyChange } from "../lib/projects/localModelsOnly";
 import { useTimerStore } from "./timer";
 import { useSettingsStore, whenSettingsLoaded } from "./settings";
 import { mayAutoTouch, targetOfSpec } from "../lib/remote/hpc/hpcHost";
@@ -1147,6 +1148,11 @@ interface ProjectsStore {
    *  `agent_remote_control` setting. */
   setProjectRemoteControl: (id: string, remoteControl: boolean | null) => Promise<void>;
   setProjectScheduleMcp: (id: string, level: "off" | "propose" | "apply") => Promise<void>;
+  /** Local models only / Cut network (`services::agent_privacy`). The backend
+   *  refuses (rejects with a message naming the project) when the project
+   *  cannot be covered, and ends the running agent tabs that are not a verified
+   *  local launch; those tabs are closed here too. */
+  setProjectAgentPrivacy: (id: string, localModelsOnly: boolean, cutNetwork: boolean) => Promise<AgentPrivacyChange>;
   /** The agent-push policy (`services::git_push_mcp`): level and protected
    *  branches; an omitted argument leaves that field alone. */
   setProjectGitPushMcp: (id: string, level?: GitPushMcpLevel, protectedBranches?: string[]) => Promise<void>;
@@ -1974,6 +1980,40 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   setProjectScheduleMcp: async (id, level) => {
     await invoke("set_project_schedule_mcp", { projectId: id, level });
     patchProject(id, (project) => ({ ...project, schedule_mcp: level }));
+  },
+
+  setProjectAgentPrivacy: async (id, localModelsOnly, cutNetwork) => {
+    const change = await invoke<AgentPrivacyChange>("set_project_agent_privacy", {
+      projectId: id,
+      localModelsOnly,
+      cutNetwork,
+    });
+    patchProject(id, (project) => {
+      const next = { ...project };
+      delete next.agent_privacy;
+      if (change.local_models_only || change.cut_network) {
+        next.agent_privacy = { local_models_only: change.local_models_only, cut_network: change.cut_network };
+      }
+      return next;
+    });
+    // The agents the backend ended lose their tabs too, not left dead: exactly the
+    // ones it names (PTY ids `<scope>:<tab key>`, in the project's own scope and in
+    // any other whose fence showed the folder: a parent project's, a box's, the root
+    // console's). Not every agent tab of the project: a verified local tab the
+    // backend kept alive (the switch turned off and on again with one open) would
+    // vanish while its process kept running.
+    if (change.local_models_only) {
+      const tabs = useTabsStore.getState();
+      const ended = new Set(change.closed_tabs);
+      for (const [scope, list] of Object.entries(tabs.tabsByScope)) {
+        for (const tab of list) {
+          if (ended.has(`${scope}:${tab.key}`)) {
+            tabs.removeTabInScope(scope, tab.key);
+          }
+        }
+      }
+    }
+    return change;
   },
 
   setProjectGitPushMcp: async (id, level, protectedBranches) => {

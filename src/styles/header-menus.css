@@ -161,34 +161,9 @@
 .activity-today  { stroke: var(--accent); stroke-width: 1.5; }
 
 /* ── Activity year selector ──────────────────────────────────────────── */
+/* The year picker is the shared `.seg` (settings-chrome.css). */
 .activity-years {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
   margin-bottom: 8px;
-}
-
-.activity-year-btn {
-  padding: 2px var(--space-2);
-  border: 1px solid var(--control-border);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  cursor: var(--cur-pointer, pointer);
-  border-radius: var(--radius-sm);
-  transition: background var(--transition), border-color var(--transition), color var(--transition);
-}
-
-.activity-year-btn:hover {
-  background: var(--control-hover-bg);
-  border-color: var(--text-muted);
-  color: var(--text-primary);
-}
-
-.activity-year-btn.selected {
-  background: var(--pill-active-bg);
-  border-color: var(--pill-active-border);
-  color: var(--text-primary);
 }
 
 .activity-legend {
@@ -495,22 +470,12 @@
 }
 
 /* ── The 🧠 menu's section headers (Agents · Local models · Machine) ──────────
-   The shared `.tab-new-menu-group-label` is a small accent word, which is the
-   right weight for a menu of one-line entries. This menu is not that: its rows
-   are two and three lines tall (a model carries a badge strip, a chip row and a
-   progress bar), so four accent words scattered down it read as more of the same
-   text rather than as the boundaries between three different things.
-
-   So the header is given a *band*: a tinted, rounded strip with a solid accent
-   bar down its left edge — a shape none of the rows have, so the eye finds the
-   boundaries without reading them. Inset rather than bled to the menu's edge,
-   since the menu's own 4px padding, rounded corners and accent top rail are what
-   a full-bleed band would have to fight. Scoped to this menu deliberately: the
-   pinned titles of the VPN and mail menus lay their own flex out (a close button
-   pushed to the far edge), and a shared change here would break them. Flat
-   backgrounds only, never a blurred shadow (the WebKit software-rendering rule).
-   The 4px top margin is what separates a header from the section above it; the
-   first one drops it, having nothing to be separated from. */
+   Its rows are two and three lines tall, so the sections need a boundary the eye
+   finds without reading. It is a hairline and a quiet neutral label, the way the
+   other header menus divide their groups: the accent is spent once, on the
+   pinned title, and not on a band per section (the accent budget,
+   `docs/context/desktop_ui_system.md`). The first header of a list, and the one
+   straight under the note (which draws its own hairline), drop the line. */
 /* The tallest menu in the app — four sections of two- and three-line rows — so
    it is bounded and its body scrolls (the pinned first title + `.menu-scroll-
    region`, the unified scrolling-menu shape). Without a cap a machine with
@@ -525,50 +490,50 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 6px 0 3px;
-  padding: 5px var(--space-2) 5px 9px;
-  font-size: var(--text-sm);
-  letter-spacing: 0.1em;
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
-  border-left: 2px solid var(--accent);
-  border-radius: calc(var(--radius) / 2);
-  color: color-mix(in srgb, var(--accent) 85%, var(--text-primary));
+  margin: var(--space-2) 0 2px;
+  padding: var(--space-3) 10px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
 }
-:is(.local-model-menu, .models-overlay-models) > .tab-new-menu-group-label:first-child {
+:is(.local-model-menu, .models-overlay-models) > .tab-new-menu-group-label:first-child,
+:is(.local-model-menu, .models-overlay-models) .vpn-indicator-note + .tab-new-menu-group-label {
   margin-top: 0;
+  border-top: none;
 }
-/* The pinned line is the menu's TITLE, not one of its sections — it stays put
-   while the bands scroll underneath — so it drops the band that marks a section
-   boundary: two identical strips, one pinned and one sliding under it, read as a
-   repeat rather than as a title over its contents. What is left is the plain
+/* The pinned line is the menu's TITLE, not one of its sections: the plain
    accent word every other header menu pins, plus a hairline that separates it
    from the note below (the global-machines menu's shape). */
 .local-model-menu > .tab-new-menu-group-label.local-model-menu-title {
   margin: 0;
   padding: var(--space-1) 10px 3px;
-  background: none;
-  border-left: none;
-  border-radius: 0;
+  border-top: none;
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--text-sm);
   letter-spacing: 0.08em;
   color: var(--accent);
 }
 /* A subheader inside a section, not a section of its own: the on-disk models
-   are part of Local Models, so this label drops the accent band and rail that
-   mark a top-level header and reads as a quiet divider indented under it.
+   are part of Local Models, so this label drops the section line and reads as
+   a quieter divider indented under it.
    Same element and same class list otherwise, so the flex/gap layout (label +
    any tag) still applies. */
 :is(.local-model-menu, .models-overlay-models) .tab-new-menu-group-label.is-sub {
   margin: 8px 0 2px;
   padding: 2px var(--space-2) 2px 0;
   margin-left: 11px;
-  background: none;
-  border-left: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-  border-radius: 0;
+  border-top: none;
+  border-bottom: 1px solid var(--border-subtle);
   letter-spacing: 0.08em;
-  color: var(--text-secondary);
+  color: var(--text-muted);
+}
+/* The verbs that lead a section (Manage CLIs, Skills library, Manage local
+   models) are menu rows like every other header menu's: no fill at rest, the
+   hover fill on pointer. The agent rows below share their text column. */
+.local-model-menu .menu-scroll-region > .tab-new-menu-item {
+  background: transparent;
+}
+.local-model-menu .menu-scroll-region > .tab-new-menu-item:hover:not(:disabled) {
+  background-color: var(--control-hover-bg);
 }
 .local-model-status-dot {
   position: absolute;
@@ -883,8 +848,8 @@
   color: var(--text-primary);
 }
 .local-model-role-chip.on {
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--control-border));
   color: var(--accent);
   font-weight: 600;
 }
@@ -976,7 +941,7 @@
   padding: 6px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--control-bg);
+  background: transparent;
   transition: background-color var(--transition);
 }
 .local-model-check-row:hover {
@@ -1171,8 +1136,38 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 26px;
+  min-height: 34px;
   padding: var(--space-1) 10px;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--transition);
+}
+.local-model-agent-row:hover {
+  background-color: var(--control-hover-bg);
+}
+/* The CLI's stored release check beside its name (`agent_latest`, asked
+   daily): muted when current or unchecked, the success colour when a newer
+   release is out — then a button into Manage CLIs, where the update runs. */
+.local-model-agent-update {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+.local-model-agent-update.is-new {
+  color: var(--success);
+  font-weight: 600;
+  cursor: var(--cur-pointer, pointer);
+}
+.local-model-agent-update.is-new:hover {
+  text-decoration: underline;
+}
+.local-model-agent-checked {
+  padding: var(--space-1) 10px var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 /* In-flight downloads shown at the top of the brain menu. */
@@ -1442,6 +1437,11 @@
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+  /* The window is user-select: none (base.css); installer output is the one
+     thing the user needs to copy into a bug report, so it selects. */
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: var(--cur-text, text);
 }
 
 /* `.ollama-action-btn` is the settings button in its compact size — look,
@@ -1766,7 +1766,6 @@
   z-index: 500;
   padding: 10px 20px;
   border: 0;
-  border-top: 2px solid transparent;
   border-radius: var(--radius);
   box-shadow: var(--shadow-2);
   font-size: var(--text-md);
@@ -2057,7 +2056,8 @@ html[data-header-drag] * {
   .header-center { gap: 3px; }
   .header-right { gap: 3px; padding-inline: 6px; }
   .project-switcher { gap: 2px; padding-right: 3px; }
-  .project-search-wrap { width: 128px; }
+  .project-search-wrap { width: 88px; }
+  .project-search-wrap:focus-within { width: 200px; }
   .header-right-gap { width: 2px; }
 }
 
@@ -2065,7 +2065,8 @@ html[data-header-drag] * {
   .header-right { gap: 2px; padding-inline: var(--space-1); }
   .header-right-gap { width: 1px; }
   .project-switcher-separator { margin-inline: 1px; }
-  .project-search-wrap { width: 108px; }
+  .project-search-wrap { width: 76px; }
+  .project-search-wrap:focus-within { width: 180px; }
 }
 .vpn-indicator-btn:hover .vpn-indicator-label,
 .vpn-indicator-btn[aria-expanded="true"] .vpn-indicator-label,
@@ -2983,6 +2984,12 @@ html[data-header-drag] * {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* A box row's colour mark (`BoxSwatch`) before its name. */
+.command-palette-box-swatch {
+  width: 12px;
+  height: 11px;
 }
 
 .command-palette-detail {

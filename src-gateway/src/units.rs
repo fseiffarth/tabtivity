@@ -16,11 +16,30 @@
 //!   `NoNewPrivileges=` on the daemon or tmux units: the agent fence
 //!   (bubblewrap) needs user namespaces and the user's home (§8).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::brand::{self, DISPLAY, SLUG};
 use crate::names;
 use crate::wire;
+
+/// A path as the unit files spell it: always `/`. The names are Linux paths
+/// built with `join`, which separates with `\` on a Windows build of this
+/// crate, and a unit file is systemd's, never the build host's.
+trait UnixDisplay {
+    fn unix(&self) -> String;
+}
+
+impl UnixDisplay for Path {
+    fn unix(&self) -> String {
+        self.to_string_lossy().replace('\\', "/")
+    }
+}
+
+impl UnixDisplay for PathBuf {
+    fn unix(&self) -> String {
+        self.as_path().unix()
+    }
+}
 
 /// What `install` writes: `(path, contents, mode)`.
 pub type Rendered = Vec<(PathBuf, String, u32)>;
@@ -82,9 +101,9 @@ pub fn server_env(d: &Deployment) -> String {
         out.push_str(&format!("{}={content}\n", env(wire::env::CONTENT_ORIGIN)));
     }
     out.push_str(&format!("{}={}\n", env(wire::env::GATEWAY_UID), d.gateway_uid));
-    out.push_str(&format!("{}={}\n", env(wire::env::POLICY_FILE), names::gateway_state_dir().join(crate::policy::POLICY_FILE).display()));
-    out.push_str(&format!("{}={}\n", env(wire::env::CLI_ROOT), names::cli_root().display()));
-    out.push_str(&format!("{}={}\n", env("WEB_DIST"), names::share_dir().join("web-dist").display()));
+    out.push_str(&format!("{}={}\n", env(wire::env::POLICY_FILE), names::gateway_state_dir().join(crate::policy::POLICY_FILE).unix()));
+    out.push_str(&format!("{}={}\n", env(wire::env::CLI_ROOT), names::cli_root().unix()));
+    out.push_str(&format!("{}={}\n", env("WEB_DIST"), names::share_dir().join("web-dist").unix()));
     out
 }
 
@@ -126,10 +145,10 @@ CapabilityBoundingSet=\n\
 [Install]\n\
 WantedBy=multi-user.target\n",
         gw = names::gateway_account(),
-        env = names::server_env_file().display(),
+        env = names::server_env_file().unix(),
         pwa = env(crate::config::PWA_DIR_ENV),
-        share = names::share_dir().display(),
-        bin = names::gateway_binary().display(),
+        share = names::share_dir().unix(),
+        bin = names::gateway_binary().unix(),
         state = names::gateway_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
     )
 }
@@ -162,7 +181,7 @@ Accept=no\n\
 \n\
 [Install]\n\
 WantedBy=sockets.target\n",
-        dir = names::socket_dir().display(),
+        dir = names::socket_dir().unix(),
         gw = names::gateway_account(),
     )
 }
@@ -192,14 +211,14 @@ PrivateTmp=yes\n\
 # No ProtectSystem=/ProtectHome=/RestrictNamespaces=/NoNewPrivileges=: the\n\
 # agent fence (bubblewrap) needs user namespaces and the user's home.\n",
         prefix = brand::SERVER_ACCOUNT_PREFIX,
-        envfile = names::server_env_file().display(),
+        envfile = names::server_env_file().unix(),
         mode = env(wire::env::MODE),
         user = env(wire::env::USER),
         sock = env(wire::env::SOCKET),
-        dir = names::socket_dir().display(),
+        dir = names::socket_dir().unix(),
         tmuxsock = env(wire::env::TMUX_SOCKET),
-        tmuxdir = names::tmux_dir("x").parent().map(|p| p.display().to_string()).unwrap_or_default(),
-        bin = names::serverd_binary().display(),
+        tmuxdir = names::tmux_dir("x").parent().map(|p| p.unix().to_string()).unwrap_or_default(),
+        bin = names::serverd_binary().unix(),
     )
 }
 
@@ -223,7 +242,7 @@ Accept=no\n\
 \n\
 [Install]\n\
 WantedBy=sockets.target\n",
-        path = names::keeper_socket().display(),
+        path = names::keeper_socket().unix(),
     )
 }
 
@@ -266,7 +285,7 @@ SystemCallArchitectures=native\n\
 CapabilityBoundingSet=\n",
         socket = names::keeper_unit("socket"),
         auth = names::auth_account(),
-        bin = names::gateway_binary().display(),
+        bin = names::gateway_binary().unix(),
         state = names::keeper_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
     )
 }
@@ -335,9 +354,9 @@ SystemCallArchitectures=native\n\
 CapabilityBoundingSet=\n",
         socket = names::broker_unit("socket"),
         auth = names::auth_account(),
-        bin = names::gateway_binary().display(),
+        bin = names::gateway_binary().unix(),
         broker_state = names::broker_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
-        keys = names::keeper_state_dir().display(),
+        keys = names::keeper_state_dir().unix(),
     )
 }
 
@@ -360,7 +379,7 @@ Accept=no\n\
 \n\
 [Install]\n\
 WantedBy=sockets.target\n",
-        path = names::hub_socket().display(),
+        path = names::hub_socket().unix(),
     )
 }
 
@@ -402,9 +421,9 @@ SystemCallArchitectures=native\n\
 CapabilityBoundingSet=\n",
         socket = names::hub_unit("socket"),
         hub = names::hub_account(),
-        bin = names::gateway_binary().display(),
+        bin = names::gateway_binary().unix(),
         state = names::hub_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
-        shared = names::shared_root().display(),
+        shared = names::shared_root().unix(),
     )
 }
 
@@ -425,7 +444,7 @@ Accept=no\n\
 \n\
 [Install]\n\
 WantedBy=sockets.target\n",
-        path = names::calendar_socket().display(),
+        path = names::calendar_socket().unix(),
     )
 }
 
@@ -466,7 +485,7 @@ SystemCallArchitectures=native\n\
 CapabilityBoundingSet=\n",
         socket = names::calendar_unit("socket"),
         cal = names::calendar_account(),
-        bin = names::gateway_binary().display(),
+        bin = names::gateway_binary().unix(),
         state = names::calendar_state_dir().file_name().and_then(|n| n.to_str()).unwrap_or_default(),
     )
 }
@@ -482,7 +501,7 @@ pub fn proc_fstab_line(gid: u32) -> String {
 }
 
 pub fn tmux_service() -> String {
-    let tmuxdir = names::tmux_dir("x").parent().map(|p| p.display().to_string()).unwrap_or_default();
+    let tmuxdir = names::tmux_dir("x").parent().map(|p| p.unix().to_string()).unwrap_or_default();
     let runtime = tmuxdir.trim_start_matches("/run/").to_string();
     format!(
         "[Unit]\n\
@@ -509,7 +528,7 @@ KillMode=control-group\n",
 pub fn tmpfiles() -> String {
     format!(
         "# {DISPLAY} server runtime directories.\nd /run/{SLUG} 0755 root root -\nd {users} 0750 root {gw} -\nd /run/{SLUG}/tmux 0755 root root -\n",
-        users = names::socket_dir().display(),
+        users = names::socket_dir().unix(),
         gw = names::gateway_account(),
     )
 }
@@ -574,7 +593,7 @@ mod tests {
         assert!(env_file.contains("SERVER_GATEWAY_UID=990\n"));
         assert!(env_file.contains(&format!("SERVER_CLI_ROOT=/opt/{SLUG}/agents")));
         assert!(tmpfiles().contains(&format!("d /run/{SLUG}/users 0750 root {SLUG}-gw")));
-        assert!(all.iter().all(|(p, _, mode)| p.is_absolute() && *mode == 0o644));
+        assert!(all.iter().all(|(p, _, mode)| p.has_root() && *mode == 0o644));
     }
 
     #[test]

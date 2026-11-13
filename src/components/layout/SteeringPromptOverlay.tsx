@@ -1,8 +1,10 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { wrapStep } from "../../lib/wrapStep";
 import { DialogShell } from "../common/PromptDialogs";
 import { ErrorNote } from "../common/ErrorNote";
 import { UntestedTag } from "../common/UntestedTag";
-import { useT } from "../../lib/i18n";
+import { ReaderSlashMenu, slashMenuKey } from "../terminal/ReaderSlashMenu";
+import { useT, type TranslationKey } from "../../lib/i18n";
 import {
   STEERING_PROMPT_EVENT,
   clearAgentTab,
@@ -13,9 +15,22 @@ import {
   type SteeringPromptDetail,
 } from "../../lib/shortcuts/steeringAgent";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
+import { pasteIntoAgentBox, spliceSpaced } from "../../lib/terminal/terminalDrop";
+import { onParsedSettled } from "../../lib/terminal/parsedSettled";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
+import { readReaderLive } from "../../lib/agents/readerLive";
+import { isNewConversationCommand } from "../../lib/agents/typedClear";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
+import { agentFamily } from "../../../shared/agentComposer";
+import {
+  completedSlashCommand,
+  forgetSlashCommand,
+  readSlashCommands,
+  rememberSlashCommand,
+  slashSuggestions,
+  type SlashSuggestion,
+} from "../../../mobile-web/src/slashCommands";
 import { CLAUDE_EFFORTS, modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { selectMoveKeys } from "../../../mobile-web/src/terminal/selectPrompt";
@@ -26,6 +41,10 @@ import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { chordLabel } from "../../lib/shortcuts/shortcuts";
+import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
+
+const COMMIT_LABELS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit.own", state: "mobile.commit.state", split: "mobile.commit.split" };
+const COMMIT_HINTS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit.ownHint", state: "mobile.commit.stateHint", split: "mobile.commit.splitHint" };
 
 type Open = Omit<SteeringPromptDetail, "handled">;
 
@@ -33,20 +52,32 @@ type Open = Omit<SteeringPromptDetail, "handled">;
 const drafts = new Map<string, string>();
 
 /**
- * Steering's prompt box (the Prompt key, I by default): a text box in the
+ * Steering's prompt box (the Prompt key, Space by default): a text box in the
  * middle of the window for the active agent tab, so a prompt goes in without
  * leaving the keyboard mode for the terminal. Enter submits it
  * (`sendSteeringPrompt`), Shift+Enter breaks the line; Enter or Escape hands
  * the keyboard back to steering on the level the key was pressed on, as the
  * project jump does. A send that fails keeps the box and the text, with why.
  * Text left unsent (Escape, Cancel) waits in the box for that tab's next open.
- * Plan / Goal open it led with `/plan ` / `/goal ` (`ledDraft`).
+ * Plan / Goal chips lead it with `/plan ` / `/goal ` (`ledDraft`).
+ *
+ * A paste of files (copied in the file manager) or of an image (a screenshot,
+ * no text on the clipboard) goes in as a drop onto the tab would
+ * (`lib/terminal/terminalDrop`): copied into the tab folder's inbox and typed
+ * at the caret as `@<reference>`, which the fenced agent can read.
+ *
+ * The Chat view composer's suggestions, read the same way: text starting
+ * with `/` opens its `/` menu under the box (`ReaderSlashMenu`: ↑/↓, Tab or
+ * Enter on a picked row fills it, Esc closes it), and the empty box shows
+ * Claude Code's own suggestion for the next prompt, read off the pane's
+ * screen, as its placeholder — Tab or → takes it in.
  *
  * Under the text, the phone composer's chips on Alt+keys (the letters type
  * text here): Alt+M lists the session's own `/model` picker, Alt+E the
  * effort (Claude's `/effort` levels; elsewhere the `/model` picker, whose
- * next step it is), Alt+K clears the conversation (pressed twice: it asks
- * first, as K does), Alt+L / Alt+G lead the text with `/plan` / `/goal` or
+ * next step it is), Alt+C clears the conversation (pressed twice: it asks
+ * first), Alt+T lists the Commit chip's three commit prompts (the composer's:
+ * each goes to the agent as a prompt of its own, the draft kept), Alt+P / Alt+G lead the text with `/plan` / `/goal` or
  * take that lead off again. A list takes ↑/↓, Enter and the digits; Escape
  * closes the list before the box.
  *
@@ -69,18 +100,14 @@ export function SteeringPromptOverlay() {
   if (!open) return null;
   const close = () => {
     setOpen(null);
-    const steering = useKeyboardSteeringStore.getState();
-    steering.enter();
-    if (open.level !== "tabs") steering.setLevel(open.level);
+    useKeyboardSteeringStore.getState().enter(open.level);
   };
   // Keyed by the tab, so a box reopened for another tab takes that tab's draft.
   const id = `${open.scope}:${open.tab.key}`;
   return <PromptBox key={id} draftKey={id} target={open} onClose={close} />;
 }
 
-/** The chips' Alt+keys, beside the steering keys that do the same on the
- *  tab level (K, L, G). */
-const CHIP_KEYS = { model: "m", effort: "e", clear: "k", plan: "l", goal: "g" } as const;
+const CHIP_KEYS = { model: "m", effort: "e", clear: "c", plan: "p", goal: "g", commit: "t" } as const;
 type Chip = keyof typeof CHIP_KEYS;
 
 /** A chip's key as its `<kbd>` names it: `chordLabel`'s Alt — "Alt+M", or
@@ -90,7 +117,12 @@ export function chipKeyLabel(chip: Chip): string {
 }
 
 function chipFor(e: ReactKeyboardEvent): Chip | null {
-  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return null;
+  if (e.metaKey || e.shiftKey) return null;
+  // AltGr counts as Alt here (the user's choice): Linux reports it as neither
+  // Alt nor Ctrl, Windows as Ctrl+Alt, and its letter as another character
+  // (AltGr+E is € on a German layout) — so it matches by `code` below. The
+  // cost: AltGr's € µ ¢ þ ŋ are not typed in this one box.
+  if (!e.getModifierState("AltGraph") && (!e.altKey || e.ctrlKey)) return null;
   for (const chip of Object.keys(CHIP_KEYS) as Chip[]) {
     const key = CHIP_KEYS[chip];
     // `code` too: Option+letter types another character on macOS.
@@ -105,6 +137,17 @@ function digitOf(e: ReactKeyboardEvent): number | null {
   return /^[1-9]$/.test(e.key) ? Number(e.key) : null;
 }
 
+/** How long the pane's output rests before its prompt suggestion is read
+ *  again: one read per redraw, not per chunk of it. */
+const SUGGESTION_SETTLE_MS = 120;
+
+/** Claude Code's prompt suggestion on pane `ptyId`'s screen, or "" (another
+ *  CLI, a turn running, a dialog up, no screen in this window). */
+function promptSuggestionOf(ptyId: string, agent: string): string {
+  const term = terminalFor(ptyId);
+  return term ? readReaderLive(term.buffer.active, agent).suggestion : "";
+}
+
 function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Open; onClose: () => void }) {
   const t = useT();
   const modelsByTab = useAgentModelsStore((state) => state.byTab);
@@ -115,7 +158,23 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   const agent = agentTabLabel(target.tab);
   const offer = steeringAgentOffer(target.tab);
   const claude = isClaudeCommand(target.tab.cmd);
+  const cli = agentFamily(agent);
   const [value, setValue] = useState(() => ledDraft(drafts.get(draftKey) ?? "", target.lead));
+  /** The `/` menu (the Chat view's `ReaderSlashMenu`): the commands sent to
+   * this CLI before, the row ↑/↓ moved to and whether Esc closed it for the
+   * text as it stands. */
+  const [usedSlash, setUsedSlash] = useState(() => readSlashCommands(cli));
+  const [slashAt, setSlashAt] = useState<number | null>(null);
+  const [slashClosed, setSlashClosed] = useState(false);
+  /** Claude Code's suggestion for the next prompt, dimmed in its empty input
+   * box: read off the pane's screen now and again as it draws. */
+  const [suggestion, setSuggestion] = useState(() => promptSuggestionOf(ptyId, agent));
+  useEffect(() => {
+    const term = terminalFor(ptyId);
+    if (!term || !isClaudeCommand(target.tab.cmd)) return;
+    const writes = onParsedSettled(term, () => setSuggestion(promptSuggestionOf(ptyId, agent)), SUGGESTION_SETTLE_MS);
+    return () => writes.dispose();
+  }, [ptyId, agent, target.tab.cmd]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const errorId = useId();
@@ -140,6 +199,8 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   });
   // Which list is under the text: the session's picker, or Claude's levels.
   const [effortOpen, setEffortOpen] = useState(false);
+  const [commitOpen, setCommitOpen] = useState(false);
+  const [commitCursor, setCommitCursor] = useState(0);
   const [effortCursor, setEffortCursor] = useState(0);
   const [effortSending, setEffortSending] = useState("");
   const [note, setNote] = useState<"effortFailed" | "cleared" | "clearFailed" | null>(null);
@@ -152,11 +213,48 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   const modelPickable = modelPickOffered(target.tab);
   // Not while the session's picker is up: the text would land in it.
   const submittable = !busy && !picking && value.trim().length > 0;
+  // Not over a model or effort list: ↑/↓ and Enter are that list's.
+  const slashMenu = useMemo(
+    () => (slashClosed || picking || effortOpen || commitOpen ? [] : slashSuggestions(value, cli, usedSlash)),
+    [slashClosed, picking, effortOpen, commitOpen, value, cli, usedSlash],
+  );
+  /** Claude's suggestion while the box is empty, as its own CLI shows it:
+   * the placeholder, taken into the box by Tab or →, so the user still
+   * sends, edits or ignores it. */
+  const shownSuggestion = suggestion && !value && !busy && !working && !picking && !effortOpen && !commitOpen ? suggestion : "";
+
+  /** OpenCode's picker is answered by typing a row's query into its search
+   * field, and its walk (`OpenCodePickerWalk`) moves the dialog's highlight
+   * to list the whole list. The `current` it reports is the model in use
+   * (`●`, none on mini), not the highlight. So ↑/↓ move a cursor of the
+   * box's own over the rows as they are shown, and Enter answers that row. */
+  const ownCursor = isOpenCodeTab(agent);
+  // Held by the row's words, not its index: the walk can still put rows
+  // above the ones listed so far.
+  const [rowAt, setRowAt] = useState<string | null>(null);
+  const shownStep = session.shownStep;
+  const shownGroups = shownStep
+    ? ownCursor && shownStep.title === "Select model"
+      ? groupOpenCodeModels(shownStep.options)
+      : [{ key: "all", provider: undefined, options: shownStep.options }]
+    : [];
+  const shownRows = shownGroups.flatMap((group) => group.options);
+  const rowKey = (option: { label: string; description?: string }) => `${option.label}\u0000${option.description ?? ""}`;
+  const startRow = session.picker && session.picker.current >= 0 ? session.picker.current : null;
+  const cursorRow = !ownCursor
+    ? session.picker?.current ?? null
+    : (rowAt !== null ? shownRows.find((option) => rowKey(option) === rowAt)?.index : undefined) ?? startRow;
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ownCursor || cursorRow === null) return;
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [ownCursor, cursorRow]);
 
   // A picker just gone: the status line may name another model or effort.
   const [wasPicking, setWasPicking] = useState(picking);
   if (wasPicking !== picking) {
     setWasPicking(picking);
+    setRowAt(null);
     if (!picking) setStatus(readStatus());
   }
   // Leaving the box leaves no picker open in the session.
@@ -165,10 +263,21 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   useEffect(() => () => { if (latest.current.picking) latest.current.close(); }, []);
 
   const refocus = () => input.current?.focus();
+  /** The text changed (typed, picked, led): kept as the tab's draft, and the
+   *  `/` menu offered afresh for it. */
+  const editValue = (next: string) => {
+    setValue(next);
+    if (next) drafts.set(draftKey, next);
+    else drafts.delete(draftKey);
+    setError(null);
+    setSlashAt(null);
+    setSlashClosed(false);
+  };
   const closeLists = () => {
     if (picking) session.close();
     setEffortOpen(false);
     setEffortSending("");
+    setCommitOpen(false);
   };
   const openModel = () => {
     if (picking) {
@@ -215,6 +324,35 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
       },
     );
   };
+  // A Tabby chat has no files to commit.
+  const commitOffered = offer.clear && target.scope !== "assistant";
+  const openCommit = () => {
+    if (!commitOffered) return;
+    if (commitOpen) {
+      setCommitOpen(false);
+      return;
+    }
+    if (picking) session.close();
+    setEffortOpen(false);
+    setNote(null);
+    setCommitCursor(0);
+    setCommitOpen(true);
+  };
+  /** One of the composer's three commit prompts, sent as a prompt of its own;
+   *  the draft stays for the tab's next open. */
+  const chooseCommit = async (choice: CommitChoice) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await sendSteeringPrompt(target.tab, COMMIT_PROMPTS[choice]);
+      onClose();
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+      setCommitOpen(false);
+    }
+  };
   const clear = () => {
     if (!offer.clear) return;
     if (!clearArmed) {
@@ -226,22 +364,49 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   };
   const lead = (command: SteeringAgentCommand) => {
     const led = new RegExp(`^${command}(?:\\s+|$)`, "u");
-    const next = led.test(value) ? value.replace(led, "") : ledDraft(value, command);
-    setValue(next);
-    if (next) drafts.set(draftKey, next);
-    else drafts.delete(draftKey);
+    editValue(led.test(value) ? value.replace(led, "") : ledDraft(value, command));
+  };
+  /** The `/` menu's row taken into the box: only filled, the user still
+   *  sends it, so a stray pick never runs `/clear` on the session. */
+  const pickSlash = (picked: SlashSuggestion) => {
+    editValue(picked.args ? `${picked.line} ` : picked.line);
+    refocus();
+  };
+  const forgetSlash = (line: string) => {
+    forgetSlashCommand(cli, line);
+    setUsedSlash(readSlashCommands(cli));
+    setSlashAt(null);
+  };
+  /** The `/` menu's keys (`slashMenuKey`); true when one was taken. */
+  const slashKey = (e: ReactKeyboardEvent): boolean => {
+    const action = slashMenuKey(e, slashMenu.length, slashAt);
+    if (action === null) return false;
+    if (action === "close") {
+      setSlashClosed(true);
+      setSlashAt(null);
+    } else if ("move" in action) setSlashAt(action.move);
+    else pickSlash(slashMenu[action.pick]);
+    return true;
+  };
+  /** Tab or → in the empty box takes Claude's suggestion into it. */
+  const suggestionKey = (e: ReactKeyboardEvent): boolean => {
+    if (!shownSuggestion || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return false;
+    if (e.key !== "Tab" && e.key !== "ArrowRight") return false;
+    editValue(shownSuggestion);
+    return true;
   };
   const runChip = (chip: Chip) => {
     if (chip !== "clear") setClearArmed(false);
     if (chip === "model") openModel();
     else if (chip === "effort") openEffort();
     else if (chip === "clear") clear();
+    else if (chip === "commit") openCommit();
     else if (offer[chip]) lead(chip === "plan" ? "/plan" : "/goal");
   };
 
   /** The keys a list takes while it is open; true when one was taken. */
   const listKey = (e: ReactKeyboardEvent): boolean => {
-    if (!picking && !effortOpen) return false;
+    if (!picking && !effortOpen && !commitOpen) return false;
     if (e.key === "Escape") {
       closeLists();
       return true;
@@ -253,6 +418,23 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         const option = step?.options.find((entry) => entry.number === digit);
         if (option) session.choose(option.index);
         return true;
+      }
+      if (ownCursor) {
+        if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          const n = shownRows.length;
+          if (n === 0) return true;
+          const at = shownRows.findIndex((option) => option.index === cursorRow);
+          const next = at < 0
+            ? (e.key === "ArrowDown" ? 0 : n - 1)
+            : wrapStep(at, e.key === "ArrowDown" ? 1 : -1, n);
+          setRowAt(rowKey(shownRows[next]));
+          return true;
+        }
+        if (e.key === "Enter" && !e.shiftKey) {
+          if (cursorRow !== null && !(session.busy && !session.remembered)) session.choose(cursorRow);
+          return true;
+        }
+        return false;
       }
       // ↑/↓ go to the session's own picker, so its highlight is the cursor
       // and it scrolls its window to the rows it does not draw.
@@ -267,6 +449,23 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
       }
       return false;
     }
+    if (commitOpen) {
+      const n = COMMIT_CHOICES.length;
+      const digit = digitOf(e);
+      if (digit !== null) {
+        if (digit <= n) void chooseCommit(COMMIT_CHOICES[digit - 1]);
+        return true;
+      }
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        setCommitCursor((at) => wrapStep(at, e.key === "ArrowDown" ? 1 : -1, n));
+        return true;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        void chooseCommit(COMMIT_CHOICES[commitCursor]);
+        return true;
+      }
+      return false;
+    }
     if (effortOpen) {
       const n = CLAUDE_EFFORTS.length;
       const digit = digitOf(e);
@@ -275,7 +474,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
         return true;
       }
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-        setEffortCursor((at) => (at + (e.key === "ArrowDown" ? 1 : -1) + n) % n);
+        setEffortCursor((at) => wrapStep(at, e.key === "ArrowDown" ? 1 : -1, n));
         return true;
       }
       if (e.key === "Enter" && !e.shiftKey) {
@@ -286,12 +485,41 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     return false;
   };
 
+  /** Put `text` at the caret, spaced off the word before it, as the Reader's
+   *  composer takes a drop. */
+  const insertAtCaret = (text: string) => {
+    const box = input.current;
+    setValue((current) => {
+      const next = spliceSpaced(current, box ? Math.min(box.selectionEnd, current.length) : current.length, text);
+      drafts.set(draftKey, next);
+      return next;
+    });
+    setError(null);
+    box?.focus();
+  };
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    pasteIntoAgentBox(event, ptyId, ({ text, error }) => {
+      if (text) insertAtCaret(text);
+      if (error) setError(t(error));
+    });
+  };
+
   async function submit() {
     if (!submittable) return;
     setBusy(true);
     setError(null);
     try {
-      await sendSteeringPrompt(target.tab, value);
+      // A prefix the CLI's popup completes (`/clea`) runs that command.
+      const command = completedSlashCommand(value, cli, usedSlash) ?? value;
+      // A new conversation goes in as the Clear chip's does, so the window
+      // knows of it at once (Codex's hook says so only with the next prompt).
+      if (offer.clear && isNewConversationCommand(command)) {
+        if (!(await clearAgentTab(target.scope, target.tab))) throw new Error(t("steering.prompt.clearFailed"));
+      } else {
+        await sendSteeringPrompt(target.tab, value);
+      }
+      // Offered again by the `/` menu, newest first.
+      rememberSlashCommand(cli, command);
       drafts.delete(draftKey);
       onClose();
     } catch (e) {
@@ -300,7 +528,6 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     }
   }
 
-  const shownStep = session.shownStep;
   const chips: { chip: Chip; label: string; shown: boolean; disabled?: boolean; on?: boolean; title?: string }[] = [
     {
       chip: "model",
@@ -325,6 +552,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     },
     { chip: "plan", label: t("steering.prompt.chipPlan"), shown: offer.plan, on: /^\/plan(?:\s|$)/u.test(value) },
     { chip: "goal", label: t("steering.prompt.chipGoal"), shown: offer.goal, on: /^\/goal(?:\s|$)/u.test(value) },
+    { chip: "commit", label: t("mobile.commit.open"), shown: commitOffered, on: commitOpen },
   ];
 
   return (
@@ -335,29 +563,28 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           <span className="steering-prompt-agent">{[agent !== target.tab.label ? agent : "", model].filter(Boolean).join(" · ")}</span>
         )}
         <UntestedTag id="steering.agentPrompt" />
+        <UntestedTag id="steering.promptPaste" />
+        <UntestedTag id="steering.promptAltGr" />
+        {(slashMenu.length > 0 || shownSuggestion) && <UntestedTag id="steering.promptSuggestions" />}
       </h2>
       <textarea
         ref={input}
         className="file-paste-name steering-prompt-input"
         autoFocus
         rows={4}
-        aria-label={t("steering.prompt.placeholder")}
-        placeholder={t("steering.prompt.placeholder")}
+        aria-label={shownSuggestion ? `${t("terminal.reader.suggestion")}: ${shownSuggestion}` : t("steering.prompt.placeholder")}
+        placeholder={shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion }) : t("steering.prompt.placeholder")}
         aria-invalid={!!error}
         aria-describedby={error ? errorId : undefined}
         value={value}
         disabled={busy}
+        onPaste={onPaste}
         // A kept draft: the caret goes after it, not before.
         onFocus={(e) => {
           const end = e.currentTarget.value.length;
           e.currentTarget.setSelectionRange(end, end);
         }}
-        onChange={(e) => {
-          setValue(e.target.value);
-          if (e.target.value) drafts.set(draftKey, e.target.value);
-          else drafts.delete(draftKey);
-          setError(null);
-        }}
+        onChange={(e) => editValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return;
           const chip = chipFor(e);
@@ -367,8 +594,8 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
             return;
           }
           if (e.key !== "Alt") setClearArmed(false);
-          if (listKey(e)) {
-            // Taken here: the box's own Escape and Enter stand aside.
+          if (listKey(e) || slashKey(e) || suggestionKey(e)) {
+            // Taken here: the box's own Escape, Enter and Tab stand aside.
             e.preventDefault();
             return;
           }
@@ -377,24 +604,23 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
           void submit();
         }}
       />
+      {slashMenu.length > 0 && <ReaderSlashMenu suggestions={slashMenu} at={slashAt} onPick={pickSlash} onForget={forgetSlash} />}
       {(picking || effortOpen) && (
-        <div className="steering-prompt-list" role="listbox"
+        <div ref={listRef} className="steering-prompt-list" role="listbox"
           aria-label={picking ? shownStep?.title ?? t("terminal.reader.modelTitle") : t("terminal.reader.effortTitle")}>
           <div className="steering-prompt-list-head">
             {picking ? shownStep?.title ?? t("terminal.reader.modelTitle") : t("terminal.reader.effortTitle")}
           </div>
           {picking ? (
             shownStep ? (
-              (isOpenCodeTab(agent) && shownStep.title === "Select model"
-                ? groupOpenCodeModels(shownStep.options)
-                : [{ key: "all", options: shownStep.options }]).map((group) => <div className="steering-prompt-option-group" role="group" aria-label={group.key !== "all" ? openCodeModelGroupTitle(group, t) : undefined} key={group.key}>
+              shownGroups.map((group) => <div className="steering-prompt-option-group" role="group" aria-label={group.key !== "all" ? openCodeModelGroupTitle(group, t) : undefined} key={group.key}>
                 {group.key !== "all" && <div className="terminal-reader-option-group-title" role="presentation">{openCodeModelGroupTitle(group, t)}</div>}
                 {group.options.map((option) => (
                 <button
                   key={`${option.index}:${option.label}`}
                   type="button"
                   role="option"
-                  aria-selected={!!session.picker && option.index === session.picker.current}
+                  aria-selected={option.index === cursorRow}
                   className="terminal-reader-option"
                   disabled={session.busy}
                   onClick={() => { session.choose(option.index); refocus(); }}
@@ -431,6 +657,29 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
             ))
           )}
           {picking && session.step?.hidden ? <small className="terminal-reader-question-more">{t("steering.prompt.moreRows")}</small> : null}
+          <small className="terminal-reader-question-more">{t("steering.prompt.listKeys")}</small>
+        </div>
+      )}
+      {commitOpen && (
+        <div className="steering-prompt-list" role="listbox" aria-label={t("mobile.commit.title")}>
+          <div className="steering-prompt-list-head">{t("mobile.commit.title")}</div>
+          {COMMIT_CHOICES.map((choice, index) => (
+            <button
+              key={choice}
+              type="button"
+              role="option"
+              aria-selected={index === commitCursor}
+              className="terminal-reader-option"
+              disabled={busy}
+              onClick={() => { void chooseCommit(choice); }}
+            >
+              <span className="terminal-reader-option-number">{index + 1}</span>
+              <span className="terminal-reader-option-label">
+                <span>{t(COMMIT_LABELS[choice])}</span>
+                <small>{t(COMMIT_HINTS[choice])}</small>
+              </span>
+            </button>
+          ))}
           <small className="terminal-reader-question-more">{t("steering.prompt.listKeys")}</small>
         </div>
       )}

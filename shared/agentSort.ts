@@ -4,16 +4,19 @@
  * working" means: the laptop and the phone show the same tabs, and a reader
  * who switches between them should find them in the same places.
  *
- * - `lastWorking`: what to look at next, in three tiers — a tab that has
- *   stopped to ask something, then the tabs working right now, then everything
- *   else by the last turn it finished, most recent first. The default. The
- *   tiers are the point: a question is the only thing on this list that cannot
- *   make progress without the reader, so it outranks any timestamp; a working
- *   tab needs nothing but time; and once neither applies, the newest finished
- *   answer is the one to read. Within the first two tiers the tabs keep their
- *   arrival order — a tab that is working right now has no reading that would
- *   order it (its `workingAt` is the last turn's edge, not this one's), and
- *   shuffling the questions would move them under the pointer as they arrive.
+ * - `lastWorking`: what to look at next, in tiers — a tab that has stopped to
+ *   ask something, then the ready ones (a finished turn the reader has not
+ *   seen yet), then the tabs working right now, then everything else by the
+ *   last turn it finished, most recent first. The default. The tiers are the
+ *   point: a question is the only thing on this list that cannot make progress
+ *   without the reader, so it outranks any timestamp; a ready tab has an answer
+ *   waiting to be read, which is what the list is opened to find; a working tab
+ *   needs nothing but time; and once none applies, the newest finished answer
+ *   is the one to read. The ready tier goes newest finished turn first. The
+ *   question and working tiers keep their arrival order — a tab that is
+ *   working right now has no reading that would order it (its `workingAt` is
+ *   the last turn's edge, not this one's), and shuffling the questions would
+ *   move them under the pointer as they arrive.
  *   The phone adds one tier below the working tabs: a tab holding a message
  *   typed on the phone and not sent yet (`drafted`) — the reader started
  *   something there and is the one it waits on, more than any finished turn.
@@ -37,9 +40,11 @@ export const DEFAULT_AGENT_SORT: AgentSort = "lastWorking";
 export interface AgentSortKeys {
   /** Stopped and waiting on the reader — the top tier of `lastWorking`. */
   decision?: boolean;
-  /** Producing output right now — the second tier of `lastWorking`. */
+  /** Finished a turn the reader has not seen yet — the second tier. */
+  ready?: boolean;
+  /** Producing output right now — the third tier of `lastWorking`. */
   working: boolean;
-  /** Holds a typed, unsent message — the third tier of `lastWorking`. */
+  /** Holds a typed, unsent message — the fourth tier of `lastWorking`. */
   drafted?: boolean;
   /** ms epoch of the tab's last output while working, if seen this session. */
   workingAt?: number;
@@ -51,11 +56,16 @@ export function isAgentSort(value: unknown): value is AgentSort {
   return typeof value === "string" && (AGENT_SORTS as readonly string[]).includes(value);
 }
 
-/** 3 needs the reader, 2 is busy, 1 holds a draft, 0 is none of these —
- * `lastWorking`'s tiers. */
+/** `lastWorking`'s tiers: 4 asks the reader, 3 is ready to read, 2 is busy,
+ * 1 holds a draft, 0 is none of these. */
+const TIER_ASKING = 4;
+const TIER_READY = 3;
+const TIER_WORKING = 2;
+
 function tierOf(keys: AgentSortKeys): number {
-  if (keys.decision) return 3;
-  if (keys.working) return 2;
+  if (keys.decision) return TIER_ASKING;
+  if (keys.ready) return TIER_READY;
+  if (keys.working) return TIER_WORKING;
   return keys.drafted ? 1 : 0;
 }
 
@@ -70,9 +80,9 @@ export function sortAgentTabs<T>(tabs: readonly T[], sort: AgentSort, keysOf: (t
         if (byTier !== 0) return byTier;
         // A question and a working tab are ordered by nothing but the tab bar:
         // neither carries a reading of what it is doing *now*.
-        if (tier >= 2) return a.index - b.index;
+        if (tier === TIER_ASKING || tier === TIER_WORKING) return a.index - b.index;
       }
-      // The drafted and bottom tiers, and the whole of `lastDone`: newest
+      // The ready, drafted and bottom tiers, and the whole of `lastDone`: newest
       // finished turn first, a tab that has finished none of them last.
       const byDone = (b.keys.doneAt ?? Number.NEGATIVE_INFINITY) - (a.keys.doneAt ?? Number.NEGATIVE_INFINITY);
       // Two infinities subtract to NaN, which is the tie the index settles.

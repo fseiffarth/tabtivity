@@ -265,26 +265,33 @@ fn top_level(conn: &Connection, id: &str) -> Option<String> {
 /// The newest top-level, unarchived session of `directory` created at or
 /// after `since`; `None` when the store cannot be queried.
 fn newest_in(conn: &Connection, directory: &str, since: Option<i64>) -> Option<Option<String>> {
-    let [given, real] = folder_dirs(directory);
+    let [given, real, given_slashed, real_slashed] = folder_dirs(directory);
     conn.query_row(
         "SELECT id FROM session
-          WHERE directory IN (?1, ?2) AND parent_id IS NULL AND time_archived IS NULL
-            AND time_created >= ?3
+          WHERE directory IN (?1, ?2, ?3, ?4) AND parent_id IS NULL AND time_archived IS NULL
+            AND time_created >= ?5
           ORDER BY time_updated DESC LIMIT 1",
-        rusqlite::params![given, real, since.unwrap_or(i64::MIN)],
+        rusqlite::params![given, real, given_slashed, real_slashed, since.unwrap_or(i64::MIN)],
         |row| row.get(0),
     )
     .optional()
     .ok()
 }
 
-/// The two ways a session's `directory` may name the folder: as given, and
-/// resolved (the same twice when they agree).
-fn folder_dirs(directory: &str) -> [String; 2] {
+/// The ways a session's `directory` may name the folder: as given and
+/// resolved (repeats when they agree), and on Windows both with forward
+/// slashes, which is how OpenCode 2.2.0 stores it (`C:/Users/…`).
+fn folder_dirs(directory: &str) -> [String; 4] {
     let real = std::fs::canonicalize(directory)
+        .map(crate::paths::without_verbatim_prefix)
         .map(|real| real.to_string_lossy().into_owned())
         .unwrap_or_else(|_| directory.to_string());
-    [directory.to_string(), real]
+    folder_spellings(directory, &real, cfg!(windows))
+}
+
+fn folder_spellings(given: &str, real: &str, windows: bool) -> [String; 4] {
+    let slashed = |path: &str| if windows { path.replace('\\', "/") } else { path.to_string() };
+    [given.to_string(), real.to_string(), slashed(given), slashed(real)]
 }
 
 /// Whether `id` is a top-level, unarchived session OpenCode ran in
@@ -294,11 +301,11 @@ pub fn folder_session(db: &Path, directory: &str, id: &str) -> bool {
     let Some(conn) = open_store(db) else {
         return false;
     };
-    let [given, real] = folder_dirs(directory);
+    let [given, real, given_slashed, real_slashed] = folder_dirs(directory);
     conn.query_row(
         "SELECT 1 FROM session
-          WHERE id = ?1 AND directory IN (?2, ?3) AND parent_id IS NULL AND time_archived IS NULL",
-        rusqlite::params![id, given, real],
+          WHERE id = ?1 AND directory IN (?2, ?3, ?4, ?5) AND parent_id IS NULL AND time_archived IS NULL",
+        rusqlite::params![id, given, real, given_slashed, real_slashed],
         |_| Ok(()),
     )
     .is_ok()
@@ -317,16 +324,16 @@ pub fn folder_chats(
     scanned: usize,
 ) -> Option<(Vec<FolderChat>, Option<usize>)> {
     let conn = open_store(db)?;
-    let [given, real] = folder_dirs(directory);
+    let [given, real, given_slashed, real_slashed] = folder_dirs(directory);
     let mut stmt = conn
         .prepare(
             "SELECT id, time_updated FROM session
-              WHERE directory IN (?1, ?2) AND parent_id IS NULL AND time_archived IS NULL
-              ORDER BY time_updated DESC, id DESC LIMIT ?3 OFFSET ?4",
+              WHERE directory IN (?1, ?2, ?3, ?4) AND parent_id IS NULL AND time_archived IS NULL
+              ORDER BY time_updated DESC, id DESC LIMIT ?5 OFFSET ?6",
         )
         .ok()?;
     let rows: Vec<(String, i64)> = stmt
-        .query_map(rusqlite::params![given, real, scanned as i64 + 1, offset as i64], |row| {
+        .query_map(rusqlite::params![given, real, given_slashed, real_slashed, scanned as i64 + 1, offset as i64], |row| {
             Ok((row.get(0)?, row.get(1)?))
         })
         .ok()?
@@ -963,6 +970,15 @@ mod tests {
         let t = session_transcript(&db, "/nothing/here", None, None, None, None, 120).unwrap();
         assert!(t.available && t.entries.is_empty());
         assert!(session_transcript(&db.with_file_name("absent.db"), "/p", None, None, None, None, 120).is_none());
+    }
+
+    #[test]
+    fn a_windows_folder_is_also_looked_up_with_forward_slashes() {
+        let spellings = folder_spellings(r"C:\Users\me\proj", r"C:\Users\Me\proj", true);
+        assert_eq!(spellings[2], "C:/Users/me/proj");
+        assert_eq!(spellings[3], "C:/Users/Me/proj");
+        let (given, real) = (r"/odd\name", r"/real\name");
+        assert_eq!(folder_spellings(given, real, false), [given, real, given, real]);
     }
 
     #[test]

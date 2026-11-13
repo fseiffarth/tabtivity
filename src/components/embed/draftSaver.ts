@@ -53,6 +53,11 @@ export class DraftSaver {
   get dirty(): boolean {
     return this.baseline !== null && this.draft !== this.baseline;
   }
+  /** Unsaved, and `dispose` would not save it: autosave is off. What closing
+   *  its tab would throw away (`lib/tabs/tabCloseGuard`). */
+  get lostOnDispose(): boolean {
+    return !this.enabled && this.dirty;
+  }
   /** Save now only if autosave would save it anyway (the retire handshake). */
   flushIfAutosave(): Promise<void> {
     return this.enabled ? this.flush() : Promise.resolve();

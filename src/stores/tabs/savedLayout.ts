@@ -15,10 +15,26 @@ import { FILES_TAB_CMD, cmdToKind, isRestorableTab } from "./tabKinds";
 
 // ── Tree (de)serialization ──────────────────────────────────────────────────
 
-export function serializeTree(node: LayoutNode | null): SavedLayoutTree | null {
+export function serializeTree(
+  node: LayoutNode | null,
+  pending?: readonly RespawnTarget[],
+): SavedLayoutTree | null {
   if (!node) return null;
+  // A popout restored docked and not yet re-opened (its scope has not been the
+  // workspace's since the load) is still a popout: a save in that gap keeps its
+  // tag, or the next launch would dock it for good.
+  const target = pending?.find((t) => t.id === node.id);
+  const tag = target
+    ? {
+        detached: true as const,
+        bounds: target.bounds,
+        zoom: target.zoom,
+        ...(target.name ? { detachedName: target.name } : {}),
+      }
+    : {};
   if (node.type === "group") {
     return {
+      ...tag,
       type: "group",
       tabKeys: [...node.tabKeys],
       activeKey: node.activeKey,
@@ -31,11 +47,12 @@ export function serializeTree(node: LayoutNode | null): SavedLayoutTree | null {
     };
   }
   return {
+    ...tag,
     type: "split",
     dir: node.dir,
     sizes: [...node.sizes],
     children: node.children
-      .map(serializeTree)
+      .map((c) => serializeTree(c, pending))
       .filter((c): c is SavedLayoutTree => c != null),
   };
 }

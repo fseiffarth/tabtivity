@@ -58,20 +58,36 @@ export function writeLibraryView(view: LibraryView, storage?: ViewStorage): void
   writeJson(KEY, { layout, sort, desc, foldersFirst, thumbs }, storage);
 }
 
-/** What a tile draws: a folder, a picture, a PDF, a text, or a file. */
-export type Glyph = "dir" | "image" | "pdf" | "text" | "file";
+/** What a tile draws: a folder, a picture, a PDF, a film or sound, a text,
+ * or a file. */
+export type Glyph = "dir" | "image" | "pdf" | "media" | "text" | "file";
 
 export function glyphOf(kind: string): Glyph {
   if (kind === "dir") return "dir";
   if (kind.startsWith("image/")) return "image";
   if (kind === "application/pdf") return "pdf";
+  if (kind.startsWith("video/") || kind.startsWith("audio/")) return "media";
   return kind.startsWith("text/") ? "text" : "file";
 }
 
 /** The order Sort by kind groups in, ascending. */
-const GLYPH_ORDER: Record<Glyph, number> = { dir: 0, pdf: 1, image: 2, text: 3, file: 4 };
+const GLYPH_ORDER: Record<Glyph, number> = { dir: 0, pdf: 1, image: 2, media: 3, text: 4, file: 5 };
 
-const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+/** A name collator per language (the app's, so the order matches what the
+ * reader reads); `undefined` is the browser's own. */
+const collators = new Map<string | undefined, Intl.Collator>();
+function collatorFor(lang?: string): Intl.Collator {
+  let collator = collators.get(lang);
+  if (!collator) {
+    try {
+      collator = new Intl.Collator(lang, { numeric: true, sensitivity: "base" });
+    } catch {
+      collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    }
+    collators.set(lang, collator);
+  }
+  return collator;
+}
 
 /** A created time the desktop's filesystem knows; none (or 0) is not one. */
 const createdOf = (entry: ProjectFileEntry) => entry.created !== undefined && entry.created > 0 ? entry.created : null;
@@ -83,8 +99,9 @@ const createdOf = (entry: ProjectFileEntry) => entry.created !== undefined && en
  * — never as 0, which would put it first when ascending. Folders on top holds
  * in both directions too.
  */
-export function sortEntries<T extends ProjectFileEntry>(entries: readonly T[], view: Pick<LibraryView, "sort" | "desc" | "foldersFirst">): T[] {
+export function sortEntries<T extends ProjectFileEntry>(entries: readonly T[], view: Pick<LibraryView, "sort" | "desc" | "foldersFirst">, lang?: string): T[] {
   const sign = view.desc ? -1 : 1;
+  const collator = collatorFor(lang);
   const byName = (a: T, b: T) => collator.compare(a.name, b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   return [...entries].sort((a, b) => {
     if (view.foldersFirst) {

@@ -3,6 +3,7 @@ import { useEffect, useMemo } from "react";
 import type { CalendarTask } from "../../types";
 import type { MailHeader } from "../../types/mail";
 import { useCalendarStore } from "../../stores/calendar/calendar";
+import { useViewShown } from "../../stores/rootOverlay";
 import { useMailStore } from "../../stores/mail";
 import {
   releaseUrgentMailPoll,
@@ -37,7 +38,7 @@ export function TodoMailRail({ tasks, defaultCalendarId, intakeColumnId }: Props
   const t = useT();
   const mailClient = useExperimental("mail_client");
   const accounts = useMailStore((s) => s.accounts);
-  const overlayOpen = useTodoStore((s) => s.overlayOpen);
+  const overlayOpen = useViewShown("todo");
   const urgent = useTodoStore((s) => s.urgentMail);
   const important = useTodoStore((s) => s.importantMail);
   const error = useTodoStore((s) => s.urgentError);
@@ -66,9 +67,7 @@ export function TodoMailRail({ tasks, defaultCalendarId, intakeColumnId }: Props
   }
 
   const openInMail = async (header: MailHeader) => {
-    // Close first: all three overlays are `.modal-backdrop` at the same
-    // z-index, so leaving this one up would stack a board over the mailbox.
-    useTodoStore.getState().closeOverlay();
+    // No closing first: opening the Mail view takes the window off the board.
     const mail = useMailStore.getState();
     // Awaited in this order on purpose: `openMessage` resolves its header out
     // of the loaded page, so opening before the page lands opens nothing.

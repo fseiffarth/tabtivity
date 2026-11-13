@@ -6,6 +6,7 @@ import { useT } from "../../lib/i18n";
 import { AgentsHelp, AgentsStatus } from "./agentsUi";
 import { AgentLoginsRows } from "./AgentLoginsRows";
 import { AgentApiKeysRows } from "./AgentApiKeysRows";
+import { ClaudeTokenRow } from "./ClaudeTokenRow";
 
 /** `agent_global_status` (`services::agent_global`). */
 interface AgentGlobalLayer {
@@ -181,6 +182,7 @@ export function AgentAccounts({ onChange }: { onChange?: () => void }) {
   return (
     <div className="agents-stack">
       <AgentLoginsRows refreshKey={apiKeysVersion} onChange={onChange} />
+      <ClaudeTokenRow />
       <AgentApiKeysRows
         onChange={() => {
           setApiKeysVersion((v) => v + 1);

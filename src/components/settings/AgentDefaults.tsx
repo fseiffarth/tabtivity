@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { UntestedTag } from "../common/UntestedTag";
 import { Dropdown } from "../common/Dropdown";
 import { useT } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settings";
@@ -7,9 +8,8 @@ import { agentModelsFor } from "../../lib/agents/agentPrefaces";
 import type { AgentInfo } from "./agentTypes";
 import type { Settings } from "../../types";
 
-/** The phone saves these straight to the file (`launch-defaults`): the latest
- * is read into this window's store when the form opens and before it saves,
- * so a phone save shows here and is kept. */
+/** The latest saved defaults are read into this window's store when the form
+ * opens and before it saves, so another window's save shows here and is kept. */
 async function latestLaunchDefaults(): Promise<Settings["agent_launch_defaults"]> {
   const fresh = await invoke<Settings>("get_settings");
   useSettingsStore.setState((s) => (s.settings ? { settings: { ...s.settings, agent_launch_defaults: fresh.agent_launch_defaults } } : {}));
@@ -33,7 +33,9 @@ export function AgentDefaults({ agent, compact = false }: { agent: AgentInfo; co
   const cap = agent.launch_defaults;
   const invalidModel = model.trim().startsWith("-") || [...model].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
   const changed = model.trim() !== (saved?.model ?? "") || effort !== (saved?.effort ?? "");
-  const models = agentModelsFor(agent.bin, knownModels);
+  const models = [...new Set([...(agent.default_models ?? []), ...agentModelsFor(agent.bin, knownModels)])];
+  // Keep existing/custom IDs selectable even after a catalog update.
+  const choices = model && !models.includes(model) ? [...models, model] : models;
   const save = async (reset = false) => {
     setSaving(true);
     setError("");
@@ -62,10 +64,22 @@ export function AgentDefaults({ agent, compact = false }: { agent: AgentInfo; co
       {!compact && <p className="settings-help">{t("agents.defaultsHelp")}</p>}
       {cap.model ? (
         <>
+          <div className="settings-card-row">
+            <span>{t("agents.defaultModel")} <UntestedTag id="agents.defaultModelChoices" /></span>
+            <Dropdown
+              value={model}
+              options={[{ value: "", label: t("agents.defaultsCli") }, ...choices.map((name) => ({ value: name, label: name }))]}
+              ariaLabel={t("agents.defaultModel")}
+              disabled={saving}
+              onChange={setModel}
+            />
+          </div>
+          {models.length === 0 && <p className="settings-help">{t("agents.defaultsNoModels")}</p>}
           <label className="settings-card-row">
-            <span>{t("agents.defaultModel")}</span>
+            <span>{t("agents.defaultsCustomModel")}</span>
             <input
               type="text"
+              aria-label={t("agents.defaultsCustomModel")}
               spellCheck={false}
               style={{ minWidth: 0, flex: 1 }}
               value={model}
@@ -76,16 +90,6 @@ export function AgentDefaults({ agent, compact = false }: { agent: AgentInfo; co
               onKeyDown={(e) => { if (e.key === "Enter" && changed && !saving) void save(); }}
             />
           </label>
-          {models.length > 0 && (
-            <Dropdown
-              value={models.includes(model) ? model : ""}
-              options={models.map((name) => ({ value: name, label: name }))}
-              placeholder={t("agents.defaultsKnownModels")}
-              ariaLabel={t("agents.defaultsKnownModels")}
-              disabled={saving}
-              onChange={setModel}
-            />
-          )}
         </>
       ) : <p className="settings-help">{t("agents.defaultsModelUnavailable")}</p>}
       {cap.efforts.length > 0 ? (

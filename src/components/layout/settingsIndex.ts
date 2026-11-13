@@ -104,6 +104,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
       { key: "settings.themeVars" },
       { key: "settings.language", aliases: "settings.searchAlias.language" },
       { key: "settings.showUntestedTags" },
+      { key: "settings.privacyCurtain" },
       { key: "settings.runScriptsBg" },
       { key: "settings.persistLocal", aliases: "settings.searchAlias.persistLocal" },
     ],
@@ -111,6 +112,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   layout: {
     items: [
       { key: "settings.windowZoom", aliases: "settings.searchAlias.zoom" },
+      { key: "settings.sidePanelAutoHide" },
       { key: "settings.closeSubwindowOnLastTab" },
       { key: "settings.minSubWidth" },
       { key: "settings.minSubHeight" },
@@ -128,7 +130,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
     labels: ["settings.calendarGlobalApp", "settings.todoBoard", "settings.weekStartsOn", "settings.defaultView", "settings.dayGridStart", "settings.defaultReminder"],
   },
   usageStats: { labels: ["settings.dailyRecap", "settings.openUsageStats"] },
-  pdfMarkup: { labels: ["settings.pdfMarkupDirect", "settings.pdfMarkupInstruction", "markup.ask.label", "settings.pdfMarkupApply"] },
+  pdfMarkup: { labels: ["settings.pdfMarkupDirect", "settings.pdfMarkupInstruction", "markup.ask.label", "settings.pdfMarkupApply", "settings.pdfMarkupAutoReload", "settings.pdfMarkupSubagents"] },
   rootConsole: {
     labels: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   },
@@ -148,7 +150,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   },
   resourceMonitor: { labels: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"] },
   experimental: {
-    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter"],
+    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter", "settings.assistant", "settings.voiceHandsFree"],
   },
   git: { keywords: ["nav.git.blurb"], aliases: "settings.searchAlias.git" },
   vpn: { keywords: ["nav.vpn.blurb"], aliases: "settings.searchAlias.vpn" },

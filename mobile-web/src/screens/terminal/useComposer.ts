@@ -21,7 +21,7 @@ import { type TerminalControl } from "../../terminal/protocol";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../terminal/openCodeMini";
 import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../../terminal/composer";
 import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../../terminal/commitPrompts";
-import { sendToSubagent, type SubagentSendFailure } from "../../terminal/subagentInput";
+import { sendToSubagent, subagentViewed, viewSession, type SubagentSendFailure } from "../../terminal/subagentInput";
 import { finishSendNow, pullQueuedPrompts, queueFamily, queuedHintShown, takenPrompts } from "../../terminal/queuePull";
 import { inWorkflow, type SubagentStep } from "../../terminal/subagents";
 import {
@@ -150,7 +150,7 @@ export function useComposerUploads({
  * and Undo. */
 export function useComposerSend({
   tab, bare, composerInput, write, sendControl, sendNowAsking, sendNowAnswer, recognition,
-  dictateButton, connectedRef, voiceRequest, voiceProgress, sendGuard, voiceOpen, sendTimers, commandSentAt, lastOutputAt,
+  dictateButton, connectedRef, voiceRequest, voiceProgress, settleTimer, sendGuard, voiceOpen, sendTimers, commandSentAt, lastOutputAt,
   settleQueue, bracketedPaste, screenRows, viewportRows, connected, setAiOffAt, aiOffRef, ctrl,
   setCtrl, setSendFailed, setDraft, draft, uploadsRef, editing, setEditing, editingRef, editSending,
   setEditSending, liveScreen, setLastSent, slashCliKey, agentKey, usedSlash, setUsedSlash,
@@ -159,7 +159,7 @@ export function useComposerSend({
   setEditNote, editNote, setSubagentSending, subagentSending, setSubagentNote, setQueueNote,
   queuePulling, setQueuePulling, setUndoNote, setUndoing, undoRun, setTranscriptReload,
   setClearRefused, liveBusy, setSendNowWaiting, sendNowWaiting, agentAtWork, subagentPath, openStep,
-  transcriptCurrent, transcriptVersion, storedEntries, queuedShown,
+  transcriptCurrent, transcriptVersion, storedEntries, queuedShown, onSubagentSent,
 }: {
   tab: TabRow;
   bare: boolean;
@@ -173,6 +173,8 @@ export function useComposerSend({
   connectedRef: MutableRefObject<boolean>;
   voiceRequest: MutableRefObject<number>;
   voiceProgress: MutableRefObject<DictationProgress>;
+  /** The utterance layer's settle timer (`useVoiceInput`). */
+  settleTimer: MutableRefObject<number>;
   /** Hands-free's send guard and whether the recognizer holds unsettled words
    * (`useHandsFree`): a send ends both. */
   sendGuard: MutableRefObject<SendGuard | undefined>;
@@ -241,6 +243,7 @@ export function useComposerSend({
   transcriptVersion: MutableRefObject<string | undefined>;
   storedEntries: TranscriptEntry[];
   queuedShown: boolean;
+  onSubagentSent: (token: string, text: string) => void;
 }) {
   /** The tab's CLI where its queue can be read off the screen. */
   const queueCli = queueFamily(agentKey);
@@ -358,6 +361,9 @@ export function useComposerSend({
    * aborted, not stopped: a stop lets the recognizer finalize what it still
    * holds, and those words would land in the draft just emptied. */
   const endDictation = () => {
+    // An abort never reaches `onEnd`: the utterance layer's settle timer would
+    // still fire for the dead mic and hand its held words to a command.
+    window.clearTimeout(settleTimer.current);
     voiceRequest.current += 1;
     setPreparingVoice(false);
     const active = recognition.current;
@@ -373,12 +379,27 @@ export function useComposerSend({
     setVoicePreview("");
     setVoiceStatus(null);
   };
+  /** Set by dictation's spoken send ("go on") around its submit: the draft
+   * empties but the mic stays open for the next prompt. What it heard so far
+   * was settled first (`forgetDictation`), so none of it comes back. */
+  const keepMicOnSend = useRef(false);
+  /** A send from the composer empties it and ends the dictation — or, for a
+   * spoken send, only the hands-free guard's pause and the "Heard:" line. */
+  const clearSentDraft = () => {
+    setDraft("");
+    if (!keepMicOnSend.current) {
+      endDictation();
+      return;
+    }
+    sendGuard.current?.reset();
+    setVoicePreview("");
+  };
   /** The open subagent the composer writes to: Claude's only, the one CLI
    * whose own TUI takes words for a subagent. */
   const subagentTarget = openStep && agentFamily(tab.agent_label ?? tab.label) === "claude" && !inWorkflow(subagentPath) ? openStep : undefined;
   /** Words for the open subagent, delivered through Claude's agent list
-   * (`subagentInput`); the Reader stays on the subagent, whose conversation
-   * shows them once it has taken them. Words that did not get there go back
+   * (`subagentInput`); show the words as soon as the write succeeds, while
+   * Claude may still have them queued. Words that did not get there go back
    * into an empty composer, with the reason under it. */
   /** Types `words` as the composer would, once its last write is out. */
   const typeOut = async (words: string) => {
@@ -390,10 +411,7 @@ export function useComposerSend({
   const sendToOpenSubagent = (text: string, target: SubagentStep, fromComposer: boolean) => {
     setSubagentNote("");
     setSubagentSending(true);
-    if (fromComposer) {
-      setDraft("");
-      endDictation();
-    }
+    if (fromComposer) clearSentDraft();
     void sendToSubagent({
       rows: () => screenRows.current(),
       key: async (key) => type(key),
@@ -401,6 +419,7 @@ export function useComposerSend({
       type: () => typeOut(text),
     }, target, SUBAGENT_WALK).then((result) => {
       if (result.ok) {
+        onSubagentSent(target.token, text);
         setLastSent(text);
         return;
       }
@@ -415,7 +434,15 @@ export function useComposerSend({
    * point — the markup view's Submit keeps its layer otherwise. */
   /** `interrupt`: the Send button's hold — a working agent is stopped and the
    * words go in at once instead of waiting for its next idle point. */
-  const submitText = (text: string, fromComposer: boolean, interrupt: boolean): boolean => {
+  /** The pane's screen, or nothing while xterm has none to read. */
+  const readableScreen = (): string[] => {
+    try {
+      return screenRows.current();
+    } catch {
+      return [];
+    }
+  };
+  const submitText = (text: string, fromComposer: boolean, interrupt: boolean, sessionViewed = false): boolean => {
     if (editing && fromComposer) {
       submitEdit(editing, text);
       return true;
@@ -445,6 +472,29 @@ export function useComposerSend({
       sendToOpenSubagent(text, subagentTarget, fromComposer);
       return true;
     }
+    // Claude's TUI left on a subagent (viewed in Terminal mode) takes what is
+    // typed into that subagent's box, and the session never records it: the
+    // session is viewed again first, then the words go as they would have.
+    if (!sessionViewed && agentFamily(tab.agent_label ?? tab.label) === "claude" && subagentViewed(readableScreen())) {
+      if (subagentSending) return false;
+      setSubagentNote("");
+      setSubagentSending(true);
+      const keepMic = keepMicOnSend.current;
+      void viewSession({ rows: readableScreen, key: async (key) => type(key) }, SUBAGENT_WALK).then((back) => {
+        if (!back) {
+          setSubagentNote("mobile.subagent.viewed");
+          return;
+        }
+        keepMicOnSend.current = keepMic;
+        try {
+          submitTextRef.current(text, fromComposer, interrupt, true);
+        } finally {
+          keepMicOnSend.current = false;
+        }
+      }).finally(() => setSubagentSending(false));
+      return true;
+    }
+    setSubagentNote("");
     const id = slash ? undefined : ++pendingId.current;
     // A chat of the assistant scope has no held-prompt binding: its words go straight to the CLI.
     if (id !== undefined && agentAtWork && !interrupt && !bare) {
@@ -480,10 +530,11 @@ export function useComposerSend({
       void reportSentPrompt(tab.id, text).catch(() => {});
     }
     if (!fromComposer) return true;
-    setDraft("");
-    endDictation();
+    clearSentDraft();
     return true;
   };
+  const submitTextRef = useRef(submitText);
+  submitTextRef.current = submitText;
   /** The composer's words go with the files that landed for them; while one
    * is still on its way nothing goes, so no reference is left behind. */
   const submitDraft = (text = draft, fromComposer = true, interrupt = false): boolean => {
@@ -497,6 +548,15 @@ export function useComposerSend({
    * that started them. */
   const submitDraftRef = useRef(submitDraft);
   submitDraftRef.current = submitDraft;
+  /** Dictation's spoken send: the draft goes, the mic stays open. */
+  const submitSpokenRef = useRef((text: string) => {
+    keepMicOnSend.current = true;
+    try {
+      return submitDraftRef.current(text);
+    } finally {
+      keepMicOnSend.current = false;
+    }
+  });
   /** Esc stops the agent's turn; once the CLI has wound down the message is
    * typed like any other — not held for an idle point the interrupt has just
    * made. A failure after the gap marks the bubble, as a dropped piece does. */
@@ -576,10 +636,7 @@ export function useComposerSend({
     setEditNote("mobile.composer.heldNote");
     // `held: ""` — asked for, id not known yet: waiting, not yet editable.
     setPending((current) => [...current, { ...pendingPrompt(id, text, storedEntries), held: "" }].slice(-MAX_PENDING));
-    if (fromComposer) {
-      setDraft("");
-      endDictation();
-    }
+    if (fromComposer) clearSentDraft();
     // The answer may come after the reader left the tab, or came back to it:
     // `patchHeld` hands it to the chat showing the tab then (`onHeldPatched`).
     holdPrompt(tab.id, text).then(
@@ -606,10 +663,11 @@ export function useComposerSend({
     const release = codexQueueShown();
     if (type(AGENT_INTERRUPT) && release) void releaseCodexQueue();
   };
-  /** The queued bubbles' Send now: Esc stops the agent's turn, and the CLI
-   * then sends what waits in its queue at once (the desktop chat's Send now).
-   * But Claude takes a queued message into the running turn at its next tool
-   * call, and an Esc after that stops the turn that was to answer it. The
+  /** The queued bubbles' Send now (the desktop chat's): Claude's own
+   * Ctrl+X Ctrl+S sends what waits in its queue into the turn at once; the
+   * other CLIs' Esc stops the turn and then sends it. But Claude takes a
+   * queued message into the running turn at its next tool call, after which
+   * there is nothing left to send now. The
    * phone's copy of the screen is too late to judge that by, so the desktop
    * does, beside the pane (`send_now`): it presses only while the queue hint
    * shows. Until then — the desktop has not typed the prompt in yet, or the
@@ -858,6 +916,8 @@ export function useComposerSend({
    * once — no confirm dialog. The draft is left alone. A Codex that is working
    * would refuse it, so the button says so here instead. */
   const clearConversation = () => {
+    // One already waits behind the turn: a second would clear the new chat too.
+    if (clearQueued) return;
     if (codexBusy()) {
       setClearRefused(true);
       return;
@@ -865,7 +925,7 @@ export function useComposerSend({
     setClearRefused(false);
     if (sendAgentText(NEW_CONVERSATION_COMMAND)) startedOver();
   };
-  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft, submitDraftRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
+  return { type, press, clearPending, deliver, sendAgentText, forgetDictation, endDictation, subagentTarget, submitDraft, submitDraftRef, submitSpokenRef, sendHold, sendHoldHandlers, sendMarkup, refreshOutboxFile, sendQueuedNow, pullQueued, stopTurn, startEdit, cancelEdit, resendPrompt, undoClearConversation, clearConversation };
 }
 
 /** The composer's chips and menus (Commit, the `/` menu, the Plan/Goal

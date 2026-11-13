@@ -1,7 +1,8 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useRef, type ReactNode } from "react";
 import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
+import { useModalFocus } from "../modalFocus";
 
 export interface SheetOption {
   key: string;
@@ -41,8 +42,10 @@ export function OptionSheet({ title, note, children, footer, options, waiting, b
 }) {
   useBackLayer(onClose);
   const t = useT();
+  const dialog = useRef<HTMLElement>(null);
+  useModalFocus(dialog);
   return <div className="sheet-backdrop" role="presentation" onClick={onClose}>
-    <section className="option-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
+    <section ref={dialog} className="option-sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
       <span className="sheet-grip" aria-hidden="true" />
       <header>
         <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
@@ -56,7 +59,7 @@ export function OptionSheet({ title, note, children, footer, options, waiting, b
         : <ul className="option-list">{options.map((option, index) => <Fragment key={option.key}>
             {option.group && option.group !== options[index - 1]?.group && <li className="option-list-group">{option.group}</li>}
             <li>
-            <button className={option.current ? "current" : ""} aria-current={option.current || undefined} disabled={busy} onClick={() => onPick(option.key)}>
+            <button className={option.current ? "current" : ""} aria-current={option.current || undefined} data-steer-confirm={option.key === "confirm" ? "" : undefined} disabled={busy} onClick={() => onPick(option.key)}>
               <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
               {option.pending
                 ? <span className="sheet-pending" role="status">{t("mobile.optionSheet.switching")}</span>

@@ -31,14 +31,40 @@
 /// falls back to its own print preview on seeing it.
 pub const UNSUPPORTED: &str = crate::brand::NATIVE_PRINT_UNSUPPORTED;
 
+/// Two-sided printing, as the print preview's "Two-sided" control names it. A
+/// printer setting, not a layout: the frontend has already imposed the pages
+/// (N-up, booklet), this only presets how the sheet is turned over.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Duplex {
+    /// Single-sided.
+    #[default]
+    None,
+    /// Flip on the long edge (CUPS `two-sided-long-edge`, PPD `DuplexNoTumble`).
+    Long,
+    /// Flip on the short edge (`two-sided-short-edge`, `DuplexTumble`) — what a
+    /// saddle-stitch booklet wants.
+    Short,
+}
+
 /// What the system print dialog opens preset to: the paper the frontend laid
-/// the document out on (`A4`, `Letter`, …) and colour off for a grayscale job.
-/// Linux only; the other paths ignore it.
+/// the document out on (`A4`, `Letter`, …), colour off for a grayscale job and
+/// two-sided printing. Linux only; the other paths ignore it. `duplex` defaults
+/// to single-sided so an older frontend that does not send it keeps working.
+///
+/// Windows and macOS leave two-sided to the system dialog: WebView2's
+/// `ShowPrintUI` opens Edge's own preview with no way to preset it (the
+/// programmatic `ICoreWebView2PrintSettings` belong to `Print`/`PrintToPdf`,
+/// which skip the dialog), and PDFKit's print operation takes the shared
+/// `NSPrintInfo`, whose duplex lives in an opaque Core Printing dictionary.
+/// The pages are imposed either way; the user turns the sheet over there.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintSetup {
     pub paper: String,
     pub grayscale: bool,
+    #[serde(default)]
+    pub duplex: Duplex,
 }
 
 /// GTK's PWG name for a preview paper size; `None` leaves the dialog's default.
@@ -338,8 +364,21 @@ mod imp {
         dialog.show();
     }
 
+    /// GTK's duplex setting for the preview's. GTK names the PPD tumble modes
+    /// by the axis the sheet turns about: `Horizontal` is `DuplexNoTumble`
+    /// (flip on the long edge), `Vertical` is `DuplexTumble` (the short edge).
+    pub(super) fn gtk_duplex(duplex: super::Duplex) -> gtk::PrintDuplex {
+        match duplex {
+            super::Duplex::None => gtk::PrintDuplex::Simplex,
+            super::Duplex::Long => gtk::PrintDuplex::Horizontal,
+            super::Duplex::Short => gtk::PrintDuplex::Vertical,
+        }
+    }
+
     /// Opens the dialog on the paper the pages were laid out on — so CUPS does
-    /// not fit them onto another — and, for a grayscale job, with colour off.
+    /// not fit them onto another —, for a grayscale job with colour off, and with
+    /// the two-sided mode the preview chose (the dialog still lets the user change
+    /// it; a printer without a duplexer ignores it).
     /// Orientation is left alone: a landscape sheet is already landscape-shaped
     /// in the PDF, and CUPS turns it onto the paper itself; asking for landscape
     /// as well would turn it a second time.
@@ -348,6 +387,7 @@ mod imp {
     unsafe fn preset(dialog: Gp, setup: &super::PrintSetup) {
         let settings = gtk::PrintSettings::new();
         settings.set_use_color(!setup.grayscale);
+        settings.set_duplex(gtk_duplex(setup.duplex));
         if let Some(name) = super::gtk_paper_name(&setup.paper) {
             let paper = gtk::PaperSize::new(Some(name));
             settings.set_paper_size(&paper);
@@ -422,5 +462,41 @@ mod imp {
         std::ffi::CStr::from_ptr((*err).message)
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_setup_without_duplex_is_single_sided() {
+        // An older frontend sends no `duplex` at all.
+        let setup: PrintSetup =
+            serde_json::from_str(r#"{"paper":"A4","grayscale":false}"#).unwrap();
+        assert_eq!(setup.duplex, Duplex::None);
+    }
+
+    #[test]
+    fn the_previews_duplex_words_parse() {
+        let parse = |word: &str| -> Duplex {
+            let json = format!(r#"{{"paper":"A4","grayscale":true,"duplex":"{word}"}}"#);
+            serde_json::from_str::<PrintSetup>(&json).unwrap().duplex
+        };
+        assert_eq!(parse("none"), Duplex::None);
+        assert_eq!(parse("long"), Duplex::Long);
+        assert_eq!(parse("short"), Duplex::Short);
+        assert!(serde_json::from_str::<PrintSetup>(
+            r#"{"paper":"A4","grayscale":true,"duplex":"sideways"}"#
+        )
+        .is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn duplex_maps_onto_the_tumble_axes() {
+        assert_eq!(imp::gtk_duplex(Duplex::None), gtk::PrintDuplex::Simplex);
+        assert_eq!(imp::gtk_duplex(Duplex::Long), gtk::PrintDuplex::Horizontal);
+        assert_eq!(imp::gtk_duplex(Duplex::Short), gtk::PrintDuplex::Vertical);
     }
 }

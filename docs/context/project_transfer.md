@@ -73,9 +73,43 @@ claim, and import treats the whole file as untrusted:
   only **after** every directory and file, so a link in the archive can never
   become the path a later file is written through.
 
-What import *does* adopt is the registry entry's settings. That is the feature,
-and it is a different risk class: none of those fields is executed by importing.
-The user still has to switch to the project and press something.
+What import adopts from the registry entry is an **allowlist of descriptive
+keys** (`project_transfer::ADOPTED_KEYS`, applied by `adopt_imported_entry` to
+the entry and to the `project.json` twin alike): the address of the project
+(`directory`, `mirror`, `remote`, `compute_hosts`), `git_type`/`git_provider`/
+`git_profile_url`, `description`, `categories`, `color`, `icon`, `favorite`,
+`weight` and the time/stat fields. An unknown key — one a later build adds
+included — does not travel. This replaced a drop-list (gap 74): the old
+reasoning "none of those fields is executed by importing" was wrong, because the
+registry entry is the record Tabtivity trusts for what runs and where. Reset,
+with a note in the import result (`ImportBundleResult.notes`, words in
+`transfer.note.*`, shown by both import dialogs, only when something was reset):
+
+- `auto_connect` and `key_auth` on the primary and every worker (`connectReset`;
+  the OpenVPN block and its `auto_connect` still go with `vpnDropped`). Together
+  they make the app dial the author's host at launch with `BatchMode` and
+  `accept-new`; the user turns them on again here.
+- `sandbox` comes in `enabled: false` with `dockerfile`, `image` and
+  `spec_source_hash` cleared (`sandboxReset`), keeping the resource caps and a
+  `network` of `bridge` or `none`. The `scope` goes back to the default (every
+  tab) and any other network name back to the default bridge
+  (`sandboxPolicyReset`): both are how far the author wanted this machine's
+  container to reach, not descriptive. A matching hash would answer the O#143
+  "docker build runs RUN as root" confirm in advance.
+- Every `compute_hosts` entry's `sync_code` is written `false` (`syncCodeReset`;
+  absent reads as on): a connected worker with it on gets the project's tracked
+  code pushed to the author's host.
+- `git_push_mcp` (level and protected list, `pushReset`) and `schedule_mcp`
+  (`scheduleReset`) are removed, i.e. the default level. The *export* still
+  keeps the push level (a bundle moved between one user's machines) and drops
+  only the confirmations.
+- `python_interpreter` (`interpreterReset`: Run executes it, and the path
+  rewrite would point it into the unpacked tree), `default_apps`, `agent_fence`,
+  `remote_control`, `hpc` and `run_host` are dropped without a note.
+
+The remote spec's host is kept (it is what the project is); the connect flag is
+the part that needed the user. Everything that remains is still not executed by
+importing: the user has to switch to the project and press something.
 
 ## What deliberately does not travel
 
@@ -190,7 +224,23 @@ The host is asked to leave out `./.git` and the always-rebuildable names, and
 the same filter runs again on the stream for nested ones. Folders whose
 rebuildability needs a proof (`build`, `dist`, `target`, venvs) travel from
 the host: an archive arrives in no order that could show the tool beside them.
-Both calls are user gestures (`ssh_common::user_dial`).
+Both calls are user gestures (`ssh_common::user_dial`). The stream is the
+host's to shape, so `pack_tar` bounds it (`PACK_LIMITS`, gap 86): every header
+counts against 200 000 entries and every file byte (a hard link copied from the
+bundle included, since the zip stores a full copy) against 32 GiB — the
+`tree_copy` limits. The `links`, `carried` and `skipped` collections
+hold one item per entry, so the entry bound bounds them. The pruned folders sit
+in a component trie (`PrunedDirs`), so a lookup costs the length of the path,
+not a rescan of every pruned folder per entry. A hit fails the export
+and the staged bundle is dropped, like any other export error.
+
+The user's own copies (`projects::copy_tree_core`: archive, move the mirror,
+Duplicate, the Remote -> Remote-only move-out) do not use these caps. They copy
+regular files only through no-follow handles, skip pipes and sockets, create a
+destination file `O_EXCL | O_NOFOLLOW` (refusing a link or FIFO there), fail on
+an unreadable file and never remove the source after a failed copy, but have no
+entry or byte cap (the user's decision, 2026-11-05: a `target/` or `node_modules/`
+passes 200 000 entries); the depth cap stays, as it bounds recursion.
 
 ## Nothing left out without a word
 
@@ -251,6 +301,42 @@ Time is merged, not added: a day is raised to the imported figure and a day this
 machine already recorded more on keeps its own number, so re-importing the same
 bundle twice cannot double a total.
 
+## Several projects at once: project sets
+
+"＋ → Export Projects…" (`ProjectSetExportDialog`) writes a **project set**
+(`commands/project_transfer/set.rs`): a zip of whole bundles, one per
+project, plus `project-set.json` naming them. Each member is exactly what
+"Export project…" writes; the set adds no layout of its own, so every
+guarantee above holds per member without being restated.
+
+- Members are **stored**, not deflated again (a bundle is already a zip), so
+  each one's bytes sit contiguous in the set. Import reads a member in place
+  through `set::FileWindow` (a seekable byte range of the set file); nothing
+  is unpacked to a temp file. `member_window` refuses any member that is not
+  stored plainly, not listed in the set manifest, or not one level under
+  `projects/`.
+- Export writes each member into a temp dir beside the destination, copies it
+  into the staged set and deletes it: one member's worth of extra disk at a
+  time. The destination, that temp dir and the staged set are all excluded
+  from every walk (`export_project_excluding`), because a set saved inside
+  one of its projects would otherwise pack itself. (The same rule now covers
+  the single export's own staged file.)
+- One project failing (an unknown id, a VM, an unreadable root) is reported in
+  `ExportSetReport.members` and the others still go in; only a set that ends
+  up empty is an error.
+- The switches are shared. A mirrored remote project packs its local mirror,
+  a remote-only one its host's copy while connected (`host_copy`) and only its
+  settings otherwise; single rebuildable folders and a mirrored project's host
+  copy stay choices of the single export.
+- The set uses the bundle's extension, so the one "Import Project File" picker
+  opens both: `inspect_project_bundle` answers `{kind: "project"}` or
+  `{kind: "set"}`, and a set hands over to `ProjectSetImportDialog`, which runs
+  the single `import_project_export` once per ticked member (`member` in the
+  request), in turn. Local members land in one parent folder, remote working
+  copies in another; a failure is named and the rest still land.
+- The set manifest's member list is informational: what import trusts about a
+  member comes from that member's own bundle manifest.
+
 ## Known gaps
 
 - Export is refused for VM projects (above). Carrying a qcow2 overlay is a
@@ -263,3 +349,5 @@ bundle twice cannot double a total.
 - Progress is emitted per 64 files (`project-export` event); there is no cancel.
 - A file name that is not valid UTF-8 travels under its lossy spelling (the
   zip stores names as text).
+- A project set has no per-project switches and no cancel; a remote-only
+  member is not measured before export.

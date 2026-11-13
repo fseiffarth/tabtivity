@@ -102,7 +102,7 @@ import {
   type Layer,
   type Mark,
   type MarkColor,
-  STAMP_SYMBOLS,
+  copyMarks,
   type StampSymbol,
   type TextMark,
   type TickedMark,
@@ -115,20 +115,27 @@ import { pageTextItemBoxes } from "./pageText";
 import { tickCaption, type TickCaption } from "./PdfMarkupTicks";
 import {
   applyPreset as applyPenPreset,
+  armDock,
+  armProof,
+  clampSize,
   colorOf,
-  nextStyle,
+  dockToolOf,
   PRESSURE_CURVES,
   readPenPrefs,
+  removePreset as removePenPreset,
   resetPresets as resetPenPresets,
   savePreset as savePenPreset,
   stepSize as stepPenSize,
-  TEXT_MARK_MODES,
   withColor,
   writePenPrefs,
+  type DockTool,
   type EraserMode,
+  type LassoMode,
   type PenPrefs,
   type PenSize,
   type PenStyle,
+  type PenTool,
+  type ProofPick,
   type TextMarkMode,
 } from "../../../../mobile-web/src/markup/pen";
 import { layerKey, loadLayer, saveLayer, stale, type Fingerprint } from "../../../../mobile-web/src/markup/store";
@@ -151,7 +158,12 @@ const DIALOG_REREAD_MS = 1_000;
 /** A picture's words: none, so the text marks say so. */
 const NO_RUNS: readonly TextRun[] = [];
 
-export type MarkupTool = "ink" | "box" | "text" | "stamp" | "textmark" | "select" | "eraser";
+export type MarkupTool = PenTool;
+/** How long `E` must be held before it is the quick eraser rather than a tap
+ * that arms the eraser. */
+export const QUICK_ERASE_MS = 250;
+/** How far a copy of the selection lands from it, in CSS px. */
+const COPY_OFFSET_PX = 16;
 
 /** A note being typed: where it goes, and which existing note it replaces. */
 export type NoteDraft = {
@@ -288,6 +300,13 @@ export type MarkupEdit = {
   clearSelection: () => void;
   /** Commits a change to the selected marks (a move) and keeps them selected. */
   commitSelection: (next: Layer) => void;
+  /** The selection bar's actions (`PdfMarkupLayer`). */
+  restyleSelection: (change: { color?: MarkColor; style?: PenStyle }) => void;
+  deleteSelection: () => void;
+  /** Copies the selection `offset` page units down-right and selects the copies. */
+  copySelection: (offset: number) => void;
+  canComment: boolean;
+  openComment: () => void;
   comment: CommentDraft | null;
   editComment: (text: string) => void;
   /** `null` removes the comment. */
@@ -844,6 +863,19 @@ export function usePdfMarkup({
     setSelected(null);
     setHistory((now) => commit(now, removeMarks(now.present, chosen.n, chosen.indices)));
   }, []);
+  const copySelection = useCallback((offset: number) => {
+    const chosen = selectionRef.current;
+    if (!chosen) return;
+    const copied = copyMarks(historyRef.current.present, chosen.n, chosen.indices, offset, offset);
+    if (!copied) {
+      setLimitHit(true);
+      return;
+    }
+    setCommentDraft(null);
+    setScratchLayer(null);
+    setHistory((now) => commit(now, copied.layer));
+    setSelected({ n: chosen.n, indices: copied.indices, layer: copied.layer });
+  }, []);
   /** A comment card is open only for one selected ink, box or stamp mark. */
   const comment =
     commentDraft && selection && selection.n === commentDraft.n && selection.indices.length === 1 && selection.indices[0] === commentDraft.index
@@ -917,29 +949,98 @@ export function usePdfMarkup({
     select,
     clearSelection,
     commitSelection,
+    restyleSelection,
+    deleteSelection,
+    copySelection,
+    canComment,
+    openComment,
     comment,
     editComment: (text) => setCommentDraft((draft) => (draft ? { ...draft, text } : draft)),
     saveComment,
     cancelComment: () => setCommentDraft(null),
   };
 
+  // ── The dock (`PdfMarkupDock`): six slots, the armed slot's options on a
+  // second press, the quick eraser on a held E.
+  /** The armed slot's options popover is open. */
+  const [options, setOptions] = useState(false);
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
   /** Each tool draws in its own remembered colour (`colorOf`). */
-  const setTool = useCallback((next: MarkupTool) => setPen((was) => ({ ...was, tool: next })), []);
-  /** A tool's key pressed: arms it, and pressed again on an armed pen steps
-   *  its style, on an armed eraser switches between rubbing and the area, on
-   *  the text marks steps their mode, on the stamp its symbol. */
+  const setTool = useCallback((next: MarkupTool) => {
+    setOptions(false);
+    setPen((was) => ({ ...was, tool: next }));
+  }, []);
+  /** A dock slot pressed: the armed one again opens or closes its options;
+   *  another arms its tool (Proof: what it armed last) with them closed. */
+  const pressDock = useCallback((slot: DockTool) => {
+    if (dockToolOf(toolRef.current) === slot) {
+      setOptions((open) => !open);
+      return;
+    }
+    setOptions(false);
+    setPen((was) => armDock(was, slot));
+  }, []);
+  /** A tool's key pressed: its slot, as `pressDock` — B and M arm the box and
+   *  the text marks straight away, as their own keys always did. */
   const pressTool = useCallback(
-    (next: MarkupTool) =>
-      setPen((was) => {
-        if (was.tool !== next) return { ...was, tool: next };
-        if (next === "ink") return { ...was, style: nextStyle(was.style) };
-        if (next === "eraser") return { ...was, eraser: was.eraser === "area" ? "medium" : "area" };
-        if (next === "textmark") return { ...was, textMark: TEXT_MARK_MODES[(TEXT_MARK_MODES.indexOf(was.textMark) + 1) % TEXT_MARK_MODES.length] };
-        if (next === "stamp") return { ...was, stamp: STAMP_SYMBOLS[(STAMP_SYMBOLS.indexOf(was.stamp) + 1) % STAMP_SYMBOLS.length] };
-        return was;
-      }),
-    [],
+    (next: MarkupTool) => {
+      if (next === "box" || next === "textmark") {
+        if (toolRef.current === next) setOptions((open) => !open);
+        else {
+          setOptions(false);
+          setPen((was) => armProof(was, next === "box" ? "box" : was.textMark));
+        }
+        return;
+      }
+      pressDock(dockToolOf(next));
+    },
+    [pressDock],
   );
+  /** A proofreading mark picked in the Proof slot's grid. */
+  const pickProof = useCallback((pick: ProofPick) => setPen((was) => armProof(was, pick)), []);
+  /** The quick eraser: `E` held past `QUICK_ERASE_MS` erases until it is let
+   *  go, then the tool before it is back; a shorter press is a tap of the
+   *  eraser slot. */
+  const quick = useRef<{ timer: number | null; from: MarkupTool | null }>({ timer: null, from: null });
+  const eraserKeyDown = useCallback(() => {
+    const held = quick.current;
+    if (held.timer !== null || held.from !== null) return;
+    held.timer = window.setTimeout(() => {
+      held.timer = null;
+      if (toolRef.current === "eraser") return;
+      held.from = toolRef.current;
+      setOptions(false);
+      setPen((was) => ({ ...was, tool: "eraser" }));
+    }, QUICK_ERASE_MS);
+  }, []);
+  const eraserKeyUp = useCallback(() => {
+    const held = quick.current;
+    if (held.timer !== null) {
+      window.clearTimeout(held.timer);
+      held.timer = null;
+      pressDock("eraser");
+      return;
+    }
+    const from = held.from;
+    held.from = null;
+    if (from) setPen((was) => (was.tool === "eraser" ? { ...was, tool: from } : was));
+  }, [pressDock]);
+  useEffect(() => () => {
+    if (quick.current.timer !== null) window.clearTimeout(quick.current.timer);
+  }, []);
+  // Leaving the mode closes the popover and drops a held E.
+  useEffect(() => {
+    if (active) return;
+    setOptions(false);
+    const held = quick.current;
+    if (held.timer !== null) window.clearTimeout(held.timer);
+    held.timer = null;
+    held.from = null;
+  }, [active]);
+  /** The agent panel (`PdfMarkupAgentPanel`): opened from the send header's
+   *  badge only, never by itself. */
+  const [panel, setPanel] = useState(false);
   /** A colour picked: the armed tool's — or, with marks selected, theirs. */
   const setColor = useCallback(
     (next: MarkColor) => {
@@ -948,8 +1049,12 @@ export function usePdfMarkup({
     },
     [restyleSelection],
   );
-  const setTextMark = useCallback((mode: TextMarkMode) => setPen((was) => ({ ...was, tool: "textmark", textMark: mode })), []);
-  const setStamp = useCallback((symbol: StampSymbol) => setPen((was) => ({ ...was, tool: "stamp", stamp: symbol })), []);
+  const setTextMark = useCallback((mode: TextMarkMode) => setPen((was) => armProof(was, mode)), []);
+  const setStamp = useCallback((symbol: StampSymbol) => setPen((was) => armProof(was, symbol)), []);
+  const setStraight = useCallback((straight: boolean) => setPen((was) => ({ ...was, straight })), []);
+  const setEraseHighlights = useCallback((eraseHighlights: boolean) => setPen((was) => ({ ...was, eraseHighlights })), []);
+  const setLasso = useCallback((lasso: LassoMode) => setPen((was) => ({ ...was, lasso })), []);
+  const removePreset = useCallback((i: number) => setPen((was) => removePenPreset(was, i)), []);
   const setSnap = useCallback((snap: boolean) => setPen((was) => ({ ...was, snap })), []);
   const cyclePressure = useCallback(
     () => setPen((was) => ({ ...was, pressure: PRESSURE_CURVES[(PRESSURE_CURVES.indexOf(was.pressure) + 1) % PRESSURE_CURVES.length] })),
@@ -960,7 +1065,7 @@ export function usePdfMarkup({
   const savePreset = useCallback(() => setPen(savePenPreset), []);
   const resetPresets = useCallback(() => setPen(resetPenPresets), []);
   const setStyle = useCallback((style: PenStyle) => setPen((was) => ({ ...was, tool: "ink", style })), []);
-  const setSize = useCallback((size: PenSize) => setPen((was) => ({ ...was, size })), []);
+  const setSize = useCallback((size: PenSize) => setPen((was) => ({ ...was, size: clampSize(size) })), []);
   const setEraser = useCallback((eraser: EraserMode) => setPen((was) => ({ ...was, tool: "eraser", eraser })), []);
   const stepSize = useCallback((delta: -1 | 1) => setPen((was) => stepPenSize(was, delta)), []);
 
@@ -1249,6 +1354,15 @@ export function usePdfMarkup({
     tool,
     setTool,
     pressTool,
+    pressDock,
+    pickProof,
+    options,
+    setOptions,
+    eraserKeyDown,
+    eraserKeyUp,
+    panel,
+    setPanel,
+    copyOffset: COPY_OFFSET_PX,
     color,
     setColor,
     pen,
@@ -1259,9 +1373,13 @@ export function usePdfMarkup({
     setTextMark,
     setStamp,
     setSnap,
+    setStraight,
+    setEraseHighlights,
+    setLasso,
     cyclePressure,
     applyPreset,
     savePreset,
+    removePreset,
     resetPresets,
     restyleSelection,
     deleteSelection,

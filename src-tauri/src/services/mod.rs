@@ -5,10 +5,10 @@ pub mod agent;
 pub use agent::{
     agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_defaults, agent_exec,
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
-    agent_install, agent_latest, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
+    agent_install, agent_latest, agent_privacy, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
-    assistant_model_probe, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
-    model_rows, opencode_models, opencode_session, opencode_store, transcript_watch,
+    assistant_attach, assistant_model_probe, claude_token, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
+    model_rows, muse_session, opencode_models, opencode_session, opencode_store, transcript_watch,
 };
 #[cfg(unix)]
 pub use agent::codex_package;
@@ -25,7 +25,7 @@ pub use mail::{
     mail_thunderbird,
 };
 pub mod mcp;
-pub use mcp::{git_push_mcp, help_mcp, markup_mcp, schedule_mcp, web_lane};
+pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, schedule_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
@@ -68,10 +68,17 @@ pub mod home_io;
 // special file is read, and bytes and entries are bounded.
 pub mod tree_copy;
 pub mod hpc_mode;
+// Local port forwards over a remote project's ControlMaster, so a server a
+// remote tab prints opens in this machine's browser (docs/context/port_forwards.md).
+pub mod port_forward;
 // Which IDE a project tree belongs to (`.idea/`, `.vs/` + `*.sln`, `.vscode/`)
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// The way a fenced agent with no network reaches the local Ollama and a few of
+// Tabtivity's tools (Local models only + Cut network, docs/context/local_models_only.md).
+#[cfg(unix)]
+pub mod local_lane;
 // Who owns a loopback listener (`/proc/net/tcp{,6}`, Linux): Ollama, the API
 // proxy's remembered port and the phone's sign-in relay judge the owner, not
 // the address.
@@ -134,17 +141,29 @@ pub mod sandbox;
 pub mod sheet_reader;
 pub mod skills;
 // SyncTeX read natively: reverse and forward search, page anchors, map freshness.
+pub mod sync_handoff;
 pub mod synctex;
 // The tracked external-app windows and their launch origins (managed state).
 pub mod window_registry;
 // Dictionary-backed (Hunspell/spellbook) spell check for the native editors.
 pub mod spell;
 pub mod state_gc;
+// When a run died, when no handler could say (`crash.log`'s PREVIOUS RUN DIED).
+pub mod run_heartbeat;
+// The open-file soft limit raised at launch; descriptor headroom before a
+// renderer reload.
+pub mod fd_limit;
+// TensorBoard event files read natively (the training-curves viewer).
+pub mod tfevents;
 pub mod terminal_service;
 pub mod tmux_local;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
 // (headless owner plan, H1b).
 pub mod launch_prep;
+// Agent-authored tab metadata (`cockpitMeta`), host-owned inside the tab set.
+pub mod cockpit_meta;
+// Result references (`tab_set_results`): project gate, path checks, explicit open.
+pub mod cockpit_results;
 // The shared tab set with a version and per-operation merge (headless owner
 // plan, H1): what `save_tab_layout`'s whole-snapshot write became.
 pub mod workspace;

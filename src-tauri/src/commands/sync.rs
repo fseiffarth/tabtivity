@@ -83,6 +83,11 @@ const CONTENT_VERIFY_MAX_BYTES: u64 = 1024 * 1024; // 1 MiB
 /// so a bounded IPC payload wins over completeness past this point.
 const LOCAL_NEW_ROWS_CAP: usize = 2000;
 
+/// Cap on the green rows `sync_status` adds for lockstep-tracked files with no
+/// manifest record ([`remote_sync::lockstep_unrecorded`]). No stat behind them, so
+/// the cost is payload only; past it a file keeps the rowless look.
+const LOCKSTEP_ROWS_CAP: usize = 5000;
+
 /// Per-file bound on a push's SFTP round-trips. Every transfer below rides the
 /// *pooled* session, and a dropped ControlMaster / dead `sftp-server` leaves a
 /// request waiting on a response that never comes — an unbounded wait that hangs
@@ -153,7 +158,8 @@ async fn verify_amber_identical(
     if !remote_sync::content_verify_worth_it(host, local, CONTENT_VERIFY_MAX_BYTES) {
         return None;
     }
-    let host_bytes = sftp::read_file_on(sftp, host_abs).await.ok()?;
+    // Bounded by the cutoff, not by the listing: the host's word for the size is stale by now.
+    let host_bytes = sftp::read_file_up_to(sftp, host_abs, CONTENT_VERIFY_MAX_BYTES).await.ok()??;
     let local_bytes = read_mirror_bytes(project_id, rel).await?;
     (host_bytes == local_bytes).then(|| ContentRebase {
         rel: rel.to_string(),
@@ -869,6 +875,25 @@ pub async fn sync_status(
             });
         }
     }
+    // Lockstep-owned files the manifest never recorded (committed after pairing)
+    // read green for the same reason as the branch above. With no row they fell
+    // to the tree's "none" default — a ⬆ push whose transfer `drop_lockstep_tracked`
+    // withholds, so the dialog behind it could only be cancelled.
+    for rel in remote_sync::lockstep_unrecorded(&snapshot, &lockstep_tracked, LOCKSTEP_ROWS_CAP) {
+        out.push(SyncStatusEntry {
+            auto_sync: remote_sync::is_auto(&snapshot, &rel),
+            rel_path: rel,
+            is_dir: false,
+            selected: false,
+            state: SyncState::Green,
+            excluded: false,
+            host_mtime: None,
+            local_mtime: None,
+            host_diverged: false,
+            local_diverged: false,
+            host_checked: false,
+        });
+    }
     // Re-stat the selected files concurrently over the pooled SFTP session. The
     // client multiplexes many in-flight requests over the one channel, so a large
     // selection is latency-bound (~one round-trip worth) instead of N sequential
@@ -1181,7 +1206,8 @@ pub async fn sync_resolve_if_identical(
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Read both sides fully. A side that can't be read (deleted on the host, never
     // pulled locally) is not "identical" — leave it amber for the merge viewer.
-    let Ok(host_bytes) = sftp::read_file_on(&sftp, &host_abs).await else {
+    // A file past the sync cap is never compared in memory: not provably identical.
+    let Ok(Some(host_bytes)) = sftp::read_file_up_to(&sftp, &host_abs, remote_sync::MAX_SYNC_FILE_BYTES).await else {
         return Ok(false);
     };
     let Some(local_bytes) = read_mirror_bytes(&project_id, &rel_path).await else {
@@ -1877,9 +1903,16 @@ pub async fn sync_diff(
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Host bytes now (empty if the host no longer has the file → shown as a full
     // deletion by the diff).
-    let host_bytes = sftp::read_file_on(&sftp, &host_abs)
-        .await
-        .unwrap_or_default();
+    let host_bytes = match sftp::read_file_up_to(&sftp, &host_abs, remote_sync::MAX_SYNC_FILE_BYTES).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            return Err(format!(
+                "'{rel_path}' is larger than {} MiB on the host — too large to diff here",
+                remote_sync::MAX_SYNC_FILE_BYTES / (1024 * 1024)
+            ));
+        }
+        Err(_) => Vec::new(),
+    };
     let mirror_root = remote_sync::mirror_dir(&project_id);
     // Compute the diff LOCALLY (never over SSH — the mirror is on disk and the
     // host bytes are already in memory). Off the async thread: git spawns a
@@ -2018,6 +2051,24 @@ async fn pull_subtree(
         } else {
             format!("'{rel}' has nothing to pull — the host holds no regular file there")
         });
+    }
+
+    // Room for it, before anything is written (gap 86): the listing's sizes are the
+    // host's word and the preview the user confirmed is the only other bound, so a
+    // pull that cannot fit is refused here rather than filling the disk part-way.
+    // Only what the mirror does not hold already counts (a re-pull replaces its own files).
+    let room = {
+        let mirror = remote_sync::mirror_dir(project_id);
+        let listed: Vec<(String, u64)> = files.iter().map(|f| (f.rel.clone(), f.size)).collect();
+        app_core::rt::spawn_blocking(move || {
+            let needed = remote_sync::pull_bytes_needed(&mirror, &listed);
+            remote_sync::pull_space_refusal(&mirror, needed)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    if let Some(refusal) = room {
+        return Err(refusal);
     }
 
     let total = files.len();
@@ -2170,7 +2221,7 @@ async fn try_rsync_pull(target: &RemoteTarget, rel: &str, files: &[remote_sync::
 fn diff_no_index_command(cwd: &std::path::Path, old: &std::path::Path, new: &std::path::Path) -> std::process::Command {
     let args = ["diff", "--no-index", "--", &old.to_string_lossy(), &new.to_string_lossy()];
     let mut cmd = crate::commands::git::hardened_git_command_in(cwd, &args);
-    let ceiling = cwd.parent().map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+    let ceiling = cwd.parent().map(|p| crate::paths::without_verbatim_prefix(p.canonicalize().unwrap_or_else(|_| p.to_path_buf())));
     cmd.env("GIT_CEILING_DIRECTORIES", ceiling.unwrap_or_else(|| cwd.to_path_buf()));
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
     cmd
@@ -2306,6 +2357,51 @@ mod tests {
             assert!(gates.iter().any(|g| chunk.contains(g)), "{name} does not check the remote-only posture");
         }
         assert!(commands >= 15, "the scan found only {commands} commands");
+    }
+
+    /// The phone's Diverged resolve drives these commands through the window
+    /// (`lib/mobileDiverged`: `sync_pull` for "use the host's copy",
+    /// `sync_apply_delete` with side "local" for "accept the host's deletion"),
+    /// and adds no destructive path of its own. So the loss of local files
+    /// reaches `services::local_loss` here, whoever asks: a pull files the
+    /// mirror edits it is about to overwrite *before* it writes (the evidence is
+    /// gone afterwards), and a mirror copy's deletion files `Deleted` *after* the
+    /// unlink succeeded (a failed delete logs no loss). A change that moves or
+    /// drops either record fails here.
+    #[test]
+    fn the_destructive_commands_a_phone_resolve_drives_file_their_local_loss() {
+        let source = include_str!("sync.rs");
+        let production = &source[..source.find("#[cfg(test)]\nmod tests").expect("tests module")];
+        let body = |start: &str| {
+            let from = production.find(start).unwrap_or_else(|| panic!("{start} is gone"));
+            let rest = &production[from + start.len()..];
+            &production[from..from + start.len() + rest.find("\n}\n").expect("end of the function")]
+        };
+
+        let delete = body("pub async fn sync_apply_delete(");
+        let removed = delete.find("std::fs::remove_file(&mirror_path)").expect("the mirror copy is removed here");
+        let recorded = delete.find("local_loss::record_paths(").expect("a mirror deletion is recorded");
+        assert!(removed < recorded, "the record follows the unlink, so a failed delete logs nothing");
+        let record = &delete[recorded..];
+        let record = &record[..record.find(");").expect("end of the call")];
+        assert!(record.contains("LossKind::Deleted") && record.contains("LossSource::Sync") && record.contains("vec![rel_path.clone()]"), "{record}");
+
+        let pull = body("async fn pull_subtree(");
+        let warned = pull.find("warn_overwritten(project_id, \"Pull from the host\", doomed)").expect("a pull files the edits it overwrites");
+        let doomed = pull.find("unsynced_local_edits(project_id, manifest, &rels)").expect("the edits are collected first");
+        assert!(doomed < warned, "collected before the write");
+        for write in ["try_rsync_pull(", "pull_file("] {
+            if let Some(at) = pull.find(write) {
+                assert!(warned < at, "{write} runs after the record, not before");
+            }
+        }
+        let overwritten = body("fn warn_overwritten(");
+        assert!(overwritten.contains("LossKind::Overwritten") && overwritten.contains("LossSource::Sync"), "{overwritten}");
+
+        // And both entry points the window can reach go through `pull_subtree`.
+        for command in ["pub async fn sync_pull(", "pub async fn sync_whole_project("] {
+            assert!(body(command).contains("pull_subtree("), "{command} no longer pulls through the recorded path");
+        }
     }
 
     /// A status pass judged `f` against its old base; a push recorded a new base

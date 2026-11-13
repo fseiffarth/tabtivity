@@ -1,3 +1,4 @@
+import { isTabKey } from "../lib/shortcuts/keyNames";
 import { isVisibleControl } from "./useModalFocus";
 import { useEffect, useLayoutEffect, useRef, type FocusEvent, type KeyboardEvent } from "react";
 import { headerMenuCloseDelay, useHeaderHoverMenuStore } from "../stores/headerHoverMenu";
@@ -44,7 +45,7 @@ export function useHeaderMenu(id: string) {
   }, [id, open]);
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.defaultPrevented) return;
-    if (e.key === "Tab") { e.stopPropagation(); return; }
+    if (isTabKey(e)) { e.stopPropagation(); return; }
     if (open && e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();

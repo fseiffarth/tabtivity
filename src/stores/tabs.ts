@@ -7,6 +7,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { InternalViewer } from "../lib/viewers/fileUtils";
 import { forgetPty } from "../lib/agents/promptCount";
 import { forgetTypedLine } from "../lib/agents/typedClear";
+import { autoLabelOnClear, holdsAutoLabel, withAutoLabel } from "../lib/agents/autoTabName";
 import { forgetPromptTrail } from "./agents/promptTrail";
 import { BOX_SCOPE_PREFIX, ROOT_SCOPE, splitPtyId } from "../lib/terminal/ptyId";
 import { METRIC, agentMetricLeaf, sub } from "../lib/usageMetrics";
@@ -17,10 +18,12 @@ import { useRunHostPrefStore } from "./remote/runHostPref";
 import { withdrawnTabKinds } from "../lib/experimental";
 import { useSettingsStore } from "./settings";
 import { basename, relativePathWithin, resolvePath } from "../lib/paths";
-import { getDetachedWindowContext } from "./detachedContext";
+import { getDetachedWindowContext, type DetachedWindowContext } from "./detachedContext";
+import { usePopoutViewStore } from "./popoutView";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { currentTabCommand } from "../lib/brandMigration";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../lib/assistant";
+import { readCockpitMeta, sameCockpitMeta } from "../lib/cockpit/agentNotes";
 import type {
   AddTabOpts,
   DetachedEditPayload,
@@ -125,6 +128,7 @@ export {
   findGroup,
   findGroupOfTab,
   orderedTabKeys,
+  stepOrderedTab,
 } from "./tabs/layoutTree";
 export {
   BLOB_TAB_CMD,
@@ -364,6 +368,9 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     stack: t.stack,
     mark: t.mark,
     todoId: t.todoId,
+    autoLabel: t.autoLabel,
+    autoNamed: t.autoNamed || undefined,
+    taskName: t.taskName,
     hostSession: t.hostSession || undefined,
     apiKey: t.apiKey,
     localLaunch: t.localLaunch,
@@ -473,6 +480,16 @@ interface TabsStore {
   // loud. Falls through to `renameTab` when they are the same, keeping the
   // detached-popout forwarding path intact.
   renameTabInScope: (scope: string, key: string, label: string) => void;
+  /** Name an agent tab of `scope` by its task (`stores/agents/autoTabNames`):
+   *  only while it still holds the label Tabtivity gave it, checked inside the
+   *  write, so a rename the user made in between always wins. Sets
+   *  `taskName` to `label` and `autoNamed` true; the tab's own label stays
+   *  its CLI's name (the desktop shows the task only on hover). */
+  autoNameTabInScope: (scope: string, key: string, label: string) => void;
+  /** After a `/clear`, arm an unarmed agent tab of `scope` for a name from the
+   *  new conversation (`autoLabelOnClear`, checked inside the write). Returns
+   *  whether the tab now holds its automatic label. */
+  armAutoLabelInScope: (scope: string, key: string) => boolean;
   // Paint one tab of the ACTIVE scope with a palette colour, or clear it with
   // `undefined` (see TabEntry.color). Forwards to the main window from a popout
   // exactly as `renameTab` does.
@@ -592,6 +609,10 @@ interface TabsStore {
   // freshly opened duplicate (the `tex` → `texworkspace` upgrade in
   // FileViewerPane / openTexWorkspace). No-op when unchanged.
   setTabViewer: (key: string, viewer: InternalViewer) => void;
+  // Point ONE embed tab at another path of the same file — a remote project's
+  // mirror copy ⇄ its host copy (`lib/remote/fileSide`). Label, viewer and
+  // viewer state stay; works on any scope's tab. No-op when unchanged.
+  setTabEmbedPath: (key: string, embedPath: string) => void;
   // Merge a patch into an embed tab's persisted viewer position (scroll/zoom/
   // pan). The viewer panes call this as the reader scrolls/zooms; the debounced
   // saveLayout effect then flushes it to project.json (see ViewerState).
@@ -844,6 +865,8 @@ interface TabsStore {
     detachedGroupId: string,
     tab: Omit<TabEntry, "key">,
     targetGroupId: string,
+    /** `besideActive`: right of the group's active tab, as `addTab`'s. */
+    opts?: { besideActive?: boolean },
   ) => string | null;
   // Like `addDetachedTab`, but the new tab carves a NEW pane at `edge` of
   // `targetGroupId` within the popout's subtree instead of appending to it — a
@@ -959,6 +982,9 @@ interface TabsStore {
     localFile: string;
     requestHash: string;
     spec: Omit<TabEntry, "key">;
+    /** An already-open tab of the scope that takes the request instead of a
+     *  new one (an agent nothing has been asked of yet). */
+    reuse?: (tabs: readonly TabEntry[]) => TabEntry | undefined;
   }) => Promise<TabEntry>;
   // Persist an explicit scope's tabs+layout (incl. its detached groups) to its
   // project.json. `saveLayout` is the current-scope convenience over this; the
@@ -1108,6 +1134,15 @@ function writeScope(
   };
 }
 
+/** In a popout heap, the context when `scope` is the popout's own: its tabs and
+ *  subwindows are the popout view's (`stores/popoutView`), and a write to them
+ *  goes to the main window as an edit. Null in the main window, and for another
+ *  scope's tabs. */
+function popoutOwns(scope: string): DetachedWindowContext | null {
+  const ctx = getDetachedWindowContext();
+  return ctx && ctx.scope === scope ? ctx : null;
+}
+
 /** Convenience accessor for a scope's mutable state. */
 function scopeState(s: TabsStore, scope: string) {
   return {
@@ -1240,9 +1275,16 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
-  focusGroup: (groupId) => get().focusGroupInScope(get().scope, groupId),
+  focusGroup: (groupId) => get().focusGroupInScope(getDetachedWindowContext()?.scope ?? get().scope, groupId),
 
   focusGroupInScope: (scope, groupId) => {
+    // Popout heap: its subwindows are the popout view's, and which one is
+    // focused is this window's own business (the main window keeps no focus
+    // for a popout's panes).
+    if (popoutOwns(scope)) {
+      usePopoutViewStore.getState().focusGroup(groupId);
+      return;
+    }
     set((s) => {
       const { tabs, layout } = scopeState(s, scope);
       if (!findGroup(layout, groupId)) return {};
@@ -1285,6 +1327,17 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   setGroupActive: (groupId, key) => get().setGroupActiveInScope(get().scope, groupId, key),
 
   setGroupActiveInScope: (scope, groupId, key) => {
+    // Popout heap: focus the subwindow here, stream the activation to the main
+    // window (whose reseed redraws the strip).
+    const ctx = popoutOwns(scope);
+    if (ctx) {
+      const view = usePopoutViewStore.getState();
+      const group = findGroup(view.tree, groupId);
+      if (!group || !group.tabKeys.includes(key)) return;
+      view.focusGroup(groupId);
+      if (group.activeKey !== key) ctx.pushEdit({ kind: "activate", key });
+      return;
+    }
     set((s) => {
       const { tabs, layout } = scopeState(s, scope);
       const group = findGroup(layout, groupId);
@@ -1344,7 +1397,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const key = nextKey(tab.kind);
     // Spread first so a stray `key` on the payload can't shadow the minted one.
     const entry: TabEntry = {
-      ...withTmuxSession(withRunHostDefault(scope, tab), scope),
+      ...withTmuxSession(withRunHostDefault(scope, withAutoLabel(scope, tab)), scope),
       key,
       scope,
       launchedAt: Date.now(),
@@ -1396,7 +1449,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // up to a flush interval ago: merge what is still staged (§3.1).
     const spec = duplicateSpec({ ...source, viewerState: savedViewerState(source) });
     const entry: TabEntry = {
-      ...withTmuxSession(withRunHostDefault(owner, { ...spec, ...overrides }), owner),
+      ...withTmuxSession(withRunHostDefault(owner, withAutoLabel(owner, { ...spec, ...overrides })), owner),
       key: nextKeyValue,
       launchedAt: Date.now(),
     };
@@ -1467,6 +1520,38 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         s.focusedGroupByScope[scope] ?? null,
       );
     });
+  },
+
+  autoNameTabInScope: (scope, key, label) => {
+    const nextLabel = label.trim();
+    if (!nextLabel) return;
+    set((s) => {
+      const tabs = s.tabsByScope[scope];
+      const tab = tabs?.find((t) => t.key === key);
+      if (!tabs || !tab || !holdsAutoLabel(tab)) return {};
+      if (tab.taskName === nextLabel && tab.autoNamed) return {};
+      const named = tabs.map((t) => (t.key === key ? { ...t, taskName: nextLabel, autoNamed: true } : t));
+      return writeScope(s, scope, named, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
+    });
+  },
+
+  armAutoLabelInScope: (scope, key) => {
+    let armed = false;
+    set((s) => {
+      const tabs = s.tabsByScope[scope];
+      const tab = tabs?.find((t) => t.key === key);
+      if (!tabs || !tab) return {};
+      if (holdsAutoLabel(tab)) {
+        armed = true;
+        return {};
+      }
+      const autoLabel = autoLabelOnClear(scope, tab);
+      if (autoLabel === undefined) return {};
+      armed = true;
+      const next = tabs.map((t) => (t.key === key ? { ...t, autoLabel } : t));
+      return writeScope(s, scope, next, s.layoutByScope[scope] ?? null, s.focusedGroupByScope[scope] ?? null);
+    });
+    return armed;
   },
 
   setTabColor: (key, color) => {
@@ -1771,6 +1856,13 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   },
 
   removeTabInScope: (scope, key) => {
+    // Popout heap: the popout's own close (its × path), so the last tab closes
+    // the window exactly as the button does.
+    const ctx = popoutOwns(scope);
+    if (ctx) {
+      ctx.closeTab(key);
+      return;
+    }
     // A tab that lives in a popout is not in this scope's in-window layout at
     // all, and its pane is mounted in the detached window — so it is closed the
     // way `closeDetachedGroup` closes one, PTY kill included, whether or not
@@ -2009,6 +2101,25 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       });
       // Stable array when nothing moved, so a repeated heal attempt does not
       // churn the tabs array / wake the saveLayout debounce.
+      if (!changed) return {};
+      return writeScope(s, owner, nextTabs, layout, focusedGroupId);
+    });
+  },
+
+  setTabEmbedPath: (key, embedPath) => {
+    set((s) => {
+      const owner = scopeOfTab(s, key);
+      const { tabs, layout, focusedGroupId } = scopeState(s, owner);
+      let changed = false;
+      const nextTabs = tabs.map((t) => {
+        if (t.key !== key || t.kind !== "embed" || t.embedPath === embedPath) return t;
+        changed = true;
+        // A side flip of the old path would override the new path's own side
+        // (`ViewerState.fileSide`): the new path IS the side asked for.
+        if (t.viewerState?.fileSide === undefined) return { ...t, embedPath };
+        const { fileSide: _flip, ...viewerState } = t.viewerState;
+        return { ...t, embedPath, viewerState };
+      });
       if (!changed) return {};
       return writeScope(s, owner, nextTabs, layout, focusedGroupId);
     });
@@ -2339,6 +2450,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
   setGroupFiles: (groupId, open) => get().setGroupFilesInScope(get().scope, groupId, open),
 
   setGroupFilesInScope: (scope, groupId, open) => {
+    // Popout heap: the same `files` edit the popout's ◫ button streams.
+    const ctx = popoutOwns(scope);
+    if (ctx) {
+      if (findGroup(usePopoutViewStore.getState().tree, groupId)) ctx.pushEdit({ kind: "files", groupId, open });
+      return;
+    }
     set((s) => {
       const { tabs, layout, focusedGroupId } = scopeState(s, scope);
       if (!layout || !findGroup(layout, groupId)) return {};
@@ -3281,7 +3398,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     if (closedKey) forgetClosedTab(scope, closedKey);
   },
 
-  addDetachedTab: (scope, detachedGroupId, tab, targetGroupId) => {
+  addDetachedTab: (scope, detachedGroupId, tab, targetGroupId, opts) => {
     let created: string | null = null;
     set((s) => {
       const entries = s.detachedGroupsByScope[scope] ?? [];
@@ -3333,11 +3450,12 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
       // (a single-pane popout, or a stale target id).
       const target = findGroup(rec.subtree, targetGroupId) ?? allGroups(rec.subtree)[0];
       if (!target) return {};
-      const nextSub = mapGroup(rec.subtree, target.id, (g) => ({
-        ...g,
-        tabKeys: [...g.tabKeys, key],
-        activeKey: key,
-      }));
+      const nextSub = mapGroup(rec.subtree, target.id, (g) => {
+        const at = opts?.besideActive && g.activeKey ? g.tabKeys.indexOf(g.activeKey) : -1;
+        const tabKeys = [...g.tabKeys];
+        tabKeys.splice(at >= 0 ? at + 1 : tabKeys.length, 0, key);
+        return { ...g, tabKeys, activeKey: key };
+      });
       const nextEntries = [...entries];
       nextEntries[idx] = { ...rec, subtree: nextSub };
       // Append the payload so the MAIN window's pane layer mounts + owns the PTY;
@@ -3631,7 +3749,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const detached = s.detachedGroupsByScope[scope];
     const hidden = s.hiddenGroupsByScope[scope];
     const merged = withHiddenDocked(
-      withDetachedDocked(serializeTree(layout), detached),
+      withDetachedDocked(serializeTree(layout, s.pendingRespawnByScope[scope]), detached),
       hidden,
     );
     const tabGroups = pruneSavedTree(merged, keepKeys);
@@ -3839,7 +3957,7 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     });
   },
 
-  hydrateThenCreateInScope: async ({ scope, cwd, localFile, requestHash, spec }) => {
+  hydrateThenCreateInScope: async ({ scope, cwd, localFile, requestHash, spec, reuse }) => {
     // A failed backend read propagates (rejecting the request): swallowing it
     // and creating the tab anyway would let `persistScopeStrict` below OVERWRITE
     // the saved layout with just this one tab. `createEmptyScope` marks a scope
@@ -3850,7 +3968,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     const existing = get().tabsByScope[scope]?.find(
       (tab) => tab.mobileRequestHash === requestHash,
     );
-    const created = existing ?? get().addTabToScope(scope, { ...spec, mobileRequestHash: requestHash });
+    const created =
+      existing ??
+      reuse?.(get().tabsByScope[scope] ?? []) ??
+      get().addTabToScope(scope, { ...spec, mobileRequestHash: requestHash });
     await get().persistScopeStrict(scope, localFile);
     return created;
   },
@@ -3922,7 +4043,10 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
         // via get().tabs). Prune AFTER merging so dropped (non-restorable) tabs in
         // a detached group are pruned consistently.
         const detached = get().detachedGroupsByScope[scope];
-        const merged = withDetachedDocked(serializeTree(layout), detached);
+        const merged = withDetachedDocked(
+          serializeTree(layout, get().pendingRespawnByScope[scope]),
+          detached,
+        );
         const groups = pruneSavedTree(merged, keep);
         // The layout is keyed by PROJECT ID now, not by the path to a
         // project.json: it lives in the state dir, because the host reads it back
@@ -4365,6 +4489,11 @@ export function adoptSyncOutcome(scope: string, outcome: WorkspaceSyncOutcome, s
       const ownColor = agreed !== undefined && agreed.color !== next.color;
       if (!ownLabel && held.label !== next.label) next = { ...next, label: held.label };
       if (!ownColor && color !== next.color) next = { ...next, color };
+      // The agent's notes are the host's: always the stored copy, never an
+      // edit of this window's. A new `revision` is the only change that
+      // replaces the object (so an unchanged tab keeps its identity).
+      const meta = readCockpitMeta(held.cockpitMeta);
+      if (!sameCockpitMeta(meta, next.cockpitMeta)) next = { ...next, cockpitMeta: meta };
       fields.set(t.key, {
         label: ownLabel ? agreed.label : held.label,
         color: ownColor ? agreed.color : color,

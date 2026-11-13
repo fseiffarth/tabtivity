@@ -397,3 +397,203 @@
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
+
+2427. **Project boxes redesign: one colour, one way out, one way in.** The box UI
+    was rebuilt in 2026-11 (`docs/box_redesign_plan.md`): box pills with an
+    always-visible ✕ and a fold pill, quick create from every door, one shared
+    membership checklist, the member chip on tabs, the "Start in…" fly-out, the
+    accordion side panel, the box sheet, boxes in the header search and Ctrl+K,
+    the popout title-bar mark and a feature hint. **Nothing is live-tested**; each
+    row below is one thing to click through. Frontend, except `create_box`/
+    `patch_box` (new optional arguments; until the running window is restarted the
+    frontend falls back to the older calls). `docs/box_redesign_handoff.md` lists
+    the commits, `UntestedTag` ids and flagged choices.
+    - [ ] 🖐️ Manual test — **Enter and leave a box.** Create two boxes
+      with two projects each, then click a box pill: the strip narrows
+      to that box's projects and takes the box colour, the pill shows an
+      always-visible ✕. Click the ✕ (and again with All projects in the
+      box list, and with the first row of the header search): you are
+      back on the project the strip was on. In the list the box you are
+      in has a ✓ and the sliced box is bold; a click on the caret keeps
+      the list open until a second click, a pick, Escape or a press
+      elsewhere. Dissolve the box you are standing in: the strip leaves
+      it first.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Narrow windows and the empty state.**
+      Shrink the window through the three width tiers: the box pills
+      drop to 3 and then to the selected box alone, and the fold pill ▣▾
+      +N (a bare count when no pill fits) opens the same list. With no
+      box at all, a dashed + Box pill stands where the box pills would;
+      one click asks for a name and enters the new box.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Quick create from every door.** New box
+      through: the + menu's New Box, the box list's New Box row, the
+      ghost pill, Box these (N)… after Ctrl-clicking pills, New box with
+      <project>… on a pill, Ctrl+K → New box…. Each asks for a name
+      pre-filled "Box 1" (the next free number), Enter creates the box
+      and you are inside it. An empty name, a duplicate (any case) and
+      an 81-character name are refused with a reason on the prompt.
+      Alt-drag one pill onto another: the two are boxed, you enter the
+      box and its pill name is in rename.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Membership checklists.** Box pill menu →
+      Members and project pill menu → Boxes show one checklist: it stays
+      open across toggles, scrolls without a row cap, gets a filter
+      field past 8 rows and lists closed projects labelled "closed" (add
+      and remove one without opening it). Inside a box, a member pill's
+      menu has Remove <project> from <box>. Dissolve box… asks, leaves
+      the box first when you are in it, and the projects stay.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **The box sheet (Edit box…).** Edit box…
+      opens one box (the box you are in, else the first): name (checked as
+      you type), colour, the member list (closed projects too, badges
+      for closed/container/VM/remote and the swatches of the other boxes
+      holding the project, a filter field), one trust line per kind of
+      member that runs outside its container/VM or needs a connection,
+      the folder with Open, the phone-access switch and a Dissolve box…
+      footer. Save sends only the difference: add a member from a pill
+      menu while the sheet is open, then Save a rename: the new member is
+      still there. A refused name stays on the sheet with its reason.
+      Switch phone access on, turn persistent local sessions off in
+      Settings and reopen the sheet: the switch is still there (access
+      can always be switched off) with a line saying it is on but cannot
+      work; with the box's access off the line says it needs them.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Keyboard and swatches.**
+      Ctrl+Shift+PageDown/PageUp walk home → box 1 … box N → back to the
+      project you came from (and unslice); with one box it alternates
+      box and home. While a box is sliced, Ctrl+Shift+Tab and the
+      steering digits visit only the visible pills. A click on a project
+      pill's coloured box swatch opens that box (a small list when the
+      project is in several).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Which project is this tab in?** Open an
+      agent, a shell and a Files tab from different members inside a
+      box: each tab wears a dot in its project's colour after its label
+      (a square for the whole box), dot only when the tab bar is under
+      about 520 px; viewer and monitor tabs show none. The tab's hover
+      card has a member row. Pop a tab out: the popout strip shows the
+      same chip. Rename a tab: the chip stays.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **The + menu starts where you are.** Inside a
+      box with an agent tab of member A active, press + (and
+      Ctrl+Shift+N, Ctrl+Shift+M, Ctrl+1): the new tab starts in A, and
+      the menu header names the target. Hover Agents/Shell/Files for
+      Start in…: pick member B or the whole box; the tab starts there
+      and a worktree choice follows B's repository. Monitor, Disk usage
+      and the like keep the box folder. The popout's + menu does the
+      same; the empty group starts in the box folder.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Side panel accordion.** In a box the side
+      panel shows one section per member: one open at a time, each
+      header with the project's colour dot, a git dot (only when dirty,
+      staged, unpushed or broken; none for remote members), and the
+      agent count. Folding is remembered per box across a restart. Drag
+      a file over a folded section for about ⅔ s: it opens, and dropping
+      moves the file there. The ⋯ on a header opens a menu (Files/Git,
+      Remote/Local, open folder, project settings, Open as tab: a files
+      tab with the git bar at that member's root). The toolbar 🔍 opens
+      one search field above the sections that searches the expanded
+      member (disabled on a remote member's Remote side). Drag a header's
+      grip to reorder the members; add a project from the box pill menu
+      in the meantime and reorder again: the new member is still there.
+      An empty box shows "No projects yet" with an Add projects… button
+      that opens the box sheet (no button in a popout).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Search, palette and popout.** Focus the
+      header search with nothing typed: the boxes are listed with their
+      coloured swatch and member names; inside a box "All projects"
+      leads. Type a member's name: its box appears, and project rows
+      wear their boxes' swatches. Ctrl+K lists a Boxes group (Enter
+      enters the box), New box…, Show all projects (only inside a box),
+      and once you type, Add <project> to <box>; a tab row of a box
+      scope names its box. A popout showing a box has ▣ and the box name
+      in the box colour in its title bar.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Member agents on the box pill, and the
+      hint.** Start an agent in a member project while the box is closed
+      on the strip: the box pill's status bar (and its row in the list)
+      shows it, and a click on that bar opens the member's tab. With
+      four or more projects and no box, the feature hint "Group related
+      projects in a box" points at the ghost pill after the usual pause;
+      it never shows once a box exists. The lesson "Group projects into
+      a box" walks through the seven steps, and Help → Containers, VMs
+      and project boxes describes the same flow.
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS

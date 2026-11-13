@@ -77,21 +77,13 @@ vi.mock("../../components/tabs/NewTabMenu", () => ({
 import { allGroups, useTabsStore } from "../../stores/tabs";
 import { useProjectsStore } from "../../stores/projects";
 import { useCalendarStore } from "../../stores/calendar/calendar";
-import {
-  clampRootOverlayFrame,
-  filledRootOverlayFrame,
-  rootOverlayFrameDrag,
-  toggleRootConsole,
-  useRootOverlayStore,
-  MIN_ROOT_OVERLAY_HEIGHT,
-  MIN_ROOT_OVERLAY_WIDTH,
-} from "../../stores/rootOverlay";
+import { toggleRootConsole, useRootOverlayStore } from "../../stores/rootOverlay";
 import { setCalendarWriteHandler } from "../../lib/calendar/calendarWriteHook";
 import { useRootReviewStore } from "../../stores/rootReview";
 import { resetArrivals, useArrivalsStore } from "../../stores/calendar/arrivals";
 import { RootOverlayHost } from "../../components/layout/RootOverlay";
 import { SHORTCUT_DEFS, chordMatches, resolveChord } from "../../lib/shortcuts/shortcuts";
-import { BRAND, tabCommand } from "../../lib/brand";
+import { BRAND, storageKey, tabCommand } from "../../lib/brand";
 
 function seedRootTabs() {
   const tabs = useTabsStore.getState();
@@ -111,9 +103,10 @@ beforeEach(() => {
     focusedGroupByScope: {},
   });
   useProjectsStore.setState({ rootDir: "/r", activeId: "p1" });
-  useRootOverlayStore.setState({ open: false, frame: null, filled: false, installTabs: {} });
+  localStorage.clear();
+  useRootOverlayStore.setState({ open: false, installTabs: {} });
   useCalendarStore.setState({ events: [], tasks: [] });
-  useRootReviewStore.setState({ proposals: [], count: 0, panel: false, busy: false, error: null });
+  useRootReviewStore.setState({ proposals: [], imports: [], count: 0, busy: false, error: null });
   resetArrivals();
 });
 
@@ -158,6 +151,33 @@ describe("RootOverlayHost", () => {
     }
     // The scope's own active tab (the last added) is the one shown.
     expect(latest.get(b.key)?.visible).toBe(true);
+  });
+
+  it("the view's strip, + and ⚿ badge sit in the shell's sub-bar, the file toggle beside ⤢", async () => {
+    seedRootTabs();
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().show());
+    const bar = document.querySelector(".root-overlay-subbar") as HTMLElement;
+    expect(bar.contains(screen.getByText("Claude"))).toBe(true);
+    expect(bar.contains(screen.getByTitle("New tab"))).toBe(true);
+    expect(bar.querySelector(".root-overlay-rights.status")).toBeTruthy();
+    expect(bar.querySelector(".subwindow-files-toggle")).toBeTruthy();
+    // Unsplit, the layout under the bar has no strip of its own.
+    expect(document.querySelectorAll(".root-overlay-group")).toHaveLength(0);
+  });
+
+  it("Escape defers to an open + menu, then closes the console", async () => {
+    seedRootTabs();
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().show());
+    fireEvent.click(screen.getByTitle("New tab"));
+    expect(screen.getByTestId("pick-shell")).toBeTruthy();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useRootOverlayStore.getState().open).toBe(true);
+    fireEvent.click(screen.getByTestId("pick-shell"));
+    expect(screen.queryByTestId("pick-shell")).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
   it("switches tabs locally and closes a tab in the ROOT scope", async () => {
@@ -279,13 +299,12 @@ describe("RootOverlayHost", () => {
     expect(screen.queryByRole("button", { name: new RegExp(String.raw`${BRAND.display} tools`) })).toBeNull();
     const approvals = screen.getByRole("button", { name: /Approvals/ });
     await act(async () => { fireEvent.click(approvals); });
-    expect(useRootReviewStore.getState().panel).toBe(true);
     expect(screen.getByRole("region", { name: "Agent proposals" })).toBeTruthy();
     // The tools' own switch stays in Settings: the console writes none.
     const { invoke } = await import("@tauri-apps/api/core");
     expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
     await act(async () => { fireEvent.click(approvals); });
-    expect(useRootReviewStore.getState().panel).toBe(false);
+    expect(screen.queryByRole("region", { name: "Agent proposals" })).toBeNull();
   });
 
   // The panel's anchor is re-read from the button whenever the console's frame
@@ -295,7 +314,10 @@ describe("RootOverlayHost", () => {
   // goes white. A console with a REMEMBERED frame is what exposes it.
   it("a moved console still opens the panel — the anchor effect does not loop", async () => {
     seedRootTabs();
-    useRootOverlayStore.setState({ frame: { x: 40, y: 60, width: 900, height: 600 } });
+    localStorage.setItem(
+      storageKey("rootConsoleFrame"),
+      JSON.stringify({ frame: { x: 40, y: 60, width: 900, height: 600 }, filled: false }),
+    );
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().show());
     const approvals = screen.getByRole("button", { name: /Approvals/ });
@@ -307,9 +329,25 @@ describe("RootOverlayHost", () => {
     seedRootTabs();
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().show());
-    await act(async () => useRootReviewStore.getState().setPanel(true));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Approvals/ })); });
+    expect(screen.getByRole("region", { name: "Agent proposals" })).toBeTruthy();
     await act(async () => useRootOverlayStore.getState().close());
-    expect(useRootReviewStore.getState().panel).toBe(false);
+    expect(screen.queryByRole("region", { name: "Agent proposals" })).toBeNull();
+  });
+
+  it("Escape closes the open ✓ panel first and leaves the console up", async () => {
+    seedRootTabs();
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().show());
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Approvals/ })); });
+    expect(screen.getByRole("region", { name: "Agent proposals" })).toBeTruthy();
+    // From the body, so it passes the document (the portal's handler) before the window's.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(useRootOverlayStore.getState().open).toBe(true);
+    await act(async () => { await new Promise((r) => setTimeout(r, 400)); });
+    expect(screen.queryByRole("region", { name: "Agent proposals" })).toBeNull();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(useRootOverlayStore.getState().open).toBe(false);
   });
 
   it("Escape outside a pane closes it; the project stays where it was", async () => {
@@ -546,55 +584,24 @@ describe("the console's frame", () => {
     seedRootTabs();
     render(<RootOverlayHost />);
     await act(async () => useRootOverlayStore.getState().show());
+    const row = () => JSON.parse(localStorage.getItem(storageKey("rootConsoleFrame")) ?? "null");
     fireEvent.click(screen.getByTitle("Fill the window"));
-    expect(useRootOverlayStore.getState().filled).toBe(true);
+    expect(row()).toEqual({ frame: null, filled: true });
+    expect(screen.getByRole("dialog").style.position).toBe("fixed");
     fireEvent.click(screen.getByTitle("Back to the previous size"));
-    expect(useRootOverlayStore.getState()).toMatchObject({ filled: false, frame: null });
+    expect(row()).toEqual({ frame: null, filled: false });
   });
 
-  it("clamps a remembered frame into the window it actually opens in", () => {
-    // Sized on a wide external display, opened on a laptop panel.
-    expect(clampRootOverlayFrame({ x: 2400, y: 1300, width: 1600, height: 900 }, 1280, 800)).toEqual({
-      x: 0,
-      y: 0,
-      width: 1280,
-      height: 800,
-    });
-    // A window smaller than the minimum still yields a usable console at 0,0.
-    expect(clampRootOverlayFrame({ x: 10, y: 10, width: 300, height: 100 }, 320, 200)).toEqual({
-      x: 0,
-      y: 0,
-      width: MIN_ROOT_OVERLAY_WIDTH,
-      height: MIN_ROOT_OVERLAY_HEIGHT,
-    });
-    expect(filledRootOverlayFrame(1000, 600)).toEqual({ x: 16, y: 16, width: 968, height: 568 });
-  });
-
-  it("moves, resizes, and pins the far edge past the minimum", () => {
-    const start = { x: 100, y: 100, width: 800, height: 500 };
-    expect(rootOverlayFrameDrag(start, "move", 40, -30, 1920, 1080)).toEqual({
-      x: 140,
-      y: 70,
-      width: 800,
-      height: 500,
-    });
-    // A south-east corner grows both axes; a north-west one moves the origin.
-    expect(rootOverlayFrameDrag(start, "se", 60, 40, 1920, 1080)).toEqual({
-      x: 100,
-      y: 100,
-      width: 860,
-      height: 540,
-    });
-    expect(rootOverlayFrameDrag(start, "nw", 50, 20, 1920, 1080)).toEqual({
-      x: 150,
-      y: 120,
-      width: 750,
-      height: 480,
-    });
-    // The left edge dragged far right stops at the minimum with the RIGHT edge
-    // where it was — it must not start pushing the console across the screen.
-    const pinned = rootOverlayFrameDrag(start, "w", 700, 0, 1920, 1080);
-    expect(pinned.width).toBe(MIN_ROOT_OVERLAY_WIDTH);
-    expect(pinned.x + pinned.width).toBe(start.x + start.width);
+  it("opens at a frame an earlier build remembered under the same key", async () => {
+    seedRootTabs();
+    localStorage.setItem(
+      storageKey("rootConsoleFrame"),
+      JSON.stringify({ frame: { x: 40, y: 60, width: 900, height: 600 }, filled: false }),
+    );
+    render(<RootOverlayHost />);
+    await act(async () => useRootOverlayStore.getState().show());
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.style.left).toBe("40px");
+    expect(dialog.style.width).toBe("900px");
   });
 });

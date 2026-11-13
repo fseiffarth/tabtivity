@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRendererWatchdog } from "../../lib/window/rendererWatchdog";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -47,6 +47,7 @@ import {
   type DetachedWindowContext,
 } from "../../stores/detachedContext";
 import { applyDetachedStatus } from "../../stores/activity";
+import { usePopoutViewStore } from "../../stores/popoutView";
 import {
   allGroups,
   orderedTabKeys,
@@ -66,6 +67,7 @@ import { startFocusTracking, useQuiesce } from "../../stores/power";
 import { startStrayFullscreenGuard } from "../../lib/window/strayFullscreen";
 import { startBoundsStream } from "../../lib/window/boundsStream";
 import { applyFastModeAttribute, useFastMode } from "../../lib/agents/fastMode";
+import { useSoftwarePaintAttribute } from "../../lib/window/softwarePaint";
 import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
@@ -74,7 +76,12 @@ import { listenPdfReveal } from "../../stores/viewers/pdfSync";
 import { listenEditorJump } from "../../stores/viewers/editorJump";
 import { listenTexCenter } from "../../stores/viewers/texCenter";
 import { chordMatches, resolveChord, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
+import { useSteering } from "../../hooks/useSteering";
 import { DetachedCenterPanel } from "./DetachedCenterPanel";
+import { SteeringLegend } from "./SteeringLegend";
+import { SteeringPromptOverlay } from "./SteeringPromptOverlay";
+import { SteeringConfirmOverlay } from "./SteeringConfirmOverlay";
+import { ShortcutHelpOverlay } from "./ShortcutHelpOverlay";
 import { BrowserDownloadHost } from "../browser/BrowserDownloadHost";
 import { ExecTrustHost } from "../common/ExecTrustHost";
 import { OpenExternalHost } from "../common/OpenExternalHost";
@@ -186,6 +193,7 @@ export function DetachedApp({ param }: Props) {
   // window's (see the focus tracker above for the same reason).
   const fastMode = useFastMode();
   useEffect(() => applyFastModeAttribute(fastMode), [fastMode]);
+  useSoftwarePaintAttribute();
 
   // Clear a stray OS fullscreen, exactly as `restore_main_window` does for the
   // main window and for its reason: a `_NET_WM_STATE_FULLSCREEN` window loses
@@ -276,6 +284,11 @@ export function DetachedApp({ param }: Props) {
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [param.scope, param.groupId]);
+
+  // Keyboard steering, in this window: the main window's handler on this
+  // popout's own subwindows and tabs (`useSteering`, `steeringScope`). Its
+  // bar, prompt box, confirm and cheat sheet are mounted below.
+  useSteering({ surface: "popout" });
 
   // Theme, accent/corners/cursor and language follow the main window's
   // Settings live (this popout is its own runtime; see the hook).
@@ -380,6 +393,13 @@ export function DetachedApp({ param }: Props) {
   // keeps the window alive (minimized) instead. Attaching the listener also
   // announces this popout as able to answer (`detached_retire_ready`).
   useTauriListener(() => answerRetireRequests(label), [label]);
+
+  // Which window this is, for the popout view (`stores/popoutView`): steering
+  // and the cross-window handover address this popout by its label. The tree,
+  // tabs and focus are written by `DetachedCenterPanel`, which renders them.
+  useLayoutEffect(() => {
+    usePopoutViewStore.getState().setView({ label, scope: param.scope, popoutId: param.groupId });
+  }, [label, param.scope, param.groupId]);
 
   // Seed + edit listeners. The main window owns the source of truth and ships
   // the group's tabs + subtree; subsequent main-side edits re-seed.
@@ -591,7 +611,6 @@ export function DetachedApp({ param }: Props) {
   // used to silently vanish. Installed once, reading the live callbacks through
   // refs so it never needs re-binding; removed on unmount so a test (or a
   // future in-main mount) cannot inherit it.
-  const focusedGroupRef = useRef<string | null>(null);
   const seamRef = useRef({ group, pushEdit, handleClose });
   seamRef.current = { group, pushEdit, handleClose };
   // Installed during RENDER, not in an effect: child effects run before the
@@ -611,7 +630,7 @@ export function DetachedApp({ param }: Props) {
       targetGroupId: () => {
         const tree = seamRef.current.group;
         const groups = tree ? allGroups(tree) : [];
-        const focused = focusedGroupRef.current;
+        const focused = usePopoutViewStore.getState().focusedGroupId;
         if (focused && groups.some((g) => g.id === focused)) return focused;
         return groups[0]?.id ?? param.groupId;
       },
@@ -736,9 +755,6 @@ export function DetachedApp({ param }: Props) {
       tabs={tabs}
       remoteInfo={remoteInfo}
       windowVisible={windowVisible}
-      onFocusedGroup={(id) => {
-        focusedGroupRef.current = id;
-      }}
       onActivate={(key) => pushEdit({ kind: "activate", key })}
       onClose={handleClose}
       onDockWindow={handleDock}
@@ -769,13 +785,20 @@ export function DetachedApp({ param }: Props) {
       onMove={(key, targetGroupId, index) =>
         pushEdit({ kind: "move", key, targetGroupId, index })
       }
-      onAddTab={(tab, targetGroupId, edge) =>
-        pushEdit({ kind: "add", tab, targetGroupId, edge })
+      onAddTab={(tab, targetGroupId, edge, opts) =>
+        pushEdit({ kind: "add", tab, targetGroupId, edge, ...(opts?.besideActive ? { besideActive: true } : {}) })
       }
       onFiles={(groupId, patch) => pushEdit({ kind: "files", groupId, ...patch })}
       windowName={windowName}
       onName={(groupId, name) => pushEdit({ kind: "name", groupId, name })}
       />
+      {/* Keyboard steering in this window (`useSteering` above): the bar sets
+          `html[data-steer]`, which every marker rule keys on. The project jump
+          box is the main window's (its key hands over). */}
+      <ShortcutHelpOverlay />
+      <SteeringLegend />
+      <SteeringPromptOverlay />
+      <SteeringConfirmOverlay />
     </>
   );
 }

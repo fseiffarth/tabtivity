@@ -75,6 +75,24 @@ the user's ears — and speech that starts while the voice speaks stops it
 cannot undo a new one's mode. Barge-in through speakers needs a voice whose
 samples Tabtivity sees (Piper, plan step 7).
 
+## Natural voices (Piper)
+
+The user found espeak on Ubuntu too poor (2026-11-05), so plan step 7's
+Piper voices exist: `services::voice::piper`. The frozen MIT
+`rhasspy/piper` 2023.11.14-2 binary (user's pick over piper1-gpl's Python
+package and sherpa-onnx) runs as a **child process, never linked** — its
+espeak-ng is GPL. One medium voice per app language, program and voices
+fetched by an install tab from pinned URLs with embedded hashes into
+`<state_dir>/voice/{piper,voices}/`. Not on macOS: the release's macOS
+build is broken and macOS's own voices are good. One Piper process per
+read (not per chunk: one model load), chunks one per stdin line, raw PCM
+read from stdout and played through a `cpal` output stream that Tabtivity
+owns — the samples an echo canceller would need. The mute gate still
+applies (half-duplex), and echo cancellation is still open. `tts::ReadAloud`
+picks per read: a natural voice when the `voice_natural` setting allows it
+and one is installed for the language, else the OS voice, built lazily; a
+Piper that will not start falls back to the OS voice for that read.
+
 ## The hands-free send guard
 
 `shared/handsFree.ts`, one state machine for both the desktop and the phone:
@@ -84,7 +102,24 @@ line cancels it and keeps the draft. A spoken "stop" takes longer to settle
 than the window lasts, so speech that starts inside the window *holds* it
 and its settled text decides: a stop word cancels, other words join the
 draft and the pause starts again. A stop word segment never reaches the
-draft. "go on" is deliberate and skips the window.
+draft. "go on" is deliberate and skips the window. On the phone it also
+leaves the mic open (`useComposer` `submitSpokenRef`); hands-free then holds
+the turn's answers and closes the mic for them only while nothing is being
+dictated (`useHandsFree`), so the voice is never dictated back.
+
+## Spoken edits of the draft
+
+"Tabby scratch that", "Tabby replace X by Y", "Tabby correction …", "Tabby
+clear all", "Tabby plan" / "Tabby goal" edit the composer's draft on both
+hosts (`lib/voice/draftEdit.ts`, matched by `voiceCommands.ts`
+`matchDraftEdit`). The assistant's name in front is required, because "replace
+the loop with a map" is an ordinary prompt; the name is matched loosely (one
+letter off, first letter fixed: "Tabbi", "Tavi"). The rest must be one phrase
+**whole**, never the nearest one, so "Tabby, plan the refactor" stays dictation.
+Undo and restate work off voice's own history of the draft before and after
+each piece. That history only holds while the draft is still what voice left
+it: after typing it is dropped, rather than taking back text the user wrote.
+In hands-free an edit restarts the pause, and an emptied draft sends nothing.
 
 The desktop's voice detector already waits the pause before it closes a
 segment (the backend's `handsFree` mode), so its guard opens the window as
@@ -125,6 +160,32 @@ echo-cancelled against `speechSynthesis`, so there is no barge-in; a tap on
 the line interrupts. The screen must stay on and the page open — Android
 takes the mic from a hidden page — so working from a pocket would need a
 native app.
+
+## Spoken navigation on the phone (docs/voice_nav_mode_plan.md)
+
+Inside the Focus mic, hands-free only. The dictation hook reads **utterances**,
+not deltas (`voiceInput.ts` `stepUtterances`: Android finalizes one utterance
+several times as it grows), so "starts with Tabby" and "Tabby navigate" are
+judged on a settled utterance; `useVoiceInput`'s `dispatch` is the one ordered
+route a held utterance takes (navigation mode → "Tabby navigate" → [spoken
+draft edits] → the Tabby gate → hands-free's guard and `pick` → dictation).
+`useVoiceNav` is the mode: it sets `utterances.capture` (nothing heard is
+typed, the send guard is kept out), matches each utterance with
+`match(..., { requireCommandWord: false })` against lists built from rows the
+phone already holds (`voiceNav.ts`: `GET /projects`, `/projects/{id}`,
+`/activity`; opaque ids only), says its answers always (read-aloud on or off),
+half-duplex (mic closed while it speaks, reopened 300 ms after the voice falls
+quiet), and closes after 10 s of quiet that does not count speaking time. The
+three queues are Needs you's asking / finished groups (`needsYouGroups.ts`,
+shared with the screen) and the working tabs in the Agents view's order; "again"
+is a module cursor, a landing marks a done tab seen. A jump replaces the screen
+(App keys `Terminal` by tab), so it leaves a one-shot note (`leaveLanding`,
+30 s) that the new screen takes on mount (`useVoiceLanding`): once connected and
+the stored session is in it says the last prompt, reads the answers after it
+through the reading cursor (`readTurn(tab, sinceKey)`), then starts the mic with
+the gate on. Hands-free's reopen of the mic defers to the open mode (`navOpen`).
+The start word is exact (phonetic spelling plus `voice.assistantAliases`): a
+fuzzy score let "taxi" and "toby" in.
 
 ## Where this goes: hands-free navigation
 

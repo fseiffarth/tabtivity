@@ -332,7 +332,6 @@
   padding: 10px var(--space-3);
   border-radius: var(--radius);
   border: 0;
-  border-top: 2px solid transparent;
   box-shadow: var(--shadow-2);
   color: var(--text-primary);
   font-size: var(--text-md);
@@ -514,6 +513,45 @@
 }
 .hint-bubble.terminal-sign-in::after {
   content: none;
+}
+
+/* The server chips (TerminalServerChips): the sign-in card's look, stacked at the
+   pane's bottom-left so the two never overlap. Static cards like the sign-in
+   one: a fade in, no breathing glow. */
+.terminal-server-chips {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100% - 32px));
+  pointer-events: none;
+}
+.hint-bubble.terminal-server-chip {
+  position: relative;
+  pointer-events: auto;
+}
+.hint-bubble.terminal-server-chip::after {
+  content: none;
+}
+.terminal-server-chip-name {
+  font-weight: 600;
+  margin: 0 16px 0 0;
+  overflow-wrap: anywhere;
+}
+.terminal-server-chip-forward {
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  margin-top: 2px;
+}
+.terminal-server-chip .hint-bubble-actions {
+  margin-top: 6px;
+}
+.terminal-server-chip .hint-bubble-actions .hint-bubble-got-it {
+  margin-left: 0;
 }
 
 /* The version-drift and undo-clear cards sit over a running agent, whose input
@@ -995,6 +1033,53 @@
   50% {
     opacity: 1;
   }
+}
+
+/* Hints stay up until dismissed, so a loop here repaints at 60 Hz for as long as
+   one is ignored: renderer 0% of a core at rest, 16–18% with a hint up, on a page
+   far lighter than the app (measured 2026-11-02). On the CPU paint path
+   (`lib/window/softwarePaint`) and in a quiesced window each loop rests on its
+   peak, which still marks the target. The energy-saver attribute also covers a
+   blurred window, where a loop would otherwise freeze mid-pulse. */
+:root[data-software-paint] .hint-bubble::after,
+:root[data-energy-saver="on"] .hint-bubble::after {
+  animation: none;
+  opacity: 1;
+}
+
+:root[data-software-paint] .hint-target,
+:root[data-energy-saver="on"] .hint-target {
+  animation: none;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+:root[data-software-paint] .tour-target,
+:root[data-energy-saver="on"] .tour-target {
+  animation: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+:root[data-software-paint] .tour-hint-btn.nudge,
+:root[data-energy-saver="on"] .tour-hint-btn.nudge {
+  animation: none;
+}
+
+/* Only the pulse goes: the entry keeps running, so a banner neither replays it
+   when the window regains focus nor sits paused at `opacity: 0` while blurred. */
+:root[data-energy-saver="on"] .hint-bubble--banner {
+  animation: hint-banner-in 0.24s ease-out;
+}
+
+/* One-shots, on the CPU path only and after the rule above so they win over it:
+   each lands in one paint, as a hover card does. The spotlight's entry would
+   otherwise animate a 9999px shadow, which is the whole window every frame. */
+:root[data-software-paint] .hint-bubble,
+:root[data-software-paint] .tour-spotlight,
+:root[data-software-paint] .tour-bubble,
+:root[data-software-paint] .tour-reward,
+:root[data-software-paint] .tour-hint {
+  animation: none;
 }
 
 

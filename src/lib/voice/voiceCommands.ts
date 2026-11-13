@@ -1,4 +1,4 @@
-import { matchOption, sanitizeVoiceTranscript } from "../../../shared/voice";
+import { matchOption, sanitizeVoiceTranscript, spokenSend } from "../../../shared/voice";
 import { fuzzyMatch } from "../fuzzy";
 import { translate, type Language, type TranslationKey } from "../i18n";
 
@@ -346,12 +346,18 @@ interface Words {
  * → "l onglet", "to-do" → "to do"), number words as digits. */
 function words(utterance: string, lang: Language): Words {
   const text = sanitizeVoiceTranscript(utterance);
+  return { text, tokens: tokenize(text, lang) };
+}
+
+/** `text`'s words, their places in `text` itself (not sanitized: a draft's
+ * line breaks stay where they are). */
+function tokenize(text: string, lang: Language): Token[] {
   const tokens: Token[] = [];
   for (const found of text.matchAll(/[\p{L}\p{N}]+/gu)) {
     const start = found.index ?? 0;
     tokens.push({ norm: numberWord(fold(found[0]), lang), start, end: start + found[0].length });
   }
-  return { text, tokens };
+  return tokens;
 }
 
 function norms(text: string, lang: Language): string[] {
@@ -836,6 +842,151 @@ export function weakPhrase(phrase: string, lang: Language): boolean {
   return tokens.some((token) => /^\d+$/.test(token.norm) || vocab.has(token.norm));
 }
 
+// ---------------------------------------------------------------- the start word and draft edits
+
+/** What a spoken edit does to the composer's draft (`draftEdit.ts` applies
+ * it): lead it with `/plan` or `/goal` as the chip does, take back the last
+ * thing voice did, empty it, swap words in it, or say the last piece again. */
+export type DraftEdit =
+  | { kind: "prefix"; command: "/plan" | "/goal" }
+  | { kind: "undo" }
+  | { kind: "clear" }
+  /** Each way the words split at the template's middle word ("replace meet
+   * with you with see you"), the longest `from` first. */
+  | { kind: "replace"; splits: readonly { from: string; to: string }[] }
+  | { kind: "restate"; text: string };
+
+/** A spoken edit, the language its phrase was matched in (the draft's words
+ * are compared in it), and whether "go on" followed it: send after. */
+export type SpokenDraftEdit = DraftEdit & { lang: Language; send: boolean };
+
+type EditPart = { lit: string } | { slot: "from" | "to" | "text" };
+
+function editTemplates(key: TranslationKey, lang: Language): EditPart[][] {
+  return splitTemplates(translate(lang, key)).map((template) => {
+    const parts: EditPart[] = [];
+    for (const piece of template.split(/(\{\w+\})/u)) {
+      const slot = /^\{(from|to|text)\}$/u.exec(piece);
+      if (slot) parts.push({ slot: slot[1] as "from" | "to" | "text" });
+      else for (const word of norms(piece, lang)) parts.push({ lit: word });
+    }
+    return parts;
+  });
+}
+
+/** Every way `tokens` fill an edit template whole, each slot at least one word. */
+function editFillings(parts: readonly EditPart[], tokens: readonly Token[]): Map<string, [number, number]>[] {
+  const out: Map<string, [number, number]>[] = [];
+  const spans = new Map<string, [number, number]>();
+  const walk = (pi: number, ti: number) => {
+    if (pi === parts.length) {
+      if (ti === tokens.length) out.push(new Map(spans));
+      return;
+    }
+    const part = parts[pi];
+    if ("lit" in part) {
+      if (tokens[ti]?.norm === part.lit) walk(pi + 1, ti + 1);
+      return;
+    }
+    for (let end = ti + 1; end <= tokens.length; end++) {
+      spans.set(part.slot, [ti, end]);
+      walk(pi + 1, end);
+    }
+    spans.delete(part.slot);
+  };
+  walk(0, 0);
+  return out;
+}
+
+/** A slot's words as heard, without the end mark a recognizer puts on the
+ * utterance ("… with bar." → "bar"). */
+function slotText(source: Words, tokens: readonly Token[], span: [number, number] | undefined): string {
+  return span ? rawText(source, tokens, span).replace(/[.!?…]+$/u, "").trim() : "";
+}
+
+function draftEditIn(utterance: string, lang: Language): SpokenDraftEdit | null {
+  // "Tabby scratch that, go on": the edit, then the send.
+  const sendless = spokenSend(utterance);
+  const send = sendless !== null;
+  const source = words(sendless ?? utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return null;
+  const tokens = withoutPolite(source.tokens.slice(skip), lang);
+  if (!tokens.length) return null;
+  const said = tokens.map((token) => token.norm).join(" ");
+  const is = (key: TranslationKey) => alternatives(key, lang).includes(said);
+  // Plan and goal are the catalog's own phrases (`voice.cmd.plan`/`goal`).
+  if (is("voice.cmd.plan")) return { kind: "prefix", command: "/plan", lang, send };
+  if (is("voice.cmd.goal")) return { kind: "prefix", command: "/goal", lang, send };
+  if (is("voice.edit.undo")) return { kind: "undo", lang, send };
+  if (is("voice.edit.clear")) return { kind: "clear", lang, send };
+  const splits: { from: string; to: string }[] = [];
+  for (const parts of editTemplates("voice.edit.replace", lang)) {
+    for (const spans of editFillings(parts, tokens)) {
+      const from = slotText(source, tokens, spans.get("from"));
+      const to = slotText(source, tokens, spans.get("to"));
+      if (from && to && !splits.some((split) => split.from === from && split.to === to)) splits.push({ from, to });
+    }
+  }
+  if (splits.length) return { kind: "replace", splits: splits.sort((a, b) => b.from.length - a.from.length), lang, send };
+  for (const parts of editTemplates("voice.edit.restate", lang)) {
+    const [spans] = editFillings(parts, tokens);
+    const text = spans ? slotText(source, tokens, spans.get("text")) : "";
+    if (text) return { kind: "restate", text, lang, send };
+  }
+  return null;
+}
+
+/**
+ * The edit one dictated utterance asks of the draft, or `null` (dictation).
+ * It must start with the start word, and the rest must be one edit phrase
+ * **whole**, in `lang` or else in English: "Tabby plan" is an edit, "Tabby,
+ * plan the refactor" is not, and nothing is guessed at — what is not an edit
+ * stays dictation, word for word.
+ */
+export function matchDraftEdit(utterance: string, lang: Language): SpokenDraftEdit | null {
+  return draftEditIn(utterance, lang) ?? (lang === "en" ? null : draftEditIn(utterance, "en"));
+}
+
+/** Whether `utterance`, so far, may still turn out a spoken draft edit: the
+ * start word alone, or with the beginning of an edit phrase ("Tabby scr…",
+ * "Tabby replace …", "Tabby plan"). Until it settles, its words are held back
+ * from the draft, as a "Tabby navigate" is; anything else after the start word
+ * is dictation at once. */
+export function mayEditDraft(utterance: string, lang: Language): boolean {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return false;
+  const heard = withoutPolite(source.tokens.slice(skip), lang).map((token) => token.norm);
+  if (!heard.length) return true;
+  const fits = (parts: readonly EditPart[]) => {
+    for (let at = 0; at < heard.length; at++) {
+      const part = parts[at];
+      // A slot takes whatever follows; a phrase heard whole may carry "go on".
+      if (!part || "slot" in part) return true;
+      const last = at === heard.length - 1;
+      if (last ? !part.lit.startsWith(heard[at]) : part.lit !== heard[at]) return false;
+    }
+    return true;
+  };
+  return [lang, ...(lang === "en" ? [] : ["en" as Language])].some((spoken) => {
+    const keys: TranslationKey[] = ["voice.edit.undo", "voice.edit.clear", "voice.edit.replace", "voice.edit.restate", "voice.cmd.plan", "voice.cmd.goal"];
+    return keys.some((key) => editTemplates(key, spoken).some(fits));
+  });
+}
+
+/** Where `phrase` stands last in `text`, word for word as the matcher
+ * compares words (case, accents, punctuation aside; number words as digits):
+ * its span in `text`, or `null`. */
+export function lastSpokenSpan(text: string, phrase: string, lang: Language): { start: number; end: number } | null {
+  const run = norms(phrase, lang);
+  const tokens = tokenize(text, lang);
+  for (let at = tokens.length - run.length; at >= 0; at--) {
+    if (startsWith(tokens, run, at)) return { start: tokens[at].start, end: tokens[at + run.length - 1].end };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------- spoken lines
 
 /** "Didn't catch that", in `lang`. */
@@ -859,3 +1010,97 @@ export const BUILTIN_AGENT_ALIASES: Readonly<Record<string, readonly string[]>> 
   gemini: ["jemini", "gemeni"],
   copilot: ["co pilot"],
 };
+
+// ---------------------------------------------------------------- the start word, navigating
+
+/** How many leading tokens the start word takes (`voice.startWord`, the
+ * assistant's name), 0 when it is not first. A recognizer spells a name it
+ * does not know freely, so the heard word is compared as a spoken name is
+ * (`phonetic`: "Tabbi" and "Tabby" are one), as one word or, for the name's own
+ * spelling, as two run together ("Tab bi"), and only at the start: "ask Tabby" or a "tabby cat"
+ * mid-sentence is dictation. The bar is exact on that spelling plus the
+ * dictionary's aliases (`voice.assistantAliases`: "Tavi", the spellings a
+ * recognizer is known to write) — a fuzzy score let "taxi", "Toby" and
+ * "tabs" through, each one letter from a four-letter name, and a word spoken
+ * at the start of every sentence cannot afford a false hit. */
+function startWordLength(tokens: readonly Token[], lang: Language): number {
+  const phoneticForm = (form: string) => phonetic(norms(form, lang).join(""));
+  const name = phoneticForm(translate(lang, "voice.startWord"));
+  const forms = new Set([name, ...splitTemplates(translate(lang, "voice.assistantAliases")).map(phoneticForm)].filter(Boolean));
+  if (!forms.size || !tokens.length) return 0;
+  if (forms.has(phonetic(tokens[0].norm))) return 1;
+  // Two words run together ("Tab bi") are the name itself, never an alias: the
+  // aliases are one-word spellings, and "tab" + "be" ("tab be careful") is
+  // ordinary speech that joins into one of them.
+  if (tokens.length > 1 && name && phonetic(tokens[0].norm + tokens[1].norm) === name) return 2;
+  return 0;
+}
+
+/** The utterance after the start word ("Tabby, scratch that" → "scratch
+ * that"), as heard; `null` when it does not start with it. `rest` may be
+ * empty ("Tabby" alone). */
+export function matchStartWord(utterance: string, lang: Language): { rest: string } | null {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return null;
+  const after = source.tokens[skip];
+  return { rest: after ? source.text.slice(after.start).trim() : "" };
+}
+
+/** The runs of words that follow the start word in a `voice.navigate` phrase
+ * ("{assistant} navigate" → ["navigate"]). */
+function navigateRuns(lang: Language): string[][] {
+  const target = norms(translate(lang, "voice.startWord"), lang).join("");
+  return splitTemplates(translate(lang, "voice.navigate")).map((phrase) => {
+    const tokens = norms(phrase, lang);
+    let joined = "";
+    for (let index = 0; index < tokens.length; index++) {
+      joined += tokens[index];
+      if (joined === target) return tokens.slice(index + 1);
+    }
+    return tokens;
+  }).filter((run) => run.length > 0);
+}
+
+/** "Tabby navigate …": opens navigation mode. The start word, then the
+ * navigate word (`voice.navigate`, exact); `rest` is what follows, as heard —
+ * a command said in the same breath, or empty. `null` for anything else,
+ * including "navigate" with no start word and "tabby" in a sentence. Call it
+ * on a whole, settled utterance, never on one still growing. */
+export function matchNavigate(utterance: string, lang: Language): { rest: string } | null {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return null;
+  for (const run of navigateRuns(lang)) {
+    if (!startsWith(source.tokens, run, skip)) continue;
+    const after = source.tokens[skip + run.length];
+    return { rest: after ? source.text.slice(after.start).trim() : "" };
+  }
+  return null;
+}
+
+/** Whether `utterance` is, so far, the beginning of a "Tabby navigate" — only
+ * the start word, or it and the start of the navigate word ("Tabby", "Tabby
+ * nav"), or the whole navigate phrase and anything after it. While it is, the
+ * words are held back from the draft until the utterance settles and shows
+ * whether it was a command. */
+export function mayNavigate(utterance: string, lang: Language): boolean {
+  const source = words(utterance, lang);
+  const skip = startWordLength(source.tokens, lang);
+  if (!skip) return false;
+  const heard = source.tokens.slice(skip).map((token) => token.norm);
+  if (!heard.length) return true;
+  return navigateRuns(lang).some((run) => {
+    if (heard.length > run.length) return run.every((word, index) => heard[index] === word);
+    return heard.every((word, index) => (index < heard.length - 1 ? word === run[index] : run[index].startsWith(word)));
+  });
+}
+
+/** A leave phrase (`voice.nav.leave`: "stop", "cancel", "never mind"): the
+ * whole utterance, the start word allowed in front. Ends navigation mode. */
+export function matchNavLeave(utterance: string, lang: Language): boolean {
+  const source = words(utterance, lang);
+  const tokens = withoutPolite(source.tokens.slice(startWordLength(source.tokens, lang)), lang);
+  if (!tokens.length) return false;
+  return alternatives("voice.nav.leave", lang).includes(tokens.map((token) => token.norm).join(" "));
+}

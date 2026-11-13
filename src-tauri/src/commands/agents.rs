@@ -66,6 +66,8 @@ fn platform_install(spec: &AgentSpec) -> (Option<&'static str>, String, &'static
 /// Public view of one agent + whether it is currently installed.
 #[derive(serde::Serialize)]
 pub struct AgentInfo {
+    /// Discovered launch model IDs; never picker display labels.
+    pub default_models: Vec<String>,
     pub launch_defaults: crate::services::agent_defaults::Capabilities,
     pub id: String,
     pub label: String,
@@ -345,6 +347,11 @@ fn list_agents_blocking() -> Vec<AgentInfo> {
                 .map(|pkg| format!("npm uninstall -g {pkg}"))
                 .unwrap_or_default();
             AgentInfo {
+                default_models: if installed.contains(spec.id) {
+                    crate::services::agent_defaults::discovered_models(spec.bin)
+                } else {
+                    Vec::new()
+                },
                 launch_defaults: crate::services::agent_defaults::capabilities(spec.bin),
                 id: spec.id.to_string(),
                 label: spec.label.to_string(),
@@ -397,7 +404,7 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
             use std::os::windows::process::CommandExt;
             c.raw_arg(format!("/D /C {cmd_str} 2>&1"));
         }
-        into_install_home(&mut c)?;
+        into_install_home(&mut c, Some(spec))?;
         Ok(c)
     }
     #[cfg(not(windows))]
@@ -408,52 +415,94 @@ fn installer_command(spec: &AgentSpec) -> Result<std::process::Command, String> 
                 spec.docs
             ));
         }
+        let prelude = crate::services::agent_install::installer_prelude(spec.id, || installer_uv(spec));
         let mut c = crate::paths::command_no_window("sh");
-        c.arg("-c").arg(format!("{} 2>&1", spec.install_cmd));
-        into_install_home(&mut c)?;
+        c.arg("-c").arg(format!("{prelude}{} 2>&1", spec.install_cmd));
+        into_install_home(&mut c, Some(spec))?;
         Ok(c)
     }
 }
 
+/// The `uv` an installer would run first on [`agent_install_path`], and the
+/// version it reports (`None` inside when it prints none).
+#[cfg(not(windows))]
+fn installer_uv(spec: &AgentSpec) -> Option<Option<String>> {
+    let path = agent_install_path(Some(spec));
+    let uv = std::env::split_paths(&path).map(|dir| dir.join("uv")).find(|p| p.is_file())?;
+    let out = crate::paths::command_no_window(&uv).arg("--version").output().ok();
+    Some(out.and_then(|o| {
+        crate::services::agent_versions::parse_version(&String::from_utf8_lossy(&o.stdout))
+    }))
+}
+
 /// What brings the installed `spec` up to date: its installer again, or, for a
 /// CLI whose installer cannot (`agent_install::self_update_argv`), its own
-/// update verb on the copy every other command resolves to. That copy is not
-/// always in the install home, so the two stay one binary rather than the
-/// installer adding a second, and a host copy gets it too: it cannot update
-/// itself from inside a fence.
+/// update verb on the copy every other command resolves to. The verb runs only
+/// on a copy in Tabtivity's install home ([`update_target_in`]): a copy
+/// somewhere else belongs to whoever installed it, and Tabtivity never edits
+/// another app's paths. For that one the installer runs instead and puts a
+/// fresh copy into the install home, whose launcher dirs lead PATH: its
+/// "already installed" check looks only at its own target under the install
+/// home's `HOME`/`LOCALAPPDATA` (Antigravity's `install.sh`/`install.ps1`).
+/// On Windows every Antigravity install used to land in the user's
+/// `%LOCALAPPDATA%\agy`, so Update was refused there every time.
 fn update_command(spec: &AgentSpec) -> Result<std::process::Command, String> {
     let Some(argv) = crate::services::agent_install::self_update_argv(spec.id) else {
         return installer_command(spec);
     };
     let bin = resolve_spec_path(spec).ok_or_else(|| format!("{} is not installed.", spec.label))?;
+    if !update_target_in(&bin, &crate::services::agent_install::install_root()) {
+        return installer_command(spec);
+    }
     let mut c = crate::paths::command_no_window(&bin);
     c.args(argv).stdin(std::process::Stdio::null());
-    into_install_home(&mut c)?;
+    into_install_home(&mut c, Some(spec))?;
     Ok(c)
 }
 
+/// Whether an update verb may run on `bin`: it lives (links resolved) in
+/// `root`, Tabtivity's install home.
+fn update_target_in(bin: &std::path::Path, root: &std::path::Path) -> bool {
+    let real = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    real(bin).starts_with(real(root))
+}
+
 /// Point an installer at Tabtivity's own install home: create it, hand over
-/// its environment and [`agent_install_path`].
-fn into_install_home(c: &mut std::process::Command) -> Result<(), String> {
+/// its environment and [`agent_install_path`] (for `spec`'s installer, when
+/// one runs).
+fn into_install_home(c: &mut std::process::Command, spec: Option<&AgentSpec>) -> Result<(), String> {
     let root = crate::services::agent_install::install_root();
     std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
     let env = crate::services::agent_install::install_env();
     // The Windows `APPDATA` stand-in must exist: npm and PowerShell write
-    // into it without creating it first.
+    // into it without creating it first. `AppData\Local` too: `USERPROFILE`
+    // moves it, .NET answers "" for a missing one, and PowerShell's module
+    // cache then lands relative to the working directory.
     if let Some((_, appdata)) = env.iter().find(|(k, _)| k == "APPDATA") {
         std::fs::create_dir_all(appdata).map_err(|e| format!("create {appdata}: {e}"))?;
+        let local = root.join("AppData").join("Local");
+        std::fs::create_dir_all(&local).map_err(|e| format!("create {}: {e}", local.display()))?;
     }
     c.envs(env);
-    c.env("PATH", agent_install_path());
+    c.env("PATH", agent_install_path(spec));
+    // Never the directory Tabtivity was started from (`src-tauri` in dev).
+    c.current_dir(&root);
     Ok(())
 }
 
 /// PATH for an installer: the install home's launcher dirs first, so a
-/// second installer of the same vendor finds the first's tools there.
-fn agent_install_path() -> std::ffi::OsString {
-    let mut dirs = crate::services::agent_install::bin_dirs_in(&crate::storage::state_dir());
+/// second installer of the same vendor finds the first's tools there. For
+/// `spec`'s installer, without the dirs of a host copy it would mistake for
+/// its own (`agent_install::installer_path_dirs`).
+fn agent_install_path(spec: Option<&AgentSpec>) -> std::ffi::OsString {
+    let state_dir = crate::storage::state_dir();
+    let mut dirs = crate::services::agent_install::bin_dirs_in(&state_dir);
     if let Some(path) = crate::paths::effective_path() {
         dirs.extend(std::env::split_paths(&path));
+    }
+    if let Some(spec) = spec {
+        let root = crate::services::agent_install::install_root_in(&state_dir);
+        dirs = crate::services::agent_install::installer_path_dirs(spec.id, spec.bin, &root, dirs);
     }
     std::env::join_paths(dirs).unwrap_or_default()
 }
@@ -735,7 +784,7 @@ fn npm_uninstall_command(
         c
     };
     if in_install_home {
-        into_install_home(&mut c)?;
+        into_install_home(&mut c, None)?;
     }
     Ok(c)
 }
@@ -910,6 +959,8 @@ pub async fn agent_warmup(agent: String, message: String) -> Result<AgentWarmupL
     let cwd = warmup_dir()?;
 
     let mut cmd = crate::paths::command_no_window(&path);
+    // Tabtivity's probe home with the stored login, not the user's own `$HOME`.
+    into_probe_home(&mut cmd, spec, &cwd).await?;
     cmd.args(&argv)
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
@@ -1581,7 +1632,13 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
         Err(error) => return AgentUsageReport::refused(spec.id, spec.label, true, "cli_failed", error),
     };
 
-    let mut cmd = tokio::process::Command::from(crate::paths::command_no_window(&path));
+    // The same probe home the version probes and the warm-up run in, so the
+    // usage windows come from the login the plan row is read from.
+    let mut std_cmd = crate::paths::command_no_window(&path);
+    if let Err(error) = into_probe_home(&mut std_cmd, spec, &cwd).await {
+        return AgentUsageReport::refused(spec.id, spec.label, true, "cli_failed", error);
+    }
+    let mut cmd = tokio::process::Command::from(std_cmd);
     cmd.args(&argv)
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
@@ -1744,24 +1801,36 @@ pub async fn agent_versions(
 
 /// Ask installed CLIs' registries for their newest release — each Manage CLIs
 /// card's "Check for update" (`id`), or every installed CLI when `id` is
-/// `None`; the agent twin of `check_ollama_updates`. Only on a click: one
-/// request per CLI that has a known registry, all at once, each settled on its
+/// `None`; the agent twin of `check_ollama_updates`. On a click (and once a
+/// day without one, [`start_daily_update_check`]): one request per CLI that has a known registry, all at once, each settled on its
 /// own so one registry being down costs only its row. The installed versions
 /// are re-read first, so a CLI that updated itself since the last probe is not
 /// offered the update it already has. Each answer is stored for `agent_versions`
 /// to hand back.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn check_agent_updates(id: Option<String>) -> Vec<crate::services::agent_latest::UpdateReport> {
+    check_updates_of(|spec_id| id.as_deref().is_none_or(|id| id == spec_id), true).await
+}
+
+/// Check the registries of the installed CLIs `wanted` picks, all at once, and
+/// store each answer. `refresh` re-probes every installed version first (a
+/// click: the CLI may have updated itself since); the daily check takes the
+/// cached probes, which `agent_versions` re-reads whenever an executable
+/// changed, rather than spawning every CLI once a day in the background.
+async fn check_updates_of(
+    wanted: impl Fn(&str) -> bool,
+    refresh: bool,
+) -> Vec<crate::services::agent_latest::UpdateReport> {
     use crate::services::agent_latest;
 
-    let mut probed: std::collections::HashMap<String, Option<String>> = agent_versions(Some(true))
+    let mut probed: std::collections::HashMap<String, Option<String>> = agent_versions(Some(refresh))
         .await
         .into_iter()
         .map(|report| (report.agent, report.version))
         .collect();
     let mut checks = Vec::new();
     let installed = installed_specs();
-    for (spec, path) in installed.into_iter().filter(|(spec, _)| id.as_deref().is_none_or(|id| id == spec.id)) {
+    for (spec, path) in installed.into_iter().filter(|(spec, _)| wanted(spec.id)) {
         let source = agent_latest::source_for(spec.id);
         let current = agent_latest::current_version(spec.id, &path, probed.remove(spec.id).flatten());
         checks.push(tokio::spawn(async move {
@@ -1784,6 +1853,89 @@ pub async fn check_agent_updates(id: Option<String>) -> Vec<crate::services::age
     reports
 }
 
+/// The event every window hears after the daily check stored new answers; the
+/// payload is the checked rows (`UpdateReport`), and a window re-reads
+/// `agent_versions` for the whole picture.
+pub const AGENT_UPDATES_CHECKED_EVENT: &str = "agent-updates-checked";
+
+/// The event every window hears after the daily check stored a new answer for
+/// Ollama's own release; no payload, a window re-reads `ollama_version_status`.
+pub const OLLAMA_RELEASE_CHECKED_EVENT: &str = "ollama-release-checked";
+
+/// How long after launch the first daily check waits, so it never competes
+/// with the window restoring its tabs.
+const DAILY_CHECK_FIRST_DELAY: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// How often the daily check looks for a CLI whose last check is a day old.
+/// Hourly, so a machine that sleeps or an app opened late still checks that day.
+const DAILY_CHECK_TICK: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Once a day per installed CLI, the "Check for update" a Manage CLIs card
+/// offers, without the click: shortly after launch and then hourly, every
+/// installed CLI with a known registry whose last check (clicked or not) is a
+/// day old is asked ([`crate::services::agent_latest::due_agents`]), and so is
+/// an installed Ollama ([`crate::commands::ollama::daily_release_check`]). One
+/// GET per due CLI, nothing else leaves the machine; nothing is installed. When
+/// anything was asked, every window hears [`AGENT_UPDATES_CHECKED_EVENT`] and
+/// re-reads the stored answers: the Models & agents menu and a new tab of the
+/// CLI show them. Off with `Settings::daily_release_check` (Manage CLIs), read at
+/// every tick: then nothing is asked until a click.
+pub fn start_daily_update_check(ctx: CoreCtx) {
+    app_core::rt::spawn(async move {
+        tokio::time::sleep(DAILY_CHECK_FIRST_DELAY).await;
+        loop {
+            run_daily_update_check(&ctx).await;
+            tokio::time::sleep(DAILY_CHECK_TICK).await;
+        }
+    });
+}
+
+/// Whether the user lets the app look up releases by itself
+/// (`Settings::daily_release_check`, Manage CLIs). No settings file is the
+/// default, on; a file that cannot be read counts as off, since the switch
+/// cannot be told and a lookup is a request out.
+fn release_check_enabled_in(path: &std::path::Path) -> bool {
+    if !path.exists() {
+        return crate::schema::Settings::default().daily_release_check();
+    }
+    crate::storage::read_json::<crate::schema::Settings>(path).is_ok_and(|settings| settings.daily_release_check())
+}
+
+async fn run_daily_update_check(ctx: &CoreCtx) {
+    use crate::services::agent_latest;
+
+    // The switch is read at every tick, so a change applies without a restart.
+    // Off: neither Ollama's nor any CLI's registry is asked; a click still is.
+    let on = app_core::rt::spawn_blocking(|| release_check_enabled_in(&crate::storage::settings_path()))
+        .await
+        .unwrap_or(false);
+    if !on {
+        return;
+    }
+
+    // Ollama's own release, beside the CLIs' (`commands::ollama`); windows
+    // re-read it through `ollama_version_status`.
+    if crate::commands::ollama::daily_release_check().await {
+        ctx.emit(OLLAMA_RELEASE_CHECKED_EVENT, ());
+    }
+
+    let installed = installed_specs();
+    let store = agent_latest::load();
+    let due: std::collections::HashSet<&str> = agent_latest::due_agents(
+        &store,
+        installed.iter().map(|(spec, _)| spec.id),
+        crate::clock::now_secs(),
+        agent_latest::DAILY_EVERY_SECS,
+    )
+    .into_iter()
+    .collect();
+    if due.is_empty() {
+        return;
+    }
+    let reports = check_updates_of(|id| due.contains(id), false).await;
+    ctx.emit(AGENT_UPDATES_CHECKED_EVENT, &reports);
+}
+
 /// Stop reminding the user that `agent`'s installed version has moved past what
 /// Tabtivity was verified against.
 ///
@@ -1799,31 +1951,32 @@ pub async fn dismiss_agent_version(agent: String, version: String) -> Result<(),
     Ok(())
 }
 
-/// `remembered_model_rows({ agent })` → `{ title?, rows }`, what `agent`'s own
-/// model picker drew last time in this build of it (`services::model_rows`),
-/// for a model sheet to list while the session draws its picker; `null` when
-/// none.
+/// `remembered_model_rows({ agent, scope })` → `{ title?, rows }`, what
+/// `agent`'s own model picker drew last time in this build of it, in a session
+/// of the same `scope` (`services::model_rows`), for a model sheet to list
+/// while the session draws its picker; `null` when none. Never what another
+/// scope's screen drew (gap 95).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn remembered_model_rows(agent: String) -> Option<crate::services::model_rows::Rows> {
+pub async fn remembered_model_rows(agent: String, scope: String) -> Option<crate::services::model_rows::Rows> {
     use crate::services::model_rows;
     app_core::rt::spawn_blocking(move || {
         let (id, source) = installed_source(&agent)?;
-        model_rows::rows_in(&model_rows::store_path(), id, Some(&source))
+        model_rows::rows_in(&model_rows::store_path(), id, &scope, Some(&source))
     })
     .await
     .ok()
     .flatten()
 }
 
-/// `remember_model_rows({ agent, rows: { title?, rows } })`: keep what
-/// `agent`'s picker just drew for its installed build. A patch of that one
-/// entry.
+/// `remember_model_rows({ agent, scope, rows: { title?, rows } })`: keep what
+/// `agent`'s picker just drew for its installed build, under the `scope` of
+/// the tab it was read in. A patch of that one entry.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn remember_model_rows(agent: String, rows: crate::services::model_rows::Rows) -> Result<(), String> {
+pub async fn remember_model_rows(agent: String, scope: String, rows: crate::services::model_rows::Rows) -> Result<(), String> {
     use crate::services::model_rows;
     app_core::rt::spawn_blocking(move || {
         let (id, source) = installed_source(&agent).ok_or_else(|| format!("unknown agent: {agent}"))?;
-        model_rows::remember_rows_in(&model_rows::store_path(), id, Some(&source), rows)
+        model_rows::remember_rows_in(&model_rows::store_path(), id, &scope, Some(&source), rows)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1971,6 +2124,25 @@ pub async fn agent_login_sign_out(id: String) -> Result<(), String> {
     app_core::rt::try_blocking("agent", move || crate::services::agent_auth::sign_out(&id)).await
 }
 
+/// Claude's saved long-lived token (`services::claude_token`): whether one is
+/// saved and in use. Never the token.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_token_status() -> Result<crate::services::claude_token::ClaudeTokenStatus, String> {
+    app_core::rt::try_blocking("agent", || Ok(crate::services::claude_token::status())).await
+}
+
+/// Save a token `claude setup-token` printed (pasted by the user).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_token_save(token: String) -> Result<(), String> {
+    app_core::rt::try_blocking("agent", move || crate::services::claude_token::save(&token)).await
+}
+
+/// Forget the saved token.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn claude_token_clear() -> Result<(), String> {
+    app_core::rt::try_blocking("agent", crate::services::claude_token::clear).await
+}
+
 /// Sign OpenCode out of one scope whose database the startup sweep flagged as
 /// holding a `wellknown` source (`agent_auth::sign_out_scope`).
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2052,6 +2224,7 @@ mod tests {
         assert_eq!(resume_args_for_bin("codex", "abc"), Some(Vec::new()));
         assert_eq!(resume_args_for_bin("gemini", "abc"), Some(vec!["--resume".to_string(), "latest".to_string()]));
         assert_eq!(resume_args_for_bin("agy", "abc"), Some(vec!["--continue".to_string()]));
+        assert_eq!(resume_args_for_bin("muse", "abc"), Some(vec!["resume".to_string(), "--last".to_string()]));
         assert_eq!(resume_args_for_bin("aider", "abc"), None);
         assert_eq!(resume_args_for_bin("not-an-agent", "abc"), None);
         assert!(is_resumable_bin("droid"));
@@ -2073,6 +2246,114 @@ mod tests {
             assert_eq!(&argv[..args.len()], *args, "{id}");
             assert!(args.iter().all(|a| !a.is_empty()), "{id}: empty arg");
         }
+    }
+
+    /// Gap 93: an update verb runs only on a copy in the install home; a copy
+    /// elsewhere gets the installer (a fresh copy in the install home) instead.
+    #[test]
+    fn the_update_verb_runs_only_on_a_binary_in_the_install_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("install");
+        let host = tmp.path().join("host");
+        for dir in [&root.join(".local").join("bin"), &host] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let ours = root.join(".local").join("bin").join("agy");
+        let theirs = host.join("agy");
+        std::fs::write(&ours, b"").unwrap();
+        std::fs::write(&theirs, b"").unwrap();
+
+        assert!(update_target_in(&ours, &root));
+        assert!(!update_target_in(&theirs, &root));
+        // A launcher in the install home that links to a copy elsewhere is that copy.
+        #[cfg(unix)]
+        {
+            let link = root.join(".local").join("bin").join("agy-link");
+            std::os::unix::fs::symlink(&theirs, &link).unwrap();
+            assert!(!update_target_in(&link, &root));
+        }
+        // A sibling folder sharing the prefix is not inside.
+        let near = tmp.path().join("install-other");
+        std::fs::create_dir_all(&near).unwrap();
+        std::fs::write(near.join("agy"), b"").unwrap();
+        assert!(!update_target_in(&near.join("agy"), &root));
+    }
+
+    /// Gap 93: a probe command carries the probe home, and none of the
+    /// variables that would point the CLI at the user's own config.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_command_runs_with_the_probe_home_as_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let cwd = state.join("agent-cron");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let home = crate::services::agent_home::prepare_probe_home_in(state, &cwd).unwrap().dir;
+        let claude = find_spec("claude").expect("claude in registry");
+
+        let mut cmd = crate::paths::command_no_window("sh");
+        cmd.env("HOME", "/the/users/real/home").env("CLAUDE_CONFIG_DIR", "/the/users/real/.claude");
+        cmd.args(["-c", "printf '%s|%s' \"$HOME\" \"${CLAUDE_CONFIG_DIR-unset}\""]);
+        apply_probe_home(&mut cmd, claude, &home);
+        let out = cmd.output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), format!("{}|unset", home.display()));
+    }
+
+    /// Gap 93: the three probes all go through the probe home. A source scan,
+    /// as for the other spawn paths: the spawn itself needs a real CLI.
+    #[test]
+    fn usage_version_and_warmup_spawns_use_the_probe_home() {
+        fn body<'a>(src: &'a str, head: &str) -> &'a str {
+            let start = src.find(head).unwrap_or_else(|| panic!("{head} not found"));
+            let end = src[start..].find("\n}\n").map_or(src.len(), |e| start + e);
+            &src[start..end]
+        }
+        let this = include_str!("agents.rs");
+        let registry = include_str!("../services/agent/agent_registry.rs");
+        for (what, text) in [
+            ("agent_warmup", body(this, "pub async fn agent_warmup(")),
+            ("agent_usage", body(this, "pub async fn agent_usage(")),
+            ("probe_agent_version", body(registry, "pub(crate) async fn probe_agent_version(")),
+        ] {
+            assert!(text.contains("into_probe_home("), "{what} must run in the probe home");
+        }
+    }
+
+    /// The daily release check's switch: absent is on, only an explicit false
+    /// is off, an unreadable file is off, and an old `agent_limit_auto_handoff`
+    /// beside it changes nothing.
+    #[test]
+    fn the_release_check_switch_reads_absent_as_on_and_false_as_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        assert!(release_check_enabled_in(&path), "no settings file: the default, on");
+        for (json, want) in [
+            ("{}", true),
+            (r#"{"daily_release_check":true}"#, true),
+            (r#"{"daily_release_check":false}"#, false),
+            (r#"{"agent_limit_auto_handoff":true}"#, true),
+            ("{not json", false),
+        ] {
+            std::fs::write(&path, json).unwrap();
+            assert_eq!(release_check_enabled_in(&path), want, "{json}");
+        }
+    }
+
+    /// The tick reads the switch before it asks Ollama or any registry, and
+    /// those requests have no other background caller.
+    #[test]
+    fn the_daily_tick_reads_the_switch_before_any_request() {
+        let this = include_str!("agents.rs");
+        let start = this.find("async fn run_daily_update_check(").expect("tick");
+        let end = this[start..].find("\n}\n").map_or(this.len(), |e| start + e);
+        let tick = &this[start..end];
+        let gate = tick.find("release_check_enabled_in(").expect("the tick reads the switch");
+        assert!(gate < tick.find("daily_release_check().await").unwrap());
+        assert!(gate < tick.find("check_updates_of(").unwrap());
+        assert!(tick.contains("if !on {\n        return;"));
+        let production = &this[..this.find("#[cfg(test)]").unwrap()];
+        assert_eq!(production.matches("daily_release_check().await").count(), 1);
+        assert_eq!(production.matches("run_daily_update_check(&ctx)").count(), 1);
     }
 
     #[test]
@@ -2484,6 +2765,22 @@ mod tests {
         assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
         let vibe = find_spec("vibe").unwrap(); // no Windows installer
         assert!(installer_command(vibe).is_err());
+    }
+
+    #[test]
+    fn openclaw_windows_install_brings_its_own_node_before_its_main_run() {
+        let cmd = find_spec("openclaw").unwrap().install_cmd_windows.unwrap();
+        assert_eq!(windows_shell_kind(cmd), "powershell");
+        assert!(cmd.find("-NodeOnly").unwrap() < cmd.find("$s | iex").unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_installer_has_the_local_appdata_folder_its_profile_moves() {
+        let c = installer_command(find_spec("claude").unwrap()).unwrap();
+        let root = crate::services::agent_install::install_root();
+        assert!(root.join("AppData").join("Local").is_dir());
+        assert_eq!(c.get_current_dir(), Some(root.as_path()));
     }
 
     #[test]

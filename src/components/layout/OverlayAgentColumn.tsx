@@ -14,12 +14,12 @@ import { RootRightsBadge, useRootMcpRights } from "./RootRightsBadge";
 import type { OverlayAgentHandle } from "./useOverlayAgent";
 
 interface Props {
-  /** The overlay this column docks in. */
+  /** The app view this column docks in. */
   app: SteeringApp;
   /** The scope `tab` belongs to: root (the default, the mail / calendar /
-   *  to-do overlays' docked agent) or the Tabby scope. The root scope brings
-   *  the root console's stand-down and its rights badge; another scope is
-   *  drawn alone (it has no console, and nothing in it holds MCP rights). */
+   *  to-do views' docked agent) or the Tabby scope. The root scope brings its
+   *  rights badge and the ↗ door into the console; another scope is drawn
+   *  alone (it has no console, and nothing in it holds MCP rights). */
   scope?: string;
   /** The root rights badge in the head. Defaults to on for the root scope and
    *  off for any other. */
@@ -42,7 +42,7 @@ interface Props {
 }
 
 /**
- * The docked agent column of a mail / calendar / to-do overlay: an attach-only
+ * The docked agent column of the Mail / Calendar / To-do views: an attach-only
  * view of a ROOT tab beside the app, so a root agent's MCP writes land next to
  * the prompt that caused them (`docs/done/overlay_agent_plan.md`). The tab is an
  * ordinary root tab — its PTY is owned by `CenterPanel`'s keep-alive layer and
@@ -52,11 +52,12 @@ interface Props {
  * column's (`SubwindowFilesSidebar`), the badge is the root console's
  * (`RootRightsBadge`), the pane gets the props `RootOverlay` hands its panes.
  *
- * One visible view per PTY: while the root console is open it shows this tab
- * itself, and a popped-out root subwindow holding the tab shows it in its own
- * window, so in both cases the column shows a placeholder; while the pane IS
+ * One visible view per PTY: a popped-out root subwindow holding the tab shows
+ * it in its own window, so the column shows a placeholder; while the pane IS
  * drawn here, its key is in `shownKeys` and `CenterPanel`'s root copy steps
- * aside.
+ * aside. (The column lives in a Mail / Calendar / To-do view of the console
+ * window, which shows one view at a time: neither Root's layout nor the Now
+ * view's detail pane can draw the same tab beside it.)
  *
  * With a `scope` other than root (the Tabby scope) the same column draws a tab
  * of that scope: no rights badge, no console to stand down for or open the tab
@@ -77,8 +78,6 @@ export function OverlayAgentColumn({
   onDismissHint,
 }: Props) {
   const t = useT();
-  // Only the root scope has a console to stand down for.
-  const consoleOpen = useRootOverlayStore((s) => s.open) && scope === ROOT_SCOPE;
   const open = useOverlayAgentStore((s) => s.docks[app].open);
   const tab = open ? dockedTab : null;
   const storedWidth = useOverlayAgentStore((s) => s.width);
@@ -117,7 +116,7 @@ export function OverlayAgentColumn({
   );
   // The pane marks its key shown (`AttachedAgentPane`) for as long as it is
   // mounted, which is what `CenterPanel`'s copy stands down for.
-  const showPane = !!tab && !consoleOpen && !inPopout;
+  const showPane = !!tab && !inPopout;
 
   const hide = () => {
     useOverlayAgentStore.getState().hide(app);
@@ -218,10 +217,10 @@ export function OverlayAgentColumn({
             <div className="center-placeholder" style={{ height: "100%" }}>
               <div className="center-placeholder-card">
                 <div className="center-placeholder-title">
-                  {t(inPopout ? "overlayAgent.shownInPopout" : "overlayAgent.shownInConsole")}
+                  {t("overlayAgent.shownInPopout")}
                 </div>
                 <div className="center-placeholder-hint">
-                  {t(inPopout ? "overlayAgent.shownInPopoutHint" : "overlayAgent.shownInConsoleHint")}
+                  {t("overlayAgent.shownInPopoutHint")}
                 </div>
               </div>
             </div>

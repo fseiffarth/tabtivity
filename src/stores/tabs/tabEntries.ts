@@ -9,6 +9,8 @@ import { ROOT_SCOPE } from "../../lib/terminal/ptyId";
 import { newTmuxSessionName } from "../../lib/terminal/tmuxSession";
 import { envName } from "../../lib/brand";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../../lib/assistant";
+import { restoredTaskName } from "../../lib/agents/autoTabName";
+import { readCockpitMeta } from "../../lib/cockpit/agentNotes";
 import type { SavedTabEntry, TabEntry, TabKind } from "./types";
 import { nextKey } from "./ids";
 import { FILES_TAB_CMD, cmdToKind, isRelaunchableLocalTab, isResumableAgentTab, resumeArgsOf } from "./tabKinds";
@@ -75,6 +77,10 @@ export function normalizeTodoId(value: unknown): string | undefined {
  *   project's container, which is the safe direction (`lib/remote/hostBound.ts`).
  * - `mark` and `todoId` are dropped: the card is the original's, and a copied
  *   Urgent would double what the project pill says needs attention.
+ * - `autoLabel`/`autoNamed`/`taskName` are dropped: the copy is a conversation of its
+ *   own, armed afresh for the name of its own first prompt (`withAutoLabel`).
+ * - `cockpitMeta` is dropped: the notes are the original agent's, and the
+ *   host strips them from a created tab anyway.
  */
 export function duplicateSpec(tab: TabEntry): Omit<TabEntry, "key"> {
   const {
@@ -86,6 +92,10 @@ export function duplicateSpec(tab: TabEntry): Omit<TabEntry, "key"> {
     scheduleTargetId: _scheduleTarget,
     mark: _mark,
     todoId: _todo,
+    autoLabel: _autoLabel,
+    autoNamed: _autoNamed,
+    taskName: _taskName,
+    cockpitMeta: _cockpitMeta,
     ...rest
   } = tab;
   if (!sessionId) return rest;
@@ -282,6 +292,12 @@ export function restoreSavedTab(
     stack: normalizeStackName(t.stack),
     mark: isTabMark(t.mark) ? t.mark : undefined,
       todoId: normalizeTodoId(t.todoId),
+      // Named by its task: plain text from the file, capped; without one
+      // the tab is simply never named by a prompt.
+      ...restoredTaskName(t),
+      // The agent's own notes, as the host stored them: validated and bounded
+      // again on the way in, and never written back from here.
+      cockpitMeta: readCockpitMeta(t.cockpitMeta),
     };
 }
 

@@ -1,6 +1,7 @@
 import type { TranslationKey } from "../i18n";
 import { fmtModified } from "../viewers/fileUtils";
 import type { SyncEntryStatus } from "../../stores/remote/sync";
+import { newerFileSide } from "../viewers/syncSideTimes";
 
 /**
  * What a diverged file's row says and offers, from its status alone: the
@@ -84,12 +85,8 @@ export function splitByNewerSide(
   const local: string[] = [];
   for (const rel of relPaths) {
     const e = byPath?.[rel];
-    if (!e || e.hostMtime == null || e.localMtime == null) continue;
-    if (e.hostDiverged !== e.localDiverged) {
-      (e.hostDiverged ? host : local).push(rel);
-    } else if (e.hostMtime !== e.localMtime) {
-      (e.hostMtime > e.localMtime ? host : local).push(rel);
-    }
+    const newer = e ? newerFileSide(e) : null;
+    if (newer) (newer.side === "host" ? host : local).push(rel);
   }
   return { host, local };
 }
@@ -140,4 +137,19 @@ export function splitByDeleteSide(
     if (side) (side === "host" ? host : local).push(rel);
   }
   return { host, local };
+}
+
+/**
+ * The diverged files BOTH sides changed since their recorded base (the backend's
+ * per-side flags, both copies present) — the true conflicts, the complement of
+ * `withoutChangedOnBoth`. What "Hand to an agent" takes from the orange list.
+ */
+export function bothChangedPaths(
+  byPath: Record<string, SyncEntryStatus> | undefined,
+  relPaths: string[],
+): string[] {
+  return relPaths.filter((rel) => {
+    const e = byPath?.[rel];
+    return !!(e && e.hostMtime != null && e.localMtime != null && e.hostDiverged && e.localDiverged);
+  });
 }

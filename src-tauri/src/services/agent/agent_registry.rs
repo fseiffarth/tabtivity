@@ -277,9 +277,13 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // private Node 24 and installs both under `~/.openclaw` — no root, no
         // onboarding prompt, nothing added to shell rc files.
         install_cmd: "curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash",
-        // The Windows installer onboards interactively unless told not to.
+        // The Windows installer onboards interactively unless told not to, and
+        // on a Node it rejects runs `winget install OpenJS.NodeJS.LTS`: that
+        // replaces the machine's Node, and Restart Manager Ctrl+C's every
+        // console running it. So its `-NodeOnly` step puts a private Node in
+        // the launcher dir first, where the main run finds it.
         install_cmd_windows: Some(
-            "$env:OPENCLAW_NO_ONBOARD='1'; irm https://openclaw.ai/install.ps1 | iex",
+            "$env:OPENCLAW_NO_ONBOARD='1'; $s=irm https://openclaw.ai/install.ps1; $n=Join-Path $env:USERPROFILE '.openclaw\\bin'; if (-not (Test-Path (Join-Path $n 'node.exe'))) { & ([scriptblock]::Create($s)) -NodeOnly -NodePrefix $n }; $env:PATH=$n+';'+$env:PATH; $s | iex",
         ),
         extra_paths: &[".openclaw/bin/openclaw", ".local/bin/openclaw"],
         docs: "https://docs.openclaw.ai",
@@ -450,7 +454,9 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "muse",
         label: "Meta Muse Code",
         bin: "muse",
-        resume: Resume::No,
+        // The folder's latest session (1.4.15); `muse_session::resolve` aims
+        // it at the Resume menu's pick, or drops it where there is none.
+        resume: Resume::Args(&["resume", "--last"]),
         install_cmd: "curl -fsSL https://dev.meta.ai/install.sh | bash",
         install_cmd_windows: None,
         extra_paths: &[".local/bin/muse"],
@@ -660,6 +666,37 @@ pub(crate) fn warmup_dir() -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+/// Run `cmd`, an agent CLI started for a probe (`/usage`, `--version`, the
+/// warm-up), in Tabtivity's probe home instead of the user's own `$HOME`:
+/// `agent_home::prepare_probe_home` (the stored logins, no hooks, no global
+/// layer) is prepared off the async worker and `cmd` gets its environment
+/// ([`apply_probe_home`]). Refuses, rather than falling back to the real
+/// home, when the home cannot be prepared.
+pub(crate) async fn into_probe_home(
+    cmd: &mut std::process::Command,
+    spec: &AgentSpec,
+    cwd: &std::path::Path,
+) -> Result<(), String> {
+    let cwd = cwd.to_path_buf();
+    let home = tokio::task::spawn_blocking(move || crate::services::agent_home::prepare_probe_home(&cwd))
+        .await
+        .map_err(|e| format!("probe home: {e}"))?
+        .map_err(|e| format!("probe home: {e}"))?;
+    apply_probe_home(cmd, spec, &home.dir);
+    Ok(())
+}
+
+/// Give `cmd` the environment of the probe home `home`: its `HOME` (and the
+/// Windows equivalents), and none of the variables that would point the CLI
+/// at the user's own config folder.
+pub(crate) fn apply_probe_home(cmd: &mut std::process::Command, spec: &AgentSpec, home: &std::path::Path) {
+    use crate::services::agent_home as homes;
+    for var in homes::PROBE_UNSET {
+        cmd.env_remove(var);
+    }
+    cmd.envs(homes::probe_env_for(cfg!(windows), home, spec.bin));
+}
+
 /// Ask one agent CLI what version it is, once.
 ///
 /// Same spawn shape as the usage read above and for the same reasons: argv
@@ -678,7 +715,9 @@ pub(crate) async fn probe_agent_version(
         .ok_or_else(|| format!("{} has no known version flag", spec.label))?;
     let cwd = warmup_dir()?;
 
-    let mut cmd = tokio::process::Command::from(crate::paths::command_no_window(path));
+    let mut std_cmd = crate::paths::command_no_window(path);
+    into_probe_home(&mut std_cmd, spec, &cwd).await?;
+    let mut cmd = tokio::process::Command::from(std_cmd);
     cmd.args(&argv)
         .envs(versions::version_env(spec.id).iter().copied())
         .current_dir(&cwd)

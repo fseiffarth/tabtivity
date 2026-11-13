@@ -78,8 +78,8 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
 
   it("lists the outbox on open, renders each image from the tab's own route, and opens one full-screen", async () => {
     const fetchMock = outboxFetch(() => [
-      { name: "plot.png", kind: "image/png", size: 48_000, modified: NOW - 90 },
-      { name: "shot-1.jpg", kind: "image/jpeg", size: 1_300_000, modified: NOW - 7_200 },
+      { name: "plot.png", kind: "image/png", size: 48_000, modified: NOW - 90, from_tab: true },
+      { name: "shot-1.jpg", kind: "image/jpeg", size: 1_300_000, modified: NOW - 7_200, from_tab: true },
     ]);
     vi.stubGlobal("fetch", fetchMock);
     render(<Terminal tab={TAB} back={() => {}} />);
@@ -116,14 +116,14 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     await settle();
     expect(screen.queryByRole("button", { name: /Files from the agent/ })).toBeNull();
 
-    images.unshift({ name: "plot.png", kind: "image/png", size: 48_000, modified: NOW - 90 });
+    images.unshift({ name: "plot.png", kind: "image/png", size: 48_000, modified: NOW - 90, from_tab: true });
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
     screen.getByRole("button", { name: "Files from the agent (1)" });
 
     // Coming back to the page re-reads the folder; a new picture joins the
     // gallery on its own — nothing to dismiss, nothing pushed into the chat.
-    images.unshift({ name: "diagram.png", kind: "image/png", size: 9_000, modified: NOW - 5 });
+    images.unshift({ name: "diagram.png", kind: "image/png", size: 9_000, modified: NOW - 5, from_tab: true });
     act(() => { document.dispatchEvent(new Event("visibilitychange")); });
     await settle();
     const gallery = openGallery(2);
@@ -135,9 +135,9 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
       ? jsonResponse(200, { files: [
-        { name: "notes.svg", kind: "text/plain; charset=utf-8", size: 80, modified: NOW },
-        { name: "paper.pdf", kind: "application/pdf", size: 400, modified: NOW },
-        { name: "data.zip", kind: "application/octet-stream", size: 400, modified: NOW },
+        { name: "notes.svg", kind: "text/plain; charset=utf-8", size: 80, modified: NOW, from_tab: true },
+        { name: "paper.pdf", kind: "application/pdf", size: 400, modified: NOW, from_tab: true },
+        { name: "data.zip", kind: "application/octet-stream", size: 400, modified: NOW, from_tab: true },
       ] }) : new Response("<svg onload='alert(1)'>inert text</svg>"))));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -165,7 +165,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     Object.defineProperty(navigator, "share", { configurable: true, value: share });
     try {
       vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
-        ? jsonResponse(200, { files: [{ name: "data.zip", kind: "application/octet-stream", size: 4, modified: NOW }] })
+        ? jsonResponse(200, { files: [{ name: "data.zip", kind: "application/octet-stream", size: 4, modified: NOW, from_tab: true }] })
         : new Response(new Uint8Array([80, 75, 0, 1])))));
       render(<Terminal tab={TAB} back={() => {}} />);
       await settle();
@@ -187,7 +187,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
 
   it("caps the inline text preview and reads the whole file into the app", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
-      ? jsonResponse(200, { files: [{ name: "large.log", kind: "text/plain; charset=utf-8", size: 2 * 1024 * 1024, modified: NOW }] })
+      ? jsonResponse(200, { files: [{ name: "large.log", kind: "text/plain; charset=utf-8", size: 2 * 1024 * 1024, modified: NOW, from_tab: true }] })
       : new Response("x".repeat(2 * 1024 * 1024)))));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -204,7 +204,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
 
   it("opens a text too big for the app in the browser's tab", async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
-      ? jsonResponse(200, { files: [{ name: "huge.log", kind: "text/plain; charset=utf-8", size: 9 * 1024 * 1024, modified: NOW }] })
+      ? jsonResponse(200, { files: [{ name: "huge.log", kind: "text/plain; charset=utf-8", size: 9 * 1024 * 1024, modified: NOW, from_tab: true }] })
       : new Response("x".repeat(2 * 1024 * 1024)))));
     render(<Terminal tab={TAB} back={() => {}} />);
     await settle();
@@ -222,7 +222,7 @@ describe(`${BRAND.display} Mobile reaches the files the agent sent through the g
     Object.defineProperty(navigator, "standalone", { configurable: true, value: true });
     try {
       vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(url.endsWith("/outbox")
-        ? jsonResponse(200, { files: [{ name: "huge.log", kind: "text/plain; charset=utf-8", size: 9 * 1024 * 1024, modified: NOW }] })
+        ? jsonResponse(200, { files: [{ name: "huge.log", kind: "text/plain; charset=utf-8", size: 9 * 1024 * 1024, modified: NOW, from_tab: true }] })
         : new Response("x".repeat(2 * 1024 * 1024)))));
       render(<Terminal tab={TAB} back={() => {}} />);
       await settle();

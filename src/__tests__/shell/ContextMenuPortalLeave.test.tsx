@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { useState } from "react";
 import { ContextMenuPortal } from "../../components/common/ContextMenuPortal";
 
 afterEach(() => {
@@ -25,6 +26,32 @@ describe("ContextMenuPortal leaving", () => {
     open(onClose);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the top portal first when focus is outside the menus", () => {
+    function Menus() {
+      const [parentOpen, setParentOpen] = useState(true);
+      const [childOpen, setChildOpen] = useState(false);
+      return parentOpen && (
+        <ContextMenuPortal x={10} y={10} onClose={() => setParentOpen(false)}>
+          <button type="button" onClick={() => setChildOpen(true)}>Open submenu</button>
+          {childOpen && (
+            <ContextMenuPortal x={20} y={20} onClose={() => setChildOpen(false)}>
+              <button type="button">Submenu choice</button>
+            </ContextMenuPortal>
+          )}
+        </ContextMenuPortal>
+      );
+    }
+
+    const view = render(<Menus />);
+    fireEvent.click(view.getByText("Open submenu"));
+    expect(view.queryByText("Submenu choice")).not.toBeNull();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(view.queryByText("Submenu choice")).toBeNull();
+    expect(view.queryByText("Open submenu")).not.toBeNull();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(view.queryByText("Open submenu")).toBeNull();
   });
 
   it("holds the menu for the exit duration, faded, with the catcher gone", () => {

@@ -127,7 +127,7 @@ every agent — and runs alongside an orchestrator rather than replacing it.
   terminal, files the agent sends you, read-only project files, and PDF markup
   with a finger or the Apple Pencil that goes straight back to the agent.
 - **[Agents and terminals](docs/guide/features.md#agents-and-terminals)**:
-  27 built-in agent CLIs plus your own and local Ollama models, per-tab
+  30 built-in agent CLIs plus your own and local Ollama models, per-tab
   session resume, scheduled prompts and chains, and a tiling, pop-out tab
   layout. Local agents run inside a default-on sandbox (the agent fence).
 - **[Projects, boxes and isolation tiers](docs/guide/features.md#projects-and-boxes)**:
@@ -143,6 +143,29 @@ every agent — and runs alongside an orchestrator rather than replacing it.
   notebooks, spreadsheets, SQLite, and more.
 - **[Interface and learning](docs/guide/features.md#interface-and-learning)**:
   a theme customizer, a guided tour with ~30 lessons, and five languages.
+
+### Which agent CLIs resume and have a chat view
+
+Every built-in CLI runs in a terminal tab. These CLIs do more:
+
+| CLI | Resumes after a restart | Chat view (desktop) | Chat on the phone | Earlier chats (Resume menu) | Diffs |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Claude | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
+| Codex | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
+| Copilot | ✓ own session | ✓ | | ✓ | ✓ |
+| OpenCode | ✓ folder's latest | ✓ | ✓ | ✓ | ✓ |
+| Antigravity | ✓ folder's latest | ✓ | ✓ | ✓ | |
+| Meta Muse Code | ✓ folder's latest | ✓ | ✓ | ✓ | |
+| Gemini | ✓ folder's latest | | ✓ | | |
+| Vibe, Qwen, Cursor, Grok, Droid | ✓ folder's latest | | | | |
+
+*Own conversation* or *own session*: each tab comes back to the exact chat it
+had. *Folder's latest*: the tab continues the newest chat in its folder, so
+two tabs of the same CLI in one folder both come back to that one. Picking a
+chat in the Resume menu pins the tab to it. Muse's resume and chat view are
+new and have not been tried in a real window yet. The other built-in CLIs
+start fresh after a restart; a custom agent can bring its own resume flag
+([details](docs/guide/features.md#agent-clis-resume-and-tools)).
 
 The full tour is in **[docs/guide/features.md](docs/guide/features.md)**.
 

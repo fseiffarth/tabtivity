@@ -796,17 +796,7 @@ pub fn install() -> Result<InstallOutcome, String> {
         InstallKind::Nsis => {
             // The Tauri NSIS installer detects a running Tabtivity and offers to
             // close it, so handing it over mid-session is the supported flow.
-            // A plain `Command`, deliberately not `paths::command_no_window`:
-            // this child is meant to put a window on screen, and suppressing a
-            // console for an installer is the opposite of what is wanted here.
-            let mut cmd = std::process::Command::new(&staged.path);
-            // Run it from the directory it landed in, so nothing resolves
-            // against whatever Tabtivity's cwd happens to be.
-            if let Some(parent) = staged.path.parent() {
-                cmd.current_dir(parent);
-            }
-            crate::paths::spawn_reaped(cmd)
-                .map_err(|e| format!("could not start the installer: {e}"))?;
+            launch_installer(&staged.path)?;
             Ok(InstallOutcome {
                 restart_required: true,
                 installer_launched: true,
@@ -829,6 +819,62 @@ pub fn install() -> Result<InstallOutcome, String> {
             path: path_str,
         }),
     }
+}
+
+/// Start the Windows installer through the shell, not `CreateProcess`.
+///
+/// The bundle is built `perMachine`, so the setup's manifest asks for
+/// `requireAdministrator`. `CreateProcess` (what `std::process::Command` uses)
+/// never raises a UAC prompt for that — it fails with `ERROR_ELEVATION_REQUIRED`
+/// (os error 740). `ShellExecuteW` honours the manifest and shows the prompt,
+/// and also opens an `.msi` through `msiexec`. It returns once the process
+/// exists (after consent), which is fine: the command runs off the UI thread.
+#[cfg(target_os = "windows")]
+fn launch_installer(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(Some(0)).collect() };
+    let verb = wide("open".as_ref());
+    let file = wide(path.as_os_str());
+    // Run it from the directory it landed in, so nothing resolves against
+    // whatever Tabtivity's cwd happens to be.
+    let dir = path.parent().map(|p| wide(p.as_os_str()));
+    // SAFETY: every string is NUL-terminated and outlives the call.
+    let code = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+            SW_SHOWNORMAL,
+        )
+    }
+    .0 as isize;
+    // Documented contract: a value above 32 is success, anything else an error
+    // code. SE_ERR_ACCESSDENIED (5) is what a declined UAC prompt comes back as.
+    match code {
+        c if c > 32 => Ok(()),
+        5 => Err("the installer needs administrator rights and the prompt was declined".to_string()),
+        c => Err(format!("could not start the installer: {}", std::io::Error::from_raw_os_error(c as i32))),
+    }
+}
+
+/// Elsewhere an NSIS artifact is never picked; keep the plain spawn for
+/// completeness. Deliberately not `paths::command_no_window`: an installer is
+/// meant to put a window on screen.
+#[cfg(not(target_os = "windows"))]
+fn launch_installer(path: &Path) -> Result<(), String> {
+    let mut cmd = std::process::Command::new(path);
+    if let Some(parent) = path.parent() {
+        cmd.current_dir(parent);
+    }
+    crate::paths::spawn_reaped(cmd)
+        .map(|_| ())
+        .map_err(|e| format!("could not start the installer: {e}"))
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {

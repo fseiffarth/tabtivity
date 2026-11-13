@@ -1,6 +1,6 @@
 import { ADVANCED_TOUR_STEPS, TOUR_STEPS, type TourStep } from "./tour";
 import type { TranslationKey } from "./i18n";
-import { modifierLabel } from "./shortcuts/shortcuts";
+import { modifierLabel, projectCycleLabels } from "./shortcuts/shortcuts";
 
 /**
  * Task "lessons" — short, replayable narrated walkthroughs for specific jobs
@@ -380,7 +380,7 @@ export const LESSONS: Lesson[] = [
         task: {
           promptKey: "lessons.keyboardSteering.enterModeTask",
           hintKey: "lessons.keyboardSteering.enterModeTaskHint",
-          appear: ".steering-legend, .steering-legend-fab",
+          appear: ".steering-bar",
         },
       },
       {
@@ -459,7 +459,7 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.keyboardSteering.projectCycleTitle",
         bodyKey: "lessons.keyboardSteering.projectCycleBody",
-        bodyParams: () => ({ modifier: modifierLabel() }),
+        bodyParams: () => ({ modifier: modifierLabel(), ...projectCycleLabels() }),
       },
     ],
   },
@@ -1360,6 +1360,20 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.projectBoxes.boxScopeTitle",
         bodyKey: "lessons.projectBoxes.boxScopeBody",
+      },
+      {
+        id: "member-chip",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.projectBoxes.memberChipTitle",
+        bodyKey: "lessons.projectBoxes.memberChipBody",
+      },
+      {
+        id: "side-panel",
+        anchor: null,
+        placement: "bottom",
+        titleKey: "lessons.projectBoxes.sidePanelTitle",
+        bodyKey: "lessons.projectBoxes.sidePanelBody",
       },
     ],
   },

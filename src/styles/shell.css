@@ -103,6 +103,62 @@ select option {
   --text-muted: var(--top-frame-text-muted);
 }
 
+/* Fullscreen auto-hide (HeaderBar sets `is-autohide` only while the window's own
+   fullscreen mode is on). The bar leaves the layout, so the content takes the
+   whole screen, and parks just above the edge; `top` rather than a transform,
+   because a transformed ancestor would re-anchor the position:fixed menus that
+   live inside the bar. Revealed by the pointer at the top edge (`.header-hotzone`,
+   `is-revealed`), by keyboard focus inside it, or by steering aimed at it
+   (its projects level, its header region).
+   Hidden, it is inert so nothing in it can be clicked or tabbed to. */
+.app-header.is-autohide {
+  position: fixed;
+  top: -40px;
+  left: 0;
+  right: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: top 140ms ease-out, visibility 0s linear 140ms;
+  /* Floating over the content, the bar must be fully filled: the glass themes'
+     --top-frame-bg is translucent, so the page behind showed through it. The
+     opaque app background is the base and the theme's own fill is laid over it
+     (::after, under the wash), which keeps the tint a docked bar has. */
+  background: var(--bg-main);
+}
+.app-header.is-autohide::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--top-frame-bg);
+  pointer-events: none;
+  z-index: -2;
+}
+.app-header.is-autohide:is(
+    .is-revealed,
+    :has(:focus-visible)
+  ),
+html[data-steer="projects"] .app-header.is-autohide,
+html[data-steer-region="header"] .app-header.is-autohide {
+  top: 0;
+  visibility: visible;
+  pointer-events: auto;
+  transition: top 140ms ease-out, visibility 0s;
+}
+.header-hotzone {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  z-index: 79;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-header.is-autohide,
+  .app-header.is-autohide.is-revealed {
+    transition: none;
+  }
+}
+
 /* …but a menu dropping out of the bar is its own surface, not the frame: it
    sits on --bg-elevated over the app's content, so it takes the theme's ink
    back (--text-*-base, themes.css). The header's popovers render INSIDE it
@@ -127,8 +183,9 @@ select option {
    overlay works over any of them with no per-theme branching. The translucency
    lives in the token (32% accent by default) rather than in an `opacity` here,
    so one hex with an alpha channel from the Theme Customizer can set both the
-   hue and how far it carries; the themes that want no wash set it to
-   `transparent`. Negative z-index keeps it under the header's own
+   hue and how far it carries. Every built-in theme leaves it `transparent`
+   since 2026-11-04 (a calm header, the accent kept for state); the overlay
+   stays for a Customizer wash. Negative z-index keeps it under the header's own
    (unpositioned, normal-flow) children within .app-header's own stacking
    context. */
 .app-header::before {
@@ -206,6 +263,10 @@ select option {
      is drawn by the ::before/::after bars below, which have fixed pixel sizes
      and so are untouched by it. */
   font-size: 0;
+  /* The glyph's ink: secondary text at rest, so the four controls read as
+     chrome rather than as three traffic lights; each takes its own colour
+     (--wm-*) only under the pointer, close turning red. */
+  --wm-ink: var(--text-secondary);
   transition: background-color var(--transition), border-color var(--transition),
     transform var(--transition);
 }
@@ -215,15 +276,18 @@ select option {
 .vpn-prompt-close:active,
 .dialog-close-btn:active { transform: scale(0.92); }
 .wm-minimize:hover {
+  --wm-ink: var(--wm-minimize);
   background: color-mix(in srgb, var(--wm-minimize) 20%, transparent);
   border-color: color-mix(in srgb, var(--wm-minimize) 45%, transparent);
 }
 .wm-maximize:hover {
+  --wm-ink: var(--wm-maximize);
   background: color-mix(in srgb, var(--wm-maximize) 20%, transparent);
   border-color: color-mix(in srgb, var(--wm-maximize) 45%, transparent);
 }
 .wm-fullscreen:hover,
 .wm-fullscreen[aria-pressed="true"] {
+  --wm-ink: var(--wm-maximize);
   background: color-mix(in srgb, var(--wm-maximize) 20%, transparent);
   border-color: color-mix(in srgb, var(--wm-maximize) 45%, transparent);
 }
@@ -231,8 +295,29 @@ select option {
 .vpn-indicator-close:hover,
 .vpn-prompt-close:hover,
 .dialog-close-btn:hover {
+  --wm-ink: var(--wm-close);
   background: color-mix(in srgb, var(--wm-close) 26%, transparent);
   border-color: color-mix(in srgb, var(--wm-close) 55%, transparent);
+}
+
+/* Pin glyph (fullscreen only): a ring at rest, filled while the bar is pinned. */
+.wm-pin::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--wm-ink);
+}
+.wm-pin:hover {
+  --wm-ink: var(--wm-maximize);
+  background: color-mix(in srgb, var(--wm-maximize) 20%, transparent);
+  border-color: color-mix(in srgb, var(--wm-maximize) 45%, transparent);
+}
+.wm-pin[aria-pressed="true"] {
+  --wm-ink: var(--wm-maximize);
+}
+.wm-pin[aria-pressed="true"]::before {
+  background: var(--wm-ink);
 }
 
 /* Minimize glyph: a single bar. */
@@ -241,7 +326,7 @@ select option {
   width: 10px;
   height: 2px;
   border-radius: 1px;
-  background: var(--wm-minimize);
+  background: var(--wm-ink);
 }
 
 /* Maximize glyph: a small window outline. */
@@ -250,12 +335,12 @@ select option {
   width: 9px;
   height: 9px;
   border-radius: 2px;
-  border: 1.5px solid var(--wm-maximize);
+  border: 1.5px solid var(--wm-ink);
 }
 
 /* Fullscreen glyph: four corner brackets, drawn as eight short bars. */
 .wm-fullscreen::before {
-  --wm-fs-c: linear-gradient(var(--wm-maximize), var(--wm-maximize));
+  --wm-fs-c: linear-gradient(var(--wm-ink), var(--wm-ink));
   content: "";
   width: 11px;
   height: 11px;
@@ -281,7 +366,7 @@ select option {
   width: 12px;
   height: 2px;
   border-radius: 1px;
-  background: var(--wm-close);
+  background: var(--wm-ink);
 }
 .wm-close::before,
 .vpn-indicator-close::before,

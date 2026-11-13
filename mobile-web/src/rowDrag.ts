@@ -130,6 +130,7 @@ export function useRowDrag(
       onPointerDown: (event) => startDrag(event, key),
       onKeyDown: (event) => {
         // Left and right too: on a wide screen the cards stand two to a line.
+        if (event.defaultPrevented) return;
         const step = event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : 0;
         if (!step) return;
         event.preventDefault();

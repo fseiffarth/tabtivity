@@ -45,6 +45,7 @@ function status(installed: boolean): VoiceStatus {
       { id: "silero-vad", kind: "vad", installed, sizeBytes: 900_000 },
     ],
     defaultModel: "small",
+    natural: { offered: false, voices: [] },
     gpuBuilt: false,
     gpuCrashed: false,
     device: null,
@@ -120,6 +121,22 @@ describe("dictating into the Chat's composer", () => {
     expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "Fix the login.");
     expect(invoke).toHaveBeenCalledWith("voice_listen_stop", { session: 11 });
     expect(screen.getByRole("button", { name: "Dictate" })).toBeTruthy();
+  });
+
+  it("edits the draft on \"Tabby …\" instead of typing it, with a note on the line", async () => {
+    const box = await composer(host);
+    await startMic();
+    emit("voice:final", { session: 11, segment: 1, text: "Fix the login." });
+    emit("voice:final", { session: 11, segment: 2, text: "And the logout." });
+    expect(box.value).toBe("Fix the login. And the logout.");
+    emit("voice:final", { session: 11, segment: 3, text: "Tabby, scratch that." });
+    expect(box.value).toBe("Fix the login.");
+    expect(screen.getByText("Removed “And the logout.”")).toBeTruthy();
+    emit("voice:final", { session: 11, segment: 4, text: "Tabby, replace login with sign-in." });
+    expect(box.value).toBe("Fix the sign-in.");
+    emit("voice:final", { session: 11, segment: 5, text: "Tabby plan." });
+    expect(box.value).toBe("/plan Fix the sign-in.");
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
   });
 
   it("offers the install tab when the speech model is missing", async () => {

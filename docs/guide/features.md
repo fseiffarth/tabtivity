@@ -228,8 +228,8 @@ current integration state.
 | **Gemini** (`gemini`) | Continues the latest conversation in the directory. | Core tab use confirmed; restore remains less precise than Claude/Codex. |
 | **Vibe** (`vibe`) | Continues the latest saved session. | Pending. |
 | **Ollama via Vibe** | Isolated per-model `VIBE_HOME`; continue-latest where a resumable tab is available. | Partial. |
-| **Qwen, OpenCode, Copilot, Cursor, Grok, Antigravity, Droid** | CLI-specific continue-latest flags. | Pending. |
-| **Kiro, Cline, Aider, OpenClaw, Goose, Pi, Plandex, SWE-agent, Mini SWE-agent, Crush, Amp, Kimi, Qoder, Muse Code, Auggie, Kilo Code, Continue.dev, Junie, CodeBuddy** | Launch support; no built-in tab restore path. | Pending. |
+| **Qwen, OpenCode, Copilot, Cursor, Grok, Antigravity, Droid, Muse Code** | CLI-specific continue-latest flags (Muse: `resume --last`, skipped in a folder with no session yet). | Pending. |
+| **Kiro, Cline, Aider, OpenClaw, Goose, Pi, Plandex, SWE-agent, Mini SWE-agent, Crush, Amp, Kimi, Qoder, Auggie, Kilo Code, Continue.dev, Junie, CodeBuddy** | Launch support; no built-in tab restore path. | Pending. |
 | **Custom agents** | Optional resume arguments supplied by the user. | Depends on the command. |
 | **Shell** | Respawns an ordinary shell or reattaches its tmux session where configured. | Core tab use confirmed. |
 
@@ -241,8 +241,8 @@ filesystem access; project-local XDG paths alone are not an isolation boundary.
 restarts. Tabtivity installs session hooks keyed by `TABTIVITY_TAB_UID`, so a
 `/clear` can update the recorded live session. Codex also has hook-free binding,
 including its SQLite-backed session index; its hooks may need one-time `/hooks`
-trust. Qwen, OpenCode, Copilot, Cursor, Grok, Gemini, Antigravity, and Vibe have
-continue-latest restore paths. Those cannot distinguish several conversations
+trust. Qwen, OpenCode, Copilot, Cursor, Grok, Gemini, Antigravity, Vibe, and Muse
+have continue-latest restore paths. Those cannot distinguish several conversations
 in the same directory as precisely as Claude/Codex. Custom agents can supply
 resume arguments; agents without a supported resume path are not restored.
 

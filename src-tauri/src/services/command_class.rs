@@ -98,6 +98,9 @@ pub enum OffReason {
     /// Reads the CLI config or login files of *this computer's* own user; on a
     /// server the user signs in through sign-in tabs instead (§5.1).
     LocalCliFiles,
+    /// Binds a listener on the machine's own loopback (a port forward); a
+    /// daemon's loopback is not the browser user's.
+    DaemonLoopback,
 }
 
 impl CommandClass {
@@ -125,6 +128,7 @@ impl OffReason {
             OffReason::WholeDocumentSave => "whole-document-save",
             OffReason::HeadlessOwner => "headless-owner",
             OffReason::LocalCliFiles => "local-cli-files",
+            OffReason::DaemonLoopback => "daemon-loopback",
         }
     }
 }
@@ -193,6 +197,10 @@ use CommandClass::{Admin, Client, Core, Off};
 /// defines it, which is also how `lib.rs` lists them; keep a new command's row
 /// next to its neighbours.
 static TABLE: &[(&str, CommandClass)] = &[
+    // commands/agent_privacy.rs
+    // Desktop only (decision D4): the phone reads the setting from the project
+    // record and has no setter; a browser client hides the control.
+    ("set_project_agent_privacy", Client),
     // commands/agent_prompts.rs
     ("agent_prompt_archive", Core),
     ("agent_prompt_blame", Core),
@@ -216,6 +224,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_logins", Core),
     ("agent_login_sign_out", Core),
     ("agent_login_scope_sign_out", Core),
+    ("claude_token_clear", Core),
+    ("claude_token_save", Core),
+    ("claude_token_status", Core),
     ("agent_login_use_admin_key", Core),
     ("agent_api_key_clear", Core),
     ("agent_api_key_set", Core),
@@ -370,8 +381,15 @@ static TABLE: &[(&str, CommandClass)] = &[
     // commands/clipboard.rs
     ("clipboard_file_paths", Client),
     ("clipboard_has_image", Client),
+    ("copy_files_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
     ("save_clipboard_image", Client),
+    // commands/cockpit_results.rs — `client` (plan decision 12): the click of the
+    // window the agent's tab is shown in, judged against this machine's registry.
+    ("cockpit_result_target", Client),
+    // — and the dismissal of an agent's reported question (decision 20): the user's
+    // own click, one compare-and-swap on the attention id, nothing else written.
+    ("cockpit_attention_dismiss", Client),
     // commands/connect.rs — this desktop as a server's client (plan §7.2):
     // the machine the user sits at, never exposed.
     ("connect_forget", Client),
@@ -713,6 +731,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("prepare_local_launch", Core),
     ("prepare_text_completion", Core),
     ("pull_ollama_model", Admin),
+    ("restart_ollama_server", Admin),
+    ("search_huggingface_models", Core),
     ("search_ollama_registry", Core),
     ("stop_ollama_model", Admin),
     ("vibe_install_strategy", Core),
@@ -741,6 +761,10 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("pdf_markup_undo", Core),
     ("pdf_markup_undo_preview", Core),
     ("pdf_markup_undo_settle", Core),
+    // commands/port_forward.rs
+    ("port_forward_close", Off(OffReason::DaemonLoopback)),
+    ("port_forward_list", Off(OffReason::DaemonLoopback)),
+    ("port_forward_open", Off(OffReason::DaemonLoopback)),
     // commands/power.rs
     ("get_power_state", Client),
     // commands/presenter.rs
@@ -760,6 +784,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("print_test_page", Client),
     // commands/print_native.rs
     ("print_pdf_native", Client),
+    // commands/print_mcp.rs — agent print requests are approved in the
+    // window's own preview and printed on this machine.
+    ("print_mcp_decide", Client),
+    ("print_mcp_pdf", Client),
+    ("print_mcp_requests", Client),
     // commands/project_runtime.rs
     ("load_side_panel_folder", Core),
     ("save_side_panel_folder", Core),
@@ -832,7 +861,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("workspace_sync", Core),
     // commands/project_transfer.rs
     ("export_project", Core),
+    ("export_project_set", Core),
     ("import_project_export", Core),
+    ("inspect_project_bundle", Core),
     ("inspect_project_export", Core),
     ("preview_host_export", Core),
     ("preview_project_export", Core),
@@ -946,6 +977,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_auto_preview", Core),
     ("sync_big_folders", Core),
     ("sync_diff", Core),
+    ("sync_handoff_export", Core),
+    ("sync_handoff_load_resolved", Core),
+    ("sync_handoff_reveal", Client),
     ("sync_file_meta", Core),
     ("sync_mark_selected", Core),
     ("sync_pull", Core),
@@ -985,6 +1019,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("register_host_bound_tab", Core),
     // commands/tex.rs
     ("compile_tex", Core),
+    ("compile_tex_host", Core),
     ("list_fonts", Core),
     ("resolve_tex_root", Core),
     ("synctex_edit", Core),
@@ -994,6 +1029,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("tex_capability", Core),
     ("tex_auto_engine", Core),
     ("tex_preview_snippet", Core),
+    // commands/tfevents.rs
+    ("tfevents_discover", Core),
+    ("tfevents_read", Core),
     // commands/timer.rs
     ("get_project_activity", Core),
     ("get_time_activity_all", Core),
@@ -1022,6 +1060,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("voice_listen_start", Client),
     ("voice_listen_stop", Client),
     ("voice_model_install_script", Client),
+    ("voice_natural_install_script", Client),
     ("voice_speak", Client),
     ("voice_speak_stop", Client),
     ("voice_status", Client),
@@ -1134,6 +1173,15 @@ mod tests {
             actual, expected,
             "src/lib/transport/commandClasses.ts is stale; regenerate with\n  UPDATE_COMMAND_CLASSES=1 cargo test --manifest-path src-tauri/Cargo.toml -q --lib -- the_generated_command_classes_ts_is_current"
         );
+    }
+
+    #[test]
+    fn the_cockpit_commands_are_client_class() {
+        // The window's own clicks on an agent's notes (plan decisions 12 and 20):
+        // a browser shim may forward them, nothing here is core or admin.
+        assert_eq!(class_of("cockpit_result_target"), Some(Client));
+        assert_eq!(class_of("cockpit_attention_dismiss"), Some(Client));
+        assert!(names_in(Client).any(|name| name == "cockpit_attention_dismiss"));
     }
 
     #[test]

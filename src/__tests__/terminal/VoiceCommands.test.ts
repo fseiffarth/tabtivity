@@ -13,7 +13,11 @@ import {
   hasCommandWord,
   match,
   matchConfirm,
+  matchNavLeave,
+  matchNavigate,
   matchReading,
+  matchStartWord,
+  mayNavigate,
   matchesPhrase,
   resolveAmbiguity,
   weakPhrase,
@@ -505,5 +509,142 @@ describe("matchOption with the rows' own words", () => {
     expect(matchOption("No", 2, labels)).toBeNull();
     expect(matchOption("same", 2, ["Same", "same"])).toBeNull();
     expect(matchOption("No", 3)).toBeNull();
+  });
+});
+
+describe("the start word and navigation", () => {
+  const A = BRAND.assistant;
+  const navigatePhrases = (lang: Language) => translate(lang, "voice.navigate").split("|").map((phrase) => phrase.trim());
+  /** Spellings a recognizer writes for the name, built from it (no literal). */
+  const misspellings = (lang: Language): string[] => [
+    ...translate(lang, "voice.assistantAliases").split("|"),
+    A.toLowerCase(),
+    A.replace(/y$/i, "i"),
+    A.replace(/bb/i, "b").replace(/y$/i, "i"),
+    `${A.slice(0, 3)} ${A.slice(3).replace(/y$/i, "i")}`,
+  ];
+  /** Words one letter from the name that are not it. */
+  const nearWords = ["taxi", "Toby", "tabs", "tab", "tobi", "tape", "tabu"];
+  /** Ordinary words that run together into a one-word alias ("tab" + "be" → "tabe"). */
+  const nearPairs = ["tab be", "tab bee", "Tab be"];
+  const aloneIn: Record<Language, string> = {
+    en: "ask @@ to navigate the tabs",
+    de: "frag @@ ob er navigiere",
+    es: "pregunta a @@ si navega",
+    fr: "demande à @@ s'il navigue",
+    it: "chiedi a @@ se naviga",
+  };
+
+  it.each(LANGS)("%s: the navigate phrases open navigation mode, with or without a command after", (lang) => {
+    for (const phrase of navigatePhrases(lang)) {
+      expect(matchNavigate(phrase, lang), phrase).toEqual({ rest: "" });
+      expect(matchNavigate(`${phrase}.`, lang), phrase).toEqual({ rest: "" });
+      const command = templates(lang, "openProject")[0].replace("{project}", "Alpha");
+      expect(matchNavigate(`${phrase} ${command}`, lang), phrase)?.toEqual({ rest: command });
+      expect(matchNavigate(`${phrase}, ${command}`, lang), phrase)?.toEqual({ rest: command });
+    }
+  });
+
+  it.each(LANGS)("%s: only a start word counts, and only at the start", (lang) => {
+    expect(matchNavigate(navigatePhrases(lang)[0].split(" ").slice(1).join(" "), lang)).toBeNull();
+    expect(matchStartWord(aloneIn[lang].replace("@@", A), lang)).toBeNull();
+    expect(matchNavigate(`please remember ${navigatePhrases(lang)[0]}`, lang)).toBeNull();
+    expect(matchStartWord("fix the login", lang)).toBeNull();
+    expect(matchStartWord("", lang)).toBeNull();
+  });
+
+  it.each(LANGS)("%s: the name alone is a start word with nothing after it", (lang) => {
+    expect(matchStartWord(A, lang)).toEqual({ rest: "" });
+    expect(matchStartWord(`${A}.`, lang)).toEqual({ rest: "" });
+    expect(matchNavigate(A, lang)).toBeNull();
+    expect(matchStartWord(`${A}, and add a test`, lang)).toEqual({ rest: "and add a test" });
+  });
+
+  it.each(LANGS)("%s: recognizers' spellings of the name still start a prompt", (lang) => {
+    for (const spelling of misspellings(lang)) {
+      expect(matchStartWord(`${spelling} and add a test`, lang), spelling)?.toEqual({ rest: "and add a test" });
+      expect(matchStartWord(`${spelling}`, lang), spelling)?.toEqual({ rest: "" });
+    }
+    expect(matchNavigate(`${misspellings(lang)[1]} ${navigatePhrases(lang)[0].split(" ").slice(1).join(" ")}`, lang)).toEqual({ rest: "" });
+  });
+
+  it.each(LANGS)("%s: words near the name do not", (lang) => {
+    for (const word of nearWords) {
+      expect(matchStartWord(`${word} and add a test`, lang), word).toBeNull();
+      expect(matchStartWord(word, lang), word).toBeNull();
+      expect(matchNavigate(`${word} ${navigatePhrases(lang)[0].split(" ").slice(1).join(" ")}`, lang), word).toBeNull();
+    }
+  });
+
+  it.each(LANGS)("%s: two ordinary words that join into an alias are not the start word", (lang) => {
+    for (const pair of nearPairs) {
+      expect(matchStartWord(`${pair} careful with that`, lang), pair).toBeNull();
+      expect(matchStartWord(pair, lang), pair).toBeNull();
+      expect(matchNavigate(`${pair} ${navigatePhrases(lang)[0].split(" ").slice(1).join(" ")}`, lang), pair).toBeNull();
+    }
+    // The name split in two is still the name.
+    expect(matchStartWord(`${A.slice(0, 3)} ${A.slice(3).replace(/y$/i, "i")} and add a test`, lang)).toEqual({ rest: "and add a test" });
+  });
+
+  it("holds an utterance back while it may still be a navigate command", () => {
+    expect(mayNavigate(A, "en")).toBe(true);
+    expect(mayNavigate(`${A} nav`, "en")).toBe(true);
+    expect(mayNavigate(`${A} navigate`, "en")).toBe(true);
+    expect(mayNavigate(`${A} navigate go to project Alpha`, "en")).toBe(true);
+    expect(mayNavigate(`${A}, navigation`, "en")).toBe(true);
+    expect(mayNavigate(`${A} navy`, "en")).toBe(false);
+    expect(mayNavigate(`${A} scratch that`, "en")).toBe(false);
+    expect(mayNavigate(`${A} and add a test`, "en")).toBe(false);
+    expect(mayNavigate("navigate", "en")).toBe(false);
+    expect(mayNavigate("go on", "en")).toBe(false);
+    expect(mayNavigate("taxi navigate", "en")).toBe(false);
+    expect(mayNavigate(`${A} navigiere`, "de")).toBe(true);
+    expect(mayNavigate(`${A} navi`, "de")).toBe(true);
+  });
+
+  it.each(LANGS)("%s: a leave phrase is the whole utterance", (lang) => {
+    for (const phrase of translate(lang, "voice.nav.leave").split("|")) {
+      expect(matchNavLeave(phrase, lang), phrase).toBe(true);
+      expect(matchNavLeave(`${phrase}!`, lang), phrase).toBe(true);
+      expect(matchNavLeave(`${A} ${phrase}`, lang), phrase).toBe(true);
+      expect(matchNavLeave(`${phrase} the server and then the build`, lang), phrase).toBe(false);
+    }
+    expect(matchNavLeave("", lang)).toBe(false);
+    expect(matchNavLeave(A, lang)).toBe(false);
+  });
+
+  it("leave phrases beyond the matcher's stop: cancel, never mind", () => {
+    expect(matchNavLeave("never mind", "en")).toBe(true);
+    expect(matchNavLeave("cancel", "en")).toBe(true);
+    expect(matchNavLeave("please cancel", "en")).toBe(true);
+    expect(matchNavLeave("vergiss es", "de")).toBe(true);
+  });
+
+  it("a bare \"the current tab\" is not the working-tab command in French or Italian", () => {
+    for (const [lang, text] of [["fr", "l'onglet en cours"], ["it", "la scheda in corso"]] as const) {
+      expect(said(match(text, lang, lists, free)), text).not.toBe("nextWorking");
+    }
+    expect(said(match("l'onglet qui travaille", "fr", lists, free))).toBe("nextWorking");
+    expect(said(match("la scheda che lavora", "it", lists, free))).toBe("nextWorking");
+  });
+
+  const queues: Record<Language, [string, string][]> = {
+    en: [["go to the done tab", "nextDone"], ["go to the working tab", "nextWorking"], ["go to the waiting tab", "nextWaiting"], ["the done tab", "nextDone"]],
+    de: [["geh zum fertigen Tab", "nextDone"], ["geh zum arbeitenden Tab", "nextWorking"], ["geh zum wartenden Tab", "nextWaiting"], ["der fertige Tab", "nextDone"]],
+    es: [["ve a la pestaña terminada", "nextDone"], ["ve a la pestaña que trabaja", "nextWorking"], ["ve a la pestaña en espera", "nextWaiting"]],
+    fr: [["va à l'onglet terminé", "nextDone"], ["va à l'onglet en cours", "nextWorking"], ["va à l'onglet en attente", "nextWaiting"]],
+    it: [["vai alla scheda finita", "nextDone"], ["vai alla scheda in corso", "nextWorking"], ["vai alla scheda in attesa", "nextWaiting"]],
+  };
+
+  it.each(LANGS)("%s: \"go to the done / working / waiting tab\" are the queue commands, not a tab's name or a to-do", (lang) => {
+    const named: VoiceLists = {
+      ...lists,
+      tabs: [{ id: "t-done", name: "done tab" }, { id: "t-work", name: "working tab" }, { id: "t-wait", name: "waiting tab" }],
+      cards: [{ id: "c-done", name: "done" }, ...(lists.cards ?? [])],
+    };
+    for (const [text, id] of queues[lang]) {
+      expect(said(match(text, lang, named, free)), text).toBe(id);
+      expect(said(match(`${WORD} ${text}`, lang, named)), text).toBe(id);
+    }
   });
 });

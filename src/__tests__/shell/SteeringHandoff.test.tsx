@@ -20,7 +20,6 @@ import { SteeringLegend } from "../../components/layout/SteeringLegend";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { useTabsStore } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
-import { STEERING_PROMPT_EVENT, type SteeringPromptDetail } from "../../lib/shortcuts/steeringAgent";
 import { BRAND } from "../../lib/brand";
 
 function Harness() {
@@ -69,26 +68,30 @@ describe("steering hand-off", () => {
     expect(steering()).toMatchObject({ active: true, level: "region", region: "side", handedTo: null });
   });
 
-  it("keeps the legend up with the box's keys and Esc back, folded or not", () => {
+  it("keeps the bar up with the box's keys and Esc back, folded or not", () => {
     const { container } = render(<SteeringLegend />);
-    expect(document.querySelector(".steering-legend")).toBeNull();
+    expect(document.querySelector(".steering-bar")).toBeNull();
     act(() => {
       steering().enter();
       steering().handOff("prompt");
     });
-    let legend = document.querySelector(".steering-legend");
-    expect(legend?.textContent).toContain(`Back to ${BRAND.display} navigation`);
-    expect(legend?.textContent).toContain("Esc");
-    expect(legend?.textContent).toContain("Send");
+    let bar = document.querySelector(".steering-bar");
+    expect(bar?.textContent).toContain(`Back to ${BRAND.display} navigation`);
+    expect(bar?.textContent).toContain("Esc");
+    expect(bar?.textContent).toContain("Send");
+    // The mark is hollow (steering is off) and the rung names the box.
+    expect(bar?.querySelector(".steering-bar-badge.hollow")).not.toBeNull();
+    expect(bar?.querySelector(".steering-rung.lent")?.textContent).toBe("Prompt");
+    expect([...bar!.querySelectorAll(".steering-rung")].map((r) => r.textContent)).toEqual(["Tabs", "Prompt"]);
     act(() => {
       steering().toggleLegend();
     });
-    legend = document.querySelector(".steering-legend");
-    expect(legend?.textContent).toContain(`Back to ${BRAND.display} navigation`);
+    bar = document.querySelector(".steering-bar");
+    expect(bar?.textContent).toContain(`Back to ${BRAND.display} navigation`);
     act(() => {
       steering().dropHandoff();
     });
-    expect(document.querySelector(".steering-legend")).toBeNull();
+    expect(document.querySelector(".steering-bar")).toBeNull();
     expect(container).toBeTruthy();
   });
 
@@ -101,26 +104,5 @@ describe("steering hand-off", () => {
     });
     press("Escape");
     expect(steering()).toMatchObject({ active: true, level: "region", region: "side", handedTo: null });
-  });
-
-  it("Plan opens the prompt box led with /plan instead of leaving the mode", () => {
-    const seen: SteeringPromptDetail[] = [];
-    const box = (e: Event) => {
-      const detail = (e as CustomEvent<SteeringPromptDetail>).detail;
-      detail.handled = true;
-      seen.push(detail);
-    };
-    window.addEventListener(STEERING_PROMPT_EVENT, box);
-    try {
-      useTabsStore.getState().addTab({ label: "claude", cmd: "claude", cwd: "/p", kind: "agent" });
-      render(<Harness />);
-      act(() => steering().enter());
-      press("l");
-      expect(seen).toHaveLength(1);
-      expect(seen[0].lead).toBe("/plan");
-      expect(steering()).toMatchObject({ active: false, handedTo: "prompt" });
-    } finally {
-      window.removeEventListener(STEERING_PROMPT_EVENT, box);
-    }
   });
 });

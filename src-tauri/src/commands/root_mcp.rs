@@ -103,12 +103,17 @@ pub const SESSIONS_EVENT: &str = "root-mcp-sessions-changed";
 
 /// What a lane changed, for whoever shows it: the window turns it into its
 /// Tauri event; the Mobile host pokes an open window over its control socket.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
     /// A schedule proposal was made or a row changed (`agent_tasks.json`).
     Schedules,
     /// A push or release proposal changed (`services::git_push_mcp`).
     GitPush,
+    /// A markup ask or tick of a tab this process spawned opened, closed or
+    /// went (`services::markup_mcp`): the window's markup views re-read.
+    Markup,
+    /// A committed self-rename: re-read this scope without changing focus.
+    Workspace { scope: String, version: u64 },
 }
 pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 
@@ -116,10 +121,11 @@ pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 struct ServerState {
     /// The context of a process with no other listener to defer to — the
     /// window, or a server daemon (no window at all): the root and reader
-    /// lanes' mail and events, and the markup lane's views. `None` in a
-    /// desktop's Mobile host, whose listener serves the schedule, push and
-    /// help lanes only (`docs/headless_mcp_plan.md`) — `/mcp` and
-    /// `/mcp/markup` are not even routed there.
+    /// lanes' mail and events. `None` in a desktop's Mobile host, whose
+    /// listener serves the schedule, push, help, web and markup lanes
+    /// (`docs/headless_mcp_plan.md`) — `/mcp` is not even routed there. The
+    /// markup lane needs no context: its views are the window's commands and
+    /// the phone routes, which reach the host's store (phase 1b).
     ctx: Option<CoreCtx>,
     port: u16,
     /// The process's token store, the only one this listener accepts.
@@ -241,9 +247,24 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         };
         let reason = reply.as_ref().and_then(crate::services::web_lane::refusal_reason);
         if crate::services::web_lane::audited(&message, reason) {
-            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+            audit_lane(&audit_session, &tool, started, reason);
         }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
+    }
+    if session.identity.caller == root_mcp::Caller::Cockpit {
+        let outcome = app_core::rt::spawn_blocking(move || {
+            let (_global, _own) = (global, own);
+            let reply = crate::services::cockpit_mcp::handle_message(&session, &message);
+            let patch = reply.as_ref().and_then(|reply| crate::services::cockpit_mcp::refresh_patch(&session, reply));
+            let reason = reply.as_ref().and_then(crate::services::cockpit_mcp::refusal_reason);
+            (reply, patch, reason, message["method"] == "tools/call")
+        }).await;
+        let Ok((reply, patch, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+        if audited {
+            audit_lane(&audit_session, &tool, started, reason);
+        }
+        if let Some((scope, version)) = patch { (state.notify)(Notice::Workspace { scope, version }); }
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Helper {
         // The help identity (`services::help_mcp`): the compiled-in corpus and
@@ -260,8 +281,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
             crate::services::help_mcp::handle_message(&session, &message)
         }).await;
         return match reply {
-            Ok(Some(reply)) => Json(reply).into_response(),
-            Ok(None) => StatusCode::ACCEPTED.into_response(),
+            Ok(reply) => lane_reply(reply),
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
@@ -283,9 +303,30 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }).await;
         let Ok((reply, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
         if audited {
-            security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+            audit_lane(&audit_session, &tool, started, reason);
         }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
+    }
+    if session.identity.caller == root_mcp::Caller::Printer {
+        // The print lane (`services::print_mcp`): as markup — the switch is
+        // read per call and answered as a normal `off` result; tool calls and
+        // refusals are audited by session, tool and fixed category, never the
+        // file or the note.
+        if session.check().is_err() {
+            security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("revoked"));
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let outcome = app_core::rt::spawn_blocking(move || {
+            let (_global, _own) = (global, own);
+            let reply = crate::services::print_mcp::handle_message(&session, &message);
+            let reason = reply.as_ref().and_then(crate::services::print_mcp::refusal_reason);
+            (reply, reason, crate::services::print_mcp::audited(&message, reason))
+        }).await;
+        let Ok((reply, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+        if audited {
+            audit_lane(&audit_session, &tool, started, reason);
+        }
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Scheduler {
         if session.identity.project.as_deref().is_none_or(|p| crate::services::schedule_mcp::level(p).is_err()) || session.check().is_err() {
@@ -310,7 +351,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let failed = reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reply.as_ref().and_then(crate::services::schedule_mcp::refusal_reason));
         if changed { (state.notify)(Notice::Schedules); }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     if session.identity.caller == root_mcp::Caller::Pusher {
         // The push lane (`services::git_push_mcp`): the global switch is read
@@ -330,7 +371,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         let failed = reason.is_some() || reply.as_ref().is_some_and(|r| r.get("error").is_some() || r["result"]["isError"] == true);
         security::audit_reason(&audit_session, &tool, if failed { "refused" } else { "allowed" }, started.elapsed(), reason);
         if changed { (state.notify)(Notice::GitPush); }
-        return match reply { Some(reply) => Json(reply).into_response(), None => StatusCode::ACCEPTED.into_response() };
+        return lane_reply(reply);
     }
     // The root lane is served where its mail, review and session controls
     // live: the window, or a server daemon (its browser client). A desktop's
@@ -394,7 +435,7 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }
     };
     let reason = reply.as_ref().and_then(root_mcp::refusal_reason);
-    security::audit_reason(&audit_session, &tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
+    audit_lane(&audit_session, &tool, started, reason);
     // One event per row: a board move can reindex a whole column.
     for change in effects.changes {
         ctx.emit(CHANGED_EVENT, change);
@@ -403,10 +444,21 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         ctx.emit("root-mcp-review-changed",
             crate::services::root_mcp_review::pending_count(&storage::state_dir()));
     }
+    lane_reply(reply)
+}
+
+/// A lane's JSON-RPC reply, or `202 Accepted` with no body for a notification.
+fn lane_reply(reply: Option<Value>) -> Response {
     match reply {
         Some(reply) => Json(reply).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
+}
+
+/// One served request in the audit ring: `refused` under its fixed `reason`,
+/// `allowed` without one.
+fn audit_lane(session: &root_mcp::Session, tool: &str, started: Instant, reason: Option<&'static str>) {
+    security::audit_reason(session, tool, if reason.is_some() { "refused" } else { "allowed" }, started.elapsed(), reason);
 }
 
 /// Why a request that authenticated is not served, each with its own words:
@@ -460,6 +512,9 @@ pub fn stop_for_exit() {
 }
 
 pub fn start(ctx: CoreCtx) {
+    // The tabs the Mobile host spawns keep their markup asks in its memory;
+    // the window's markup commands read them over its admin socket.
+    crate::commands::markup_mcp::use_host_peer(storage::state_dir().join("mobile-control/admin.sock"));
     let notify = serve_everything(&ctx, Arc::new(|_| {}));
     let handle = app_core::rt::spawn(async move {
         let served = match bind(LOOPBACK).await {
@@ -488,25 +543,32 @@ fn serve_everything(ctx: &CoreCtx, notify: NoticeSink) -> NoticeSink {
         push_events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
     }));
     crate::commands::markup_mcp::install_change_hook(ctx);
+    #[cfg(feature = "desktop")]
+    crate::commands::print_mcp::install_change_hook(ctx);
     let events = ctx.clone();
     Arc::new(move |notice| {
-        notify(notice);
+        notify(notice.clone());
         match notice {
             Notice::Schedules => events.emit("agent-schedules-changed", ()),
             Notice::GitPush => events.emit(crate::services::git_push_mcp::CHANGED_EVENT, ()),
+            // The markup hook installed above rings its own event.
+            Notice::Markup => {}
+            Notice::Workspace { scope, version } => events.emit(crate::commands::projects::WORKSPACE_PATCH_EVENT,
+                serde_json::json!({ "scope": scope, "version": version, "ops": [] })),
         };
     })
 }
 
 /// The Mobile host's listener (`docs/headless_mcp_plan.md`): the schedule,
-/// push and help lanes for the tabs it spawns with no window open, on its own
-/// loopback port and token store. `server` is the host's context when it is
-/// a server daemon: there is no window to defer to, so the listener serves
-/// every lane the window would — root, reader and markup too — and rings
-/// their events to the browser clients ([`serve_everything`]). A desktop's
-/// Mobile host passes `None` and never serves those: a second root listener
-/// would sweep the window's review copies, and asks it held would be
-/// invisible to the window. Bound before this
+/// push, help, web and markup lanes for the tabs it spawns with no window
+/// open, on its own loopback port and token store. `server` is the host's
+/// context when it is a server daemon: there is no window to defer to, so the
+/// listener serves every lane the window would — root and reader too — and
+/// rings their events to the browser clients ([`serve_everything`]). A
+/// desktop's Mobile host passes `None` and never serves those: a second root
+/// listener would sweep the window's review copies. Its markup asks stay in
+/// its own memory and reach an open window through `notify` ([`Notice::Markup`])
+/// and the window's reads of its admin socket. Bound before this
 /// returns, so a spawn after it is wired; the server runs until `shutdown`
 /// turns true. When the first bind fails, the error is returned (for the
 /// journal) and a task keeps retrying with [`bind_retry_delay`] until a bind
@@ -518,9 +580,22 @@ pub async fn start_headless(
 ) -> Result<u16, String> {
     let notify = match server {
         Some(ctx) => serve_everything(ctx, notify),
-        None => notify,
+        None => {
+            markup_mcp_changes(notify.clone());
+            notify
+        }
     };
     start_headless_on(LOOPBACK, notify, server.cloned(), shutdown).await
+}
+
+/// A desktop's Mobile host: whenever one of its tabs' asks or ticks changes,
+/// say so to `notify` (which pokes an open window).
+fn markup_mcp_changes(notify: NoticeSink) {
+    crate::services::markup_mcp::set_change_hook(markup_notice_hook(notify));
+}
+
+fn markup_notice_hook(notify: NoticeSink) -> Box<dyn Fn() + Send + Sync> {
+    Box::new(move || notify(Notice::Markup))
 }
 
 /// Any free loopback port.
@@ -582,20 +657,28 @@ async fn until_true(mut flag: tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-/// The routes a listener answers: the schedule, push, help and web lanes
-/// everywhere, the root (and reader) and markup lanes where this process
-/// serves the views and controls they need — the window, or a server daemon,
-/// which has no window ([`ServerState::ctx`]).
+/// The routes a listener answers: the schedule, push, help, web and markup
+/// lanes everywhere, the root (and reader) lane where this process serves the
+/// mail and controls it needs — the window, or a server daemon, which has no
+/// window ([`ServerState::ctx`]).
 fn router(state: ServerState) -> Router {
     let mut router = Router::new()
         .route("/mcp/schedule", post(handle))
         .route("/mcp/git", post(handle))
         .route("/mcp/help", post(handle))
+        .route("/mcp/cockpit", post(handle))
         // The assistant's web lane is served by every listener, the window's
         // and the Mobile host's: a phone chat runs with no window.
         .route("/mcp/web", post(handle));
+    // The markup lane holds its asks in this process's memory and needs no
+    // context: its views are the window's commands (which read the Mobile
+    // host's store over the admin socket) and the phone's routes.
+    router = router.route("/mcp/markup", post(handle));
+    // The print lane: only the window grants its tokens
+    // (`Runtime::serves_print`), so elsewhere the route authenticates nobody.
+    router = router.route("/mcp/print", post(handle));
     if state.ctx.is_some() {
-        router = router.route("/mcp", post(handle)).route("/mcp/markup", post(handle));
+        router = router.route("/mcp", post(handle));
     }
     router.layer(axum::middleware::map_response(close_connection)).with_state(state)
 }
@@ -618,7 +701,7 @@ fn serve(
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     let serves = ctx.is_some();
-    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: serves, serves_web });
+    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: true, serves_web });
     let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
     let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
@@ -874,12 +957,15 @@ pub async fn root_mcp_session_revoke(ctx: Ctx, id: String, remove_proposals: Opt
 }
 
 /// The push proposals of one project (the git bar's and the Agents view's
-/// card), pruned of expired and orphaned ones and of pushes the branch's
-/// remote already holds (that check runs git, hence off the UI thread).
+/// card), pruned of expired and orphaned ones. Pending cards the remote
+/// already holds are settled by a background `ls-remote` the call starts
+/// (gap 89): this is the only place that asks the remote about them.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_push_mcp_proposals(project_id: String) -> Result<Vec<crate::services::git_push_mcp::Proposal>, String> {
     app_core::rt::blocking("root console", move || {
-        crate::services::git_push_mcp::settle_pushed_elsewhere(Some(&project_id), None);
+        // The remote is asked about pending cards on a thread of its own (the
+        // answer reaches the window as a change event), never from here.
+        crate::services::git_push_mcp::settle_in_background(&project_id);
         crate::services::git_push_mcp::proposals_for(Some(&project_id), None)
     })
     .await
@@ -921,7 +1007,9 @@ fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
         "/mcp/schedule" => caller == root_mcp::Caller::Scheduler,
         "/mcp/git" => caller == root_mcp::Caller::Pusher,
         "/mcp/help" => caller == root_mcp::Caller::Helper,
+        "/mcp/cockpit" => caller == root_mcp::Caller::Cockpit,
         "/mcp/markup" => caller == root_mcp::Caller::Marker,
+        "/mcp/print" => caller == root_mcp::Caller::Printer,
         "/mcp/web" => caller == root_mcp::Caller::Web,
         _ => false,
     }
@@ -929,6 +1017,21 @@ fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
 
 #[cfg(test)]
 mod security_tests {
+    #[tokio::test]
+    async fn cockpit_route_is_an_exclusive_lane() {
+        use super::*;
+        let (token, _) = root_mcp::test_session(root_mcp::Caller::Cockpit);
+        assert!(admission(root_mcp::tokens(), "/mcp/cockpit", &token).await.is_ok());
+        for path in ["/mcp", "/mcp/help", "/mcp/markup", "/mcp/schedule", "/mcp/git", "/mcp/web"] {
+            assert_eq!(admission(root_mcp::tokens(), path, &token).await, Err(StatusCode::UNAUTHORIZED));
+        }
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::Helper, root_mcp::Caller::Marker,
+            root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher, root_mcp::Caller::Web, root_mcp::Caller::Reader, root_mcp::Caller::LocalModel] {
+            let (other, _) = root_mcp::test_session(caller);
+            assert_eq!(admission(root_mcp::tokens(), "/mcp/cockpit", &other).await, Err(StatusCode::UNAUTHORIZED));
+        }
+    }
+
     #[tokio::test]
     async fn routes_refuse_wrong_token_class_before_reading_body() {
         for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler, root_mcp::Caller::Pusher] {
@@ -1139,9 +1242,10 @@ mod security_tests {
         drop(taken);
     }
 
-    /// A desktop's Mobile host listener has no root or markup lane at all:
-    /// `/mcp` and `/mcp/markup` are not routed (404 before any handler). A
-    /// server daemon's routes every lane.
+    /// A desktop's Mobile host listener has no root lane at all: `/mcp` is
+    /// not routed (404 before any handler), while the markup lane is
+    /// (`docs/headless_mcp_plan.md`, phase 1b). A server daemon's routes
+    /// every lane.
     #[tokio::test]
     async fn the_headless_router_does_not_route_the_root_lane() {
         use tower::ServiceExt;
@@ -1151,9 +1255,7 @@ mod security_tests {
             .body(axum::body::Body::from("{}")).unwrap();
         let root = router(state.clone()).oneshot(req("/mcp")).await.unwrap();
         assert_eq!(root.status(), StatusCode::NOT_FOUND);
-        let markup = router(state.clone()).oneshot(req("/mcp/markup")).await.unwrap();
-        assert_eq!(markup.status(), StatusCode::NOT_FOUND, "a desktop's Mobile host never serves the markup lane");
-        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/web"] {
+        for path in ["/mcp/schedule", "/mcp/git", "/mcp/help", "/mcp/web", "/mcp/markup"] {
             let side = router(state.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(side.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
@@ -1166,6 +1268,18 @@ mod security_tests {
             let served = router(server.clone()).oneshot(req(path)).await.unwrap();
             assert_eq!(served.status(), StatusCode::UNAUTHORIZED, "a server daemon serves {path}");
         }
+    }
+
+    /// A desktop's Mobile host tells its sink whenever a markup ask or tick of
+    /// one of its tabs changes, which pokes an open window.
+    #[test]
+    fn the_hosts_markup_hook_notifies_its_sink() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let hook = markup_notice_hook(Arc::new(move |notice| log.lock().unwrap().push(notice)));
+        hook();
+        hook();
+        assert_eq!(*seen.lock().unwrap(), vec![Notice::Markup, Notice::Markup]);
     }
 
     use super::*;

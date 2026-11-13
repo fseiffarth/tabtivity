@@ -33,6 +33,20 @@ import {
 } from "../window/printing";
 import type { PrintSnapshot } from "../../types/printing";
 import { storageKey as brandStorageKey } from "../brand";
+import {
+  DUPLEX_CHOICES,
+  GUTTER_CM,
+  NUP_CHOICES,
+  autoTurn,
+  autoTurns,
+  gridFor,
+  isImposed,
+  pagesPerSheet,
+  planImposition,
+  sheetCount,
+  type Duplex,
+  type NUp,
+} from "./printImposition";
 
 // ── Print options ────────────────────────────────────────────────────────────
 // The preview overlay exposes the options a printer dialog normally would. They
@@ -63,6 +77,15 @@ export interface PrintOptions {
   /** How many times the whole job prints, collated (1-2-3, 1-2-3). Per job, like
    *  the page selection — see `loadPrintOptions`. */
   copies: number;
+  /** Logical pages per physical sheet, in reading order (paged documents only);
+   *  ignored while `booklet` is on, which is always two. */
+  nup: NUp;
+  /** Saddle-stitch booklet: pages padded to a multiple of four and imposed two to
+   *  a landscape side in folding order. Implies 2-up and a landscape sheet. */
+  booklet: boolean;
+  /** Two-sided printing — a printer setting the native dialog is preset to, not a
+   *  layout (paged documents with a native print path only). */
+  duplex: Duplex;
 }
 
 /** Paper dimensions in cm, portrait (width × height). */
@@ -95,15 +118,19 @@ export const DEFAULT_PRINT_OPTIONS: PrintOptions = {
   background: true,
   pageNumbers: false,
   copies: 1,
+  nup: 1,
+  booklet: false,
+  duplex: "none",
 };
 
 /** The most copies one job asks for — a typo of 1000 should not feed a printer. */
 export const MAX_COPIES = 99;
 
-/** Sheet box in cm for the chosen paper + orientation (landscape swaps them). */
+/** Sheet box in cm for the chosen paper + orientation (landscape swaps them). A
+ *  booklet side is always landscape: two upright pages side by side. */
 export function pageBoxCm(opts: PrintOptions): [number, number] {
   const [w, h] = PAPER_CM[opts.paper] ?? PAPER_CM.A4;
-  return opts.orientation === "landscape" ? [h, w] : [w, h];
+  return opts.orientation === "landscape" || opts.booklet ? [h, w] : [w, h];
 }
 
 /** The printable box in cm: the sheet minus the margin on each side. */
@@ -119,7 +146,8 @@ export function contentBoxCm(opts: PrintOptions): [number, number] {
  * fixed so the strip keeps a single row height; the width follows the aspect.
  */
 export function thumbSizePx(opts: PrintOptions, height = 84): [number, number] {
-  const [w, h] = pageBoxCm(opts);
+  // A card is a page, and a booklet's pages are the upright halves of its sides.
+  const [w, h] = pageBoxCm(opts.booklet ? { ...opts, booklet: false, orientation: "portrait" } : opts);
   return [Math.round((height * w) / h), height];
 }
 
@@ -212,6 +240,8 @@ export function buildOptionsCss(opts: PrintOptions, paged = false): string {
   const zoom = scale / 100;
   const sheetW = round2(w / zoom);
   const sheetH = round2(h / zoom);
+  // Several pages to a sheet: the preview wraps each group in an `.app-sheet`.
+  const imposed = paged && isImposed(opts);
 
   const css = [
     `@page{size:${w}cm ${h}cm;margin:0}`,
@@ -238,7 +268,8 @@ export function buildOptionsCss(opts: PrintOptions, paged = false): string {
     // and a `.print-page` IS a sheet (a paged document's paper on screen), so it
     // keeps its own too.
     css.push(
-      `body *:not(.print-page){background:transparent!important;` +
+      `body *:not(.print-page)${imposed ? ":not(.app-sheet)" : ""}` +
+        `{background:transparent!important;` +
         `background-image:none!important;box-shadow:none!important}`,
     );
   }
@@ -278,11 +309,31 @@ export function buildOptionsCss(opts: PrintOptions, paged = false): string {
     // printable box prints at that fraction of it, which is what a printer's
     // scale does — and the preview shows the same fraction, since the sheet on
     // screen is the same box at the paper's true size.
+    //
+    // With several pages to a sheet (`imposed`) the sheet is a wrapper the preview
+    // builds around each group (`.app-sheet`, see `printDocument`): it takes over
+    // everything above — page box, margins, the screen paper — as a grid, and each
+    // `.print-page` becomes a cell of it, a size container of its own that fits its
+    // image the way a whole sheet does. The cells carry no margin: the grid does.
+    const sheet = imposed ? ".app-sheet" : ".print-page";
+    const { cols, rows } = gridFor(pagesPerSheet(opts), w > h);
+    const gap = imposed ? GUTTER_CM : 0;
     css.push(
       `html,body{height:100%}body{zoom:1}` +
-        `.print-page{position:relative;box-sizing:border-box;height:100%;` +
-        `padding:${pad}cm;display:flex;align-items:center;justify-content:center;` +
-        `overflow:hidden;container-type:size}` +
+        `${sheet}{position:relative;box-sizing:border-box;height:100%;` +
+        `padding:${pad}cm;` +
+        (imposed
+          ? `display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));` +
+            `grid-template-rows:repeat(${rows},minmax(0,1fr));gap:${gap}cm;overflow:hidden}` +
+            `.app-sheet+.app-sheet{break-before:page;page-break-before:always}` +
+            // A cell never starts a page: the caller's `.print-page + .print-page`
+            // break must not split a sheet.
+            `.app-sheet>.print-page{position:relative;box-sizing:border-box;height:auto;` +
+            `min-width:0;min-height:0;margin:0;padding:0;display:flex;align-items:center;` +
+            `justify-content:center;overflow:hidden;container-type:size;` +
+            `break-before:auto!important;page-break-before:auto!important}`
+          : `display:flex;align-items:center;justify-content:center;` +
+            `overflow:hidden;container-type:size}`) +
         // Capped on BOTH axes, sized on neither: the binding axis decides, so the
         // page prints as large as its margins allow whatever its aspect is.
         `.print-page>img{width:auto;height:auto;max-width:${scale}%;max-height:${scale}%}` +
@@ -293,8 +344,11 @@ export function buildOptionsCss(opts: PrintOptions, paged = false): string {
         // for a flowing document; the sheets carry the paper themselves.
         `@media screen{html{padding-bottom:0}html,body{height:auto}` +
         `body{width:${w}cm;min-height:0;background:transparent;box-shadow:none}` +
-        `.print-page{height:${h}cm;margin:0 auto 18px;background:#fff;` +
-        `box-shadow:0 2px 12px rgba(0,0,0,.45)}}`,
+        `${sheet}{height:${h}cm;margin:0 auto 18px;background:#fff;` +
+        `box-shadow:0 2px 12px rgba(0,0,0,.45)}` +
+        // Where one page of a sheet ends — a white page on white paper has no edge.
+        (imposed ? `.app-sheet>.print-page{outline:1px dashed rgba(0,0,0,.14)}` : "") +
+        `}`,
     );
 
     // Per-page rotation (classes stamped on the page elements by printDocument;
@@ -322,10 +376,16 @@ export function buildOptionsCss(opts: PrintOptions, paged = false): string {
     // (`data-page`, set by printDocument) and exist only for paged documents.
     // The number sits in the bottom margin band, and the sheet gives up 16px of
     // its printable height to it rather than having the page print over it.
+    //
+    // Imposed, each page of the sheet is numbered in its own cell, the band being
+    // the cell's rather than the paper margin's (the grid already keeps the margin).
+    const numberPad = imposed ? "0px" : `${pad}cm`;
     css.push(
-      `.print-page{position:relative;padding-bottom:calc(${pad}cm + 16px)}` +
+      (imposed
+        ? `.app-sheet>.print-page{padding-bottom:16px}`
+        : `.print-page{position:relative;padding-bottom:calc(${pad}cm + 16px)}`) +
         `.print-page::after{content:attr(data-page);position:absolute;` +
-        `left:0;right:0;bottom:${pad}cm;text-align:center;color:#555;` +
+        `left:0;right:0;bottom:${numberPad};text-align:center;color:#555;` +
         `font:10px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}`,
     );
   }
@@ -427,6 +487,10 @@ export function sanitizePrintOptions(
     background: o.background !== false,
     pageNumbers: o.pageNumbers === true,
     copies: clampCopies(typeof o.copies === "number" ? o.copies : defaults.copies),
+    // Options saved before imposition existed carry none of these.
+    nup: (NUP_CHOICES as readonly unknown[]).includes(o.nup) ? (o.nup as NUp) : defaults.nup,
+    booklet: o.booklet === true,
+    duplex: pick(o.duplex, DUPLEX_CHOICES, defaults.duplex),
   };
 }
 
@@ -492,7 +556,33 @@ export function buildPrintDoc(bodyHtml: string, css: string, title = "Print"): s
  */
 export type NativePrint = (sheets: PageList, opts: PrintOptions) => Promise<NativePdfPrint>;
 
-export function printDocument(fullHtml: string, native?: NativePrint): Promise<void> {
+/**
+ * An agent's print request under review (`services::print_mcp`,
+ * `lib/viewers/printRequest.ts`): the preview opens on the request's PDF with
+ * the agent's options preset, its title names the tab that asked, Print reads
+ * "Approve & print" and a Reject button sits beside it. The preset options are
+ * the agent's, so they are never saved as the user's printer preferences.
+ */
+export interface PrintApproval {
+  /** Who asked: the agent tab's title (or its id). */
+  requester: string;
+  /** The agent's one-line note, shown as plain text. */
+  note?: string;
+  /** The agent's options, laid over the user's for this job only. */
+  preset: Partial<PrintOptions>;
+  /** Claim the request for this window before anything is laid out or sent
+   *  (`services::print_mcp::claim`): `false` when it ended or another window
+   *  claimed it, and then nothing prints. */
+  claim: () => Promise<boolean>;
+  /** Give a claim back when nothing was sent (layout or the native print
+   *  failed, the system dialog was cancelled): the request waits again. */
+  release: () => Promise<void>;
+  /** The job left for the printer (or its system dialog took it over). */
+  onPrinted: () => Promise<void>;
+  onReject: () => Promise<void>;
+}
+
+export function printDocument(fullHtml: string, native?: NativePrint, approval?: PrintApproval): Promise<void> {
   return new Promise<void>((resolve) => {
     // ── Overlay chrome (reuses the app's shared modal classes) ──────────────
     const backdrop = document.createElement("div");
@@ -506,7 +596,9 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
     const title = document.createElement("span");
     title.className = "print-preview-title";
-    title.textContent = translateNow("print.title");
+    title.textContent = approval
+      ? translateNow("printRequest.title", { who: approval.requester })
+      : translateNow("print.title");
 
     const actions = document.createElement("div");
     actions.className = "print-preview-actions";
@@ -636,6 +728,40 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     // does not snap back to 1 in between.
     const copies = numberField(translateNow("print.copies"), opts.copies, (v) => set({ copies: v }));
 
+    // Imposition: several pages to a sheet, or a booklet; and two-sided printing,
+    // which is the printer's business (the native dialog is preset to it) and so
+    // only exists where a native path does (see `apply`).
+    const nup = selectField(
+      translateNow("print.nup"),
+      NUP_CHOICES.map((n) => [String(n), String(n)] as const),
+      String(opts.nup),
+      (v) => set({ nup: Number(v) as NUp }),
+    );
+    // The two-sided setting a booklet displaced, for when it is switched off.
+    let duplexBeforeBooklet: Duplex | null = null;
+    const booklet = checkField(translateNow("print.booklet"), opts.booklet, (v) => {
+      if (v) {
+        duplexBeforeBooklet = opts.duplex;
+        set({ booklet: true, duplex: "short" });
+      } else {
+        set({ booklet: false, duplex: duplexBeforeBooklet ?? "none" });
+        duplexBeforeBooklet = null;
+      }
+    });
+    const duplex = selectField(
+      translateNow("print.duplex"),
+      [
+        ["none", translateNow("print.duplexNone")],
+        ["long", translateNow("print.duplexLong")],
+        ["short", translateNow("print.duplexShort")],
+      ],
+      opts.duplex,
+      (v) => set({ duplex: v as Duplex }),
+    );
+    nup.wrap.append(...untestedTag("print.layoutNup"));
+    booklet.wrap.append(...untestedTag("print.booklet"));
+    duplex.wrap.append(...untestedTag("print.duplex"));
+
     optionsRow.append(
       copies.wrap,
       paper.wrap,
@@ -644,6 +770,9 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       scale.wrap,
       pages.wrap,
       rangeInput,
+      nup.wrap,
+      booklet.wrap,
+      duplex.wrap,
       background.wrap,
       grayscale.wrap,
       pageNumbers.wrap,
@@ -678,9 +807,24 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     stripPages.className = "print-strip-pages";
     strip.append(stripBar, stripPages);
 
-    actions.append(printBtn, closeBtn);
+    // An agent's request: Reject beside Approve, and the agent's note under the
+    // title — text only, it is the agent's words.
+    const rejectBtn = document.createElement("button");
+    rejectBtn.className = "settings-btn print-preview-reject";
+    rejectBtn.type = "button";
+    rejectBtn.textContent = translateNow("printRequest.reject");
+    const requestLine = document.createElement("div");
+    requestLine.className = "print-preview-request";
+    if (approval) {
+      requestLine.textContent = approval.note
+        ? translateNow("printRequest.note", { note: approval.note })
+        : translateNow("printRequest.noNote");
+      requestLine.append(...untestedTag("printMcp"));
+    }
+
+    actions.append(...(approval ? [rejectBtn] : []), printBtn, closeBtn);
     titlebar.append(title, progressEl, actions);
-    dialog.append(titlebar, optionsRow, strip, iframe);
+    dialog.append(titlebar, ...(approval ? [requestLine] : []), optionsRow, strip, iframe);
     backdrop.append(dialog);
 
     // ── Live state of the previewed document ────────────────────────────────
@@ -688,6 +832,12 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     let styleEl: HTMLStyleElement | null = null;
     /** Page elements indexed by original page number − 1; never reordered. */
     let pageEls: HTMLElement[] = [];
+    /** The element the page elements live in (they move into `sheetEls` while
+     *  several are imposed on a sheet, so their parent is remembered here). */
+    let pageParent: HTMLElement | null = null;
+    /** The sheet wrappers of an imposed print (several pages to a sheet, or a
+     *  booklet), one per sheet; empty at one page per sheet. */
+    let sheetEls: HTMLElement[] = [];
     /** Working arrangement (see `pageModel`): the sheets, moved/dropped/turned by
      *  the strip. Every entry's `src` is SELF — a print job never merges documents. */
     let arrangement: PageList = [];
@@ -708,8 +858,25 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
     /** Push the arrangement + options into the previewed document and the UI. */
     const apply = () => {
-      savePrintOptions(opts, kind);
       const paged = pageEls.length > 0;
+      // Imposition is page arithmetic: a flowing document has no pages to impose.
+      if (!paged && (opts.booklet || opts.nup !== 1)) opts = { ...opts, booklet: false, nup: 1 };
+      // An agent's request presets its own options: never the user's defaults.
+      if (!approval) savePrintOptions(opts, kind);
+      // Two-sided printing is handed to the native dialog, so it exists wherever
+      // there is one; the preview's own print dialog takes no such request.
+      const twoSided = paged && native !== undefined;
+      nup.select.value = String(pagesPerSheet(opts));
+      nup.select.disabled = !paged || opts.booklet;
+      booklet.input.disabled = !paged;
+      booklet.input.checked = opts.booklet;
+      orientation.select.value = opts.booklet ? "landscape" : opts.orientation;
+      orientation.select.disabled = opts.booklet;
+      duplex.select.value = opts.duplex;
+      duplex.select.disabled = !twoSided;
+      nup.wrap.title = paged ? (opts.booklet ? translateNow("print.nupBookletHint") : "") : NO_PAGES_HINT;
+      booklet.wrap.title = paged ? translateNow("print.bookletHint") : NO_PAGES_HINT;
+      duplex.wrap.title = twoSided ? translateNow("print.duplexHint") : translateNow("print.duplexNoNativeHint");
       pages.select.disabled = !paged;
       pageNumbers.input.disabled = !paged;
       rangeInput.disabled = !paged || opts.pages !== "custom";
@@ -729,7 +896,15 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
       const sequence = printSequence(arrangement, opts);
       const printing = new Set(sequence.map((r) => r.page));
-      const parent = pageEls[0]?.parentElement ?? null;
+      const parent = pageParent;
+      // Take the pages back out of last time's sheets before arranging them anew.
+      if (sheetEls.length > 0) {
+        pageEls.forEach((el) => parent?.appendChild(el));
+        sheetEls.forEach((el) => el.remove());
+        sheetEls = [];
+      }
+      const imposed = paged && isImposed(opts);
+      const turn = imposed && autoTurns(opts) ? autoTurnFor(opts) : null;
       // `pageEls` is indexed by original page number − 1 and never reordered.
       pageEls.forEach((el, i) =>
         el.classList.toggle("app-print-hidden", !printing.has(i + 1)),
@@ -743,12 +918,15 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
         const el = pageEls[ref.page - 1];
         if (!el) return;
         parent?.appendChild(el);
-        el.style.pageBreakBefore = i === 0 ? "auto" : "always";
-        el.style.breakBefore = i === 0 ? "auto" : "page";
+        // On an imposed sheet a page never starts a page: its sheet does.
+        el.style.pageBreakBefore = i === 0 || imposed ? "auto" : "always";
+        el.style.breakBefore = i === 0 || imposed ? "auto" : "page";
         el.setAttribute("data-page", String(i + 1));
         el.classList.remove("app-rot-90", "app-rot-180", "app-rot-270");
-        if (ref.rot) el.classList.add(`app-rot-${ref.rot}`);
+        const rot = turn ? (ref.rot + turn(el, ref.rot)) % 360 : ref.rot;
+        if (rot) el.classList.add(`app-rot-${rot}`);
       });
+      if (imposed) realiseSheets(sequence);
 
       realiseCopies(sequence, paged);
 
@@ -758,12 +936,14 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
 
       if (!ready) return;
       const empty = paged && sequence.length === 0;
-      printBtn.disabled = empty;
+      printBtn.disabled = empty || decided || claimHeld;
       if (empty) {
         printBtn.textContent = translateNow("print.noneSelected");
       } else {
-        const label =
-          (paged && sequence.length < pageEls.length
+        const label = approval && !decided
+          ? translateNow("printRequest.approve") +
+            (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "")
+          : (paged && sequence.length < pageEls.length
             ? sequence.length === 1
               ? translateNow("print.printOnePage")
               : translateNow("print.printPages", { count: sequence.length })
@@ -771,6 +951,63 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
           (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "");
         printBtn.innerHTML = `${PRINTER_SVG} ${escapeHtml(label)}`;
       }
+    };
+
+    /** The turn that fits a page into a cell of the imposed sheet, for the layouts
+     *  that turn pages to their cell (see `autoTurns`): read off the page's image,
+     *  which is not known until it has decoded — until then, no turn. */
+    const autoTurnFor = (o: PrintOptions) => {
+      const [pw, ph] = pageBoxCm(o);
+      const pad = MARGIN_CM[o.margin] ?? MARGIN_CM.normal;
+      const { cols, rows } = gridFor(pagesPerSheet(o), pw > ph);
+      // A page number takes a 16 px band (0.42 cm) off the bottom of its cell.
+      const band = o.pageNumbers ? 0.42 : 0;
+      const cw = (pw - 2 * pad - (cols - 1) * GUTTER_CM) / cols;
+      const ch = (ph - 2 * pad - (rows - 1) * GUTTER_CM) / rows - band;
+      return (el: HTMLElement, rot: number): number => {
+        const img = el.querySelector("img");
+        if (!img?.naturalWidth || !img.naturalHeight) return 0;
+        const quarter = rot === 90 || rot === 270;
+        return autoTurn(
+          quarter ? img.naturalHeight : img.naturalWidth,
+          quarter ? img.naturalWidth : img.naturalHeight,
+          cw,
+          ch,
+        );
+      };
+    };
+
+    /**
+     * Put the arranged pages onto imposed sheets: one `.app-sheet` wrapper per
+     * sheet of the plan (`planImposition`, the same plan the PDF is built from),
+     * holding its pages in reading order and an empty cell where the plan leaves a
+     * blank. Page numbers stay those of the sequence, so a booklet's sides read
+     * out of order, as they should.
+     */
+    const realiseSheets = (sequence: PageList) => {
+      const parent = pageParent;
+      if (!parent) return;
+      const [pw, ph] = pageBoxCm(opts);
+      const plan = planImposition(sequence.length, opts, pw > ph);
+      plan.sheets.forEach((cells, si) => {
+        const sheetEl = parent.ownerDocument.createElement("div");
+        sheetEl.className = "app-sheet";
+        sheetEl.style.pageBreakBefore = si === 0 ? "auto" : "always";
+        sheetEl.style.breakBefore = si === 0 ? "auto" : "page";
+        for (const at of cells) {
+          const ref = at === null ? undefined : sequence[at];
+          const page = ref ? pageEls[ref.page - 1] : undefined;
+          if (page) {
+            sheetEl.appendChild(page);
+          } else {
+            const blank = parent.ownerDocument.createElement("div");
+            blank.className = "print-page app-blank";
+            sheetEl.appendChild(blank);
+          }
+        }
+        parent.appendChild(sheetEl);
+        sheetEls.push(sheetEl);
+      });
     };
 
     /**
@@ -790,8 +1027,21 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       copyNodes = [];
       flowCopies = 1;
       if (n <= 1) return;
-      if (paged) {
-        const parent = pageEls[0]?.parentElement;
+      if (paged && sheetEls.length > 0) {
+        // Imposed: a copy is the whole run of sheets again, collated.
+        const parent = pageParent;
+        if (!parent) return;
+        for (let c = 1; c < n; c++) {
+          for (const sheetEl of sheetEls) {
+            const copy = sheetEl.cloneNode(true) as HTMLElement;
+            copy.style.pageBreakBefore = "always";
+            copy.style.breakBefore = "page";
+            parent.appendChild(copy);
+            copyNodes.push(copy);
+          }
+        }
+      } else if (paged) {
+        const parent = pageParent;
         if (!parent || sequence.length === 0) return;
         // The first copy is the arranged originals themselves; clone the rest.
         withCopies(sequence, n)
@@ -848,6 +1098,9 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       grayscale.input.checked = opts.grayscale;
       pageNumbers.input.checked = opts.pageNumbers;
       copies.input.value = String(opts.copies);
+      nup.select.value = String(pagesPerSheet(opts));
+      booklet.input.checked = opts.booklet;
+      duplex.select.value = opts.duplex;
     };
 
     /**
@@ -946,7 +1199,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       // exact for sheets, unknown for flowing text (the engine paginates it).
       const expectedPages =
         pageEls.length > 0
-          ? printSequence(arrangement, opts).length * clampCopies(opts.copies)
+          ? sheetCount(printSequence(arrangement, opts).length, opts) * clampCopies(opts.copies)
           : null;
       const before = lastSnapshot ?? (await printSnapshot());
       if (done || run !== followRun || !before.supported) return;
@@ -983,6 +1236,51 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       }
     };
 
+    // ── Approval (an agent's request) ───────────────────────────────────────
+    /** The request was approved or rejected: Approve and Reject are spent. */
+    let decided = false;
+    /** This window holds the request's claim: a print is under way, so
+     *  neither Reject nor a second Approve may run until it settles. */
+    let claimHeld = false;
+    const settle = () => {
+      decided = true;
+      rejectBtn.disabled = true;
+      printBtn.disabled = true;
+    };
+    /** Approve: claim the request before anything is laid out or sent. Only
+     *  the winner prints; one that ended, or that another window claimed,
+     *  prints nothing here. */
+    const claimed = async (): Promise<boolean> => {
+      if (!approval) return true;
+      if (await approval.claim().catch(() => false)) {
+        claimHeld = true;
+        rejectBtn.disabled = true;
+        return true;
+      }
+      settle();
+      showFailure(new Error(translateNow("printRequest.gone")));
+      return false;
+    };
+    /** The job left (or the system dialog owns it): record the approval. */
+    const approved = () => {
+      claimHeld = false;
+      if (!approval || decided) return;
+      settle();
+      void approval.onPrinted().catch(() => {});
+    };
+    /** Nothing was sent: give the claim back, so the request waits again. */
+    const released = () => {
+      if (!approval || !claimHeld) return;
+      claimHeld = false;
+      if (!decided) rejectBtn.disabled = false;
+      void approval.release().catch(() => {});
+    };
+    rejectBtn.addEventListener("click", () => {
+      if (!approval || decided || claimHeld) return;
+      settle();
+      void approval.onReject().catch(() => {}).finally(() => cleanup());
+    });
+
     // ── Teardown (single-shot) ──────────────────────────────────────────────
     let done = false;
     const cleanup = () => {
@@ -1008,16 +1306,18 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
     });
     document.addEventListener("keydown", onKeyDown);
 
-    const printFrame = () => {
-      if (!frameWin) return;
+    /** `window.print()` on the preview; whether the dialog could be asked for. */
+    const printFrame = (): boolean => {
+      if (!frameWin) return false;
       try {
         frameWin.focus();
         frameWin.print();
       } catch {
         /* printing unsupported / dialog refused: leave preview open */
-        return;
+        return false;
       }
       void followJob();
+      return true;
     };
 
     /** A native print that failed says so where the user is looking. */
@@ -1031,26 +1331,49 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       progressEl.replaceChildren(text);
     };
 
-    printBtn.addEventListener("click", () => {
-      if (printBtn.disabled || !frameWin) return;
-      if (!native || pageEls.length === 0) {
-        printFrame();
+    printBtn.addEventListener("click", () => void onPrint());
+    const onPrint = async () => {
+      if (printBtn.disabled || !frameWin || decided || claimHeld) return;
+      printBtn.disabled = true;
+      // Nothing below lays out or sends a page unless this window won the
+      // request's claim (`services::print_mcp::claim`).
+      if (!(await claimed())) return;
+      if (done) {
+        // The preview closed while the claim was on its way: nothing was sent.
+        released();
         return;
       }
-      printBtn.disabled = true;
+      if (!native || pageEls.length === 0) {
+        printBtn.disabled = false;
+        // `window.print()` says nothing about a cancelled dialog: the user saw
+        // the job and pressed Approve, which is the decision — once the dialog
+        // could be asked for at all.
+        if (printFrame()) approved();
+        else released();
+        return;
+      }
       native(printSequence(arrangement, opts), opts)
         .then((outcome) => {
-          if (done) return;
-          if (outcome === "unsupported") printFrame();
-          else if (outcome === "sent") void followJob();
+          if (outcome === "sent" || outcome === "opened") {
+            // Recorded even when the preview closed meanwhile: the job left.
+            approved();
+            if (outcome === "sent" && !done) void followJob();
+          } else if (outcome === "unsupported" && !done && printFrame()) {
+            approved();
+          } else {
+            // The system dialog was cancelled, or the preview closed before
+            // the fallback could open: nothing was sent.
+            released();
+          }
         })
         .catch((e) => {
+          released();
           if (!done) showFailure(e);
         })
         .finally(() => {
-          if (!done) printBtn.disabled = printSequence(arrangement, opts).length === 0;
+          if (!done) printBtn.disabled = decided || printSequence(arrangement, opts).length === 0;
         });
-    });
+    };
 
     iframe.onload = () => {
       const win = iframe.contentWindow;
@@ -1065,6 +1388,7 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       (doc.head ?? doc.documentElement).appendChild(styleEl);
 
       pageEls = Array.from(doc.querySelectorAll<HTMLElement>(".print-page"));
+      pageParent = pageEls[0]?.parentElement ?? null;
       flowNodes = doc.body ? Array.from(doc.body.childNodes) : [];
       arrangement = initialPages(pageEls.length);
       // A document made of sheets keeps its own printer settings (see `PrintKind`):
@@ -1074,8 +1398,14 @@ export function printDocument(fullHtml: string, native?: NativePrint): Promise<v
       if (pageEls.length > 0) {
         kind = "page";
         opts = loadPrintOptions(kind);
-        syncControls();
       }
+      // The agent's options for this job, over the user's own. Counted as a
+      // touch, so the sheet's orientation below does not undo them.
+      if (approval) {
+        opts = sanitizePrintOptions({ ...opts, ...approval.preset });
+        touched = true;
+      }
+      syncControls();
       apply(); // style the preview immediately; the button stays "Preparing…"
 
       Promise.all(
@@ -1268,8 +1598,9 @@ export function printHtmlBody(
   css: string,
   title?: string,
   native?: NativePrint,
+  approval?: PrintApproval,
 ): Promise<void> {
-  return printDocument(buildPrintDoc(bodyHtml, css, title), native);
+  return printDocument(buildPrintDoc(bodyHtml, css, title), native, approval);
 }
 
 /**

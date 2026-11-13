@@ -1,7 +1,7 @@
 ---
 id: talking-to-an-agent
 title: Talking to an agent (dictation, read-aloud, hands-free)
-keywords: [voice, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, los, chime, barge-in, talk]
+keywords: [voice, dictate, dictation, microphone, mic, speech, speech model, whisper, read aloud, read-aloud, speak, voice language, hands-free, handsfree, headset, stop word, go on, los, chime, barge-in, talk, correct, correction, scratch that, replace, undo, Tabby plan, Tabby goal]
 related: [agent-clis, mobile, keyboard, settings-and-appearance]
 ---
 
@@ -18,6 +18,24 @@ base, small or large) in a tab, one click. While you speak, **Heard:** shows
 what it understood; each finished sentence lands in the text box, where
 Ctrl+Z takes it back. End with **"go on"** (German **"los"**) to send without
 those words, or press Send.
+
+### Correcting what you said
+
+Start with **"Tabby"** to change the text box instead of adding to it. The
+whole sentence must be one of these, or it is dictated as usual:
+
+| Say | What it does |
+|---|---|
+| "Tabby, scratch that" (German "streich das") | removes the last thing you said; say it again for the one before |
+| "Tabby, replace *login* by *sign-in*" ("ersetze … durch …") | swaps the last place those words stand |
+| "Tabby, correction, *in the frontend*" ("Korrektur, …") | says the last thing again, differently |
+| "Tabby, clear all" ("alles löschen") | empties the box; "scratch that" brings it back |
+| "Tabby, plan" / "Tabby, goal" | starts the prompt with `/plan` or `/goal`, as the chips do |
+
+The line under the box says what changed. Add "go on" to send right after.
+Once you have typed into the box, "scratch that" only takes back what you
+say from then on. It works the same on the phone, in the voice language you
+dictate in, and the English phrases work in every language.
 
 Only one tab listens at a time: starting the mic in another tab stops it in
 the first, and the red mic in the header shows which tab has it — a click
@@ -74,6 +92,24 @@ listening: a small mic on the steering badge says so.
 The Focus view's mic dictates with the phone's speech (on the device where it
 can). Its menu holds **Read answers aloud**, the voice language and
 **Hands-free**: the same pause, chime and "stop" window, then the answer is
-read and the mic opens again. Keep the screen on and the page open — a web
-page cannot hold the microphone from a pocket. A tap on the line stops the
-voice or cancels a send.
+read and the mic opens again. Ending with **"go on"** sends and leaves the
+mic open, so the next prompt can follow straight away; with Hands-free on,
+the answer still waits until you stop talking, then the mic pauses while it
+is read. Keep the screen on and the page open — a web page cannot hold the
+microphone from a pocket. A tap on the line stops the voice or cancels a
+send.
+
+With Hands-free on, a spoken **"go on"** also plays a chime and shows "Sent —
+say Tabby for your next prompt": from then until the next send the open mic
+dictates only what you start with **"Tabby"**; talk before it is dropped, and
+a prompt you have already begun carries on without it.
+
+Say **"Tabby navigate"** to move without touching the screen: say a project
+("go to project Alpha" — the phone asks "Project Alpha?", answer yes or no),
+**"the working tab"**, **"the done tab"** (only ones you have not opened yet) or
+**"the waiting tab"** (they go across all projects; say it again for the next
+one), or a tab of this project by name, number or agent. The phone says where
+it is going, opens the tab, reads your last prompt there and the agent's
+answer, then listens again: begin the next prompt with "Tabby". **"Stop"** or
+**"cancel"**, ten quiet seconds, or a tap on the mic ends navigation; a
+half-written prompt stays with its tab.

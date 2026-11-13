@@ -12,7 +12,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Project } from "../../../mobile-web/src/screens/Project";
-import { shareAs } from "../../../mobile-web/src/outboxShare";
+import { MAX_SHARE_MANY, shareAs, shareSize, sizeOfMany, useOutboxShare, useShareMany } from "../../../mobile-web/src/outboxShare";
+import { ShareSizeSheet } from "../../../mobile-web/src/components/ShareSizeSheet";
+import { MAX_VIEW_FILE, type OutboxFile, type ViewerScope } from "../../../mobile-web/src/api";
 
 /** Chrome on Android: a short list of extensions, and a bare media type. */
 const CHROME = /\.(png|jpe?g|gif|webp|pdf|txt|csv)$/i;
@@ -69,7 +71,11 @@ describe("Mobile outbox — sharing a file", () => {
     expect(shareAs(PLOT)).toEqual({ name: "plot.png", type: "image/png" });
     expect(shareAs(NOTES)).toEqual({ name: "notes.md.txt", type: "text/plain" });
     expect(shareAs({ ...NOTES, name: "notes.txt" })).toEqual({ name: "notes.txt", type: "text/plain" });
-    // Nothing the share sheet would take: no button, Save stays.
+    // Any other refused file goes as .txt, bytes unchanged (a binary STL).
+    expect(shareAs(ARCHIVE)).toEqual({ name: "data.zip.txt", type: "text/plain" });
+    expect(shareAs({ ...ARCHIVE, name: "part.stl" })).toEqual({ name: "part.stl.txt", type: "text/plain" });
+    // Nothing the share sheet would take, not even as .txt: no button, Save stays.
+    chromeCanShare.mockReturnValueOnce(false).mockReturnValueOnce(false);
     expect(shareAs(ARCHIVE)).toBeNull();
     Reflect.deleteProperty(navigator, "share");
     expect(shareAs(PLOT)).toBeNull();
@@ -81,8 +87,8 @@ describe("Mobile outbox — sharing a file", () => {
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
 
     const gallery = await openGallery(2);
-    // Offered only where the share sheet takes the file.
-    expect(within(gallery).queryByRole("button", { name: "Share data.zip" })).toBeNull();
+    // A refused kind is still offered (as data.zip.txt), and Save stays.
+    expect(within(gallery).getByRole("button", { name: "Share data.zip" })).toBeTruthy();
     expect(within(gallery).getByRole("link", { name: "Save data.zip" })).toBeTruthy();
 
     fireEvent.click(within(gallery).getByRole("button", { name: "Share plot.png" }));
@@ -192,5 +198,90 @@ describe("Mobile outbox — sharing a file", () => {
     await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
     expect(shared(share).name).toBe("notes.md.txt");
     expect(shared(share).type).toBe("text/plain");
+  });
+
+  describe("past the share limit", () => {
+    const MB = 1024 * 1024;
+    const PART = { name: "part.stl", kind: "application/octet-stream", size: 180 * MB, modified: 1_770_000_100 };
+    const HERE: ViewerScope = { files: "p1" };
+
+    function One({ file, scope = HERE }: { file: OutboxFile; scope?: ViewerScope }) {
+      const sharing = useOutboxShare(scope);
+      return <>
+        <button onClick={() => void sharing.share(file)}>go</button>
+        {sharing.ready && <button onClick={() => void sharing.share(file)}>again</button>}
+        <ShareSizeSheet files={sharing.asking} onShare={sharing.confirm} onClose={sharing.cancel} />
+      </>;
+    }
+
+    function Many({ files }: { files: OutboxFile[] }) {
+      const sharing = useShareMany(HERE);
+      return <>
+        <button onClick={() => void sharing.share(files)}>go</button>
+        <ShareSizeSheet files={sharing.asking} onShare={sharing.confirm} onClose={sharing.cancel} />
+      </>;
+    }
+
+    it("goes at once under the limit, asks past it, and cannot go where no whole bytes come", () => {
+      expect(shareSize(HERE, MAX_VIEW_FILE)).toBe("ok");
+      expect(shareSize(HERE, MAX_VIEW_FILE + 1)).toBe("ask");
+      // A remote host, a drop box and the outbox hand over at most the limit whole.
+      expect(shareSize({ files: "p1", on: "host" }, MAX_VIEW_FILE + 1)).toBeNull();
+      expect(shareSize({ inbox: "t1" }, MAX_VIEW_FILE + 1)).toBeNull();
+      const small = { ...PART, size: MB };
+      expect(sizeOfMany(HERE, [small, small])).toBe("ok");
+      expect(sizeOfMany(HERE, [small, PART])).toBe("ask");
+      expect(sizeOfMany(HERE, [{ ...small, size: MAX_SHARE_MANY / 2 + 1 }, { ...small, size: MAX_SHARE_MANY / 2 }])).toBe("ask");
+      expect(sizeOfMany({ files: "p1", on: "host" }, [small, PART])).toBeNull();
+    });
+
+    it("asks before fetching a big file, shares it as it is on yes, and fetches nothing on no", async () => {
+      const fetch = vi.fn(async () => new Response(new Uint8Array([1, 2, 3])));
+      vi.stubGlobal("fetch", fetch);
+      render(<One file={PART} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "go" }));
+      const ask = screen.getByRole("dialog", { name: "Share part.stl (180.0 MB)?" });
+      expect(ask.textContent).toContain("memory");
+      expect(fetch).not.toHaveBeenCalled();
+      fireEvent.click(within(ask).getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "go" }));
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Share anyway" }));
+      await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      // No zip: the file goes under the name the share sheet takes, bytes unchanged.
+      expect(shared(share).name).toBe("part.stl.txt");
+      expect(shared(share).size).toBe(3);
+    });
+
+    it("does not ask again for the second tap a slow download needs", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([1]))));
+      share.mockImplementationOnce(() => Promise.reject(new DOMException("stale", "NotAllowedError")));
+      render(<One file={PART} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "go" }));
+      fireEvent.click(screen.getByRole("button", { name: "Share anyway" }));
+      fireEvent.click(await screen.findByRole("button", { name: "again" }));
+      await waitFor(() => expect(share).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("asks once for several files past the together limit", async () => {
+      const fetch = vi.fn(async () => new Response(new Uint8Array([1])));
+      vi.stubGlobal("fetch", fetch);
+      const half = { ...PART, size: 30 * MB };
+      render(<Many files={[half, { ...half, name: "lid.stl" }]} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "go" }));
+      const ask = screen.getByRole("dialog", { name: "Share 2 files (60.0 MB)?" });
+      expect(fetch).not.toHaveBeenCalled();
+      fireEvent.click(within(ask).getByRole("button", { name: "Share anyway" }));
+      await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+      const files = (share.mock.calls[0] as unknown as [{ files: File[] }])[0].files;
+      expect(files.map((file) => file.name)).toEqual(["part.stl.txt", "lid.stl.txt"]);
+    });
   });
 });

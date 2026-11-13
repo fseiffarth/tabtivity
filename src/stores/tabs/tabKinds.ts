@@ -60,7 +60,7 @@ export const CALENDAR_TAB_CMD = tabCommand("calendar");
  * one zustand store), so a mail tab showed the same mailbox from every scope —
  * i.e. exactly what the header's ✉ button already opens over whatever is on
  * screen, without belonging to a project you then switch away from. The tab kind
- * is gone; `MailPane` lives on, rendered only by `MailOverlayHost`.
+ * is gone; `MailPane` lives on, rendered only by `MailView`.
  *
  * The constant stays because the *persisted layouts* do: a saved tree written
  * before the removal still carries `kind: "mail"` tabs holding this `cmd`, and

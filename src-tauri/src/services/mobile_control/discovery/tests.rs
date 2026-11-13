@@ -515,6 +515,50 @@ fn the_assistant_scope_has_a_per_phone_list_absent_is_every_phone_empty_is_none(
     assert_eq!(assistant_devices(dir.path()), Some(Vec::new()));
 }
 
+/// Root's per-phone list is opt-in, unlike every other scope's: with the
+/// switch on and no list, no phone has root — a phone paired later is off it
+/// until the user ticks it. A list names the phones; an empty or malformed
+/// one, or unreadable settings, none. The catalog, the per-phone view and
+/// `ScopeAccess` (what a phone's prompt or schedule faces) agree.
+#[test]
+fn the_root_scope_is_off_for_every_phone_until_the_list_names_it() {
+    let host = crate::brand::MOBILE_HOST_KEY;
+    let reaching = |devices: Option<serde_json::Value>, phone: &str| {
+        let mut block = serde_json::json!({ "enabled": true, "root_access": true });
+        if let Some(devices) = devices {
+            block["root_devices"] = devices;
+        }
+        let dir = assistant_state(Some(serde_json::json!({ "assistant": false, host: block })), vec![]);
+        fs::create_dir_all(dir.path().join("root")).expect("root dir");
+        let env = RootEnv { dir: dir.path().join("root"), fenced: || true };
+        let catalog = Catalog::load_with(dir.path(), &[7; 32], &env, &HashMap::new(), &HostLive::default(), true).expect("catalog");
+        let listed = catalog.projects.iter().any(|p| p.raw_id == "root");
+        let seen = catalog.for_device(phone).projects.iter().any(|p| p.raw_id == "root");
+        let access = ScopeAccess::load_with(dir.path(), &env).expect("access").reaches("root", phone);
+        (listed, seen, access)
+    };
+    // Absent: the scope is there, no phone reaches it.
+    assert_eq!(reaching(None, "d1"), (true, false, Ok(false)));
+    // A list: those phones only.
+    let list = Some(serde_json::json!(["d1", "d2"]));
+    assert_eq!(reaching(list.clone(), "d1"), (true, true, Ok(true)));
+    assert_eq!(reaching(list, "d3"), (true, false, Ok(false)));
+    // Empty, or anything that is not a list of strings: no phone.
+    for none in [serde_json::json!([]), serde_json::json!("d1"), serde_json::json!(["d1", 2]), serde_json::Value::Null] {
+        assert_eq!(reaching(Some(none.clone()), "d1"), (true, false, Ok(false)), "{none}");
+    }
+    // The list narrows the switch; it never opens a closed one.
+    let dir = assistant_state(
+        Some(serde_json::json!({ "assistant": false, host: { "enabled": true, "root_access": false, "root_devices": ["d1"] } })),
+        vec![],
+    );
+    assert!(load_assistant(dir.path()).is_empty());
+    // Unreadable settings are no phone either.
+    let dir = tempfile::tempdir().expect("state dir");
+    fs::write(dir.path().join("settings.json"), b"{").expect("corrupt");
+    assert!(root_devices(dir.path()).is_empty());
+}
+
 /// The chat assistant reaches the phone by its switch and gate alone
 /// (`assistant_open`), as a scope of its own kind rooted in the work
 /// folder: listed before its folder exists (so the phone can start the
@@ -822,6 +866,8 @@ fn agent_label_names_the_cli_not_the_tab() {
         args: None,
         launched_at: None,
         assistant: None,
+        auto_label: None,
+        task_name: None,
     };
     assert_eq!(agent_label_of(&tab("release review", "claude")), "Claude");
     assert_eq!(agent_label_of(&tab("Codex", "codex")), "Codex");
@@ -1123,6 +1169,10 @@ fn a_mobile_enabled_box_is_a_scope_with_the_folder_and_member_roots() {
     let labels: Vec<&str> = b.tabs.iter().map(|t| t.public.label.as_str()).collect();
     assert_eq!(labels, vec!["Box shell", "Lib shell", "Remote shell"]);
     assert!(!b.public.id.contains("b1"), "the opaque id must not carry the box id");
+    // Every member, as the id its own row would carry; the list narrows them
+    // per phone (`host::projects`).
+    let ids: Vec<String> = ["p-lib", "p-remote", "p-vm", "p-gone"].iter().map(|id| key_id(&[7; 32], "project", &[id])).collect();
+    assert_eq!(b.public.members.as_deref(), Some(ids.as_slice()));
 }
 
 /// One project record per host type, each with Mobile on.
@@ -1721,6 +1771,43 @@ fn a_remote_only_project_runs_everything_on_its_host() {
     }
 }
 
+/// The phone's project row says whether the project is Local models only and whether
+/// its network is cut, as two plain flags read with the backend's own rule
+/// (`agent_privacy::privacy_of_value`): an unset project reads false and carries
+/// neither key, a malformed record reads as locked, and the setting itself, the id
+/// and the folder never cross.
+#[test]
+fn a_project_row_carries_the_local_models_only_flags_and_nothing_else() {
+    let wire_of = |privacy: Option<serde_json::Value>| {
+        let (dir, _) = host_tab_state(None, false);
+        let path = dir.path().join("projects.json");
+        let mut records: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        if let Some(value) = privacy {
+            records[0]["agent_privacy"] = value;
+        }
+        fs::write(&path, serde_json::to_vec(&records).unwrap()).unwrap();
+        let project = load_hosts(dir.path(), &HostLive::default(), true);
+        let flags = (project.public.local_models_only, project.public.cut_network);
+        (flags, serde_json::to_string(&project.public).unwrap())
+    };
+    let (flags, wire) = wire_of(None);
+    assert_eq!(flags, (false, false));
+    assert!(!wire.contains("local_models_only") && !wire.contains("cut_network"), "an unlocked project says nothing: {wire}");
+    assert_eq!(wire_of(Some(serde_json::Value::Null)).0, (false, false));
+    assert_eq!(wire_of(Some(serde_json::json!({}))).0, (false, false));
+    assert_eq!(wire_of(Some(serde_json::json!({ "local_models_only": false, "cut_network": false }))).0, (false, false));
+    let (flags, wire) = wire_of(Some(serde_json::json!({ "local_models_only": true, "cut_network": false })));
+    assert_eq!(flags, (true, false));
+    assert!(wire.contains(r#""local_models_only":true"#) && !wire.contains("cut_network"), "{wire}");
+    let (flags, wire) = wire_of(Some(serde_json::json!({ "local_models_only": true, "cut_network": true, "future": 1 })));
+    assert_eq!(flags, (true, true));
+    assert!(wire.contains(r#""cut_network":true"#) && !wire.contains("future") && !wire.contains("agent_privacy"), "{wire}");
+    // Cut network means something only beneath Local models only.
+    assert_eq!(wire_of(Some(serde_json::json!({ "cut_network": true }))).0, (false, false));
+    // A record of another shape reads as locked, as the gate reads it.
+    assert_eq!(wire_of(Some(serde_json::json!("yes"))).0, (true, false));
+}
+
 /// With no machine a phone-made agent may start on (host sessions not
 /// persisted, or a build that lists no host tab), a remote-only project
 /// takes nothing from the phone; a plain remote project's row carries no
@@ -2103,4 +2190,25 @@ fn repeat_loads_inside_the_ttl_do_not_touch_the_disk() {
     fs::remove_file(dir.path().join("projects.json")).expect("remove");
     assert!(cache.load(dir.path(), &[7; 32]).is_ok());
     assert!(cache.load_fresh(dir.path(), &[7; 32]).is_ok());
+}
+
+/// The phone names an agent tab by its first prompt while the tab still holds
+/// the label Tabtivity gave it; a tab the user renamed shows that name.
+#[test]
+fn public_label_is_the_task_name_until_renamed() {
+    let tab = |value: serde_json::Value| -> SavedTab { serde_json::from_value(value).expect("saved tab") };
+    let named = tab(serde_json::json!({
+        "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent",
+        "autoLabel": "Claude", "autoNamed": true, "taskName": "Fix the settings scrollbar",
+    }));
+    assert_eq!(public_label_of(&named), "Fix the settings scrollbar");
+    let renamed = tab(serde_json::json!({
+        "label": "Mine", "cmd": "claude", "cwd": "", "kind": "agent",
+        "autoLabel": "Claude", "taskName": "Fix the settings scrollbar",
+    }));
+    assert_eq!(public_label_of(&renamed), "Mine");
+    let unnamed = tab(serde_json::json!({ "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent", "autoLabel": "Claude" }));
+    assert_eq!(public_label_of(&unnamed), "Claude");
+    let odd = tab(serde_json::json!({ "label": "Claude", "cmd": "claude", "cwd": "", "kind": "agent", "autoLabel": "Claude", "taskName": 5 }));
+    assert_eq!(public_label_of(&odd), "Claude");
 }

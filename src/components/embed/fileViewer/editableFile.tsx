@@ -1,7 +1,8 @@
 import { DraftSaver } from "../draftSaver";
 import { registerUnsavedWork } from "../../../lib/window/unsavedWork";
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { PaneUnsavedContext } from "../../../lib/tabs/tabCloseGuard";
 import { useSettingsStore } from "../../../stores/settings";
 import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
 import { useProjectsStore } from "../../../stores/projects";
@@ -147,6 +148,8 @@ function useEditHistory(initial: string) {
 export function useEditableFile(path: string, enabled = true) {
   const scope = useFileScope();
   const t = useT();
+  // The tab's close guard, when this viewer is a tab's (null elsewhere).
+  const registerPaneUnsaved = useContext(PaneUnsavedContext);
   const loadedIdentity = useRef<string | null>(null);
   const identity = JSON.stringify([path, scope]);
   const [content, setContent] = useState<string | null>(null);
@@ -276,12 +279,19 @@ export function useEditableFile(path: string, enabled = true) {
       dirty: () => saver.dirty,
       flush: () => saver.flushIfAutosave(),
     });
+    // Closing the tab with autosave off would drop the buffer: its × asks.
+    const unguard = registerPaneUnsaved?.({
+      lostOnClose: () => saver.lostOnDispose,
+      save: () => saver.flush(),
+      label: () => basename(path),
+    });
     return () => {
       active = false;
       unregister();
+      unguard?.();
       saver.dispose();
     };
-  }, [saver, path, scope]);
+  }, [saver, path, scope, registerPaneUnsaved]);
   useEffect(() => {
     saver.update(draft, baseline, loaded && enabled, autosave);
   }, [saver, draft, baseline, loaded, enabled, autosave]);
@@ -381,6 +391,9 @@ export function useReadonlyFile(path: string) {
   // unsaved draft), and holding the key makes the message follow the language.
   const [errorKey, setErrorKey] = useState<TranslationKey | null>(null);
   const error = errorKey ? t(errorKey) : null;
+  // A viewer's Retry: bumping it re-runs the first read below.
+  const [reloadTick, setReloadTick] = useState(0);
+  const reload = useCallback(() => setReloadTick((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -390,7 +403,7 @@ export function useReadonlyFile(path: string) {
       .then((text) => { if (!cancelled) setContent(text); })
       .catch((e) => { if (!cancelled) setErrorKey(describeFileErrorKey(e)); });
     return () => { cancelled = true; };
-  }, [path, scope]);
+  }, [path, scope, reloadTick]);
 
   // Diff-aware reload: silently re-read on an external write, once loaded. The
   // read is dropped if the file was switched meanwhile.
@@ -403,5 +416,5 @@ export function useReadonlyFile(path: string) {
   }, [path, scope, identity]);
   useDiskReloadPoll(path, scope, onDiskChange, { enabled: content != null });
 
-  return { content, error, loaded: content != null };
+  return { content, error, loaded: content != null, reload };
 }

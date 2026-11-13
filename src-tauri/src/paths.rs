@@ -308,6 +308,9 @@ fn supplemental_path_dirs_for(
                         .join("bin"),
                 );
                 dirs.push(local.join("bin"));
+                // Where winget links the portable packages it installs; a
+                // fresh install is invisible to this process until relaunch.
+                dirs.push(local.join("Microsoft").join("WinGet").join("Links"));
             }
             if let Some(roaming) = app_data {
                 dirs.push(PathBuf::from(roaming).join("npm"));
@@ -326,6 +329,10 @@ fn supplemental_path_dirs_for(
                 // `qemu-system-*.exe` and `qemu-img.exe` here and adds nothing
                 // to PATH; the VM tier resolves them through this.
                 dirs.push(PathBuf::from(pf).join("qemu"));
+                // Docker Desktop and OpenVPN's installers add their `bin` to the
+                // machine PATH for *new* processes only.
+                dirs.push(PathBuf::from(pf).join("Docker").join("Docker").join("resources").join("bin"));
+                dirs.push(PathBuf::from(pf).join("OpenVPN").join("bin"));
             }
         }
         OsKind::Unix => {}
@@ -455,10 +462,9 @@ fn resolve_in_dirs(
     exists: &impl Fn(&Path) -> bool,
 ) -> Option<PathBuf> {
     for dir in dirs {
-        let base = dir.join(bin);
-        if exists(&base) {
-            return Some(base);
-        }
+        // Extensions first: npm's Windows global dir holds `claude` (a POSIX
+        // sh script `CreateProcess` rejects with error 193) beside `claude.cmd`
+        // and `claude.ps1`, and the bare file must not shadow the launchable one.
         for ext in exts {
             if ext.is_empty() {
                 continue;
@@ -467,6 +473,10 @@ fn resolve_in_dirs(
             if exists(&cand) {
                 return Some(cand);
             }
+        }
+        let base = dir.join(bin);
+        if exists(&base) {
+            return Some(base);
         }
     }
     None
@@ -693,6 +703,34 @@ pub fn resolve_offpath_binary(bin: &str) -> Option<PathBuf> {
         std::env::var_os("PATHEXT").as_deref(),
         &|p| p.is_file(),
     )
+}
+
+/// `\\?\C:\dir` -> `C:\dir` and `\\?\UNC\srv\share` -> `\\srv\share`, or `None`
+/// when `raw` carries no verbatim prefix or is too long for the plain spelling
+/// (a path at or past `MAX_PATH` only works verbatim).
+fn strip_verbatim_prefix(raw: &str) -> Option<String> {
+    if raw.len() >= 260 {
+        return None;
+    }
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    let rest = raw.strip_prefix(r"\\?\")?;
+    let mut chars = rest.chars();
+    let drive = chars.next()?;
+    (drive.is_ascii_alphabetic() && chars.next() == Some(':') && chars.next() == Some('\\'))
+        .then(|| rest.to_string())
+}
+
+/// A `canonicalize`d path spelled the way programs expect. Windows returns
+/// `\\?\C:\…`, which `cmd.exe` refuses as a working directory, Git for Windows
+/// does not understand in `GIT_CEILING_DIRECTORIES` and the UI would show to the
+/// user. Unchanged elsewhere, and for a path only the verbatim form can name.
+pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    path.to_str().and_then(strip_verbatim_prefix).map(PathBuf::from).unwrap_or(path)
 }
 
 pub fn home_dir() -> PathBuf {
@@ -1032,6 +1070,26 @@ pub fn excluded_rel_set(excluded: &[String]) -> std::collections::HashSet<String
         .collect()
 }
 
+/// Whether Windows takes the path segment `segment` for a device, on every OS
+/// (a project synced to Windows must never carry one): its part before the
+/// first dot, trailing spaces dropped, any case, is `CON`, `PRN`, `AUX`,
+/// `NUL`, `CONIN$`, `CONOUT$`, or `COM`/`LPT` followed by one of `0`–`9`,
+/// `¹`, `²`, `³` (Win32 reads the superscripts as digits). `nul`, `CON.txt`,
+/// `com1.tar.gz` and `LPT³` are; `CONSOLE.txt` and `COM10` are not. A file
+/// named one can be created handle-relative, but Explorer can neither open
+/// nor delete it.
+pub fn is_windows_device_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment).trim_end().to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let (Some(prefix), Some(port)) = (stem.get(..3), stem.get(3..)) else {
+        return false;
+    };
+    matches!(prefix, "COM" | "LPT")
+        && matches!(port, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1120,6 +1178,25 @@ mod tests {
         let present = dirs[0].join("vibe.exe");
         let found = resolve_in_dirs(&dirs, "vibe", &["exe", "cmd", "bat"], &|p| p == present);
         assert_eq!(found, Some(present));
+    }
+
+    #[test]
+    fn resolve_in_dirs_prefers_a_windows_extension_over_the_bare_shim_script() {
+        let dirs = vec![PathBuf::from("npm")];
+        let bare = dirs[0].join("codex");
+        let cmd = dirs[0].join("codex.cmd");
+        let found = resolve_in_dirs(&dirs, "codex", &["exe", "cmd"], &|p| p == bare || p == cmd);
+        assert_eq!(found, Some(cmd));
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_stripped_only_where_the_plain_spelling_works() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users\a").as_deref(), Some(r"C:\Users\a"));
+        assert_eq!(strip_verbatim_prefix(r"\\?\UNC\srv\share\x").as_deref(), Some(r"\\srv\share\x"));
+        assert_eq!(strip_verbatim_prefix(r"C:\Users\a"), None);
+        assert_eq!(strip_verbatim_prefix(r"\\?\GLOBALROOT\Device"), None);
+        let long = format!(r"\\?\C:\{}", r"dir\".repeat(80));
+        assert_eq!(strip_verbatim_prefix(&long), None);
     }
 
     #[test]
@@ -1292,6 +1369,9 @@ mod tests {
             path.starts_with(r"C:\Program Files")
                 && path.ends_with(Path::new("MiKTeX/miktex/bin/x64"))
         }));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("Microsoft/WinGet/Links"))));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("Docker/Docker/resources/bin"))));
+        assert!(windows.iter().any(|path| path.ends_with(Path::new("OpenVPN/bin"))));
     }
 
     #[test]

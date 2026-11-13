@@ -72,6 +72,9 @@ export default tseslint.config(
       '.tabtivity/**',
       // Agent worktrees: full checkouts, each linted from its own root.
       '.claude/**',
+      // Scratch (gitignored): scripts/verify-cli's probe homes hold the JS
+      // runtimes the CLIs unpack, 193k findings on the first round there.
+      'tmp/**',
       'coverage/**',
     ],
   },

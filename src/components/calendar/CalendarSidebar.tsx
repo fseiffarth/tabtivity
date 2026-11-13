@@ -366,13 +366,14 @@ export function CalendarSidebar({
                 }}
               />
             ) : (
-              <span
+              <button
+                type="button"
                 className={`cal-list-name${cal.visible ? "" : " cal-list-name-off"}`}
-                onDoubleClick={() => setEditing(cal.id)}
-                title={t("calendarSidebar.renameHintTitle")}
+                onClick={() => setEditing(cal.id)}
+                title={t("common.rename")}
               >
                 {cal.name}
-              </span>
+              </button>
             )}
 
             {/* Reminders on/off for this calendar. Always shown, on or off; the

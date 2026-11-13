@@ -19,6 +19,15 @@ const FROM_LABEL = {
   named: "mobile.sentIndex.fromNamed",
 } as const;
 
+/** The list's groups, the agent's own work first: what it sent you, what it
+ * changed, what its answers mention, then what you sent it. */
+const GROUPS = [
+  ["agent", "mobile.sentIndex.out", "mobile.sentIndex.outHint"],
+  ["changed", "mobile.sentIndex.changed", "mobile.sentIndex.changedHint"],
+  ["named", "mobile.sentIndex.named", "mobile.sentIndex.namedHint"],
+  ["phone", "mobile.sentIndex.in", "mobile.sentIndex.inHint"],
+] as const;
+
 export interface SentFile {
   file: OutboxFile;
   from: SentFrom;
@@ -27,7 +36,8 @@ export interface SentFile {
 /**
  * Every file this conversation carried, newest first: what the agent sent from
  * this tab (`OutboxFile.from_tab` — the gallery's other files belong to other
- * chats) and what the phone sent with the prompts shown (`leaves`, as
+ * chats; the caller passes only the ones the chat posts, so an earlier
+ * conversation's sends stay out) and what the phone sent with the prompts shown (`leaves`, as
  * `inboxLeaves` read them), then the project files it changed and its answers
  * name (`changed`, `named`). A leaf the desktop has not described yet, or no
  * longer holds, is left out — the list names files that can be opened. A file
@@ -59,8 +69,9 @@ export function sentFiles(
 /**
  * The conversation's files, beside the subagent index in the sticky strip over
  * the chat: shut, one chip with the count; open, the strip's full width split
- * into In (what you sent into the tab), Out (what the agent sent out of it),
- * Changed and Named (the desktop's Files menu), each a grid of tiles: the
+ * into groups (`GROUPS`) — sent by the agent, changed by it, mentioned in its
+ * answers (the desktop's Files menu), sent by you — each headed by a line
+ * saying what it holds, its tiles rimmed in its colour, a grid of tiles: the
  * file's picture or badge, its name, when and how big. A tap opens the file
  * full screen (the chat's own viewer for its side), or saves bytes the phone
  * cannot show. The pictures stay where they were sent in the chat; this is the
@@ -92,15 +103,13 @@ export function SentFilesIndex({ tabId, project, files, more = false, open, onTo
       <svg className={open ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
     </button>
     {open && <div id="mobile-sent-list" className="sent-index-groups">
-      {([
-        ["phone", "mobile.sentIndex.in"], ["agent", "mobile.sentIndex.out"],
-        ["changed", "mobile.sentIndex.changed"], ["named", "mobile.sentIndex.named"],
-      ] as const).map(([side, heading]) => {
+      {GROUPS.map(([side, heading, hint]) => {
         const rows = files.filter((row) => row.from === side);
         if (rows.length === 0) return null;
         const title = t(heading, { count: rows.length });
-        return <section key={side} aria-label={title}>
-          <h3 className={`sent-index-head ${side}`}>{title}{(side === "changed" || side === "named") && isUntested("mobile.chat.changedFiles") && <em> · {t("mobile.focus.untested")}</em>}</h3>
+        return <section key={side} className={`sent-index-group ${side}`} aria-label={title}>
+          <h3 className="sent-index-head">{title}{(side === "changed" || side === "named") && isUntested("mobile.chat.changedFiles") && <em> · {t("mobile.focus.untested")}</em>}</h3>
+          <p className="sent-index-hint">{t(hint)}</p>
           <ul className="sent-index-list">
             {rows.map((row) => {
               const { file, from } = row;

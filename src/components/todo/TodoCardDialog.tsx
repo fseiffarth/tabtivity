@@ -561,7 +561,7 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
                 half is: what it was, and the two things that can be done about it.
                 "Open" is the calendar overlay rather than a jump to the day — the
                 calendar store has no per-date target to aim at — so it is offered
-                only where `CalendarOverlayHost` would actually raise something, the
+                only where the Calendar view would actually open, the
                 agenda rail's rule. */}
             {draft.event && (
               <div className="todo-field todo-mail-link">
@@ -590,7 +590,6 @@ export function TodoCardDialog({ task, columns, onClose, onOpenMail }: Props) {
                         className="cal-link-btn"
                         onClick={() => {
                           onClose();
-                          useTodoStore.getState().closeOverlay();
                           useCalendarStore.getState().openOverlay();
                         }}
                       >

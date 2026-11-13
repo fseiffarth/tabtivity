@@ -24,9 +24,7 @@ const NEXT_STEP_WAIT_MS = 700;
  * opening: a frame split across reads is not the list. */
 const KEEP_SETTLE_MS = 500;
 
-/** The levels Claude Code's `/effort` takes (2.1.288); the session lowers one
- * its model does not support and says so. `auto` hands it back to the model. */
-export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
+export { CLAUDE_EFFORTS } from "../../shared/claudeEfforts";
 
 export type SessionPickerCommand = "/model" | "/permissions";
 
@@ -125,7 +123,8 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   const scope = splitPtyId(ptyId)?.scope;
   const hostPinned = useProjectsStore((s) => isHostPinned(s.projects.find((p) => p.id === scope)));
   const runsHere = effectiveTabLocation(tab, { hostPinned }) === "local";
-  const rememberRows = command === "/model" && !!tab.cmd && runsHere;
+  // Rows are kept and listed per scope (gap 95): a tab's screen fills only its own scope's sheets.
+  const rememberRows = command === "/model" && !!tab.cmd && !!scope && runsHere;
   const typeKeysNow = useRef(typeKeys);
   useEffect(() => { typeKeysNow.current = typeKeys; });
   /** OpenCode's list is a scroll box that shows a slice of itself: the walk
@@ -260,8 +259,8 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     setEffortFor(null);
     setRememberedStep(null);
     setHeldPick(null);
-    if (next === "/model" && tab.cmd && runsHere) {
-      void invoke<ModelRows | null>("remembered_model_rows", { agent: tab.cmd }).then(
+    if (next === "/model" && tab.cmd && scope && runsHere) {
+      void invoke<ModelRows | null>("remembered_model_rows", { agent: tab.cmd, scope }).then(
         (rows) => setRememberedStep((now) => now ?? modelRowsStep(rows)),
         () => {},
       );
@@ -329,10 +328,10 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
     const keep = setTimeout(() => {
       rowsKept.current = true;
       if (rememberedStep && sameModelRows(rememberedStep, step)) return;
-      void invoke("remember_model_rows", { agent: tab.cmd, rows: modelRowsOf(step) }).catch(() => {});
+      void invoke("remember_model_rows", { agent: tab.cmd, scope, rows: modelRowsOf(step) }).catch(() => {});
     }, KEEP_SETTLE_MS);
     return () => clearTimeout(keep);
-  }, [picking, rememberRows, step, effortFor, openCodeTab, rememberedStep, tab.cmd]);
+  }, [picking, rememberRows, step, effortFor, openCodeTab, rememberedStep, tab.cmd, scope]);
   const answerNow = useRef(answerLive);
   answerNow.current = answerLive;
   // The live list is in: answer the remembered row held for it, by label —

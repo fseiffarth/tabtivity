@@ -20,6 +20,8 @@ import { inputFrameStart } from "../../terminal/statusLine";
 import { useChatUncommitted } from "../../terminal/chatUncommitted";
 import { transcriptTurns, type TranscriptTurn } from "../../terminal/transcriptTurns";
 import { openSubagent, stepSibling, type SubagentStep } from "../../terminal/subagents";
+import { isViewedSubagent, viewedSubagent } from "../../terminal/subagentInput";
+import { agentFamily } from "../../terminal/composer";
 import { withPending, type PendingPrompt } from "../../terminal/pendingPrompts";
 import { outboxPosts } from "../../terminal/outboxPosts";
 import { inboxLeaves, useInboxFiles } from "../../terminal/inboxRefs";
@@ -246,11 +248,15 @@ export function useSessionEntries({
     [sessionEntries],
   );
   const namedFiles = useNamedFiles(tab.id, answerTexts, filesInReach);
-  const changed = useChangedFiles(tab.id, filesInReach);
-  /** Every file of the conversation, for the list beside the subagent index. */
+  // Until the desktop reads the new session, its changes are the cleared one's.
+  const changed = useChangedFiles(tab.id, filesInReach && sinceClear === null);
+  /** Every file of this conversation, for the list beside the subagent index:
+   * of what the tab sent, only the posts the chat shows — a send from an
+   * earlier conversation of the same tab is not this chat's. */
+  const postedFiles = useMemo(() => [...chatPosts.values()].flat().flatMap((post) => post.files), [chatPosts]);
   const chatFiles = useMemo(
-    () => sentFiles(outbox, promptLeaves, inboxFiles, changed.files, namedFiles),
-    [outbox, promptLeaves, inboxFiles, changed.files, namedFiles],
+    () => sentFiles(postedFiles, promptLeaves, inboxFiles, changed.files, namedFiles),
+    [postedFiles, promptLeaves, inboxFiles, changed.files, namedFiles],
   );
   return { cliReady, sessionWaiting, sinceClear, storedEntries, sessionEntries, sessionAgents, earlierAgents, agentsEarlier, queuedShown, chatPosts, inboxFiles, chatFiles, namedFiles, changedMore: changed.more };
 }
@@ -259,8 +265,8 @@ export function useSessionEntries({
  * up and across subagents. */
 export function useSubagentReader({
   tab, readableHost, view, setAtBottom, atBottomRef, pending, setSubagentNote, setSubagentPath,
-  setSubagentListOpen, setSentListOpen, openStep, subRead, setSubRead, setSubLimit, subLimit,
-  restoreScroll, sessionEntries,
+  closeChatIndex, openStep, subRead, setSubRead, setSubLimit, subLimit,
+  restoreScroll, sessionEntries, screenRows,
 }: {
   tab: TabRow;
   readableHost: RefObject<HTMLElement>;
@@ -270,8 +276,7 @@ export function useSubagentReader({
   pending: PendingPrompt[];
   setSubagentNote: Dispatch<SetStateAction<"" | TranslationKey>>;
   setSubagentPath: Dispatch<SetStateAction<readonly SubagentStep[]>>;
-  setSubagentListOpen: Dispatch<SetStateAction<boolean>>;
-  setSentListOpen: Dispatch<SetStateAction<boolean>>;
+  closeChatIndex: () => void;
   openStep: SubagentStep;
   subRead: { token: string; transcript: SessionTranscript; } | null;
   setSubRead: Dispatch<SetStateAction<{ token: string; transcript: SessionTranscript; } | null>>;
@@ -279,6 +284,8 @@ export function useSubagentReader({
   subLimit: number;
   restoreScroll: MutableRefObject<number | null>;
   sessionEntries: TranscriptEntry[];
+  /** The pane's screen as drawn (`bufferRows`). */
+  screenRows: MutableRefObject<() => string[]>;
 }) {
   /** The open subagent's conversation, once read. */
   const subToken = openStep?.token;
@@ -292,8 +299,6 @@ export function useSubagentReader({
     setSubagentPath([]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.id]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { setSubagentListOpen(false); setSentListOpen(false); }, [tab.id]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setSubagentNote(""); }, [tab.id, subToken]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -326,12 +331,49 @@ export function useSubagentReader({
     if (!token) return;
     const top = readableHost.current?.scrollTop ?? 0;
     setSubagentPath((path) => openSubagent(path, { token, task: turn.text, role: turn.role, ...(turn.workflow ? { workflow: true } : {}) }, levelEntriesRef.current, top));
-    if (!fromList) setSubagentListOpen(false);
+    if (!fromList) closeChatIndex();
     // A conversation opens on its newest turn, as the session does.
     atBottomRef.current = true;
     setAtBottom(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Focus follows the terminal: a subagent viewed in Claude's own agent list
+  // (Terminal view) is the one Focus opens when it is chosen, so what is read
+  // and typed there is that subagent's. Read once per choice, off the screen;
+  // opened once the session's records hold it.
+  const claude = tab.kind === "agent" && agentFamily(tab.agent_label ?? tab.label) === "claude";
+  const [following, setFollowing] = useState<{ task: string; role: string } | null>(null);
+  useEffect(() => {
+    if (view !== "focus" || !claude) {
+      setFollowing(null);
+      return;
+    }
+    let rows: string[] = [];
+    try {
+      rows = screenRows.current();
+    } catch {
+      // No screen drawn yet: nothing is viewed in it.
+    }
+    setFollowing(viewedSubagent(rows));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, claude, tab.id]);
+  useEffect(() => {
+    if (!following || sessionEntries.length === 0) return;
+    setFollowing(null);
+    // A Workflow run is no subagent the agent list views; a description
+    // shared by two leaves Focus where it was.
+    const found = sessionEntries.filter((entry) => entry.kind === "agent" && entry.subagent && !entry.workflow
+      && isViewedSubagent(following, { task: entry.text, role: entry.role }));
+    const token = found.length === 1 ? found[0].subagent : undefined;
+    if (!token) return;
+    const entry = found[0];
+    setSubagentPath((path) => (path.length === 1 && path[0].token === token ? path
+      : openSubagent([], { token, task: entry.text, role: entry.role }, sessionEntries, -1)));
+    closeChatIndex();
+    atBottomRef.current = true;
+    setAtBottom(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [following, sessionEntries]);
   const openListedSubagent = (entry: TranscriptEntry) => {
     if (!entry.subagent) return;
     openSubagentTurn(entry, true);

@@ -183,6 +183,48 @@ describe(`${BRAND.display} Mobile readable terminal view`, () => {
     expect(screen.lines[1].spans.map((span) => span.text).join("")).toBe("Worked for 2m 10s");
   });
 
+  it("keeps the rows a full-width rule was printed against apart", () => {
+    // Nothing between a rule filling its row and the next row but the terminal's
+    // own wrap: xterm marks that row wrapped, yet it never continued the rule.
+    const rows = readableScreen(plainBuffer([
+      "1 more notice hidden",
+      "",
+      `${"─".repeat(60)} my-project ─`,
+      `${WRAP}❯ Try "edit <filepath> to..."`,
+      "─".repeat(76),
+      `${WRAP}  ⏵⏵ auto mode on (shift+tab to cycle)`,
+    ])).lines;
+    expect(rows.map((line) => line.text)).toEqual([
+      "1 more notice hidden",
+      "",
+      "my-project",
+      "❯ Try \"edit <filepath> to...\"",
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    ]);
+    expect(rows[2].frameText).toBeDefined();
+    expect(rows[4].afterRule).toBe(true);
+  });
+
+  it("keeps a footer's rows apart where ConPTY sent them padded with no line break", () => {
+    // OpenCode 2.2.0's mini on Windows, as captured: only the terminal's own
+    // wrap stands between these rows.
+    const pad = (text: string) => text.padEnd(40);
+    const rows = readableScreen(plainBuffer([
+      pad("Build · gemma4:e4b · 953ms"),
+      `${WRAP}${pad("")}`,
+      `${WRAP}${pad("┃  Ask anything…")}`,
+      `${WRAP}${pad("")}`,
+      `${WRAP}${pad("Build · gemma4:e4b · 2.1K (2%) · Ollama")}`,
+    ])).lines.map((line) => line.text.trim()).filter(Boolean);
+    expect(rows[0]).toBe("Build · gemma4:e4b · 953ms");
+    expect(rows[rows.length - 1]).toBe("Build · gemma4:e4b · 2.1K (2%) · Ollama");
+  });
+
+  it("still joins a line that ran over the edge, a blank at the wrap included", () => {
+    const rows = readableScreen(plainBuffer(["one two ", `${WRAP}three`])).lines;
+    expect(rows.map((line) => line.text)).toEqual(["one two three"]);
+  });
+
   it("keeps a divider label's style without its bright border spans", () => {
     const [line] = readableScreen(styledBuffer([
       { text: "─ ", fg: 15 },
@@ -397,6 +439,58 @@ describe(`${BRAND.display} Mobile side panel`, () => {
       "$ a command printed the whole width before the panel opened",
       "● Wrote the plan.", "", "How should homes sync, so", "nothing leaks?", "🖐️ Shipped", "❯", "  ⏵⏵ auto mode on",
     ]);
+  });
+
+  it("cuts the 2.1.318 diff panel, whose divider stops above the full-width input box", () => {
+    // Captured off Claude Code 2.1.318 (172 columns, narrowed): the `│` runs
+    // from the top row down to the row above the box's top edge; the box, the
+    // footer and the panel's headline row are what was left glued before.
+    const pane = (left: string, right = "") => `${left.padEnd(30)}│${right.padEnd(20)}`;
+    const rows = [
+      pane("", "                   ✕"),
+      pane("● Ran the tests."),
+      pane(""),
+      pane("  Ran 1 shell command"),
+      pane("", "  No changes this"),
+      pane(""),
+      pane("✻ Brewed for 12s"),
+      pane(""),
+      pane("", "+4 files edited"),
+      "─".repeat(51),
+      "❯ ",
+      "─".repeat(51),
+      "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines).toEqual(["● Ran the tests.", "", "  Ran 1 shell command", "", "✻ Brewed for 12s", "", "❯", "  ⏵⏵ auto mode on (shift+tab to cycle)"]);
+  });
+
+  it("cuts the 2.1.318 diff panel above a dialog drawn across the whole screen", () => {
+    const pane = (left: string, right = "") => `${left.padEnd(30)}│${right.padEnd(20)}`;
+    const rows = [
+      ...Array.from({ length: 8 }, (_, index) => pane(`     ${index + 1}`, index === 4 ? "  No changes this" : "")),
+      pane("✻ Sautéed for 6s"),
+      "▔".repeat(51),
+      "   Select login method:   (a row that runs past the divider column)",
+      "   ❯ 1. Claude account with subscription",
+      "   Esc to cancel",
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines.join("\n")).not.toMatch(/No changes|│/u);
+    expect(lines.slice(-3)).toEqual(["   Select login method:   (a row that runs past the divider column)", "   ❯ 1. Claude account with subscription", "   Esc to cancel"]);
+  });
+
+  it("leaves a table's columns whole above the input box: its bottom is a junction, not the box's rule", () => {
+    const rows = [
+      "┌──────────────────────────┬──────────┐",
+      ...Array.from({ length: 8 }, (_, index) => `│ row ${index}                    │ value    │`),
+      "└──────────────────────────┴──────────┘",
+      "─".repeat(60),
+      "❯ ",
+      "─".repeat(60),
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines.map((row) => row.text);
+    expect(lines[0]).toBe("row 0                    │ value");
   });
 
   it("leaves a table's columns whole: they never run through every row", () => {

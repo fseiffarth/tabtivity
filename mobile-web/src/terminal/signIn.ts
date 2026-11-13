@@ -431,6 +431,7 @@ const SIGNED_OUT_WINDOW = 15;
 /** What the CLIs print when a turn fails for want of a login, or when they
  * open on their own sign-in choice. */
 const SIGNED_OUT = [
+  /\b(?:login|session) (?:has )?expired\b/iu,
   /\bnot (?:signed|logged) in\b/iu,
   /\bplease run \/(?:login|auth)\b/iu,
   /\binvalid api key\b/iu,

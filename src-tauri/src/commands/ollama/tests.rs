@@ -1,5 +1,25 @@
 use super::*;
 
+/// A restart names Ollama's own programs exactly, never a pattern that could
+/// reach some other process.
+#[test]
+fn a_restart_stops_only_ollamas_own_programs() {
+    for (bin, args) in STOP_UNOWNED_SERVER {
+        assert!(matches!(*bin, "taskkill" | "pkill"));
+        assert!(args.last().unwrap().to_lowercase().starts_with("ollama"));
+    }
+}
+
+/// A spawned server only ever raises Ollama's default: a GPU large enough for a
+/// higher one keeps it, and no GPU at all still needs room for an agent's prompt.
+#[test]
+fn a_spawned_server_raises_only_the_small_gpu_context_default() {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    assert_eq!(spawned_context_length(0), Some(32_768));
+    assert_eq!(spawned_context_length(12 * GIB), Some(32_768));
+    assert_eq!(spawned_context_length(24 * GIB), None);
+}
+
 /// An interrupted-pull list that does not parse keeps its entries: a new
 /// pull fails to record itself rather than replacing them with its own.
 #[test]
@@ -270,8 +290,13 @@ fn the_manifest_url_defaults_the_namespace_and_the_tag() {
     );
     // An explicit namespace is kept rather than nested under `library/`.
     assert_eq!(
+        registry_manifest_url("someone/model:q4").unwrap(),
+        "https://registry.ollama.ai/v2/someone/model/manifests/q4"
+    );
+    // A Hugging Face model is read where Ollama pulls it from.
+    assert_eq!(
         registry_manifest_url("hf.co/someone/model:q4").unwrap(),
-        "https://registry.ollama.ai/v2/hf.co/someone/model/manifests/q4"
+        "https://huggingface.co/v2/someone/model/manifests/q4"
     );
 }
 
@@ -321,6 +346,35 @@ fn the_installed_version_is_found_whatever_else_the_command_printed() {
         Some("0.32.5")
     );
     assert_eq!(parse_version("no version here").as_deref(), None);
+}
+
+#[test]
+fn a_stored_release_check_is_compared_against_the_installed_version() {
+    use crate::services::agent_latest::Checked;
+    let checked = Checked { latest: Some("0.35.1".into()), error: None, checked_at: 1 };
+    let mut status = OllamaVersionStatus { current: "0.30.0".into(), ..Default::default() };
+    apply_checked(&mut status, &checked);
+    assert_eq!((status.latest.as_str(), status.update_available), ("0.35.1", true));
+
+    // Upgraded since the check: the same answer is no longer an update.
+    let mut status = OllamaVersionStatus { current: "0.35.1".into(), ..Default::default() };
+    apply_checked(&mut status, &checked);
+    assert!(!status.update_available);
+
+    // A failed check keeps the release seen before, and says why.
+    let failed = Checked { latest: Some("0.35.1".into()), error: Some("down".into()), checked_at: 2 };
+    let mut status = OllamaVersionStatus { current: "0.30.0".into(), ..Default::default() };
+    apply_checked(&mut status, &failed);
+    assert!(status.update_available);
+    assert_eq!(status.error.as_deref(), Some("down"));
+
+    // Nothing ever answered, or Ollama's version unreadable: no update.
+    let mut status = OllamaVersionStatus { current: "0.30.0".into(), ..Default::default() };
+    apply_checked(&mut status, &Checked::default());
+    assert!(status.latest.is_empty() && !status.update_available);
+    let mut status = OllamaVersionStatus::default();
+    apply_checked(&mut status, &checked);
+    assert!(!status.update_available);
 }
 
 #[test]
@@ -1674,4 +1728,23 @@ fn first_available_model() -> Option<String> {
         .as_array()?
         .iter()
         .find_map(|m| Some(m["name"].as_str()?.to_owned()))
+}
+
+/// H1: a registry body is refused on a declared length over the cap before
+/// it is read, and while streaming once the running total would pass it.
+#[test]
+fn a_registry_body_is_capped_by_its_declared_length_and_while_streaming() {
+    assert!(declared_len_fits(None, 10).is_ok());
+    assert!(declared_len_fits(Some(10), 10).is_ok());
+    assert!(declared_len_fits(Some(11), 10).unwrap_err().contains("too large"));
+    assert!(declared_len_fits(Some(u64::MAX), REGISTRY_MAX_BYTES).is_err());
+
+    let mut body = Vec::new();
+    push_capped(&mut body, b"12345", 10).unwrap();
+    push_capped(&mut body, b"67890", 10).unwrap();
+    assert_eq!(body, b"1234567890");
+    // One byte past the cap is refused and leaves the body as it was.
+    assert!(push_capped(&mut body, b"x", 10).unwrap_err().contains("too large"));
+    assert_eq!(body.len(), 10);
+    assert!(push_capped(&mut Vec::new(), &[0; 11], 10).is_err());
 }

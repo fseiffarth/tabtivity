@@ -88,7 +88,14 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    - switch off → the list is ignored, and `set_*_mobile_access(false)`
      removes both keys.
 
-Root has no per-phone list (out of scope).
+Root has a per-phone list of its own, `tabtivity_mobile_host.root_devices`
+beside the `root_access` switch in `settings.json`, and it is **opt-in**: absent,
+empty or malformed is no phone, so a phone paired later is off root until the
+user ticks it (Settings → Mobile → the root row's phones button, or the phone's
+own panel). `discovery::root_devices` feeds the same `ScopeSource.devices` the
+other lists do, so the catalog, `pty_bridge`'s re-check and `phone_origin` all
+apply it. The list narrows the switch and the review gate; it never opens
+either. The phone draws no root row: the logo on its start page opens it.
 
 ## Where it is enforced
 

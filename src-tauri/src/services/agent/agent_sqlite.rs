@@ -38,7 +38,7 @@ impl Limits {
 /// that runs without a deadline of its own) refuses the store.
 pub fn open_read(file: &HomeFile, limits: Limits, tables: &[&str]) -> Option<Connection> {
     file.open_read()?;
-    let conn = Connection::open_with_flags(file.path(), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW).ok()?;
+    let mut conn = Connection::open_with_flags(file.path(), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW).ok()?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false).ok()?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true).ok()?;
     conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, limits.max_len).ok()?;

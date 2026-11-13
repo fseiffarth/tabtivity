@@ -535,6 +535,60 @@ fn git_diff_file_untracked_uses_no_index_fallback() {
 }
 
 #[test]
+fn git_diff_file_staged_only_change_shows_the_index_diff() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping git_diff_file_staged_only_change_shows_the_index_diff");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    init_repo(dir);
+
+    fs::write(dir.join("kept.txt"), "one\n").expect("write");
+    for args in [&["add", "kept.txt"][..], &["commit", "-m", "init"][..]] {
+        let ok = crate::paths::command_no_window("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("git runs")
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    }
+    // Edit and stage it: the working tree now equals the index, so the plain
+    // `git diff` is empty — the staged change must still show.
+    fs::write(dir.join("kept.txt"), "one\nstaged line\n").expect("rewrite");
+    let ok = crate::paths::command_no_window("git")
+        .args(["add", "kept.txt"])
+        .current_dir(dir)
+        .output()
+        .expect("git add runs")
+        .status
+        .success();
+    assert!(ok, "git add failed");
+
+    let diff =
+        git_diff_file_blocking(dir.to_string_lossy().to_string(), "kept.txt".to_string())
+            .expect("git_diff_file should succeed");
+    assert!(diff.contains("staged line"), "expected the staged change, got: {diff}");
+}
+
+#[test]
+fn git_diff_file_outside_a_repository_says_so() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping git_diff_file_outside_a_repository_says_so");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path();
+    fs::write(dir.join("loose.txt"), "not under git\n").expect("write");
+
+    let err = git_diff_file_blocking(dir.to_string_lossy().to_string(), "loose.txt".to_string())
+        .expect_err("a file outside git has no diff");
+    assert_eq!(err, NOT_A_REPO);
+}
+
+#[test]
 fn parse_blame_porcelain_maps_lines_and_caches_metadata() {
     // Two commits: `aaa…` owns lines 1 & 3 (its metadata appears once, on
     // line 1, and is reused for line 3), `bbb…` owns line 2, and line 4 is

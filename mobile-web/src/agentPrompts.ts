@@ -79,3 +79,20 @@ export function promptClock(at: string | undefined, now = new Date()): string {
     && when.getDate() === now.getDate();
   return sameDay ? time : `${when.toLocaleDateString([], { month: "2-digit", day: "2-digit" })} ${time}`;
 }
+
+/** How many sent prompts a card shows before "n earlier prompts" on a tablet:
+ * the newest and two older ones. A draft typed on the phone is the newest
+ * entry and takes one of the three places. */
+export const TABLET_PROMPT_CAP = 3;
+
+/**
+ * Which of a card's sent prompts (`count`, newest first) show on a tablet.
+ * `shown` is how many lead the list and `hidden` how many wait behind the
+ * "earlier prompts" control; expanded, or on a phone (`cap` off), nothing waits.
+ */
+export function capPrompts(count: number, opts: { capped: boolean; hasDraft: boolean; expanded: boolean }): { shown: number; hidden: number } {
+  if (!opts.capped || opts.expanded) return { shown: count, hidden: 0 };
+  const room = Math.max(1, TABLET_PROMPT_CAP - (opts.hasDraft ? 1 : 0));
+  const shown = Math.min(count, room);
+  return { shown, hidden: count - shown };
+}

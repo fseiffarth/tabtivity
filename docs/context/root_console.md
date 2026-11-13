@@ -39,9 +39,10 @@ floats over a project. The drag keeps its state local rather than in
 It is a window, not a dialog, so it behaves like one. The title bar is the move
 handle (a press on a tab or a control keeps its own meaning), eight grips on the
 edges and corners resize it, and ⤢ fills the window — as does a double-click on
-the bar. The frame lives in `stores/rootOverlay`, in localStorage rather than
-`settings.json`: where a window sits on one desk is not a preference worth
-syncing. It is re-clamped against the window it actually opens in, so a console
+the bar. The frame is `useFloatingFrame` (the hook the mail, calendar, to-do and
+models overlays use; the pure math is `lib/window/floatingFrame.ts`), kept in
+localStorage (`rootConsoleFrame`) rather than `settings.json`: where a window
+sits on one desk is not a preference worth syncing. It is re-clamped against the window it actually opens in, so a console
 sized on an external display is still reachable on the laptop panel, and an edge
 dragged past the minimum pins the opposite edge instead of pushing the console
 across the screen. An untouched console keeps the size the stylesheet gives it.
@@ -115,20 +116,70 @@ becomes the active scope:
   switch.
 
 With no project open, `CenterPanel` still shows the root scope. While the
-overlay is up, the panel's copies of the root panes stand down: two visible
+window is up, the panel's copies of the root panes stand down: two visible
 views of one PTY would take turns resizing it.
 
-## Docked in the app overlays
+## Views: one window, ten
+
+The console's window is also the cockpit's, and the apps' and system pages'
+(`docs/context/cockpit.md`). A view strip in the title bar reads Now, Projects,
+Tonight, a divider, Mail, Calendar, To-do, a divider, Agents, Models, Machines, a
+divider, then **Root** (the star): the console proper, this whole document. It is
+icon + label at 1180 px and up, icons only from 820 px, and the current tab plus a
+▾ menu under that. `stores/rootOverlay` holds `view` (`WindowView`, `lib/cockpit/views`)
+next to `open`; `show()` always means Root, `openView(view)` opens any other view
+(and never hydrates root), `rootViewShown` / `viewShown` ask whether a view is on
+screen (as against `open`, "is the window up"). Only the shown view mounts (Mail's
+unsent composers excepted).
+
+The pieces, and the rules they keep:
+
+- **`RootOverlay.tsx` is the shell, `RootView.tsx` the console.** The shell owns the
+  backdrop, the frame, the title bar, the Escape rule and `useRootMcpRights`; the
+  view owns the layout tree, pane layer, `GroupStrip`, `+` menu, file column and
+  drag. The view portals its strip, ⚿ badge and ◫ toggle into the shell's bar
+  slots (`RootBarSlots`): they sit in a sub-bar under the
+  title bar (a split layout keeps a strip per subwindow and has no sub-bar, so
+  there they stay in the title bar), so the title bar never changes between
+  views.
+- **One ✓ Approvals pill** (`OverlayApprovals`, the whole queue, with the review
+  gate's advisory), in the title bar of every view.
+- **Escape** is one rule in the shell: not from a pane (`.root-overlay-region`), the
+  cockpit's detail pane or an app view's docked agent column (an agent's), not
+  while a menu, dialog, drag, or the ✓ panel is up (`busyRef`, `framing`,
+  `defaultPrevented`).
+- **Entry points** all land on Root and never switch the workspace to the root
+  scope: Ctrl+Shift+R, `openTabInRootConsole`, `jumpToTab(ROOT_SCOPE, key)`, a
+  roster row's Enter, the Prompt chart (`openPromptChartTab`), the phone's
+  Activate. The header gauge, steering U and the box chip open Now.
+- **Ownership.** A root tab is drawn by the Root view, by the Now detail pane (as
+  a roster row), or by an app view's docked agent column, never two of them (one
+  view is shown at a time, so there is nothing to stand down for). Root's slots in
+  `CenterPanel` stand down for `open` (the window covers them) and wake by what is
+  drawn.
+- **Root's Needs-you rail**: a 40 px icon rail of live-store
+  groups beside the console (not drawn at all while nothing waits; the "Needs you N" chip
+  stands in the bar then, the way to the groups that need a read), the full
+  `CockpitRail` on a click (fold remembered; resizable by Now's grip, width
+  remembered); the Root tab wears the lamp of root's tabs (asking count, working
+  ring). Neither reads anything the header badge does not. Narrower than 820 px the
+  column is not mounted and Now's "Needs you N" chip sits in the window's bar
+  instead (the sub-bar; the title bar's cluster in a split Root).
+- **The empty Root card** offers "Start <agent> in Root" (the `+` menu's default
+  root-allowed agent, one click).
+- **Steering** walks Root's tabs while the Root view is up (`steeringScope`).
+
+
+## Docked in the app views
 
 The root agents are the only ones holding the calendar, board and mail tools,
-and the console that holds them floats over the very calendar they write to.
-Typing "a meeting on Friday at 14:00" and watching it land needs the agent and
-the app in one view. Ctrl+1–9 inside the mail, calendar or to-do overlay (or
-the ✦ in its title bar) therefore dock a root agent in a column on the overlay's
-right (`OverlayAgentColumn`, `useOverlayAgent`, `stores/overlayAgent`). A
-column, not the console beside the overlay: one frame moves, fills and closes as
-one, where two floating windows would each need their own placement, and the
-◫ file column already set the pattern (the resize edge is its handle).
+and the console that holds them is a view of the same window as the calendar they
+write to. Typing "a meeting on Friday at 14:00" and watching it land needs the
+agent and the app in one view. Ctrl+1–9 inside the Mail, Calendar or To-do view
+(or the ✦ in the window's title bar, portaled in by `ViewBarAgentSlot`) therefore
+dock a root agent in a column on the view's right (`OverlayAgentColumn`,
+`useOverlayAgent`, `stores/overlayAgent`). A column, not the Root view beside the
+app: the ◫ file column already set the pattern (the resize edge is its handle).
 
 The tab still lives in root. It is added through `addTabToRoot`, the
 hydrate-first door `openTabInRootConsole` now wraps, minus the `show`. Its PTY
@@ -141,10 +192,12 @@ console's own `+` menu's (`useAddTabMenuData(ROOT_SCOPE)` →
 Root-chip agent behind it (the default lacks the chip, no custom order) becomes
 a hint naming the switch rather than a key silently passed on.
 
-**One visible view per PTY**, as with the console over `CenterPanel`:
+**One visible view per PTY** holds by construction: the window shows one view at
+a time, so the column (in an app view) never meets Root's layout or the Now
+detail pane. The two stand-downs that existed for the overlays ("Shown in the root
+console" in the column, "Shown in the {app} overlay" in the detail pane) are gone.
+What is left:
 
-- Console open → the column shows "Shown in the root console" instead of the
-  pane. A chord answered by an overlay closes the console, so it shows.
 - The tab in a popped-out root subwindow → "Shown in a popout window". That
   webview's stores are out of reach, so any tab in a detached root group
   counts, and ↗ is dropped: the console draws only the in-window layout.
@@ -153,11 +206,11 @@ a hint naming the switch rather than a key silently passed on.
   `!(rootConsoleOpen && scopeKey === ROOT_SCOPE)` rule. With no project open,
   that copy would otherwise be on screen too.
 
-**Escape belongs to the agent.** Each overlay closes on a window-level Escape;
+**Escape belongs to the agent.** The window closes on a window-level Escape;
 that handler ignores events from inside `.overlay-agent-column`, the console's
 `regionRef` rule. Without it Claude's cancel key would close the app.
 
-**Reuse.** One docked agent per overlay, session-only. Ctrl+N on a closed column
+**Reuse.** One docked agent per app view, session-only. Ctrl+N on a closed column
 re-shows the docked tab when it came from the same `+` menu row and its program
 still runs; anything else mints a new root tab, and the one it replaces keeps
 running in the console. The row, not the command, is the identity: a custom
@@ -166,12 +219,13 @@ tab stays in root (it prints `[process exited]`), so the dock store keeps it;
 an exit watcher on the terminal bus, armed per docked key at dock time, keeps
 the reuse rule from putting that corpse back. A `terminal-ready` revives it.
 
-**Chord routing.** `frontAppOverlay` picks the overlay: one counts while its
-store has it open and its settings gate is on; the one holding focus wins, else
-the topmost by `AppShell` mount order (board, calendar, mail). `useKeyboard`
-then dispatches a cancelable `OVERLAY_AGENT_EVENT` (`requestOverlayAgent`), the
-`requestNewTab` pattern. An unanswered request passes the key on, never into a
-workspace tab hidden under the overlay. Shell and monitor chords are unchanged.
+**Chord routing.** `shownApp` (`lib/shortcuts/appViews`) is the shown view, if it
+is an app and its settings gate is on. `useKeyboard` then dispatches a cancelable
+`OVERLAY_AGENT_EVENT` (`requestOverlayAgent`), the `requestNewTab` pattern, and
+leaves the window up so the column shows. An unanswered request passes the key
+on, never into a workspace tab hidden under the window. Shell and monitor chords
+are unchanged. Mail's hidden-but-mounted view (a composer waiting) answers
+nothing and draws no column.
 
 **Arrivals.** A row an agent's write adds flies into the calendar views and the
 board (`stores/calendar/arrivals`: a 450 ms `cal-arrive` keyframe, the mark held
@@ -185,8 +239,8 @@ it, reading the store before the merge:
 - Not a delete followed by an upsert of the same id: that is a move to
   another calendar.
 
-Under the default review level the write lands on the user's ✓ in the overlay's
-own Approvals pill, so the entrance plays on approval, in the same window. Mail
+Under the default review level the write lands on the user's ✓ in the window's
+Approvals pill, so the entrance plays on approval, in the same window. Mail
 drafts get no entrance: an agent draft always lands unfiled in the approvals
 list and reaches "Drafted by agents" only through that ✓, so the user's own
 click is the arrival.
@@ -827,6 +881,11 @@ So root is a phone scope, behind a line drawn where the rights actually are:
   `ScopeKind::Root` from `paths::root_work_dir()` and `sessions/root/`. A
   hand-edited *project record* using the id `root` is still refused: it would
   borrow that session directory and walk past the gate below.
+- **Per phone, default none.** `tabtivity_mobile_host.root_devices` names the
+  phones that may open root (`mobile_access.md`); with the switch on and no
+  list no phone does, and one paired later starts off root. On the phone root is
+  no row of the project list: the logo at the top left of the start page opens
+  it (a dot while proposals wait).
 - **The device that drives the agent never approves its proposals.** Approve,
   reject, undo, the session grants and Settings are Tauri commands with no
   phone route. The phone's root row carries `pending_reviews`, a count.

@@ -1,5 +1,5 @@
 import { CommandPalette } from "./CommandPalette";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -55,12 +55,15 @@ import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { usePaneRects } from "./usePaneRects";
 import { useDividerDrag } from "./useDividerDrag";
 import { TabHoverCard } from "../tabs/TabHoverCard";
+import { TabMemberChip, memberTableOf, tabMemberInfo } from "../tabs/TabMemberChip";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { WindowControls } from "../header/WindowControls";
-import { DragGhost, SplitPreviewOverlay } from "./CenterPanel";
+import { DragGhost, FocusFrameOverlay, SplitPreviewOverlay } from "./CenterPanel";
 import { TabDropPlaceholder } from "../tabs/TabDropPlaceholder";
 import { NewTabMenu } from "../tabs/NewTabMenu";
+import { NewTabKeys } from "./RootNewTabKeys";
 import { agentMachines } from "../tabs/agentMenuEntries";
+import { isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { CustomAgentDialog } from "../tabs/CustomAgentDialog";
 import { TabColorPicker } from "../tabs/TabColorPicker";
@@ -73,6 +76,7 @@ import { useDialogs } from "../common/PromptDialogs";
 import { tabColorCss, type TabColor } from "../../lib/theme/tabColors";
 import { pickEdge } from "../tabs/dragGeometry";
 import {
+  actionMatches,
   chordMatches,
   resolveChord,
   type ShortcutAction,
@@ -87,6 +91,8 @@ import { isPaneTerminalTarget, terminalMayTakeChord } from "../../lib/shortcuts/
 import { useDragStore } from "../../stores/drag/drag";
 import { useTabLandStore } from "../../stores/drag/tabLand";
 import { useSettingsStore } from "../../stores/settings";
+import { usePopoutViewStore } from "../../stores/popoutView";
+import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import {
   DEFAULT_MIN_SUBWINDOW_PX,
   allGroups,
@@ -102,10 +108,10 @@ import {
   type TabEntry,
   type TabLocation,
 } from "../../stores/tabs";
-import { dividerFraction } from "../../stores/tabs/layoutTree";
+import { dividerFraction, stepOrderedTab } from "../../stores/tabs/layoutTree";
 import { attentionStateClass, busyStateClass, useActivityStore } from "../../stores/activity";
 import { resolveLocalMirror, resolveProjectDirectory } from "../../types";
-import { detachedNewTabCwd, type DetachedRemoteInfo } from "../../stores/detached";
+import { detachedNewTabCwd, detachedNewTabTarget, type DetachedRemoteInfo } from "../../stores/detached";
 import {
   TabAgentModeMarks,
   TabSourceBadge,
@@ -126,7 +132,9 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ScrollingTabStrip } from "../tabs/ScrollingTabStrip";
 import { noteTabClose } from "../../lib/tabs/closedTabSlot";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
-import { ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
+import { BoxSwatch, ClockIcon, CloseIcon, GripIcon, PencilIcon, WindowIcon } from "../common/icons/Icon";
+import { boxScopeId } from "../../stores/boxes";
+import { boxColor } from "../../lib/theme/boxColor";
 
 
 interface Props {
@@ -147,9 +155,6 @@ interface Props {
    *  popout must stop streaming its terminals and polling its file views — panes
    *  compose their own visibility with this. */
   windowVisible?: boolean;
-  /** Report which pane is current, so the window's store seam can land a new tab
-   *  (a Ctrl+clicked link, an install) in the pane the user is working in. */
-  onFocusedGroup?: (groupId: string | null) => void;
   onActivate: (key: string) => void;
   onClose: (key: string) => void;
   /** Dock the WHOLE popout back into the main window's tiled layout (#237) —
@@ -191,7 +196,13 @@ interface Props {
    *  key/own the PTY, so it streams the resolved payload to the main window, which
    *  creates the tab and re-seeds. A side `edge` carves a NEW pane at that edge (a
    *  file dropped on a body edge); omitted/"center" appends to the group. */
-  onAddTab: (tab: Omit<TabEntry, "key">, targetGroupId: string, edge?: DropEdge) => void;
+  onAddTab: (
+    tab: Omit<TabEntry, "key">,
+    targetGroupId: string,
+    edge?: DropEdge,
+    /** `besideActive`: right of the group's active tab (steering's new tabs). */
+    opts?: { besideActive?: boolean },
+  ) => void;
   /** Toggle/resize a group's docked file-viewer column (the per-subwindow right
    *  file viewer): applied optimistically popout-side and streamed to the main
    *  window so the flag persists (and survives a dock-back). */
@@ -217,7 +228,6 @@ export function DetachedCenterPanel({
   tabs,
   remoteInfo,
   windowVisible = true,
-  onFocusedGroup,
   onActivate,
   onClose,
   onDockWindow,
@@ -241,7 +251,9 @@ export function DetachedCenterPanel({
   // `TabBar` questions word for word. Mounted in this window's own tree, so the
   // portal lands in the popout's document, not the main window's.
   const { promptText, dialogs } = useDialogs();
-  const [addMenu, setAddMenu] = useState<{ groupId: string; x: number; y: number } | null>(null);
+  // `besideActive`: opened by steering's + key, so what it opens lands right of
+  // the active tab (as the main window's bar does).
+  const [addMenu, setAddMenu] = useState<{ groupId: string; x: number; y: number; besideActive?: boolean } | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
   const [tabMenu, setTabMenu] = useState<{ key: string; x: number; y: number } | null>(null);
@@ -292,6 +304,13 @@ export function DetachedCenterPanel({
   const hostPinned = isHostPinned(remoteInfo?.project);
   const primaryHost = remoteInfo?.primaryHost;
   const computeHosts = remoteInfo?.computeHosts;
+  // A box's member table for the tabs' member chips, from the seed (the popout
+  // is inert to the boxes and projects stores; a member added later shows no chip
+  // here until a reseed).
+  const memberTable = useMemo(
+    () => memberTableOf(scope, remoteInfo?.box ? [remoteInfo.box] : [], remoteInfo?.boxMembers ?? []),
+    [scope, remoteInfo?.box, remoteInfo?.boxMembers],
+  );
   // One bar element per group, so a per-tab drag can hit-test the bar it's over.
   const barRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   // One body element per group, for resolving an edge-split drop target.
@@ -346,26 +365,29 @@ export function DetachedCenterPanel({
   const landedNonce = useTabLandStore((s) => s.landed?.nonce ?? 0);
   const clearLanded = useTabLandStore((s) => s.clear);
   const byKey = new Map(tabs.map((t) => [t.key, t] as const));
+  // A group's tab folders, active first: where its new tabs start
+  // (`detachedNewTabCwd`, `detachedNewTabTarget`).
+  const groupCwdsOf = (g: GroupNode) => [
+    byKey.get(g.activeKey ?? g.tabKeys[0] ?? "")?.cwd,
+    ...g.tabKeys.map((k) => byKey.get(k)?.cwd),
+  ];
   // Which group inside this popout is "current". A split popout otherwise
   // rendered every pane as `.focused` with no active-pane marker; mirror the main
   // window, where `focusedGroupId` drives the `.focus-frame` accent outline. The
   // detached window is inert to the main tabs store (separate JS heap, layout
-  // streamed via props), so focus is tracked locally here.
-  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
+  // streamed via props), so focus lives in this heap's popout view
+  // (`stores/popoutView`), which steering and the window's store seam (#231: a
+  // link opened from a pane lands in that pane) read too. The view follows the
+  // streamed tree and tabs here, before paint; a tree that loses the focused
+  // group keeps focus on its first.
+  useLayoutEffect(() => {
+    usePopoutViewStore.getState().setView({ scope, popoutId, tree, tabs });
+  }, [scope, popoutId, tree, tabs]);
+  const focusedGroupId = usePopoutViewStore((s) => s.focusedGroupId);
+  const setFocusedGroupId = usePopoutViewStore((s) => s.focusGroup);
   // Only paint this popout's active subwindow while the popout itself owns OS
   // focus, so it and the main window never both highlight one at once (#42).
   const windowFocused = useWindowFocused();
-  // Keep focus on a group that still exists as the tree changes (split added /
-  // removed / docked back); default to the first group.
-  useEffect(() => {
-    const ids = allGroups(tree).map((g) => g.id);
-    setFocusedGroupId((cur) => (cur && ids.includes(cur) ? cur : (ids[0] ?? null)));
-  }, [tree]);
-  // Publish it to the window's store seam (#231), so a link opened from a pane
-  // lands in the pane it was opened from rather than always in the first one.
-  useEffect(() => {
-    onFocusedGroup?.(focusedGroupId);
-  }, [focusedGroupId, onFocusedGroup]);
 
   // Per-tab lamps (#234), mirrored from the main window's classifier — the same
   // two maps `TabBar` reads, keyed by the composed PTY id.
@@ -385,16 +407,21 @@ export function DetachedCenterPanel({
   // cycle tab, cycle subwindow focus, and F11 window fullscreen. The rest are
   // deliberately absent because the popout has no matching concept:
   // app-internal fullscreen, hide/close-subwindow (no such edit),
-  // cycle-project / cycleProjectBack (a popout owns no project switcher), and
-  // keyboard steering + shortcutHelp (main-window mode/overlays) — their
-  // chords are simply never checked here, so pressing one in a popout falls
-  // through as a clean no-op rather than entering a half-mode. Live values are read
+  // cycle-project / cycleProjectBack (a popout owns no project switcher) and
+  // shortcutHelp — their chords are simply never checked here, so pressing one
+  // in a popout falls through as a clean no-op. Keyboard steering is not here
+  // either: `DetachedApp` runs the main window's own handler (`useSteering`,
+  // surface "popout"), and this one stands aside while it is on. The new-tab
+  // chords are answered per group below. Live values are read
   // through a ref so the window listener binds once and never churns on the
   // per-render identity of the edit callbacks.
   const kbRef = useRef({ tree, focusedGroupId, onActivate, onClose, onFiles });
   kbRef.current = { tree, focusedGroupId, onActivate, onClose, onFiles };
   useEffect(() => {
     const onKeyDown = async (e: KeyboardEvent) => {
+      // Steering owns every key while it is on (its capture listener already
+      // stopped the event; this is the belt).
+      if (useKeyboardSteeringStore.getState().active) return;
       const overrides = useSettingsStore.getState().settings
         ?.keyboard_shortcuts as ShortcutMap | undefined;
       // F11 (as bound) — this popout's fullscreen mode, the same toggle as the
@@ -418,7 +445,7 @@ export function DetachedCenterPanel({
       if (editable && !isMacCommandChord(e) && !isPaneTerminalTarget(e.target)) return;
       const is = (action: ShortcutAction) =>
         (!editable || editorMayTakeChord(action, e) || terminalMayTakeChord(action, e)) &&
-        chordMatches(resolveChord(action, overrides), e);
+        actionMatches(action, overrides, e);
       const {
         tree: t,
         focusedGroupId: fid,
@@ -461,6 +488,19 @@ export function DetachedCenterPanel({
         return;
       }
 
+      // Next / previous tab across all of this popout's subwindows; focus
+      // moves to the subwindow that holds it.
+      const prevAll = is("prevProjectTab");
+      if (prevAll || is("nextProjectTab")) {
+        const step = stepOrderedTab(t, focused?.id ?? null, prevAll ? -1 : 1);
+        if (step) {
+          e.preventDefault();
+          if (step.groupId !== focused?.id) usePopoutViewStore.getState().focusGroup(step.groupId);
+          activate(step.key);
+        }
+        return;
+      }
+
       // Cycle which subwindow is focused (only meaningful once the popout is
       // split into several panes). A direct move — the popout has a focus frame
       // but not the main window's numbered Shift-preview nav.
@@ -471,7 +511,7 @@ export function DetachedCenterPanel({
           e.preventDefault();
           const from = fid ? ids.indexOf(fid) : -1;
           const base = from >= 0 ? from : 0;
-          setFocusedGroupId(ids[(base + (down ? 1 : -1) + ids.length) % ids.length]);
+          usePopoutViewStore.getState().focusGroup(ids[(base + (down ? 1 : -1) + ids.length) % ids.length]);
         }
         return;
       }
@@ -1552,6 +1592,7 @@ export function DetachedCenterPanel({
                 >
                   <TabStatusMark stateClass={stateClass} />
                   <span className="tab-label">{tab.label}</span>
+                  <TabMemberChip info={tabMemberInfo(tab, memberTable)} label={tab.label} />
                   <TabMarkBadge tab={tab} inPopout />
                   <TabAgentModeMarks scope={scope} tab={tab} isActive={isActive} />
                   <TabContinueButton tab={tab} stateClass={stateClass} />
@@ -1732,6 +1773,10 @@ export function DetachedCenterPanel({
                     visible={visible}
                     focused={visible && isFocused}
                     attachOnly
+                    // A host-pinned project's tab runs on its host: without
+                    // this the pane resolved it as local, and its Chat read
+                    // this machine's disk instead of the host's conversation.
+                    hostPinned={hostPinned}
                     filesProjectDir={tab.cwd}
                     terminalCwd={localTabCwd(tab, {
                       isRemoteProject: isRemote,
@@ -1840,6 +1885,10 @@ export function DetachedCenterPanel({
     (firstGroup ? tabs.find((t) => t.key === firstGroup.activeKey)?.label : undefined) ??
     "Subwindow";
 
+  // The box this window shows (the one-time seed carries its record), for the
+  // titlebar mark.
+  const titleBox = remoteInfo?.box && scope === boxScopeId(remoteInfo.box.id) ? remoteInfo.box : null;
+
   return (
     <FileDropContext.Provider value={fileDrop}>
     <div className={`detached-center center-panel${windowDragging ? " moving" : ""}`}>
@@ -1881,6 +1930,17 @@ export function DetachedCenterPanel({
         </span>
         {/* Plain text, not a control, so the title moves the window like the rest
             of the strip; a right-click names it. */}
+        {titleBox && (
+          <span
+            className="detached-titlebar-box"
+            style={{ "--box-mark": boxColor(titleBox) } as React.CSSProperties}
+            title={t("detachedTabs.boxMarkTitle", { name: titleBox.name })}
+          >
+            <BoxSwatch className="detached-titlebar-box-swatch" color={boxColor(titleBox)} />
+            <span className="detached-titlebar-box-name">{titleBox.name}</span>
+            <UntestedTag id="detachedTabs.boxMark" />
+          </span>
+        )}
         {windowName && (
           <span className="detached-titlebar-name" title={windowName}>{windowName}</span>
         )}
@@ -1925,19 +1985,15 @@ export function DetachedCenterPanel({
         {/* Focus frame: the accent outline around the current subwindow (tab bar
             + pane region, sidebar excluded), drawn here (above the opaque panes)
             for the same reason as the split preview — an in-body frame would be
-            hidden. Mirrors the main window's `FocusFrameOverlay` (minus
-            Ctrl+Shift+↑/↓ nav, which isn't wired here). Falls back to the pane rect if the
-            whole-subwindow box wasn't measured. */}
-        {windowFocused &&
-          focusedGroupId &&
-          (groupFrameRects[focusedGroupId] ?? groupRects[focusedGroupId]) && (
-            <div
-              className="focus-frame"
-              style={
-                groupFrameRects[focusedGroupId] ?? groupRects[focusedGroupId]
-              }
-            />
-          )}
+            hidden. The main window's own `FocusFrameOverlay`, which reads this
+            popout's focus (`steeringScope`) and draws only while the window has
+            the keyboard; while steering is on it numbers the subwindows (↓/↑
+            badges) for the subwindows level. */}
+        <FocusFrameOverlay
+          groupRects={groupRects}
+          frameRects={groupFrameRects}
+          orderedIds={allGroups(tree).map((g) => g.id)}
+        />
         {/* #42 (Windows): the move placeholder. While shown, `.detached-center.moving`
             hides the heavy pane content so this trivial surface is all WebView2 has to
             composite during the native drag — keeping the content aligned with the
@@ -1951,24 +2007,55 @@ export function DetachedCenterPanel({
       {dropActive && <div className="detached-drop-target" />}
       {/* #42: the "+" add-tab menu for the group that opened it. cwd is the
           main window's own new-tab folder (`detachedNewTabCwd`), not the active
-          tab's — a viewer tab's cwd is its file's folder. */}
+          tab's — a viewer tab's cwd is its file's folder. In a box popout it is
+          the active tab's member root (`detachedNewTabTarget`, which the menu's
+          first line names), the box folder for an empty group. */}
+      {/* The new-tab keys (Ctrl+Shift+N / M, Ctrl+1–9, steering's N O 1–9 +)
+          for this window's subwindows: `newTabChord` aims them at the popout's
+          focused one (`steeringScope`), and this opens what that bar's + menu
+          row would, streamed as an `add` edit like a pick from the menu. */}
+      <NewTabKeys
+        scope={scope}
+        seed={remoteInfo?.box ? { box: remoteInfo.box, members: remoteInfo.boxMembers ?? [] } : undefined}
+        groupIds={allGroups(tree).map((g) => g.id)}
+        cwdFor={(groupId) => {
+          const g = findGroup(tree, groupId);
+          return detachedNewTabCwd(scope, remoteInfo, g ? groupCwdsOf(g) : []);
+        }}
+        onAdd={(spec, groupId, besideActive) =>
+          onAddTab(spec, groupId, undefined, besideActive ? { besideActive } : undefined)
+        }
+        onMenu={(groupId, besideActive) => {
+          if (addMenu?.groupId === groupId) {
+            setAddMenu(null);
+            return true;
+          }
+          const button = barRefs.current.get(groupId)?.querySelector<HTMLElement>(".tab-new-btn");
+          if (!button) return false;
+          const r = button.getBoundingClientRect();
+          setAddMenu({ groupId, x: r.left, y: r.bottom + 4, besideActive });
+          return true;
+        }}
+      />
       {addMenu &&
         (() => {
           const g = findGroup(tree, addMenu.groupId);
           if (!g) return null;
-          const cwd = detachedNewTabCwd(scope, remoteInfo, [
-            byKey.get(g.activeKey ?? g.tabKeys[0] ?? "")?.cwd,
-            ...g.tabKeys.map((k) => byKey.get(k)?.cwd),
-          ]);
+          const groupCwds = groupCwdsOf(g);
+          const cwd = detachedNewTabCwd(scope, remoteInfo, groupCwds);
           return (
             <NewTabMenu
               scope={scope}
               projectCwd={cwd}
+              target={detachedNewTabTarget(scope, remoteInfo, groupCwds)}
+              boxSeed={remoteInfo?.box ? { box: remoteInfo.box, members: remoteInfo.boxMembers ?? [] } : undefined}
               // The detached window is inert to the projects store, so there's no
               // project name to auto-name an agent session with — skip it.
               projectName=""
               anchor={{ x: addMenu.x, y: addMenu.y }}
-              onPick={(tab) => onAddTab(tab, addMenu.groupId)}
+              onPick={(tab) =>
+                onAddTab(tab, addMenu.groupId, undefined, addMenu.besideActive ? { besideActive: true } : undefined)
+              }
               onClose={() => setAddMenu(null)}
               onManageAgents={() => setAgentDialogOpen(true)}
               machines={
@@ -1977,6 +2064,8 @@ export function DetachedCenterPanel({
                   : undefined
               }
               hostPinned={hostPinned}
+              localModelsOnly={isLocalModelsOnly(remoteInfo?.project)}
+              cutNetwork={isCutNetwork(remoteInfo?.project)}
             />
           );
         })()}
@@ -2177,6 +2266,7 @@ export function DetachedCenterPanel({
             hostPinned={hostPinned}
             primaryHost={primaryHost}
             computeHosts={computeHosts}
+            memberTable={memberTable}
             anchorX={hoverTab.x}
             anchorY={hoverTab.y}
           />

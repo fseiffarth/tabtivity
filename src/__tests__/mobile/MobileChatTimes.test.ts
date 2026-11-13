@@ -4,6 +4,7 @@ import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-
 import { pendingPrompt, withPending } from "../../../mobile-web/src/terminal/pendingPrompts";
 import { transcriptTurns } from "../../../mobile-web/src/terminal/transcriptTurns";
 import { BRAND } from "../../lib/brand";
+import { dateLocale } from "../../lib/i18n";
 
 const labels = { today: "Today", yesterday: "Yesterday" };
 const local = (y: number, m: number, d: number, h = 12, min = 0) => new Date(y, m - 1, d, h, min);
@@ -29,7 +30,7 @@ describe(`${BRAND.display} Mobile chat times`, () => {
     const now = local(2026, 9, 29, 9);
     expect(chatDayLabel(local(2026, 9, 29, 0, 1), now, labels)).toBe("Today");
     expect(chatDayLabel(local(2026, 9, 28, 23, 59), now, labels)).toBe("Yesterday");
-    expect(chatDayLabel(local(2026, 9, 25), now, labels)).toBe(local(2026, 9, 25).toLocaleDateString([], { weekday: "long" }));
+    expect(chatDayLabel(local(2026, 9, 25), now, labels)).toBe(local(2026, 9, 25).toLocaleDateString(dateLocale(), { weekday: "long" }));
     expect(chatDayLabel(local(2026, 9, 1), now, labels)).not.toMatch(/2026/);
     expect(chatDayLabel(local(2025, 12, 31), now, labels)).toMatch(/2025/);
   });

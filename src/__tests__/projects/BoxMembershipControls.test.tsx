@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 
 import { ProjectSwitcher } from "../../components/layout/ProjectSwitcher";
 import { useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice } from "../../stores/boxSlice";
 import { useHeaderHoverMenuStore } from "../../stores/headerHoverMenu";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
@@ -70,6 +71,7 @@ function openAddMenu(container: HTMLElement): HTMLElement {
 }
 
 beforeEach(() => {
+  resetBoxSlice();
   useHeaderHoverMenuStore.setState({ openId: null });
   useProjectsStore.setState({ projects: [], activeId: null, loaded: true });
   useBoxesStore.setState({ boxes: [], loaded: true });
@@ -188,6 +190,26 @@ describe("Box membership controls", () => {
     // Box-local reopening never adds the project here: it shows in the general
     // strip only if it was already open there.
     expect(pillNames(container)).toEqual(["member"]);
+  });
+
+  it("a closed member's pill menu offers the explicit Remove from the box", async () => {
+    const removeFromBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ removeFromBox });
+    const container = await renderBoxSlice(
+      [project("member", 0), project("closed", 1, { status: "inactive" })],
+      ["member", "closed"],
+    );
+    await act(async () => {
+      fireEvent.contextMenu(pill(container, "closed"));
+    });
+    const row = [...document.querySelectorAll(".context-menu button")].find((el) =>
+      el.textContent?.includes("Remove closed from Research"),
+    ) as HTMLElement;
+    expect(row).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(removeFromBox).toHaveBeenCalledWith("closed", "boxA");
   });
 
   it("retains ordinary + and × behavior outside a Box slice", async () => {

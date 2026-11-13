@@ -30,7 +30,7 @@ export { FileGlyph, asViewerFile } from "./FilesLibrary";
  * it opens on the one it was last put away on (`readFilesSide`), and its
  * root's switch moves between them.
  */
-export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true, search = false, filesOff = false, here = true, host = false, hostLabel }: {
+export function ProjectFiles({ projectId, label, onClose, markup, showTab, linked, menu, browse = true, search = false, filesOff = false, here = true, host = false, hostLabel, docked = false }: {
   projectId: string;
   /** The project's name, the drawer's heading and the library root's title. */
   label: string;
@@ -60,6 +60,9 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
   host?: boolean;
   /** What the root's switch calls the remote side (`host_label`). */
   hostLabel?: string;
+  /** Standing as a pane beside the chat (a landscape tablet): the chat behind
+   * stays usable, so the library is no modal dialog. */
+  docked?: boolean;
 }) {
   const t = useT();
   const both = here && host;
@@ -78,7 +81,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
 
   useEffect(() => {
     if (libraryShown) return;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented) onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [libraryShown, onClose]);
@@ -92,7 +95,7 @@ export function ProjectFiles({ projectId, label, onClose, markup, showTab, linke
 
   if (libraryShown) {
     return <FilesLibrary key={side} projectId={projectId} label={label} onClose={direct ? onClose : closeLibrary}
-      markup={markup} showTab={showTab} linked={linked} side={side} onSide={both ? pickSide : undefined} hostLabel={hostLabel} focusSearch={search} />;
+      markup={markup} showTab={showTab} linked={linked} side={side} onSide={both ? pickSide : undefined} hostLabel={hostLabel} focusSearch={search} docked={docked} />;
   }
 
   return <div className="sheet-backdrop files-drawer-backdrop" role="presentation" onClick={onClose}>

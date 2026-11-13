@@ -110,8 +110,11 @@
   cursor: var(--cur-text, text);
   overflow-x: auto;
   white-space: nowrap;
-  /* A one-line address strip: it pans, it never shows a bar or a thumb. */
-  --app-scrollbar: none;
+  /* A one-line address strip: it pans, it never shows a bar. */
+  scrollbar-width: none;
+}
+.browser-address-display::-webkit-scrollbar {
+  display: none;
 }
 
 .browser-address-input {
@@ -651,6 +654,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Agent print requests: Review and Reject side by side. */
+.print-requests-actions {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
 }
 .print-job-time {
   color: var(--text-muted);

@@ -1,10 +1,9 @@
 /**
  * `OverlayAgentColumn` — the docked agent column of the mail / calendar / to-do
- * overlays. It is an attach-only view of a ROOT tab (the PTY is `CenterPanel`'s),
- * shows a placeholder while the root console shows that tab itself, registers
- * the key it draws in `shownKeys` so `CenterPanel`'s copy steps aside, and draws
- * the user's stored width capped by the room the overlay has — never saving
- * that cap.
+ * views. It is an attach-only view of a ROOT tab (the PTY is `CenterPanel`'s),
+ * shows a placeholder while a popout shows that tab, registers the key it draws
+ * in `shownKeys` so `CenterPanel`'s copy steps aside, and draws the user's
+ * stored width capped by the room the view has — never saving that cap.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -132,22 +131,6 @@ describe("OverlayAgentColumn", () => {
     expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
     unmount();
     expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(false);
-  });
-
-  it("shows a placeholder, and stops claiming the key, while the root console is open", async () => {
-    await mount(<OverlayAgentColumn app="calendar" tab={tab} hint={null} />);
-    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
-    paneProps.length = 0;
-
-    act(() => useRootOverlayStore.setState({ open: true }));
-
-    expect(screen.queryByTestId("pane")).toBeNull();
-    expect(screen.getByText("Shown in the root console")).toBeTruthy();
-    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(false);
-
-    act(() => useRootOverlayStore.setState({ open: false }));
-    expect(screen.getByTestId("pane")).toBeTruthy();
-    expect(useOverlayAgentStore.getState().shownKeys.has(tab.key)).toBe(true);
   });
 
   it("shows a placeholder, and claims no key, while the tab is in a popped-out root subwindow", async () => {

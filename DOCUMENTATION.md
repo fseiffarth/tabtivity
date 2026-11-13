@@ -509,8 +509,9 @@ without it.
 With that switch on, the phone's chat treats files as the desktop's does: a
 picture or PDF an answer names follows it as a message of its own, a path in
 the answer opens the file, and **Files (N)** over the chat also lists what the
-agent changed and what its answers name. A file deleted since, or one in
-another worktree, stays in **Diffs**.
+agent changed and what its answers mention. A file deleted since, or one in
+another worktree, stays in **Diffs**. The list holds the current conversation
+only: after a clear or a resume, an earlier conversation's files drop out.
 
 Marking up is a loop, not one shot (`docs/done/pdf_markup_rounds_plan.md`):
 **Submit keeps the view open.** The round's marks stay on show, dimmed, and are
@@ -1055,6 +1056,7 @@ returns true. The panel uses backend commands from `commands/ollama.rs`:
 | `load_ollama_model` | Loads a model into memory (`device`: `gpu` / `cpu`, default auto) with `keep_alive = -1` and waits; emits `ollama-load-progress` (`loading` → `success`/`error`). |
 | `load_installed_ollama_model` | The phone's load: only a name `/api/tags` lists (exact or `:latest`, never a prefix or a cloud model), Ollama picks the device, answers at once with the listed name and loads on a detached thread with the same events; refusals are bare codes (`ollama_not_running`, `model_not_installed`, `model_not_local`). |
 | `stop_ollama_model` | Unloads a model from memory with `keep_alive = 0`. |
+| `restart_ollama_server` | Stops the local Ollama server, whoever started it, and starts it again (`systemctl restart` for the system service). Refuses a server on another machine with `ollama_remote`. |
 | `delete_ollama_model` | Deletes a local model through `/api/delete`. |
 | `prepare_local_agent` | Writes an isolated per-model Vibe config and returns `VIBE_HOME` plus alias. |
 
@@ -1087,8 +1089,10 @@ keeps global `~/.vibe/config.toml` untouched.
 
 Beyond these, a **rebindable** set lives in `src/lib/shortcuts/shortcuts.ts` and is edited
 in Settings → Shortcuts, persisted as `settings.keyboard_shortcuts` overrides:
-toggle subwindow fullscreen, cycle to the next project, previous/next tab in a
-subwindow, cycle the focused subwindow up/down, cycle tabs, hide the focused
+toggle subwindow fullscreen, cycle to the next / previous project (AltGr+Tab / AltGr+Shift+Tab, plus
+Alt+Shift+→ / ←; on macOS the arrows),
+next/previous tab of the whole project (Ctrl+Tab / Ctrl+Shift+Tab, across
+subwindows), previous/next tab in a subwindow, cycle the focused subwindow up/down, cycle tabs, hide the focused
 subwindow, toggle its file viewer, close the focused subwindow, close the active
 tab, and close all tabs in a project. On macOS the Meta key is reserved for Cmd
 shortcuts, so the chord labels differ there.
@@ -1169,10 +1173,13 @@ The root terminal also gets context files in `~/tabtivity/root/`:
 A *box* temporarily joins two or more projects for side-by-side work — the box
 folder plus every member root in one file view, cross-project copy-paste, PDF
 merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
-`BoxEditorDialog.tsx`, `stores/boxes.ts`, `commands/boxes.rs`;
+`BoxMemberChecklist.tsx`, `BoxEditorDialog.tsx` — the box sheet —
+`stores/boxes.ts`, `stores/boxSlice.ts`, `commands/boxes.rs`;
 `docs/context/project_boxes.md` holds the design rationale). Backend commands:
-`get_boxes`, `save_boxes`, `create_box`, `rename_box`, `delete_box`,
-`set_box_members`, `ensure_box_folder`, `refresh_box_agent_docs`.
+`get_boxes`, `save_boxes`, `create_box`, `rename_box`, `patch_box`,
+`delete_box`, `set_box_members` (a whole-list write, kept for an older running
+frontend and as the fallback when the backend lacks `patch_box`'s `order`),
+`ensure_box_folder`, `refresh_box_agent_docs`.
 
 - **Data model (N:M).** Boxes live in their own `~/.local/share/tabtivity/boxes.json`
   (`Vec<ProjectBox>` = `{id, name, member_ids, position, folder?, relations}`)
@@ -1184,25 +1191,78 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
   ids that no longer reference a known project.
 - **Switcher (overlay model).** Member pills always render individually, with
   one colour swatch per box they are in (`lib/theme/boxColor`, a stable hue per
-  box id); no box takes width in the scrolling strip. Every box stands as a
+  box id; a click on the swatches opens that box, a small list when there are
+  several); no box takes width in the scrolling strip. Every box stands as a
   small pill of its own in the fixed leading segment beside the scope chip —
   its mark in the box's colour, one click into the box, a standing drop
-  target, right-click for rename / a Members checklist / edit / delete — up to
-  `MAX_BOX_PILLS`; the rest stay in the chip's dropdown (which always lists
-  every box) and the chip shows "+N". `Ctrl+Shift+PageDown/PageUp` cycle the
-  boxes. Empty and one-member boxes survive and are still listed — the ONLY way
-  a box disappears is an explicit, confirmed **Dissolve** / **Delete box** (the
-  folder and agent docs stay on disk).
-- **Box/unbox gestures.** Five ways in/out: the pill context menu's *Boxes*
-  group (checkbox row per box, additive toggle), the box pill's context menu's
-  *Members* checklist (toggles on the spot, stays open), Ctrl/Cmd-click
-  multi-select → "Box these (N)…", the box editor dialog (rename, full member
-  list, dissolve; opened from the box pill's menu, the pill menu, multi-select,
-  or the switcher "+"), and drag-and-drop (plain or Alt drop on any box pill —
-  or, when boxes overflow the row, on a row of the chip's list, which springs
-  open under a drag — = additive add; Alt-drop one pill on another = new box of
-  the two). While a box slice is selected the switcher's "+" lists non-members
-  to add, and each member pill's ✕ removes only that membership.
+  target, right-click for rename / a Members checklist / edit / dissolve. The
+  row's budget follows the header width tier (6 / 6 / 3 / 1 pills; the selected
+  box always keeps its pill); the rest stay in the chip's dropdown (which
+  always lists every box), reached by the fold pill `▣▾ +N` after the shown
+  pills. With no box a dashed ghost `+ Box` pill stands there instead.
+  **The slice** (`stores/boxSlice.ts`: `sliceBoxId`, `lastUnslicedScope`,
+  `selectBox`, `leaveBox`; session-only) is the box whose members the strip
+  shows; the selected pill carries an always-visible ✕ (`leaveBox`: clear the
+  slice and, from inside the box scope, return to the project the unsliced
+  strip last stood on) and the strip is tinted in the box colour. In the list
+  a ✓ marks the scope box and bold the slice. The strip, the keyboard ring
+  (`keyboardSteering.projectStations`, `cycleProject`) and the station badges
+  share one list (`stripProjects`). `Ctrl+Shift+PageDown/PageUp` (`cycleBox`)
+  walk `[project you came from, box1 … boxN]` and step back out past either
+  end. Empty and one-member boxes survive and are still listed — the ONLY way a
+  box disappears is an explicit, confirmed **Dissolve box…** (the folder and
+  agent docs stay on disk; dissolving the box you are in leaves it first).
+  Box pill status bars count the box's own scope AND its member projects'
+  scopes.
+- **Create and membership.** Every create door (the `+` menu row, the chip
+  list's New Box, the ghost pill, "Box these (N)…", "New box with X…", Ctrl+K →
+  New box…, Alt-drag one pill onto another) goes through
+  `useQuickCreateBox()`: a name prompt pre-filled with the next free "Box N",
+  then `createBoxQuick` (`create_box` with optional `memberIds`/`color`) and the
+  slice enters the box. Names are trimmed, non-empty, at most 80 characters, no
+  control characters and unique case-insensitively — checked only when the
+  name changes (`clean_box_name`, `boxNameProblem`), so a legacy empty or
+  duplicate name still loads and saves. Membership is edited by one shared
+  checklist, `BoxMemberChecklist` (box pill menu: projects; project pill menu:
+  boxes): closed projects included and labelled, scrolls, filter field past 8
+  rows, each toggle one singular `patch_box` add/remove (optimistic, reverted
+  on failure). Saves from the box sheet go through `saveBox`, a diffed
+  `patch_box` (`name`, `addMembers`, `removeMembers`, `color`), never the whole
+  list, so a member added meanwhile survives (the side panel's drag reorder is
+  likewise a `patch_box` `order`: the named members take the slots they hold,
+  any other member keeps its slot); against an older running backend both
+  `saveBox` and `createBoxQuick` fall back to the singular calls. Other
+  gestures: Ctrl/Cmd-click multi-select → "Box these (N)…", drag-and-drop
+  (plain or Alt drop on any box pill, or on a row of the chip's list, which
+  springs open under a drag — additive add; Alt-drop one pill on another = new
+  box of the two, entered and put into inline rename). While a box slice is
+  selected the switcher's "+" lists non-members to add, and each member pill's
+  menu has an explicit "Remove … from …" row beside the ✕.
+- **The box sheet** (`BoxEditorDialog.tsx`, "Edit box…"): one box — name
+  (checked as you type, only when changed), colour, the member list (closed
+  projects too; badges closed / container / VM / remote and the swatches of the
+  other boxes holding the project; a filter field), one trust line per kind of
+  member that runs outside its container or VM or needs a connection, the
+  folder with Open, the phone-access switch and the **Dissolve box…** footer.
+  There is no create mode: boxes are born through the name prompt. Save is one
+  `saveBox` diff against what the sheet opened with. The phone row is the
+  Settings → Mobile switch (acts at once, keeps the box's per-phone list); with
+  no tmux (Windows) or persistent local sessions off it is replaced by a line
+  saying why, except for a box whose access is already on, which keeps its
+  switch so the access can always be revoked. An empty box shows "No projects
+  yet" + **Add projects…** (`BoxEmptyLine`, in the strip and the side panel; the
+  button is left out in a popout, which has no sheet host).
+- **Finding boxes.** Focusing the header search (`ProjectSearch.tsx`) with
+  nothing typed lists the boxes (coloured `BoxSwatch`, member names), with "All
+  projects" first while a box is sliced; a query matches a box by its name or a
+  member's name, and project rows wear the swatches of their boxes. Ctrl+K
+  (`CommandPalette.tsx`) has a Boxes group (a pick runs `boxSlice.selectBox`,
+  i.e. the slice plus `openBox`), the actions "New box…", "Show all projects"
+  (only while sliced) and, once something is typed, "Add (current project) to
+  (box)"; tab rows of box scopes carry the box name (`scopeDisplayName`). A
+  popout whose scope is `box:<id>` shows the box swatch and name in its title
+  bar. With four or more projects and no box, the feature hint `box-create`
+  points at the ghost pill.
 - **Box folder, agent docs + member symlinks.** Opening a box (`openBox` →
   `ensure_box_folder`) lazily creates a folder under `~/tabtivity/boxes/<name>/`
   (unique name resolved against other boxes and existing dirs) and
@@ -1222,15 +1282,32 @@ merges across members, and box-rooted agent tabs (`BoxScopeChip.tsx`,
   (disjoint from project ids and `"root"`). The scope is first-class now: its
   tabs persist under `<state_dir>/sessions/box_<id>/terminals.json` and restore
   lazily on the next open (nothing restorable seeds one shell at the box
-  folder). New tabs default to the box folder; the box "+" menu also offers
-  per-member rows ("Files — ⟨m⟩" / "Shell — ⟨m⟩" / "Claude — ⟨m⟩") whose tabs
-  land at the member root — resume-safe, since Claude keys history by cwd. The
+  folder). Where a new tab starts is computed per tab group
+  (`stores/boxes.ts` `newTabTarget`): the root directory of the member that
+  owns the group's active tab (`memberOfCwd`: path-component prefix, longest
+  member root wins), else the box folder; the `+` button, Ctrl+Shift+N/M,
+  Ctrl+1-9, steering and the popout `+` all land in the same `TabBar`
+  computation, and the menu header names the target. Agents, Shell and Files
+  rows carry a "Start in…" fly-out (another member or the whole box; a member's
+  Files row opens a `projectfiles` tab, the box's the plain `files` tab); tabs
+  at a member root are resume-safe, since Claude keys history by cwd. Monitor,
+  Disk usage and other non-launch kinds keep the box folder. Tabs in
+  a member show a `TabMemberChip` (dot in `memberColor(projectId)`, a square
+  for the whole box; shell, agent, `files`, `projectfiles` kinds only; derived
+  from `tab.cwd`, nothing stored), in the main strip and the popout's. The side
+  panel is an accordion (`ProjectFilesPane.tsx`, `stores/boxAccordion.ts`): one
+  member expanded, headers with colour dot, git dot and agent count; the
+  collapse state is per-viewer `localStorage` keyed by box id. A `⋯` on a member
+  header (`BoxMemberMenu.tsx`) offers Files/Git, Remote/Local, the file manager,
+  project settings and **Open as tab** (a `projectfiles` tab at the member's
+  root); the toolbar's search is one shared field above the sections that
+  searches the expanded member (`sharedSearch` on `FileTree`). The
   spawn gate (`pty_spawn`) and file confinement (`compute_allowed_roots`)
   accept the box folder ∪ member roots ∪ remote members' mirrors, and fail
   closed on an unknown box. Local shells in a box scope get tmux persistence
   like root/project shells. **Trust (v1):** box tabs run local + uncontained —
   a member's container/VM boundary does not extend to the shared scope; the box
-  editor shows a notice when a member is containerized/VM.
+  sheet shows a notice when a member is containerized/VM.
 
 ### Trust Tiers
 
@@ -1452,6 +1529,7 @@ Tauri v2 Application
 |   +-- hooks/                useKeyboard, useClampToViewport, useWindowFocused
 |   +-- types/index.ts        Shared TypeScript types
 +-- mobile-web/               The companion PWA — its own Vite bundle
+                              (`steering/`: Bluetooth-keyboard steering, docs/context/phone_steering.md)
 ```
 
 **IPC pattern:** Rust ↔ React via Tauri `invoke` for request/response and Tauri
@@ -1916,8 +1994,10 @@ Ollama integration test skips itself when no local server or model is available.
   with DMABUF off. DMABUF stays disabled — a 2026-08-05 re-test on WebKitGTK
   2.52.3 was faster but produced flicker, missing PDF images, and a renderer
   crash.
-- A native scrollbar's shape is unreachable from CSS on WebKitGTK, so Tabtivity
-  hides the engine's bar and draws its own (`lib/theme/customScrollbar.ts`).
+- Scrollbars are the engine's, styled once in `styles/base.css` through the
+  `::-webkit-scrollbar` pseudo-elements. Setting `scrollbar-width`,
+  `scrollbar-color` or `scrollbar-gutter` on a surface switches WebKitGTK to
+  its native 21px bar there.
 
 ## Practical Development Notes
 

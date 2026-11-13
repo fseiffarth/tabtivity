@@ -409,7 +409,7 @@ describe("import dialog", () => {
   async function chooseBundle(info: BundleInfo) {
     mockOpen.mockResolvedValue(info.path);
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "inspect_project_export") return Promise.resolve(info);
+      if (cmd === "inspect_project_bundle") return Promise.resolve({ kind: "project", info });
       return Promise.resolve(null);
     });
     await act(async () => {
@@ -422,7 +422,7 @@ describe("import dialog", () => {
 
   it("reads the file before asking anything, and says what is in it", async () => {
     await chooseBundle(bundle());
-    expect(mockInvoke).toHaveBeenCalledWith("inspect_project_export", {
+    expect(mockInvoke).toHaveBeenCalledWith("inspect_project_bundle", {
       bundlePath: `/media/stick/thesis.${NAMES.exportExtension}`,
     });
     expect(screen.getByText(new RegExp(String.raw`Thesis — exported 2026-09-20 by ${BRAND.display} 0\.1\.76`))).toBeTruthy();
@@ -488,7 +488,7 @@ describe("import dialog", () => {
     await chooseBundle(bundle());
     const entry: ProjectEntry = { ...project, id: "p2", name: "Thesis copy" };
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "inspect_project_export") return Promise.resolve(bundle());
+      if (cmd === "inspect_project_bundle") return Promise.resolve({ kind: "project", info: bundle() });
       if (cmd === "get_boxes") {
         return Promise.resolve([{ id: "b1", name: "Papers", member_ids: ["p2"], position: 10, rev: 3 }]);
       }

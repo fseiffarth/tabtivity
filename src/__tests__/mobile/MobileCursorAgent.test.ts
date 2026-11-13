@@ -133,7 +133,7 @@ describe(`${BRAND.display} Mobile — Cursor agent's model dialog`, () => {
     expect(readCursorPicker(WALKED.map((line) => ({ text: line.text.replace(" →  ", "    ") })))).toBeNull();
   });
 
-  it("names the rows it cannot see yet by walking half a window past them", () => {
+  it("names the rows it cannot see yet by walking to the farthest of them in one run", () => {
     const dialog = (from: number, marked: number, labels: string[]) => lines(
       " Available models",
       "",
@@ -147,17 +147,18 @@ describe(`${BRAND.display} Mobile — Cursor agent's model dialog`, () => {
       "Claude Opus 4.8", "GPT-5.6 Sol", "GPT-5.5", "Claude Fable 5.1", "Claude Fable 5", "Grok 4.5"];
     const top = readCursorPicker(dialog(1, 3, MODELS.slice(0, 6)))!;
     let step = mergeSelectRows(null, top);
-    expect(revealSelectRow(step, top)).toBe(9);
-    // Scrolled just far enough: rows 4–9, of which 4–6 are known.
-    const scrolled = readCursorPicker(dialog(4, 9, MODELS.slice(3, 9)))!;
-    step = mergeSelectRows(step, scrolled);
+    expect(revealSelectRow(step, top)).toBe(12);
+    // A frame skipped rows 7–9 on the way: the walk goes back for them.
+    const bottom = readCursorPicker(dialog(10, 12, MODELS.slice(9)))!;
+    // Sharing no row with what is known, it is the same list only mid-walk.
+    expect(mergeSelectRows(step, bottom).options).toHaveLength(3);
+    step = mergeSelectRows(step, bottom, true);
     expect(step.options).toHaveLength(9);
-    expect(revealSelectRow(step, scrolled)).toBe(12);
-    // Capped at the list's end, and then nothing is left.
-    const bottom = readCursorPicker(dialog(7, 12, MODELS.slice(6)))!;
-    step = mergeSelectRows(step, bottom);
+    expect(revealSelectRow(step, bottom)).toBe(7);
+    const back = readCursorPicker(dialog(7, 7, MODELS.slice(6, 12)))!;
+    step = mergeSelectRows(step, back, true);
     expect(step.options.map((option) => option.label)).toEqual(MODELS);
-    expect(revealSelectRow(step, bottom)).toBeUndefined();
+    expect(revealSelectRow(step, back)).toBeUndefined();
   });
 });
 
@@ -171,15 +172,14 @@ describe(`${BRAND.display} Mobile — revealing a windowed dialog`, () => {
     context: 0,
   });
 
-  it("keeps a known row in the frame a walk lands on", () => {
-    // Opened on the last page: walking up half a window keeps 30–34 in view,
-    // whether the window scrolls to 26–35 or centres on 26 (21–30).
+  it("walks to the farthest unseen row, above the window first", () => {
+    // Opened on the last page: straight up to the first row.
     const last = prompt([30, 31, 32, 33, 34, 35, 36, 37, 38, 39], 9, 29);
-    expect(revealSelectRow(mergeSelectRows(null, last), last)).toBe(26);
-    // A windowed Claude Code picker, three rows of five, still walks a row at
-    // a time: half its window is one row.
+    expect(revealSelectRow(mergeSelectRows(null, last), last)).toBe(1);
+    // A windowed Claude Code picker, three rows of five: straight to the last
+    // row, not a row per round trip.
     const claude = prompt([1, 2, 3], 0, 2);
-    expect(revealSelectRow(mergeSelectRows(null, claude), claude)).toBe(4);
+    expect(revealSelectRow(mergeSelectRows(null, claude), claude)).toBe(5);
   });
 
   it("has nothing to reveal once every row is known", () => {

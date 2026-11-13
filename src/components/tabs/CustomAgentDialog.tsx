@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "../../stores/settings";
-import { runInstallInTab } from "../../lib/installCommand";
+import { customInstallShell, runInstallInTab } from "../../lib/installCommand";
 import { useT } from "../../lib/i18n";
 import type { CustomAgent } from "../../types";
 import { ErrorNote } from "../common/ErrorNote";
@@ -116,7 +116,7 @@ export function CustomAgentDialog({ onClose }: Props) {
   // install-via-tab policy). Closes the dialog so the terminal is in view.
   const install = (a: CustomAgent) => {
     if (!a.installCmd) return;
-    runInstallInTab(`Install ${a.label}`, a.installCmd, "default");
+    runInstallInTab(`Install ${a.label}`, a.installCmd, customInstallShell(a.installCmd));
     onClose();
   };
 

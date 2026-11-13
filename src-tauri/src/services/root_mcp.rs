@@ -49,7 +49,7 @@ use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
-use super::root_mcp_security::{self as security, Access, Policy};
+use super::root_mcp_security::{self as security, Access, Policy, RollingWindow, RollingWindows, HOUR};
 
 use serde_json::{json, Value};
 
@@ -68,19 +68,38 @@ pub const SCHEDULE_URL_ENV: &str = crate::app_env!("SCHEDULE_MCP_URL");
 /// project-agent tab while agent pushes are switched on.
 pub const GIT_TOKEN_ENV: &str = crate::app_env!("GIT_MCP_TOKEN");
 pub const GIT_URL_ENV: &str = crate::app_env!("GIT_MCP_URL");
-/// The help identity's pair (`services::help_mcp`), set for every local agent
-/// tab while the help server is on.
+/// The self-only workspace lane, granted to eligible local agent spawns.
+pub const COCKPIT_TOKEN_ENV: &str = crate::app_env!("COCKPIT_MCP_TOKEN");
+pub const COCKPIT_URL_ENV: &str = crate::app_env!("COCKPIT_MCP_URL");
+/// The read-only help lane, separate from workspace mutations.
 pub const HELP_TOKEN_ENV: &str = crate::app_env!("HELP_MCP_TOKEN");
 pub const HELP_URL_ENV: &str = crate::app_env!("HELP_MCP_URL");
 /// The markup identity's pair (`services::markup_mcp`), set for a local
 /// project-agent tab with a schedule target while the server is on.
 pub const MARKUP_TOKEN_ENV: &str = crate::app_env!("MARKUP_MCP_TOKEN");
 pub const MARKUP_URL_ENV: &str = crate::app_env!("MARKUP_MCP_URL");
+/// The print identity's pair (`services::print_mcp`), set for a local
+/// project-agent tab the window spawns while the server is on.
+pub const PRINT_TOKEN_ENV: &str = crate::app_env!("PRINT_MCP_TOKEN");
+pub const PRINT_URL_ENV: &str = crate::app_env!("PRINT_MCP_URL");
 /// The web lane's pair (`services::web_lane`), set for a chat-assistant tab
 /// only (`PtyOptions.assistant`), and the only MCP token such a tab gets.
 /// `services::assistant::LaneGrant::from_env` reads them back.
 pub const WEB_TOKEN_ENV: &str = crate::app_env!("WEB_MCP_TOKEN");
 pub const WEB_URL_ENV: &str = crate::app_env!("WEB_MCP_URL");
+/// Every lane's token variable, the one table a scrub or a rollback walks
+/// (`SpawnTokenGuard`, the pre-push hook's environment). A new lane's
+/// `*_TOKEN_ENV` goes here too; a source-scan test fails until it does.
+pub const LANE_TOKEN_ENVS: &[&str] = &[
+    TOKEN_ENV,
+    SCHEDULE_TOKEN_ENV,
+    GIT_TOKEN_ENV,
+    COCKPIT_TOKEN_ENV,
+    HELP_TOKEN_ENV,
+    MARKUP_TOKEN_ENV,
+    PRINT_TOKEN_ENV,
+    WEB_TOKEN_ENV,
+];
 /// The server name the agent CLIs list the tools under.
 pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
 
@@ -91,13 +110,16 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// Each process that spawns agent tabs runs its own listener and serves the
 /// tabs it spawned (`docs/headless_mcp_plan.md`): the window, and the Mobile
 /// host for the tabs it starts with no window open. `serves_root` is false in
-/// the Mobile host, which serves the schedule, push and help lanes only — so
-/// [`grant_lanes`] hands out neither a root nor a reader token there.
+/// the Mobile host, which serves the schedule, push, help, web and markup
+/// lanes — so [`grant_lanes`] hands out neither a root nor a reader token
+/// there.
 /// `serves_markup`: this process holds the markup questions its tabs ask
-/// (`services::markup_mcp`) and answers the views that show them — the
-/// window, and a server daemon, which has no window and answers both the
-/// browser client and the phone itself. A desktop's Mobile host does not:
-/// the window's markup view could never see its asks.
+/// (`services::markup_mcp`) and answers the views that show them. Every
+/// listener does: the window, a server daemon (which has no window and
+/// answers both the browser client and the phone itself) and, since phase 1b,
+/// a desktop's Mobile host, whose asks the window's markup commands read over
+/// its admin socket (`commands::markup_mcp`) and whose phone routes answer
+/// them when no window is open (`host.rs` `markup_call`).
 /// `serves_web`: this process serves the chat assistant's web lane
 /// (`services::web_lane`, `/mcp/web`) and so grants its token
 /// ([`grant_lanes`]'s assistant arm). The window and a desktop's Mobile host
@@ -105,6 +127,14 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// server in v1).
 #[derive(Debug, Clone)]
 pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool, pub serves_web: bool }
+impl Runtime {
+    /// This process approves agent print requests (`services::print_mcp`):
+    /// the window alone — the one listener that serves both the root lane
+    /// (a server daemon does too, but has no web lane) and the web lane (the
+    /// Mobile host does too, but no root lane). Approval needs the window's
+    /// print preview and this machine's printers.
+    pub fn serves_print(&self) -> bool { self.serves_root && self.serves_web }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -118,14 +148,15 @@ pub struct Identity {
     /// spawn from the trusted `projects.json` entry — never from the tab's
     /// cwd or anything inside the tree. `None` for every other class.
     pub push: Option<PushBinding>,
-    /// A [`Caller::LocalModel`] tab's Ollama endpoint, resolved from
-    /// `ollama_host` **at spawn** — the `api_base` its Vibe config was written
-    /// with (`commands::ollama::prepare_local_agent`), which a later change of
-    /// the setting does not move. `root_mcp_mail` reads only while this is
+    /// A [`Caller::LocalModel`] tab's Ollama endpoint, read **at spawn** from
+    /// the `api_base` of its Vibe home's config
+    /// (`agent_privacy::local_vibe_launch`), which a later change of
+    /// `ollama_host` does not move. `root_mcp_mail` reads only while this is
     /// loopback; `None` for every other class.
     pub endpoint: Option<String>,
-    /// A [`Caller::LocalModel`] tab's Ollama model, read from its spawn env
-    /// ([`local_model_of`]) — never from its Vibe home, which the tab writes.
+    /// A [`Caller::LocalModel`] tab's Ollama model, read at spawn from the same
+    /// config (`agent_privacy::local_vibe_launch`), never from the renderer's
+    /// label alone.
     /// Its mail reads go ahead only while that endpoint lists this model as
     /// local, not an Ollama cloud model (gap 25), and its mail taint is also
     /// kept per model ([`model_read_mail`], gap 33). `None` for every other
@@ -163,6 +194,8 @@ fn lane(caller: Caller) -> u8 {
         Caller::Helper => 3,
         Caller::Marker => 4,
         Caller::Web => 5,
+        Caller::Cockpit => 6,
+        Caller::Printer => 7,
     }
 }
 /// One process's bearer tokens and the sessions they open, in memory only.
@@ -208,6 +241,8 @@ impl TokenStore {
             } else { true }
         });
         let session = Session {
+            cockpit: None,
+            cockpit_rate: Arc::default(),
             id: crate::digest::sha256_hex(token.as_bytes()),
             access: Access::initial(identity.caller), identity,
             revoked: Arc::new(AtomicBool::new(false)),
@@ -215,8 +250,8 @@ impl TokenStore {
             projects_grant: Arc::new(std::sync::Mutex::new(ProjectsGrant::Hidden)),
             permits: Arc::new(tokio::sync::Semaphore::new(2)),
             rate: Arc::new(std::sync::Mutex::new((std::time::Instant::now(), 0))),
-            schedule_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
-            push_rate: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            schedule_rate: Arc::default(),
+            push_rate: Arc::default(),
         };
         map.insert(token, session);
     }
@@ -255,7 +290,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
-        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web) {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) {
             *s.projects_grant.lock_ok() = grant.clone();
         }
     }
@@ -291,9 +326,11 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
         Caller::Agent | Caller::LocalModel | Caller::Reader => SERVER_NAME,
         Caller::Scheduler => super::schedule_mcp::SERVER_NAME,
         Caller::Pusher => super::git_push_mcp::SERVER_NAME,
+        Caller::Cockpit => super::cockpit_mcp::SERVER_NAME,
         Caller::Helper => super::help_mcp::SERVER_NAME,
         Caller::Marker => super::markup_mcp::SERVER_NAME,
         Caller::Web => super::web_lane::SERVER_NAME,
+        Caller::Printer => super::print_mcp::SERVER_NAME,
     }).collect();
     names.dedup();
     names
@@ -302,7 +339,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
 /// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().map().values()
-        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web))
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -434,6 +471,8 @@ pub enum Caller {
     /// Any local agent tab's help identity (`services::help_mcp`): served the
     /// read-only help tools on `/mcp/help` and nothing else.
     Helper,
+    /// Self-only workspace presentation tools, isolated on `/mcp/cockpit`.
+    Cockpit,
     /// A local project-agent tab's markup identity (`services::markup_mcp`),
     /// bound at spawn to its project and schedule target: served
     /// `markup_ask` / `markup_withdraw` / `markup_done` on `/mcp/markup` and
@@ -444,6 +483,10 @@ pub enum Caller {
     /// nothing else. The root registry's route and policy are positive lists
     /// that do not name it, so it reaches no other path.
     Web,
+    /// A local project-agent tab's print identity (`services::print_mcp`),
+    /// bound at spawn to its project: served `print_request` /
+    /// `print_status` / `print_cancel` on `/mcp/print` and nothing else.
+    Printer,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -476,6 +519,8 @@ pub struct Session {
     pub id: String,
     pub identity: Identity,
     pub access: Access,
+    pub(crate) cockpit: Option<super::cockpit_mcp::Binding>,
+    cockpit_rate: Arc<std::sync::Mutex<RollingWindow>>,
     revoked: Arc<AtomicBool>,
     /// Latched by the first mail read tool this spawn calls
     /// ([`Self::mark_read_mail`]). A local-model tab is only tainted once it
@@ -492,8 +537,8 @@ pub struct Session {
     projects_grant: Arc<std::sync::Mutex<ProjectsGrant>>,
     pub permits: Arc<tokio::sync::Semaphore>,
     rate: Arc<std::sync::Mutex<(std::time::Instant, u32)>>,
-    schedule_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
-    push_rate: Arc<std::sync::Mutex<std::collections::VecDeque<std::time::Instant>>>,
+    schedule_rate: Arc<std::sync::Mutex<RollingWindow>>,
+    push_rate: Arc<std::sync::Mutex<RollingWindow>>,
 }
 
 /// The most tabs the web lane's hourly budget remembers at once.
@@ -503,8 +548,8 @@ const WEB_BUDGET_TABS: usize = 512;
 /// the same tab, and the budget must not reset with it. Entries older than an
 /// hour are pruned on every admit; past [`WEB_BUDGET_TABS`] the tab that
 /// called longest ago is dropped.
-fn web_budgets() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>> {
-    static BUDGETS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::collections::VecDeque<std::time::Instant>>>> = OnceLock::new();
+fn web_budgets() -> &'static std::sync::Mutex<RollingWindows> {
+    static BUDGETS: OnceLock<std::sync::Mutex<RollingWindows>> = OnceLock::new();
     BUDGETS.get_or_init(Default::default)
 }
 
@@ -516,20 +561,16 @@ pub(crate) fn web_budget_tabs() -> usize { web_budgets().lock_ok().len() }
 pub(crate) const WEB_BUDGET_TABS_MAX: usize = WEB_BUDGET_TABS;
 
 impl Session {
+    pub(crate) fn admit_cockpit_rate(&self) -> bool {
+        self.cockpit_rate.lock_ok().admit(30, std::time::Duration::from_secs(60), std::time::Instant::now())
+    }
+
     pub fn admit_schedule_rate(&self) -> bool {
-        let mut calls = self.schedule_rate.lock_ok();
-        calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
-        if calls.len() >= 12 { return false; }
-        calls.push_back(std::time::Instant::now());
-        true
+        self.schedule_rate.lock_ok().admit(12, HOUR, std::time::Instant::now())
     }
     /// Six `git_push` calls per tab per rolling hour (`services::git_push_mcp`).
     pub fn admit_push_rate(&self) -> bool {
-        let mut calls = self.push_rate.lock_ok();
-        calls.retain(|at| at.elapsed() < std::time::Duration::from_secs(3600));
-        if calls.len() >= 6 { return false; }
-        calls.push_back(std::time::Instant::now());
-        true
+        self.push_rate.lock_ok().admit(6, HOUR, std::time::Instant::now())
     }
     /// [`crate::services::web_lane::CALLS_PER_HOUR`] `web_fetch` / `web_search`
     /// calls per tab per rolling hour, counted together
@@ -537,17 +578,14 @@ impl Session {
     /// is refused for any other reason than this budget still spent one: the
     /// count is of attempts.
     pub fn admit_web_rate(&self) -> bool {
-        let hour = std::time::Duration::from_secs(3600);
+        let now = std::time::Instant::now();
         let mut map = web_budgets().lock_ok();
-        map.retain(|_, calls| { calls.retain(|at| at.elapsed() < hour); !calls.is_empty() });
+        map.retain(|_, calls| calls.prune(HOUR, now));
         if !map.contains_key(&self.identity.tab) && map.len() >= WEB_BUDGET_TABS {
-            let oldest = map.iter().filter_map(|(tab, calls)| calls.back().map(|at| (*at, tab.clone()))).min().map(|(_, tab)| tab);
+            let oldest = map.iter().filter_map(|(tab, calls)| calls.last().map(|at| (at, tab.clone()))).min().map(|(_, tab)| tab);
             if let Some(tab) = oldest { map.remove(&tab); }
         }
-        let calls = map.entry(self.identity.tab.clone()).or_default();
-        if calls.len() >= super::web_lane::CALLS_PER_HOUR { return false; }
-        calls.push_back(std::time::Instant::now());
-        true
+        map.entry(self.identity.tab.clone()).or_default().admit(super::web_lane::CALLS_PER_HOUR, HOUR, now)
     }
     pub fn admit_rate(&self) -> bool {
         let mut rate = self.rate.lock_ok();
@@ -596,7 +634,7 @@ pub struct SessionInfo {
 /// Help, markup and web sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -605,7 +643,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -786,29 +824,6 @@ fn is_local_model(opts: &PtyOptions) -> bool {
         && (opts.env.contains_key(crate::app_env!("LOCAL_MODEL")) || opts.env.contains_key("VIBE_ACTIVE_MODEL"))
 }
 
-/// The Ollama model a local-model spawn runs, from the same env pair
-/// [`local_model_has_tools`] reads: `TABTIVITY_LOCAL_MODEL` raw, else the
-/// `VIBE_ACTIVE_MODEL` alias mapped back through the "MCP"-chipped models (a
-/// tab with the tools is one of them). Fails closed — `None`, so the tab reads
-/// no mail — when the two disagree or the alias names no single model. The
-/// env comes from the renderer at spawn; the tab's own Vibe home, which it
-/// writes, is never consulted (gap 25).
-fn local_model_of(opts: &PtyOptions, tool_models: &[String]) -> Option<String> {
-    let raw = opts.env.get(crate::app_env!("LOCAL_MODEL")).map(|m| m.trim()).filter(|m| !m.is_empty());
-    let alias = opts.env.get("VIBE_ACTIVE_MODEL").map(|a| a.trim()).filter(|a| !a.is_empty());
-    let alias_of = crate::services::ollama_client::sanitize_alias;
-    match (raw, alias) {
-        (Some(raw), Some(alias)) => (alias_of(raw) == alias).then(|| raw.to_string()),
-        (Some(raw), None) => Some(raw.to_string()),
-        (None, Some(alias)) => {
-            let mut named = tool_models.iter().map(|m| m.trim()).filter(|m| alias_of(m) == alias);
-            let first = named.next()?;
-            named.all(|m| m == first).then(|| first.to_string())
-        }
-        (None, None) => None,
-    }
-}
-
 /// Whether a Vibe tab's local model wears the "MCP" chip. The tab names its
 /// model twice (`NewTabMenu`): `TABTIVITY_LOCAL_MODEL` raw, `VIBE_ACTIVE_MODEL`
 /// as the alias `prepare_local_agent` wrote — and a restored tab may carry
@@ -822,27 +837,26 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-pub struct SpawnTokenGuard { token: Option<String>, push: Option<String>, help: Option<String>, markup: Option<String>, web: Option<String>, armed: bool }
+/// Every lane's token ([`LANE_TOKEN_ENVS`]) is taken, so no lane is left out.
+pub struct SpawnTokenGuard { tokens: Vec<String>, listed: bool, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
-            token: opts.env.get(TOKEN_ENV).or_else(|| opts.env.get(SCHEDULE_TOKEN_ENV)).cloned(),
-            push: opts.env.get(GIT_TOKEN_ENV).cloned(),
-            help: opts.env.get(HELP_TOKEN_ENV).cloned(),
-            markup: opts.env.get(MARKUP_TOKEN_ENV).cloned(),
-            web: opts.env.get(WEB_TOKEN_ENV).cloned(),
+            tokens: LANE_TOKEN_ENVS.iter().filter_map(|var| opts.env.get(*var).cloned()).collect(),
+            listed: [TOKEN_ENV, SCHEDULE_TOKEN_ENV, GIT_TOKEN_ENV].iter().any(|var| opts.env.contains_key(*var)),
             armed: true,
         }
     }
     pub fn keep(&mut self) { self.armed = false; }
     /// Whether this spawn was handed a listed token (root, reader, schedule
-    /// or push); the help, markup and web tokens alone do not count.
-    pub fn holds_token(&self) -> bool { self.token.is_some() || self.push.is_some() }
+    /// or push); the cockpit, help, markup, print and web tokens alone do not
+    /// count.
+    pub fn holds_token(&self) -> bool { self.listed }
 }
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in [&self.token, &self.push, &self.help, &self.markup, &self.web].into_iter().flatten() { revoke_token(token); }
+            for token in &self.tokens { revoke_token(token); }
         }
     }
 }
@@ -881,6 +895,9 @@ pub(crate) struct Trusted {
     state: std::path::PathBuf,
     settings: Option<crate::schema::Settings>,
     entry: Option<crate::schema::projects::ProjectEntry>,
+    /// `storage::home_share_dir()`: where the local `vibe` homes live, which
+    /// [`grant_root`] reads to tell a local model from a label.
+    share: std::path::PathBuf,
 }
 impl Trusted {
     pub(crate) fn read(state: &Path, project: Option<&str>) -> Self {
@@ -889,7 +906,7 @@ impl Trusted {
             crate::storage::read_json::<crate::schema::projects::ProjectsList>(&state.join("projects.json")).ok()?
                 .into_iter().find(|e| e.id == id)
         });
-        Trusted { state: state.to_path_buf(), settings, entry }
+        Trusted { state: state.to_path_buf(), settings, entry, share: crate::storage::home_share_dir() }
     }
     fn tool_models(&self) -> Vec<String> {
         self.settings.as_ref().and_then(|s| s.ollama_mcp_models.clone()).unwrap_or_default()
@@ -990,6 +1007,16 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
     if project_lanes && runtime.serves_markup && trusted.settings.as_ref().is_some_and(|s| s.markup_mcp()) {
         grant_markup(opts, runtime, store, &trusted.tool_models());
     }
+    // The print requests server (`services::print_mcp`), merged into the same
+    // Vibe env after markup. Approval needs the window's preview, so only the
+    // window grants it (`Runtime::serves_print`).
+    if project_lanes && runtime.serves_print() && trusted.settings.as_ref().is_some_and(|s| s.print_mcp()) {
+        grant_print(opts, runtime, store, &trusted.tool_models());
+    }
+    if agent_spawn && reader_project.is_none() && help_reaches(opts, &trusted)
+        && trusted.settings.as_ref().is_some_and(|s| s.cockpit_mcp()) {
+        grant_cockpit(opts, runtime, store, &trusted.state, &trusted.tool_models());
+    }
     root_agent
 }
 
@@ -1038,19 +1065,24 @@ pub fn web_endpoint_url(port: u16) -> String {
 fn grant_root(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, trusted: &Trusted) {
     let Some(settings) = trusted.settings.as_ref() else { return };
     if !settings.root_mcp() { return; }
-    let host = crate::services::ollama_client::host_setting(settings).0.map(str::to_string);
     let Some(token) = mint_token() else { return };
-    let caller = if is_local_model(opts) { Caller::LocalModel } else { Caller::Agent };
-    // The endpoint this tab's model answers from, fixed here like its Vibe
-    // config is: `resolve_ollama_addr` with the remote allowance, so a remote
-    // host is *recorded* and refused at read time, not hidden behind an error.
-    let endpoint = (caller == Caller::LocalModel)
-        .then(|| crate::services::ollama_client::resolve_ollama_addr(host.as_deref(), true).ok())
-        .flatten();
+    // A local-model caller is what the backend verified, not the renderer's
+    // label: the launch's own files name a loopback Ollama model
+    // (`agent_privacy::local_vibe_launch`). A spawn that only *says* it is local
+    // (the label, a `vibe` on a cloud home) gets no token at all rather than the
+    // cloud class, so nothing is served on the strength of a claim.
+    let launch = crate::services::agent_privacy::local_vibe_launch(opts, &trusted.share);
+    if launch.is_none() && is_local_model(opts) {
+        return;
+    }
+    let caller = if launch.is_some() { Caller::LocalModel } else { Caller::Agent };
+    // The endpoint this tab's model answers from: the one its config was
+    // written with, which a later change of `ollama_host` does not move.
+    let endpoint = launch.as_ref().map(|l| l.endpoint.clone());
     let tool_models = trusted.tool_models();
     // The model, fixed here with the endpoint: what the read gate judges
     // local or cloud, and what keys the per-model taint (gaps 25, 33).
-    let model = (caller == Caller::LocalModel).then(|| local_model_of(opts, &tool_models)).flatten();
+    let model = launch.map(|l| l.model);
     apply_to_spawn_with(opts, runtime, &token, &settings.root_mcp_agent_list(), &tool_models, settings.root_mcp_local_only());
     if opts.env.get(TOKEN_ENV) == Some(&token) {
         let read_mail = spawn_read_mail(&trusted.state, &opts.id, model.as_deref());
@@ -1165,6 +1197,46 @@ pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     }
 }
 
+/// Wire the self-only cockpit server beside the other independently granted lanes.
+pub fn apply_cockpit_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
+    let local = is_local_model(opts);
+    if opts.sandbox || (local && !local_model_has_tools(opts, tool_models)) { return; }
+    let url = format!("http://127.0.0.1:{}/mcp/cockpit", runtime.port);
+    let name = super::cockpit_mcp::SERVER_NAME;
+    opts.env.insert(COCKPIT_TOKEN_ENV.into(), token.into());
+    opts.env.insert(COCKPIT_URL_ENV.into(), url.clone());
+    if local {
+        let mut servers: Vec<Value> = opts.env.get("VIBE_MCP_SERVERS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        servers.retain(|s| s["name"] != name);
+        servers.push(json!({"name": name, "transport": "http", "url": url, "api_key_env": COCKPIT_TOKEN_ENV}));
+        opts.env.insert("VIBE_MCP_SERVERS".into(), Value::Array(servers).to_string());
+        let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let pattern = json!(format!("{name}_*"));
+        if !enabled.contains(&pattern) { enabled.push(pattern); }
+        opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
+    } else {
+        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, COCKPIT_TOKEN_ENV);
+    }
+}
+
+/// Bind a token only to a tab already held by the workspace owner. No tool
+/// argument can choose this scope or identity.
+fn grant_cockpit(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, state: &Path, models: &[String]) {
+    let Some(binding) = super::cockpit_mcp::binding_for_spawn(state, opts) else { return };
+    if !matches!(basename(&opts.cmd), "claude" | "codex") && !is_local_model(opts) { return; }
+    let Some(token) = mint_token() else { return };
+    apply_cockpit_to_spawn_with(opts, runtime, &token, models);
+    if opts.env.get(COCKPIT_TOKEN_ENV) != Some(&token) { return; }
+    store.register(token.clone(), Identity { tab: opts.id.clone(), caller: Caller::Cockpit,
+        project: Some(binding.scope.clone()), schedule_target: None, push: None, endpoint: None, model: None }, false);
+    if let Some(session) = store.map().get_mut(&token) { session.cockpit = Some(binding.clone()); }
+    // The previous spawn's token is gone by now (`register` revokes it): what
+    // it published as current activity is not this spawn's.
+    super::cockpit_mcp::clear_foreign_activity(&binding);
+}
+
 /// Hand an agent tab the help server (`services::help_mcp`). Pure over
 /// `runtime` so it is testable; [`grant_lanes`] decides who qualifies.
 ///
@@ -1262,6 +1334,48 @@ pub fn grant_markup(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore
     apply_markup_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(MARKUP_TOKEN_ENV) == Some(&token) {
         store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Marker, project: opts.project_id.clone(), schedule_target: Some(ScheduleBinding { target, agent }), push: None, endpoint: None, model: None }, false);
+    }
+}
+
+/// Hand a local project-agent tab the print requests server
+/// (`services::print_mcp`). Pure over `runtime` so it is testable;
+/// [`grant_lanes`] decides who qualifies. Wired as markup is: Claude and
+/// Codex on their own command line, a tool-tagged local Vibe model merged
+/// into its MCP env, every other agent CLI the inert env pair. A tab without
+/// a project, a container tab and an untagged local model get nothing.
+pub fn apply_print_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
+    let local = is_local_model(opts);
+    if opts.project_id.is_none() || opts.sandbox || (local && !local_model_has_tools(opts, tool_models)) { return; }
+    let url = print_endpoint_url(runtime.port);
+    let name = super::print_mcp::SERVER_NAME;
+    opts.env.insert(PRINT_TOKEN_ENV.into(), token.into());
+    opts.env.insert(PRINT_URL_ENV.into(), url.clone());
+    if local {
+        let mut servers: Vec<Value> = opts.env.get("VIBE_MCP_SERVERS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        servers.retain(|s| s["name"] != name);
+        servers.push(json!({"name": name, "transport": "http", "url": url, "api_key_env": PRINT_TOKEN_ENV}));
+        opts.env.insert("VIBE_MCP_SERVERS".into(), Value::Array(servers).to_string());
+        let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let pattern = json!(format!("{name}_*"));
+        if !enabled.contains(&pattern) { enabled.push(pattern); }
+        opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
+    } else {
+        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, PRINT_TOKEN_ENV);
+    }
+}
+
+pub fn print_endpoint_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp/print")
+}
+
+/// The print lane of [`grant_lanes`]: the token binds the tab and its project.
+pub fn grant_print(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, tool_models: &[String]) {
+    let Some(token) = mint_token() else { return };
+    apply_print_to_spawn_with(opts, runtime, &token, tool_models);
+    if opts.env.get(PRINT_TOKEN_ENV) == Some(&token) {
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Printer, project: opts.project_id.clone(), schedule_target: None, push: None, endpoint: None, model: None }, false);
     }
 }
 
@@ -1820,6 +1934,22 @@ pub(crate) fn resolve_project(stores: &Stores, wanted: &str) -> Result<String, S
         [] => Err(format!("no project named '{wanted}' (see projects_list)")),
         _ => Err(format!("several projects are named '{wanted}'; pass the id instead")),
     }
+}
+
+/// What a cloud caller is told about a local-models-only project's working
+/// copy: the git tools (branch, commit subjects) read the folder's own text.
+const LOCAL_MODELS_ONLY_READ: &str =
+    "this project is set to Local models only, so its working copy is not read for a cloud agent";
+
+/// Whether `entry`'s folder must not be read for this call: it is
+/// local-models-only and the caller is not a local-model tab whose model is
+/// confirmed to run on this machine ([`local_model_confirmed`]). The tab kind
+/// alone is not enough: a Mistral tab on an Ollama cloud model is a
+/// [`Caller::LocalModel`] whose answers come from ollama.com. A call with no
+/// session (nothing recorded to confirm) is hidden too.
+fn hidden_from(stores: &Stores, entry: &crate::schema::projects::ProjectEntry) -> bool {
+    let confirmed_local = stores.caller == Caller::LocalModel && stores.session.is_some() && local_model_confirmed(stores);
+    !confirmed_local && crate::services::agent_privacy::is_locked(entry)
 }
 
 fn projects_list(stores: &Stores) -> Result<Value, String> {
@@ -3340,6 +3470,12 @@ fn projects_git_status(stores: &Stores, args: &Value) -> Result<Value, String> {
             continue;
         }
         let skip = |reason: String| json!({ "id": entry.id, "name": entry.name, "reason": reason });
+        // A local-models-only project's working copy is not read for a cloud
+        // caller (`services::agent_privacy`).
+        if hidden_from(stores, &entry) {
+            skipped.push(skip(LOCAL_MODELS_ONLY_READ.to_string()));
+            continue;
+        }
         // One slow repo must not cost the rows already read: a snapshot is
         // started only while it can still finish inside the request.
         if out_of_time || stores.closing(GIT_TIMEOUT + std::time::Duration::from_millis(500)) {
@@ -3403,6 +3539,9 @@ fn project_activity(stores: &Stores, args: &Value) -> Result<Value, String> {
     let wanted = str_arg(args, "project").ok_or("`project` is required")?;
     let id = resolve_project(stores, wanted)?;
     let entry = read_projects(stores.projects).into_iter().find(|p| p.id == id).ok_or("project not found")?;
+    if hidden_from(stores, &entry) {
+        return Err(LOCAL_MODELS_ONLY_READ.to_string());
+    }
     let (dir, source) = local_checkout(&entry)?;
     let snap = git_snapshot(stores, Path::new(&dir))?.ok_or("not a git repository")?;
     let count = args.get("commits").and_then(Value::as_u64).unwrap_or(10).clamp(1, 30);
@@ -3652,6 +3791,68 @@ pub(crate) fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
+/// A JSON-RPC success reply carrying `result`.
+pub(crate) fn rpc_result(id: Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+/// The id of one JSON-RPC message a tool lane (`services::mcp`) received:
+/// `Err` with the `-32600` reply for a malformed message, `Ok(None)` for a
+/// notification (no `id`), which gets no reply. Every lane runs this before
+/// its own access checks.
+pub(crate) fn rpc_request_id(message: &Value) -> Result<Option<Value>, Value> {
+    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
+        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
+        || message.get("params").is_some_and(|p| !p.is_object()) {
+        return Err(rpc_error(Value::Null, -32600, "invalid request"));
+    }
+    Ok(message.get("id").cloned())
+}
+
+/// What a tool lane (`services::mcp`) answers `initialize` and `tools/list` with.
+pub(crate) struct LaneInfo {
+    pub name: &'static str,
+    pub instructions: &'static str,
+    pub tools: fn() -> Value,
+}
+
+/// One request a tool lane serves once its access checks passed: a finished
+/// reply, or a `tools/call` for the lane's own body.
+pub(crate) enum LaneMethod<'a> {
+    Reply(Value),
+    /// `args` is the raw `params.arguments`, `None` when absent: each lane
+    /// picks its own default.
+    Call { name: &'a str, args: Option<Value> },
+}
+
+/// The methods every tool lane answers alike — `initialize`, `ping`,
+/// `tools/list`, and `-32601` for any other than `tools/call`.
+pub(crate) fn lane_method<'a>(lane: &LaneInfo, id: &Value, message: &'a Value) -> LaneMethod<'a> {
+    let ok = |result: Value| LaneMethod::Reply(rpc_result(id.clone(), result));
+    match message["method"].as_str().unwrap_or_default() {
+        "initialize" => ok(json!({"protocolVersion":PROTOCOL_VERSION,"capabilities":{"tools":{}},
+            "serverInfo":{"name":lane.name,"version":env!("CARGO_PKG_VERSION")},"instructions":lane.instructions})),
+        "ping" => ok(json!({})),
+        "tools/list" => ok(json!({"tools":(lane.tools)()})),
+        "tools/call" => LaneMethod::Call {
+            name: message["params"]["name"].as_str().unwrap_or_default(),
+            args: message["params"].get("arguments").cloned(),
+        },
+        _ => LaneMethod::Reply(rpc_error(id.clone(), -32601, "method not found")),
+    }
+}
+
+/// A tool lane's successful `tools/call` result: `value` as text and as
+/// structured content.
+pub(crate) fn tool_ok(value: Value) -> Value {
+    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
+}
+
+/// A tool lane's failed `tools/call` result: `text` alone, `isError` set.
+pub(crate) fn tool_err(text: &str) -> Value {
+    json!({"content":[{"type":"text","text":text}],"isError":true})
+}
+
 /// The fixed category an audited refusal of [`handle_message`] is logged under
 /// (`security::audit_reason`), as the other lanes log theirs: `None` for a
 /// served call. Only fixed texts are matched — never a tool's own message, which
@@ -3697,13 +3898,10 @@ pub fn refusal_reason(reply: &Value) -> Option<&'static str> {
 /// Answer one JSON-RPC message. `None` for a notification (no `id`), which MCP
 /// answers with `202 Accepted` and no body. Blocking: it reads and writes files.
 pub fn handle_message(stores: &Stores, tab: &str, message: &Value) -> (Option<Value>, Effects) {
-    if message["jsonrpc"] != "2.0" || !message["method"].is_string()
-        || message.get("id").is_some_and(|id| !id.is_string() && !id.is_i64() && !id.is_u64())
-        || message.get("params").is_some_and(|p| !p.is_object()) {
-        return (Some(rpc_error(Value::Null, -32600, "invalid request")), Effects::default());
-    }
-    let Some(id) = message.get("id").filter(|v| !v.is_null()).cloned() else {
-        return (None, Effects::default());
+    let id = match rpc_request_id(message) {
+        Err(reply) => return (Some(reply), Effects::default()),
+        Ok(None) => return (None, Effects::default()),
+        Ok(Some(id)) => id,
     };
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     let ok = |result: Value| Some(json!({ "jsonrpc": "2.0", "id": id.clone(), "result": result }));

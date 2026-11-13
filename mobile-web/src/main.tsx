@@ -7,6 +7,7 @@ import { App } from "./App";
 import { ErrorBoundary } from "./ErrorBoundary";
 import "./style.css";
 import "./themes.css";
+import "./steering/steering.css";
 import { applyPhoneTheme } from "./theme";
 import { rememberPushLanguage } from "./pushTitles";
 import { hardenPrototype } from "../../src/lib/hardenPrototype";

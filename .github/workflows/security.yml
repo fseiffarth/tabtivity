@@ -47,11 +47,6 @@ jobs:
       # - RUSTSEC-2023-0071 `rsa` Marvin timing oracle: `pgp` pulls `rsa` in
       #   unconditionally and no patched version exists. Mitigated by defaulting
       #   key generation to Curve25519; see the note on `pgp` in Cargo.toml.
-      # - RUSTSEC-2026-0367/0368/0369 `zip` 8.6 `extract()` symlink/SUID flaws,
-      #   patched in 9: our own `zip` is 9, but `calamine` (spreadsheet reading,
-      #   no newer release) still pulls 8.6. It only reads entries through
-      #   `ZipArchive` and never calls `extract()`. Drop these when `calamine`
-      #   moves to zip 9.
       # - RUSTSEC-2026-0387 `crypto-bigint` 0.5.5 timing variability in its
       #   "constant-time" arithmetic (published 2026-10-23; patched in 0.7.6):
       #   the RustCrypto 0.13 curve crates (`elliptic-curve`, `p256`, `k256`, …)
@@ -61,7 +56,7 @@ jobs:
       #   timing side channel on our ECC secret operations; drop this once that
       #   bump has landed.
       - name: Audit Rust dependencies
-        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369 --ignore RUSTSEC-2026-0387
+        run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387
 
       # The release binary, checksum pinned to the version, as for gitleaks in
       # ci-cd.yml.

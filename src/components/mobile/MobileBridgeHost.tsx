@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
+import { localChoiceRows } from "./localChoiceRows";
 import { BOX_SCOPE_PREFIX, boxScopeId, useBoxesStore } from "../../stores/boxes";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import { switchTabLocation } from "../../stores/agents/agentLocationSwitch";
@@ -26,12 +27,13 @@ import { ensureRootScopeHydrated, useRootOverlayStore } from "../../stores/rootO
 import { closeTabInScope } from "../../lib/remote/closeRemoteTab";
 import { useSettingsStore } from "../../stores/settings";
 import { calendarColor, useCalendarStore, visibleCalendarIds } from "../../stores/calendar/calendar";
-import { agentTabState, agentTurnStartedAt, lastTabReadAt, noteUserInput, useActivityStore } from "../../stores/activity";
-import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
+import { agentTabState, noteUserInput, useActivityStore } from "../../stores/activity";
+import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
-import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
+import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
+import { answerMarkupQuestions, dismissMarkupQuestions, listMarkupQuestions, listMarkupTicks, MARKUP_MCP_CHANGED, reopenMarkupQuestions, type MarkupAnswer, type MarkupTick } from "../../lib/viewers/markupQuestions";
 import { markupErrorCode } from "../../lib/viewers/pdfMarkup";
 import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type ProjectAgentPrompt, type SentAgentPrompt } from "../../stores/agents/agentPrompts";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
@@ -76,7 +78,7 @@ import {
 } from "../../lib/tabs/newTabItems";
 import { worktreeAgentSpec } from "../tabs/agentWorktrees";
 import { probeLocalModelPlacement } from "../tabs/localModelGroup";
-import { listLocalDrivers, loadOllamaModel, type LocalDriverInfo } from "../../lib/agents/localDrivers";
+import { listLocalDrivers, loadOllamaModel } from "../../lib/agents/localDrivers";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 import { readerAgent } from "../../lib/agents/agentReader";
 import { agentWorktreeChoices, CARRIES_CONVERSATION, sameDir, worktreeName, type GitWorktree } from "../../lib/agents/agentWorktrees";
@@ -89,8 +91,8 @@ import { finishAlert } from "../../lib/alertDone";
 import { useAlertsFeed, type AlertsFeed } from "../files/useAlertsFeed";
 import { agentTurnEdges, type AgentTurnEdge, type MobileAgentState } from "../../lib/mobileAgentTurns";
 import { freshGitDot, gitDotRows, type MobileGitDot, type MobileGitStateRow } from "../../lib/mobileGitDots";
-import { divergedCount, divergedDiff, divergedList, divergedPreview, divergedResolve, type MobileDivergedFile, type MobileSyncOp, type MobileSyncPreview } from "../../lib/mobileDiverged";
-import { mobileSubagentCount } from "../../lib/mobileSubagents";
+import { divergedCount, divergedDiff, divergedList, divergedPreview, divergedResolve, type MobileDivergedFile, type MobilePreviewOp, type MobileSyncOp, type MobileSyncPreview } from "../../lib/mobileDiverged";
+import { agentRosterFacts, agentRosterState, isRosterAgentKind, type AgentRosterFacts } from "../../lib/agents/agentRoster";
 import {
   desktopTimeZone,
   localOccurrenceKey,
@@ -326,15 +328,15 @@ type DesktopRequest =
   | { type: "local_model_mutate"; request_id: string; action: LocalModelAction }
   | { type: "cli_overview"; request_id: string; refresh?: boolean }
   | { type: "sync_diverged"; request_id: string; project_id: string }
-  | { type: "sync_preview"; request_id: string; project_id: string; direction: "pull" | "push"; paths: string[] }
-  | { type: "sync_resolve"; request_id: string; project_id: string; op: MobileSyncOp; paths: string[] }
+  | { type: "sync_preview"; request_id: string; project_id: string; op: MobilePreviewOp; paths: string[] }
+  | { type: "sync_resolve"; request_id: string; project_id: string; op: MobileSyncOp; paths: string[]; expect?: string | null }
   | { type: "sync_diff"; request_id: string; project_id: string; path: string };
 type DesktopResponse =
 | { status: "catalog"; agents: CatalogAgent[]; statuses: AgentTabStatus[]; schedules: AgentTabSchedules[]; prompts: AgentTabPrompts[]; timings: AgentTabTiming[]; closed: ClosedAgentTabRow[]; git?: MobileGitDot; diverged?: number }
   | { status: "activity"; statuses: AgentTabStatus[]; prompts: AgentTabPrompts[] }
   | { status: "git_states"; states: MobileGitStateRow[] }
   | { status: "diverged"; connected: boolean; files: MobileDivergedFile[] }
-  | { status: "sync_preview"; preview: MobileSyncPreview }
+  | { status: "sync_preview"; preview: MobileSyncPreview; fingerprint: string }
   | { status: "sync_resolved"; done: number; failed: number; skipped: number }
   | { status: "sync_diff"; diff: string; cut: boolean }
   | { status: "activated" }
@@ -571,30 +573,11 @@ function agentStatuses(projectId?: string): AgentTabStatus[] {
   return scope ? projectAgentStatuses(scope.id) : [];
 }
 
-/**
- * What the phone is told one agent tab is doing.
- *
- * The first four answers are the desktop's own lamps, unchanged — `interrupted`
- * (the user cut the turn off) included, which that store holds even on the
- * viewed tab, until the next turn. The fifth is
- * the one this window cannot read off `attentionByTab`: that flag means UNREAD
- * output and is deliberately never raised for the tab under the user's eyes —
- * but "under the user's eyes" here is only "it is the visible tab of its group",
- * which an unattended desktop satisfies all night. A phone asking "did anything
- * finish?" would then be told no, forever, about precisely the tab its owner
- * left open. So a finished turn nobody has *arrived at* since (`lastTabReadAt`,
- * moved by a tab switch here or by the phone opening the tab) is reported as
- * done on its own evidence.
- */
+/** What the phone is told one agent tab is doing: the shared roster's
+ * reading (`lib/agents/agentRoster`), so the phone and the desktop cockpit
+ * give one tab one answer. */
 function mobileAgentState(ptyId: string): MobileAgentState {
-  const live = agentTabState(ptyId);
-  if (live !== "idle") return live;
-  const activity = useActivityStore.getState();
-  if (activity.attentionByTab[ptyId] === "interrupted") return "interrupted";
-  if (activity.attentionByTab[ptyId] === "done") return "done";
-  const doneAt = activity.lastDoneByTab[ptyId];
-  if (doneAt !== undefined && doneAt > (lastTabReadAt(ptyId) ?? 0)) return "done";
-  return "idle";
+  return agentRosterState(ptyId);
 }
 
 /**
@@ -630,83 +613,46 @@ function agentTurnSnapshot(): Map<string, MobileAgentState> {
  * of output does not walk every tab of every scope per chunk. */
 const AGENT_TURN_SETTLE_MS = 500;
 
-/** The model tag a phone card shows for `tab`, with both of its sources asked
- * to re-read for the next poll. */
-function mobileModelTag(projectId: string, tab: TabEntry): string | undefined {
-  const models = useAgentModelsStore.getState();
-  void models.refresh(projectId, tab);
-  void models.refreshScreen(projectId, tab);
-  return agentTabModelTag(projectId, tab, models.byTab, models.screenByTab);
+/** An agent tab as the phone counts one (`isRosterAgentKind`). */
+function isAgentKind(kind: TabEntry["kind"]): boolean {
+  return isRosterAgentKind(kind);
 }
 
-/** The PLAN / GOAL marks the desktop's tab strip shows for a tab
- * (`TabAgentModeMarks`), onto a phone row — only the ones that are on. Read
- * after `mobileModelTag`, whose screen re-read refreshes them too. */
-function withModeMarks<Row extends { plan?: boolean; goal?: boolean }>(row: Row, ptyId: string): Row {
-  const marks = tabModeMarks(useAgentModelsStore.getState(), ptyId);
-  if (marks?.plan) row.plan = true;
-  if (marks?.goal) row.goal = true;
+/** The wire timing fields of a tab's shared roster facts. */
+function withTimings<Row extends AgentTabTiming>(row: Row, facts: AgentRosterFacts): Row {
+  if (facts.model) row.model = facts.model;
+  if (facts.plan) row.plan = true;
+  if (facts.goal) row.goal = true;
+  if (facts.subagents) row.subagents = facts.subagents;
+  if (facts.workingAt !== undefined) row.working_at = facts.workingAt;
+  if (facts.doneAt !== undefined) row.done_at = facts.doneAt;
+  if (facts.turnStartedAt !== undefined) row.turn_started_at = facts.turnStartedAt;
   return row;
 }
 
-/** An agent tab as the phone counts one: a local-model tab is one too — the
- * catalog lists it as `agent` (`services::mobile_control::discovery`). */
-function isAgentKind(kind: TabEntry["kind"]): boolean {
-  return kind === "agent" || kind === "local_agent";
-}
-
 function projectAgentStatuses(projectId: string): AgentTabStatus[] {
-  const activity = useActivityStore.getState();
   return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
-    const ptyId = `${projectId}:${tab.key}`;
-    const state = mobileAgentState(ptyId);
-    if (state === "idle") return [];
-    const status: AgentTabStatus["status"] = state;
+    if (mobileAgentState(`${projectId}:${tab.key}`) === "idle") return [];
     // The phone sorts by these and tags the row with the model; the answer is
-    // whatever the desktop knows at this poll (the model store throttles its
-    // own re-reads), so the phone can be one poll behind, never wrong. The
-    // model is read off the live tmux pane first (`agentTabModelTag`).
-    const row: AgentTabStatus = { tmux_session: tab.tmuxSession, status };
-    const model = mobileModelTag(projectId, tab);
-    if (model) row.model = model;
-    withModeMarks(row, ptyId);
-    const subagents = mobileSubagentCount(projectId, tab);
-    if (subagents) row.subagents = subagents;
-    // Subagents at work past the Stop keep the turn going (`turnDuration`).
-    const workingAt = status === "working" || subagents ? Date.now() : activity.lastWorkingByTab[ptyId];
-    if (workingAt !== undefined) row.working_at = workingAt;
-    const doneAt = activity.lastDoneByTab[ptyId];
-    if (doneAt !== undefined) row.done_at = doneAt;
-    const turnStartedAt = agentTurnStartedAt(ptyId);
-    if (turnStartedAt !== undefined) row.turn_started_at = turnStartedAt;
-    return [row];
+    // whatever the desktop knows at this poll, so the phone can be one poll
+    // behind, never wrong.
+    const facts = agentRosterFacts(projectId, tab, Date.now());
+    if (facts.state === "idle") return [];
+    return [withTimings<AgentTabStatus>({ tmux_session: tab.tmuxSession, status: facts.state }, facts)];
   });
 }
 
 /** Timings of the agent tabs `projectAgentStatuses` leaves out (a quiet or
  * already-read tab), so the phone's "last working" sort keeps a read turn in
  * its place among the finished ones instead of dropping it to its tab-bar spot
- * — and their model, so a quiet card is tagged like a busy one. */
+ * — and their model, so a quiet card is tagged like a busy one. A background
+ * subagent works on after the turn is over. */
 function projectAgentTimings(projectId: string): AgentTabTiming[] {
-  const activity = useActivityStore.getState();
   return phoneTabs(projectId).flatMap((tab) => {
     if (!isAgentKind(tab.kind) || !tab.tmuxSession) return [];
-    const ptyId = `${projectId}:${tab.key}`;
-    if (mobileAgentState(ptyId) !== "idle") return [];
-    const row: AgentTabTiming = { tmux_session: tab.tmuxSession };
-    const model = mobileModelTag(projectId, tab);
-    if (model) row.model = model;
-    withModeMarks(row, ptyId);
-    // A background subagent works on after the turn is over.
-    const subagents = mobileSubagentCount(projectId, tab);
-    if (subagents) row.subagents = subagents;
-    const workingAt = subagents ? Date.now() : activity.lastWorkingByTab[ptyId];
-    if (workingAt !== undefined) row.working_at = workingAt;
-    const doneAt = activity.lastDoneByTab[ptyId];
-    if (doneAt !== undefined) row.done_at = doneAt;
-    const turnStartedAt = agentTurnStartedAt(ptyId);
-    if (turnStartedAt !== undefined) row.turn_started_at = turnStartedAt;
+    if (mobileAgentState(`${projectId}:${tab.key}`) !== "idle") return [];
+    const row = withTimings<AgentTabTiming>({ tmux_session: tab.tmuxSession }, agentRosterFacts(projectId, tab, Date.now()));
     return row.model === undefined && !row.plan && !row.goal && !row.subagents && row.working_at === undefined && row.done_at === undefined && row.turn_started_at === undefined ? [] : [row];
   });
 }
@@ -1051,6 +997,9 @@ async function create(request: CreateRequest, t: ReturnType<typeof useT>): Promi
       localFile: scope.localFile,
       requestHash,
       spec,
+      // An agent nothing has been asked of yet takes the phone's ＋ as the
+      // desktop's does — when the phone can attach it (a saved tmux session).
+      reuse: (tabs) => findEmptyAgentTab(scope.id, tabs.filter((tab) => tab.tmuxSession), spec),
     });
   } catch (error) {
     return { status: "error", code: "persist_failed", message: String(error) };
@@ -1319,13 +1268,8 @@ async function localChoices(scope: MobileScope): Promise<{ model: string; ready:
     probeLocalModelPlacement(model),
   ]);
   const withVibe = enabledInstalledAgentBins(statuses, settings?.disabled_agents).has("vibe");
-  const row = (d: LocalDriverInfo) => ({ key: d.id, label: d.label, caution: d.heavy_harness, driver: d.id as string | undefined });
-  const available = drivers.filter((d) => d.available);
-  const rows = [
-    ...available.filter((d) => !d.heavy_harness).map(row),
-    ...(withVibe ? [{ key: "vibe", label: "Mistral", caution: false, driver: undefined }] : []),
-    ...available.filter((d) => d.heavy_harness).map(row),
-  ];
+  const project = useProjectsStore.getState().projects.find((entry) => entry.id === scope.id);
+  const rows = localChoiceRows(drivers, withVibe, project);
   const choices = await Promise.all(rows.map(async (row) => ({
     driver: row.driver,
     public: {
@@ -1506,7 +1450,7 @@ async function closeMobileTab(projectId: string, tmuxSession: string): Promise<D
   await restoreScope(scope);
   const tab = mobileTargetTab(scope.id, tmuxSession);
   if (!tab) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
-  closeTabInScope(scope.id, tab.key);
+  await closeTabInScope(scope.id, tab.key);
   // CenterPanel's debounce persists the ACTIVE scope only, and the phone closes
   // a tab in whichever project it is looking at. Without this write the catalog
   // — which reads that same session file — keeps listing the closed tab, and a
@@ -2955,8 +2899,9 @@ async function attachDesktopImage(projectId: string, imageId: string, chat?: str
  * file. `workspace` re-fetches the scope's shared tab set (`refreshWorkspaceScope`,
  * which also adds a tab created elsewhere); `projects` the registry;
  * `calendar` the board and month; `schedules` and `prompts` every loaded
- * project's rows. Best-effort — a slice that fails to load is the next
- * poll's problem. */
+ * project's rows; `markup` rings the markup views (the host's own tabs'
+ * asks and ticks changed). Best-effort — a slice that fails to load is the
+ * next poll's problem. */
 /** Broadcast `agent-schedules-changed` to every window of this app; where the
  * event cannot be sent, at least re-read this window's rows. */
 export async function emitSchedulesChanged(): Promise<void> {
@@ -2964,6 +2909,18 @@ export async function emitSchedulesChanged(): Promise<void> {
     await emit("agent-schedules-changed");
   } catch {
     await useAgentSchedulesStore.getState().refreshLoaded();
+  }
+}
+
+/** A tab the Mobile host spawned asked or ticked (`markup_ask` /
+ * `markup_done` in the host's own memory, `docs/headless_mcp_plan.md` phase
+ * 1b): ring the event the markup views already re-read on, as the window's own
+ * listener does for its tabs. Best-effort. */
+export async function emitMarkupChanged(): Promise<void> {
+  try {
+    await emit(MARKUP_MCP_CHANGED);
+  } catch {
+    // No IPC to ring over: the views re-read on their next trigger.
   }
 }
 
@@ -2979,6 +2936,7 @@ async function refreshSlices(projectId: string | null | undefined, slices: strin
     // (`docs/headless_mcp_plan.md`, the Mobile host's schedule notices).
     else if (slice === "schedules") jobs.push(emitSchedulesChanged());
     else if (slice === "prompts") jobs.push(useAgentPromptsStore.getState().refreshLoaded());
+    else if (slice === "markup") jobs.push(emitMarkupChanged());
   }
   await Promise.all(jobs.map((job) => job.catch(() => undefined)));
   return { status: "seen" };
@@ -2986,7 +2944,7 @@ async function refreshSlices(projectId: string | null | undefined, slices: strin
 
 /** The agents whose transcript `services::agent_transcript` reads; any other
  * family answers `unsupported` there, and so does the short-circuit below. */
-const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "opencode", "gemini", "agy"]);
+const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "opencode", "gemini", "agy", "muse"]);
 
 /**
  * The phone's Focus view on an agent tab: the conversation as the agent's own
@@ -3013,7 +2971,7 @@ async function agentTranscriptFor(
   // A local-model tab's `cmd` is its launcher; only an OpenCode driver has a
   // transcript to read (`readerAgent`).
   const agent = readerAgent(tab);
-  if (!tab.sessionId && !["opencode", "gemini", "agy"].includes(agent)) {
+  if (!tab.sessionId && !["opencode", "gemini", "agy", "muse"].includes(agent)) {
     // Two different answers for the phone: a family whose transcript is
     // never read (the backend's `unsupported`, decided by the same list) hands
     // Focus to the terminal; a tab that has no session id *yet* — every tab
@@ -3114,10 +3072,14 @@ async function handleRequest(
     // Both check the host-wide switch first (`lib/mobileLocalModels`).
     case "local_models": return localModelsList();
     case "local_model_mutate": return localModelMutate(request.action);
-    // The phone's Diverged list; the sidecar has checked its switches.
+    // The phone's Diverged list. The sidecar has checked its switches and
+    // sealed the preview token; the preview and the resolve repeat
+    // `project_sync`, refuse a delete on an HPC host, and a resolve
+    // moves nothing unless the preview's fingerprint still holds
+    // (`lib/mobileDiverged`).
     case "sync_diverged": return divergedList(request.project_id);
-    case "sync_preview": return divergedPreview(request.project_id, request.direction, request.paths);
-    case "sync_resolve": return divergedResolve(request.project_id, request.op, request.paths);
+    case "sync_preview": return divergedPreview(request.project_id, request.op, request.paths);
+    case "sync_resolve": return divergedResolve(request.project_id, request.op, request.paths, request.expect);
     case "sync_diff": return divergedDiff(request.project_id, request.path);
     // The side panel's CLIs view's reading; the sidecar cuts it for the phone
     // (no account, no path-naming panel line).

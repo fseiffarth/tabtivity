@@ -25,7 +25,8 @@
 //!
 //! [`import_from_user_home`] fills the layer from the user's own `~/.claude`,
 //! `~/.codex` and `~/.gemini`, plus the hook and plugin files the other CLIs
-//! read (Cursor, Droid, Copilot, OpenCode, Pi, Mistral Vibe) — so a tool the
+//! read (Cursor, Droid, Copilot, OpenCode, Pi, Mistral Vibe) and the shared
+//! `~/.agents/skills` (Codex, Copilot, OpenCode) — so a tool the
 //! user wired into their agents themselves (rtk's `rtk init -g`, say) reaches
 //! every Tabtivity agent too. One click, the one direction that is safe.
 //! Tabtivity's own session hooks are filtered out of what it imports; they are
@@ -163,7 +164,16 @@ pub fn apply_to_home(state_dir: &Path, home: &Path) -> io::Result<()> {
                     }
                 }
             }
-            dst.write(&bytes)?;
+            // One file that cannot be written must not cost the rest of the
+            // layer — the merged configs below carry settings like Codex's
+            // Windows sandbox. A copy placed before stays recorded as ours.
+            if let Err(e) = dst.write(&bytes) {
+                eprintln!("agent_global: copy {rel} into {}: {e}", home.display());
+                if previous.files.contains(rel) {
+                    placed.push(rel.clone());
+                }
+                continue;
+            }
         }
         // Also repairs a copy an earlier spawn left non-executable.
         let _ = dst.set_exec_bits(exec_bits(&src));
@@ -537,6 +547,9 @@ const IMPORT_DIRS: &[&str] = &[
     ".codex/prompts",
     ".codex/rules",
     ".codex/skills",
+    // The shared user-skill folder Codex, Copilot and OpenCode read beside
+    // their own (Claude only offers to import from it).
+    ".agents/skills",
     ".gemini/commands",
     ".gemini/hooks",
     ".copilot/hooks",
@@ -1020,6 +1033,24 @@ mod tests {
         assert!(home.join(".claude/CLAUDE.md").is_file());
     }
 
+    #[test]
+    fn a_file_that_cannot_be_written_does_not_cost_the_rest_of_the_layer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        let layer = global_dir_in(&state);
+        write(&layer.join(".claude/CLAUDE.md"), "global");
+        write(&layer.join(".claude/skills/a/SKILL.md"), "skill");
+        write(&layer.join(".codex/config.toml"), "[windows]\nsandbox = \"elevated\"\n");
+        // A directory where the first file goes: its write fails.
+        write(&home.join(".claude/CLAUDE.md/inside"), "x");
+        apply_to_home(&state, &home).unwrap();
+        assert_eq!(std::fs::read_to_string(home.join(".claude/skills/a/SKILL.md")).unwrap(), "skill");
+        let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+        assert!(codex.contains("sandbox = \"elevated\""), "{codex}");
+        assert!(home.join(MANIFEST).is_file());
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_hook_script_stays_executable_in_the_home() {
@@ -1244,6 +1275,7 @@ mod tests {
         write(&user.join(".claude/history.jsonl"), "{}");
         write(&user.join(".claude/skills/s/SKILL.md"), "skill");
         write(&user.join(".codex/skills/.system/x.md"), "bundled");
+        write(&user.join(".agents/skills/shared/SKILL.md"), "shared skill");
         write(&user.join(".codex/AGENTS.md"), "codex\n@/home/u/.codex/RTK.md");
         write(&user.join(".codex/RTK.md"), "rtk");
         write(&user.join(".codex/auth.json"), "{}");
@@ -1281,12 +1313,13 @@ mod tests {
             ),
         );
         let report = import_from_user_home_in(&state, &user).unwrap();
-        assert_eq!(report, ImportReport { files: 7, configs: 5 });
+        assert_eq!(report, ImportReport { files: 8, configs: 5 });
         let layer = global_dir_in(&state);
         assert!(layer.join(".claude/CLAUDE.md").is_file());
         assert!(layer.join(".claude/RTK.md").is_file());
         assert!(layer.join(".claude/statusline.sh").is_file());
         assert!(layer.join(".claude/skills/s/SKILL.md").is_file());
+        assert!(layer.join(".agents/skills/shared/SKILL.md").is_file());
         assert!(!layer.join(".claude/.credentials.json").exists());
         assert!(!layer.join(".claude/history.jsonl").exists());
         assert!(!layer.join(".codex/skills/.system").exists());

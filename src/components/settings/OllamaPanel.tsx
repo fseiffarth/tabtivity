@@ -9,6 +9,7 @@ import {
   ToggleRow,
 } from "../layout/settingsUi";
 import { formatBytes as fmtBytes } from "../../lib/formatBytes";
+import { placementLabel } from "../../lib/agents/ollamaPlacement";
 import { UntestedTag } from "../common/UntestedTag";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Dropdown } from "../common/Dropdown";
@@ -30,6 +31,7 @@ interface OllamaModelInfo {
   family: string | null;
   running: boolean;
   size_vram: number;
+  loaded_size?: number;
 }
 
 /** How a chosen models-download location would be applied (mirrors backend
@@ -52,7 +54,25 @@ interface RegistryModel {
   sizes: string[];
   pulls: string;
   updated: string;
+  /** A GGUF repo on Hugging Face (`hf.co/<user>/<repo>`): its `sizes` are
+   *  quantization tags. */
+  hugging_face: boolean;
+  /** Parameter count from the Hugging Face search ("7.6B"); null otherwise. */
+  params: string | null;
+  /** A gated Hugging Face repo: pulls only once Ollama's key is on the account. */
+  gated: boolean;
 }
+
+/** One page of Hugging Face search results (mirrors backend HfSearchPage). */
+interface HfSearchPage {
+  models: RegistryModel[];
+  nextCursor: string | null;
+}
+
+/** Where the browse list searches: ollama.com, or GGUF repos on Hugging Face
+ *  (pulled by Ollama as `hf.co/<user>/<repo>:<quant>`). */
+const REGISTRY_SOURCES = ["ollama", "hf"] as const;
+type RegistrySource = (typeof REGISTRY_SOURCES)[number];
 
 /** A tag's headline facts (mirrors backend RegistryDetails), fetched lazily so a
  *  row that carries no size badge on the search card can still show its
@@ -184,6 +204,9 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const [regRuns, setRegRuns] = useState(""); // "" = either, else a REGISTRY_RUNS value
   const [regDownload, setRegDownload] = useState(""); // "" = any, else a REGISTRY_DOWNLOAD_SIZES value
   const [sortBy, setSortBy] = useState<SortKey>("popular");
+  const [regSource, setRegSource] = useState<RegistrySource>("ollama");
+  // Hugging Face pages by cursor, not number: the next page's token.
+  const hfCursor = useRef<string | null>(null);
   const [regModels, setRegModels] = useState<RegistryModel[]>([]);
   const [regPage, setRegPage] = useState(0);
   const [regLoading, setRegLoading] = useState(false);
@@ -268,8 +291,8 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The installed Ollama version — a local read, no network (the registry half
-  // only runs when the user presses "Check for updates").
+  // The installed Ollama version — a local read, no network; the newest release
+  // comes from the last stored check (the daily one or "Check for updates").
   useEffect(() => {
     if (!installed) return;
     ollamaVersionStatus(false)
@@ -525,7 +548,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // Filters and sort are ollama.com's own (see `search_ollama_registry`), so
   // every page arrives filtered and in order and scrolling just appends.
   const regCapabilities = [...regTypes, regRuns].filter(Boolean);
-  const regFilterKey = `${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
+  const regFilterKey = `${regSource}|${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
 
   // Fetch one page of ollama.com/search results. `reset` replaces the list
   // (new query/filter/sort); otherwise it appends, de-duping by name across
@@ -540,13 +563,24 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       setRegDone(false);
     }
     try {
-      const result = await invoke<RegistrySearchPage>("search_ollama_registry", {
-        query: regQueryLive.trim(),
-        capabilities: regCapabilities,
-        size: regDownload,
-        sort: sortBy,
-        page,
-      });
+      // Hugging Face's filters are not ollama.com's: only the query and sort apply.
+      const result: RegistrySearchPage =
+        regSource === "hf"
+          ? await invoke<HfSearchPage>("search_huggingface_models", {
+              query: regQueryLive.trim(),
+              sort: sortBy,
+              cursor: reset ? null : hfCursor.current,
+            }).then((p) => {
+              if (seq === regSeq.current) hfCursor.current = p.nextCursor;
+              return { models: p.models, hasMore: p.nextCursor !== null };
+            })
+          : await invoke<RegistrySearchPage>("search_ollama_registry", {
+              query: regQueryLive.trim(),
+              capabilities: regCapabilities,
+              size: regDownload,
+              sort: sortBy,
+              page,
+            });
       if (seq !== regSeq.current) return;
       setRegPage(page);
       setRegDone(!result.hasMore);
@@ -870,8 +904,14 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
         </div>
         {meta && <div className="ollama-catalog-hint">{meta}</div>}
         {m.description && <div className="ollama-catalog-desc">{m.description}</div>}
-        {(caps.length > 0 || m.community) && (
+        {(caps.length > 0 || m.community || m.hugging_face) && (
           <div className="ollama-caps">
+            {m.hugging_face && (
+              <span className="ollama-cap" title={t("ollama.hfTitle", { user: m.name.split("/")[1] ?? "" })}>
+                {t("ollama.hfBadge")}
+              </span>
+            )}
+            {m.params && <span className="ollama-cap">{m.params}</span>}
             {m.community && (
               <span className="ollama-cap" title={t("ollama.communityTitle", { user: m.name.split("/")[0] })}>
                 {t("ollama.communityBadge")}
@@ -889,6 +929,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             {n}
           </div>
         ))}
+        {m.gated && <div className="ollama-catalog-hint">{t("ollama.hfGated")}</div>}
         <div
           className="ollama-catalog-foot"
           onMouseEnter={() => fetchTagInfo(fullName)}
@@ -943,7 +984,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   ) => (
     <div className="ollama-filter-group">
       <span className="ollama-filter-label">{label}</span>
-      <div className="ollama-seg" role="group" aria-label={label}>
+      <div className="seg" role="group" aria-label={label}>
         <button type="button" className={anyActive ? "active" : ""} aria-pressed={anyActive} onClick={onAny}>
           {t("ollama.any")}
         </button>
@@ -1118,7 +1159,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       title={t("ollama.deletePartialTitle")}
                       onClick={() => deletePausedPull(model)}
                     >
@@ -1144,7 +1185,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn"
+                      className="btn-quiet"
                       title={t("ollama.dismissTitle")}
                       onClick={() => dismissPull(model)}
                     >
@@ -1170,7 +1211,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <div className="ollama-model-actions">
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       title={t("ollama.deleteLayerTitle")}
                       onClick={() => deleteOrphan(o.path)}
                     >
@@ -1202,7 +1243,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-name">{m.name}</span>
                   {m.running && (
                     <span className={`ollama-live${m.size_vram > 0 ? " gpu" : ""}`}>
-                      {t("ollama.inMemory")} · {m.size_vram > 0 ? `GPU ${fmtBytes(m.size_vram)}` : "CPU"}
+                      {t("ollama.inMemory")} · {placementLabel(m, fmtBytes)}
                     </span>
                   )}
                 </div>
@@ -1240,7 +1281,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                   <span className="ollama-model-actions-end">
                     <button
                       type="button"
-                      className={`ollama-ghost-btn${updateVerdicts[m.name]?.update_available ? " primary" : ""}`}
+                      className={`btn-quiet${updateVerdicts[m.name]?.update_available ? " is-notable" : ""}`}
                       disabled={busy[`${m.name}:pull`]}
                       title={t("ollama.updateTitle")}
                       onClick={() =>
@@ -1253,7 +1294,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
                     </button>
                     <button
                       type="button"
-                      className="ollama-ghost-btn danger"
+                      className="btn-quiet is-danger"
                       disabled={busy[`${m.name}:del`]}
                       title={t("ollama.deleteModelTitle")}
                       onClick={() =>
@@ -1380,7 +1421,25 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       </div>
 
       <div className="ollama-filters">
-        {filterGroup(
+        <div className="ollama-filter-group">
+          <span className="ollama-filter-label">
+            {t("ollama.filterSource")} <UntestedTag id="ollama.filterSource" />
+          </span>
+          <div className="seg" role="group" aria-label={t("ollama.filterSource")}>
+            {REGISTRY_SOURCES.map((src) => (
+              <button
+                key={src}
+                type="button"
+                className={regSource === src ? "active" : ""}
+                aria-pressed={regSource === src}
+                onClick={() => setRegSource(src)}
+              >
+                {t(`ollama.source.${src}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+        {regSource === "ollama" && filterGroup(
           t("ollama.filterType"),
           regTypes.size === 0,
           () => setRegTypes(new Set()),
@@ -1391,7 +1450,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             toggle: () => toggleType(cap),
           })),
         )}
-        {filterGroup(
+        {regSource === "ollama" && filterGroup(
           t("ollama.filterRuns"),
           regRuns === "",
           () => setRegRuns(""),
@@ -1402,7 +1461,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             toggle: () => setRegRuns((prev) => (prev === where ? "" : where)),
           })),
         )}
-        {filterGroup(
+        {regSource === "ollama" && filterGroup(
           t("ollama.filterDownload"),
           regDownload === "",
           () => setRegDownload(""),

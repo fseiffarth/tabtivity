@@ -10,7 +10,7 @@ import { getModelRows, rememberModelRows, type TabRow } from "../../api";
 import { type ReadableLine } from "../../terminal/readableScreen";
 import {
   mergeSelectRows, readSelectPrompt, revealSelectRow, sameSelectStep, selectKeys, selectMoveKeys,
-  type SelectPrompt, type SelectStep,
+  selectRowPosition, type SelectPrompt, type SelectStep,
 } from "../../terminal/selectPrompt";
 import { liveModelPick, modelRowsOf, modelRowsStep, sameModelRows } from "../../terminal/modelRows";
 import {
@@ -33,6 +33,11 @@ const MODEL_KEEP_SETTLE = 500;
  * done and the sheet steps aside. */
 const SELECT_NEXT_WAIT = 700;
 
+/** How long a dialog that was listed may stay unreadable, with no tap
+ * answering it, before the sheet takes it as dismissed (on the desktop, or by
+ * the session itself). Longer than a redraw, short enough not to linger. */
+const PICKER_GONE_GRACE = 1_200;
+
 /** The model sheet's reading of the picker on screen: OpenCode's walk, the rows
  * put together, and the reveal walk. */
 export function useModelPicker({
@@ -50,6 +55,8 @@ export function useModelPicker({
   knownStep: SelectStep | null;
   setKnownStep: Dispatch<SetStateAction<SelectStep | null>>;
   rememberedStep: SelectStep | null;
+  /** `origin` is the printed number the walk started on, `target` the
+   * position it walks to (`selectRowPosition`). */
   setReveal: Dispatch<SetStateAction<{ origin: number; target: number; } | null>>;
   reveal: { origin: number; target: number; } | null;
   revealStuck: MutableRefObject<boolean>;
@@ -112,21 +119,33 @@ export function useModelPicker({
    * a tap just answered and the session has not redrawn yet. */
   const pickerStep = picker && answered && sameSelectStep(answered, picker) ? null : picker;
   /** The step as far as it is known: the rows on screen plus those an earlier
-   * slice of the same picker drew. OpenCode's slices are put together by its
-   * own walk (`openCodeWalk`), which already is the whole list. */
+   * slice of the same picker drew — while the reveal walk runs, also a slice
+   * sharing no row with them, since its arrows cannot leave the list. OpenCode's
+   * slices are put together by its own walk (`openCodeWalk`), which already is
+   * the whole list. */
+  const walking = reveal !== null;
   const listedStep = useMemo<SelectStep | null>(
-    () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep)),
-    [pickerStep, openCode, knownStep],
+    () => (!pickerStep ? null : openCode ? pickerStep : mergeSelectRows(knownStep, pickerStep, walking)),
+    [pickerStep, openCode, knownStep, walking],
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (listedStep && !openCode) setKnownStep(listedStep); }, [listedStep, openCode]);
-  /** The remembered rows, listed until the session draws its picker — for
-   * OpenCode until its walk has listed the whole of it. */
-  const modelPreview = modelSheet && !answered && !effortFor && !effortStep && (!listedStep || (openCode && !!picker?.hidden))
+  /** Whether the live list is all there: OpenCode's walk has listed it, or a
+   * windowed picker's reveal walk has nothing left to show. */
+  const listSettled = !!pickerStep && !!listedStep && !reveal && (openCode
+    ? !picker?.hidden
+    : revealStuck.current || revealSelectRow(listedStep, pickerStep) === undefined);
+  /** The remembered rows, listed until the live list is all there — a
+   * windowed picker's first slice is three rows of thirteen, and a sheet
+   * growing row by row under the reader's thumb is no list to pick from. A
+   * tap on one is held for the live list (`heldPick`). */
+  const modelPreview = modelSheet && !answered && !effortFor && !effortStep && !listSettled
     ? rememberedStep
     : null;
   /** The printed number of the row the dialog highlights right now. */
   const pickerAt = pickerStep?.options[pickerStep.current]?.number;
+  /** …and where it sits for the arrow keys (`selectRowPosition`). */
+  const pickerPosition = pickerAt === undefined || !listedStep ? undefined : selectRowPosition(listedStep, pickerAt);
   /** The effort stops Antigravity's dialog is offering right now — the ones
    * belonging to the model its highlight is on, which is why they are read
    * again after every walk rather than kept with the row. */
@@ -160,8 +179,12 @@ export function useModelPicker({
         // picker gave back, where ↑ recalls old prompts from history.
         clearPending();
         setReveal(null);
-        setModelSheet(false);
-        return;
+        // A frame sampled between the TUI erasing its dialog and painting the
+        // redraw (every walk arrow causes one) reads as "gone"; closing at
+        // once took the sheet, and the effort row in it, from under a thumb
+        // already on its way. The dialog coming back clears this timer.
+        const gone = window.setTimeout(() => setModelSheet(false), PICKER_GONE_GRACE);
+        return () => window.clearTimeout(gone);
       }
       const next = window.setTimeout(() => {
         setModelSheet(false);
@@ -185,8 +208,9 @@ export function useModelPicker({
    * walked to each one it hides, which scrolls it into view, and back. Only
    * arrow keys — nothing is accepted — and only while nothing was tapped. */
   useEffect(() => {
-    if (!modelSheet || openCode || answered || !pickerStep || !listedStep || pickerAt === undefined || revealStuck.current) return;
-    if (reveal && pickerAt !== reveal.target) {
+    if (!modelSheet || openCode || answered || !pickerStep || !listedStep || pickerAt === undefined || pickerPosition === undefined || revealStuck.current) return;
+    // Positions, not numbers: the walk's arrows also stop on an expander row.
+    if (reveal && pickerPosition !== reveal.target) {
       // The keys have not landed yet. If they never do, stop walking.
       const stuck = window.setTimeout(() => {
         revealStuck.current = true;
@@ -194,20 +218,21 @@ export function useModelPicker({
       }, MODEL_PICKER_WAIT);
       return () => window.clearTimeout(stuck);
     }
-    const target = revealSelectRow(listedStep, pickerStep) ?? reveal?.origin;
-    if (target === undefined || target === pickerAt) {
+    const target = revealSelectRow(listedStep, pickerStep)
+      ?? (reveal ? selectRowPosition(listedStep, reveal.origin) : undefined);
+    if (target === undefined || target === pickerPosition) {
       if (reveal) setReveal(null);
       return;
     }
-    if (!deliver(selectMoveKeys(pickerAt, target))) {
+    if (!deliver(selectMoveKeys(pickerPosition, target))) {
       setReveal(null);
       return;
     }
     setReveal({ origin: reveal?.origin ?? pickerAt, target });
     // `deliver` is a fresh closure every render; the walk runs on the frames.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelSheet, openCode, answered, pickerStep, listedStep, pickerAt, reveal]);
-  return { openCodeWalk, picker, pickerStep, listedStep, modelPreview, pickerAt, effortSlider };
+  }, [modelSheet, openCode, answered, pickerStep, listedStep, pickerAt, pickerPosition, reveal]);
+  return { openCodeWalk, picker, pickerStep, listedStep, listSettled, modelPreview, pickerAt, effortSlider };
 }
 
 /** Opens the model sheet and answers it: a tap, a held remembered row, Antigravity's effort. */
@@ -215,8 +240,8 @@ export function useModelPickerAnswers({
   tab, pickModel, bare, connected, liveScreen, modelSheet, setModelSheet, setAnswered, answered,
   setKnownStep, setRememberedStep, rememberedStep, setHeldPick, heldPick, sheetAnswered, keptStep,
   setReveal, reveal, revealStuck, effortFor, setEffortFor, setEffortStep, effortStep, sawPicker,
-  clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, picker, pickerStep,
-  listedStep, modelPreview, pickerAt, effortSlider,
+  clearPending, deliver, sendAgentText, openCode, antigravity, openCodeWalk, pickerStep,
+  listedStep, listSettled, modelPreview, pickerAt, effortSlider,
 }: {
   tab: TabRow;
   pickModel: boolean;
@@ -248,9 +273,9 @@ export function useModelPickerAnswers({
   openCode: boolean;
   antigravity: boolean;
   openCodeWalk: MutableRefObject<OpenCodePickerWalk | null>;
-  picker: SelectPrompt | null;
   pickerStep: SelectPrompt | null;
   listedStep: SelectStep | null;
+  listSettled: boolean;
   modelPreview: SelectStep | null;
   pickerAt: number | undefined;
   effortSlider: AntigravityEffort | null;
@@ -344,11 +369,15 @@ export function useModelPickerAnswers({
     }
     // No walk key may follow the answer's into the session.
     if (openCode) openCodeWalk.current?.hold();
-    // Walked by printed number: a windowed picker's rows on screen are a slice.
+    // Walked by position, from the printed numbers: a windowed picker's rows
+    // on screen are a slice, and an expander row is a stop with no number.
     const writes = openCode
       ? picked.keys ?? openCodePickKeys(picked.label)
-      : pickerAt === undefined ? [] : selectKeys(pickerAt, picked.number);
+      : pickerAt === undefined ? [] : selectKeys(selectRowPosition(listedStep, pickerAt), selectRowPosition(listedStep, picked.number));
     if (writes.length === 0 || !deliver(writes)) return;
+    // An expander's Enter opens its rows into the same list, which the sheet
+    // goes on listing: nothing was answered.
+    if (picked.expander) return;
     sheetAnswered.current = true;
     setAnswered(listedStep);
   };
@@ -363,11 +392,6 @@ export function useModelPickerAnswers({
   };
   const answerModelNow = useRef(answerModel);
   answerModelNow.current = answerModel;
-  /** Whether the live list is all there: OpenCode's walk has listed it, or a
-   * windowed picker's reveal walk has nothing left to show. */
-  const listSettled = !!pickerStep && !!listedStep && !reveal && (openCode
-    ? !picker?.hidden
-    : revealStuck.current || revealSelectRow(listedStep, pickerStep) === undefined);
   // The opening's model list, kept for the next one once it is all there and
   // has stopped changing (a frame split across reads is not the list), and
   // only before anything was answered in it.

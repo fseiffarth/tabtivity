@@ -51,7 +51,7 @@ export function writeIntroPage(page: IntroPage): void {
 }
 
 /** What the user can say they want to do on the Goals page, in display order. */
-export const INTRO_GOALS = ["code", "localAi", "write", "remote", "sandbox", "organize", "phone", "explore"] as const;
+export const INTRO_GOALS = ["code", "phone", "localAi", "write", "remote", "sandbox", "organize", "explore"] as const;
 export type IntroGoal = (typeof INTRO_GOALS)[number];
 
 /** One goal card and what picking it brings along. */

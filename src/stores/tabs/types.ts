@@ -4,9 +4,66 @@
 import type { TabColor } from "../../lib/theme/tabColors";
 import type { TabMark } from "../../lib/tabMarks";
 import type { InternalViewer } from "../../lib/viewers/fileUtils";
-import type { AutocompleteMode } from "../../types";
+import type { AutocompleteMode, AutocompleteTrigger } from "../../types";
 import type { LoginTarget } from "../../lib/remote/loginTarget";
 import type { AssistantLaunch } from "../../lib/assistant";
+
+/**
+ * Notes an agent published about its own tab through the cockpit MCP — a
+ * read-only mirror of the backend's `services::cockpit_meta`. The host writes
+ * it and a window never sends it back (`toSavedTabEntry` leaves it out; the
+ * workspace merge ignores what a client sends). The `spawn` generation markers
+ * are backend-only; the mirror omits them.
+ * Plain text by the agent, stamped with the host's clock (ms since the epoch).
+ */
+export interface CockpitMeta {
+  v: 1;
+  /** Bumped by every change the host commits; never reused. */
+  revision: number;
+  activity?: { text: string; setAt: number };
+  handoff?: { summary: string; checks: string; remaining: string; setAt: number };
+  /** Project-relative references the agent listed (`tab_set_results`); a
+   *  label and a path to show, never something to read: only the host opens one. */
+  results?: { items: { label: string; relativePath: string }[]; setAt: number };
+  /** The agent's plan steps (`tab_set_progress`), kept as history: it counts as
+   *  running only while the agent is live, `ended` is unset and it is under
+   *  30 minutes old (`lib/cockpit/agentNotes::progressReport`). `ended` is the
+   *  host's mark that a later spawn took the tab over. */
+  progress?: { steps: ProgressStep[]; setAt: number; ended?: true };
+  /** What the agent says is in its way (`tab_set_blocker`); transient like `activity`. */
+  blocker?: { text: string; setAt: number };
+  /** Checks the agent *reports* (`tab_set_verification`); `setAt` is when it
+   *  reported them, never when anything ran. */
+  verification?: { entries: VerificationEntry[]; setAt: number };
+  /** A question the agent says it needs the user for (`tab_request_attention`).
+   *  `id` is the host's, new for every changed question; `dismissed` is the
+   *  user's, written by the narrow dismissal command only. It asks nothing of
+   *  the app: no answer, no approval. The spawn that issued it is not mirrored
+   *  (a new spawn's grant removes it). */
+  attention?: { id: string; question: string; setAt: number; dismissed?: true };
+  /** The agent's finished milestones (`tab_add_milestone`), oldest first, at
+   *  most 20; `at` is the host's clock. */
+  milestones?: AgentMilestone[];
+}
+
+export interface AgentMilestone {
+  requestId: string;
+  text: string;
+  at: number;
+}
+
+export type ProgressState = "pending" | "active" | "done";
+export interface ProgressStep {
+  id: string;
+  label: string;
+  state: ProgressState;
+}
+export type VerificationOutcome = "passed" | "failed" | "pending" | "not_run";
+export interface VerificationEntry {
+  label: string;
+  outcome: VerificationOutcome;
+  note?: string;
+}
 
 export type TabKind =
   | "agent"
@@ -66,6 +123,9 @@ export interface ViewerState {
   // to the per-type setting. Toggled from the in-tab AI-assist controls.
   autocomplete?: boolean;
   autocompleteMode?: AutocompleteMode;
+  // When suggestions are asked for: "auto" after a typing pause, "manual" only
+  // on Ctrl+Space. Absent → Copilot asks on request, a local model on a pause.
+  autocompleteTrigger?: AutocompleteTrigger;
   spellCheck?: boolean;
   // The TeX editor's hover-preview and beamer switches are NOT here: they are
   // the project's, in `stores/viewers/texViewPref` (a tab of a deck is not where "this
@@ -196,6 +256,12 @@ export interface ViewerState {
   texEngine?: string;
   texOutDir?: string;
   texExtraFlags?: string;
+  // A remote project's file tab flipped to the OTHER side of its path with the
+  // Local/Remote switch (`FileViewerPane`). Absent = follow the path's own side.
+  // Persisted per tab so the flip survives a popout, a dock-back and a restart —
+  // the pane remounts in each, and session state alone came back on the path's
+  // side. Dropped when the tab is pointed at another path (`setTabEmbedPath`).
+  fileSide?: "local" | "remote";
 }
 
 export interface TabEntry {
@@ -362,6 +428,24 @@ export interface TabEntry {
   // by searching for this id. Persisted; dropped by `duplicateSpec` (one card,
   // one tab).
   todoId?: string;
+  // Named by its task (`lib/agents/autoTabName`): `autoLabel` is the label
+  // Tabtivity gave this agent tab itself (its CLI's name at open), and
+  // `taskName` the name its first prompt gave it. The label itself never
+  // changes: the desktop shows the task name only in the tab's hover card,
+  // the phone shows it as the tab's name. It counts only while
+  // `label === autoLabel`, so a rename by the user from any route ends it for
+  // good. `autoNamed`: the first prompt already named it (set once, not every
+  // turn). All persisted, so a relaunch neither renames a named tab again nor
+  // forgets an unnamed one; all dropped by `duplicateSpec` (a copy is its own
+  // conversation).
+  autoLabel?: string;
+  autoNamed?: boolean;
+  taskName?: string;
+  // What the agent said about its own tab (`tab_set_activity` /
+  // `tab_set_handoff` on the cockpit MCP lane). Host-owned: taken from the
+  // saved record on restore and from every workspace sync/patch answer, never
+  // saved from here, and dropped by `duplicateSpec` (a copy is another agent).
+  cockpitMeta?: CockpitMeta;
   // The root console's **Host session** (`docs/context/agent_authority.md`):
   // this agent tab runs unfenced, with the user's full rights, in Tabtivity's
   // `host` agent home. Only ever set by the console's own "Host session" menu
@@ -675,6 +759,12 @@ export interface SavedTabEntry {
   mark?: TabMark;
   // Persisted to-do card link (see TabEntry.todoId).
   todoId?: string;
+  // Persisted task-name state (see TabEntry.autoLabel).
+  autoLabel?: string;
+  autoNamed?: boolean;
+  taskName?: string;
+  // Host-written agent notes (see TabEntry.cockpitMeta); read here, never sent.
+  cockpitMeta?: unknown;
   mobileRequestHash?: string;
   // Sign-in tab marker (see TabEntry.signIn); load drops such a tab.
   signIn?: boolean;

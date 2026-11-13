@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RunningShells, shownShells } from "../../../mobile-web/src/components/RunningShells";
 import type { RunningShell } from "../../../mobile-web/src/api";
@@ -25,17 +25,24 @@ describe("the phone chat's running shells", () => {
     expect(rows[1].textContent).toContain("Background shell running…");
   });
 
-  it("opens a shell's whole command on a tap, cut as the desktop cut it", () => {
-    const long: RunningShell = { command: "npm run build\n  && npm test", description: "Build and test", cut: true };
-    render(<RunningShells shells={[long, { command: "make -j4", background: true }, waiting]} />);
-    // No command, no toggle; no description, the command's first line names it.
-    expect(screen.getAllByRole("button")).toHaveLength(2);
-    expect(screen.getAllByRole("status")[1].textContent).toContain("make -j4");
+  it("never shows a command line, and offers the Terminal view in its place", () => {
+    // Even a host that sent one (an older build) shows nothing of it.
+    const leaked: RunningShell = { command: "curl -H 'Authorization: Bearer sk-secret' /home/me/x", description: "Fetch the data" };
+    const asked = vi.fn();
+    render(<RunningShells shells={[leaked, background]} onShowTerminal={asked} />);
+    expect(document.body.textContent).toContain("Fetch the data");
+    expect(document.body.textContent).not.toContain("sk-secret");
+    expect(document.body.textContent).not.toContain("/home/me");
     expect(document.querySelector("pre")).toBeNull();
-    fireEvent.click(screen.getAllByRole("button", { name: "Show the command it runs" })[0]);
-    expect(document.querySelector("pre")?.textContent).toBe("npm run build\n  && npm test…");
-    fireEvent.click(screen.getByRole("button", { name: "Hide the command" }));
-    expect(document.querySelector("pre")).toBeNull();
+    const links = screen.getAllByRole("button", { name: "View in Terminal" });
+    expect(links).toHaveLength(2);
+    fireEvent.click(links[0]);
+    expect(asked).toHaveBeenCalledOnce();
+  });
+
+  it("a shell with no description is named by the row alone, not by its command", () => {
+    render(<RunningShells shells={[{ command: "make -j4", background: true }]} />);
+    expect(screen.getByRole("status").textContent).toBe("$Background shell running…");
   });
 
   it("tags the rows while the feature is untested", () => {

@@ -1125,6 +1125,48 @@ pub async fn compile_tex(
     .await
 }
 
+/// Compile a remote project's `.tex` on its host: `path` is the HOST path (a
+/// file read from the Remote side, or any file of a host-pinned project), which
+/// `compile_tex` cannot open here. Runs latexmk there over the pooled
+/// ControlMaster and waits for it, like a local build (`tex/host.rs` has the
+/// script); no tab opens. The PDF is reported by its host path. A project's
+/// `latexmkrc` runs on the host as the login, where its agents already run —
+/// nothing of the project runs on this machine. Pressed by a person, so the
+/// dial is user-initiated; the frontend asks first on an HPC-tagged host.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn compile_tex_host(
+    project_id: String,
+    path: String,
+    engine: Option<String>,
+) -> Result<TexCompileResult, String> {
+    app_core::rt::try_blocking("compile", move || {
+        let target = crate::services::remote::remote_target_for(&project_id)
+            .ok_or_else(|| "not a remote project: its files build on this machine".to_string())?;
+        let root = target.spec.remote_path.clone();
+        let tex = host::host_tex(&root, &path)?;
+        let script = host::host_build_script(&root, &tex, engine.as_deref());
+        let _dial = crate::services::ssh_common::user_dial(&target.spec.user, &target.spec.host, target.spec.port);
+        // The host's own `timeout` stops the build at the ceiling; this one only
+        // frees the worker if the connection itself stalls.
+        let out = crate::services::ssh_exec::run_remote_script_within(
+            &target.spec,
+            &script,
+            RUN_TIMEOUT + std::time::Duration::from_secs(60),
+        )?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        host::read_host_build(&tex, engine.as_deref(), &stdout, &stderr).ok_or_else(|| {
+            let why = stderr.trim();
+            if why.is_empty() {
+                "the build on the host did not finish".to_string()
+            } else {
+                format!("the build on the host did not run: {why}")
+            }
+        })
+    })
+    .await
+}
+
 /// A deck figure's `.tex` may be compiled only when neither it nor its own
 /// folder is a link (and its name has no `~`, a Windows 8.3 alias): a
 /// figure folder pointed at a box sibling would compile, and write the PDF,
@@ -2344,6 +2386,8 @@ pub fn resolve_tex_root(path: String) -> Result<String, String> {
     // 3. It is its own root.
     Ok(src_str)
 }
+
+mod host;
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 

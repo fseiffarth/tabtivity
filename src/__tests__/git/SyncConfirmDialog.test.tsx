@@ -53,6 +53,57 @@ describe("SyncConfirmDialog", () => {
     expect(await answer).toBe(true);
   });
 
+  it("offers Git sync, not a lone Cancel, when only git-tracked files are in scope", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) =>
+      cmd === "sync_transfer_preview"
+        ? { ...PREVIEW, files: 0, bytes: 0, overwrites: 0, tracked: 1 }
+        : {},
+    );
+    render(<SyncConfirmDialog />);
+    let answer: Promise<boolean> = Promise.resolve(true);
+    act(() => {
+      answer = confirmSyncTransfer({
+        projectId: "p1",
+        direction: "push",
+        relPath: "DATASETS.md",
+        isDir: false,
+        label: "DATASETS.md",
+      });
+    });
+    expect(await screen.findByText(/reach the other side through Git sync/)).toBeTruthy();
+    // No "will be copied to the host" headline over a transfer that moves nothing.
+    expect(screen.queryByText(/will be copied to the host/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Copy to host|Overwrite host/ })).toBeNull();
+    act(() => screen.getByRole("button", { name: /Sync Git now/ }).click());
+    // Nothing moved as bytes, so the transfer's caller still reads "no".
+    expect(await answer).toBe(false);
+    expect(mockInvoke).toHaveBeenCalledWith("git_peer_sync_now", { projectId: "p1" });
+  });
+
+  it("stays open and names the reason when Git sync comes back out of step", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) =>
+      cmd === "sync_transfer_preview"
+        ? { ...PREVIEW, files: 0, bytes: 0, overwrites: 0, tracked: 2 }
+        : { status: "desynchronized", detail: "fast-forward refused." },
+    );
+    render(<SyncConfirmDialog />);
+    act(() => {
+      void confirmSyncTransfer({
+        projectId: "p1",
+        direction: "push",
+        relPath: "rgt",
+        isDir: true,
+        label: "rgt",
+      });
+    });
+    act(() => {
+      void screen.findByRole("button", { name: /Sync Git now/ }).then((b) => b.click());
+    });
+    expect(await screen.findByText(/not in step: fast-forward refused\./)).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
   it("withdraws an open ask when the project switches", async () => {
     render(<SyncConfirmDialog />);
     let answer: Promise<boolean> = Promise.resolve(true);

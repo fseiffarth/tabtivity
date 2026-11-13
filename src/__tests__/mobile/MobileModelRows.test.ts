@@ -22,6 +22,20 @@ describe("remembered model rows", () => {
     });
   });
 
+  it("stop at Claude Code's expander row (2.1.322), which opens folded", () => {
+    const opened = {
+      title: "Select model",
+      options: [
+        { index: 0, number: 5, label: "Haiku 5.5" },
+        { index: 1, number: 5.5, label: "More models", expander: true as const },
+        { index: 2, number: 6, label: "Fable 5.1" },
+      ],
+    };
+    // The store keeps whole numbers only, and a row under the fold would be a
+    // tap the next, folded, opening cannot answer.
+    expect(modelRowsOf(opened).rows).toEqual([{ label: "Haiku 5.5", number: 5 }]);
+  });
+
   it("come back as the step a sheet lists", () => {
     const step = modelRowsStep(modelRowsOf(live));
     expect(step).toEqual({

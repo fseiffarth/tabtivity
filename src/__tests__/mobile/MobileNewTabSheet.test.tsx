@@ -46,6 +46,49 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("Mobile project screen — the ＋ in a Local models only project", () => {
+  // The desktop's ＋ menu offers the local model's rows and the shells alone there; the
+  // phone's sheet reads the same rule (`cloudRowsOffered`) off the row's flag.
+  const OPTIONS = {
+    worktrees: [],
+    cloud: [{ agent_id: "claude", action: "new", task: true }],
+    sign_in: [{ agent_id: "claude", signed_in: false }],
+    ["api" + "_key"]: [{ agent_id: "claude" }],
+    local: { model: "qwen3:8b", ready: true, agents: [{ id: "L1", label: "Pi", caution: false }] },
+  };
+  const serveBoth = (project: Record<string, unknown>) =>
+    fetchMock.mockImplementation((url: string) => Promise.resolve(new Response(
+      JSON.stringify(String(url).includes("launch-options") ? OPTIONS : { ...DETAIL, project: { ...DETAIL.project, ...project } }),
+      { status: 200 },
+    )));
+  const open = async () => {
+    render(<Project id="p" back={() => {}} terminal={() => {}} />);
+    await screen.findByText("claude 1");
+    fireEvent.contextMenu(screen.getByRole("button", { name: "New tab" }));
+    return screen.findByRole("dialog", { name: "New tab" });
+  };
+
+  it("hides the cloud agents, their sessions, the API and sign-in rows, and keeps the local model and the shell", async () => {
+    serveBoth({ local_models_only: true });
+    const sheet = await open();
+    await within(sheet).findByText("Pi");
+    expect(within(sheet).queryByRole("button", { name: "Claude" })).toBeNull();
+    expect(sheet.querySelector(".new-tab-cloud")).toBeNull();
+    expect(sheet.textContent).not.toMatch(/Sign in to an agent/i);
+    expect(within(sheet).getByRole("button", { name: "New shell" })).toBeTruthy();
+    expect(within(sheet).getByText(/Local models only/)).toBeTruthy();
+  });
+
+  it("lists everything in a project that is not locked", async () => {
+    serveBoth({});
+    const sheet = await open();
+    await within(sheet).findByText("Pi");
+    expect(within(sheet).getByRole("button", { name: "Claude" })).toBeTruthy();
+    expect(sheet.querySelector(".new-tab-cloud")).toBeTruthy();
+    expect(within(sheet).queryByText(/Local models only/)).toBeNull();
+  });
+});
+
 describe("Mobile project screen — the ＋", () => {
   it("keeps the creating buttons out of the page until the header's ＋ asks for them", async () => {
     serve(DETAIL);

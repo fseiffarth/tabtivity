@@ -690,6 +690,11 @@ select.file-viewer-run-args-input {
   font-size: 10px;
   cursor: var(--cur-pointer, pointer);
 }
+/* Why the chosen autocomplete provider is silent in this file. */
+.file-viewer-ai-note {
+  color: var(--text-muted);
+  font-size: 10px;
+}
 /* A failed dictionary download beside the "＋ Language" menu. */
 .file-viewer-spell-error {
   color: var(--danger);
@@ -3438,6 +3443,78 @@ select.file-viewer-run-args-input {
   opacity: 0.4;
   cursor: var(--cur-default, default);
 }
+/* Sync merge: a chip is coloured by the side it currently holds (remote = the
+   --warning of the right column's tint, local = the --success of the left's), the
+   same locality colours the Take pills and rulers use — not git's kept/reverted. */
+.file-viewer-compare.sync .file-viewer-compare-chip.accept {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+  color: var(--warning);
+}
+.file-viewer-compare.sync .file-viewer-compare-chip.reject {
+  border-color: color-mix(in srgb, var(--success) 60%, transparent);
+  color: var(--success);
+}
+/* The newer side of a change: a small arrow on the chip pointing at its column. */
+.file-viewer-compare-chip-newer {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 2px;
+}
+.file-viewer-compare-chip-newer svg {
+  width: 9px;
+  height: 9px;
+}
+.file-viewer-compare-chip-newer.left {
+  color: var(--success);
+}
+.file-viewer-compare-chip-newer.right {
+  color: var(--warning);
+}
+/* Column header: title, then the side's modified time and a "newer" badge. */
+.file-viewer-compare-col-title {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-viewer-compare-stamp {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+.file-viewer-compare-newer {
+  padding: 0 5px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.file-viewer-compare-newer.left {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 60%, transparent);
+}
+.file-viewer-compare-newer.right {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+}
+/* Beside a Take pill: that side's time for the change, "newer" in bold. */
+.file-viewer-compare-take-when {
+  display: inline-flex;
+  gap: 4px;
+  padding-left: 4px;
+  border-left: 1px solid currentColor;
+  font-weight: 500;
+  opacity: 0.9;
+}
+.file-viewer-compare-take-when b {
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 9px;
+}
 
 /* #67 in-editor search: the match spans paint a translucent highlight behind the
    editable text (the layer sits below the textarea), the current match brighter —
@@ -4262,7 +4339,7 @@ select.file-viewer-run-args-input {
 /* pdf.js viewer: a zoom toolbar above a scrolling stack of page canvases. The
    host and scroll surround use theme variables, so the viewer is dark in dark
    themes; the page canvases stay white sheets (rendered as authored). The scroll
-   area shows the app's own thumb, like every other scroll surface. */
+   area's bar is the baseline one, like every other scroll surface. */
 .file-viewer-pdf-host {
   display: flex;
   flex-direction: column;
@@ -4483,6 +4560,10 @@ select.file-viewer-run-args-input {
   cursor: var(--cur-crosshair, crosshair);
   touch-action: none;
 }
+/* Once a pen has drawn, a finger scrolls and pinches the pages. */
+.file-viewer-pdf-markup-layer.is-fingers-pan {
+  touch-action: pan-x pan-y pinch-zoom;
+}
 .file-viewer-pdf-markup-layer.is-text,
 .file-viewer-pdf-markup-layer.is-textmark {
   cursor: var(--cur-text, text);
@@ -4522,6 +4603,354 @@ select.file-viewer-run-args-input {
 .file-viewer-pdf-markup-note-colors {
   margin: 4px 0;
 }
+/* ── The markup dock (`PdfMarkupDock`, docs/markup_notes_style_plan.md) ──
+   A `.context-menu` surface (the floating recipe paints it) held over the
+   pages instead of portaled: absolute in the scroll wrap, clear of the page
+   rail and the agent panel (`--dock-inset-*`, measured by the dock). Size and
+   layout only here. */
+.context-menu.file-viewer-pdf-markup-dock {
+  position: absolute;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-1);
+  --dock-mid: calc(var(--dock-inset-left, 0px) + (100% - var(--dock-inset-left, 0px) - var(--dock-inset-right, 0px)) / 2);
+}
+.context-menu.file-viewer-pdf-markup-dock.is-bottom {
+  bottom: 16px;
+  left: var(--dock-mid);
+  transform: translateX(-50%);
+}
+.context-menu.file-viewer-pdf-markup-dock.is-top {
+  top: 12px;
+  left: var(--dock-mid);
+  transform: translateX(-50%);
+}
+.context-menu.file-viewer-pdf-markup-dock.is-left {
+  left: calc(var(--dock-inset-left, 0px) + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+.context-menu.file-viewer-pdf-markup-dock.is-right {
+  right: calc(var(--dock-inset-right, 0px) + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+.context-menu.file-viewer-pdf-markup-dock.is-vertical {
+  flex-direction: column;
+}
+.context-menu.file-viewer-pdf-markup-dock.is-dragging {
+  opacity: 0.85;
+}
+/* The dock's buttons are tool squares, not the menu's full-width rows. */
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-dock-btn,
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-grip,
+.context-menu.file-viewer-pdf-markup-dock .file-viewer-pdf-markup-more > .file-viewer-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-height: 0;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-lg);
+}
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-grip {
+  width: 16px;
+  color: var(--text-muted);
+  cursor: var(--cur-grab, grab);
+  touch-action: none;
+}
+.context-menu.file-viewer-pdf-markup-dock.is-vertical button.file-viewer-pdf-markup-grip {
+  width: 32px;
+  height: 16px;
+}
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-dock-btn:disabled {
+  opacity: 0.4;
+}
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-dock-btn::after,
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-grip::after {
+  display: none;
+}
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-dock-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.context-menu.file-viewer-pdf-markup-dock button.file-viewer-pdf-markup-dock-btn.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.file-viewer-pdf-markup-dock-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 22px;
+  margin: 0 4px;
+  background: var(--border-subtle);
+}
+.file-viewer-pdf-markup-dock.is-vertical .file-viewer-pdf-markup-dock-sep {
+  width: 22px;
+  height: 1px;
+  margin: 4px 0;
+}
+/* A favourite: a dot of its colour, as wide as it draws. */
+.file-viewer-pdf-markup-fav-dot {
+  display: inline-block;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 30%, transparent);
+}
+.file-viewer-pdf-markup-fav-dot.is-wide {
+  opacity: 0.8;
+}
+/* The armed tool's options, beside the dock on the side away from its edge. */
+.context-menu.file-viewer-pdf-markup-pop {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 288px;
+  padding: var(--space-3);
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+.file-viewer-pdf-markup-dock.is-bottom .file-viewer-pdf-markup-pop {
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.file-viewer-pdf-markup-dock.is-top .file-viewer-pdf-markup-pop {
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.file-viewer-pdf-markup-dock.is-left .file-viewer-pdf-markup-pop {
+  left: calc(100% + 8px);
+  top: 0;
+}
+.file-viewer-pdf-markup-dock.is-right .file-viewer-pdf-markup-pop {
+  right: calc(100% + 8px);
+  top: 0;
+}
+.context-menu.file-viewer-pdf-markup-pop button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-height: 0;
+}
+.context-menu.file-viewer-pdf-markup-pop button::after {
+  display: none;
+}
+.file-viewer-pdf-markup-pop-head {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.file-viewer-pdf-markup-pop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.file-viewer-pdf-markup-size-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+.file-viewer-pdf-markup-pop-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.context-menu.file-viewer-pdf-markup-pop button.file-viewer-pdf-markup-pop-save {
+  align-self: flex-start;
+}
+/* The Proof slot's grid: each mark drawn over its name. */
+.file-viewer-pdf-markup-proof {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+.context-menu.file-viewer-pdf-markup-pop .file-viewer-pdf-markup-proof button {
+  flex-direction: column;
+  gap: 2px;
+  height: 48px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+}
+.context-menu.file-viewer-pdf-markup-pop .file-viewer-pdf-markup-proof button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.file-viewer-pdf-markup-proof button > span:first-child {
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+/* The selected marks' bar, just above them on the page. */
+.context-menu.file-viewer-pdf-markup-selbar {
+  position: absolute;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px var(--space-1);
+  white-space: nowrap;
+}
+.context-menu.file-viewer-pdf-markup-selbar button {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  min-height: 0;
+}
+.context-menu.file-viewer-pdf-markup-selbar button::after {
+  display: none;
+}
+/* The read-only page rail while marking. */
+.file-viewer-pdf-markup-pages {
+  flex: 0 0 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 0;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.file-viewer-pdf-markup-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: var(--cur-pointer, pointer);
+}
+.file-viewer-pdf-markup-page-card {
+  position: relative;
+  display: block;
+  width: 64px;
+  height: 86px;
+  border: 1px solid var(--border-color);
+  background: #fff;
+}
+.file-viewer-pdf-markup-page-card canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.file-viewer-pdf-markup-page.active .file-viewer-pdf-markup-page-card {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.file-viewer-pdf-markup-page-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-panel);
+}
+/* The agent panel, at the right of the pages. */
+.file-viewer-pdf-markup-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+}
+.file-viewer-pdf-markup-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.file-viewer-pdf-markup-panel-title {
+  font-weight: 600;
+}
+.file-viewer-pdf-markup-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3);
+}
+.file-viewer-pdf-markup-panel-body p {
+  margin: 0;
+}
+.file-viewer-pdf-markup-panel-empty {
+  color: var(--text-secondary);
+}
+.file-viewer-pdf-markup-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.file-viewer-pdf-markup-panel .file-viewer-pdf-markup-questions {
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  background: none;
+  border-bottom: 0;
+}
+/* The send header's Agent badge: a count, or a dot when something waits
+   without one. */
+.file-viewer-pdf-markup-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.file-viewer-pdf-markup-agent-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--bg-main);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.file-viewer-pdf-markup-agent-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+/* A picture marked up: the panel beside the viewport. */
+.file-viewer-image-body.is-marking {
+  position: relative;
+  display: flex;
+}
+.file-viewer-image-body.is-marking .file-viewer-image-viewport {
+  flex: 1;
+  min-width: 0;
+}
+
 /* The target tab's model chip (`PdfMarkupModel`): the Reader's model list
    (`terminal-reader-picker`, `subwindows.css`) dropped under the chip, over
    the pages, instead of rising over a composer. */
@@ -6864,4 +7293,103 @@ select.file-viewer-run-args-input {
   color: var(--text-primary);
   white-space: pre;
   tab-size: 4;
+}
+
+/* "← Back to <agent>" over a file tab an agent's file link opened
+   (`tabs/LinkBackButton`). Bottom left, clear of the viewers' top toolbars;
+   a static shadow, nothing animated. */
+.link-back-btn {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(60%, 360px);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: var(--cur-pointer, pointer);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+.link-back-btn:hover {
+  border-color: var(--accent);
+}
+.link-back-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sync resolver "Hand to an agent" dialog (DialogShell, project-dialog frame):
+   the ready prompt, one main action, and one picker for the open agent tabs —
+   a button per tab ran past the window once a project held ten "Claude" tabs. */
+.project-dialog.sync-handoff-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+.sync-handoff-text {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.sync-handoff-where {
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.sync-handoff-warn {
+  color: var(--warning);
+}
+.sync-handoff-note {
+  color: var(--text-secondary);
+}
+.sync-handoff-dialog textarea {
+  resize: vertical;
+  font-size: var(--text-md);
+}
+.sync-handoff-new {
+  align-self: stretch;
+}
+.sync-handoff-send {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.sync-handoff-label {
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+}
+.sync-handoff-send-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.sync-handoff-tab {
+  flex: 1;
+  min-width: 0;
+}
+.sync-handoff-tab .dropdown-trigger {
+  min-height: 30px;
+  font-size: var(--text-base);
+}
+.sync-handoff-none {
+  color: var(--text-muted);
+  font-size: var(--text-md);
+}
+.sync-handoff-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.sync-handoff-close {
+  margin-left: auto;
 }

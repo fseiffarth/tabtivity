@@ -24,7 +24,11 @@ import { openLinkedFile } from "../../components/embed/fileViewer/openLinked";
 import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { useProjectsStore } from "../../stores/projects";
 import { useTabsStore } from "../../stores/tabs";
+import { useBoxesStore } from "../../stores/boxes";
+import { resetBoxSlice, useBoxSliceStore } from "../../stores/boxSlice";
 import type { TabEntry } from "../../stores/tabs/types";
+import { useSettingsStore } from "../../stores/settings";
+import type { Settings } from "../../types";
 
 const tab = (key: string, label: string): TabEntry => ({ key, label, cmd: "", cwd: "/p", kind: "shell", scope: "p1" });
 
@@ -37,6 +41,8 @@ const rows = () => [...document.querySelectorAll(".command-palette-row")];
 const type = (value: string) => fireEvent.change(screen.getByRole("textbox"), { target: { value } });
 
 beforeEach(() => {
+  resetBoxSlice();
+  useBoxesStore.setState({ boxes: [], loaded: true });
   useProjectsStore.setState({
     projects: [{ id: "p1", name: "Alpha", directory: "/p" } as never, { id: "p2", name: "Beta", directory: "/q" } as never],
     activeId: "p1",
@@ -130,5 +136,127 @@ describe("CommandPalette", () => {
     expect(invokeMock).not.toHaveBeenCalled();
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
     expect(activate).toHaveBeenCalledWith("t9");
+  });
+});
+
+describe("CommandPalette boxes", () => {
+  const box = (id: string, name: string, members: string[], position = 1) => ({ id, name, member_ids: members, position });
+
+  it("lists the boxes in a group of their own, after the projects", async () => {
+    useBoxesStore.setState({ boxes: [box("b1", "Thesis", ["p1", "p2"]), box("b2", "Infra", ["p2"], 2)] });
+    render(<CommandPalette />);
+    await openPalette();
+    expect(groups()).toEqual(["Tabs", "Projects", "Boxes", "Files in Alpha", "Actions"]);
+    const boxRows = rows().filter((r) => r.querySelector(".box-swatch"));
+    expect(boxRows.map((r) => r.querySelector(".command-palette-label")?.textContent)).toEqual(["Thesis", "Infra"]);
+    expect(boxRows[0].querySelector(".command-palette-detail")?.textContent).toBe("Box · 2 members");
+  });
+
+  it("opens a box with Enter: slices the strip and enters its scope", async () => {
+    const openBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("b1", "Thesis", ["p1"])], openBox });
+    render(<CommandPalette />);
+    await openPalette();
+    type("thesis");
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    });
+    expect(openBox).toHaveBeenCalledWith("b1");
+    expect(useBoxSliceStore.getState().sliceBoxId).toBe("b1");
+    expect(document.querySelector(".command-palette")).toBeNull();
+  });
+
+  it("offers New box… and asks for a name once picked", async () => {
+    render(<CommandPalette />);
+    await openPalette();
+    type("new box");
+    const row = rows().find((r) => r.textContent?.includes("New box…"));
+    expect(row).toBeTruthy();
+    await act(async () => {
+      fireEvent.mouseDown(row as Element);
+    });
+    expect(document.querySelector(".command-palette")).toBeNull();
+    // The name prompt outlives the palette and is pre-filled with the next free name.
+    await vi.waitFor(() => expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("Box 1"));
+  });
+
+  it("offers Show all projects only while a box is sliced, and it leaves the box", async () => {
+    useBoxesStore.setState({ boxes: [box("b1", "Thesis", ["p1"])] });
+    render(<CommandPalette />);
+    await openPalette();
+    type("show all");
+    expect(rows().some((r) => r.textContent?.includes("Show all projects"))).toBe(false);
+    cleanup();
+
+    useBoxSliceStore.setState({ sliceBoxId: "b1" });
+    render(<CommandPalette />);
+    await openPalette();
+    type("show all");
+    const row = rows().find((r) => r.textContent?.includes("Show all projects"));
+    expect(row).toBeTruthy();
+    await act(async () => {
+      fireEvent.mouseDown(row as Element);
+    });
+    expect(useBoxSliceStore.getState().sliceBoxId).toBeNull();
+  });
+
+  it("toggles hide mode outside a slice, naming the switch's other state", async () => {
+    const { settings: before, updateSettings: realUpdate } = useSettingsStore.getState();
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+    useSettingsStore.setState({ settings: {} as Settings, updateSettings });
+    render(<CommandPalette />);
+    await openPalette();
+    type("other projects");
+    const hide = rows().find((r) => r.textContent?.includes("Hide other projects"));
+    expect(hide).toBeTruthy();
+    await act(async () => {
+      fireEvent.mouseDown(hide as Element);
+    });
+    expect(updateSettings).toHaveBeenLastCalledWith({ bar_solo: true });
+    cleanup();
+
+    useSettingsStore.setState({ settings: { bar_solo: true } as Settings, updateSettings });
+    render(<CommandPalette />);
+    await openPalette();
+    type("other projects");
+    expect(rows().some((r) => r.textContent?.includes("Show other projects"))).toBe(true);
+    cleanup();
+
+    useBoxesStore.setState({ boxes: [box("b1", "Thesis", ["p1"])] });
+    useBoxSliceStore.setState({ sliceBoxId: "b1" });
+    render(<CommandPalette />);
+    await openPalette();
+    type("other projects");
+    expect(rows().some((r) => r.textContent?.includes("other projects"))).toBe(false);
+    useSettingsStore.setState({ settings: before, updateSettings: realUpdate });
+  });
+
+  it("adds the current project to a box it is not in, once something is typed", async () => {
+    const addToBox = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("b1", "Thesis", ["p2"]), box("b2", "Infra", ["p1"], 2)], addToBox });
+    render(<CommandPalette />);
+    await openPalette();
+    // Blank: no per-box rows crowding the list.
+    expect(rows().some((r) => r.textContent?.includes("Add Alpha to"))).toBe(false);
+    type("add alpha");
+    const adds = rows().filter((r) => r.textContent?.includes("Add Alpha to"));
+    // Alpha is already in Infra: only Thesis is offered.
+    expect(adds.map((r) => r.textContent)).toEqual(["Add Alpha to Thesis"]);
+    await act(async () => {
+      fireEvent.mouseDown(adds[0]);
+    });
+    expect(addToBox).toHaveBeenCalledWith("p1", "b1");
+  });
+
+  it("names the box on a box-scope tab row", async () => {
+    useBoxesStore.setState({ boxes: [box("b1", "Thesis", ["p1"])] });
+    useTabsStore.setState({
+      tabsByScope: { p1: [tab("t1", "build log")], "box:b1": [{ ...tab("t3", "box shell"), scope: "box:b1" }] },
+    });
+    render(<CommandPalette />);
+    await openPalette();
+    type("box shell");
+    const row = rows().find((r) => r.textContent?.includes("box shell"));
+    expect(row?.querySelector(".command-palette-detail")?.textContent).toBe("Thesis");
   });
 });

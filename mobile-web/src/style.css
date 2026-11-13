@@ -362,11 +362,6 @@ small { color:#9498aa; }
 .new-tab-cloud-agent { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:0 0 8px; }
 .new-tab-cloud-agent > strong { flex:1 1 auto; min-width:0; color:#aeb4c8; font-size:.9rem; font-weight:600; overflow-wrap:anywhere; }
 .new-tab-cloud-agent > button { min-height:36px; padding:6px 10px; font-size:.8rem; }
-/* The model sheet's launch defaults: the fold above, its fields stacked. */
-.launch-defaults[open] { display:grid; gap:10px; padding-bottom:8px; }
-.launch-defaults > .sheet-note { padding:0; }
-.launch-defaults input { padding:10px; border-radius:10px; }
-.launch-defaults-actions { display:flex; flex-wrap:wrap; gap:8px; }
 /* Home: slim bar, large title, one segmented switch, then inset groups with
    hairline rows. No gradients: accent for actions and selection, colour for
    state. The project screen shares the gutter and the ground. */
@@ -377,24 +372,25 @@ small { color:#9498aa; }
 .home-brand strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-headline); font-weight:650; letter-spacing:.01em; }
 .home-logo-frame { display:grid; place-items:center; flex:0 0 auto; width:28px; height:28px; }
 .home-logo { width:26px; height:26px; color:#f0efff; }
+/* The logo as the root console's door: the same look, a bare button, a tap
+   target at least a row tall, and a dot while root's proposals wait. */
+button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padding:0; border:0; background:transparent; color:inherit; text-align:start; }
+.home-logo-frame { position:relative; }
+.home-brand-dot { position:absolute; top:-1px; right:-2px; width:9px; height:9px; border-radius:50%; background:var(--warn,#f5b94a); box-shadow:0 0 0 2px #0b0d13; }
 .home-header > .lamp { flex:0 0 auto; margin:0 var(--sp-2); }
 .home-offline { display:inline-flex; align-items:center; gap:6px; flex:0 0 auto; padding:4px 10px; border-radius:999px; background:#3b2027; color:#ffb4c0; font-size:var(--fs-caption); font-weight:650; }
-.home-settings { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
+.home-settings,.home-head-button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; background:transparent; color:#d7d3f5; }
+.home-head-button { position:relative; border-radius:var(--r-md); }
+.home-head-button[aria-pressed="true"] { background:#2e2b48; color:#e7e9f2; }
+.home-head-button > .untested { position:absolute; top:-6px; right:-4px; }
 .home-settings svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .projects-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:var(--sp-3); }
 .projects-row h1 { font-size:var(--fs-large); font-weight:700; letter-spacing:-.02em; }
 .projects-row > .new-tab { --o:var(--r-sm); display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; font-size:1.25rem; line-height:1; }
-.home-switch { --o:var(--r-md); gap:2px; margin:var(--sp-4) 0 var(--sp-2); padding:3px; background:var(--surface-group); }
-.home-switch > button { --o:var(--r-sm); display:flex; align-items:center; justify-content:center; gap:6px; min-height:38px; padding:0 var(--sp-2); border:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:600; }
 /* Four segments have to fit the narrowest phones in every language. */
-@media (max-width:359px) { .home-switch > button { min-width:0; padding:0 2px; font-size:var(--fs-micro); } }
-.home-switch > button.selected { background:#2e2b48 !important; color:#e7e9f2; }
-.home-switch-badge { min-width:18px; padding:1px 5px; border-radius:999px; background:#493b1d; color:#ffd36b; font-size:var(--fs-micro); font-weight:700; font-variant-numeric:tabular-nums; }
 /* The projects' caption shows only under Needs you; alone, the title says it. */
-.home-section-head { margin:28px var(--sp-1) var(--sp-2); color:var(--ink-muted); font-size:var(--fs-caption); font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.home-section-head { margin:var(--sp-6) 2px var(--sp-2); font-size:var(--fs-headline); font-weight:700; letter-spacing:-.01em; }
 .home-needs > .home-section-head { margin-top:var(--sp-5); }
-.home-projects-head { display:none; }
-.home-needs ~ .home-projects-head { display:block; }
 /* An inset group. Never put a sheet in one: the clip would cut it off. */
 .home-group,.home-screen > .home-projects { --o:var(--r-lg); display:grid; gap:0; background:var(--surface-group); }
 .home-group > * + *,.home-projects > * + * { border-top:1px solid var(--hairline); }
@@ -406,17 +402,18 @@ small { color:#9498aa; }
 .home-needs-copy small { color:var(--ink-muted); font-size:var(--fs-foot); }
 .home-needs-row time { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-caption); font-variant-numeric:tabular-nums; }
 .home-group-more { min-height:var(--hit); color:#bcb0ff; font-size:var(--fs-sub); font-weight:600; }
-.home-group-more-glyph { color:#6fe29c; font-size:.7rem; }
 .home-projects > .tab-card { border:0; border-radius:0; background:transparent; }
 .home-project-card .card { gap:var(--sp-3); min-height:60px; padding:10px var(--sp-3); }
 .home-project-card .card > span:nth-child(2) { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
 .home-project-card .card strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; }
 .home-project-card .card small { font-size:var(--fs-foot); }
-.home-project-card .tab-card-grip { width:var(--hit); color:#6f7488; }
-.home-project-card .card-trailing { gap:6px; }
+.home-project-card .tab-card-grip { flex:0 0 var(--hit); width:var(--hit); color:#6f7488; }
+.home-project-card .card-trailing { display:grid; grid-template-columns:52px 48px; gap:6px; }
+.home-project-card .card-trailing > .home-agent-counts { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:4px; min-width:0; }
 .home-project-card .agent-status.home-agent-count { padding:4px 7px; font-variant-numeric:tabular-nums; }
-.home-project-card .count { display:inline-flex; align-items:center; gap:5px; min-width:0; padding:0 0 0 4px; background:none; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
-.home-project-card .count::before { content:""; width:11px; height:9px; border:1.5px solid currentColor; border-radius:2px; }
+.home-project-card .card-trailing > .count { display:flex; flex-wrap:nowrap; white-space:nowrap; justify-content:flex-end; align-items:center; gap:5px; min-width:0; padding:0 0 0 4px; background:none; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
+.home-project-card .count > svg { flex:0 0 auto; }
+.home-project-card .count > span { display:block; min-width:2ch; text-align:right; }
 .home-hint,.project-hint { display:flex; align-items:center; gap:var(--sp-1); margin:6px 0 0 var(--sp-1); color:var(--ink-muted); font-size:var(--fs-foot); line-height:1.35; }
 .home-hint > span,.project-hint > span { flex:1 1 auto; min-width:0; }
 .project-host-note { display:flex; align-items:flex-start; gap:var(--sp-1); }
@@ -454,7 +451,7 @@ small { color:#9498aa; }
 .project-activate { margin-bottom:var(--sp-3); }
 .project-activate > button { --o:var(--r-md); width:100%; min-height:var(--hit); border:0; }
 /* The radius these screens round their pieces to, each its own `--o`. */
-.home-switch,.home-switch > button,.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
+.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
 /* The four top-level sections. Fixed to the bottom edge so it survives the long
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
@@ -817,6 +814,21 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal-view-switch button.selected { color:#e7e9f2; }
 .terminal-screen > header .terminal-view-switch { padding:0; background:transparent; }
 .terminal-view-switch .view-pill { display:inline-flex; align-items:center; height:34px; padding:0 10px 0 12px; background:var(--surface-group); color:#e7e9f2; }
+/* The Focus head reads as one row: ‹, the name with its connection dot right
+   after it, then the tools at the far end — ☰ and the agent's files as the
+   project screen's plain 44px icons, the view pill the one filled control.
+   `order` moves the dot (last in the markup) beside the name. */
+.terminal-screen > header > * { order:3; }
+.terminal-screen > header > .back { order:0; }
+.terminal-screen > header > .terminal-title { order:1; flex:0 1 auto; }
+.terminal-screen > header > .lamp { order:2; flex:0 0 auto; width:8px; height:8px; margin:0 auto 0 2px; box-shadow:none; }
+.terminal-screen > header > .terminal-view-switch { margin-left:2px; }
+.terminal-screen > header > :is(.drawer-open,.terminal-gallery) { width:auto; min-width:40px; height:var(--hit); padding:0 8px; border:0; background:transparent; color:#e7e9f2; }
+.terminal-screen > header > .drawer-open svg { width:20px; height:20px; }
+.terminal-screen > header > .terminal-gallery { gap:3px; }
+.terminal-screen > header > .terminal-gallery > span { display:grid; place-items:center; }
+.terminal-screen > header > .terminal-gallery .app-icon { width:20px; height:20px; }
+.terminal-screen > header > .terminal-gallery small { color:#a99cf0; font-size:var(--fs-caption); font-weight:650; font-variant-numeric:tabular-nums; }
 /* An agent tab's Focus opens a list once it is up: where Focus reads from. */
 .view-caret { display:inline-block; width:5px; height:5px; margin:0 1px 2px 6px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); opacity:.75; }
 .focus-menu-backdrop { position:fixed; inset:0; z-index:12; }
@@ -1078,15 +1090,11 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-title strong { color:#e7e9f2; font:600 .86rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .subagent-steps { display:flex; flex:0 0 auto; align-items:center; gap:6px; color:#9da3b6; font-size:.72rem; font-variant-numeric:tabular-nums; }
 .subagent-bar + .readable-empty { min-height:calc(100% - 56px); }
-/* Keep the session's subagents within reach even after their cards scroll away. */
-/* The strip over the chat: the subagent index and the sent-files index side by
-   side, one list open at a time. */
-.chat-index { position:sticky; top:-12px; z-index:2; display:flex; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid var(--hairline); background:#0b0d13; }
+/* Keep the session's subagents, files and links within reach while scrolling. */
+.chat-index { position:sticky; top:-12px; z-index:2; display:flex; flex-wrap:wrap; align-items:flex-start; gap:6px; margin:-12px -14px 12px; padding:7px 10px; border-bottom:1px solid var(--hairline); background:#0b0d13; }
 /* Not the global `nav` row: the chip stacks over its list at full width. */
 .chat-index > nav { display:block; flex:1 1 0; min-width:0; margin:0; }
-/* An open list takes the strip's full width; the shut chip moves to a line of
-   its own above it. */
-.chat-index:has(> nav.open) { flex-wrap:wrap; }
+/* An open list takes the strip's full width below the closed chips. */
 .chat-index > nav.open { flex:1 0 100%; }
 .chat-index:has(> nav.open) > nav:not(.open) { order:-1; }
 .chat-index .subagent-index-toggle span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1095,30 +1103,46 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .subagent-index-toggle em { color:#8fb8ff; font-size:.62rem; font-style:normal; text-transform:uppercase; }
 .subagent-index-toggle svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .subagent-index-toggle svg.expanded { transform:rotate(180deg); }
-.subagent-index-list { display:grid; gap:4px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
-.subagent-index-list button, .git-rows > li { --rim:#2c3a55; display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; background-color:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
+/* Under the Focus head the strip is the head's second row: the head drops
+   its hairline for the strip's, the shut lists are compact filled chips at
+   their own width rather than bordered full-width bars, and the chat fades
+   out under the strip instead of showing a half-cut line. */
+.terminal-screen:has(.chat-index) > header { border-bottom-color:transparent; }
+.chat-index > nav:not(.open) { flex:0 1 auto; }
+.chat-index .subagent-index-toggle { min-height:30px; padding:4px 8px 4px 9px; border:0; background-color:var(--surface-group); }
+.chat-index .subagent-index-toggle svg { width:15px; height:15px; color:var(--ink-muted); }
+.chat-index::after { content:""; position:absolute; inset:calc(100% + 1px) 0 auto; height:10px; background:linear-gradient(rgba(11,13,19,.96),rgba(11,13,19,0)); pointer-events:none; }
+.subagent-index-list, .chat-link-index-list { display:grid; gap:4px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
+:is(.subagent-index-list,.chat-link-index-list) button, .git-rows > li { --rim:#2c3a55; display:grid; gap:2px; width:100%; padding:8px 10px; border:1px solid #2c3a55; background-color:#151b28; color:#dbe4f6; font:inherit; text-align:left; }
 .subagent-index-list button:disabled { opacity:.6; }
-.subagent-index-list small, .git-rows > li > small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
-.subagent-index-list span, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
+:is(.subagent-index-list,.chat-link-index-list) small, .git-rows > li > small { color:#8fb8ff; font-size:.64rem; text-transform:uppercase; letter-spacing:.05em; }
+:is(.subagent-index-list,.chat-link-index-list) span, .chat-link-index-list bdi, .git-rows > li > span { font-size:.8rem; line-height:1.35; overflow-wrap:anywhere; }
+.chat-link-index-list { margin:0; padding-inline:0; list-style:none; }
+.chat-link-index-list bdi { color:#b8c9e9; direction:ltr; }
 .subagent-index-list button.subagent-index-earlier { color:#9da3b6; font-size:.76rem; text-align:center; }
-.sent-index-groups { display:grid; gap:10px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
+.sent-index-groups { display:grid; gap:12px; max-height:min(55vh,400px); overflow:auto; padding-top:7px; }
+.sent-index-group { --group:#8fb8ff; }
+.sent-index-group.phone { --group:#a99cf0; }
+.sent-index-group.changed { --group:#8fd0a8; }
+.sent-index-group.named { --group:#c9b37e; }
+.sent-index-group + .sent-index-group { padding-top:10px; border-top:1px solid #2c3a55; }
+.sent-index-group .sent-index-head { display:flex; align-items:center; gap:6px; margin-bottom:1px; color:var(--group); }
+.sent-index-group .sent-index-head::before { content:""; flex:none; width:8px; height:8px; border-radius:50%; background:var(--group); }
+.sent-index-hint { margin:0 0 6px; padding:0 2px 0 16px; color:#95a6c8; font-size:.68rem; }
 .sent-index-head, .subagent-index-head { margin:0 0 5px; padding:0 2px; font-size:.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .subagent-index-head { margin:0; color:#8c98b3; }
 .subagent-index-group { display:grid; gap:4px; }
 .subagent-index-group + .subagent-index-group { margin-top:6px; }
-.sent-index-head.phone { color:#a99cf0; }
-.sent-index-head.agent { color:#8fb8ff; }
 .sent-index-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(96px,1fr)); gap:6px; margin:0; padding:0; list-style:none; }
 .sent-index-list li { min-width:0; }
 .sent-index-list button, .sent-index-list a { display:grid; gap:3px; width:100%; padding:4px 4px 6px; border:1px solid #2c3a55; border-radius:9px; background:#151b28; color:#dbe4f6; font:inherit; text-align:left; text-decoration:none; }
+.sent-index-group .sent-index-list :is(button,a) { border-color:color-mix(in srgb,var(--group) 35%,#2c3a55); }
 .sent-index-thumb { display:grid; place-items:center; width:100%; aspect-ratio:1; overflow:hidden; border-radius:6px; background:#2b2f45; color:#b9c4e0; font-size:1.15rem; font-weight:700; }
 .sent-index-thumb img { width:100%; height:100%; object-fit:cover; }
 .sent-index-name, .sent-index-list small { overflow:hidden; padding:0 2px; text-overflow:ellipsis; white-space:nowrap; }
 .sent-index-name { font-size:.74rem; font-weight:600; }
 .sent-index-list small { color:#95a6c8; font-size:.64rem; }
 .sent-index-more { padding:0 2px; color:#95a6c8; font-size:.68rem; }
-.sent-index-head.changed { color:#8fd0a8; }
-.sent-index-head.named { color:#c9b37e; }
 .git-sheet { max-height:92dvh; }
 .git-body { display:grid; gap:6px; overflow:auto; }
 .git-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0; padding:2px 6px; color:#9da3b6; font-size:.84rem; }
@@ -1178,7 +1202,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-shell-mark { width:15px; text-align:center; color:#8fb8ff; font:600 .78rem/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
 .transcript-shell-item { min-width:0; }
 .transcript-shell-toggle { flex:none; padding:2px 8px; border:0; background:transparent; color:#8fb8ff; font-size:.8rem; }
-.transcript-shell-command { margin:0 10px 6px 33px; padding:6px 8px; max-height:40vh; overflow:auto; border-radius:8px; background:#14161e; color:#c8cde0; font:400 .72rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.transcript-shell-terminal { margin-left:auto; text-decoration:underline; }
 @media (prefers-reduced-motion: reduce) { .transcript-working-dots i { animation:none; opacity:.7; } }
 .readable-notice { margin-bottom:10px; padding:8px 10px; border-left:3px solid #747b90; border-radius:8px; background:#14161e; color:#9298aa; font:400 .78rem/1.45 Inter,ui-sans-serif,system-ui,sans-serif; }
 .readable-earlier { display:block; width:100%; margin-bottom:10px; padding:9px 10px; border:1px solid #34384a; border-radius:9px; background:#151823; color:#9da3b6; font:500 .78rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; text-align:center; }
@@ -1225,8 +1249,26 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .fact-action { display:flex; align-items:center; gap:5px; flex:0 0 auto; max-width:14em; margin:0 -4px; padding:5px 4px; border:0; border-radius:6px; background:transparent; color:#b9bed0; font:inherit; }
 .fact-action:active { background:rgba(255,255,255,.08); }
 .fact-action:disabled { color:#8b90a5; opacity:.6; }
-.fact-action-plan { box-shadow:inset 0 0 0 1px #8c7df4; background:rgba(120,104,217,.28); color:#fff; }
+/* Make tappable status facts visible without a hover-capable pointer. */
+.session-facts :is(.fact-action,.fact-limit):not(:disabled) { background:rgba(255,255,255,.04); box-shadow:inset 0 0 0 1px #393f55; cursor:pointer; }
+.session-facts :is(.fact-action,.fact-limit):not(:disabled):is(:hover,:active,[aria-expanded="true"]) { background:rgba(255,255,255,.08); box-shadow:inset 0 0 0 1px #8b90a5; }
+.session-facts :is(.fact-action,.fact-limit):focus-visible { outline:2px solid #8c7df4; outline-offset:-2px; }
+.session-facts .fact-action-plan:not(:disabled) { box-shadow:inset 0 0 0 1px #8c7df4; background:rgba(120,104,217,.28); color:#fff; }
 .fact-action-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+/* The status chip is its lamp alone: padded out to a fingertip's width. */
+.fact-action.fact-status { min-width:26px; justify-content:center; }
+/* The model chip's effort, a gauge plus the level: never cut, the model name
+   ellipsizes first. */
+.fact-effort { display:inline-flex; align-items:center; gap:3px; flex:0 0 auto; color:#9ea4b8; }
+/* Claude's effort in the model sheet: the levels as one segment under the
+   models, the current one lit as the list's current row is. */
+.model-effort { margin-top:var(--sp-3); }
+.model-effort-levels { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:2px; padding:2px; background:#0b0d13; }
+.model-effort-levels button { min-width:0; min-height:44px; padding:0 2px; border:0; border-radius:0; background:var(--surface-raised); color:#c8cdda; font-size:var(--fs-sub); font-weight:600; }
+.model-effort-levels button.current { background:#2e2b48; color:#d7d3f5; box-shadow:inset 0 0 0 1px #8c7df4; }
+.model-effort-levels button:disabled { opacity:.5; }
+@media (max-width:359px) { .model-effort-levels { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+.model-effort > .sheet-note { margin-top:6px; }
 /* The same lamp the tab row shows, so the state reads without opening the
    sheet. `idle` is dim rather than absent: a missing lamp reads as broken. */
 .fact-lamp { width:7px; height:7px; flex:0 0 auto; border-radius:50%; background:#5a6178; }
@@ -1298,8 +1340,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .slash-pick small { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#9498aa; font-size:.76rem; }
 .slash-row.used .slash-pick small { color:#b3a9f5; }
 /* Claude's one suggestion: the `/` menu's look, as tall as its text, which wraps. */
-.prompt-suggestion { height:auto; max-height:min(30vh,180px); }
-.prompt-suggestion .slash-pick strong { max-width:none; white-space:normal; overflow-wrap:anywhere; font-family:inherit; font-weight:500; }
+.prompt-composer textarea.suggested { color:#9fa4b6 !important; -webkit-text-fill-color:#9fa4b6; font-style:italic; }
+.composer-suggested-untested { align-self:center; flex:none; font-size:.7em; opacity:.7; }
 .slash-forget { flex:0 0 auto; width:32px; height:32px; padding:0; border:0; border-radius:0; background:transparent; color:#767a8b; }
 .composer-dictate { color:#dcd6ff; background:transparent; }
 .composer-dictate.listening { color:#fff; background:#7a3151; box-shadow:0 0 0 2px rgba(227,107,154,.22); }
@@ -1452,17 +1494,23 @@ span.files-close { background:transparent; }
 .drawer-files .untested { margin-left:6px; }
 /* The files library (`FilesLibrary`): the whole screen in the drawer sheet's
    surface, slid in as the drawer is. Its head is ‹ parent · the folder's
-   title (the path menu) · ⋯ (the view menu); the body under it scrolls. */
+   title (the path menu) · ⋯ (the view menu) and × in a folder; the body under it scrolls. */
 .files-library { position:fixed; inset:0; z-index:12; display:flex; flex-direction:column; padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left); background:#171a24; color:#e6e9f2; animation:files-drawer-in .18s ease-out; }
-.files-library-head { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(0,1fr); align-items:center; gap:4px; min-height:44px; padding:max(14px, calc(8px + env(safe-area-inset-top))) 10px 8px; border-bottom:1px solid #2b3040; }
-.files-library-back { justify-self:start; display:flex; align-items:center; gap:1px; max-width:100%; min-height:36px; padding:4px 8px 4px 0; border:0; border-radius:10px; background:transparent; color:#8fb8ff; font-size:.9rem; }
+.files-library-head { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2fr) minmax(max-content,1fr); align-items:center; gap:4px; min-height:44px; padding:max(14px, calc(8px + env(safe-area-inset-top))) 10px 8px; border-bottom:1px solid #2b3040; }
+.files-library-back { justify-self:start; display:flex; align-items:center; gap:1px; max-width:100%; min-height:44px; padding:4px 8px 4px 0; border:0; border-radius:10px; background:transparent; color:#8fb8ff; font-size:.9rem; }
 .files-library-back span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .files-library-head svg { width:20px; height:20px; flex:0 0 auto; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
 .files-library-head h2 { display:flex; justify-content:center; align-items:center; min-width:0; margin:0; font-size:1.02rem; }
 .files-library-title { min-width:0; padding:6px 8px; overflow:hidden; border:0; border-radius:10px; background:transparent; color:inherit; font:inherit; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }
 .files-library-head h2 small { flex:0 0 auto; color:#8fb8ff; font-size:.62rem; text-transform:uppercase; }
-.files-library-more { justify-self:end; display:grid; place-items:center; width:36px; height:36px; padding:0; border:0; border-radius:50%; background:#2a2e3e; color:#c8cdda; }
+/* 44 px to tap, the 36 px disc drawn inside it. */
+.files-library-more { position:relative; justify-self:end; display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; border-radius:50%; background:transparent; color:#c8cdda; }
+.files-library-more::before { content:""; position:absolute; inset:4px; border-radius:50%; background:#2a2e3e; }
+.files-library-more svg { position:relative; }
 .files-library-more svg, .option-list .files-more svg { stroke-width:3.2; }
+/* ⋯ and, inside a folder, × (`files-library-close`): out of the library from any folder. */
+.files-library-actions { justify-self:end; display:flex; align-items:center; }
+.files-library-close svg { stroke-width:2.2; }
 .files-library-bar { flex:0 0 auto; display:grid; gap:11px; padding:10px 10px 0; }
 .files-library-body { flex:1; display:grid; align-content:start; gap:11px; min-height:0; padding:10px 10px calc(16px + env(safe-area-inset-bottom)); overflow:auto; overscroll-behavior:contain; }
 /* A list row's ⋯, after its ↗ Share. */
@@ -1479,11 +1527,15 @@ span.files-close { background:transparent; }
 .files-tile-cover .files-icon-image { background:#1d3329; color:#8ad1a6; }
 .files-tile-cover .files-icon-pdf { background:#3a2226; color:#f28b82; }
 .files-tile-cover .files-icon-text { background:#2a2c3a; color:#c8cdda; }
+.files-tile-cover .files-icon-media { background:#2e2640; color:#c4a8ff; }
 .files-tile-open strong { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; padding:2px 2px 0; font-size:.82rem; font-weight:600; line-height:1.25; overflow-wrap:anywhere; }
 .files-tile-open small { padding:0 2px; overflow:hidden; color:#98a0b4; font-size:.7rem; text-overflow:ellipsis; white-space:nowrap; }
 .files-tile-open small.files-hit-place { color:#8fb8ff; }
 .files-tile.files-folded strong { color:#aeb4c4; font-weight:500; }
-.files-tile-menu { position:absolute; top:5px; right:5px; display:grid; place-items:center; width:30px; height:30px; padding:0; border:0; border-radius:50%; background:rgba(16,19,28,.72); color:#d8e2f5; }
+/* A 44 px hit area in the cover's corner, the 30 px disc drawn inside it. */
+.files-tile-menu { position:absolute; top:-2px; right:-2px; display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; border-radius:50%; background:transparent; color:#d8e2f5; }
+.files-tile-menu::before { content:""; position:absolute; inset:7px; border-radius:50%; background:rgba(16,19,28,.72); }
+.files-tile-menu svg { position:relative; }
 .files-tile-menu svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.4; stroke-linecap:round; stroke-linejoin:round; }
 .files-tile-share { justify-self:start; padding:5px 10px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.75rem; }
 .files-grid > .files-section { grid-column:1 / -1; }
@@ -1517,6 +1569,35 @@ span.files-close { background:transparent; }
 .files-library .files-upload strong { font-size:.95rem; }
 .files-library .files-upload small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .files-note { margin:-4px 4px 0; padding:0 2px; font-size:.76rem; }
+/* A long-press opens the item menu, so the phone's own callout and text
+   selection stay off the tile and row buttons. */
+.files-tile-open, .files-list li > button:first-child { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; }
+/* Large folders: rows off screen skip their paint until scrolled near. */
+.files-grid > .files-tile { content-visibility:auto; contain-intrinsic-size:auto 180px; }
+.files-list > li { content-visibility:auto; contain-intrinsic-size:auto 64px; }
+/* The folders down to this one, under the head, scrolled to the end. */
+.files-path ol { display:flex; gap:2px; margin:0 4px; padding:0; overflow-x:auto; list-style:none; scrollbar-width:none; }
+.files-path li { display:flex; flex:0 0 auto; align-items:center; max-width:60vw; }
+.files-path li + li::before { content:"›"; padding:0 3px; color:#5d6478; }
+.files-path button, .files-path span { min-width:0; min-height:32px; padding:4px 8px; overflow:hidden; border:0; border-radius:8px; background:#1e2230; color:#8fb8ff; font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
+.files-path span { background:transparent; color:#d8e2f5; font-weight:600; line-height:24px; }
+/* The search's scope chips: this folder, and what git ignores. */
+.files-search-chips { display:flex; flex-wrap:wrap; gap:6px; margin:-4px 4px 0; }
+.files-search-chips button { min-height:32px; max-width:100%; padding:4px 10px; overflow:hidden; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#c8cdda; font-size:.78rem; text-overflow:ellipsis; white-space:nowrap; }
+.files-search-chips button.selected { border-color:#2f6fec; background:#1d2a44; color:#8fb8ff; }
+.files-recent-link { justify-self:start; min-height:32px; margin:-4px 4px 0; padding:4px 10px; border:1px solid #34384a; border-radius:999px; background:#1b2333; color:#8fb8ff; font-size:.78rem; }
+.files-saved h3 .files-recent-hide { float:right; padding:0 4px; border:0; background:transparent; color:#8fb8ff; font-size:.76rem; font-weight:600; letter-spacing:0; text-transform:none; }
+/* An iPad or a phone held sideways: sheets stand centred at a readable width
+   (not the files drawer, which comes from the right), tiles grow, rows stop
+   at a readable length. */
+@media (min-width:700px) {
+  .sheet-backdrop:not(.files-drawer-backdrop) > .option-sheet { max-width:560px; margin-inline:auto; border-radius:var(--r-sheet) var(--r-sheet) 0 0; }
+}
+@media (min-width:900px) {
+  .files-library .files-grid { grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); }
+  .files-library .files-strip > .files-tile { flex-basis:124px; }
+  .files-library .files-list { width:100%; max-width:900px; margin-inline:auto; }
+}
 .files-list small.files-hit-place { overflow:hidden; color:#8fb8ff; text-overflow:ellipsis; white-space:nowrap; }
 /* A file's ↗ Share sits beside its row, drawn as the outbox tile's Share link. */
 .files-list li { display:flex; flex-wrap:wrap; align-items:stretch; gap:3px; }
@@ -1532,6 +1613,7 @@ span.files-close { background:transparent; }
 .option-list button > span.files-icon-image { background:#1d3329; color:#8ad1a6; }
 .option-list button > span.files-icon-pdf { background:#3a2226; color:#f28b82; }
 .option-list button > span.files-icon-text { background:#2a2c3a; color:#c8cdda; }
+.option-list button > span.files-icon-media { background:#2e2640; color:#c4a8ff; }
 .files-list strong { font-size:.94rem; }
 /* A PDF opened from the drawer, as a card after the tabs: the row's kind tile
    where a tab card has its colour dot, and the folder under the name. */
@@ -1597,6 +1679,11 @@ span.files-close { background:transparent; }
 .question-type > button { grid-column:2; }
 .question-type > button.primary { justify-content:center; width:auto; min-height:44px; padding:10px 20px; border:1px solid #8c7df4; border-radius:0; background:#6c5ce7; color:#fff; font-weight:700; }
 .question-type em { grid-column:1 / -1; color:#98a0b4; font-size:.78rem; }
+/* The answer's 📎 (`attach`): left of Send, the composer's add button's size. */
+.question-type > button.question-attach { grid-column:1; justify-self:start; display:grid; place-items:center; width:44px; min-height:44px; padding:0; border:1px solid var(--edge); border-radius:0; background:transparent; color:#d7d3f5; }
+.question-type > button.question-attach svg { width:20px; height:20px; }
+.question-type small { grid-column:1 / -1; color:#98a0b4; font-size:.78rem; }
+.question-type small[role="alert"] { color:#ff9b9b; }
 /* A question kept in the chat once answered (`AskedCard`): the live card's
    rows, no longer buttons — the ones the answer took lit as the highlighted
    row is, the rest quieted as a sent list's are. */
@@ -1799,6 +1886,12 @@ span.files-close { background:transparent; }
 .markup-host { display:contents; }
 .markup-host.away { display:none; }
 .outbox-viewer { position:fixed; inset:0; z-index:13; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); background:rgba(4,5,9,.97); color:#e6e9f2; }
+/* A file the viewer cannot draw, or one past the desktop's cap: named, centred. */
+.outbox-no-preview { display:grid; align-content:center; justify-items:center; gap:8px; min-height:0; padding:24px 20px calc(24px + env(safe-area-inset-bottom)); overflow:auto; text-align:center; }
+.outbox-no-preview svg { width:56px; height:56px; fill:none; stroke:#8fb8ff; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.outbox-no-preview strong { max-width:100%; font-size:1rem; overflow-wrap:anywhere; }
+.outbox-no-preview small { color:#98a0b4; }
+.outbox-no-preview p { max-width:28em; margin:4px 0 8px; color:#c9cddb; font-size:.88rem; }
 .outbox-viewer-head { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; min-height:0; padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
 .outbox-viewer-head > a, .outbox-viewer-head > button { flex:0 0 auto; }
 /* The name over its position and size, so neither squeezes the other. Kept
@@ -1813,6 +1906,32 @@ span.files-close { background:transparent; }
 .outbox-viewer-stage { position:relative; min-height:0; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; }
 .outbox-viewer-stage img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform-origin:center; -webkit-user-drag:none; }
 .outbox-viewer-stage.zoomed { cursor:grab; }
+/* An iPad held sideways: the open file stands beside the files library's
+   folder (`files-split`), the folder on the left two fifths. */
+.files-library.files-split { right:60%; border-right:1px solid #2a2e3c; animation:none; }
+.outbox-viewer.paned { left:40%; }
+.files-split .files-shown > button, .files-split .files-shown .files-tile-open { background:#24283a; box-shadow:inset 3px 0 0 #8fb8ff; }
+/* Files dragged over a folder that takes uploads. */
+.files-library-body.files-dropping { outline:2px dashed #8fb8ff; outline-offset:-6px; border-radius:var(--r-md); }
+.files-drop-note { margin:var(--sp-2) var(--sp-3); color:#8fb8ff; font-weight:600; text-align:center; }
+/* Select files: ticked items, and the bar acting on them. */
+.files-library-body.files-selecting { padding-bottom:calc(72px + env(safe-area-inset-bottom)); }
+.files-picked > button, .files-picked .files-tile-open { background:#22304a; box-shadow:inset 0 0 0 2px #8fb8ff; }
+.files-select-bar { position:absolute; left:0; right:0; bottom:0; z-index:2; display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-2); padding:var(--sp-2) var(--sp-3) calc(var(--sp-2) + env(safe-area-inset-bottom)); background:#1d2130; border-top:1px solid #2a2e3c; }
+.files-select-bar > [role="status"] { margin-right:auto; font-weight:600; }
+.files-select-bar > button { min-height:var(--hit); padding:0 var(--sp-3); border-radius:var(--r-sm); }
+.files-select-bar .error { color:#f28b82; }
+/* A keyboard or a pointer (an iPad's): where the focus is, and what is under
+   the pointer, show on the items. */
+.files-library-body :is(.files-tile-open, .files-list > li > button, .files-section > button):focus-visible { outline:2px solid #8fb8ff; outline-offset:-2px; }
+@media (hover:hover) {
+  .files-library-body :is(.files-tile-open, .files-list > li > button):hover { background:#1f2331; }
+}
+/* A film or a sound: the phone's own player, centred; its controls take
+   the touches the picture stage keeps for pinch and swipe. */
+.outbox-viewer-stage.outbox-media { display:grid; place-items:center; padding:var(--sp-3); touch-action:auto; user-select:auto; -webkit-user-select:auto; }
+.outbox-media video { max-width:100%; max-height:100%; background:#000; border-radius:var(--r-sm); }
+.outbox-media audio { width:min(100%, 480px); }
 .outbox-viewer-status { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); display:grid; justify-items:center; gap:10px; max-width:min(80%,22rem); margin:0; color:#95a6c8; font-size:.85rem; text-align:center; pointer-events:none; }
 .outbox-viewer-status button { pointer-events:auto; }
 .outbox-viewer-stage.zoomed img { will-change:transform; }
@@ -1939,7 +2058,6 @@ span.files-close { background:transparent; }
 .markup-toolbar > button.selected { background:#2f6fec; color:#fff; }
 .markup-toolbar > button:disabled { opacity:.35; }
 .markup-toolbar > button[aria-expanded="true"] { background:#2b3043; }
-.markup-color-well span { display:block; width:24px; height:24px; border-radius:50%; box-shadow:0 0 0 2px #e6e9f2; }
 .markup-toolbar-rule { flex:0 0 auto; width:1px; height:24px; margin:0 3px; background:#34384a; }
 /* Previous / Next mark: the toolbar's look stood on end, at the palette's
    right edge (reading too, where it is the palette's only part). */
@@ -1961,13 +2079,6 @@ span.files-close { background:transparent; }
 .markup-pen-ring { display:block; border-radius:50%; border:1.5px solid currentColor; }
 .markup-pen-area { display:block; width:16px; height:11px; border:1.5px dashed currentColor; }
 .markup-pen-meaning { margin:0; color:#c9cddb; font-size:.74rem; text-align:center; }
-.markup-color-well.is-eraser { color:#e6e9f2; }
-/* On a wide screen the colours ride in the toolbar too. */
-.markup-toolbar-colors { display:none; }
-@media (min-width: 560px) {
-  .markup-toolbar-colors { display:inline-flex; align-items:center; gap:6px; padding:0 4px; }
-  .markup-toolbar-colors .markup-color { width:26px; height:26px; }
-}
 /* What the area eraser will take while it is dragged. */
 .markup-area { position:absolute; border:1.5px dashed #333; outline:1.5px solid rgba(255,255,255,.85); pointer-events:none; z-index:3; }
 .markup-more { display:grid; min-width:230px; }
@@ -2008,6 +2119,36 @@ span.files-close { background:transparent; }
 .markup-comment textarea { min-height:56px; resize:vertical; border:1px solid #34384a; border-radius:8px; background:#0f131c; color:#e6e9f2; font:400 .85rem/1.3 Inter,ui-sans-serif,system-ui,sans-serif; padding:6px 8px; }
 .markup-comment .markup-pen-actions { display:flex; justify-content:flex-end; }
 .markup-more-value { margin-left:auto; color:#8fb8ff; font-size:.8rem; }
+/* The notes-style dock (docs/markup_notes_style_plan.md): the Draw/Scroll
+   switch, the six slots; a slot's sheet holds favourites, a segmented choice,
+   the size slider, switches and the Proof grid; the Agent badge's sheet. */
+.markup-toolbar > button.markup-finger { width:44px; border-radius:14px; display:flex; flex-direction:column; gap:0; font-size:.95rem; line-height:1; }
+.markup-toolbar > button.markup-finger small { font-size:.6rem; font-weight:600; }
+.markup-toolbar > button.markup-finger.selected { background:#e6e9f2; color:#141a26; }
+.markup-seg { display:flex; gap:2px; padding:3px; border-radius:12px; background:#141a26; }
+.markup-seg button { flex:1; min-height:36px; border:0; border-radius:9px; background:transparent; color:#c9cddb; font:500 .82rem/1.1 Inter,ui-sans-serif,system-ui,sans-serif; }
+.markup-seg button.selected { background:#2b3043; color:#fff; }
+.markup-pen-switch { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 6px; border:0; background:transparent; color:#e6e9f2; font:500 .86rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif; text-align:left; }
+.markup-pen-switch[aria-checked="true"] .markup-switch { background:#2f6fec; }
+.markup-pen-switch[aria-checked="true"] .markup-switch::after { left:19px; }
+.markup-size { display:flex; align-items:center; gap:10px; padding:0 6px; color:#c9cddb; font-size:.82rem; }
+.markup-size input { flex:1; accent-color:#2f6fec; }
+.markup-size .markup-more-value { margin-left:0; min-width:1.5em; text-align:right; }
+.markup-proof { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:5px; }
+.markup-proof button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; min-height:52px; border:1px solid #34384a; border-radius:10px; background:#141a26; color:#e6e9f2; font-size:.66rem; }
+.markup-proof button > span:first-child { font-size:1.05rem; }
+.markup-proof button.selected { border-color:#2f6fec; box-shadow:0 0 0 1px #2f6fec; }
+.markup-preset .markup-fav-dot { display:block; border-radius:50%; box-shadow:0 0 0 1.5px rgba(255,255,255,.55); }
+.markup-preset { justify-content:center; min-width:44px; height:44px; padding:0; }
+.markup-preset.markup-preset-add { border-style:dashed; color:#8fb8ff; font-size:1.2rem; }
+.markup-lasso { position:absolute; left:0; top:0; z-index:3; pointer-events:none; overflow:visible; }
+.markup-lasso polyline { fill:rgba(47,111,236,.08); stroke:#2f6fec; stroke-width:1.5; stroke-dasharray:4 3; }
+.markup-popover.markup-agent { display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto; padding:10px; }
+.markup-popover.markup-agent p { margin:0; color:#c9cddb; font-size:.82rem; }
+.outbox-action.markup-agent { display:inline-flex; align-items:center; gap:6px; }
+.outbox-action.markup-agent.selected { background:#2b3043; }
+.markup-agent-count { display:inline-grid; place-items:center; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:#2f6fec; color:#fff; font-size:.7rem; font-weight:700; }
+.markup-agent-dot { width:7px; height:7px; border-radius:50%; background:#2f6fec; }
 .markup-tick-diff { position:absolute; z-index:1; overflow:hidden; padding:4px 8px; border-radius:10px; background:rgba(15,42,24,.92); color:#c9f2d5; font:500 .7rem/1.25 Inter,ui-sans-serif,system-ui,sans-serif; text-overflow:ellipsis; white-space:nowrap; max-width:240px; pointer-events:none; }
 /* The agent's markup questions (`MarkupQuestionsCard`, `markup_ask`): a card
    docked at the top of the palette, folded to its head by a tap, its rows the
@@ -2088,10 +2229,10 @@ span.files-close { background:transparent; }
 :where(:is(.terminal-screen,.sheet-backdrop,.brand-screen) .primary) { --rim:#8c7df4; }
 :where(.prompt-composer,.focus-menu,.transcript-screen) { --r:var(--r-lg); }
 :where(.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent) { --r:var(--r-md); --rim:var(--edge); }
-:where(.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin) { --r:var(--r-sm); --rim:var(--edge); }
+:where(.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin) { --r:var(--r-sm); --rim:var(--edge); }
 :is(.terminal-screen,.sheet-backdrop,.brand-screen) :is(button:not([class]),button.primary,button.danger,button.mode,button.new-tab-file,select,textarea,input:not([type="checkbox"],[type="radio"],[type="range"],[type="color"],[type="file"])),
 .prompt-composer,.focus-menu,.transcript-screen,.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent,
-.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin {
+.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin {
   border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
 }
 /* Focus retints the rim; the field draws no outline of its own. */
@@ -2135,4 +2276,249 @@ ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) 
 .screen,.terminal-screen { animation:screen-in .14s ease-out; }
 @media (prefers-reduced-motion:reduce) {
   .sheet-backdrop,.option-sheet,.screen,.terminal-screen,.list-skeleton > i { animation:none; }
+}
+
+/* Phone tips point to the visible control; all decorations pass taps through. */
+.phone-hint-pointer { position:fixed; inset:0; width:100%; height:100%; z-index:9; pointer-events:none; overflow:visible; color:#baabff; }
+.phone-hint-pointer path,.phone-hint-ring { fill:none; stroke:currentColor; stroke-width:2; }
+.phone-hint-pointer circle { fill:currentColor; }
+.phone-hint-ring { animation:phone-hint-pulse 1.8s ease-in-out 3; }
+@keyframes phone-hint-pulse { 50% { opacity:.35; } }
+@media (prefers-reduced-motion:reduce) { .phone-hint-ring { animation:none; } }
+[data-software-paint] .phone-hint-ring { animation:none; }
+
+/* PDF cards use the library's bounded first-page covers. */
+.pdf-file-cover { position:relative; display:grid; place-items:center; overflow:hidden; background:#0f131c; }
+.pdf-file-cover img { display:block; width:100%; height:100%; object-fit:contain; min-height:0; }
+.pdf-file-cover small { position:absolute; bottom:0; left:0; right:0; background:#161927; text-align:center; font-size:.6rem; }
+.outbox-post-file > .pdf-file-cover { width:72px; height:104px; border-radius:5px; }
+.outbox-file > .pdf-file-cover { width:100%; aspect-ratio:3 / 4; }
+
+/* Home's optional project tiles retain the opener and a separate drag grip. */
+/* Home's section heads are one size: Needs you, Projects (with its layout
+   button and ＋ at the far edge), Desktop. */
+.home-screen > .projects-row { gap:var(--sp-1); margin:var(--sp-6) 0 var(--sp-2); }
+.home-screen > .projects-row h1 { flex:1 1 auto; margin:0 0 0 2px; font-size:var(--fs-headline); letter-spacing:-.01em; }
+.home-layout-button,.home-back { position:relative; display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; border-radius:var(--r-md); background:transparent; color:var(--ink-muted); }
+.home-layout-button > .untested { position:absolute; top:-6px; right:-4px; }
+/* A view other than Active: ‹ and its title in place of the start page. */
+.home-subview-head { display:flex; align-items:center; gap:var(--sp-1); margin:var(--sp-2) 0 var(--sp-2) -10px; }
+.home-subview-head h1 { flex:1 1 auto; margin:0; font-size:var(--fs-title); font-weight:700; }
+.home-back { color:#d7d3f5; }
+/* The agent tiles: waiting, working, done unseen. A count of none stays
+   plain; a lit tile takes its state's colours. */
+.home-glance { position:relative; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--sp-2); margin-top:var(--sp-3); }
+.home-glance > .untested { position:absolute; top:-8px; right:0; }
+.home-glance-tile { display:grid; align-content:space-between; gap:2px; min-width:0; min-height:76px; padding:10px 12px; border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); color:var(--ink-muted); text-align:left; }
+.home-glance-top { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-1); }
+.home-glance-top strong { min-height:1.15em; color:#e7e9f2; font-size:var(--fs-large); font-weight:700; line-height:1.15; font-variant-numeric:tabular-nums; }
+.home-glance-glyph { display:grid; font-size:1rem; }
+.home-glance-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-foot); font-weight:600; }
+.home-glance-tile.waiting.lit { border-color:#5a4823; background:#2a2414; color:#e9d9a8; }
+.home-glance-tile.waiting.lit :is(strong,.home-glance-glyph) { color:#ffd36b; }
+.home-glance-tile.working.lit { border-color:#23432f; background:#122219; color:#b9dcc6; }
+.home-glance-tile.working.lit :is(strong,.home-glance-glyph) { color:#6fe29c; }
+.home-glance-tile.done.lit .home-glance-glyph { color:#91e6a9; }
+/* Needs you: each row its own card. */
+.home-needs > .home-group { gap:var(--sp-2); background:transparent; }
+.home-needs > .home-group > * + * { border-top:0; }
+.home-needs .home-group-row,.home-needs .home-group-more { border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); overflow:hidden; }
+.home-needs .home-group-more { justify-content:center; }
+/* The box layout: one inset group per box, the projects in none after them. */
+.home-screen > .home-projects + .home-projects { margin-top:var(--sp-3); }
+.home-box-member .card { padding-left:calc(var(--sp-3) + 18px); }
+.home-box-fold svg { transition:transform .15s ease-out; }
+.home-box-fold[aria-expanded="true"] svg { transform:rotate(90deg); }
+.home-box-none { margin:var(--sp-2) var(--sp-1) var(--sp-3); color:var(--ink-muted); font-size:var(--fs-foot); }
+.home-screen > .home-projects.home-projects-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; background:transparent; }
+.home-projects-grid > .tab-card { border:1px solid var(--hairline); border-radius:var(--r-lg); background:var(--surface-group); }
+.home-projects-grid .tab-card-head { position:relative; height:100%; }
+.home-projects-grid .card { display:grid; grid-template-columns:auto minmax(0,1fr); grid-template-areas:"tile trail" "name name"; align-content:space-between; align-items:start; gap:12px; min-height:108px; padding:12px; }
+.home-projects-grid .card > .home-tile { grid-area:tile; }
+.home-projects-grid .card > span:nth-child(2) { grid-area:name; width:auto; padding-right:28px; }
+.home-projects-grid .card > .card-trailing { grid-area:trail; display:flex; flex-wrap:wrap; justify-content:flex-end; justify-self:end; gap:4px; }
+.home-projects-grid .card strong { white-space:normal; overflow-wrap:anywhere; }
+.home-projects-grid .tab-card-grip { position:absolute; right:0; bottom:0; height:var(--hit); }
+.home-projects-grid .tab-card-head > .untested { position:absolute; top:40px; right:4px; }
+
+/* ---- Tablet tiers -------------------------------------------------------
+   The one place the iPad layout lives; a phone matches neither query below and
+   keeps every rule above unchanged. The two queries are `TABLET_QUERY` and
+   `SPLIT_QUERY` in `useTier.ts` (a test keeps the copies equal). The height
+   guard keeps a phone turned on its side a phone.
+
+   Tablet: the screens take the window (`--screen-measure`), surfaces lose their
+   borders for one soft static shadow (never animated), corners are 22px on
+   cards and 26px on the side panel, primary and header buttons are pills.
+   Split (landscape): Home's list stays on the left as a floating panel and the
+   chosen project fills the right (`.tabbed.split`, App.tsx).
+   Every colour is an authored hex like its neighbours, so each theme recolours
+   it (`themeColors.ts`); the shadows are black shades, which stay as written. */
+@media (min-width:700px) and (min-height:600px) {
+  :root { --screen-measure:100vw; --gutter:28px; --r-card:22px; --r-panel:26px; --soft:0 1px 2px rgba(0,0,0,.14),0 8px 24px rgba(0,0,0,.16); }
+  .home-screen,.project-screen { padding-inline:var(--gutter); }
+  .tabbed > .screen,.tabbed > .todo-screen,.tabbed > .project-screen,.tabbed > .home-screen.has-fab { padding-bottom:calc(112px + max(24px,env(safe-area-inset-bottom))); }
+
+  /* The section bar floats, centred and 420px wide, instead of spanning the window. */
+  .mobile-tabbar { inset:auto auto max(12px,env(safe-area-inset-bottom)) 50%; transform:translateX(-50%); width:min(420px,calc(100vw - 32px)); gap:4px; padding:5px; border:0; border-radius:var(--r-card); background:#1a1d2b; -webkit-backdrop-filter:none; backdrop-filter:none; box-shadow:var(--soft); }
+  .mobile-tab { min-height:52px; padding:6px 4px; border-radius:13px; }
+
+  /* Titles: larger and tighter. */
+  .project-header h1,.home-screen > .projects-row h1 { font-size:30px; font-weight:700; letter-spacing:-.025em; }
+  .project-header h1 { line-height:1.15; }
+  .home-section-head,.project-group-head { font-size:var(--fs-headline); font-weight:650; letter-spacing:-.01em; text-transform:none; }
+
+  /* Home, portrait: Needs you as a row of tiles, projects as the grid. */
+  .home-glance-tile { border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
+  .home-needs > .home-group { grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+  .home-needs .home-group-row,.home-needs .home-group-more { border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
+  .home-needs .home-group-more { grid-column:1 / -1; }
+  .home-needs .home-needs-row { min-height:72px; padding:12px 14px; }
+  .home-needs .home-needs-title { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; white-space:normal; overflow-wrap:anywhere; }
+  .home-needs .mobile-alert-row { min-height:72px; padding:12px 14px; }
+  .home-screen > .home-projects:not(.home-projects-grid) { --o:var(--r-card); box-shadow:var(--soft); }
+  .home-screen > .home-projects.home-projects-grid { gap:14px; }
+  .home-projects-grid > .tab-card { border:0; border-radius:var(--r-card); box-shadow:var(--soft); }
+  .home-screen > .projects-row > .new-tab { display:inline-flex; align-items:center; justify-content:center; gap:6px; width:auto; min-width:var(--hit); padding:0 16px 0 12px; border-radius:999px; font-size:var(--fs-sub); font-weight:600; }
+  .home-screen > .projects-row > .new-tab > svg { flex:0 0 auto; }
+
+  /* The project screen. */
+  .project-header { margin-inline:calc(-1 * var(--gutter)); gap:8px; padding:max(12px,env(safe-area-inset-top)) 20px 8px 16px; border-bottom:0; background:#0b0d13; -webkit-backdrop-filter:none; backdrop-filter:none; }
+  .project-header .terminal-title small { font-size:var(--fs-foot); }
+  .project-header-tools { gap:8px; }
+  .project-prompts-button,.project-new-tab { display:inline-flex; align-items:center; justify-content:center; gap:8px; flex:0 0 auto; height:var(--hit); min-width:var(--hit); padding:0; border:0; border-radius:999px; font-size:var(--fs-sub); font-weight:600; white-space:nowrap; }
+  .project-prompts-button { background:#1a1d2b; box-shadow:var(--soft); font-size:1.15rem; font-weight:500; }
+  .project-prompts-button .project-action-label { display:none; font-size:var(--fs-sub); }
+  .project-new-tab { padding:0 16px 0 12px; }
+  .project-new-tab > svg { flex:0 0 auto; }
+  .project-header .untested { align-self:center; }
+
+  /* Two sections, headline and count each. */
+  .project-screen .cards.project-sections { display:flex; flex-direction:column; gap:22px; }
+  .project-group { display:grid; gap:10px; }
+  .project-group-head { margin:0 2px; }
+  .project-group-count { margin-left:.4em; color:var(--ink-muted); font-weight:600; font-variant-numeric:tabular-nums; }
+  .project-group-count::before { content:"· "; }
+  .project-agents > .project-group-body { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
+  .project-agents .tab-card.swiped-out { margin-bottom:-14px; }
+
+  /* A card: no border, a soft shadow. The PLAN/GOAL ring and a tab's colour
+     stay as inset rings, since they say something; a drop line replaces them
+     while a card is dragged. */
+  .project-screen .tab-card { --ring:0 0 0 0 transparent; --stripe:0 0 0 0 transparent; border:0; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft),var(--ring),var(--stripe); }
+  .project-screen .tab-card.in-plan { --ring:inset 0 0 0 1.5px #7b6ee0; }
+  .project-screen .tab-card.in-goal { --ring:inset 0 0 0 1.5px #4fb3c0; }
+  .project-screen .tab-card.has-tab-color { --stripe:inset 4px 0 0 var(--tab-color); }
+  .project-screen .tab-card.drop-before { box-shadow:inset 3px 0 0 0 #7c6cff; }
+  .project-screen .tab-card.drop-after { box-shadow:inset -3px 0 0 0 #7c6cff; }
+  .project-screen .tab-card-grip { border-radius:0 0 var(--r-card) 0; }
+  /* Without a tile an agent card's prompts start at the name. */
+  .project-screen .tab-card-prompts { margin-left:12px; }
+  .project-screen .tab-card-foot { margin-left:12px; }
+  .tab-card-earlier { position:relative; z-index:1; justify-self:start; min-height:var(--hit); margin:0 0 -10px -8px; padding:0 8px; border:0; border-radius:10px; background:transparent; color:#bcb0ff; font-size:var(--fs-foot); font-weight:600; }
+
+  /* Files: one-line rows in one grouped surface. */
+  .project-files > .project-group-body { display:grid; overflow:hidden; border-radius:var(--r-card); background:#1a1d2b; box-shadow:var(--soft); }
+  .project-screen .file-tab-card { border:0; border-radius:0; background:transparent; box-shadow:none; }
+  .project-screen .file-tab-card + .file-tab-card { border-top:1px solid var(--hairline); }
+  .project-screen .file-tab-card.swiped-out { margin-bottom:0; }
+  .project-screen .file-tab-card .tab-card-head { align-items:center; min-height:60px; }
+  .project-screen .file-tab-card .tab-card-head .card { padding:8px 0 8px 12px; }
+  .project-screen .file-tab-card .tab-card-tile { align-self:center; margin:0 0 0 14px; }
+  .project-screen .file-tab-card .tab-card-close { align-self:center; margin-top:0; }
+  .project-screen .file-tab-card .tab-card-open { border-radius:0; }
+
+  /* Closed tabs, the one thing left in the foot (Collected prompts moved up). */
+  .project-foot { --o:var(--r-card); box-shadow:var(--soft); }
+
+  /* The agent chat. The markup keeps the phone's order and `order` sets the
+     tablet's: ‹, the tab's name under its project's, the connection dot, the
+     model and the queue as pills, the sent files, Chat | Terminal, the files. */
+  .terminal-screen > header { gap:8px; padding:6px 20px 8px 12px; border-bottom:0; }
+  .terminal-screen > header > .terminal-title { order:1; flex:1 1 auto; align-content:center; gap:0; }
+  .terminal-screen > header > .terminal-title small { order:-1; display:block; color:var(--ink-muted); font-size:var(--fs-foot); }
+  .terminal-screen > header > .terminal-title h1 { font-size:1.25rem; font-weight:700; letter-spacing:-.015em; }
+  .terminal-screen > header > .untested { order:2; align-self:center; }
+  .terminal-screen > header > .lamp { order:2; margin:0 4px; }
+  .terminal-screen > header > .header-model { order:3; }
+  .terminal-screen > header > .header-queue { order:4; }
+  .terminal-screen > header > .terminal-gallery { order:5; }
+  .terminal-screen > header > .terminal-view-switch { order:6; margin-left:0; }
+  .terminal-screen > header > .drawer-open { order:7; }
+  .header-pill,.terminal-screen > header > .terminal-gallery,.terminal-screen > header > .drawer-open { display:inline-flex; align-items:center; justify-content:center; gap:6px; flex:0 0 auto; height:var(--hit); min-width:var(--hit); padding:0 14px; border:0; border-radius:999px; background:#1a1d2b; color:#e7e9f2; font-size:var(--fs-sub); font-weight:600; box-shadow:var(--soft); }
+  .terminal-screen > header > .drawer-open { width:var(--hit); padding:0; }
+  .terminal-screen > header > .drawer-open svg { width:20px; height:20px; }
+  .terminal-screen > header > .drawer-open[aria-pressed="true"] { background:#2b2650; color:#e9e4ff; }
+  .header-queue { padding:0 12px; }
+  .header-model .fact-action-label { max-width:11rem; white-space:nowrap; }
+  .header-model .view-caret { margin:0 2px 2px 4px; }
+  .header-count { display:grid; place-items:center; min-width:20px; height:20px; padding:0 5px; box-sizing:border-box; border-radius:999px; background:#6c5ce7; color:#fff; font-size:var(--fs-caption); font-weight:700; font-variant-numeric:tabular-nums; }
+  .terminal-screen > header > .terminal-view-switch { gap:2px; padding:2px; border-radius:999px; background:#1a1d2b; box-shadow:var(--soft); }
+  .terminal-screen > header .terminal-view-switch button { min-height:var(--hit); min-width:var(--hit); padding:0 16px; border-radius:999px; background:transparent; color:var(--ink-muted); font-size:var(--fs-sub); font-weight:500; }
+  .terminal-screen > header .terminal-view-switch .view-seg[aria-pressed="true"] { background:#2b2650; color:#e9e4ff; font-weight:600; }
+  .terminal-screen > header .terminal-view-switch .view-pill { padding:0 10px; color:#e7e9f2; }
+  .terminal-screen > header .terminal-view-switch .view-pill .view-caret { margin:0 0 2px; }
+
+  /* The Chat view: transcript and composer in a 660px column in the middle; the
+     Terminal view keeps the whole width. A prompt stays a bubble on the right,
+     at most 520px wide (the theme rules colour it); an answer is flat text. */
+  .terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(14px,calc((100% - 660px) / 2)); }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-pinned-prompt { right:max(14px,calc((100% - 660px) / 2)); max-width:min(520px,calc(100% - 28px)); }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-lines .readable-turn.user:not(.with-files) { max-width:min(88%,520px); padding:12px 16px; border-radius:20px 20px 6px 20px; }
+  .terminal-screen.agent-tab[data-view="focus"] .terminal-controls { padding-inline:max(0px,calc((100% - 660px) / 2)); }
+
+  /* The composer: one floating pill surface around the field, the tools and
+     Send, a soft shadow in place of the rim (the rim returns on focus). */
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer { margin:6px 16px max(14px,env(safe-area-inset-bottom)); padding:8px 8px 8px 16px; border:0; border-radius:28px; background:#1a1d2b; box-shadow:var(--soft); }
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer:focus-within { box-shadow:var(--soft),0 0 0 2px #7c6cff; }
+}
+
+/* Split: a landscape tablet. */
+@media (min-width:1000px) and (min-height:600px) and (orientation:landscape) {
+  .project-prompts-button { padding:0 14px; font-size:var(--fs-sub); }
+  .project-prompts-button .project-action-label { display:inline; }
+
+  .tabbed.split { display:grid; grid-template-columns:320px minmax(0,1fr); align-items:start; min-height:100dvh; background:#0b0d13; }
+  /* The list is a floating panel that keeps its place while the project scrolls.
+     z-index 7 keeps its sheets under the tray (8) and over the project header (5). */
+  .tabbed.split > .home-screen { position:sticky; top:12px; z-index:7; align-self:start; height:calc(100dvh - 24px); min-height:0; max-width:none; margin:12px 0 12px 12px; padding:4px 12px calc(92px + max(8px,env(safe-area-inset-bottom))); overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); }
+  /* The project (or the empty pane) is a grid item of its own, with no wrapper:
+     the same element stands in every tier, so a turn of the iPad keeps it. */
+  .tabbed.split > .project-screen,.tabbed.split > .split-empty { min-width:0; }
+  .tabbed.split > .project-screen { max-width:none; margin:0; padding-bottom:calc(32px + max(24px,env(safe-area-inset-bottom))); }
+  .split-empty { min-height:60dvh; align-content:center; }
+
+  /* The panel is the compact column: a list, whatever layout was chosen. */
+  .tabbed.split .home-header { padding-inline:6px 0; }
+  .tabbed.split .home-glance-tile { min-height:64px; padding:8px 10px; background:#0b0d13; box-shadow:none; }
+  .tabbed.split .home-needs > .home-group { grid-template-columns:minmax(0,1fr); gap:6px; }
+  .tabbed.split .home-needs .home-group-row,.tabbed.split .home-needs .home-group-more { border-radius:14px; background:#0b0d13; box-shadow:none; }
+  .tabbed.split .home-needs .home-needs-row,.tabbed.split .home-needs .mobile-alert-row { min-height:var(--hit); padding:8px 12px; }
+  .tabbed.split .home-needs .home-needs-title { display:block; white-space:nowrap; }
+  .tabbed.split .home-screen > .projects-row h1 { font-size:1.25rem; }
+  .tabbed.split .home-screen > .projects-row > .new-tab { width:var(--hit); padding:0; border-radius:var(--r-md); background:transparent; color:#bcb0ff; }
+  .tabbed.split .home-screen > .home-projects { --o:0; gap:2px; background:transparent; box-shadow:none; }
+  .tabbed.split .home-projects > * + * { border-top:0; }
+  .tabbed.split .home-projects > .tab-card { border-radius:16px; overflow:hidden; }
+  .tabbed.split .home-projects > .tab-card.is-current { background:#2e2b48; }
+  .tabbed.split .home-project-card .card strong { font-size:1rem; }
+  .tabbed.split .home-project-card .card-trailing { grid-template-columns:auto auto; }
+
+  /* The files, docked: the chat gives up the pane's width and the library
+     stands in the space as a floating rounded panel. z-index 11 keeps a sheet
+     (12) and the viewer (13) over it. Once a file is open the library's own
+     two-pane layout (`files-split`) takes the window, as it does today. */
+  .terminal-screen[data-files-docked] { padding-right:424px; }
+  .terminal-screen[data-files-docked] .files-library:not(.files-split) { inset:12px 12px 12px auto; z-index:11; width:400px; padding:0; border-radius:var(--r-panel); background:#1a1d2b; box-shadow:var(--soft); overflow:hidden; }
+  .terminal-screen[data-files-docked] .focus-menu { right:434px; }
+
+  /* Home's assistant button stays on the list panel (x 12 to 332) just over the
+     tray, instead of floating over the project beside it. */
+  .tabbed.split .home-screen .fab { right:auto; left:calc(12px + 320px - 58px - 14px); bottom:calc(92px + max(8px,env(safe-area-inset-bottom))); }
+
+  /* The section bar is a compact tray at the foot of the list. */
+  .tabbed.split > .mobile-tabbar { inset:auto auto max(24px,calc(env(safe-area-inset-bottom) + 12px)) 24px; transform:none; width:296px; padding:4px; border-radius:18px; background:#0b0d13; box-shadow:none; }
+  /* Under the list's own layers (z-index 7) the tray would paint over them: a
+     sheet, and the files library or viewer Favorites opens. */
+  .tabbed.split:has(.sheet-backdrop,.files-library,.outbox-viewer) > .mobile-tabbar { visibility:hidden; }
 }

@@ -712,9 +712,7 @@
   border-radius: inherit;
   pointer-events: none;
   opacity: 0;
-  box-shadow:
-    0 5px 12px rgba(0, 0, 0, 0.35),
-    0 1px 3px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-2);
 }
 .file-entry.file.embeddable:hover::before {
   opacity: 1;
@@ -749,6 +747,12 @@
   font-size: var(--text-sm);
   line-height: 1;
   cursor: var(--cur-pointer, pointer);
+}
+
+.file-run-slot {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 
 .file-run-btn:hover {
@@ -888,7 +892,9 @@
   align-self: center;
   margin-left: 4px;
   padding: 0 5px;
-  width: 64px;
+  /* A floor, not a fixed width: the label grew with the font sweeps
+     (9 → 11 px) and a fixed 64 px let "LOCAL ONLY" spill past the pill. */
+  min-width: 64px;
   height: 16px;
   box-sizing: border-box;
   border-radius: var(--radius-full);

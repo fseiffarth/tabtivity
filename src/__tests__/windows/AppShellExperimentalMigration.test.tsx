@@ -48,7 +48,7 @@ vi.mock("../../stores/projects", () => {
   return {
     useProjectsStore: Object.assign(
       vi.fn((sel: (s: object) => unknown) => sel(state)),
-      { getState: () => state },
+      { getState: () => state, subscribe: () => () => {} },
     ),
     listenProjectRuntimeSwitched: vi.fn().mockResolvedValue(() => {}),
   };

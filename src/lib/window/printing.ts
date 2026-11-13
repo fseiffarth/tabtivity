@@ -60,11 +60,14 @@ export async function printSnapshot(): Promise<PrintSnapshot> {
 export type NativePdfPrint = "sent" | "cancelled" | "opened" | "unsupported";
 
 /** What the system print dialog opens preset to (Linux; ignored elsewhere): the
- *  paper the document was laid out on, and colour off for a grayscale job — the
- *  one print-preview option a vector PDF cannot carry in itself. */
+ *  paper the document was laid out on, colour off for a grayscale job, and
+ *  two-sided printing — the print-preview options a vector PDF cannot carry in
+ *  itself. `duplex` is optional so a caller that predates it keeps working; it
+ *  is `none` (single-sided) then. */
 export interface NativePrintSetup {
   paper: string;
   grayscale: boolean;
+  duplex?: "none" | "long" | "short";
 }
 
 /**

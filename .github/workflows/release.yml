@@ -1,7 +1,7 @@
 name: release
 
-# A release is cut only from a commit ci-cd.yml already passed on a branch
-# push, and nothing is rebuilt: the signed assets are the bundles that very
+# A release is cut only from a commit ci-cd.yml and security.yml (dependency
+# advisories, CodeQL) already passed on a branch push, and nothing is rebuilt: the signed assets are the bundles that very
 # run built and tested. Only main is released (RELEASE_BRANCH): develop
 # reaches it by PR, and the in-app updater installs whatever is released.
 # Three ways in:
@@ -15,7 +15,7 @@ name: release
 #     every check below passed and right before the Release is published.
 #   - Pushing a v* tag on a commit main holds (the app's Release button,
 #     which already refuses while CI is running or red, or a plain
-#     `git push`): waits for the tagged commit's ci-cd run. If it did not
+#     `git push`): waits for the tagged commit's ci-cd and security runs. If either did not
 #     pass, or anything below fails before
 #     the Release is out, the tag is deleted again — a v* tag on GitHub always
 #     has a Release behind it, and the same name can be pushed again.
@@ -132,51 +132,62 @@ jobs:
           echo "Releasing ${SHA} as $tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      # The newest ci-cd run of this commit that a branch push started (old
-      # runs on v* tags don't count). Green → release it; still going → wait;
-      # finished and none green → refuse. A commit pushed seconds ago may
-      # have no run yet, so a missing run is waited for a little too.
-      - name: Wait for the commit's ci-cd run to pass
+      # The newest run of each gating workflow for this commit that a branch
+      # push started (old runs on v* tags don't count): ci-cd, which built the
+      # bundles released below, and security (cargo-audit, cargo-deny, npm
+      # audit, zizmor, CodeQL), so a dependency with a fresh advisory is not
+      # signed and shipped through the updater on a green ci-cd alone. Green
+      # → go on; still going → wait; finished and none green → refuse. A
+      # commit pushed seconds ago may have no run yet, so a missing run is
+      # waited for a little too. Both start with the same push and run side
+      # by side, so security has normally finished by the time ci-cd has.
+      - name: Wait for the commit's ci-cd and security runs to pass
         if: steps.decide.outputs.tag != ''
         id: ci
         run: |
           set -euo pipefail
           deadline=$((SECONDS + 130 * 60))
           appear_deadline=$((SECONDS + 10 * 60))
-          while :; do
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::ci-cd is still running on ${SHA::7} after two hours; run this again once it has finished."
-              exit 1
-            fi
-            # A failed read is retried, never taken for a verdict: failing
-            # here would delete a pushed tag over an API blip.
-            if ! runs="$(gh api "repos/$GH_REPO/actions/workflows/ci-cd.yml/runs?head_sha=$SHA&event=push&per_page=50" \
-              --jq '[.workflow_runs[] | select((.head_branch // "") | test("^v[0-9]") | not)
-                     | {id, status, conclusion, branch: .head_branch, url: .html_url}]')"; then
-              echo "Could not read the ci-cd runs; trying again in a minute."
+          # Sets green_id to the green run; exits the step on a refusal.
+          wait_green() {
+            local workflow="$1" name="$2" runs total going
+            while :; do
+              if [ "$SECONDS" -ge "$deadline" ]; then
+                echo "::error::$name is still running on ${SHA::7} after two hours; run this again once it has finished."
+                exit 1
+              fi
+              # A failed read is retried, never taken for a verdict: failing
+              # here would delete a pushed tag over an API blip.
+              if ! runs="$(gh api "repos/$GH_REPO/actions/workflows/$workflow/runs?head_sha=$SHA&event=push&per_page=50" \
+                --jq '[.workflow_runs[] | select((.head_branch // "") | test("^v[0-9]") | not)
+                       | {id, status, conclusion, branch: .head_branch, url: .html_url}]')"; then
+                echo "Could not read the $name runs; trying again in a minute."
+                sleep 60
+                continue
+              fi
+              green_id="$(jq -r '[.[] | select(.status == "completed" and .conclusion == "success")] | max_by(.id) | .id // empty' <<<"$runs")"
+              if [ -n "$green_id" ]; then
+                echo "$name run $green_id passed on ${SHA::7}."
+                return 0
+              fi
+              total="$(jq length <<<"$runs")"
+              going="$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")"
+              if [ "$total" -gt 0 ] && [ "$going" -eq 0 ]; then
+                jq -r '.[] | "  \(.branch): \(.conclusion) \(.url)"' <<<"$runs"
+                echo "::error::$name did not pass on ${SHA::7}; nothing is released. Fix it, push, and release the new commit."
+                exit 1
+              fi
+              if [ "$total" -eq 0 ] && [ "$SECONDS" -ge "$appear_deadline" ]; then
+                echo "::error::No branch push ran $name on ${SHA::7}. Release a commit that is on a pushed branch."
+                exit 1
+              fi
+              echo "Waiting for $name on ${SHA::7} ($going running, $total runs)…"
               sleep 60
-              continue
-            fi
-            green="$(jq -r '[.[] | select(.status == "completed" and .conclusion == "success")] | max_by(.id) | .id // empty' <<<"$runs")"
-            if [ -n "$green" ]; then
-              echo "ci-cd run $green passed on ${SHA::7}."
-              echo "run_id=$green" >> "$GITHUB_OUTPUT"
-              break
-            fi
-            total="$(jq length <<<"$runs")"
-            going="$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")"
-            if [ "$total" -gt 0 ] && [ "$going" -eq 0 ]; then
-              jq -r '.[] | "  \(.branch): \(.conclusion) \(.url)"' <<<"$runs"
-              echo "::error::ci-cd did not pass on ${SHA::7}; nothing is released. Fix it, push, and release the new commit."
-              exit 1
-            fi
-            if [ "$total" -eq 0 ] && [ "$SECONDS" -ge "$appear_deadline" ]; then
-              echo "::error::No branch push ran ci-cd on ${SHA::7}. Release a commit that is on a pushed branch."
-              exit 1
-            fi
-            echo "Waiting for ci-cd on ${SHA::7} ($going running, $total runs)…"
-            sleep 60
-          done
+            done
+          }
+          wait_green ci-cd.yml ci-cd
+          echo "run_id=$green_id" >> "$GITHUB_OUTPUT"
+          wait_green security.yml security
 
       - name: Download the bundles that run built
         if: steps.decide.outputs.tag != ''

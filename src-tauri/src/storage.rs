@@ -298,6 +298,15 @@ enum Landing {
     NoClobber,
 }
 
+/// Whether a failed rename is the short-lived Windows sharing conflict: access
+/// denied, a sharing violation or a lock violation. Never true elsewhere, where
+/// `PermissionDenied` is a real permission problem a retry cannot fix.
+fn is_transient_sharing_error(e: &std::io::Error) -> bool {
+    cfg!(windows)
+        && (e.kind() == std::io::ErrorKind::PermissionDenied
+            || matches!(e.raw_os_error(), Some(5 | 32 | 33)))
+}
+
 /// The one staged-write path. `private` is the file's Unix mode and asks for
 /// the Windows owner-only ACL; `None` keeps the staging file's own mode
 /// (`0600` from `tempfile` on Unix) and ACL. `Ok(false)` only for a
@@ -334,7 +343,23 @@ fn write_atomic(path: &Path, bytes: &[u8], private: Option<u32>, landing: Landin
     durability::record(DurabilityStep::FileSynced, staged.path());
     match landing {
         Landing::Replace => {
-            staged.persist(path).map_err(|e| e.error)?;
+            let mut staged = staged;
+            let mut attempt = 0u64;
+            loop {
+                match staged.persist(path) {
+                    Ok(_) => break,
+                    // Windows: a rename onto a file another process has open
+                    // without `FILE_SHARE_DELETE` (antivirus, the indexer, a
+                    // viewer) fails for a moment. Retry briefly rather than
+                    // lose the save.
+                    Err(e) if attempt < 5 && is_transient_sharing_error(&e.error) => {
+                        attempt += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(25 * attempt));
+                        staged = e.file;
+                    }
+                    Err(e) => return Err(e.error),
+                }
+            }
         }
         Landing::NoClobber => match staged.persist_noclobber(path) {
             Ok(_) => {}
@@ -675,16 +700,19 @@ pub const ROOT_SCOPE: &str = "root";
 /// `Some` id as a project has to meet this one first (`is_reserved_scope`).
 pub const ASSISTANT_SCOPE: &str = "assistant";
 
-/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`] or
-/// [`ASSISTANT_SCOPE`] — and so can never be a project or box id. Compared
-/// through [`project_key`] and case-insensitively, because the id names a
-/// directory under the state dir and a case-folding filesystem or the key
-/// reduction would otherwise let `Assistant` or `assistant ` share the
-/// reserved scope's state. The one funnel the project/box registries, the
-/// layout sanitiser and the phone's discovery ask.
+/// Whether `id` names a scope the app owns — [`ROOT_SCOPE`], [`ASSISTANT_SCOPE`]
+/// or the Host session's home key (`agent_home::HOST_SCOPE_KEY`) — and so can
+/// never be a project or box id. Compared through [`project_key`] and
+/// case-insensitively, because the id names a directory under the state dir and
+/// a case-folding filesystem or the key reduction would otherwise let
+/// `Assistant` or `assistant ` share the reserved scope's state; a project
+/// `host` would share the unfenced Host session's home. The one funnel the
+/// project/box registries, the layout sanitiser and the phone's discovery ask.
 pub fn is_reserved_scope(id: &str) -> bool {
     let key = project_key(id.trim());
-    [ROOT_SCOPE, ASSISTANT_SCOPE].iter().any(|scope| key.eq_ignore_ascii_case(scope))
+    [ROOT_SCOPE, ASSISTANT_SCOPE, crate::services::agent_home::HOST_SCOPE_KEY]
+        .iter()
+        .any(|scope| key.eq_ignore_ascii_case(scope))
 }
 
 /// Whether `id` names the chat assistant's scope, in any spelling the state
@@ -1306,11 +1334,16 @@ mod tests {
     // ── reserved scopes ───────────────────────────────────────────────────
 
     #[test]
-    fn reserved_scopes_are_root_and_assistant_under_any_spelling() {
+    fn reserved_scopes_are_root_assistant_and_host_under_any_spelling() {
         for id in ["root", "assistant", "Assistant", "ROOT", " assistant ", "assistant\n"] {
             assert!(is_reserved_scope(id), "{id:?}");
         }
-        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant"] {
+        // The Host session's home key: a project `host` would share the
+        // unfenced Host session's home (screen 2026-11-12 H2).
+        for id in ["host", "Host", "HOST", " host ", "host\n"] {
+            assert!(is_reserved_scope(id), "{id:?}");
+        }
+        for id in ["", "assistants", "my-assistant", "root2", "p1", "assistant/x", "box:assistant", "hosts", "box:host"] {
             assert!(!is_reserved_scope(id), "{id:?}");
         }
         assert_eq!(project_key(ASSISTANT_SCOPE), ASSISTANT_SCOPE, "the id names its own directory");

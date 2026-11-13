@@ -56,6 +56,7 @@ class FakeWebSocket {
 import { Terminal } from "../../../mobile-web/src/screens/Terminal";
 import { SubagentsSheet } from "../../../mobile-web/src/screens/SubagentsSheet";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
+import * as subagentInput from "../../../mobile-web/src/terminal/subagentInput";
 import { compactTokens, inWorkflow, openSubagent, openSubagentRunning, siblingPosition, splitByWork, stepSibling, subagentAtWork, subagentsIn, workingElapsed, workingModelName } from "../../../mobile-web/src/terminal/subagents";
 import { BRAND, storageKey } from "../../lib/brand";
 
@@ -99,12 +100,12 @@ const SUBAGENTS: Record<string, unknown> = {
 };
 
 /** A fetch answering the session with MAIN and a subagent read with its own. */
-function subagentFetch() {
+function subagentFetch(conversations = SUBAGENTS) {
   return vi.fn((url: string) => {
     if (url.endsWith("/outbox")) return Promise.resolve(jsonResponse(200, { files: [] }));
     if (url.includes("/transcript")) {
       const token = new URL(url, "http://phone").searchParams.get("subagent");
-      return Promise.resolve(jsonResponse(200, { transcript: token ? SUBAGENTS[token] : MAIN }));
+      return Promise.resolve(jsonResponse(200, { transcript: token ? conversations[token] : MAIN }));
     }
     return Promise.resolve(jsonResponse(404, { error: "not_found" }));
   });
@@ -449,15 +450,72 @@ describe(`${BRAND.display} Mobile Reader opens the subagents an agent spawned`, 
     const typed = FakeWebSocket.instances.flatMap((socket) => socket.sent).length;
     fireEvent.change(field, { target: { value: "and the frontend?" } });
     fireEvent.click(screen.getByRole("button", { name: /^send/i }));
-    await settle();
-    await settle();
     // No Claude agent list on this screen: nothing is typed, the Reader
-    // stays on the subagent, and the words come back with the reason.
+    // stays on the subagent, and the words come back with the reason — once
+    // the screen has read the same twice (a frame half drawn is no answer).
+    await screen.findByText(/Not sent — Claude's agent list did not open this subagent/);
     expect(FakeWebSocket.instances.flatMap((socket) => socket.sent).length).toBe(typed);
     screen.getByRole("navigation", { name: "Subagent" });
     expect((field as HTMLTextAreaElement).value).toBe("and the frontend?");
-    screen.getByText(/Not sent — Claude's agent list did not open this subagent/);
     expect(within(screen.getByTestId("subagent-transcript")).queryByText("and the frontend?")).toBeNull();
+  });
+
+  it("shows a queued follow-up only in the subagent it was sent to and reconciles its record", async () => {
+    const token = "00000000000000a1";
+    const conversations = { ...SUBAGENTS };
+    const send = vi.spyOn(subagentInput, "sendToSubagent").mockResolvedValue({ ok: true, backToMain: true });
+    vi.stubGlobal("fetch", subagentFetch(conversations));
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Subagent: Explore · Map the backend" }));
+    await settle();
+
+    const followUp = "Run the tests too.";
+    fireEvent.change(screen.getByRole("textbox", { name: /message/i }), { target: { value: followUp } });
+    fireEvent.click(screen.getByRole("button", { name: /^send/i }));
+    const sub = () => within(screen.getByTestId("subagent-transcript"));
+    expect((await sub().findByRole("group", { name: "Your prompt" })).textContent).toContain(followUp);
+    expect(send).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ token }), expect.anything());
+
+    fireEvent.click(screen.getByRole("button", { name: "Next subagent" }));
+    await settle();
+    expect(sub().queryByText(followUp)).toBeNull();
+    const initial = SUBAGENTS[token] as { entries: TranscriptEntry[] };
+    conversations[token] = {
+      ...initial, version: "a1:2", available: true, truncated: false,
+      entries: [
+        ...initial.entries,
+        { kind: "prompt", text: followUp, at: "2026-09-24T10:01:01Z" },
+        { kind: "answer", text: "The tests passed.", at: "2026-09-24T10:01:02Z" },
+      ],
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Previous subagent" }));
+    await settle();
+    expect(sub().getAllByText(followUp)).toHaveLength(1);
+    expect(sub().getByText(followUp).compareDocumentPosition(sub().getByText("The tests passed.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("opens the subagent Claude's terminal is viewing when the chat is chosen", async () => {
+    localStorage.setItem(storageKey("mobile.view.claude-code"), "terminal");
+    vi.stubGlobal("fetch", subagentFetch());
+    render(<Terminal tab={TAB} back={() => {}} />);
+    await settle();
+    // Viewed in Claude's own agent list, its row printing a summary.
+    terminalState.lines = [
+      `${"─".repeat(30)} Find the tests ─`,
+      "❯ Message @general-purpose…",
+      "─".repeat(40),
+      "  ◯ main",
+      "  ◯ Explore  Map the backend     3s · ↓ 1k tokens",
+      "  ● general-purpose  Reading the test folder     3s · ↓ 1k tokens",
+    ];
+    fireEvent.click(screen.getByTitle("Output view"));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Chat" }));
+    await settle();
+    await settle();
+    const bar = screen.getByRole("navigation", { name: "Subagent" });
+    within(bar).getByText("Find the tests");
+    within(screen.getByTestId("subagent-transcript")).getByText("Tests live beside the code.");
   });
 
   it("goes back to the session when a prompt is sent from a subagent's conversation on another CLI", async () => {

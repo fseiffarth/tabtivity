@@ -339,6 +339,70 @@ export function subscribeSpeech(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** A voice that fires neither `onend` nor `onerror` (some engines go quiet on
+ * a lost audio focus) leaves `currentSpeechId` set for good. This watches the
+ * piece being said and, if nothing changes for far longer than it takes to
+ * say, stops the voice, so whoever waits on the quiet goes on. Cheap and
+ * conservative: it stops only the stall, never a long answer, since every
+ * chunk that follows starts it over. Returns the stop of the watch. */
+export function guardSpeech(): () => void {
+  let timer = 0;
+  const arm = () => {
+    window.clearTimeout(timer);
+    const head = queue[0];
+    if (speakingId === null || !head) return;
+    const length = (itemText(head) ?? "").length;
+    timer = window.setTimeout(() => {
+      if (speakingId !== null) stopSpeaking();
+    }, SPEECH_STALL_MS + Math.ceil((length * 100) / readingRate()));
+  };
+  const off = subscribeSpeech(arm);
+  arm();
+  return () => {
+    off();
+    window.clearTimeout(timer);
+  };
+}
+
+/** The floor of `guardSpeech`'s wait; the piece's length at 100 ms a character is added. */
+export const SPEECH_STALL_MS = 15_000;
+
+/** A wait for the voice to fall quiet: once nothing has been said for
+ * `tailMs`, `onQuiet` runs, once. Speech that starts again inside the tail
+ * starts the tail over, and `guardSpeech` stops a voice that never ends, so
+ * the wait cannot hold for good. `finish` ends the wait now and runs
+ * `onQuiet` (a skip); `cancel` ends it without. Ending it, either way, drops
+ * the subscription, the guard and the timer. */
+export function whenSpeechQuiet(tailMs: number, onQuiet: () => void): { finish(): void; cancel(): void } {
+  let timer = 0;
+  let done = false;
+  const unguard = guardSpeech();
+  const stop = () => {
+    off();
+    unguard();
+    window.clearTimeout(timer);
+  };
+  const finish = () => {
+    if (done) return;
+    done = true;
+    stop();
+    onQuiet();
+  };
+  const check = () => {
+    window.clearTimeout(timer);
+    if (currentSpeechId() === null) timer = window.setTimeout(finish, tailMs);
+  };
+  const off = subscribeSpeech(check);
+  check();
+  return {
+    finish,
+    cancel: () => {
+      done = true;
+      stop();
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Feeding a tab's answers
 

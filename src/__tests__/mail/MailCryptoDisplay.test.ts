@@ -81,6 +81,8 @@ describe("mail crypto display", () => {
       "signer-not-aligned",
       "signer-key-missing",
       "signature-invalid",
+      "signer-key-revoked",
+      "signature-structure",
       "format-not-supported",
       "inline-signature-not-checked",
       "decrypt-failed",

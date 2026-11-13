@@ -45,41 +45,50 @@ export function warmDragIcon(): Promise<string> {
   return dragIconPromise;
 }
 
-// Start the native OS drag-out (EXPORT/COPY to another app: a browser, Signal,
-// a file manager, the desktop). Real OLE/NSDragging/GTK drag with an
+// Start the native OS drag-out (EXPORT/COPY to another app: Teams, a browser,
+// mail, a file manager, the desktop). Real OLE/NSDragging/GTK drag with an
 // OS-rendered icon; copy semantics, so files are never MOVED out of the
-// project. Reached two ways: a dir's HTML5 dragstart (handleEntryDragStart),
-// and the mid-drag Ctrl handoff inside onEntryPointerDown.
-export function beginNativeFileDrag(paths: string[]) {
+// project. Reached two ways: a Ctrl+press HTML5 dragstart
+// (handleEntryDragStart), and a pointer drag leaving the window
+// (`toNativeDrag` in startEntryPointerDrag). Resolves false when the OS drag
+// could not start, so the gesture can carry on in-app. `onEnded` hears the
+// drop or cancel on Windows/macOS (the plugin's callback); on Linux the
+// backend's `file-drag-ended` event says it instead.
+export function beginNativeFileDrag(paths: string[], onEnded?: () => void): Promise<boolean> {
   // Linux uses our own GTK drag (`start_file_drag`): tauri-plugin-drag's GTK
   // backend hands external targets an EMPTY payload — it tears down its
   // drag-data-get handler at drop-performed, before the target requests the
   // text/uri-list data — so a drop into a browser silently did nothing (it
   // also ships unencoded file:// URIs, which strict consumers discard).
   if (PLATFORM === "linux") {
-    void invoke("start_file_drag", { paths }).catch((err) =>
-      // Surfaces the most common failure: the backend wasn't rebuilt, so the
-      // command doesn't exist yet — the drag silently no-ops otherwise.
-      console.error(`[${BRAND.slug}] native file drag-out failed:`, err),
+    return invoke("start_file_drag", { paths }).then(
+      () => true,
+      (err) => {
+        // Surfaces the most common failures: the backend wasn't rebuilt (the
+        // command doesn't exist yet), or GTK refused the drag (no pointer grab).
+        console.error(`[${BRAND.slug}] native file drag-out failed:`, err);
+        return false;
+      },
     );
-    return;
   }
   const begin = (icon: string) =>
-    startDrag({ item: paths, icon, mode: "copy" })
-      .catch((err) => {
+    startDrag({ item: paths, icon, mode: "copy" }, () => onEnded?.()).then(
+      () => true,
+      (err) => {
         // Same visibility for the plugin path (`plugin:drag|start_drag` and
         // `drag_preview_icon` only exist after a backend rebuild).
         console.error(`[${BRAND.slug}] native file drag-out failed:`, err);
-      });
+        return false;
+      },
+    );
   // The icon data URL is normally warm by drag time; if not, resolve first.
-  if (dragIconDataUrl) void begin(dragIconDataUrl);
-  else void warmDragIcon().then(begin);
+  return dragIconDataUrl ? begin(dragIconDataUrl) : warmDragIcon().then(begin);
 }
 
 // Drag-to-move dwell before a hovered folder / crumb / ↑ spring-opens (the
 // tree navigates there and the drag continues). Long enough that sweeping the
 // cursor across folders toward a sibling never opens one by accident.
-const SPRING_LOAD_MS = 650;
+export const SPRING_LOAD_MS = 650;
 
 /** What a row's pointer drag reads from the tree it started in — the tree's
  *  state as of the render whose handler the press reached. */
@@ -148,12 +157,11 @@ export function startEntryPointerDrag(
     .map((en) => ({ path: en.path, name: en.name, viewer: internalViewerFor(en, disabledViewerSet) ?? undefined }));
   const canDrop = isMultiDrag ? dragFiles.length > 0 : canTab;
   const draggedDirRels = dragEntries.filter((en) => en.is_dir).map(relForEntry);
-  // Ctrl held → the user wants to EXPORT/COPY this file out to another app
-  // (Signal, a browser, a file manager). The row arms HTML5 `draggable` while
-  // `ctrlHeld` (see renderEntry); its onDragStart suppresses the broken
-  // WebKitGTK drag and hands off to the native OS drag (handleEntryDragStart).
-  // Bail out here without preventDefault so that gesture takes over instead of
-  // the pointer drag-to-tab.
+  // Ctrl held at the press → straight to the OS drag (export to another app).
+  // The row arms HTML5 `draggable` while `ctrlHeld` (see renderEntry); its
+  // onDragStart suppresses the broken WebKitGTK drag and hands off to the
+  // native OS drag (handleEntryDragStart). Bail out here without
+  // preventDefault so that gesture takes over instead of the pointer drag.
   if (e.ctrlKey) return;
   // Let the inline run (▶) button own its own clicks — don't seed a drag or
   // swallow the click when the press lands on it.
@@ -177,29 +185,38 @@ export function startEntryPointerDrag(
   let lastPhys: PhysPoint | null = null;
   let stopPoll: (() => void) | null = null;
 
-  // Mid-drag Ctrl → arms the native OS EXPORT drag (copy the file(s) out to
-  // whatever app the cursor ends up over). Ctrl *before* the press is the
-  // multi-select toggle, so export is armed by pressing Ctrl AFTER the drag
-  // is underway — symmetric with Shift, which modifies the drop while
-  // already dragging (see DragGhost's modifier highlight). Mirrors that:
-  // holding Ctrl only MARKS the ghost's "copy out" option; the in-app hover
-  // (ghost, folder highlight, popout hover) keeps running unchanged.
+  // Leaving the window hands the file(s) to the native OS drag — an EXPORT/
+  // COPY into whatever app the cursor ends up over (Teams, a browser, mail, a
+  // file manager), the way a file manager's drag behaves. ⇧ Shift held while
+  // leaving keeps the drag in the app instead (a release outside then opens a
+  // new window or docks into a popout, as below), and the cursor leaving
+  // straight onto a popout of ours that is in front stays in-app too, so a
+  // plain drag still docks there. Ctrl forces the export (Ctrl wins over
+  // Shift), and a host (SFTP) listing never exports. The ghost's legend
+  // (CenterPanel's DragGhost) mirrors this rule.
   //
-  // The gesture then switches between two modes at the WINDOW BOUNDARY, and
-  // can switch back and forth as often as the user likes:
-  //  - leaving the window with Ctrl held → the OS drag takes over the still-
-  //    held button (GTK can only BEGIN a drag while the button is physically
-  //    down, so the crossing is the last moment this is possible), and a
-  //    release out there drops into the external app.
-  //  - coming back INTO the window → the OS drag is cancelled and the in-app
-  //    ghost/hover resumes, so re-entering never leaves the user staring at
-  //    an OS drag icon over Tabtivity's own window.
-  // While the OS owns the drag the webview sees no pointer events at all, so
-  // the boundary test runs off the OS-cursor poll (physical px → this
-  // window's client px via the frame snapshot), which keeps ticking
-  // regardless of who holds the pointer grab.
+  // The gesture switches between two modes at the WINDOW BOUNDARY, and can
+  // switch back and forth as often as the user likes:
+  //  - leaving the window → the OS drag takes over the still-held button (GTK
+  //    can only BEGIN a drag while the button is physically down, so the
+  //    crossing is the last moment this is possible), and a release out there
+  //    drops into the external app.
+  //  - coming back INTO the window (or onto a front popout) → the OS drag is
+  //    cancelled and the in-app ghost/hover resumes, so re-entering never
+  //    leaves the user staring at an OS drag icon over Tabtivity's own window.
+  // Where the desktop has coordinates (X11, Windows, macOS) the OS-cursor poll
+  // drives both crossings: while the OS owns the drag the webview sees no
+  // pointer events at all, and the poll (physical px → this window's client
+  // px via the frame snapshot) keeps ticking regardless of the pointer grab.
+  // Native Wayland has no desktop coordinates, so there the DOM tells: a
+  // pointermove outside the window (the press's implicit grab still reports
+  // it), the pointer leaving the document, and the OS drag's own `dragenter`
+  // back over this window.
   let nativeActive = false;
   let frame: WindowFrame | null = null;
+  // Whether the desktop reports coordinates (null until the probe answers;
+  // treated like "yes" meanwhile, so nothing exports off the DOM early).
+  let geometry: boolean | null = null;
   // The `tabtivity:file-drag-ended` subscription (registered below, once the
   // gesture is real) and whether the gesture has already ended — `listen` is
   // async, so it can resolve after cleanup and must then unsubscribe at once.
@@ -207,39 +224,81 @@ export function startEntryPointerDrag(
   let gestureOver = false;
   const inWindow = (c: { x: number; y: number }) =>
     c.x >= 0 && c.y >= 0 && c.x < window.innerWidth && c.y < window.innerHeight;
+  // Modifiers, tracked as gesture state rather than read off each pointer
+  // event. Cancelling the GTK drag hands the pointer back, but NOT the
+  // implicit grab the original pointerdown had: the webview then sees plain
+  // mousemove while the cursor is over the window and NOTHING once it leaves.
+  // So after one handoff, `PointerEvent.ctrlKey`/`shiftKey` stop arriving
+  // exactly where the next handoff would need them — hence flags the key
+  // events maintain. (The Ctrl keydown arm also covers Ctrl pressed while the
+  // cursor already sits outside the window with Shift held.)
+  let ctrlDown = false;
+  let shiftDown = false;
+  const exportOnLeave = () => !remoteListing && (ctrlDown || !shiftDown);
+  // Whether a popout of ours under the physical cursor is the FRONT window
+  // there: true / false, or null while the answer is still on its way (one
+  // `detached_window_frontmost` query in flight, its answer reused briefly).
+  // An occluded popout must not swallow a drop aimed at the app above it.
+  let frontCheck: { label: string; front: boolean; at: number } | null = null;
+  let frontInFlight = false;
+  const popoutInFront = (p: PhysPoint): boolean | null => {
+    const over = detached.at(p);
+    if (!over) return false;
+    if (frontCheck && frontCheck.label === over.label && Date.now() - frontCheck.at < 400) {
+      return frontCheck.front;
+    }
+    if (!frontInFlight) {
+      frontInFlight = true;
+      void invoke<boolean>("detached_window_frontmost", { registryId: over.label })
+        .catch(() => true)
+        .then((front) => {
+          frontCheck = { label: over.label, front, at: Date.now() };
+        })
+        .finally(() => {
+          frontInFlight = false;
+        });
+    }
+    return null;
+  };
   const toNativeDrag = () => {
     // A host (SFTP) listing's paths are the host's, not this machine's: the OS
     // would be handed a path that does not exist here. The drag stays in-app
     // (tabs, folders); "Download to…" is how a host file leaves.
-    if (!dragging || nativeActive || remoteListing) return;
+    if (!dragging || nativeActive || remoteListing || gestureOver) return;
     nativeActive = true;
     // The in-app drop targets are meaningless while the OS owns the drag.
     spring.cancel();
     setMoveTarget(null);
     detached.hover(null, { x: 0, y: 0 }, entry.name);
-    beginNativeFileDrag(dragEntries.map((en) => en.path));
+    void beginNativeFileDrag(dragEntries.map((en) => en.path), endFromOs).then((started) => {
+      // Refused (no pointer grab left, a backend without the command): the
+      // gesture carries on in-app rather than freezing on a drag nobody owns.
+      if (!started) nativeActive = false;
+    });
   };
   const backToInAppDrag = () => {
     if (!nativeActive) return;
     nativeActive = false;
     void invoke("cancel_file_drag").catch(() => {});
   };
-  // Ctrl, tracked as gesture state rather than read off each pointer event.
-  // Cancelling the GTK drag hands the pointer back, but NOT the implicit grab
-  // the original pointerdown had: the webview then sees plain mousemove while
-  // the cursor is over the window and NOTHING once it leaves. So after one
-  // handoff, `PointerEvent.ctrlKey` stops arriving exactly where the next
-  // handoff would need it — hence a flag the key events maintain, plus the
-  // cursor poll below as the position source. (The keydown arm also covers
-  // Ctrl pressed while the cursor already sits outside the window.)
-  let ctrlDown = false;
   const onKeyDown = (ev: KeyboardEvent) => {
+    if (ev.key === "Shift") shiftDown = true;
     if (ev.key !== "Control") return;
     ctrlDown = true;
     if (dragging && !inWindow(lastClient)) toNativeDrag();
   };
   const onKeyUp = (ev: KeyboardEvent) => {
     if (ev.key === "Control") ctrlDown = false;
+    if (ev.key === "Shift") shiftDown = false;
+  };
+  // Native Wayland: the OS drag passing back over this window is the re-entry
+  // (no cursor poll there), and the pointer leaving the document without the
+  // press's grab (after one such re-entry) is the next exit.
+  const onNativeDragEnter = () => {
+    if (geometry === false) backToInAppDrag();
+  };
+  const onDocumentLeave = () => {
+    if (geometry === false && dragging && !nativeActive && exportOnLeave()) toNativeDrag();
   };
 
   const onMove = (ev: PointerEvent) => {
@@ -254,6 +313,10 @@ export function startEntryPointerDrag(
         fileName: entry.name,
         viewer: viewer ?? undefined,
         files: isMultiDrag ? dragFiles : undefined,
+        copyOut: !remoteListing,
+      });
+      void desktopCoordinatesSupported().then((supported) => {
+        geometry = supported;
       });
       // Built-in viewers render in-app and need no external handler, so skip
       // the embed-capability probe for them. For other embeddable files,
@@ -296,15 +359,22 @@ export function startEntryPointerDrag(
           // The OS owns the pointer: this poll is also the only position
           // source, so keep the ghost tracking the cursor for the moment it
           // comes back in — whereupon the OS drag is cancelled and the
-          // in-app hover takes over again.
+          // in-app hover takes over again (over a front popout too, so it
+          // can dock).
           lastClient = c;
           useDragStore.getState().move(c.x, c.y);
-          if (inWindow(c)) backToInAppDrag();
+          if (inWindow(c) || popoutInFront(p) === true) backToInAppDrag();
           return;
         }
-        if (c && ctrlDown && !inWindow(c)) {
-          toNativeDrag();
-          return;
+        if (c && !inWindow(c) && exportOnLeave()) {
+          // Outside the window: into another app, unless the cursor sits on a
+          // popout of ours in front (dock there; unknown yet → next tick).
+          const front = popoutInFront(p);
+          if (front === false) {
+            toNativeDrag();
+            return;
+          }
+          if (front === null) return;
         }
         detached.hover(detached.at(p), p, entry.name);
       });
@@ -313,7 +383,14 @@ export function startEntryPointerDrag(
     // poll for the ghost position or revive the in-app drop targets.
     if (nativeActive) return;
     ctrlDown = ev.ctrlKey;
+    shiftDown = ev.shiftKey;
     lastClient = { x: ev.clientX, y: ev.clientY };
+    // Native Wayland: no cursor poll, but the press's implicit grab still
+    // reports moves past the window edge — that is the exit.
+    if (geometry === false && !inWindow(lastClient) && exportOnLeave()) {
+      toNativeDrag();
+      return;
+    }
     useDragStore.getState().move(ev.clientX, ev.clientY);
     hitTestMove(ev.clientX, ev.clientY);
     // Inside a detached popout, CenterPanel's window-wide drop authority isn't
@@ -389,6 +466,8 @@ export function startEntryPointerDrag(
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
+    window.removeEventListener("dragenter", onNativeDragEnter);
+    document.documentElement.removeEventListener("mouseleave", onDocumentLeave);
     spring.cancel();
     setMoveTarget(null);
     stopPoll?.();
@@ -560,6 +639,14 @@ export function startEntryPointerDrag(
   window.addEventListener("pointermove", onMove);
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("dragenter", onNativeDragEnter);
+  document.documentElement.addEventListener("mouseleave", onDocumentLeave);
+  // The OS drag reached its end (dropped in another app, or cancelled): the
+  // whole gesture is over — the webview never sees that release.
+  function endFromOs() {
+    unbindRelease();
+    onAbort();
+  }
   const unbindRelease = bindDragRelease({
     onCommit: (shiftKey) => void commitRelease(shiftKey),
     onAbort,
@@ -570,8 +657,5 @@ export function startEntryPointerDrag(
   // hands control back to the in-app drag, which is still very much alive.
   // `listen` is async: the gesture can already be over when it resolves, and
   // `subscribeTauri` unlistens then.
-  unlistenEnded = subscribeTauri(() => listen(NAMES.fileDragEndedEvent, () => {
-    unbindRelease();
-    onAbort();
-  }));
+  unlistenEnded = subscribeTauri(() => listen(NAMES.fileDragEndedEvent, endFromOs));
 }

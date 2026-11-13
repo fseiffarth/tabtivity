@@ -59,10 +59,10 @@ const REMEMBERED = {
   ],
 };
 
-function mount(remembered: unknown = REMEMBERED) {
+function mount(remembered: unknown = REMEMBERED, ptyId = "p1:t1") {
   vi.mocked(invoke).mockImplementation(async (command: string) => (command === "remembered_model_rows" ? remembered : undefined));
   const typeKeys = vi.fn(async (_keys: string[]) => {});
-  const hook = renderHook(() => useSessionPicker({ tab: TAB, ptyId: "p1:t1", agentLabel: "Claude", typeKeys }));
+  const hook = renderHook(() => useSessionPicker({ tab: TAB, ptyId, agentLabel: "Claude", typeKeys }));
   return { typeKeys, ...hook };
 }
 
@@ -78,7 +78,7 @@ describe("the model list remembered for the CLI's build", () => {
   it("lists the remembered rows at once and answers a tapped one in the live picker by its label", async () => {
     const { result, typeKeys } = mount();
     act(() => result.current.open());
-    expect(vi.mocked(invoke)).toHaveBeenCalledWith("remembered_model_rows", { agent: "claude" });
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("remembered_model_rows", { agent: "claude", scope: "p1" });
     await waitFor(() => expect(result.current.shownStep?.options.map((option) => option.label))
       .toEqual(["Default (recommended)", "Opus 5.5", "Opus 4.1", "Sonnet 5.5"]));
     expect(result.current.remembered).toBe(true);
@@ -98,6 +98,16 @@ describe("the model list remembered for the CLI's build", () => {
     expect(keeps()).toHaveLength(0);
   });
 
+  it("asks for and keeps the rows under the tab's own scope, a box's included (gap 95)", async () => {
+    const { result } = mount(REMEMBERED, "box:b7:t1");
+    act(() => result.current.open());
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("remembered_model_rows", { agent: "claude", scope: "box:b7" });
+    await waitFor(() => expect(result.current.remembered).toBe(true));
+    mocks.rows = PICKER;
+    await waitFor(() => expect(keeps()).toHaveLength(1));
+    expect(keeps()[0][1]).toMatchObject({ agent: "claude", scope: "box:b7" });
+  });
+
   it("keeps a live list that differs from the remembered one once it has settled", async () => {
     const { result } = mount();
     act(() => result.current.open());
@@ -108,6 +118,7 @@ describe("the model list remembered for the CLI's build", () => {
     await waitFor(() => expect(keeps()).toHaveLength(1));
     expect(keeps()[0][1]).toMatchObject({
       agent: "claude",
+      scope: "p1",
       rows: { rows: [
         { label: "Default (recommended)", number: 1 },
         { label: "Fable 5.1", number: 2 },

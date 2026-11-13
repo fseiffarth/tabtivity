@@ -1,3 +1,4 @@
+import { isTabKey } from "../../lib/shortcuts/keyNames";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
   continueList,
@@ -128,7 +129,7 @@ export function MarkdownPromptField({
     }
     // Tab only belongs to the field while the caret is in a list or quote —
     // everywhere else it stays the key that leaves the field.
-    if (event.key === "Tab") {
+    if (isTabKey(event)) {
       const el = ref.current;
       if (!el) return;
       const spans = el.selectionStart !== el.selectionEnd;

@@ -1588,6 +1588,16 @@ impl PtyRegistry {
         })
     }
 
+    /// Every live PTY that runs an AI, with the tab it shows: itself, or for an
+    /// attach PTY the tab it attaches to.
+    pub fn ai_ids(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .filter(|(id, _)| self.is_ai(id))
+            .map(|(id, e)| (id.clone(), e.meta.attach_of.clone().unwrap_or_else(|| id.clone())))
+            .collect()
+    }
+
     /// `None` when no such tab is live; `Some(None)` for a remote one.
     pub fn drop_dir(&self, id: &str) -> Option<Option<String>> {
         self.entries.get(id).map(|e| e.drop_dir.clone())
@@ -1786,6 +1796,12 @@ impl PtyRegistry {
             .any(|(id, e)| pty_id_in_scope(id, scope) && !e.dead.load(Ordering::SeqCst))
     }
 
+    /// The local tmux session `id` is a client of, when its spawn was wrapped
+    /// in one (`PtyMeta::local_tmux`).
+    pub fn local_tmux_of(&self, id: &str) -> Option<String> {
+        self.entries.get(id).and_then(|e| e.meta.local_tmux.clone())
+    }
+
     /// OS process id of the child for `id`, if it is still tracked.
     pub fn pid(&self, id: &str) -> Option<u32> {
         self.entries.get(id).and_then(|e| e.child.process_id())
@@ -1862,6 +1878,10 @@ fn teardown_with(taken: Vec<TakenPty>, mode: ReapMode) {
         // a respawn that fails first ends it in `launch_prep`), so a stale
         // kill touches neither.
         if crate::services::launch_prep::on_tab_gone(&id, entry.seq) {
+            // The server it printed is gone with it: end the port forwards
+            // only this tab asked for (the registry at once, `ssh -O cancel`
+            // on a thread of its own).
+            crate::services::port_forward::close_for_tab(&id);
             // The tab is gone for good, so stop watching for its Codex session.
             crate::services::codex_bind::untrack_now(&id);
             // Containerized tab: killing the child above only killed the
@@ -1999,6 +2019,40 @@ pub struct TabJoin {
     pub stale: Option<TakenPty>,
 }
 
+/// Revoke the lane token a tab's spawn held in `var` once the spawn ended, and
+/// tell the views of the lanes that keep per-tab state. Every variable of
+/// `root_mcp::LANE_TOKEN_ENVS` lands here, so a lane without its own arm is
+/// still revoked.
+fn lane_token_gone(ctx: &CoreCtx, var: &str, token: &str) {
+    use crate::services::root_mcp::{self as root_mcp, revoke_token};
+    match var {
+        root_mcp::TOKEN_ENV | root_mcp::SCHEDULE_TOKEN_ENV => {
+            let state = crate::storage::state_dir();
+            crate::services::root_mcp_review::on_spawn_gone(&state, token);
+            ctx.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
+        }
+        root_mcp::GIT_TOKEN_ENV => {
+            revoke_token(token);
+            ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
+        }
+        root_mcp::MARKUP_TOKEN_ENV => {
+            // The tab's open markup question goes with its session; the
+            // sweep rings `markup-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::markup_mcp::sweep();
+        }
+        root_mcp::PRINT_TOKEN_ENV => {
+            // The tab's pending print requests close with its session;
+            // the sweep rings `print-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::print_mcp::sweep();
+        }
+        // Help, cockpit, and the assistant's web lane (a chat's token dies
+        // with its CLI): nothing else to tell.
+        _ => { revoke_token(token); }
+    }
+}
+
 /// Open a PTY of `cols`×`rows`, run `cmd` in it, register it under `id` and
 /// stream it. `tab` is the tab's own spawn (its options): the bookkeeping that
 /// follows a tab's process — Codex binding, MCP tokens, the fence — runs for
@@ -2123,16 +2177,13 @@ fn launch(
     } else {
         route_open_at(&id, Some(&payload_id), route_seq);
     }
-    let env = tab.map(|opts| &opts.env);
-    let mcp_token = env.and_then(|env| {
-        env.get(crate::services::root_mcp::TOKEN_ENV)
-            .or_else(|| env.get(crate::services::root_mcp::SCHEDULE_TOKEN_ENV))
-            .cloned()
-    });
-    let help_token = env.and_then(|env| env.get(crate::services::root_mcp::HELP_TOKEN_ENV).cloned());
-    let push_token = env.and_then(|env| env.get(crate::services::root_mcp::GIT_TOKEN_ENV).cloned());
-    let markup_token = env.and_then(|env| env.get(crate::services::root_mcp::MARKUP_TOKEN_ENV).cloned());
-    let web_token = env.and_then(|env| env.get(crate::services::root_mcp::WEB_TOKEN_ENV).cloned());
+    // Every lane token this spawn holds (`root_mcp::LANE_TOKEN_ENVS`), each
+    // revoked when the spawn ends ([`lane_token_gone`]).
+    let lane_tokens: Vec<(&'static str, String)> = tab
+        .map(|opts| crate::services::root_mcp::LANE_TOKEN_ENVS.iter()
+            .filter_map(|var| opts.env.get(*var).map(|token| (*var, token.clone())))
+            .collect())
+        .unwrap_or_default();
     tokio::spawn(async move {
         let emitter = ctx.clone();
         batch_output(rx, |bytes| match route_chunk(&id, bytes, route_seq) {
@@ -2172,30 +2223,13 @@ fn launch(
         if current_spawn_ended {
             if is_tab {
                 crate::services::agent_fence::on_tab_gone(&id, route_seq);
+                // The program ended by itself: the server it ran is gone too.
+                crate::services::port_forward::close_for_tab(&id);
             }
             // A login PTY whose login ended is no paste target any more.
             crate::commands::credentials::forget_login_pty_spawn(&id, route_seq);
-            if let Some(token) = help_token {
-                crate::services::root_mcp::revoke_token(&token);
-            }
-            if let Some(token) = push_token {
-                crate::services::root_mcp::revoke_token(&token);
-                ctx.emit(crate::services::git_push_mcp::CHANGED_EVENT, ());
-            }
-            if let Some(token) = markup_token {
-                // The tab's open markup question goes with its session; the
-                // sweep rings `markup-mcp-changed` through the change hook.
-                crate::services::root_mcp::revoke_token(&token);
-                crate::services::markup_mcp::sweep();
-            }
-            if let Some(token) = web_token {
-                // The assistant's web lane: a chat's token dies with its CLI.
-                crate::services::root_mcp::revoke_token(&token);
-            }
-            if let Some(token) = mcp_token {
-                let state = crate::storage::state_dir();
-                crate::services::root_mcp_review::on_spawn_gone(&state, &token);
-                ctx.emit("root-mcp-review-changed", crate::services::root_mcp_review::pending_count(&state));
+            for (var, token) in &lane_tokens {
+                lane_token_gone(&ctx, var, token);
             }
             let exit = TerminalExit { id: payload_id, code: None };
             match exit_windows {
@@ -2319,6 +2353,16 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase());
     match ext.as_deref() {
+        // An npm global shim just runs `node <script>.js %*`. Going through
+        // `cmd.exe /C` re-parses every argument's quotes, which mangles the JSON
+        // an agent is launched with (`--mcp-config {"mcpServers":…}`), so run
+        // node on the script itself and the argv arrives exactly as built.
+        Some("cmd") if npm_shim_target(&path).is_some() => {
+            let (node, script) = npm_shim_target(&path).expect("checked above");
+            let mut c = CommandBuilder::new(node);
+            c.arg(script);
+            c
+        }
         Some("cmd") | Some("bat") => {
             let mut c = CommandBuilder::new("cmd.exe");
             c.arg("/D");
@@ -2339,6 +2383,32 @@ fn command_for_resolved(path: std::path::PathBuf) -> CommandBuilder {
     }
 }
 
+/// The script an npm-generated `*.cmd` shim runs, as `(node, script)`. The shim's
+/// last line is `… "%_prog%" "%dp0%\node_modules\<pkg>\<entry>.js" %*`, with
+/// `_prog` the `node.exe` beside the shim when there is one and `node` from PATH
+/// otherwise. `None` for any other batch file, or when the script is missing, so
+/// those keep their `cmd.exe /C` launch.
+fn npm_shim_target(shim: &std::path::Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let text = std::fs::read_to_string(shim).ok()?;
+    let line = text.lines().rev().find(|l| l.contains("%*") && (l.contains("%dp0%") || l.contains("%~dp0")))?;
+    let after = line.split_once("%dp0%").or_else(|| line.split_once("%~dp0"))?.1;
+    let rel = after.trim_start_matches(['\\', '/']).split('"').next()?;
+    let lower = rel.to_ascii_lowercase();
+    if !(lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs")) || rel.contains("..") {
+        return None;
+    }
+    let dir = shim.parent()?;
+    // One component at a time: a `\` inside a single `join` is a separator on
+    // Windows only, and the shim is read (and tested) on every OS.
+    let script = rel.split(['\\', '/']).filter(|part| !part.is_empty()).fold(dir.to_path_buf(), |path, part| path.join(part));
+    if !script.is_file() {
+        return None;
+    }
+    let local_node = dir.join("node.exe");
+    let node = if local_node.is_file() { local_node } else { crate::paths::resolve_executable("node")? };
+    Some((node, script))
+}
+
 fn build_command(opts: &PtyOptions) -> CommandBuilder {
     let cmd_str = if opts.cmd.is_empty() {
         default_shell()
@@ -2355,7 +2425,17 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     // Tabtivity's own helpers (the `ssh` of a remote tab, the local `tmux`) come
     // from the root-owned system dirs first, never a user-writable one (#861).
     let resolved = crate::paths::helper_program(std::ffi::OsStr::new(&cmd_str))
-        .or_else(|| crate::paths::resolve_offpath_binary(&cmd_str));
+        .or_else(|| crate::paths::resolve_offpath_binary(&cmd_str))
+        // Windows: a bare name left to `portable_pty`'s own PATH search takes
+        // the first file named exactly that — the `#!/bin/sh` agent shim in
+        // `<state>/bin` (first on every tab's PATH), or npm's `codex` script
+        // beside `codex.cmd` — and `CreateProcess` refuses both (error 193).
+        // `resolve_executable` skips the shim dir and tries PATHEXT first.
+        .or_else(|| {
+            (cfg!(windows) && !cmd_str.contains(['/', '\\']))
+                .then(|| crate::paths::resolve_executable(&cmd_str))
+                .flatten()
+        });
     let mut cmd = match resolved {
         Some(resolved) => command_for_resolved(resolved),
         None => CommandBuilder::new(&cmd_str),
@@ -2371,6 +2451,16 @@ fn build_command(opts: &PtyOptions) -> CommandBuilder {
     }
     for (k, v) in &opts.env {
         cmd.env(k, v);
+    }
+    // A tab `services::agent_privacy` verified for a local-models-only project
+    // inherits no provider key from this process (the Linux fence unsets them
+    // again inside, for what a tmux server would add).
+    if crate::services::agent_privacy::stamped(opts) {
+        for name in crate::services::agent_privacy::unset_names(opts.env.keys()) {
+            if !opts.env.contains_key(&name) {
+                cmd.env_remove(name);
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]
@@ -4301,5 +4391,50 @@ mod client_tests {
         map.remove(tab);
         map.remove(&attach);
         map.remove(&attach3);
+    }
+}
+
+#[cfg(test)]
+mod npm_shim_tests {
+    use super::npm_shim_target;
+
+    /// What `cmd-shim` writes for `npm install -g @openai/codex`.
+    const SHIM: &str = r#"@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
+"#;
+
+    #[test]
+    fn an_npm_shim_resolves_to_node_and_its_script_and_anything_else_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("codex.cmd");
+        std::fs::write(&shim, SHIM).unwrap();
+        // The script is missing: stay on the `cmd.exe /C` launch.
+        assert!(npm_shim_target(&shim).is_none());
+        let script_dir = dir.path().join("node_modules").join("@openai").join("codex").join("bin");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        std::fs::write(script_dir.join("codex.js"), "").unwrap();
+        std::fs::write(dir.path().join("node.exe"), "").unwrap();
+        let (node, script) = npm_shim_target(&shim).expect("an npm shim");
+        assert_eq!(node, dir.path().join("node.exe"));
+        assert_eq!(script, script_dir.join("codex.js"));
+        // A hand-written batch file is not an npm shim.
+        let other = dir.path().join("tool.cmd");
+        std::fs::write(&other, "@echo off\r\necho hi\r\n").unwrap();
+        assert!(npm_shim_target(&other).is_none());
     }
 }

@@ -1,5 +1,5 @@
 import { usePaneSleepHold } from "../../../lib/sleepWhenHidden";
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { invokeTrusted } from "../../../lib/execTrust";
 import { useSettingsStore } from "../../../stores/settings";
@@ -18,13 +18,10 @@ import { basename, dirname, isPathWithin, relativePathFrom } from "../../../lib/
 import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../../lib/platform";
 import { runInstallInTab } from "../../../lib/installCommand";
 import { resolveProjectDirectory } from "../../../types";
-import { useFileScope, useFileSource, readFileText, fileMtime } from "../../../lib/files/fileAccess";
+import { useFileScope, useFileSource, readFileText } from "../../../lib/files/fileAccess";
 import { isHostPinned } from "../../../lib/projectTabHost";
-import { useRemoteStatusStore } from "../../../stores/remote/remoteStatus";
-import { useDiskReloadPoll } from "../../../lib/useDiskReloadPoll";
-import { placeForFocused } from "../../../lib/terminal/pythonRun";
-import { FileDropContext } from "../../files/fileDropContext";
-import { HOST_TEX_ENGINES, openHostTexBuild } from "../../../lib/viewers/tex/hostTexBuild";
+import { guardLoginNodeRun } from "../../../lib/remote/hpc/hpcGuard";
+import { HOST_TEX_ENGINES } from "../../../lib/viewers/tex/hostTexBuild";
 import {
   type TexCapability,
   type TexCompileResult,
@@ -79,7 +76,7 @@ import { ArrowUpRightIcon, CloseIcon, GearIcon, WarningIcon } from "../../common
 import { ErrorNote } from "../../common/ErrorNote";
 import { useViewerState } from "./viewerState";
 import { openLinkedFile } from "./openLinked";
-import { jumpToSource } from "./sourceJump";
+import { alignFileTabSide, jumpToSource } from "./sourceJump";
 import { localMirrorRootFor, ViewerHeader } from "./ViewerHeader";
 import { type EditorApi, useEditableFile, ExternalChangeBanner } from "./editableFile";
 import { type HoverPreviewConfig, CodeEditor } from "./CodeEditor";
@@ -115,15 +112,12 @@ import {
  *     different layout.
  *   - The engine selector only appears when more than one engine is on PATH;
  *     otherwise the backend default is used (`engine: null`).
- *   - On a host-pinned project (VM, remote-only) there is no local tree to
- *     build: Compile opens a latexmk tab on the host instead
- *     (`lib/viewers/tex/hostTexBuild`), whatever this machine has installed,
- *     and the PDF tab opens once the build writes it.
+ *   - A file on a remote host (any file of a host-pinned VM / remote-only
+ *     project, or a remote project's file read from its Remote side) has no
+ *     local tree to build in: Compile runs latexmk on the host instead
+ *     (`compile_tex_host`, over SSH, no tab), whatever this machine has
+ *     installed, and reports it exactly as a local build — log, errors, PDF tab.
  */
-
-/** How long a host build's PDF is watched for (see `hostCompile`): a build that
- *  has written nothing by then is not coming, and the watch is an SFTP stat. */
-const HOST_BUILD_WATCH_MS = 10 * 60_000;
 
 /** OS-appropriate command to install a LaTeX/TeX distribution, used by the
  *  one-click "Install LaTeX" prompt shown when no TeX engine is on PATH. These
@@ -209,15 +203,15 @@ export function TexView({
   // The SyncTeX commands read the map off local disk; a file read from a remote
   // host (not its local mirror) has none there.
   const remoteSource = useFileSource() === "remote";
-  // A host-pinned project (VM, remote-only) has no local tree to build in:
-  // Compile opens a build tab on its host instead (`lib/viewers/tex/hostTexBuild`),
+  // A host-pinned project (VM, remote-only) has no local tree to build in, and
+  // a remote project's file read from the host (its Remote side, not the
+  // mirror) is a host path `compile_tex` cannot open here. Both build on the
+  // host: Compile runs latexmk there in the background (`compile_tex_host`),
   // this machine's TeX install is beside the point, and the hover preview —
   // which typesets in the document's local folder — is off.
   const scopeProject = useProjectsStore((s) => (scope ? s.projects.find((p) => p.id === scope) : undefined));
   const hostPinned = isHostPinned(scopeProject);
-  const hostConnected = useRemoteStatusStore((s) => (scope ? s.byProject[scope]?.ssh : undefined)) === "connected";
-  // Non-null inside a detached popout: the build tab streams into THAT window.
-  const fileDrop = useContext(FileDropContext);
+  const hostBuild = hostPinned || (remoteSource && !!scopeProject?.remote);
   const ai = useTabAiPrefs(tabKey, "tex");
   const ac = ai.ac;
   const sc = ai.sc;
@@ -507,18 +501,18 @@ export function TexView({
   const [autoEngine, setAutoEngine] = useState<string | null>(null);
   // A host build names its engine from the host's usual set, not this
   // machine's installs; its Auto is latexmk's own default.
-  const engines = hostPinned ? HOST_TEX_ENGINES : (cap?.engines ?? []);
+  const engines = hostBuild ? HOST_TEX_ENGINES : (cap?.engines ?? []);
   const showEngineMenu = engines.length > 1;
   useEffect(() => {
     // `tex_auto_engine` reads the document off this machine's disk.
-    if (!showEngineMenu || compiling || hostPinned) return;
+    if (!showEngineMenu || compiling || hostBuild) return;
     let cancelled = false;
     invoke<string | null>("tex_auto_engine", { path: root }).then(
       (e) => { if (!cancelled) setAutoEngine(e ?? null); },
       () => {},
     );
     return () => { cancelled = true; };
-  }, [showEngineMenu, root, compiling, hostPinned]);
+  }, [showEngineMenu, root, compiling, hostBuild]);
 
   // The output-folder picker browses the project this document belongs to,
   // opening at the main file's folder. A relative out-dir resolves against that
@@ -587,7 +581,7 @@ export function TexView({
       start === end ? null : { start, end, text: draftRef.current.slice(start, end) };
   }, []);
   const hoverPreview = useMemo<HoverPreviewConfig | undefined>(() => {
-    if (!hoverPref.on || !cap?.available || hostPinned) return undefined;
+    if (!hoverPref.on || !cap?.available || hostBuild) return undefined;
     // Read the draft through the ref, not the closure: the config is memoized on
     // the *document's* identity (its root, its preamble, its engine), so it must
     // not be rebuilt on every keystroke — every rebuild would re-run the range
@@ -599,7 +593,7 @@ export function TexView({
       render: (body, stillWanted) =>
         renderTexPreview(rootDir, preambleOf(), body, engine || null, stillWanted),
     };
-  }, [hoverPref.on, cap?.available, hostPinned, rootPreamble, rootDir, engine]);
+  }, [hoverPref.on, cap?.available, hostBuild, rootPreamble, rootDir, engine]);
 
   // Open the compiled PDF as its own tab (it is a real file), reusing the embed
   // viewer. openLinkedFile dedupes against an already-open PDF tab for the same
@@ -607,6 +601,10 @@ export function TexView({
   // so a reused tab reloads the freshly compiled bytes on its own.
   const openPdf = useCallback(
     (pdf: string) => {
+      // A remote project's PDF tab open on the other side (the mirror's PDF, or
+      // the host's switched to Local) is put on this build's side first, so the
+      // dedupe below finds it instead of opening a second PDF tab.
+      alignFileTabSide(pdf);
       // In a workspace the host opens the PDF tab in the workspace's own
       // subwindow; standalone opens/refocuses a separate PDF tab keyed on this tab.
       if (onOpenPdf) {
@@ -736,12 +734,22 @@ export function TexView({
       // back the old PDF (say after an \input'd file changed outside Tabtivity or a
       // package was updated). The direct-engine path always runs the engine.
       if (cap?.latexmk && !flags.some((f) => /^-g+$/.test(f))) flags.unshift("-g");
-      const res = await invokeTrusted<TexCompileResult>("compile_tex", {
-        path: target,
-        engine: engine || null,
-        outDir: outDir.trim() || null,
-        extraFlags: flags.length > 0 ? flags : null,
-      });
+      // A host file builds on the host (`compile_tex_host`: latexmk over SSH,
+      // with `-g`, no out-dir or extra flags), asking first on an HPC-tagged
+      // host like every run there (`compile_tex` opens files on this machine only).
+      if (hostBuild) {
+        if (!scope) return;
+        const ok = await guardLoginNodeRun({ projectId: scope, location: "remote", kind: "login-node-run" });
+        if (!ok) return;
+      }
+      const res = hostBuild
+        ? await invoke<TexCompileResult>("compile_tex_host", { projectId: scope, path: target, engine: engine || null })
+        : await invokeTrusted<TexCompileResult>("compile_tex", {
+            path: target,
+            engine: engine || null,
+            outDir: outDir.trim() || null,
+            extraFlags: flags.length > 0 ? flags : null,
+          });
       setLog(res.log);
       // The warnings are read whether or not the build succeeded: a document that
       // failed usually has both, and one that succeeded still has these.
@@ -800,6 +808,8 @@ export function TexView({
     save,
     onSaveAll,
     path,
+    hostBuild,
+    scope,
     engine,
     outDir,
     extraFlags,
@@ -811,81 +821,14 @@ export function TexView({
     onDiagnostics,
   ]);
 
-  // ── The host build (a host-pinned project; `lib/viewers/tex/hostTexBuild`) ──
-  // Compile saves, then opens the build tab on the host. The build runs there,
-  // in the tab, so this pane learns of its result only from the PDF: it is
-  // watched (`useDiskReloadPoll` — paused while the pane is hidden, which it
-  // is whenever the build tab shares its group, and caught up on show) from
-  // the mtime it had before, or from absent, until it changes. Then the PDF
-  // tab is opened (or refocused) as a local build's success would; an already
-  // open one reloads itself on its own poll.
-  const [hostBuildPdf, setHostBuildPdf] = useState<string | null>(null);
-  const hostBuildBaseline = useRef<number | null>(null);
-  useEffect(() => {
-    setHostBuildPdf(null);
-  }, [path]);
-  useEffect(() => {
-    if (!hostBuildPdf) return;
-    const id = window.setTimeout(() => setHostBuildPdf(null), HOST_BUILD_WATCH_MS);
-    return () => window.clearTimeout(id);
-  }, [hostBuildPdf]);
-  useDiskReloadPoll(
-    hostBuildPdf,
-    scope,
-    () => {
-      const pdf = hostBuildPdf;
-      setHostBuildPdf(null);
-      if (!pdf) return;
-      setPdfPath(pdf);
-      const nextVersion = pdfVersionRef.current + 1;
-      pdfVersionRef.current = nextVersion;
-      setPdfVersion(nextVersion);
-      onCompiled?.({ pdfPath: pdf, pdfVersion: nextVersion });
-      openPdf(pdf);
-    },
-    { seed: false, baseline: hostBuildBaseline, enabled: !!hostBuildPdf && hostConnected },
-  );
-  const hostCompile = useCallback(async () => {
-    const remoteRoot = scopeProject?.remote?.remote_path;
-    if (compiling || !scope || !remoteRoot) return;
-    setCompiling(true);
-    setCompileError(null);
-    setSyncNote(null);
-    try {
-      // The build reads files, not editor buffers: every pane's draft first.
-      await save();
-      await onSaveAll?.();
-      const target = await resolveTexRoot(path);
-      setRoot(target);
-      const pdf = target.replace(/\.tex$/i, ".pdf");
-      // -1 stands for "no PDF yet", so the first build's PDF counts as a change.
-      const before = await fileMtime(pdf, scope).catch(() => null);
-      const opened = await openHostTexBuild({
-        scope,
-        projectDir: resolveProjectDirectory(scopeProject),
-        texPath: target,
-        remoteRoot,
-        engine,
-        place: placeForFocused(fileDrop),
-      });
-      if (!opened) return;
-      hostBuildBaseline.current = before ?? -1;
-      setHostBuildPdf(pdf);
-    } catch (e) {
-      setCompileError(String(e));
-    } finally {
-      setCompiling(false);
-    }
-  }, [compiling, scope, scopeProject, save, onSaveAll, path, engine, fileDrop]);
-  const build = hostPinned ? hostCompile : compile;
 
   // Advertise this editor's compile to the PDF tab's "recompile" notice (a
   // reverse-search click with no map, a stale map, or a PDF rebuilt without
   // SyncTeX). The PDF viewer owns no compile of its own — this one holds the
   // draft, the engine and the out-dir — so it asks here. Rides a ref so the
   // registration is one per path, not one per render.
-  const compileRef = useRef(build);
-  compileRef.current = build;
+  const compileRef = useRef(compile);
+  compileRef.current = compile;
   useEffect(() => {
     const run = () => void compileRef.current();
     registerTexCompile(path, run);
@@ -945,8 +888,8 @@ export function TexView({
   const jumpToError = onJumpToSource ?? jumpToSource;
 
   // No engine (or still probing): degrade to exactly the plain-text editor. A
-  // host-pinned project builds on its host, whatever this machine has.
-  if (!hostPinned && (!cap || !cap.available)) {
+  // host build runs on the host, whatever this machine has.
+  if (!hostBuild && (!cap || !cap.available)) {
     return (
       <div className="file-viewer">
         <ViewerHeader onOpenExternally={onOpenExternally}>
@@ -1051,10 +994,10 @@ export function TexView({
           // editor textarea — the body caret stays put (and visible in a split)
           // instead of vanishing, and forward search still runs from it.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => void build()}
+          onClick={() => void compile()}
           disabled={compiling}
           title={chordHint(
-            hostPinned
+            hostBuild
               ? t("tex.compileOnHostTitle", { host: scopeProject?.remote?.label || scopeProject?.remote?.host || "" })
               : isChild
                 ? t("fileViewer.saveAndCompileNamed", { name: rootName })
@@ -1068,7 +1011,8 @@ export function TexView({
               ? t("fileViewer.compileNamed", { name: rootName })
               : t("fileViewer.compileBtn")}
         </button>
-        {hostPinned && <UntestedTag id="tex.compileOnHostTab" />}
+        {hostPinned && <UntestedTag id="tex.compileOnHost" />}
+        {hostBuild && !hostPinned && <UntestedTag id="tex.compileRemoteFileOnHost" />}
         {showEngineMenu && (
           <Dropdown
             className="file-viewer-tex-engine"
@@ -1084,7 +1028,7 @@ export function TexView({
             options={[
               // "" lets the backend pick from the document; label it with the
               // engine it would use (the first installed one until that answers).
-              { value: "", label: t("fileViewer.engineAuto", { engine: (hostPinned ? null : autoEngine) ?? engines[0] }) },
+              { value: "", label: t("fileViewer.engineAuto", { engine: (hostBuild ? null : autoEngine) ?? engines[0] }) },
               ...engines.map((eng) => ({ value: eng, label: eng })),
             ]}
           />
@@ -1093,8 +1037,8 @@ export function TexView({
         {compiling && <span className="file-viewer-tex-spinner" aria-hidden="true" />}
         {/* The out-dir picker and extra flags shape `compile_tex`'s run; a host
             build runs a fixed latexmk line, and the hover preview
-            typesets locally — neither is offered on a host-pinned project. */}
-        {!hostPinned && (
+            typesets locally — neither is offered on a host build. */}
+        {!hostBuild && (
           <button
             className={`file-viewer-tex-options-toggle${showOptions ? " active" : ""}`}
             onClick={() => setShowOptions((v) => !v)}
@@ -1104,7 +1048,7 @@ export function TexView({
             {t("fileViewer.optionsBtn")} <GearIcon />
           </button>
         )}
-        {!hostPinned && (
+        {!hostBuild && (
           <button
             className={`file-viewer-tex-preview-toggle${hoverPref.on ? " active" : ""}`}
             onClick={hoverPref.toggle}
@@ -1158,7 +1102,7 @@ export function TexView({
           <div className="file-viewer-tex-progress-bar" />
         </div>
       )}
-      {showOptions && !hostPinned && (
+      {showOptions && !hostBuild && (
         <div className="file-viewer-tex-options" role="group" aria-label={t("fileViewer.compilerOptionsGroup")}>
           <label className="file-viewer-tex-option">
             <span>{t("fileViewer.outputFolderLabel")}</span>
@@ -1451,9 +1395,9 @@ export function TexView({
             loaded={loaded}
             // Ctrl+S in the LaTeX viewer saves and recompiles (compile() persists
             // pending edits first), so the PDF preview tracks the source. On a
-            // host-pinned project it only saves: a build there is a new tab on
+            // host build it only saves: a build there is a new tab on
             // the host, which a save must not open (Compile / the chord does).
-            save={() => void (hostPinned ? save() : compile())}
+            save={() => void (hostBuild ? save() : compile())}
             onFollowLink={onEditorFollow}
             linkRanges={linkRanges}
             undo={undo}

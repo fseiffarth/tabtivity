@@ -1,6 +1,6 @@
 [package]
 name = "tabtivity"
-version = "0.2.57"
+version = "0.2.70"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
@@ -145,7 +145,7 @@ arboard = { version = "3", features = ["wayland-data-control"], optional = true 
 # Encode the clipboard's raw RGBA image as PNG before writing it to disk.
 png = "0.18"
 calamine = "0.38"
-rusqlite = { version = "0.40.1", features = ["bundled", "hooks", "limits"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "hooks", "limits"] }
 # Stage host file bytes on disk so `git diff --no-index` can diff the local mirror
 # against the current host copy (SSH-sync host-vs-mirror diff button).
 tempfile = "3"

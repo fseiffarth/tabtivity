@@ -52,6 +52,8 @@
 .mail-indicator-btn,
 .calendar-indicator-btn,
 .todo-indicator-btn,
+.cockpit-indicator-btn,
+.agents-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn {
   /* Positioning context for the badge. It must be the BUTTON and not the
@@ -62,6 +64,8 @@
 }
 .mail-indicator-btn[aria-pressed="true"],
 .todo-indicator-btn[aria-pressed="true"],
+.cockpit-indicator-btn[aria-pressed="true"],
+.agents-indicator-btn[aria-pressed="true"],
 .calendar-indicator-btn[aria-pressed="true"],
 .alerts-toggle-btn[aria-pressed="true"] {
   background: var(--control-hover-bg);
@@ -77,6 +81,8 @@
 .mail-indicator-btn,
 .calendar-indicator-btn,
 .todo-indicator-btn,
+.cockpit-indicator-btn,
+.agents-indicator-btn,
 .inbox-indicator-btn,
 .alerts-toggle-btn,
 .local-model-btn,
@@ -95,6 +101,8 @@
 .mail-indicator-icon,
 .calendar-indicator-icon,
 .todo-indicator-icon,
+.cockpit-indicator-icon,
+.agents-indicator-icon,
 .inbox-indicator-icon,
 .help-agent-icon,
 .settings-menu-icon,
@@ -144,7 +152,7 @@ svg.alerts-toggle-icon {
    ResizeObserver, never a media query: the window is what resizes). Tier 1
    folds the apps' badges, tier 2 the clock too, tier 3 the status cluster. */
 .app-header:is([data-width-tier="1"], [data-width-tier="2"], [data-width-tier="3"]) :is(
-  .mail-indicator-badge, .calendar-indicator-badge, .todo-indicator-badge, .inbox-indicator-badge
+  .mail-indicator-badge, .calendar-indicator-badge, .todo-indicator-badge, .cockpit-indicator-badge, .inbox-indicator-badge
 ) {
   display: none;
 }
@@ -156,6 +164,7 @@ svg.alerts-toggle-icon {
 .mail-indicator-badge,
 .calendar-indicator-badge,
 .todo-indicator-badge,
+.cockpit-indicator-badge,
 .inbox-indicator-badge {
   position: absolute;
   top: 1px;
@@ -168,8 +177,11 @@ svg.alerts-toggle-icon {
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
-  background: var(--danger);
-  color: var(--accent-contrast);
+  /* A plain count is neutral (2026-11-04: five red dots read as five alarms).
+     Red is for news that needs you — fresh mail, an overdue to-do — and amber
+     for an agent asking (below). */
+  background: color-mix(in srgb, var(--text-primary) 16%, var(--bg-header-solid));
+  color: var(--text-primary);
   font-size: var(--text-xs);
   font-weight: 700;
   line-height: 1;
@@ -182,9 +194,19 @@ svg.alerts-toggle-icon {
    separates the dot from the icon it sits on, which is what reads as "this just
    changed" without introducing a second count to reconcile against the first. */
 .mail-indicator-badge.fresh {
-  /* `--bg-header-solid`, never `--bg-header`: the latter is a gradient in the
-     fancy themes, and a gradient in a box-shadow drops the whole declaration. */
+  /* `--bg-header-solid`, never `--bg-header`: the latter may be a gradient (a
+     Customizer value), and a gradient in a box-shadow drops the declaration. */
   box-shadow: 0 0 0 2px var(--bg-header-solid);
+}
+.mail-indicator-badge.fresh,
+.todo-indicator-badge.overdue {
+  background: var(--danger);
+  color: var(--accent-contrast);
+}
+/* An agent waiting on an answer: the decision colour of the tab strokes. */
+.cockpit-indicator-badge.asking {
+  background: var(--status-decision);
+  color: #1c1300;
 }
 
 /* "The last check failed" is not "you have mail", so it does not wear mail's
@@ -458,30 +480,11 @@ svg.alerts-toggle-icon {
   opacity: 0.5;
 }
 
-/* The header overlays — mail, calendar, board, models & agents — all wear the root
-   console's subwindow chrome (`.root-overlay.subwindow`, its `.tab-bar` with a
-   glyph mark, a tab strip and the console's controls); the tabs' shared parts
-   are below. All that is left here is their size — exactly the split
-   `.sysmon-dialog` makes, and for the same reason: a whole pane hosted in a
-   window needs a definite height, because the pane fills it and scrolls its own
+/* Mail, calendar, board, agents, models and machines are views of the console
+   window (`layout/RootOverlay`, one frame, one size — the window's). Their bodies
+   keep the old overlays' body classes below; a pane hosted in the window needs
+   the body's definite height, because the pane fills it and scrolls its own
    regions. */
-/* ONE size for all three, deliberately. They are opened from three buttons a few
-   pixels apart in the same header and are switched between constantly, so a
-   window that jumps and resizes on every switch is the thing you notice instead
-   of the content. The board used to claim its own larger box because its columns
-   tile sideways and every extra pixel is another column — which is true, and is
-   why the shared size is the *board's* rather than a compromise between the two:
-   mail's three panes and the calendar's week grid have nothing to lose from the
-   extra room either. */
-.mail-overlay,
-.calendar-overlay,
-.todo-overlay,
-.models-overlay,
-.machines-overlay {
-  width: min(1680px, calc(100vw - 24px));
-  height: min(93vh, calc(100vh - 24px));
-  max-height: min(93vh, calc(100vh - 24px));
-}
 /* Moved, resized and filled like the root console (common/useFloatingFrame):
    the grips are subwindows.css's `.root-overlay-grip`, hung off this frame; a
    move or resize replaces the size above with an inline `position: fixed` one. */
@@ -520,7 +523,7 @@ svg.alerts-toggle-icon {
   flex: 1;
   min-width: 0;
 }
-/* The Models & agents overlay's panes (`models/ModelsOverlay`). The hosted
+/* The Agents and Models views' panes (`models/AgentsView`, `ModelsView`). The hosted
    Settings panels render a title row and a `.dialog-scroll`, which only scrolls
    inside a flex column — so the pane is that column. `:not([hidden])` because
    an author `display` would beat the `hidden` attribute a kept pane wears. */
@@ -533,85 +536,17 @@ svg.alerts-toggle-icon {
   background: var(--bg-elevated);
   color: var(--text-primary);
 }
-/* Each tab's one-line intro, on the same 880px column as the pane under it
-   (its `padding-inline` is the column rule in apps.css — no `padding`
-   shorthand here, so the result doesn't hang on the @import order). */
-.models-overlay-body .models-overlay-intro {
-  margin: 0;
-  padding-top: var(--space-3);
-  flex-shrink: 0;
-}
-/* …except Skills, whose pane is full-width: the intro lines up with its
-   toolbar's 10px inset instead. */
-.models-overlay-body #models-overlay-pane-skills > .models-overlay-intro {
-  padding-inline: 10px;
-}
 /* The window's title already names this surface — the label beside the
    window's tab strip — so the pane's own
    toolbar title would say it twice, one line apart. The calendar needs no
    equivalent: `.cal-toolbar-title` is the visible date range, not the app's
    name, so it says something the band does not. */
-.mail-overlay .mail-toolbar-title,
+.mail-overlay-body .mail-toolbar-title,
 .models-overlay-pane .skills-title,
 .models-overlay-pane > .settings-title-row {
   display: none;
 }
 
-/* ── Models & agents: the overview grid and the bar's trail ──────────────────
-   The overlay opens on a grid of section tiles rather than a tab strip; a tile
-   opens its section and the bar's back button returns. The tiles copy the
-   disk-usage home's `.du-target` (control surface, accent border on hover),
-   larger, with the section's live state on each. */
-.models-overlay-trail {
-  align-self: center;
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 6px;
-  font-size: var(--text-md);
-}
-.models-overlay-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 10px 0 var(--space-2);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-full);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font: inherit;
-  white-space: nowrap;
-}
-.models-overlay-back:hover {
-  background: var(--control-hover-bg);
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-.models-overlay-trail-sep {
-  color: var(--text-muted);
-}
-.models-overlay-trail-current {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.models-section-glyph {
-  display: inline-flex;
-  flex-shrink: 0;
-}
-.models-section-glyph-svg {
-  width: 100%;
-  height: 100%;
-}
 
 .models-home {
   overflow-y: auto;
@@ -625,23 +560,6 @@ svg.alerts-toggle-icon {
   max-width: 1120px;
   margin: 0 auto;
   padding: 36px 28px 40px;
-}
-.models-home-machine .local-model-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: 12px;
-  padding: 0;
-  margin: 0;
-}
-.models-home-machine .local-model-stat {
-  gap: 8px;
-  padding: var(--space-3) 14px;
-  background: var(--control-bg);
-  border: 1px solid var(--control-border);
-  border-radius: var(--radius-lg);
-}
-.models-home-machine .local-model-meter {
-  height: 6px;
 }
 .models-home-lead {
   margin: 0;
@@ -785,17 +703,14 @@ svg.alerts-toggle-icon {
   border-style: dashed;
 }
 
-/* ── Global machines: the overlay's tile grid (header/MachinesOverlay) ───────
+/* ── Global machines: the Machines view's tile grid (header/MachinesView) ────
    The Machines dropdown's own rows (`header/MachinesIndicator`,
-   `surface="overlay"`), dressed as the Models overlay's tiles above — the same
-   `.models-home` page, `.models-tile` card and icon box — but a tile is not one
-   button: it holds the row's actions, toggles and forms, so it keeps a plain
-   cursor and loses the menu row's hairline. Selectors are two classes deep so
-   they outrank `.vpn-indicator-row + .vpn-indicator-row` and the grab cursor
-   in header-menus.css whatever the @import order. */
-.machines-overlay-spacer {
-  flex: 1 1 auto;
-}
+   `surface="view"`), laid out as tiles on the `.models-home` page with a
+   `.models-tile` card and icon box — but a tile is not one button: it holds the
+   row's actions, toggles and forms, so it keeps a plain cursor and loses the
+   menu row's hairline. Selectors are two classes deep so they outrank
+   `.vpn-indicator-row + .vpn-indicator-row` and the grab cursor in
+   header-menus.css whatever the @import order. */
 .machines-home-inner {
   max-width: 1320px;
 }
@@ -923,7 +838,7 @@ svg.alerts-toggle-icon {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
-/* ── The header overlays' tabs (mail/MailOverlay and its three siblings) ─────
+/* ── The apps' views (mail/MailView and its siblings) ────────────────────────
    The overlays wear the root console's chrome (`.root-overlay.subwindow`, its
    `.tab-bar` / `.tab-strip` / `.tab`), so only what they add is here: the
    shared backdrop, mark and label, then mail's Inbox / message / unsent-mail
@@ -1834,11 +1749,8 @@ svg.alerts-toggle-icon {
   /* A fixed-width column set commonly exceeds the overlay's width (5 seeded
      columns + the add-column tile run past ~1600px), so a right-hand column
      like Archived routinely sits off screen and the board has to SHOW that.
-     This once forced a classic native bar, because WebKitGTK's own is an
-     invisible overlay that appears only on hover. The app's thumbs replaced
-     both: `lib/theme/customScrollbar.ts` paints this scroller's horizontal thumb
-     whenever it overflows and keeps it visible, so the affordance is back
-     without a native bar to double up with. */
+     The bar the baseline in `base.css` styles does: it is drawn whenever this
+     scroller overflows and stays visible. */
 }
 /* While a card is in flight the cards stop answering `elementFromPoint`, so the
    hit-test reaches the `.todo-column` underneath — the same trick

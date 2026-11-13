@@ -13,6 +13,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { ListSkeleton } from "../components/ListSkeleton";
 import { ageLabel } from "../terminal/fileLabels";
 import { useVisiblePoll } from "../visiblePoll";
+import { listScrollKey, useRestoreListScroll } from "../listScroll";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -69,6 +70,9 @@ export function Activity({ open, onConnection }: {
   const [tabs, setTabs] = useState<ActivityTab[]>([]);
   /** Until the first answer, an empty list is "still loading", not "nothing". */
   const [loaded, setLoaded] = useState(false);
+  /** Back from a tab opened here lands where the list stood: `App` keeps the
+   * offset under Home's key, and only these rows make the page tall enough. */
+  useRestoreListScroll(listScrollKey(null), loaded);
   const [desktop, setDesktop] = useState(true);
   const [aiOff, setAiOff] = useState(false);
   const [offline, setOffline] = useState<UnavailableReason | null>(null);
@@ -89,6 +93,7 @@ export function Activity({ open, onConnection }: {
   }, [tabs]);
   const sorted = useMemo(() => sortAgentTabs(tabs, sort, (tab) => ({
     decision: tab.agent_status === "question",
+    ready: tab.agent_status === "done",
     working: tab.agent_status === "working",
     drafted: tab.id in drafts,
     workingAt: tab.working_at,
@@ -145,6 +150,7 @@ export function Activity({ open, onConnection }: {
         // sessions is the case the colour is assigned for.
         className={`card activity-card${tabColorCss(tab.color) ? " has-tab-color" : ""}${agentModeClass(tab)}`}
         key={tab.id}
+        data-steer-row={tab.id}
         disabled={!tab.available}
         style={tabColorCss(tab.color) ? { ["--tab-color" as string]: tabColorCss(tab.color) } : undefined}
         onClick={() => open(tab.project_id, tab)}

@@ -23,11 +23,13 @@ import { LockedHomeShell } from "./screens/LockedHomeShell";
 import { Home } from "./screens/Home";
 import { Project } from "./screens/Project";
 import { Terminal } from "./screens/Terminal";
+import { listScrollKey, rememberListScroll } from "./listScroll";
 import { TabbyOpen } from "./screens/TabbyOpen";
 import { Todo } from "./screens/Todo";
 import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
-import { SECTION_ICON } from "./glyphs";
+import { DiamondIcon, SECTION_ICON } from "./glyphs";
+import { useTier } from "./useTier";
 import type { SubagentStep } from "./terminal/subagents";
 import type { MarkupBack } from "./components/OutboxViewer";
 /** The bundle this phone is running, on every splash: a connect that hangs or
@@ -35,6 +37,12 @@ import type { MarkupBack } from "./components/OutboxViewer";
  * the desktop's current bundle or is booting a stale one out of the cache. */
 import { BUNDLE_VERSION as SPLASH_VERSION } from "./buildInfo";
 import { BackNest, useBackLayer } from "./backStack";
+import { markDoneSeen } from "./seenDone";
+import { SteeringBar } from "./steering/SteeringBar";
+import { SteeringConfirm } from "./steering/SteeringConfirm";
+import { getSteering, requestFind, type Place } from "./steering/steeringState";
+import { focusRow, rowById } from "./steering/steeringDom";
+import { usePhoneSteering, type SteeringBase } from "./steering/usePhoneSteering";
 import { BRAND, LEGACY_NAMES, NAMES, storageDashKey } from "../../src/lib/brand";
 
 /**
@@ -251,6 +259,11 @@ export function App() {
     if (hiddenSections.includes(tab)) setTab("projects");
   }, [hiddenSections, tab]);
   const [projectView, setProjectView] = useState<ProjectView>({ kind: "home" });
+  /** A tablet in landscape keeps Home's list on the left and the chosen
+   * project on the right (`useTier.ts`); only the Projects section does — the
+   * others, the terminal and Tabby stay full-window. The route is the same
+   * `projectView`: the list is simply not unmounted by a project being chosen. */
+  const splitProjects = useTier() === "split" && tab === "projects";
   const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** Home's Tabby FAB was tapped: the assistant scope's id while its one chat
@@ -585,15 +598,36 @@ export function App() {
     // (`onVisibility`) locked the app again seconds after it was unlocked.
   }, [reset, auth, keepUnlock]);
 
+  /** The project to the list. Beside the list (split) the project's pane is
+   * emptied and, while keyboard steering is on, the cursor goes to the row of
+   * the project just left — the pane it stood in is gone. */
+  const leftProject = useRef<string | null>(null);
+  const leaveProject = () => {
+    if (splitProjects && projectView.kind === "project" && getSteering().active) leftProject.current = projectView.id;
+    setProjectView({ kind: "home" });
+  };
+  useEffect(() => {
+    const id = leftProject.current;
+    if (id === null || projectView.kind !== "home") return;
+    leftProject.current = null;
+    const row = rowById(id, document.querySelector("[data-steer-pane='list']") ?? document);
+    if (row) focusRow(row);
+  }, [projectView]);
   // Back: a tab returns to where it was opened from, another section to
-  // Projects, a project to the list. At the list Back leaves the app.
+  // Projects, a project to the list (in split too, where it empties the
+  // project's pane). At the list Back leaves the app.
   useBackLayer(() => {
     if (terminal) setTerminal(null);
     else if (tabby) setTabby(null);
     else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
-    else setProjectView({ kind: "home" });
+    else leaveProject();
   }, auth === "paired" && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
-  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
+  const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => {
+    // Only from a list on screen: a switch between tabs inside a terminal (or a
+    // Tabby chat opening one) has the terminal's offset, not the list's.
+    if (!terminal && !tabby && tab === "projects") rememberListScroll(listScrollKey(projectView.kind === "project" ? projectView.id : null));
+    setTerminal({ project, tab: next, pickModel, signIn, subagent, markupBack });
+  };
   // A card named by an alert opens on the To-do tab; switching tabs by hand
   // clears it, so returning to the board later does not re-open the editor a
   // reader already closed.
@@ -612,6 +646,52 @@ export function App() {
     }
     setTab(next);
   };
+  // Keyboard steering (a Bluetooth keyboard on the phone). Called here, before
+  // the early returns below, so its window listeners outlive every screen; it
+  // reads this state through a ref and acts only once the reader presses the
+  // chord. Nothing here changes what a touch does.
+  const steeringBase: SteeringBase = terminal ? "inside" : tabby || tab !== "projects" ? "section" : projectView.kind === "project" ? "tabs" : "projects";
+  const steeringPlace: Place = terminal
+    ? { kind: "terminal", project: terminal.project, tab: terminal.tab }
+    : { kind: "list", section: tab, projectId: tab === "projects" && projectView.kind === "project" ? projectView.id : null };
+  usePhoneSteering({
+    enabled: auth === "paired",
+    base: steeringBase,
+    sectionLabel: steeringBase !== "section" ? null : tabby ? "assistant.title" : TABS.find((entry) => entry.id === tab)?.label ?? null,
+    place: steeringPlace,
+    openTab: (projectId, row) => {
+      // As a tap on a Needs you row: a finished tab opened here is seen.
+      if (row.agent_status === "done") markDoneSeen(row.id, row.done_at);
+      openTerminal(projectId, row);
+    },
+    openSection: (next) => {
+      if (hiddenSections.includes(next)) return;
+      // Already there: the tab bar would reseed the section, a key should not.
+      if (next === tab && !terminal && !tabby) return;
+      setTerminal(null);
+      setTabby(null);
+      openSection(next);
+    },
+    restore: (place) => {
+      setTabby(null);
+      if (place.kind === "terminal") {
+        setTerminal({ project: place.project, tab: place.tab });
+        return;
+      }
+      setTerminal(null);
+      setTodoCard(undefined);
+      setTab(place.section);
+      if (place.section === "projects") setProjectView(place.projectId ? { kind: "project", id: place.projectId } : { kind: "home" });
+    },
+    findProject: () => {
+      requestFind();
+      setTerminal(null);
+      setTabby(null);
+      setTodoCard(undefined);
+      setTab("projects");
+      setProjectView({ kind: "home" });
+    },
+  });
   // A failed sign-in after an unlock is retried as a sign-in while the unlock
   // holds: sending the reader back through the fingerprint for a network
   // hiccup made every failure cost two unlocks. A blocked key store never got
@@ -649,7 +729,7 @@ export function App() {
   // and the tab bar would sit on the keyboard toolbar besides.
   // Each screen nests its sheets above the App's own step back
   // (`backStack.ts`): one opening on arrival registers before the App does.
-  if (terminal) return <BackNest><Terminal
+  if (terminal) return <><BackNest><Terminal
     key={terminal.tab.id}
     tab={terminal.tab}
     project={terminal.project}
@@ -657,34 +737,55 @@ export function App() {
     subagent={terminal.subagent}
     signInTab={terminal.signIn}
     markupBack={terminal.markupBack}
-    openTab={(next, opts) => openTerminal(terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
+    openTab={(next, opts) => openTerminal(opts?.project ?? terminal.project, next, false, opts?.signIn, undefined, opts?.markupBack)}
+    // Spoken navigation to a project with no agent tab: its screen, from here.
+    openProject={(id) => { setTerminal(null); setTab("projects"); setProjectView({ kind: "project", id }); }}
     back={() => setTerminal(null)}
-  /></BackNest>;
-  if (tabby) return <BackNest><TabbyOpen
+  /></BackNest><SteeringBar /></>;
+  if (tabby) return <><BackNest><TabbyOpen
     key={tabby}
     id={tabby}
     ready={(row) => { setTabby(null); openTerminal(tabby, row); }}
     back={() => setTabby(null)}
-  /></BackNest>;
-  return <div className="tabbed"><BackNest>
+  /></BackNest><SteeringBar /></>;
+  const home = <Home
+    key="home"
+    selectedId={splitProjects && projectView.kind === "project" ? projectView.id : undefined}
+    open={(id) => setProjectView({ kind: "project", id })}
+    // Straight into the session, leaving the Projects tab on its
+    // list: the agents mode is a triage list, and its loop is
+    // list → tab → back to the list, not a detour through the
+    // project the tab happens to live in.
+    openTab={(projectId, row) => openTerminal(projectId, row)}
+    tabby={setTabby}
+    todo={openTodo}
+    mail={() => setTab("mail")}
+  />;
+  const project = projectView.kind === "project"
+    ? <Project key={`project:${projectView.id}`} id={projectView.id} back={leaveProject} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
+    : null;
+  return <div className={splitProjects ? "tabbed split" : "tabbed"}><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />
       : tab === "mail" ? <Mail key={reseed} />
         : tab === "calendar" ? <Calendar key={reseed} />
-          : projectView.kind === "project"
-            ? <Project id={projectView.id} back={() => setProjectView({ kind: "home" })} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
-            : <Home
-              open={(id) => setProjectView({ kind: "project", id })}
-              // Straight into the session, leaving the Projects tab on its
-              // list: the agents mode is a triage list, and its loop is
-              // list → tab → back to the list, not a detour through the
-              // project the tab happens to live in.
-              openTab={(projectId, row) => openTerminal(projectId, row)}
-              tabby={setTabby}
-              todo={openTodo}
-              mail={() => setTab("mail")}
-            />}
+          // One parent and one key per screen in every tier, so a turn of the
+          // iPad (or a Split View resize) changes which of them are drawn and
+          // never remounts the one that stays: Home is drawn beside a project in
+          // split and instead of it elsewhere; a chosen project is the same
+          // element in all of them.
+          : <>
+            {splitProjects || project === null ? home : null}
+            {project ?? (splitProjects ? <div key="empty" className="home-empty split-empty" data-steer-pane="detail">
+              <span className="home-empty-glyph" aria-hidden="true"><DiamondIcon size="1em" /></span>
+              <strong>{t("mobile.split.emptyTitle")}</strong>
+              <p>{t("mobile.split.emptyHint")}</p>
+            </div> : null)}
+          </>}
+    {/* Inside the same nest as the screen, so its back layer wins over the screen's. */}
+    <SteeringConfirm />
     </BackNest>
     <TabBar active={tab} open={openSection} hidden={hiddenSections} />
+    <SteeringBar />
     {secretsUntrusted && <SecretsRepinSheet onClose={() => setSecretsUntrusted(false)} />}
     {!secretsUntrusted && secretsNewCode && <SecretsNewCodeSheet onClose={() => setSecretsNewCode(false)} />}
   </div>;

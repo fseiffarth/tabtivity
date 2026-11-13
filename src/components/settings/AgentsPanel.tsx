@@ -5,9 +5,7 @@ import { SettingsCard, SettingsHeader, SettingsList } from "../layout/settingsUi
 import { UntestedTag } from "../common/UntestedTag";
 import { Dropdown } from "../common/Dropdown";
 import { useSettingsStore } from "../../stores/settings";
-import { AgentScheduleMcpSettings } from "../agents/AgentScheduleMcpSettings";
-import { GitPushMcpSettings } from "../agents/GitPushMcp";
-import { MarkupMcpSettings } from "../agents/MarkupMcpSettings";
+import { AppToolsSettings } from "../agents/AppToolsSettings";
 import { cliInstallsByAdmin } from "../../lib/transport/linkState";
 import { runInstallInTab } from "../../lib/installCommand";
 import type { CustomAgent } from "../../types";
@@ -51,6 +49,7 @@ import {
 } from "./agentNotices";
 import type { AgentLogin } from "./AgentLoginsRows";
 import { CodexAutoReviewToggle, AgentAccounts } from "./AgentAccounts";
+import { ClaudeTokenRow } from "./ClaudeTokenRow";
 import { AgentFenceCard } from "./AgentFenceCard";
 import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
@@ -657,6 +656,13 @@ export function AgentsPanel({
           <AgentDefaults agent={a} />
         </AgentsFold>
       )}
+      {/* The token also lives in Accounts & keys; here it is where someone
+          looking for Claude's own sign-in looks first. */}
+      {a.id === "claude" && a.installed && (
+        <AgentsFold label={<>{t("settings.claudeToken")} <UntestedTag id="agents.claudeTokenCard" /></>}>
+          <ClaudeTokenRow heading={false} />
+        </AgentsFold>
+      )}
       {a.installed && installedExtras && (
         <div className="agents-card-use">
           <span className="agents-card-use-label">
@@ -921,6 +927,14 @@ export function AgentsPanel({
       <SettingsHeader title={t("nav.agents.title")} onBack={onBack} onClose={onClose} />
       <div className="dialog-scroll">
       <p className="settings-help agents-lead">{t("agents.lead")}</p>
+      <label className="settings-help"><input type="checkbox" checked={settings?.daily_release_check !== false}
+        onChange={(event) => void useSettingsStore.getState().updateSettings({ daily_release_check: event.target.checked })} />
+        {t("agents.dailyReleaseCheck")} <UntestedTag id="agents.dailyReleaseCheck" />
+      </label>
+      <label className="settings-help"><input type="checkbox" checked={settings?.agent_tab_auto_name !== false}
+        onChange={(event) => void useSettingsStore.getState().updateSettings({ agent_tab_auto_name: event.target.checked })} />
+        {t("agents.autoTabName")} <UntestedTag id="agents.autoTabName" />
+      </label>
       {node.status && !node.status.npm && (
         <NodeRuntimeNotice status={node.status} onRecheck={node.recheck} />
       )}
@@ -995,19 +1009,7 @@ export function AgentsPanel({
         >
           <AgentCronSection agents={agents} />
         </AgentsGroup>
-        <AgentsGroup title={t("agents.groupTools")} summary={t("agents.sumTools")}>
-          <div className="agents-stack">
-            <div className="agents-option">
-              <AgentScheduleMcpSettings />
-            </div>
-            <div className="agents-option">
-              <GitPushMcpSettings />
-            </div>
-            <div className="agents-option">
-              <MarkupMcpSettings />
-            </div>
-          </div>
-        </AgentsGroup>
+        <AppToolsSettings />
         <AgentsGroup
           title={<>{t("agents.composerHeading")} <UntestedTag id="settingsSubPanels.2" /></>}
           summary={t("agents.sumComposer")}

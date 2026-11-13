@@ -18,8 +18,12 @@
 import { IS_MAC, PLATFORM } from "../platform";
 import type { UntestedId } from "../untested";
 import { desktopOwnsSuperKey } from "./superKey";
+import { eventKey, isLoneModifier, normalizeKey } from "./keyNames";
+export { eventKey, isLoneModifier, isTabKey, normalizeKey } from "./keyNames";
 import { zoomChord, type ZoomChord } from "./zoomChord";
+import { POPOUT_MAIN_ONLY } from "./steeringPopout";
 import type { TranslationKey } from "../i18n";
+import type { ReaderViewId } from "../agents/readerSteering";
 import {
   steeringRowKeys,
   steeringSlotKeys,
@@ -36,7 +40,18 @@ export interface ChordDescriptor {
   shift?: boolean;
   alt?: boolean;
   meta?: boolean;
+  /** AltGr (the right Alt key), matched by `getModifierState("AltGraph")`.
+   *  Its own flag because the OS reports it differently: Linux as neither
+   *  Ctrl nor Alt, Windows as Ctrl+Alt — so an AltGr chord ignores both. */
+  altGr?: boolean;
 }
+
+/** The project cycle's arrow chords: the default on macOS (no AltGr), an
+ *  alias beside AltGr+Tab elsewhere. */
+const PROJECT_CYCLE_ARROWS = {
+  next: { key: "ArrowRight", alt: true, shift: true },
+  back: { key: "ArrowLeft", alt: true, shift: true },
+} satisfies Record<string, ChordDescriptor>;
 
 /** Stable ids for each rebindable navigation action. */
 export type ShortcutAction =
@@ -44,6 +59,8 @@ export type ShortcutAction =
   | "cycleProject"
   | "prevTab"
   | "nextTab"
+  | "prevProjectTab"
+  | "nextProjectTab"
   | "subwindowUp"
   | "subwindowDown"
   | "cycleTabs"
@@ -154,11 +171,32 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     group: "tabs",
     default: { key: "Enter", ctrl: true },
   },
+  // AltGr+Tab (right Alt): the left Alt+Tab is the desktop's window switcher,
+  // and Ctrl+Tab / Ctrl+Shift+Tab are the project's own tab cycle (the
+  // browser's chords). Alt+Shift+→ stays beside it (`actionChords`) for
+  // keyboards without AltGr; macOS has none, so it is the default there.
   {
     action: "cycleProject",
     labelKey: "shortcut.cycleProject",
     group: "navigation",
+    default: IS_MAC ? PROJECT_CYCLE_ARROWS.next : { key: "Tab", altGr: true },
+    untested: "shortcut.projectCycleAltGr",
+  },
+  // Every tab of the project, across its subwindows (`stepOrderedTab`). Handed
+  // over by a focused pane terminal like prevTab/nextTab (`terminalTabChord`).
+  {
+    action: "nextProjectTab",
+    labelKey: "shortcut.nextProjectTab",
+    group: "tabs",
+    default: { key: "Tab", ctrl: true },
+    untested: "shortcut.projectTabCycle",
+  },
+  {
+    action: "prevProjectTab",
+    labelKey: "shortcut.prevProjectTab",
+    group: "tabs",
     default: { key: "Tab", ctrl: true, shift: true },
+    untested: "shortcut.projectTabCycle",
   },
   // Ctrl+Shift, not plain Shift: a plain Shift+Arrow is an agent CLI's own
   // chord (Codex uses it for in-terminal selection/navigation), and a pane
@@ -247,13 +285,13 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     default: { key: " ", shift: true },
     untested: "shortcut.steeringMode",
   },
-  // Backward twin of cycleProject. Alt (not Ctrl) distinguishes it from
-  // prevTab's Ctrl+Shift+← default.
+  // Backward twin of cycleProject; its arrow alias is Alt (not Ctrl) to stay
+  // clear of prevTab's Ctrl+Shift+← default.
   {
     action: "cycleProjectBack",
     labelKey: "shortcut.cycleProjectBack",
     group: "navigation",
-    default: { key: "ArrowLeft", alt: true, shift: true },
+    default: IS_MAC ? PROJECT_CYCLE_ARROWS.back : { key: "Tab", altGr: true, shift: true },
     untested: "shortcut.cycleProjectBack",
   },
   // The boxes' twin of the project cycle: walk the box pills in the leading
@@ -265,14 +303,14 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
     labelKey: "shortcut.cycleBox",
     group: "navigation",
     default: { key: "PageDown", ctrl: true, shift: true },
-    untested: "shortcut.cycleBox",
+    untested: "boxCycle.returnStop",
   },
   {
     action: "cycleBoxBack",
     labelKey: "shortcut.cycleBoxBack",
     group: "navigation",
     default: { key: "PageUp", ctrl: true, shift: true },
-    untested: "shortcut.cycleBoxBack",
+    untested: "boxCycle.returnStop",
   },
   {
     action: "shortcutHelp",
@@ -520,30 +558,6 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   },
 ];
 
-/** Lone modifier keys that must be ignored while capturing a chord. */
-const MODIFIER_KEYS = new Set([
-  "Control",
-  "Shift",
-  "Alt",
-  "Meta",
-  "Super",
-  "OS",
-  "AltGraph",
-  "CapsLock",
-]);
-
-/** Normalize a `KeyboardEvent.key` for storage/comparison: single printable
- *  letters become lower-case so "W" and "w" match; everything else is kept. */
-export function normalizeKey(key: string): string {
-  return key.length === 1 ? key.toLowerCase() : key;
-}
-
-/** True when the keystroke is only a modifier (Ctrl/Shift/Alt/Meta) — these
- *  must not be captured as a chord on their own. */
-export function isLoneModifier(key: string): boolean {
-  return MODIFIER_KEYS.has(key);
-}
-
 /**
  * Build a `ChordDescriptor` from a real `KeyboardEvent`. Returns `null` for a
  * lone-modifier keypress (caller should keep waiting for a real key). Used by
@@ -551,7 +565,14 @@ export function isLoneModifier(key: string): boolean {
  */
 export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
   if (isLoneModifier(e.key)) return null;
-  const chord: ChordDescriptor = { key: normalizeKey(e.key) };
+  const chord: ChordDescriptor = { key: normalizeKey(eventKey(e)) };
+  // AltGr: Windows adds Ctrl+Alt to it, which `chordMatches` ignores for an
+  // AltGr chord — so they are not stored either.
+  if (e.getModifierState?.("AltGraph")) {
+    chord.altGr = true;
+    if (e.shiftKey) chord.shift = true;
+    return chord;
+  }
   if (e.ctrlKey) chord.ctrl = true;
   if (e.shiftKey) chord.shift = true;
   if (e.altKey) chord.alt = true;
@@ -575,8 +596,10 @@ export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
  */
 export function chordMatches(chord: ChordDescriptor, e: ChordKeyEvent): boolean {
   if (!chord.key || chord.key === LONE_SUPER.key) return false;
-  if (normalizeKey(e.key) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e)) return false;
+  if (normalizeKey(eventKey(e)) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e)) return false;
   if (e.shiftKey !== !!chord.shift) return false;
+  // AltGr chords: only Shift besides AltGr counts (see `ChordDescriptor.altGr`).
+  if (chord.altGr) return !!e.getModifierState?.("AltGraph");
   if (e.altKey !== !!chord.alt) return false;
   if (IS_MAC) {
     const wantsPrimary = !!chord.ctrl || !!chord.meta;
@@ -594,7 +617,8 @@ function isDigitKeyOf(key: string, e: ChordKeyEvent): boolean {
 }
 
 /** The fields a chord match reads — a DOM event or a React one both fit. */
-export type ChordKeyEvent = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
+export type ChordKeyEvent = Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> &
+  Partial<Pick<KeyboardEvent, "getModifierState">>;
 
 /** A chord the user switched off: its empty key matches nothing. Stored as a
  *  chord (not `null`) so the backend's typed map still reads it. */
@@ -620,6 +644,7 @@ export function chordLabel(chord: ChordDescriptor): string {
   if (isUnbound(chord)) return "—";
   if (IS_MAC) {
     const parts: string[] = [];
+    if (chord.altGr) parts.push("AltGr+");
     if (chord.alt) parts.push("⌥"); // Option
     if (chord.shift) parts.push("⇧"); // Shift
     if (chord.ctrl || chord.meta) parts.push("⌘"); // primary modifier / Super
@@ -628,6 +653,7 @@ export function chordLabel(chord: ChordDescriptor): string {
   }
   const parts: string[] = [];
   if (chord.ctrl) parts.push("Ctrl");
+  if (chord.altGr) parts.push("AltGr");
   if (chord.shift) parts.push("Shift");
   if (chord.alt) parts.push("Alt");
   if (chord.meta) parts.push("Super");
@@ -653,6 +679,15 @@ function prettyKey(key: string): string {
  *  go through `useChordHint` instead, so a rebinding shows up there. */
 export function modifierLabel(): string {
   return IS_MAC ? "⌘" : "Ctrl";
+}
+
+/** The default project-cycle chords as prose names them ({cycle} /
+ *  {cycleBack}): AltGr+Tab off macOS, the Alt+Shift arrows on it. */
+export function projectCycleLabels(): { cycle: string; cycleBack: string } {
+  return {
+    cycle: chordLabel(resolveChord("cycleProject", undefined)),
+    cycleBack: chordLabel(resolveChord("cycleProjectBack", undefined)),
+  };
 }
 
 /** The stored shortcut map (action id → chord). Partial: any unset action
@@ -687,6 +722,8 @@ export function actionChords(
   if (action === "togglePanels" && isLoneSuper(chord)) return [chord, { key: "F9" }];
   if (action === "toggleSidePanel" && !IS_MAC) return [chord, { key: "1", alt: true }];
   if (action === "editorRedo") return [chord, { key: "z", ctrl: true, shift: true }];
+  if (action === "cycleProject" && chord.altGr) return [chord, PROJECT_CYCLE_ARROWS.next];
+  if (action === "cycleProjectBack" && chord.altGr) return [chord, PROJECT_CYCLE_ARROWS.back];
   return [chord];
 }
 
@@ -708,7 +745,8 @@ export function chordsEqual(a: ChordDescriptor, b: ChordDescriptor): boolean {
     !!a.ctrl === !!b.ctrl &&
     !!a.shift === !!b.shift &&
     !!a.alt === !!b.alt &&
-    !!a.meta === !!b.meta
+    !!a.meta === !!b.meta &&
+    !!a.altGr === !!b.altGr
   );
 }
 
@@ -800,57 +838,92 @@ export const STEERING_CONTEXTS: { id: SteeringContext; labelKey: TranslationKey 
  * When a key is listed beyond its levels:
  *   stepsPanes — the panes level with two or more subwindows (←/→ walk them)
  *   stepsTabs  — the tabs level, or the panes level with one subwindow, where
- *                ←/→ step its tabs instead
+ *                ←/→ step its tabs instead (Tab steps them on both levels)
  *   tabsMultiPane — the tabs level with two or more subwindows (Shift+←/→
  *                walk them, ↑ goes to them)
  *   upToProjects — where ↑ climbs to the projects: the panes level, or the
  *                tabs level with one subwindow
- *   sideRegion — the region cursor is in the side panel (←/→ switch its view,
- *                and its opening key leaves it as Back does)
+ *   sideRegion — the region cursor is in the side panel (←/→ along a row or
+ *                folder, 1–9 switch its view, and its opening key leaves it as
+ *                Back does)
  *   settingsRegion — the region cursor is in the settings dialog (←/→ step
  *                its pages)
  *   headerRegion — the region cursor is on the top bar (←/→ walk it, ↓ drops
  *                a button's menu)
+ *   chromeRegion — the region cursor is on the root window's bar (the same
+ *                keys; ↑ goes on up to the projects)
+ *   upToChrome — where ↑ climbs to the root window's bar: the panes level, or
+ *                the tabs level with one subwindow, while the Root view is up
  *   overlayRegion — the region cursor is in a dialog or menu on top (←/→
  *                along a row)
  *   walkRegion — a region whose ↑/↓ walk the cursor (all but the top bar)
  *   tabCard    — a card floats over the active tab's terminal (Undo clear, a
  *                sign-in link, an update notice)
+ *   subagents  — the active agent tab's Chat lists subagents, or shows one
  *   mail / calendar / todo — that header app is switched on
- *   agentClear / agentPlan / agentGoal — the active tab is an agent that takes
- *                /clear, /plan, /goal (`steeringAgent.steeringAgentOffer`)
  *   agentPrompt — the active tab is an agent (the prompt box sends to it)
+ *   queue      — the active agent tab's Chat shows prompts still queued
  *   intoTerminal — where ←/→ step tabs, and the active tab is a terminal
  *                ↓ can scroll (the scroll level)
  *   intoDocument — the same for a tab whose document scrolls
  *   inTerminal / inDocument — the scroll level is in a terminal / a document
+ *                (inTerminal is also the Chat view; a shown Diffs / Files view
+ *                is neither)
+ *   readerViews — the active tab has a Reader view strip (the cycle key acts)
+ *   inChanges / inFiles — the scroll level is in the Reader's Diffs / Files
+ *   intoReader — where ←/→ step tabs, and the tab's Reader shows Diffs / Files
+ *                (↓ goes inside that view)
  *   popouts    — the active scope has a subwindow popped out into its own
  *                window (J raises it)
+ *   question / noQuestion — the active tab asks (a dialog on its screen, or
+ *                its turn waits on a decision): the digits answer it
+ *                (`steeringAnswer`) instead of opening agent N
+ *   jumpBack   — a status jump left a tab Back can return to
+ *   upToTitleBar — where ↑ climbs to a popout's title bar: the panes level, or
+ *                the tabs level with one subwindow, in a popout window
+ *   titleBarRegion — the region cursor is on a popout's title bar (←/→ walk
+ *                it, ↓ back down to its tabs; ↑ stops there)
+ *   inPopout   — steering runs in a popout window (the Main window key)
+ * In a popout `chromeRegion` is false: its chrome is the title bar.
  */
 export type SteeringCondition =
   | "stepsPanes"
   | "stepsTabs"
   | "tabsMultiPane"
   | "upToProjects"
+  | "upToChrome"
+  | "upToTitleBar"
+  | "titleBarRegion"
+  | "inPopout"
   | "sideRegion"
   | "settingsRegion"
   | "headerRegion"
+  | "chromeRegion"
   | "overlayRegion"
   | "steeringConfirm"
+  | "cockpitRegion"
+  | "cockpitRoster"
+  | "notCockpitRoster"
   | "walkRegion"
   | "tabCard"
+  | "subagents"
   | "mail"
   | "calendar"
   | "todo"
-  | "agentClear"
-  | "agentPlan"
-  | "agentGoal"
   | "agentPrompt"
+  | "queue"
   | "intoTerminal"
   | "intoDocument"
   | "inTerminal"
   | "inDocument"
-  | "popouts";
+  | "readerViews"
+  | "inChanges"
+  | "inFiles"
+  | "intoReader"
+  | "popouts"
+  | "question"
+  | "noQuestion"
+  | "jumpBack";
 
 /** One row of the steering legend / cheat sheet: the steering actions it
  *  explains (their keys render through `steeringRowLabel`, so a rebind shows
@@ -879,8 +952,9 @@ export interface SteeringKeyDef {
   group: SteeringGroup;
 }
 
-/** What a steering key is for — the legend's boxes. */
-export type SteeringGroup = "move" | "new" | "act" | "agent" | "status" | "open" | "mode";
+/** What a steering key is for — the legend's boxes. `main`: in a popout, the
+ *  keys whose target is only in the main window (they hand over, `steeringPopout`). */
+export type SteeringGroup = "move" | "new" | "act" | "agent" | "status" | "open" | "mode" | "main";
 
 /**
  * The legend's boxes, in display order. Each wears one of the code viewer's
@@ -895,6 +969,7 @@ export const STEERING_GROUPS: { id: SteeringGroup; labelKey: TranslationKey; tok
   { id: "status", labelKey: "steering.group.status", tok: "tok-num" },
   { id: "open", labelKey: "steering.group.open", tok: "tok-tag" },
   { id: "mode", labelKey: "steering.group.mode", tok: "tok-comment" },
+  { id: "main", labelKey: "steeringKeys.section.mainWindow", tok: "tok-tag" },
 ];
 
 /** What the legend knows about the moment, for `steeringKeysFor`. */
@@ -905,24 +980,50 @@ export interface SteeringLegendState {
   settingsRegion?: boolean;
   /** The region cursor is on the top bar. */
   headerRegion?: boolean;
+  /** The region cursor is on the root window's bar (Root view). */
+  chromeRegion?: boolean;
+  /** The Root view is up: steering's tab levels are Root's, and ↑ from them
+   *  climbs to the window's bar. */
+  inRoot?: boolean;
   /** The region cursor is in the dialog or menu on top. */
   overlayRegion?: boolean;
+  cockpitRegion?: boolean;
+  cockpitRoster?: boolean;
   /** That dialog is steering's own "are you sure" (W, K). */
   steeringConfirm?: boolean;
   /** A card floats over the active tab's terminal. */
   tabCard?: boolean;
+  /** The active agent tab's Chat lists subagents, or shows one. */
+  subagents?: boolean;
+  /** The active agent tab's Chat shows queued prompts (Send now / Cancel and edit). */
+  queue?: boolean;
   multiPane: boolean;
   apps: { mail: boolean; calendar: boolean; todo: boolean };
   /** The active tab is a live terminal (↓ scrolls it). */
   terminal?: boolean;
   /** The active tab shows a document that scrolls (↓ scrolls it). */
   document?: boolean;
+  /** The active tab draws a Reader view strip: the view it shows now. */
+  reader?: { view: ReaderViewId };
   /** The active scope has popped-out subwindows. */
   popouts?: boolean;
+  /** The active tab asks: the digits answer it. */
+  question?: boolean;
+  /** Back has a tab to return to. */
+  jumpBack?: boolean;
   /** The agent keys the active tab takes; unset = none. */
   agent?: { clear: boolean; plan: boolean; goal: boolean; prompt: boolean };
   /** How many tabs, in every scope, need an answer / work / finished unseen. */
   statusCounts: { decision: number; working: number; done: number };
+  /** Steering runs in a popout window: no projects level, ↑ climbs to its
+   *  title bar, and the main window's keys are listed as the `main` group. */
+  popout?: boolean;
+}
+
+/** The tab's Reader shows Diffs or Files, which answer the scroll level
+ *  themselves; the xterm underneath stays registered. */
+function readerPanelShown(s: SteeringLegendState): boolean {
+  return s.reader?.view === "changes" || s.reader?.view === "files";
 }
 
 function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState): boolean {
@@ -934,51 +1035,81 @@ function steeringConditionHolds(cond: SteeringCondition, s: SteeringLegendState)
     case "tabsMultiPane":
       return s.level === "tabs" && s.multiPane;
     case "upToProjects":
-      return s.level === "panes" || (s.level === "tabs" && !s.multiPane);
+      return !s.inRoot && !s.popout && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
+    case "upToChrome":
+      return !!s.inRoot && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
+    case "upToTitleBar":
+      return !!s.popout && (s.level === "panes" || (s.level === "tabs" && !s.multiPane));
+    case "titleBarRegion":
+      return !!s.popout && !!s.chromeRegion;
+    case "inPopout":
+      return !!s.popout;
     case "sideRegion":
       return s.sideRegion;
     case "settingsRegion":
       return !!s.settingsRegion;
     case "headerRegion":
       return !!s.headerRegion;
+    case "chromeRegion":
+      return !!s.chromeRegion && !s.popout;
     case "overlayRegion":
       return !!s.overlayRegion;
     case "steeringConfirm":
       return !!s.overlayRegion && !!s.steeringConfirm;
+    case "cockpitRegion": return !!s.cockpitRegion;
+    case "cockpitRoster": return !!s.cockpitRoster;
+    case "notCockpitRoster": return !s.cockpitRoster;
     case "walkRegion":
-      return !s.headerRegion;
+      return !s.headerRegion && !s.chromeRegion;
     case "tabCard":
       return !!s.tabCard;
-    case "agentClear":
-      return !!s.agent?.clear;
-    case "agentPlan":
-      return !!s.agent?.plan;
-    case "agentGoal":
-      return !!s.agent?.goal;
+    case "subagents":
+      return !!s.subagents;
     case "agentPrompt":
       return !!s.agent?.prompt;
+    case "queue":
+      return !!s.queue;
     case "intoTerminal":
-      return !!s.terminal && steeringConditionHolds("stepsTabs", s);
+      return !!s.terminal && !readerPanelShown(s) && steeringConditionHolds("stepsTabs", s);
+    case "intoReader":
+      return !!s.terminal && readerPanelShown(s) && steeringConditionHolds("stepsTabs", s);
     case "intoDocument":
       return !s.terminal && !!s.document && steeringConditionHolds("stepsTabs", s);
     case "inTerminal":
-      return !!s.terminal;
+      return !!s.terminal && !readerPanelShown(s);
+    case "readerViews":
+      return !!s.reader;
+    case "inChanges":
+      return s.reader?.view === "changes";
+    case "inFiles":
+      return s.reader?.view === "files";
     case "inDocument":
       return !s.terminal;
     case "popouts":
       return !!s.popouts;
+    case "question":
+      return !!s.question;
+    case "noQuestion":
+      return !s.question;
+    case "jumpBack":
+      return !!s.jumpBack;
     default:
-      return s.apps[cond];
+      return !!s.apps[cond];
   }
 }
 
-/** The keys that act right now — the legend's rows, in table order. */
+/** The keys that act right now — the legend's rows, in table order. In a
+ *  popout the main window's keys move to their own `main` group. */
 export function steeringKeysFor(s: SteeringLegendState): SteeringKeyDef[] {
-  return STEERING_KEYS.filter(
+  const rows = STEERING_KEYS.filter(
     (k) =>
       k.levels.includes(s.level) &&
       (!k.when || steeringConditionHolds(k.when, s)) &&
       (!k.status || s.statusCounts[k.status] > 0),
+  );
+  if (!s.popout) return rows;
+  return rows.map((k) =>
+    k.actions.length === 1 && POPOUT_MAIN_ONLY.has(k.actions[0]) ? { ...k, group: "main" as const } : k,
   );
 }
 
@@ -1025,24 +1156,33 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["newProject"], labelKey: "steering.newProject.label", descKey: "steering.newProject.desc", levels: ["projects"], group: "new" },
   // Subwindows and their tabs.
   { actions: ["left", "right"], pair: true, labelKey: "steering.focus.label", descKey: "steering.focus.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
+  { actions: ["nextTab"], labelKey: "steering.tabKey.label", descKey: "steering.tabKey.desc", levels: PANE_LEVELS, group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.tabs.label", descKey: "steering.tabs.desc", levels: PANE_LEVELS, when: "stepsTabs", group: "move" },
   { actions: ["left", "right"], pair: true, shift: true, labelKey: "steering.focusShift.label", descKey: "steering.focusShift.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTabs.label", descKey: "steering.intoTabs.desc", levels: ["panes"], when: "stepsPanes", group: "move" },
   { actions: ["down"], labelKey: "steering.intoTerminal.label", descKey: "steering.intoTerminal.desc", levels: PANE_LEVELS, when: "intoTerminal", group: "move" },
   { actions: ["down"], labelKey: "steering.intoDocument.label", descKey: "steering.intoDocument.desc", levels: PANE_LEVELS, when: "intoDocument", group: "move" },
+  { actions: ["down"], labelKey: "steering.intoReader.label", descKey: "steering.intoReader.desc", levels: PANE_LEVELS, when: "intoReader", group: "move" },
   { actions: ["up"], labelKey: "steering.upPanes.label", descKey: "steering.upPanes.desc", levels: ["tabs"], when: "tabsMultiPane", group: "move" },
   { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: PANE_LEVELS, when: "upToProjects", group: "move" },
+  { actions: ["up"], labelKey: "steering.upChrome.label", descKey: "steering.upChrome.desc", levels: PANE_LEVELS, when: "upToChrome", group: "move" },
+  { actions: ["up"], labelKey: "steering.upTitleBar.label", descKey: "steering.upTitleBar.desc", levels: PANE_LEVELS, when: "upToTitleBar", group: "move" },
   { actions: ["newShell"], labelKey: "steering.newShell.label", descKey: "steering.newShell.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["newMonitor"], labelKey: "steering.newMonitor.label", descKey: "steering.newMonitor.desc", levels: PANE_LEVELS, group: "new" },
-  { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, agentSlots: true, group: "new" },
+  { actions: [], slots: true, labelKey: "steering.newAgent.label", descKey: "steering.newAgent.desc", levels: PANE_LEVELS, when: "noQuestion", agentSlots: true, group: "new" },
   { actions: ["newTabMenu"], labelKey: "steering.newTabMenu.label", descKey: "steering.newTabMenu.desc", levels: PANE_LEVELS, group: "new" },
   { actions: ["files"], labelKey: "steering.files.label", descKey: "steering.files.desc", levels: PANE_LEVELS, group: "act" },
+  // The Reader's view cycle: plain Tab on, Shift+Tab back (the one binding, read
+  // with Shift in `useKeyboard`), each with its own legend row.
+  { actions: ["readerView"], labelKey: "steering.readerView.label", descKey: "steering.readerView.desc", levels: [...PANE_LEVELS, "scroll"], when: "readerViews", group: "act" },
+  { actions: ["readerView"], shift: true, labelKey: "steering.readerViewBack.label", descKey: "steering.readerViewBack.desc", levels: [...PANE_LEVELS, "scroll"], when: "readerViews", group: "act" },
   { actions: ["closeTab"], labelKey: "steering.closeTab.label", descKey: "steering.closeTab.desc", levels: PANE_LEVELS, group: "act" },
   { actions: ["tabCard"], labelKey: "steering.tabCard.label", descKey: "steering.tabCard.desc", levels: PANE_LEVELS, when: "tabCard", group: "act" },
-  { actions: ["agentClear"], labelKey: "steering.agentClear.label", descKey: "steering.agentClear.desc", levels: PANE_LEVELS, when: "agentClear", group: "agent" },
-  { actions: ["agentPlan"], labelKey: "steering.agentPlan.label", descKey: "steering.agentPlan.desc", levels: PANE_LEVELS, when: "agentPlan", group: "agent" },
-  { actions: ["agentGoal"], labelKey: "steering.agentGoal.label", descKey: "steering.agentGoal.desc", levels: PANE_LEVELS, when: "agentGoal", group: "agent" },
+  { actions: ["subagents"], labelKey: "steering.subagents.label", descKey: "steering.subagents.desc", levels: PANE_LEVELS, when: "subagents", group: "agent" },
+  { actions: [], slots: true, labelKey: "steering.answer.label", descKey: "steering.answer.desc", levels: [...PANE_LEVELS, "scroll"], when: "question", group: "agent" },
   { actions: ["agentPrompt"], labelKey: "steering.agentPrompt.label", descKey: "steering.agentPrompt.desc", levels: [...PANE_LEVELS, "scroll"], when: "agentPrompt", group: "agent" },
+  { actions: ["queueSend"], labelKey: "steering.queueSend.label", descKey: "steering.queueSend.desc", levels: [...PANE_LEVELS, "scroll"], when: "queue", group: "agent" },
+  { actions: ["queuePull"], labelKey: "steering.queuePull.label", descKey: "steering.queuePull.desc", levels: [...PANE_LEVELS, "scroll"], when: "queue", group: "agent" },
   { actions: ["exit", "work"], labelKey: "steering.work.label", descKey: "steering.work.desc", levels: [...PANE_LEVELS, "scroll"], group: "mode" },
   // Inside a terminal or a document (its tab's ↓): Shift scrolls a whole screen.
   { actions: ["left", "right"], pair: true, labelKey: "steering.scroll.label", descKey: "steering.scroll.desc", levels: ["scroll"], when: "inTerminal", group: "move" },
@@ -1051,34 +1191,74 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["left", "right"], pair: true, labelKey: "steering.scrollDocument.label", descKey: "steering.scrollDocument.desc", levels: ["scroll"], when: "inDocument", group: "move" },
   { actions: ["down"], labelKey: "steering.scrollEnd.label", descKey: "steering.scrollEnd.desc", levels: ["scroll"], when: "inDocument", group: "move" },
   { actions: ["up"], labelKey: "steering.scrollOutDocument.label", descKey: "steering.scrollOutDocument.desc", levels: ["scroll"], when: "inDocument", group: "move" },
+  // Inside the Reader's Diffs view (`when: "inChanges"`, levels ["scroll"]); the
+  // Diffs step fills this block, its keys come from the `inside` bindings.
+  // -- inside Diffs: begin
+  { actions: ["left", "right"], pair: true, labelKey: "steering.changes.scroll.label", descKey: "steering.changes.scroll.desc", levels: ["scroll"], when: "inChanges", group: "move" },
+  { actions: ["up", "down"], pair: true, labelKey: "steering.changes.card.label", descKey: "steering.changes.card.desc", levels: ["scroll"], when: "inChanges", group: "move" },
+  { actions: ["up", "down"], pair: true, shift: true, labelKey: "steering.changes.file.label", descKey: "steering.changes.file.desc", levels: ["scroll"], when: "inChanges", group: "move" },
+  { actions: ["viewToggle"], labelKey: "steering.changes.fold.label", descKey: "steering.changes.fold.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewNew"], labelKey: "steering.changes.new.label", descKey: "steering.changes.new.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewMode"], labelKey: "steering.changes.layout.label", descKey: "steering.changes.layout.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewOpen"], labelKey: "steering.changes.open.label", descKey: "steering.changes.open.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewOpenAlt"], labelKey: "steering.changes.openDiff.label", descKey: "steering.changes.openDiff.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  // -- inside Diffs: end
+  // Inside the Reader's Files view (`when: "inFiles"`, levels ["scroll"]); the
+  // Files step fills this block.
+  // -- inside Files: begin
+  { actions: ["up", "down"], pair: true, labelKey: "steering.readerFiles.walk.label", descKey: "steering.readerFiles.walk.desc", levels: ["scroll"], when: "inFiles", group: "move" },
+  { actions: ["up", "down"], pair: true, shift: true, labelKey: "steering.readerFiles.section.label", descKey: "steering.readerFiles.section.desc", levels: ["scroll"], when: "inFiles", group: "move" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.readerFiles.scroll.label", descKey: "steering.readerFiles.scroll.desc", levels: ["scroll"], when: "inFiles", group: "move" },
+  { actions: ["viewOpen"], labelKey: "steering.readerFiles.open.label", descKey: "steering.readerFiles.open.desc", levels: ["scroll"], when: "inFiles", group: "act" },
+  { actions: ["viewOpenAlt"], labelKey: "steering.readerFiles.show.label", descKey: "steering.readerFiles.show.desc", levels: ["scroll"], when: "inFiles", group: "act" },
+  // -- inside Files: end
   // The region cursor (side panel, header apps, + menu, settings, the top bar,
   // any dialog or menu on top).
   { actions: ["up", "down"], pair: true, labelKey: "steering.move.label", descKey: "steering.move.desc", levels: ["region"], when: "walkRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.headerWalk.desc", levels: ["region"], when: "headerRegion", group: "move" },
   { actions: ["down"], labelKey: "steering.headerOpen.label", descKey: "steering.headerOpen.desc", levels: ["region"], when: "headerRegion", group: "act" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.chromeWalk.desc", levels: ["region"], when: "chromeRegion", group: "move" },
+  { actions: ["down"], labelKey: "steering.chromeOpen.label", descKey: "steering.chromeOpen.desc", levels: ["region"], when: "chromeRegion", group: "act" },
+  { actions: ["up"], labelKey: "steering.up.label", descKey: "steering.up.desc", levels: ["region"], when: "chromeRegion", group: "move" },
+  { actions: ["left", "right"], pair: true, labelKey: "steering.move.label", descKey: "steering.titleBarWalk.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
+  { actions: ["down"], labelKey: "steering.titleBarDown.label", descKey: "steering.titleBarDown.desc", levels: ["region"], when: "titleBarRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.overlayRow.label", descKey: "steering.overlayRow.desc", levels: ["region"], when: "overlayRegion", group: "move" },
-  { actions: ["left", "right"], pair: true, labelKey: "steering.sideView.label", descKey: "steering.sideView.desc", levels: ["region"], when: "sideRegion", group: "move" },
+  { actions: ["left"], labelKey: "steering.sideParent.label", descKey: "steering.sideParent.desc", levels: ["region"], when: "sideRegion", group: "move" },
+  { actions: ["right"], labelKey: "steering.sideEnter.label", descKey: "steering.sideEnter.desc", levels: ["region"], when: "sideRegion", group: "move" },
+  // The view tabs wear these keys themselves (`SideViewKey`); the bar lists them too.
+  { actions: [], slots: true, labelKey: "steering.sideViewJump.label", descKey: "steering.sideViewJump.desc", levels: ["region"], when: "sideRegion", group: "move" },
   { actions: ["left", "right"], pair: true, labelKey: "steering.settingsPage.label", descKey: "steering.settingsPage.desc", levels: ["region"], when: "settingsRegion", group: "move" },
   { actions: ["confirm"], labelKey: "steering.confirm.label", descKey: "steering.confirm.desc", levels: ["region"], when: "steeringConfirm", group: "act" },
-  { actions: ["press"], labelKey: "steering.press.label", descKey: "steering.press.desc", levels: ["region"], group: "act" },
-  { actions: ["search"], labelKey: "steering.search.label", descKey: "steering.search.desc", levels: ["region"], group: "act" },
+  { actions: ["cockpitPanel"], labelKey: "cockpit.keys.panel", descKey: "cockpit.keys.panelHint", levels: ["region"], when: "cockpitRegion", group: "move" },
+  { actions: ["cockpitUp"], labelKey: "cockpit.keys.up", descKey: "cockpit.keys.up", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitDown"], labelKey: "cockpit.keys.down", descKey: "cockpit.keys.down", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitJump"], labelKey: "cockpit.keys.jump", descKey: "cockpit.keys.jump", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitShow"], labelKey: "cockpit.keys.show", descKey: "cockpit.keys.show", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitContinue"], labelKey: "cockpit.keys.continue", descKey: "cockpit.keys.continue", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["cockpitFilter"], labelKey: "cockpit.keys.filter", descKey: "cockpit.keys.filter", levels: ["region"], when: "cockpitRoster", group: "act" },
+  { actions: ["press"], labelKey: "steering.press.label", descKey: "steering.press.desc", levels: ["region"], when: "notCockpitRoster", group: "act" },
+  { actions: ["search"], labelKey: "steering.search.label", descKey: "steering.search.desc", levels: ["region"], when: "notCockpitRoster", group: "act" },
   { actions: ["menu"], labelKey: "steering.menu.label", descKey: "steering.menu.desc", levels: [...BASE_LEVELS, "region"], group: "act" },
   // Wherever the tab bars are. Shift walks the status jumps backwards.
   { actions: ["mail"], labelKey: "steering.mail.label", descKey: "steering.mail.desc", levels: BASE_LEVELS, when: "mail", group: "open" },
   { actions: ["calendar"], labelKey: "steering.calendar.label", descKey: "steering.calendar.desc", levels: BASE_LEVELS, when: "calendar", group: "open" },
   { actions: ["todo"], labelKey: "steering.todo.label", descKey: "steering.todo.desc", levels: BASE_LEVELS, when: "todo", group: "open" },
+  { actions: ["cockpit"], labelKey: "steering.cockpit.label", descKey: "steering.cockpit.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["nextDecision"], labelKey: "steering.nextDecision.label", descKey: "steering.nextDecision.desc", levels: BASE_LEVELS, status: "decision", group: "status" },
   { actions: ["nextWorking"], labelKey: "steering.nextWorking.label", descKey: "steering.nextWorking.desc", levels: BASE_LEVELS, status: "working", group: "status" },
   { actions: ["nextDone"], labelKey: "steering.nextDone.label", descKey: "steering.nextDone.desc", levels: BASE_LEVELS, status: "done", group: "status" },
+  { actions: ["jumpBack"], labelKey: "steering.jumpBack.label", descKey: "steering.jumpBack.desc", levels: BASE_LEVELS, when: "jumpBack", group: "status" },
   { actions: ["sidePanel"], labelKey: "steering.sidePanel.label", descKey: "steering.sidePanel.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["panels"], labelKey: "steering.panels.label", descKey: "steering.panels.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["settings"], labelKey: "steering.settings.label", descKey: "steering.settings.desc", levels: BASE_LEVELS, group: "open" },
   { actions: ["jumpProject"], labelKey: "steering.jumpProject.label", descKey: "steering.jumpProject.desc", levels: BASE_LEVELS, group: "move" },
   { actions: ["popout"], labelKey: "steering.popout.label", descKey: "steering.popout.desc", levels: BASE_LEVELS, when: "popouts", group: "move" },
+  // A popout's one way back to the main window, from every level of it
+  // (`mainWindow`); first in its bar, and in the cheat sheet of a popout only.
+  { actions: ["mainWindow"], labelKey: "steering.mainWindow.label", descKey: "steering.mainWindow.desc", levels: [...PANE_LEVELS, "scroll", "region"], when: "inPopout", group: "main" },
   { actions: ["help"], labelKey: "steering.help.label", descKey: "steering.help.desc", levels: ALL_LEVELS, group: "mode" },
   { actions: ["legend"], labelKey: "steering.legend.label", descKey: "steering.legend.desc", levels: ALL_LEVELS, group: "mode" },
   { actions: ["back"], labelKey: "steering.back.label", descKey: "steering.back.desc", levels: ["region"], group: "mode" },
   { actions: ["sidePanel"], labelKey: "steering.sidePanelBack.label", descKey: "steering.sidePanelBack.desc", levels: ["region"], when: "sideRegion", group: "mode" },
-  { actions: ["exit"], labelKey: "steering.exit.label", descKey: "steering.exit.desc", levels: ["region"], group: "mode" },
   { actions: ["exit", "work"], labelKey: "steering.exit.label", descKey: "steering.exit.desc", levels: ["projects"], group: "mode" },
 ];

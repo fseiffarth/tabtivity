@@ -4,8 +4,10 @@
  *
  * The question is a dialog (`SteeringConfirmOverlay`), so steering walks it as
  * the overlay region like any other: Esc cancels, Enter presses the button
- * under the cursor (Cancel, to start with), and the Confirm key (Y by default,
- * `steeringBindings`) presses the button marked {@link STEERING_CONFIRM_ATTR}.
+ * under the cursor (Close/Clear, to start with), and the Confirm key (Y by
+ * default, `steeringBindings`) presses the button marked
+ * {@link STEERING_CONFIRM_ATTR}. The key that asked says yes too: W again closes
+ * the tab (the button's {@link STEERING_CONFIRM_KIND_ATTR} names what it asked).
  * Once the box is gone steering is back on the level the key was pressed on.
  */
 import { closeTabInScope } from "../remote/closeRemoteTab";
@@ -29,6 +31,10 @@ export const STEERING_CONFIRM_EVENT = "app:steering-confirm";
 /** Marks the button the Confirm key presses. */
 export const STEERING_CONFIRM_ATTR = "data-steering-confirm";
 
+/** Names the kind of question on the confirm button, so the key that asked can
+ *  answer it (W twice closes). */
+export const STEERING_CONFIRM_KIND_ATTR = "data-steering-confirm-kind";
+
 /** Ask before `kind` happens to `tab`; false when there is nothing to ask
  *  (Clear on a tab that is not an agent) or no box is mounted. */
 export function requestSteeringConfirm(kind: SteeringConfirmKind, scope: string, tab: TabEntry): boolean {
@@ -47,4 +53,9 @@ export function runSteeringConfirm({ kind, scope, tab }: Omit<SteeringConfirmDet
 /** The confirm button of the box inside `root`, if one is there. */
 export function steeringConfirmButton(root: ParentNode): HTMLElement | null {
   return root.querySelector<HTMLElement>(`[${STEERING_CONFIRM_ATTR}]`);
+}
+
+/** The confirm button of a `kind` box inside `root`, if one is there. */
+export function steeringConfirmButtonFor(root: ParentNode, kind: SteeringConfirmKind): HTMLElement | null {
+  return root.querySelector<HTMLElement>(`[${STEERING_CONFIRM_ATTR}][${STEERING_CONFIRM_KIND_ATTR}="${kind}"]`);
 }

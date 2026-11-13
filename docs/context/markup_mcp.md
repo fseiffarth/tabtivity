@@ -122,11 +122,14 @@ older phone bundle sends no `origin`: the chat wording.
   wherever it is opened from, so its asks use `files:<token>` too. Answers are shaped in the sidecar before the window is
   asked (16 KiB body, ≤ 6 indices each < 6, Other… ≤ 500, no control
   characters).
-- **Headless: `desktop_unavailable`.** The asks live in the window's
-  process; with no window there is no listener and no ask. The three phone
-  routes answer `503 desktop_unavailable`, which the phone reads as "no card".
-  A desktop's Mobile host never serves the lane: asks it held would be
-  invisible to the window's markup view.
+- **Two processes: the asks live where the tab was spawned.** A window tab's
+  asks and ticks are in the window's memory; a tab the Mobile host spawned
+  (a phone ＋ Create, the scheduler restarting a stopped tab) is wired by the
+  host's own listener (`/mcp/markup`, its own token store — see **Host-spawned
+  tabs** below). Nothing is on disk; a token is good on the listener of the
+  process that minted it. With no tab of this host asking, a tab with nothing
+  held is the quiet `503 desktop_unavailable` on the three phone routes,
+  which the phone reads as "no card".
 - **A server daemon serves it itself** (hosted plan; `Runtime::serves_markup`).
   It has no window, so its own listener routes `/mcp/markup`, its browser
   client's `markup_mcp_*` commands read the asks in the same process, and
@@ -182,7 +185,8 @@ automatically" rule stands.
   /markup/questions` answers `ticks` beside `asks`; the window's bridge
   (`MobileBridgeHost` `markupQuestionsFor`) fills them, a window without the
   command answers none, and the sidecar drops any tick outside the bounds
-  (`host.rs` `valid_tick`). Headless: `desktop_unavailable`, as for the asks.
+  (`host.rs` `valid_tick`). A tab with nothing held and no window:
+  `desktop_unavailable`, as for the asks.
 - **The log and the mapping** live in the shared core
   (`mobile-web/src/markup/layer.ts`): `mintRound`, `markSent(.., roundId)`
   (logs each moved page's `marks` — the same array the Submit body sent —
@@ -230,6 +234,55 @@ automatically" rule stands.
   Unlike the desktop it reads only the view's own tab — the Focus chat's,
   or the tab this view's new-tab Submit opened; a PDF reopened from the
   file browser has no tab yet and shows no ✓ (the asks have the same reach).
+
+## Host-spawned tabs (phase 1b)
+
+`docs/headless_mcp_plan.md` ("Phase 1b"), TODO #2339. Before it, the Mobile
+host routed no `/mcp/markup` and published `serves_markup: false`, so a tab it
+spawned never got `markup_ask` / `markup_withdraw` / `markup_done` — for its
+whole life, as a CLI reads its MCP config once — and the phone showed no
+questions, ✓ badges or **Approve all**.
+
+- **The host serves its own tabs' lane.** Same router and admission, its own
+  `TokenStore`; `serves_markup` is true in every listener. The root lane
+  (`/mcp`) is still window-only.
+- **The window reads both stores.** `markup_mcp_list` / `_ticks` / `_answer`
+  / `_reopen` / `_dismiss` (`commands/markup_mcp.rs`, unchanged payloads, now
+  `async`) read the window's store, then the host's over the admin socket
+  (`AdminRequest::MarkupList` … `MarkupDismiss`, answered by
+  `markup_mcp::admin_markup` in the host). Asks merge to the newest (one per
+  tab per store; two only across a respawn by the other process), ticks
+  union (the host answers at most `MAX_PEER_TICKS` newest, to fit the 64-KiB
+  admin frame). An answer tries the window's store, then the host's, which
+  closes the ask and hands back `{ prompt, receipt }`: the window queues it
+  as for its own tabs; a failed queue reopens the ask where it lives. For a
+  host ask the window mints the receipt and sends it along, so a reply lost
+  on the way back (`markup_failed`) still lets it reopen that answer: at
+  once, else before its next request to the host, until the host answers. A
+  dismissal goes to both. The peer is set once by the window
+  (`use_host_peer`); with no host running the connect fails at once and the
+  window shows only what it holds. A host from before this answers an error,
+  read as no asks. The frontend is untouched.
+- **The host tells the window.** The host's change hook (`Notice::Markup`) →
+  `poke_desktop(["markup"])` → the window's `refreshSlices` →
+  `emitMarkupChanged` → `markup-mcp-changed`, so an open desktop view
+  re-reads at once. The phone polls and needs no push.
+- **The phone path** (`host.rs` `markup_call`): a window open → the request
+  goes there (its commands include the host's asks, its scheduler delivers
+  the answer). No window, or one that does not know the tab → the host
+  answers from its own store (`markup_here`, an answer held with
+  `headless::hold_prompt` like a phone prompt with no window), provided it
+  holds something for the request (`markup_held_here`); else the old quiet
+  `desktop_unavailable`.
+- **Lifetime.** The host calls `markup_mcp::sweep()` where it revokes tokens
+  (the phone closing a tab; the 60-s sweep after three missed looks at the
+  tmux session), so an ask or tick dies with its session. A tab the window
+  closes while the host is the owner keeps its card up to ~3 minutes. A host
+  restart forgets its asks (memory only), like a window restart.
+- **Known gaps.** A window older than this build does not read the host's
+  asks (the phone path still answers with no window). A tab respawned by the
+  other process shows only the newest card until the first process's session
+  is swept.
 
 ## Known limits
 
@@ -296,11 +349,22 @@ the app. QA group-h 31bt.
 7. Delivery failure: make queueing fail (e.g. the tab's schedule cap) — the
    card stays with "still open, try again" (desktop) / `delivery_failed`
    (phone), and a retry delivers.
-8. Window closed (headless host): the phone shows no card and no error.
-   Codex tab: the same flow.
+8. Window closed (headless host): a window tab's asks are gone with the
+   window, so the phone shows no card and no error for it. Codex tab: the
+   same flow. A tab the phone created with the window closed: see 8c.
 8b. Server daemon (no window): a project agent tab opened from the browser
    client has `markup_ask`; its card shows in the browser's markup view and
    on the phone; answering from either types the prompt into the tab, the
    other card closes; ticks show on both.
+8c. Host-spawned tab (Mobile on, **window closed**): create a Claude tab from
+   the phone, mark up a PDF in it and Submit. The agent calls `markup_ask`
+   and `markup_done`: the phone's card, ✓ badges and **Approve all** show
+   (the poll is 3 s); answering types the prompt into the tab (a held prompt
+   the host's scheduler types). Then open the window: the same tab's markup
+   view shows the same card and ticks; answering there queues the prompt
+   through the window's scheduler and closes the phone's card. Open the
+   window *first*, then ask: the desktop card appears at once (the host
+   pokes the `markup` slice). A window tab and a host tab asking at the
+   same time keep separate cards.
 9. Manage CLIs → Advanced switch off: a new tab has no `markup_ask`; a tab
    opened before answers `off`.

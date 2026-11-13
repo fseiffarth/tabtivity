@@ -679,9 +679,11 @@
   border-radius: var(--radius);
 }
 
-/* ── Keyboard steering mode legend (SteeringLegend) ──────────────────────── */
-/* Bottom-center, portalled to body, display-only. Static shadow token only —
-   never an animated blurred box-shadow (WebKitGTK software-renders those). */
+/* ── Keyboard steering mode legend ────────────────────────────────────────── */
+/* The floating legend chip: today only keyboard select's (TerminalView) wears
+   it, pinned to its pane below; steering's own legend is the docked bar
+   further down. Static shadow token only — never an animated blurred
+   box-shadow (WebKitGTK software-renders those). */
 .steering-legend {
   position: fixed;
   left: 50%;
@@ -748,199 +750,67 @@
   border-radius: 3px;
 }
 
-/* One hexagon per key group round a hub (SteeringLegend's OrbitLegend): the
-   hexagonal steering badge at the bottom centre, the hexagons in a low arch
-   along the bottom edge, each on a spoke in its own colour. The container is a
-   zero-size anchor at the hub's centre; OrbitLegend sets its `bottom` and
-   `scale` and every hexagon's box (lib/shortcuts/steeringOrbit). Only the
-   hexagons and hub are painted. Every hexagon is pointy-topped, the one
-   percentage polygon scaled to its box (regular, or up to 1.25× as wide as
-   tall); a clip-path cuts any shadow, so they go without. */
-.steering-legend-orbit,
-.steering-legend-fab {
-  --steer-hex: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+/* The steering bar (SteeringLegend): a one-row bar docked under the panes, and
+   the key caps pinned to the controls they fire. The bar takes its height out
+   of the window (`html[data-steer-bar]`), so it never covers a prompt line; it
+   is click-through but for the badge. Corners are the desktop radius scale
+   (6 / 10 / 14). Static colour only — nothing here animates or blurs. */
+html[data-steer-bar] {
+  --steer-bar-h: 28px;
 }
-.steering-legend-orbit {
-  --steer-wire: 2px;
-  display: block;
-  width: 0;
-  height: 0;
-  max-width: none;
-  padding: 0;
-  background: none;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  transform-origin: 0 0;
-  font-size: var(--text-sm);
-  line-height: 1.2;
+html[data-steer-bar] .app-shell,
+html[data-steer-bar] .detached-center {
+  padding-bottom: var(--steer-bar-h);
 }
-.steering-legend-spoke {
-  position: absolute;
-  left: 0;
-  top: calc(var(--steer-wire) / -2);
-  height: var(--steer-wire);
-  background: currentColor;
-  transform-origin: 0 50%;
-}
-.steering-legend-orbit .steering-legend-hub {
-  position: absolute;
-  left: -17.5px;
-  top: -20px;
-}
-/* The level's name on the hub's upper rim, over the spokes. */
-.steering-legend-where {
-  position: absolute;
-  left: 0;
-  bottom: 11px;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 7px;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  font-size: var(--text-sm);
-  font-weight: 700;
-  color: var(--bg-main);
-  background: var(--accent);
-  border: 2px solid var(--bg-panel);
-  border-radius: 999px;
-}
-.steering-legend-where:empty {
-  display: none;
-}
-.steering-legend-group {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-style: normal; /* .tok-comment slants code comments, not this */
-  isolation: isolate;
-  /* The hexagon's 2px rim; the fill is the inset hexagon on top of it (the
-     inset is 2px across the flat sides, 2/sin 60° at a regular one's points —
-     2.2px on the widest, too little apart to tell). */
-  background: color-mix(in srgb, currentColor 70%, transparent);
-  clip-path: var(--steer-hex);
-}
-.steering-legend-group::before {
-  content: "";
-  position: absolute;
-  inset: 2.31px 2px;
-  z-index: -1;
-  background: color-mix(in srgb, currentColor 12%, var(--bg-panel));
-  clip-path: var(--steer-hex);
-}
-/* Outside the fancy (Helix) pair `.tok-tag` is `.tok-func`'s colour (accent /
-   blue), which would paint Open like Move; red keeps the circles apart. */
-html:not([data-theme^="fancy_"]) .steering-legend-orbit .tok-tag {
-  color: var(--danger);
-}
-.steering-legend-group-keys {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-}
-.steering-legend-group .steering-legend-item {
-  gap: 4px;
-  color: inherit;
-}
-.steering-legend-group .steering-legend-item kbd {
-  padding: 0 3px;
-  font-size: var(--text-sm);
-  line-height: 1.2;
-}
-.steering-legend-group .steering-legend-count {
-  font-size: var(--text-xs);
-}
-.steering-legend-group .steering-legend-label {
-  color: var(--text-primary);
-}
-.steering-legend-group .steering-legend-item kbd {
-  color: inherit;
-  background: color-mix(in srgb, currentColor 20%, var(--bg-panel));
-  border-color: color-mix(in srgb, currentColor 60%, transparent);
-}
-.steering-legend-group .steering-legend-count {
-  color: var(--bg-panel);
-  background: color-mix(in srgb, currentColor 85%, var(--text-primary));
-}
-
-/* Steering on with the legend folded (steering's H): the hub alone, a hexagonal
-   accent badge at the bottom centre, the key that unfolds it on its rim. The
-   wrapper is click-through; only the badge takes a click. Static shadow token
-   only. */
-.steering-legend-fab {
+.steering-bar {
   position: fixed;
-  left: 50%;
-  bottom: 10px;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 9998;
+  height: 28px;
+  box-sizing: border-box;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
-  pointer-events: none;
-}
-/* The badge is the hexagon painted by `::before`, not the button itself, so
-   the key on its rim isn't clipped; `isolation` keeps that layer above the
-   spokes. Box HUB_R·√3 × 2·HUB_R (steeringOrbit). */
-.steering-legend-fab-button,
-.steering-legend-hub {
-  pointer-events: auto;
-  position: relative;
-  isolation: isolate;
-  display: grid;
-  place-items: center;
-  width: 35px;
-  height: 40px;
-  padding: 0;
-  color: var(--bg-main);
-  background: none;
-  border: none;
-  cursor: var(--cur-pointer, pointer);
-}
-.steering-legend-fab-button::before,
-.steering-legend-hub::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--accent);
-  clip-path: var(--steer-hex);
-}
-.steering-legend-fab-button:hover::before,
-button.steering-legend-hub:hover::before {
-  background: var(--accent-hover);
-}
-.steering-legend-fab-button kbd,
-.steering-legend-hub kbd {
-  position: absolute;
-  right: -5px;
-  bottom: -4px;
-  min-width: 15px;
-  padding: 0 3px;
-  font-family: inherit;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  line-height: 13px;
-  text-align: center;
+  gap: 14px;
+  padding: 0 10px 0 0;
+  overflow: hidden;
+  font-size: var(--text-md);
   color: var(--text-primary);
   background: var(--bg-panel);
-  border: 1px solid var(--accent);
-  border-radius: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  pointer-events: none;
 }
-/* The folded badge's exit key, on the opposite rim. */
-.steering-legend-fab-button kbd.steering-legend-fab-exit {
-  right: auto;
-  left: -5px;
+.steering-bar-badge {
+  pointer-events: auto;
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  width: 34px;
+  padding: 0;
+  color: var(--bg-main);
+  background: var(--accent);
+  border: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  cursor: var(--cur-pointer, pointer);
 }
-/* The Chat's hands-free is on: a mic on the rim the unfold key leaves free.
-   The folded badge has its exit key there, so the mic moves up. */
-.steering-legend-mic {
+button.steering-bar-badge:hover {
+  background: var(--accent-hover);
+}
+/* Lent to a box: steering is off, so the mark is hollow and no button. */
+.steering-bar-badge.hollow {
+  pointer-events: none;
+  color: var(--accent);
+  background: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* The Chat's hands-free is on: a mic on the badge's rim. */
+.steering-bar-mic {
   position: absolute;
-  left: -5px;
-  bottom: -4px;
+  right: -6px;
+  top: -5px;
   display: grid;
   place-items: center;
   width: 15px;
@@ -950,11 +820,141 @@ button.steering-legend-hub:hover::before {
   border: 1px solid var(--accent);
   border-radius: 50%;
 }
-.steering-legend-fab-button .steering-legend-mic {
-  left: auto;
-  bottom: auto;
-  right: -5px;
+.steering-bar-ladder {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+}
+.steering-bar-rung-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.steering-bar-sep {
+  display: inline-flex;
+  opacity: 0.6;
+}
+.steering-rung {
+  padding: 1px 7px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+.steering-rung.lit {
+  color: var(--bg-main);
+  background: var(--accent);
+}
+.steering-rung.lent {
+  color: var(--accent);
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.steering-bar-keys,
+.steering-bar-tail {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.steering-bar-keys {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.steering-bar-tail {
+  flex: none;
+}
+.steering-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.steering-bar-caps {
+  display: inline-flex;
+  gap: 2px;
+}
+.steering-bar-vr {
+  width: 1px;
+  height: 16px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+/* A narrow window drops the words first; the caps stay. */
+@media (max-width: 1280px) {
+  .steering-bar-label {
+    display: none;
+  }
+}
+
+/* A key cap: the group's editor-token colour as the fill, the inner span the
+   ink. Outside the fancy (Helix) pair \`.tok-tag\` is \`.tok-func\`'s colour
+   (accent / blue), which would paint Open like Move; red keeps them apart. */
+.steering-cap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 15px;
+  min-width: 15px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  background: currentColor;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+.steering-cap-k {
+  font-size: var(--text-xs);
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--bg-main);
+}
+.steering-cap.count {
+  min-width: 16px;
+}
+html:not([data-theme^="fancy_"]) .steering-cap.tok-tag {
+  color: var(--danger);
+}
+/* The slot key on a side panel view tab (SideViewKey): a small cap on the tab's
+   top-right corner, out of the layout so the row does not move. Static. */
+.side-panel-views .toolbar-btn--tab {
+  position: relative;
+}
+.side-view-key {
+  /* Only the side panel's own view row: the same row in a Files (Project) tab
+     has no steering keys. */
+  display: none;
+  position: absolute;
   top: -4px;
+  right: -3px;
+  height: 12px;
+  min-width: 12px;
+  padding: 0 3px;
+  pointer-events: none;
+}
+.side-panel .side-view-key {
+  display: inline-flex;
+}
+/* The caps pinned to controls: one fixed, click-through layer over the window.
+   A row hangs from its anchor point (steeringCaps) by its left edge, middle or
+   right edge. */
+.steering-caps {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+}
+.steering-cap-row {
+  position: absolute;
+  display: flex;
+  gap: 2px;
+}
+.steering-cap-row.center {
+  transform: translateX(-50%);
+}
+.steering-cap-row.end {
+  transform: translateX(-100%);
 }
 
 /* Keyboard select's legend (TerminalView, Ctrl+Shift+X): the steering legend,
@@ -1018,8 +1018,24 @@ button.steering-legend-hub:hover::before {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
-.steering-prompt-dialog .file-delete-actions {
+.steering-prompt-dialog .file-delete-actions,
+.steering-confirm-dialog .file-delete-actions {
   align-items: center;
+}
+/* Steering's "are you sure" (SteeringConfirmOverlay): the short prompt, a
+   little wider so the key legend and both buttons share one row; the
+   legend's two keys stack, the buttons keep one line each. */
+.file-delete-dialog.steering-confirm-dialog {
+  width: min(440px, calc(100vw - 32px));
+}
+.steering-confirm-dialog .steering-prompt-hint {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.steering-confirm-dialog .file-delete-actions button {
+  white-space: nowrap;
+  padding: 7px 14px;
 }
 .steering-prompt-hint {
   margin-right: auto;
@@ -1036,7 +1052,7 @@ button.steering-legend-hub:hover::before {
   white-space: nowrap;
 }
 /* The chip row under the prompt (Alt+M model, Alt+E effort, Alt+K clear,
-   Alt+L plan, Alt+G goal): the phone composer's chips with their keys as key
+   Alt+P plan, Alt+G goal): the phone composer's chips with their keys as key
    caps; an open list or a lead in the text marks its chip with the accent. */
 .steering-prompt-chips {
   display: flex;
@@ -1083,6 +1099,14 @@ button.steering-legend-hub:hover::before {
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
 }
+/* The Chat view's `/` menu, under the prompt box's text in the dialog's flow
+   (in the Reader it opens upward over the pane). Fixed height for the reason
+   the list above has one. */
+.steering-prompt-dialog .terminal-reader-slash {
+  position: static;
+  width: auto;
+  height: min(40vh, 340px);
+}
 .steering-prompt-list-head {
   font-size: var(--text-sm);
   font-weight: 600;
@@ -1102,6 +1126,169 @@ button.steering-legend-hub:hover::before {
   background: var(--control-hover-bg);
   border: 1px solid var(--border-color);
   border-radius: 3px;
+}
+
+/* Steering's project jump (SteeringProjectJump): the prompt box's dialog with
+   the search field in the middle. Up to ten results sit on a wheel round it:
+   a drawn track and a hub behind the field, each result a round digit badge
+   on the track (inline left/top and the angle's --jump-sin/--jump-cos from
+   `ringSpot`) with its name pushed out past the track and anchored on its
+   outer side, a spoke from the hub to the highlighted one. More results drop
+   to the prompt list under the field. Static: only the spoke turns, and not
+   on the software paint path. */
+.file-delete-dialog.steering-jump-dialog {
+  --jump-wheel: min(420px, 58vh);
+  width: min(680px, calc(100vw - 32px));
+  gap: 14px;
+}
+/* One fixed height for wheel, list and no-match alike: a content-sized stage
+   resized the centered dialog on every keystroke that crossed ten results. */
+.steering-jump-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: var(--jump-wheel);
+}
+.steering-jump-stage.is-ring {
+  position: relative;
+  justify-content: center;
+  align-items: center;
+}
+.steering-jump-center { width: 100%; }
+.steering-jump-stage.is-ring .steering-jump-center {
+  position: relative;
+  z-index: 1;
+  width: calc(var(--jump-wheel) * 0.38);
+}
+.file-paste-name.steering-jump-input {
+  width: 100%;
+  padding: 8px var(--space-3);
+  font-size: var(--text-lg);
+  background: var(--bg-input, var(--bg-panel));
+  border-radius: var(--radius);
+}
+.steering-jump-stage.is-ring .file-paste-name.steering-jump-input {
+  text-align: center;
+  border-radius: 999px;
+  border-color: var(--accent);
+  background: var(--bg-elevated, var(--bg-panel));
+}
+.file-paste-name.steering-jump-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.steering-jump-ring { display: contents; }
+.steering-jump-stage.is-ring .steering-jump-ring {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: var(--jump-wheel);
+  height: var(--jump-wheel);
+  transform: translateX(-50%);
+}
+/* The track the badges sit on, and the hub behind the field. */
+.steering-jump-stage.is-ring .steering-jump-ring::before,
+.steering-jump-stage.is-ring .steering-jump-ring::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.steering-jump-stage.is-ring .steering-jump-ring::before {
+  inset: 14.3%;
+  border: 1.5px solid var(--border-color);
+}
+.steering-jump-stage.is-ring .steering-jump-ring::after {
+  inset: 26.2%;
+  border: 1px solid var(--border-color);
+  background: var(--bg-panel);
+}
+/* From the hub's rim to the highlighted badge's, turned about the centre. */
+.steering-jump-spoke {
+  position: absolute;
+  z-index: 1;
+  left: calc(50% - 1px);
+  top: calc(50% - var(--jump-wheel) * 0.357 + 15px);
+  width: 2px;
+  height: calc(var(--jump-wheel) * (0.357 - 0.238) - 17px);
+  border-radius: 1px;
+  background: var(--accent);
+  transform-origin: 1px calc(var(--jump-wheel) * 0.357 - 15px);
+  transition: transform 120ms ease-out;
+  pointer-events: none;
+}
+:root[data-software-paint] .steering-jump-spoke { transition: none; }
+.steering-jump-slot {
+  position: absolute;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(-50%, -50%);
+  color: var(--text-primary);
+  background: var(--bg-elevated, var(--bg-panel));
+  border: 1.5px solid var(--border-color);
+  border-radius: 50%;
+  cursor: var(--cur-pointer, pointer);
+}
+.steering-jump-slot kbd {
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: inherit;
+}
+.steering-jump-slot.on {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* The name, out past the track along the slot's radius, anchored on its
+   outer side: left-aligned on the right half, centred at the top and bottom. */
+.steering-jump-slot .steering-jump-slot-name {
+  position: absolute;
+  left: calc(50% + 24px * var(--jump-sin));
+  top: calc(50% - 24px * var(--jump-cos));
+  max-width: 132px;
+  padding: 2px 4px;
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--text-primary);
+  transform: translate(calc(-50% + 50% * var(--jump-sin)), calc(-50% - 50% * var(--jump-cos)));
+}
+.steering-jump-slot[data-inactive] .steering-jump-slot-name { color: var(--text-muted); }
+.steering-jump-slot-name .project-search-box-swatch { margin-right: 5px; vertical-align: -1px; }
+.steering-jump-slot.on .steering-jump-slot-name {
+  font-weight: 600;
+  color: var(--accent);
+}
+.steering-jump-slot-name,
+.steering-jump-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.steering-jump-row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.steering-prompt-list.steering-jump-list { flex: 1 1 auto; height: auto; min-height: 0; }
+.steering-jump-list .terminal-reader-option[aria-selected="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.steering-jump-list .terminal-reader-option-label { min-width: 0; }
+.steering-jump-list .terminal-reader-option-label small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* No mouse pointer while steering (SteeringLegend sets `data-steer-pointer`
@@ -1173,7 +1360,9 @@ html:is([data-steer="panes"], [data-steer="scroll"]) .focus-frame {
    focused subwindow stays lit. The veil is a 0-blur spread on the focus
    frame's pseudo-element — the frame sits above the pane layer and the
    center panel clips the spread to itself. Nothing here animates. */
-html:is([data-steer="panes"], [data-steer="tabs"], [data-steer="scroll"]) .app-header {
+/* The header's contents fade, not the bar: its fill stays solid, which the
+   fullscreen header floating over the panes depends on. */
+html:is([data-steer="panes"], [data-steer="tabs"], [data-steer="scroll"]) .app-header > * {
   opacity: 0.4;
 }
 html[data-steer="scroll"] .side-panel.open {
@@ -1192,6 +1381,8 @@ html[data-steer="scroll"] .focus-frame::before {
 }
 html[data-steer-region="side"] .side-panel.open,
 html[data-steer-region="header"] .app-header,
+html[data-steer-region="chrome"] .root-console-backdrop .root-overlay-bar:not(.root-overlay-subbar),
+html[data-steer-region="chrome"] .detached-titlebar,
 html[data-steer-region="overlay"] .steer-layer,
 html[data-steer-region="card"] .subwindow.focused .terminal-sign-in,
 html[data-steer-region="addTab"] .tab-add-menu,
@@ -1512,9 +1703,141 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   box-shadow: inset 0 -2px 0 var(--accent);
 }
 /* During a tab drag the panes stop taking the pointer, as CenterPanel's do. */
-.root-overlay.dragging .pane-layer,
-.root-overlay.dragging .center-pane {
+.root-overlay-region.dragging .pane-layer,
+.root-overlay-region.dragging .center-pane {
   pointer-events: none;
+}
+/* The shell's title-bar slots (layout/RootOverlay): the view portals its strip,
+   ⚿ badge and ◫ toggle into them, and they must not be boxes of their own. */
+.root-overlay-slot {
+  display: contents;
+}
+/* The window wears the header overlays' size
+   (mail, calendar, to-do, models: ONE size, `mail-todo.css`) and, with
+   `.app-overlay-backdrop`, is centred rather than hung from the top — the
+   cockpit's three-column Now view needs the width, and a window that jumps
+   between views is the thing the header overlays avoid. A move or resize
+   still replaces all of this with an inline `position: fixed` frame. */
+.root-overlay.root-overlay-wide {
+  width: min(1680px, calc(100vw - 24px));
+  height: min(93vh, calc(100vh - 24px));
+  max-height: min(93vh, calc(100vh - 24px));
+}
+/* The view strip: the shipped `.tab` strip, the cockpit's three views, the
+   apps, the system pages, a divider between each group, then Root. Roving
+   focus, no motion. */
+.root-view-strip {
+  flex: 0 0 auto;
+  align-items: center;
+}
+.root-view-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 8px 6px;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+/* A view's icon beside its label (`cockpit/viewIcons`). */
+.root-view-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-right: 5px;
+}
+.root-view-star {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+}
+.root-view-star svg {
+  width: 13px;
+  height: 13px;
+}
+/* The Root tab's lamp: the tab wears the strip's own state classes (ring and
+   mark, `projects-tabs.css`); the amber count says how many root agents ask.
+   Static, like the ring. */
+.root-view-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  margin-left: 5px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: var(--radius-full, 999px);
+  background: var(--status-decision);
+  color: #1c1300;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.root-view-tab .tab-status-mark {
+  margin-right: 4px;
+}
+/* Middle band (820 to 1179 px, `data-band` on the frame): icons only. The label
+   stays as the tab's tooltip and accessible name; the Root tab keeps its
+   star, lamp and asking count. */
+.root-overlay[data-band="mid"] .root-view-tab .tab-label {
+  display: none;
+}
+.root-overlay[data-band="mid"] .root-view-tab .root-view-icon {
+  margin-right: 0;
+}
+.root-overlay[data-band="mid"] .root-view-tab .root-view-star {
+  margin-right: 0;
+}
+/* Narrow band (under 820 px): the current view's tab and a ▾ for the rest. */
+.root-view-more {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+.root-view-more:hover,
+.root-view-more[aria-expanded="true"] {
+  background: var(--control-hover-bg);
+  color: var(--text-primary);
+}
+.root-view-more:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.root-view-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.root-view-menu-item .root-view-icon {
+  margin-right: 0;
+}
+.root-view-menu-item.active {
+  color: var(--accent);
+}
+.root-view-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-color);
+}
+.root-view-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+/* The ◫ toggle is no longer a direct child of the cluster, so the rule that
+   keeps its auto margin from splitting a reserved width (projects-tabs.css)
+   is repeated for its slot. */
+.tab-controls .root-overlay-slot > .subwindow-files-toggle {
+  margin-left: 0;
 }
 /* Where a tab dropped on a strip lands. */
 .root-overlay-strip-marker {
@@ -2269,19 +2592,32 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   display: flex;
   flex-direction: column;
 }
+/* The scroller is a plain block and the column inside it the flex box. WebKitGTK
+   hit-tests a *scrolled* flex container as if it were not scrolled: measured in
+   an offscreen WebKit2GTK 4.1 view (2026-11-03), a press in the empty space
+   beside the newest bubble resolved to a caret in the second turn, far above —
+   so a drag begun there selected (and Ctrl+C copied) most of the conversation.
+   With the scroll on a block, the same points land in the bubbles on screen. */
 .terminal-reader-list {
   flex: 1 1 auto;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px 18px;
   overflow-y: auto;
   user-select: text;
 }
-/* Bubbles tint from the theme's ink and accent rather than `--bg-elevated`
-   and `--border-subtle`: dark and light give those the page's own colour, so
-   an answer sank into the chat. The chat sits a shade off the page, each
+.terminal-reader-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 14px 18px;
+}
+/* An answer is a card: `--bg-elevated` with a `--border-subtle` rim on the
+   chat's slightly shaded ground; a prompt is a soft accent wash without a rim
+   (2026-11-04: a grey-filled, rimmed answer beside an accent-rimmed prompt read
+   heavier than the words). The plain dark/light pair keep the ink tint below,
+   since they give `--bg-elevated` the page's own colour and an answer would
+   sink into the chat. The chat sits a shade off the page, each
    bubble a shade further with a visible rim; the mobile Focus chat's tail
    corners say whose it is, and a prompt opens its exchange with more air
    above it than the bubbles inside one. Static shadow token only. */
@@ -2289,7 +2625,7 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   position: relative;
   max-width: min(760px, 82%);
   padding: var(--space-2) var(--space-3) 18px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius);
   box-shadow: var(--shadow-1);
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -2298,19 +2634,26 @@ html:is([data-steer-region="mail"], [data-steer-region="calendar"], [data-steer-
   margin: 0;
   white-space: pre-wrap;
 }
+/* `overflow-wrap: anywhere` (above) also lowers a table column's min-content
+   width to one character, so a long cell squeezed short columns ("Agent",
+   "Model") into one letter per line. `break-word` wraps the same overlong
+   words but leaves min-content at the longest word. */
+.terminal-reader-turn .markdown-body :is(th, td) {
+  overflow-wrap: break-word;
+}
 .terminal-reader-turn.user {
   align-self: flex-end;
   border-bottom-right-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 24%, var(--bg-main));
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-main));
+  border: 1px solid transparent;
 }
-.terminal-reader-list > .terminal-reader-turn.user:not(:first-child) {
+.terminal-reader-turns > .terminal-reader-turn.user:not(:first-child) {
   margin-top: 14px;
 }
-.terminal-reader-list > .terminal-reader-turn.user + .terminal-reader-turn.user {
+.terminal-reader-turns > .terminal-reader-turn.user + .terminal-reader-turn.user {
   margin-top: 0;
 }
-.terminal-reader-list > .terminal-reader-command + .terminal-reader-turn.user {
+.terminal-reader-turns > .terminal-reader-command + .terminal-reader-turn.user {
   margin-top: 0;
 }
 .terminal-reader-turn.user .terminal-reader-time {
@@ -2437,19 +2780,18 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-reader-turn.agent {
   align-self: flex-start;
   border-bottom-left-radius: 4px;
-  background: color-mix(in srgb, var(--text-primary) 9%, var(--bg-main));
-  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
 }
 .terminal-reader-turn.agent.plan {
   border-color: var(--accent-secondary);
 }
-/* Plain Dark / Plain Light / Light Lavender / System (follow OS — marked by
+/* Plain Dark / Plain Light / System (follow OS — marked by
    `data-theme-pick`, since it paints as Fancy Dark or Fancy Light) give the
    bubbles their own ink and rim and no shadow; the corners are the base rule's
    (they were octagons until 2026-11-02). */
 [data-theme="dark"] .terminal-reader-turn,
 [data-theme="light"] .terminal-reader-turn,
-[data-theme="light_lavender"] .terminal-reader-turn,
 [data-theme-pick="system"] .terminal-reader-turn {
   border: 1px solid var(--turn-rim);
   box-shadow: none;
@@ -2457,21 +2799,18 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 [data-theme="dark"] .terminal-reader-turn.user,
 [data-theme="light"] .terminal-reader-turn.user,
-[data-theme="light_lavender"] .terminal-reader-turn.user,
 [data-theme-pick="system"] .terminal-reader-turn.user {
   --turn-fill: color-mix(in srgb, var(--accent) 24%, var(--bg-main));
   --turn-rim: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 [data-theme="dark"] .terminal-reader-turn.agent,
 [data-theme="light"] .terminal-reader-turn.agent,
-[data-theme="light_lavender"] .terminal-reader-turn.agent,
 [data-theme-pick="system"] .terminal-reader-turn.agent {
   --turn-fill: color-mix(in srgb, var(--text-primary) 9%, var(--bg-main));
   --turn-rim: color-mix(in srgb, var(--text-primary) 18%, transparent);
 }
 [data-theme="dark"] .terminal-reader-turn.agent.plan,
 [data-theme="light"] .terminal-reader-turn.agent.plan,
-[data-theme="light_lavender"] .terminal-reader-turn.agent.plan,
 [data-theme-pick="system"] .terminal-reader-turn.agent.plan {
   --turn-rim: var(--accent-secondary);
 }
@@ -2528,7 +2867,227 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 }
 /* A file path in the chat (`linkPathsInHtml`): the Markdown viewer's
    `a.file-link`, which has no href and so needs the pointer said. */
-.terminal-reader-md a.file-link { cursor: var(--cur-pointer, pointer); }
+.terminal-reader-md a.file-link,
+.terminal-reader-md .md-link[data-path-link] { cursor: var(--cur-pointer, pointer); }
+/* Chat file links stand out as links, not as code (`linkPathsInHtml`):
+   inside a sentence a solid accent underline, the folder greyed and an ↗
+   after; a path on a line of its own a file chip — type icon, the name
+   first, the folder after it in grey (CSS `order`; the DOM keeps the path's
+   own order, so a copy copies it as written). Icons are masks, so they take
+   the text colour. Nothing animates (`[data-software-paint]`). */
+.terminal-reader-md {
+  --file-link-icon-open: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17L17 7'/%3E%3Cpath d='M8 7h9v9'/%3E%3C/svg%3E");
+  --file-link-icon-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='3'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='M21 15l-5-5L5 21'/%3E%3C/svg%3E");
+  --file-link-icon-code: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 18l6-6-6-6'/%3E%3Cpath d='M8 6l-6 6 6 6'/%3E%3C/svg%3E");
+  --file-link-icon-doc: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z'/%3E%3Cpath d='M14 3v6h6M8 13h8M8 17h5'/%3E%3C/svg%3E");
+  --file-link-icon-file: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z'/%3E%3Cpath d='M14 3v6h6'/%3E%3C/svg%3E");
+  --file-link-icon-folder: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/%3E%3C/svg%3E");
+}
+.markdown-body.terminal-reader-md code.file-link-host {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+/* A Markdown link to a file (`[the report](out/report.pdf)`, a labelled
+   `.md-link[data-path-link]`) takes the in-sentence look too. */
+.markdown-body.terminal-reader-md a.file-link:not(.md-link),
+.markdown-body.terminal-reader-md .md-link[data-path-link] {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  border-radius: 4px;
+}
+.markdown-body.terminal-reader-md a.file-link:not(.md-link):hover,
+.markdown-body.terminal-reader-md .md-link[data-path-link]:hover {
+  text-decoration-thickness: 2.5px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.terminal-reader-md a.file-link .file-link-dir { color: var(--text-secondary); }
+.terminal-reader-md a.file-link .file-link-line { color: var(--text-secondary); }
+.terminal-reader-md a.file-link:not(.md-link)::after,
+.terminal-reader-md .md-link[data-path-link]::after {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-left: 0.2em;
+  vertical-align: -0.05em;
+  background: currentColor;
+  -webkit-mask: var(--file-link-icon-open) center / contain no-repeat;
+  mask: var(--file-link-icon-open) center / contain no-repeat;
+}
+.markdown-body.terminal-reader-md a.file-link.file-link--chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 1px 0;
+  padding: 2px 10px 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-sans, inherit);
+  font-size: 0.9em;
+  line-height: 1.5;
+  text-decoration: none;
+  vertical-align: middle;
+}
+.markdown-body.terminal-reader-md a.file-link.file-link--chip:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-main));
+  border-color: var(--accent);
+}
+.terminal-reader-md a.file-link--chip::before {
+  content: "";
+  flex: none;
+  order: 0;
+  width: 1.05em;
+  height: 1.05em;
+  background: var(--accent);
+  -webkit-mask: var(--file-link-icon-file) center / contain no-repeat;
+  mask: var(--file-link-icon-file) center / contain no-repeat;
+}
+.terminal-reader-md a.file-link--chip[data-kind="image"]::before { -webkit-mask-image: var(--file-link-icon-image); mask-image: var(--file-link-icon-image); }
+.terminal-reader-md a.file-link--chip[data-kind="code"]::before { -webkit-mask-image: var(--file-link-icon-code); mask-image: var(--file-link-icon-code); }
+.terminal-reader-md a.file-link--chip[data-kind="doc"]::before { -webkit-mask-image: var(--file-link-icon-doc); mask-image: var(--file-link-icon-doc); }
+.terminal-reader-md a.file-link--chip[data-kind="folder"]::before { -webkit-mask-image: var(--file-link-icon-folder); mask-image: var(--file-link-icon-folder); }
+.terminal-reader-md a.file-link--chip .file-link-name { order: 1; font-weight: 600; white-space: nowrap; }
+.terminal-reader-md a.file-link--chip .file-link-line { order: 1; white-space: nowrap; }
+.terminal-reader-md a.file-link--chip .file-link-dir {
+  order: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+}
+.terminal-reader-md a.file-link.file-link--chip::after {
+  order: 3;
+  flex: none;
+  margin-left: 0;
+  visibility: hidden;
+  background: var(--accent);
+}
+.terminal-reader-md a.file-link.file-link--chip:hover::after,
+.terminal-reader-md a.file-link.file-link--chip:focus-visible::after { visibility: visible; }
+/* A web link in the chat (`dressWebLink`), drawn like a file link: inside a
+   sentence the accent underline, the scheme and path greyed so the host
+   stands out, and a leave-the-app arrow after; on a line of its own a chip —
+   globe, then the host and path (or the label, its host greyed after it).
+   Opening always asks first (`onOpenUrl`). Nothing animates. */
+.terminal-reader-md {
+  --web-link-icon-out: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 4h6v6'/%3E%3Cpath d='M20 4l-9 9'/%3E%3Cpath d='M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5'/%3E%3C/svg%3E");
+  --web-link-icon-globe: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M3 12h18'/%3E%3Cpath d='M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z'/%3E%3C/svg%3E");
+}
+.markdown-body.terminal-reader-md .web-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+  cursor: var(--cur-pointer, pointer);
+}
+.markdown-body.terminal-reader-md .web-link:hover {
+  text-decoration-thickness: 2.5px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.terminal-reader-md .web-link .web-link-scheme,
+.terminal-reader-md .web-link .web-link-path { color: var(--text-secondary); }
+.terminal-reader-md .web-link::after {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-left: 0.2em;
+  vertical-align: -0.05em;
+  background: currentColor;
+  -webkit-mask: var(--web-link-icon-out) center / contain no-repeat;
+  mask: var(--web-link-icon-out) center / contain no-repeat;
+}
+.markdown-body.terminal-reader-md .web-link.web-link--chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 1px 0;
+  padding: 2px 10px 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-sans, inherit);
+  font-size: 0.9em;
+  line-height: 1.5;
+  text-decoration: none;
+  vertical-align: middle;
+  overflow-wrap: normal;
+}
+.markdown-body.terminal-reader-md .web-link.web-link--chip:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-main));
+  border-color: var(--accent);
+}
+.terminal-reader-md .web-link--chip::before {
+  content: "";
+  flex: none;
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 6px;
+  background: var(--accent);
+  -webkit-mask: var(--web-link-icon-globe) center / contain no-repeat;
+  mask: var(--web-link-icon-globe) center / contain no-repeat;
+}
+/* The scheme leaves the chip's look but not its text: a copy still copies
+   the address whole. */
+.terminal-reader-md .web-link--chip .web-link-scheme {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.terminal-reader-md .web-link--chip .web-link-host { flex: none; font-weight: 600; white-space: nowrap; }
+.terminal-reader-md .web-link--chip .web-link-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92em;
+}
+.terminal-reader-md .web-link.web-link--chip::after {
+  flex: none;
+  margin-left: 6px;
+  visibility: hidden;
+  background: var(--accent);
+}
+.terminal-reader-md .web-link.web-link--chip:hover::after,
+.terminal-reader-md .web-link.web-link--chip:focus-visible::after { visibility: visible; }
+/* A labelled chip: the label in full weight, the host it goes to greyed
+   after it in place of the arrow. */
+.terminal-reader-md .web-link.web-link--chip[data-host] { font-weight: 600; }
+.terminal-reader-md .web-link.web-link--chip[data-host]::after {
+  content: attr(data-host);
+  flex: 0 1 auto;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  visibility: visible;
+  background: none;
+  -webkit-mask: none;
+  mask: none;
+  color: var(--text-secondary);
+  font-size: 0.92em;
+  font-weight: 400;
+}
 /* A task list's box (`answerMarkdown` emits an empty `.md-task`): drawn, not a
    typed ☑/☐, which a font fallback could hand to the colour-emoji font. */
 .terminal-reader-md .md-task {
@@ -2831,7 +3390,35 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   background: var(--bg-subtle);
 }
 .terminal-changes-body > .terminal-changes-list { min-width: 0; }
+/* The Files tab: the picked file's viewer beside the list. */
+.terminal-files-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.terminal-files-viewer > .file-viewer { flex: 1 1 auto; min-height: 0; }
+/* A file no in-app viewer shows: name, folder · size, and the ways out. */
+.terminal-files-viewless { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-3); overflow-wrap: anywhere; }
+.terminal-files-viewless > strong { color: var(--text-primary); }
+.terminal-files-viewless > p { margin: 0; }
+.terminal-files-viewless-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2); }
 .terminal-changes-view { margin-left: auto; }
+/* Diff colours, shared by the diff viewer and the agent Reader's Diffs. They
+   follow each theme's --success / --danger; the word marks are the stronger tint
+   of the same hue. */
+:root {
+  --diff-add-bg: color-mix(in srgb, var(--success) 15%, transparent);
+  --diff-del-bg: color-mix(in srgb, var(--danger) 15%, transparent);
+  --diff-add-mark: color-mix(in srgb, var(--success) 38%, transparent);
+  --diff-del-mark: color-mix(in srgb, var(--danger) 38%, transparent);
+}
+.diff-line.is-add { background: var(--diff-add-bg); }
+.diff-line.is-del { background: var(--diff-del-bg); }
+.diff-line.is-add .diff-word { background: var(--diff-add-mark); }
+.diff-line.is-del .diff-word { background: var(--diff-del-mark); }
+.diff-word { border-radius: 2px; }
+.diff-file-note {
+  padding: 2px 0.75em;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
 .terminal-changes-split { min-width: 500px; }
 .terminal-changes-split-heading, .terminal-changes-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .terminal-changes-split-heading > span { padding: 6px var(--space-3); color: var(--text-secondary); background: var(--bg-subtle); border-bottom: 1px solid var(--border-subtle); }
@@ -2839,9 +3426,41 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .terminal-changes-split-row > div:first-child, .terminal-changes-split-heading > span:first-child { border-right: 1px solid var(--border-subtle); }
 .terminal-changes-split-row > div > span { flex: none; width: 42px; padding: 0 var(--space-2); text-align: right; color: var(--text-muted); user-select: none; }
 .terminal-changes-split-row code { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
-.terminal-changes-split-row .add { background: color-mix(in srgb, var(--success) 13%, transparent); }
-.terminal-changes-split-row .del { background: color-mix(in srgb, var(--danger) 13%, transparent); }
+.terminal-changes-split-row .add { background: var(--diff-add-bg); }
+.terminal-changes-split-row .del { background: var(--diff-del-bg); }
+.terminal-changes-split-row .add .diff-word { background: var(--diff-add-mark); }
+.terminal-changes-split-row .del .diff-word { background: var(--diff-del-mark); }
 .terminal-changes-split-note { padding: var(--space-1) var(--space-3); color: var(--text-muted); background: var(--bg-subtle); }
+/* The native diff viewer's layout: change anchors, folds, file index. */
+.diff-anchor[data-current="true"], .terminal-changes-split-row[data-current="true"] { box-shadow: inset 3px 0 0 var(--accent); }
+.diff-fold {
+  display: block; width: 100%; padding: 2px var(--space-3); border: 0;
+  border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-subtle); color: var(--text-muted); font: inherit; text-align: center;
+  cursor: var(--cur-pointer, pointer);
+}
+.diff-fold:hover { color: var(--text-primary); }
+.diff-index { max-height: 9.5em; overflow-y: auto; padding: 2px 0; border-bottom: 1px solid var(--border-color); }
+.diff-index-row {
+  display: flex; align-items: baseline; gap: var(--space-3); width: 100%; padding: 1px var(--space-3);
+  border: 0; background: transparent; color: var(--text-primary); font: inherit; text-align: left;
+  cursor: var(--cur-pointer, pointer);
+}
+.diff-index-row:hover { background: var(--bg-subtle); }
+.diff-index-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-index-from { color: var(--text-muted); }
+.diff-file-header { display: flex; align-items: baseline; gap: var(--space-3); }
+.diff-file-fold {
+  display: inline-flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding: 0; border: 0;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: var(--cur-pointer, pointer);
+}
+.diff-file-fold > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-file-caret { display: inline-block; transition: transform 0.1s; color: var(--text-muted); }
+.diff-file-caret.folded { transform: rotate(-90deg); }
+.diff-file-header .terminal-changes-counts { margin-left: auto; }
+.diff-viewer:focus { outline: none; }
+.diff-nav { display: inline-flex; align-items: center; gap: 2px; }
+.diff-nav svg { width: 12px; height: 12px; }
 @media (max-width: 600px) {
   .terminal-changes-body { flex-direction: column; }
   .terminal-changes-body > .terminal-changes-files { width: auto; max-height: 25%; border-right: none; border-bottom: 1px solid var(--border-subtle); }
@@ -2896,16 +3515,39 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: inherit;
   background: none;
   border: none;
-  border-left: 3px solid transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   cursor: var(--cur-pointer, pointer);
 }
-.terminal-changes-files button:hover { background: var(--bg-hover); }
-.terminal-changes-files button.active {
-  background: var(--bg-subtle);
-  border-left-color: var(--accent);
-}
+/* Rows read as the side panel's file tree (.file-entry): a soft accent fill
+   for the picked one, no edge bar (a bar on a rounded row bends). */
+.terminal-changes-files button:hover { background: var(--pill-hover-bg); }
+.terminal-changes-files button.active,
+.terminal-changes-files button.active:hover { background: var(--accent-soft); }
 .terminal-changes-files small { color: var(--text-muted); }
+/* The Files tab's column: a Files group and a Links group (headed only once both exist). */
+.terminal-files-group { display: flex; flex-direction: column; gap: 2px; }
+.terminal-files-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs, var(--text-sm));
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.terminal-files-group + .terminal-files-heading { margin-top: var(--space-2); }
+/* A link row: the target (host bold, path dim) over who named it and when. */
+.terminal-changes-files button.terminal-files-link { flex-direction: column; align-items: stretch; gap: 1px; }
+.terminal-files-link-main { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.terminal-files-link-main svg { flex: none; width: 12px; height: 12px; color: var(--text-muted); }
+.terminal-files-link-main strong { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.terminal-files-link-rest { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.terminal-files-link-meta { display: flex; gap: 6px; min-width: 0; padding-left: 18px; white-space: nowrap; }
+.terminal-files-link-meta > span { overflow: hidden; text-overflow: ellipsis; }
+.terminal-files-link-label { flex: 1 1 auto; min-width: 0; font-style: italic; }
+.terminal-files-link-meta > span:last-child { flex: none; }
 .terminal-changes-path {
   flex: 1 1 auto;
   min-width: 0;
@@ -3059,14 +3701,16 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   display: flex;
   gap: 6px;
 }
+/* Flat chips (2026-11-04): a soft fill, no outline, the button radius. */
 .terminal-reader-chip {
-  padding: 2px 10px;
+  padding: 2px 8px;
   font: inherit;
   font-size: var(--text-sm);
+  font-weight: 500;
   color: var(--text-secondary);
-  background: none;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   cursor: var(--cur-pointer, pointer);
 }
 .terminal-reader-chip:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); }
@@ -3134,11 +3778,13 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-primary);
   background: var(--bg-input);
   border: 1px solid var(--border-color);
-  border-radius: 15px;
+  border-radius: var(--radius);
 }
+/* Focus is the accent edge plus a soft static ring (no blur, never animated). */
 .terminal-reader-composer textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 /* The untested pill of Claude's suggestion, dimmed in the empty box as its
    placeholder: top right, clear of Send and the mic. */
@@ -3294,26 +3940,25 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 .reader-topbar-navigation { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
 .reader-topbar-actions { display: inline-flex; margin-left: auto; }
 .reader-view-tabs { display: inline-flex; align-items: center; flex: none; gap: 2px; padding: 3px; border-radius: var(--radius); background: var(--bg-subtle); }
-.reader-view-tabs > button { padding: 5px 11px; font: inherit; color: var(--text-secondary); border: none; border-radius: var(--radius); background: transparent; cursor: var(--cur-pointer, pointer); }
-.reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--accent); }
+/* One segmented control: the picked view is a lifted chip in ink, not accent. */
+.reader-view-tabs > button { padding: 4px 10px; font: inherit; font-weight: 500; color: var(--text-secondary); border: none; border-radius: var(--radius-sm); background: transparent; cursor: var(--cur-pointer, pointer); }
+.reader-view-tabs > button[aria-selected="true"] { background: var(--bg-input); color: var(--text-primary); box-shadow: var(--shadow-1); }
 .reader-view-tabs > button:disabled { opacity: 0.45; cursor: var(--cur-not-allowed, not-allowed); }
 .reader-topbar .prompt-strip-reader { border-color: transparent; border-radius: var(--radius); }
 .reader-topbar .prompt-strip-panel { top: calc(100% + 6px); bottom: auto; height: min(560px, 65vh); max-height: 65vh; }
 .reader-topbar .prompt-strip-panel:not(:has(.prompt-strip-list)):not(.reader-chats-panel) { height: auto; }
 .reader-topbar .terminal-reader-subagent-index { position: relative; padding: 0; border: none; background: none; }
 .reader-topbar .terminal-reader-subagent-list { position: absolute; top: calc(100% + 6px); left: 0; width: min(420px, 80vw); margin: 0; padding: 6px; color: var(--text-primary); background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--radius); z-index: 2; }
-.reader-toolbar-dropdown .dropdown-trigger { font-size: var(--text-sm); border-color: transparent; background: none; }
-.reader-toolbar-dropdown .dropdown-menu { width: max-content; max-width: min(420px, 80vw); color: var(--text-primary); }
-.reader-toolbar-dropdown .dropdown-menu button { white-space: normal; overflow-wrap: anywhere; }
 .reader-toolbar-error { max-width: 260px; color: var(--danger); font-size: var(--text-sm); }
 .terminal-reader[hidden] { display: none; }
-.terminal-reader-chip-actions { display: inline-flex; align-items: center; gap: 6px; position: relative; }
-.reader-topbar-actions .terminal-reader-chip { border-color: transparent; border-radius: var(--radius); }
-.reader-topbar-actions .terminal-reader-chip[aria-haspopup="menu"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--border-color)); background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel)); }
-.reader-topbar-actions .terminal-reader-commit-menu { top: calc(100% + 8px); bottom: auto; left: auto; right: 0; z-index: 3; }
+/* Clear and Commit act on the conversation, not the draft: they stand apart
+   at the chip row's right end, and the Commit menu opens up from there. */
+.terminal-reader-chip-actions { display: inline-flex; align-items: center; gap: 6px; position: relative; margin-left: auto; }
+.terminal-reader-chip-actions .terminal-reader-commit-menu { left: auto; right: 0; }
 .terminal-reader.card-composer .terminal-reader-composer { border-top: none; padding: var(--space-2) 18px 18px; }
 .terminal-reader.card-composer .terminal-reader-input textarea { padding: var(--space-3) 72px 42px 14px; min-height: 108px; }
-.terminal-reader.card-composer .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; z-index: 1; width: auto; }
+/* `right` leaves the mic and Send their corner; Clear/Commit end beside them. */
+.terminal-reader.card-composer .terminal-reader-chips { position: absolute; bottom: 30px; left: 32px; right: 104px; z-index: 1; width: auto; }
 /* The chips sit over the box's bottom padding; a long draft scrolls its lines
    through that padding, so a strip in the box's own colour hides them there
    (before the textarea in the DOM, so Send and the mic stay above it). */
@@ -3335,6 +3980,14 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   padding: 0 14px var(--space-2);
   font-size: var(--text-sm);
   color: var(--danger);
+  background: var(--bg-panel);
+}
+/* A message held in the composer while the agent's question is open. */
+.terminal-reader-waiting {
+  flex: none;
+  padding: 0 14px var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   background: var(--bg-panel);
 }
 /* The composer's `/` menu (`ReaderSlashMenu`), the phone's `.slash-menu`:
@@ -3445,15 +4098,17 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   gap: 14px;
   min-height: 28px;
   padding: 6px 14px 2px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
   color: var(--text-muted);
   white-space: nowrap;
   overflow-x: auto;
+  /* Scrolls, shows no bar: the path below gives way first, so it rarely
+     scrolls, and a bar would take a third of this line's height. */
   scrollbar-width: none;
-  /* Scrolls, shows nothing: an app-painted thumb over the text hid the dotted
-     underlines, and the path below gives way first so it rarely scrolls. */
-  --app-scrollbar: none;
+}
+.terminal-reader-facts::-webkit-scrollbar {
+  display: none;
 }
 .terminal-reader-fact { flex: none; }
 /* The one elastic fact: in a narrow pane (a file viewer beside the chat) the
@@ -3507,6 +4162,24 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-primary);
   background: var(--bg-hover);
 }
+/* Statusline actions show they are buttons before hover, including usage
+   meters: a soft fill, the frame only under the pointer (2026-11-04: ten
+   framed chips in a row read as one undifferentiated band). Plain facts stay
+   unboxed and the row's hit areas are unchanged. */
+.terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):not(:disabled) {
+  background: var(--bg-subtle);
+  text-decoration: none;
+}
+.terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):not(:disabled):is(:hover, [aria-expanded="true"]) {
+  box-shadow: inset 0 0 0 1px var(--text-muted);
+}
+.terminal-reader-facts :is(.terminal-reader-fact-model, .terminal-reader-limit):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.terminal-reader-facts .terminal-reader-fact-model:disabled {
+  text-decoration: none;
+}
 /* Plan mode stands out, as the phone's plan chip does. */
 .terminal-reader-fact-model.plan { color: var(--accent); }
 .terminal-reader-fact-model:disabled {
@@ -3550,6 +4223,18 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
    opens upward — sized by content, its head jumped on every step. */
 .terminal-reader-picker:is(.terminal-reader-picker-steps, .terminal-reader-status) {
   height: min(60vh, 460px);
+}
+.terminal-reader-picker-steps {
+  overflow: hidden;
+}
+.terminal-reader-picker-steps > .terminal-reader-options {
+  min-height: 0;
+  /* `scroll` keeps the bar's 8px whether or not the options overflow, so they
+     do not reflow between steps (`scrollbar-gutter` would keep 21px). */
+  overflow-y: scroll;
+}
+.terminal-reader-picker-steps > :not(.terminal-reader-options) {
+  flex-shrink: 0;
 }
 .terminal-reader-picker-head {
   display: flex;
@@ -3697,6 +4382,16 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: var(--text-secondary);
   background: var(--bg-inset);
   border-radius: var(--radius);
+}
+/* Keep an unrecognized screen available without filling the chat with output. */
+.terminal-reader-stray-output {
+  align-self: stretch;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.terminal-reader-stray-output > summary {
+  cursor: var(--cur-pointer, pointer);
+  padding: var(--space-2) 0;
 }
 /* What a screen the chat cannot read shows, over its Go to terminal row. */
 .terminal-reader-stray-screen {
@@ -3941,3 +4636,11 @@ button.terminal-reader-option:hover:not(:disabled) {
   align-items: center;
   gap: 6px;
 }
+
+/* Keep command copying outside the code block's horizontal scroll area. */
+.terminal-reader-code-block { position: relative; padding-top: 30px; }
+.terminal-reader-code-actions {
+  position: absolute; top: 0; right: 0;
+  display: flex; align-items: center; gap: 6px; font-size: var(--text-sm);
+}
+.terminal-reader-code-actions button { color: inherit; cursor: var(--cur-pointer, pointer); }

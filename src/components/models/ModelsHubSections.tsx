@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import { useSettingsStore } from "../../stores/settings";
 import { useOllamaAutoloadStore } from "../../stores/agents/ollamaAutoload";
 import { useOllamaUpgradeStore } from "../../stores/agents/ollamaUpgrade";
+import { placementLabel } from "../../lib/agents/ollamaPlacement";
 import type { LocalModelInfo } from "../../stores/agents/ollamaActivity";
+import { shortOnContext } from "../../lib/agents/ollamaContext";
 import type { OllamaModelUpdate } from "../../lib/agents/localDrivers";
 import { runInstallInTab, type InstallShellKind } from "../../lib/installCommand";
 import {
@@ -25,7 +27,7 @@ import { CloseIcon, DotIcon } from "../common/icons/Icon";
 /**
  * The Models & agents sections, rendered by both surfaces: the header's hover
  * dropdown (`layout/LocalModelMenu`) and the overlay's tabs
- * (`models/ModelsOverlay`). Moved out of the dropdown verbatim — same markup,
+ * (`models/ModelsView`). Moved out of the dropdown verbatim — same markup,
  * same classes — so the dropdown stays pixel-identical and the overlay's rows
  * are the dropdown's rows, never a second design of them. The data and the
  * verbs come from `useModelsHub`; these only draw.
@@ -500,7 +502,7 @@ function ModelFacts({ m, t, resident }: { m: LocalModelInfo; t: TFn; resident: b
       )}
       {resident && (
         <span className={`lm-fact lm-place ${m.size_vram > 0 ? "gpu" : "cpu"}`}>
-          {m.size_vram > 0 ? `GPU ${formatBytes(m.size_vram)}` : "CPU"}
+          {placementLabel(m, formatBytes)}
         </span>
       )}
       {hasCapability(m, "vision") && (
@@ -533,7 +535,7 @@ function LoadOnStart({ name, hub, t }: { name: string; hub: ModelsHub; t: TFn })
 
 /** A resident model: its status, the tasks it is pinned to, where it is offered,
  *  and the two verbs that are about it right now (Unload; Update if there is one). */
-function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
+export function RunningModelCard({ m, hub, t }: { m: LocalModelInfo; hub: ModelsHub; t: TFn }) {
   const {
     activeModel,
     roles,
@@ -794,6 +796,8 @@ export function LocalModelsSection({
     autoload,
     roles,
     rootOffModels,
+    restartingOllama,
+    restartOllama,
     checkUpdates,
     upgradeOllama,
     pausePull,
@@ -1048,6 +1052,7 @@ export function LocalModelsSection({
         : t("localModel.running");
     const downloadCount = Object.keys(downloads).length + paused.length;
     const showIgpu = installed && models.length > 0 && gpuStatus?.igpu_dropped;
+    const contextShort = shortOnContext(models);
     return (
       <div className="lm-page">
         <div className="lm-status">
@@ -1080,6 +1085,18 @@ export function LocalModelsSection({
           </div>
           {installed && (
             <div className="lm-status-actions">
+              {status !== "stopped" && (
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  disabled={restartingOllama}
+                  title={t("localModel.restartOllamaTitle")}
+                  onClick={restartOllama}
+                >
+                  {restartingOllama ? t("localModel.restartingOllama") : t("localModel.restartOllama")}{" "}
+                  <UntestedTag id="localModel.restartOllama" />
+                </button>
+              )}
               {/* The check is the page's one outbound request, so it stays a
                   button: a manifest-digest HEAD per installed model, only when
                   clicked. A found update shows on its card; what has no other
@@ -1114,6 +1131,20 @@ export function LocalModelsSection({
         <div className="lm-banners">
           {notices}
           {showIgpu && igpuNote}
+          {contextShort.length > 0 && (
+            <div className="local-model-igpu-notice">
+              <div className="local-model-igpu-text">
+                {t("localModel.contextShort", {
+                  names: contextShort.map((m) => m.name).join(", "),
+                  size: contextShort[0].context_length ?? 0,
+                })}{" "}
+                <UntestedTag id="localModel.contextShort" />
+              </div>
+              <button type="button" className={igpuBtn} disabled={restartingOllama} onClick={restartOllama}>
+                {restartingOllama ? t("localModel.restartingOllama") : t("localModel.restartOllama")}
+              </button>
+            </div>
+          )}
         </div>
         {machine}
         {installed && downloadCount > 0 && (
@@ -1182,9 +1213,6 @@ export function LocalModelsSection({
           it is what makes Running / On disk (`is-sub`) read as its parts. */}
       <div className="tab-new-menu-group-label">{t("localModel.localModelsGroup")}</div>
       <button className="tab-new-menu-item" onClick={onManageModels}>
-        <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-          <DotIcon />
-        </span>
         {installed ? t("localModel.manageLocalModels") : t("localModel.installOllamaEllipsis")}
         {/* The dropdown's door now opens the overlay's Ollama tab, not Settings;
             inside the overlay it is a tab switch and carries no pill. */}
@@ -1206,9 +1234,6 @@ export function LocalModelsSection({
             title={t("localModel.checkUpdatesTitle")}
             onClick={checkUpdates}
           >
-            <span className="tab-new-menu-dot" style={{ color: "transparent" }}>
-              <DotIcon />
-            </span>
             {checkingUpdates ? t("localModel.checkingUpdates") : t("localModel.checkUpdates")}
             {/* The click must always report back — but only where nothing
                 else does. A *found* update now shows itself: the green
@@ -1335,7 +1360,7 @@ export function LocalModelsSection({
                     <CaveatChip m={m} t={t} />
                     <CapabilityChips m={m} t={t} />
                     <span className={m.size_vram > 0 ? "gpu" : "cpu"}>
-                      {m.size_vram > 0 ? `GPU ${formatBytes(m.size_vram)}` : "CPU"}
+                      {placementLabel(m, formatBytes)}
                     </span>
                   </span>
                 </button>

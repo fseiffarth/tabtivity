@@ -14,6 +14,10 @@ export const INK: Record<MarkColor, string> = {
   blue: "#2663eb",
   black: "#121212",
   yellow: "#ffd91a",
+  green: "#16a34a",
+  orange: "#ea7a0c",
+  purple: "#7c3aed",
+  pink: "#ec4899",
 };
 /** How strongly a highlighter box — and the marker — covers the page. */
 export const HIGHLIGHT_ALPHA = 0.4;

@@ -106,6 +106,22 @@ describe("split popout respawns detached on restart (#42)", () => {
     expect(findSplit(layout, pending[0].id)).toBeTruthy();
   });
 
+  it("a save before the re-detach keeps the popout tagged", () => {
+    seedSplitPopout();
+    const snap = useTabsStore.getState().snapshotScopeForSwitch("p");
+    reset();
+    useTabsStore.getState().loadFromLayout(snap.tabs, "/p", "p", snap.tabGroups ?? undefined);
+
+    // Restored docked, respawn still queued (the scope was never the workspace's):
+    // a save now must not turn the popout into an ordinary docked split.
+    const again = useTabsStore.getState().snapshotScopeForSwitch("p");
+    reset();
+    useTabsStore.getState().loadFromLayout(again.tabs, "/p", "p", again.tabGroups ?? undefined);
+    const pending = useTabsStore.getState().pendingRespawnByScope["p"];
+    expect(pending).toHaveLength(1);
+    expect(pending[0].bounds).toEqual(BOUNDS);
+  });
+
   it("detachGroup re-detaches the whole split subtree by its id", () => {
     seedSplitPopout();
     const snap = useTabsStore.getState().snapshotScopeForSwitch("p");

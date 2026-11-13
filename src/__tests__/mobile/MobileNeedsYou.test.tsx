@@ -1,9 +1,10 @@
 /**
  * Home's Needs you: above the projects in the Active view, the agent tabs
  * asking something or cut off, the finished ones this phone has not opened
- * yet, then the desktop's alerts — three rows, then "Show all". Tabs at work
- * are one row that switches to the Agents view. Nothing is drawn when there
- * is nothing to show, and nothing in the Search view.
+ * yet, then the desktop's alerts — three rows, then "Show all". Above it,
+ * three tiles count the waiting, working and unseen finished tabs and lead to
+ * the Agents view. The group is not drawn when there is nothing to show, and
+ * nothing at all in the Search view.
  */
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,9 +56,12 @@ describe("Mobile home — Needs you", () => {
     expect(rows[0]).toContain("Alpha · asking");
     expect(rows[1]).toContain("Alpha · done-1");
     expect(rows[2]).toContain("Ship it");
-    // The working tab is no row of its own: one summary that leads to Agents.
+    // The working tab is no row of its own: its tile counts it and leads to Agents.
     expect(within(group()).queryByText("Alpha · busy")).toBeNull();
-    fireEvent.click(within(group()).getByRole("button", { name: /1 working · see Agents/ }));
+    const glance = screen.getByRole("navigation", { name: "Agents at a glance" });
+    expect(within(glance).getByRole("button", { name: "Waiting: 1" })).toBeTruthy();
+    expect(within(glance).getByRole("button", { name: "Done: 1" })).toBeTruthy();
+    fireEvent.click(within(glance).getByRole("button", { name: "Working: 1" }));
     expect(await screen.findByRole("heading", { name: "Agents" })).toBeTruthy();
   });
 
@@ -134,10 +138,17 @@ describe("Mobile home — Needs you", () => {
     expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
   });
 
-  it("counts the projects' asking tabs on the Agents switch without renaming it", async () => {
-    serve([]);
+  it("keeps the agent tiles when nothing waits, counting a cut-off tab as waiting", async () => {
+    serve([tab("cut", "interrupted"), tab("ask", "question")]);
     render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
     await screen.findByText("Alpha");
-    expect(screen.getByRole("button", { name: "Agents" }).textContent).toBe("Agents2");
+    expect(await screen.findByRole("button", { name: "Waiting: 2" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Working: 0" })).toBeTruthy();
+
+    cleanup();
+    serve([]);
+    render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
+    expect(await screen.findByRole("button", { name: "Done: 0" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
   });
 });

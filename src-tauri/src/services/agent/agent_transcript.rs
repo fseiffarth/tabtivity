@@ -361,7 +361,7 @@ pub fn agent_session_transcript(
     if cmd == "opencode" {
         let db = crate::services::opencode_store::db_path_for(project_id);
         let (own, since) = crate::services::opencode_session::reader_session(project_id, Some(launch_id), since);
-        return opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, since, own.as_deref(), subagent, version, limit);
     }
     if matches!(cmd, "gemini" | "agy") {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
@@ -375,6 +375,19 @@ pub fn agent_session_transcript(
         let own = (cmd == "agy").then(|| crate::services::google_chat::recorded_conversation(project_id, launch_id)).flatten();
         let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
         return crate::services::google_chat::transcript(cmd, &home, directory, since, own, version, limit);
+    }
+    if cmd == "muse" {
+        if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }
+        let Some(directory) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
+            return AgentTranscript::unavailable("no_session");
+        };
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return AgentTranscript::unavailable("unsupported");
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        let own = crate::services::google_chat::recorded_conversation(project_id, launch_id);
+        let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
+        return crate::services::muse_session::transcript(&home, directory, since, own, version, limit);
     }
     if cmd == "copilot" {
         return copilot_transcript(project_id, launch_id, subagent, version, limit);
@@ -417,20 +430,23 @@ pub fn stored_chat_transcript(
     if subagent.is_some_and(|token| !is_subagent_token(token)) {
         return AgentTranscript::unavailable("no_subagent");
     }
-    if matches!(cmd, "opencode" | "agy") {
+    if matches!(cmd, "opencode" | "agy" | "muse") {
         if !crate::services::agent_chats::is_folder_chat(cmd, project_id, tab_dir, launch_id, chat) {
             return AgentTranscript::unavailable("no_transcript");
         }
         let dir = tab_dir.unwrap_or_default();
-        if cmd == "agy" {
+        if matches!(cmd, "agy" | "muse") {
             if subagent.is_some() {
                 return AgentTranscript::unavailable("no_subagent");
             }
             let home = crate::services::agent_home::scope_home(project_id);
+            if cmd == "muse" {
+                return crate::services::muse_session::chat(&home, dir, chat, version, limit);
+            }
             return crate::services::google_chat::antigravity_chat(&home, dir, chat, version, limit);
         }
         let db = crate::services::opencode_store::db_path_for(project_id);
-        return opencode_transcript(&db, project_id, tab_dir, None, Some(chat), subagent, version, limit);
+        return opencode_transcript(&db, runs_remote(project_id), tab_dir, None, Some(chat), subagent, version, limit);
     }
     let Some(main) = crate::services::agent_chats::chat_file(cmd, project_id, tab_dir, launch_id, chat) else {
         return AgentTranscript::unavailable("no_transcript");
@@ -988,6 +1004,8 @@ fn fresh_codex_session(project_id: Option<&str>, launch_id: &str) -> Option<Agen
 /// [`agent_session_transcript`] answers for `opencode`, read from the scope's
 /// local-model home, where such a tab's OpenCode keeps its sessions. `launch_id`
 /// names its recorded session; a tab from before it had one is read by folder.
+/// Such a tab runs on this machine even in a remote project (its spawn is
+/// `local_only`), so the project being remote does not put its store away.
 pub fn local_opencode_transcript(
     project_id: Option<&str>,
     tab_dir: Option<&str>,
@@ -1002,13 +1020,13 @@ pub fn local_opencode_transcript(
     }
     let db = crate::services::opencode_store::local_model_db_path_for(project_id);
     let (own, since) = crate::services::opencode_session::reader_session(project_id, launch_id, since);
-    opencode_transcript(&db, project_id, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
+    opencode_transcript(&db, false, tab_dir, since, own.as_deref(), subagent, version, limit.clamp(1, MAX_LIMIT))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn opencode_transcript(
     db: &Path,
-    project_id: Option<&str>,
+    remote: bool,
     tab_dir: Option<&str>,
     since: Option<i64>,
     own: Option<&str>,
@@ -1019,7 +1037,7 @@ fn opencode_transcript(
     let Some(dir) = tab_dir.filter(|dir| Path::new(dir).is_absolute()) else {
         return AgentTranscript::unavailable("no_session");
     };
-    if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+    if remote {
         return AgentTranscript::unavailable("unsupported");
     }
     if !db.is_file() {
@@ -1027,6 +1045,13 @@ fn opencode_transcript(
     }
     crate::services::opencode_store::session_transcript(db, dir, since, own, subagent, version, limit)
         .unwrap_or_else(|| AgentTranscript::unavailable("read_failed"))
+}
+
+/// Whether a tab of `project_id` runs its agent on a remote host — every
+/// agent tab of a remote project but a local-model one — so its CLI's store
+/// is there and not here.
+pub(crate) fn runs_remote(project_id: Option<&str>) -> bool {
+    project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some())
 }
 
 /// The file's fingerprint: its length and modification time. Both move on
@@ -1114,7 +1139,7 @@ fn read_transcript_in(
     let effort = newest_effort(&lines, kind);
     let tokens = newest_tokens(&lines, kind);
     let context_card = newest_context_card(&lines, kind);
-    let (mut entries, calls, shell_calls) = parse_entries(lines.into_iter(), kind, sidechain);
+    let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain);
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
     let mut spawned_tokens: Vec<String> = Vec::new();
@@ -1552,11 +1577,13 @@ fn codex_context_left(info: &Value) -> Option<u8> {
 /// into one they ran together ("Let me check…" glued to the final answer).
 /// Beside them, each Claude `Agent` call's entry index and call id, for the
 /// caller to match to its subagent, and the shells it has started.
-fn parse_entries<'a>(
-    lines: impl Iterator<Item = &'a str>,
+fn parse_entries(
+    lines: &[&str],
     kind: TranscriptKind,
     sidechain: bool,
 ) -> (Vec<TranscriptEntry>, Vec<(usize, String)>, ShellCalls) {
+    // Branches Claude left: nothing on them is in its conversation any more.
+    let rewound = if kind == TranscriptKind::Claude && !sidechain { claude_rewound(lines) } else { Default::default() };
     let mut entries: Vec<TranscriptEntry> = Vec::new();
     let mut calls: Vec<(usize, String)> = Vec::new();
     // Shell calls since the last prompt, by call id: one an earlier turn
@@ -1592,6 +1619,9 @@ fn parse_entries<'a>(
         let Ok(mut value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if !rewound.is_empty() && value.get("uuid").and_then(Value::as_str).is_some_and(|uuid| rewound.contains(uuid)) {
+            continue;
+        }
         if sidechain {
             if let Some(record) = value.as_object_mut() {
                 record.remove("isSidechain");
@@ -1610,7 +1640,7 @@ fn parse_entries<'a>(
             runs.extend(claude_workflow_launch(&value));
         }
         let records = match kind {
-            TranscriptKind::Claude => claude_records(&value),
+            TranscriptKind::Claude => claude_records(&value, sidechain),
             TranscriptKind::Codex => codex_entry(&value).map(|(role, raw)| Record::Turn(role, raw)).into_iter().collect(),
             TranscriptKind::Copilot => copilot_records(&value),
         };
@@ -2030,7 +2060,7 @@ fn clean_text(raw: &str) -> Option<String> {
 /// the questions its `AskUserQuestion` calls asked. Thinking and other tool-use blocks are stepped over, as is a sidechain (a
 /// subagent's) record, and a `<synthetic>` one Claude writes for itself
 /// ("No response requested." on a resume) unless it reports an API error.
-fn claude_records(value: &Value) -> Vec<Record> {
+fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
     let sidechain = value.get("isSidechain").and_then(Value::as_bool) == Some(true);
     let placeholder = value.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
         && value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true);
@@ -2055,7 +2085,7 @@ fn claude_records(value: &Value) -> Vec<Record> {
             let Some(content) = value.get("message").and_then(|m| m.get("content")) else {
                 return Vec::new();
             };
-            let (text, spawns) = match content {
+            let (text, tools) = match content {
                 Value::String(text) => (text.clone(), Vec::new()),
                 Value::Array(blocks) => (
                     blocks
@@ -2066,7 +2096,14 @@ fn claude_records(value: &Value) -> Vec<Record> {
                         .join("\n\n"),
                     blocks
                         .iter()
-                        .filter_map(|b| claude_plan(b).or_else(|| claude_spawn(b)).or_else(|| claude_workflow(b)).or_else(|| claude_shell(b)).or_else(|| claude_question(b)))
+                        .filter_map(|b| {
+                            claude_plan(b)
+                                .or_else(|| claude_spawn(b))
+                                .or_else(|| claude_workflow(b))
+                                .or_else(|| claude_shell(b))
+                                .or_else(|| claude_question(b))
+                                .or_else(|| subagent_file.then(|| claude_handback_answer(b)).flatten())
+                        })
                         .collect(),
                 ),
                 _ => return Vec::new(),
@@ -2075,11 +2112,72 @@ fn claude_records(value: &Value) -> Vec<Record> {
             (!text.is_empty())
                 .then(|| Record::Turn("answer", text.to_string()))
                 .into_iter()
-                .chain(spawns)
+                .chain(tools)
                 .collect()
         }
         _ => Vec::new(),
     }
+}
+
+/// Claude can write a subagent's final report as the input to this tool
+/// instead of a text block. Read it from the subagent's own conversation.
+fn claude_handback_answer(block: &Value) -> Option<Record> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use")
+        || block.get("name").and_then(Value::as_str) != Some("SubagentHandback")
+    {
+        return None;
+    }
+    Some(Record::Turn("answer", block.pointer("/input/message")?.as_str()?.to_string()))
+}
+
+/// The records on branches Claude abandoned, by uuid. Claude chains its
+/// records by `parentUuid` and shows the chain that ends in the newest one.
+/// When it takes a prompt back — an Esc before the turn answered puts the
+/// words back in its input box, unsent (2.1.318) — or the user rewinds to an
+/// earlier prompt, the next prompt hangs from the record the earlier prompt
+/// hung from. Everything under that earlier prompt is then off the
+/// conversation, and a chat that showed it would claim the agent had it.
+fn claude_rewound(lines: &[&str]) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
+    #[derive(Deserialize)]
+    struct Link {
+        uuid: Option<String>,
+        #[serde(rename = "parentUuid")]
+        parent: Option<String>,
+    }
+    let mut dead: HashSet<String> = HashSet::new();
+    // The prompt hanging from each parent: a later one from the same parent
+    // leaves it. Only prompt lines are parsed whole here.
+    let mut prompt_under: HashMap<String, String> = HashMap::new();
+    for line in lines {
+        if !line.contains("\"type\":\"user\"") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        if claude_interrupt(&value).is_some() || agent_session::claude_prompt_in_record(&value).is_none() {
+            continue;
+        }
+        let (Some(uuid), Some(parent)) = (value.get("uuid").and_then(Value::as_str), value.get("parentUuid").and_then(Value::as_str)) else {
+            continue;
+        };
+        if let Some(earlier) = prompt_under.insert(parent.to_string(), uuid.to_string()) {
+            dead.insert(earlier);
+        }
+    }
+    if dead.is_empty() {
+        return dead;
+    }
+    // A record is written after its parent: one pass in file order carries
+    // the mark down each dead branch.
+    for line in lines {
+        let Ok(link) = serde_json::from_str::<Link>(line.trim()) else { continue };
+        if let (Some(uuid), Some(parent)) = (link.uuid, link.parent) {
+            if dead.contains(&parent) {
+                dead.insert(uuid);
+            }
+        }
+    }
+    dead
 }
 
 /// The notice Claude writes when the user cuts a turn off —

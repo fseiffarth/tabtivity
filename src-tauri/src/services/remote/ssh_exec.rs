@@ -448,6 +448,11 @@ pub const TMUX_HISTORY_LINES: u32 = 10_000;
 /// session's target because a pane does not inherit them from the client (see
 /// [`remote_command`]). A [`TmuxWrap::Attach`] takes none: it runs no target of
 /// its own, and the session it attaches belongs to whoever created it.
+/// The `update-environment` slot the saved Claude token takes on a remote
+/// tmux server (fixed, so every tab re-sets the same entry; far above tmux's
+/// defaults and the local slots, `tmux_local`).
+const CLAUDE_TOKEN_SLOT: usize = 8700;
+
 fn tmux_wrap_exec(exec_line: &str, wrap: &TmuxWrap, env_prefix: &str) -> String {
     // The extra options are passed as separate tmux commands: a standalone
     // `;` token (quoted so the remote shell hands it to tmux literally, not as a
@@ -472,11 +477,28 @@ fn tmux_wrap_exec(exec_line: &str, wrap: &TmuxWrap, env_prefix: &str) -> String 
             let credential = if env_prefix.contains(concat!("LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN")) {
                 concat!(" -e \"LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN=${LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN:?}\"")
             } else { "" };
-            format!(
-                "if command -v tmux >/dev/null 2>&1; then \
-                 exec tmux {history} new-session -A -D -s {q}{credential} {target} {opts} {prefix}; \
-                 else printf '{SLUG}: tmux not found on the remote host; session persistence is OFF (install tmux to enable it)\\n' >&2; {exec_line}; fi"
-            )
+            let new_session = format!("new-session -A -D -s {q}{credential} {target} {opts} {prefix}");
+            let missing = format!(
+                "else printf '{SLUG}: tmux not found on the remote host; session persistence is OFF (install tmux to enable it)\\n' >&2; {exec_line}; fi"
+            );
+            if env_prefix.contains(crate::services::claude_token::REMOTE_ENV) {
+                // The saved Claude token reaches the session from the client's
+                // environment through a fixed `update-environment` slot (tmux
+                // 3.0+ arrays; never `-e`, which would put it on the argv). An
+                // older tmux leaves it out: the host's own login applies.
+                let slot = format!(
+                    "set -g 'update-environment[{CLAUDE_TOKEN_SLOT}]' {} ';'",
+                    crate::services::claude_token::REMOTE_ENV
+                );
+                format!(
+                    "if command -v tmux >/dev/null 2>&1; then \
+                     case \"$(tmux -V 2>/dev/null)\" in \"tmux \"[012].*) exec tmux {history} {new_session};; \
+                     *) exec tmux {history} {slot} {new_session};; esac; \
+                     {missing}"
+                )
+            } else {
+                format!("if command -v tmux >/dev/null 2>&1; then exec tmux {history} {new_session}; {missing}")
+            }
         }
         TmuxWrap::Attach(name) => {
             let q = shell_quote(name);
@@ -530,10 +552,17 @@ pub fn remote_command(
         .filter(|k| {
             let k = k.as_str();
             // is_valid_env_key gates injection via a metacharacter-bearing key.
-            is_valid_env_key(k) && k != "TERM" && k != "COLORTERM" && !AGENT_AUTH_ENV.contains(&k)
+            is_valid_env_key(k)
+                && k != "TERM"
+                && k != "COLORTERM"
+                && !AGENT_AUTH_ENV.contains(&k)
+                && k != crate::services::claude_token::REMOTE_ENV
         })
         .collect();
     keys.sort();
+    // The saved Claude token (`claude_token`) rides ssh's environment channel,
+    // never this command line: only the line that reads it is written here.
+    let claude_token = env.contains_key(crate::services::claude_token::REMOTE_ENV);
     let exports: Vec<String> = keys
         .into_iter()
         .map(|k| if k == crate::services::root_mcp::TOKEN_ENV {
@@ -543,6 +572,12 @@ pub fn remote_command(
         } else { format!("export {}={}", k, shell_quote(&env[k])) })
         .collect();
     parts.extend(exports.iter().cloned());
+    if claude_token {
+        // Inside a tmux wrap the variable must survive to the tmux client,
+        // which copies it into the session (`tmux_wrap_exec`); the session's
+        // own copy of the line drops it there.
+        parts.push(crate::services::claude_token::remote_export_line(tmux.is_none()));
+    }
 
     let exec = if local_cmd.is_empty() {
         // Login shell — let the remote pick its own $SHELL.
@@ -581,10 +616,14 @@ pub fn remote_command(
     // start the server (the local half of this is `tmux_local::local_tmux_args`).
     // The `cd` needs no such repeat — a new session does take its start directory
     // from the client.
-    let env_prefix = if exports.is_empty() {
+    let mut session_exports = exports.clone();
+    if claude_token {
+        session_exports.push(crate::services::claude_token::remote_export_line(true));
+    }
+    let env_prefix = if session_exports.is_empty() {
         String::new()
     } else {
-        format!("{}; ", exports.join("; "))
+        format!("{}; ", session_exports.join("; "))
     };
     let exec = match tmux {
         Some(wrap) => tmux_wrap_exec(&exec, wrap, &env_prefix),
@@ -1080,7 +1119,7 @@ pub fn host_mux_sftp_args(spec: &RemoteSpec, control_path: &std::path::Path) -> 
 /// `control_path` as the one `-o ControlPath=` value it may be: absolute, and
 /// with nothing ssh would read as more than a path — a `%` token it would
 /// expand, whitespace that would split the option, a control character.
-fn literal_control_path(control_path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn literal_control_path(control_path: &std::path::Path) -> Result<String, String> {
     let path = control_path.to_string_lossy();
     if !control_path.is_absolute()
         || path.contains('%')
@@ -1160,6 +1199,38 @@ fn host_sh(body: &str) -> String {
     format!("exec sh -c '{body}'")
 }
 
+/// The `terminal-overrides` entry that lets a `vt100` client have dim text. The
+/// phone's attach is one (`pty_bridge::tmux_attach_command`, for its lack of
+/// `smcup`), and vt100's terminfo has no `dim`, so tmux strips SGR 2 from the
+/// client's stream while the pane keeps it. The phone's terminal and its
+/// parsers then see dim rows as ordinary text. Server-wide, in memory only, and
+/// it matches no client but a `vt100` one.
+///
+/// It is **appended** (`set-option -as`), once per server, and never written to
+/// an index: the option is the user's own and their `tmux.conf` may hold any
+/// slot of it. The value leads with a comma, which tmux 2.4 and later (where
+/// `terminal-overrides` became an array) drop when it splits the string into
+/// entries, and which a tmux before 2.4 (a single string, where `-a` joins
+/// verbatim) needs to keep the entry apart from the one before it (the 2.4
+/// changelog: "the previous set -ag syntax should work without change").
+pub const TMUX_VT100_DIM: (&str, &str) = ("terminal-overrides", r",vt100:dim=\E[2m");
+
+/// What `show-options -s terminal-overrides` prints when a `vt100` dim entry is
+/// already there, ours from an earlier attach or the user's own. Shown with
+/// `\E` or `\\E` depending on the tmux; the mark stops before it.
+pub const TMUX_VT100_DIM_MARK: &str = "vt100:dim=";
+
+/// [`TMUX_VT100_DIM`] on a host's tmux: append it only when
+/// [`TMUX_VT100_DIM_MARK`] is not in the option yet. A `case` over the printed
+/// option, so no `grep` is needed on the host. Plain `tmux`, like the attach;
+/// `sh`'s double quotes keep the backslash for tmux.
+pub fn host_tmux_keep_dim_command() -> String {
+    let (option, value) = TMUX_VT100_DIM;
+    host_sh(&format!(
+        "case \"$(tmux show-options -s {option} 2>/dev/null)\" in *{TMUX_VT100_DIM_MARK}*) ;; *) tmux set-option -as {option} \"{value}\";; esac"
+    ))
+}
+
 /// The host-side attach the phone's PTY runs through [`host_mux_args`]: plain
 /// `tmux` in a `sh` of the remote's non-login `$SHELL -c`, the way the desktop's
 /// wrap started the session ([`remote_command`]), so the same binary and server
@@ -1203,8 +1274,8 @@ pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
     })
 }
 
-/// The host-side Send now (`pty_bridge::QueueHint`): Esc into the session's
-/// pane, only while a row of its screen starts with `row_start` and holds
+/// The host-side Send now (`pty_bridge::QueueHint`): `keys` (tmux key names,
+/// one `send-keys` call per press) into the session's pane, only while a row of its screen starts with `row_start` and holds
 /// `words` — the CLI saying a message still waits in its queue. Check and
 /// press are one script on the host, so no ssh round trip falls between
 /// them; shell builtins, `sleep` between the presses of a stop that takes
@@ -1213,11 +1284,14 @@ pub fn host_tmux_window_size_command(session: &str) -> Option<String> {
 /// `❯`) against a pattern in a UTF-8 locale. Its case pattern opens with `(`:
 /// bash 3.2 otherwise takes the pattern's `)` for the end of the `$(…)`.
 /// Prints `sent` when it pressed. `None`
-/// for an invalid name, or a hint that could break out of its quotes.
-pub fn host_tmux_send_now_command(session: &str, row_start: &str, words: &str, row_tail: &str, presses: u8) -> Option<String> {
+/// for an invalid name, a hint that could break out of its quotes, or a key
+/// that is not a plain tmux key name.
+pub fn host_tmux_send_now_command(session: &str, row_start: &str, words: &str, row_tail: &str, keys: &[&str], presses: u8) -> Option<String> {
     let quotable = |text: &str| !text.chars().any(|c| matches!(c, '\'' | '"' | '\\' | '$' | '`') || c.is_control());
-    (valid_tmux_session_name(session) && quotable(row_start) && quotable(words) && quotable(row_tail) && presses > 0).then(|| {
-        let press = "tmux send-keys -t \"$t\" Escape";
+    let key_name = |key: &&str| !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let valid_keys = !keys.is_empty() && keys.iter().all(key_name);
+    (valid_tmux_session_name(session) && quotable(row_start) && quotable(words) && quotable(row_tail) && valid_keys && presses > 0).then(|| {
+        let press = format!("tmux send-keys -t \"$t\" {}", keys.join(" "));
         let keys = vec![press; usize::from(presses)].join(" && sleep 1 && ");
         host_sh(&format!(
             "{HOST_TMUX_EXACT}t=\"$e\"{session}\"$c\"; \
@@ -1661,6 +1735,12 @@ pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
     if mcp_token.is_some() {
         args.splice(0..0, ["-o".into(), concat!("SendEnv=LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN").into()]);
     }
+    // The saved Claude token (`claude_token`): the same encrypted channel. A
+    // host that refuses it runs on its own login.
+    let claude_token = opts.env.get(crate::services::claude_token::REMOTE_ENV).cloned();
+    if claude_token.is_some() {
+        args.splice(0..0, ["-o".into(), format!("SendEnv={}", crate::services::claude_token::REMOTE_ENV)]);
+    }
 
     opts.cmd = "ssh".to_string();
     opts.args = args;
@@ -1672,6 +1752,9 @@ pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
         opts.env.insert(concat!("LC_", crate::app_upper!(), "_ROOT_MCP_TOKEN").into(), token.clone());
         // Kept for PTY teardown's generation-safe revocation, never in argv.
         opts.env.insert(crate::services::root_mcp::TOKEN_ENV.into(), token);
+    }
+    if let Some(token) = claude_token {
+        opts.env.insert(crate::services::claude_token::REMOTE_ENV.into(), token);
     }
     opts.cwd = storage::root_work_dir().to_string_lossy().into_owned();
     Ok(())

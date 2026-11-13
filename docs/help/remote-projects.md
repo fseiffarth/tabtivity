@@ -65,8 +65,9 @@ Where things run:
 - Search, Ctrl+P quick open and the context-file picker search the host
   while connected (an HPC host asks first).
 - Git (commit, push, branches, worktrees, Publish…) runs on the host.
-- TeX **Compile** saves, then runs `latexmk` in a build tab on the host; the
-  PDF tab opens once the build writes it.
+- TeX **Compile** saves, then runs `latexmk` on the host in the background
+  (no tab); errors show in the editor as for a local build, and the PDF tab
+  opens or reloads when it is done.
 - The phone lists the host tabs, starts agents on the host and reads the
   files under ☰ Files, while the desktop is connected.
 

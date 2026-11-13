@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { TranslationKey } from "../i18n";
 import { NAMES } from "../brand";
+import type { TfCursor, TfFileInfo, TfReadResult } from "../viewers/tensorboard";
 
 /**
  * The project scope that absolute-path file commands are confined to.
@@ -195,6 +196,24 @@ export function fileMtime(path: string, projectId: string | null): Promise<numbe
  *  it" probe (`file_size`), a stat where a read would move the whole file. */
 export function fileSize(path: string, projectId: string | null): Promise<number> {
   return invoke<number>("file_size", { path, projectId });
+}
+
+/**
+ * Follow a TensorBoard event file: the scalars after `cursor` (the whole file
+ * when null) plus the new cursor. Ranged on the host for a remote project, so a
+ * refresh moves only the new bytes. `src-tauri/src/commands/tfevents.rs`.
+ */
+export function tfeventsRead(
+  path: string,
+  projectId: string | null,
+  cursor: TfCursor | null,
+): Promise<TfReadResult> {
+  return invoke<TfReadResult>("tfevents_read", { path, projectId, cursor });
+}
+
+/** The event files below a folder (a few levels deep, a bounded count). */
+export function tfeventsDiscover(path: string, projectId: string | null): Promise<TfFileInfo[]> {
+  return invoke<TfFileInfo[]>("tfevents_discover", { path, projectId });
 }
 
 /**

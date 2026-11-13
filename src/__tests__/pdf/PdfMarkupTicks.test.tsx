@@ -37,7 +37,11 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
   layerPng: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
 }));
 
-import { PdfMarkupBar } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupBar, PdfMarkupUndoConfirm } from "../../components/embed/pdf/PdfMarkupBar";
+import { PdfMarkupAgentPanel } from "../../components/embed/pdf/PdfMarkupAgentPanel";
+import { PdfMarkupDock } from "../../components/embed/pdf/PdfMarkupDock";
+/** The harness shows the agent panel open throughout. */
+const PINNED: ReadonlySet<string> = new Set(["ask-1:0"]);
 import { PdfTickBadges, tickBadgesByPage } from "../../components/embed/pdf/PdfMarkupTicks";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import { useActivityStore } from "../../stores/activity";
@@ -72,7 +76,7 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
   const badges = tickBadgesByPage(markup.edit.base, markup.ticks.groups).get(1) ?? [];
   return (
     <>
-      <PdfMarkupBar markup={markup} page={1} onReload={onReload} onDone={() => {}} />
+      <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={onReload} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={onReload} /></>
       <div data-testid="page-1">
         <PdfTickBadges badges={badges} size={SIZE} scale={1} disabled={markup.sending} onApprove={(marks) => markup.ticks.approve(1, marks)} />
       </div>
@@ -183,7 +187,7 @@ describe("desktop markup ticks", () => {
     function Grab() {
       const markup = usePdfMarkup({ projectId: "p1", scope: "p1", path: PATH, active: true, visible: true, pageCount: 3, docSize: 9_000, docVersion: 0 });
       approve = markup.ticks.approve;
-      return <PdfMarkupBar markup={markup} page={1} onReload={() => {}} onDone={() => {}} />;
+      return <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={() => {}} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={() => {}} /></>;
     }
     render(<Grab />);
     const round = await submitted();

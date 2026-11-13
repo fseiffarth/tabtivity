@@ -171,9 +171,11 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
       .finally(() => setLoadingDetail(false));
   }, [selectedEntry]);
 
-  /** In the scope the install button aims at — the only set "Reinstall" and the
-   *  overwrite confirm may read, since those are about *this* target's copy. */
-  const installedNames = useMemo(() => new Set(installed.map((s) => s.name)), [installed]);
+  /** Folders in the scope the install button aims at — the only set "Reinstall"
+   *  and the overwrite confirm may read, since those are about *this* target's
+   *  copy. Folders, not frontmatter names: an install writes
+   *  `.claude/skills/<entry name>/`, so that folder is what it would replace. */
+  const installedFolders = useMemo(() => new Set(installed.map((s) => s.folder)), [installed]);
   /** Present personally while a project is the target: usable here already, but
    *  not this project's own copy, so it is badged differently and never turns
    *  the install button into a "Reinstall" for a folder it would not touch. */
@@ -245,7 +247,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
 
   async function handleInstall() {
     if (!selectedEntry || !detail) return;
-    if (installedNames.has(detail.name)) {
+    if (installedFolders.has(detail.name)) {
       const ok = await confirmAction({
         title: t("skillsLibrary.reinstall"),
         body: t("skillsLibrary.confirmReinstall", { name: detail.name }),
@@ -281,7 +283,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
     });
     if (!ok) return;
     try {
-      await uninstallSkill(personal ? PERSONAL_SKILLS : target, skill.name);
+      await uninstallSkill(personal ? PERSONAL_SKILLS : target, skill.folder);
       reloadInstalled();
     } catch (e) {
       setError(String(e));
@@ -298,10 +300,10 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
   // With no source there is nothing to browse, so the form is the whole screen.
   const sourcesShown = sourcesOpen || sources.length === 0;
   const previewOpen = view === "browse" && !!selectedEntry;
-  const isInstalled = !!detail && installedNames.has(detail.name);
+  const isInstalled = !!detail && installedFolders.has(detail.name);
 
   const installedRow = (skill: InstalledSkill, from: "target" | "personal") => (
-    <div className="skills-card skills-card-static" key={`${from}:${skill.name}`}>
+    <div className="skills-card skills-card-static" key={`${from}:${skill.folder}`}>
       <span className="skills-card-name">{skill.name}</span>
       <span className="skills-card-desc">{skill.description}</span>
       <span className="skills-card-foot">
@@ -476,7 +478,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                   <span className="skills-card-name">{entry.name}</span>
                   <span className="skills-card-desc">{entry.description}</span>
                   <span className="skills-card-foot">
-                    {installedNames.has(entry.name) ? (
+                    {installedFolders.has(entry.name) ? (
                       <span className="skills-badge installed">{t("skillsLibrary.installedBadge")}</span>
                     ) : inheritedNames.has(entry.name) ? (
                       <span className="skills-badge personal" title={t("skillsLibrary.personalBadgeTitle")}>
@@ -571,9 +573,10 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                 {projectDir ? (
                   <div className="skills-seg" role="radiogroup" aria-label={t("skillsLibrary.installTo")}>
                     <span className="skills-seg-label">{t("skillsLibrary.installTo")}</span>
+                    <span className="seg">
                     <button
                       type="button"
-                      className={`skills-seg-btn${scope === "project" ? " on" : ""}`}
+                      className={scope === "project" ? "on" : undefined}
                       role="radio"
                       aria-checked={scope === "project"}
                       title={t("skillsLibrary.scopeProjectNote")}
@@ -583,7 +586,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                     </button>
                     <button
                       type="button"
-                      className={`skills-seg-btn${scope === "personal" ? " on" : ""}`}
+                      className={scope === "personal" ? "on" : undefined}
                       role="radio"
                       aria-checked={scope === "personal"}
                       title={t("skillsLibrary.scopePersonalNote")}
@@ -591,6 +594,7 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
                     >
                       {t("skillsLibrary.scopePersonal")}
                     </button>
+                    </span>
                   </div>
                 ) : (
                   <span className="skills-seg-label">{t("skillsLibrary.scopePersonalOnly")}</span>

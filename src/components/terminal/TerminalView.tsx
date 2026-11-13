@@ -1,3 +1,4 @@
+import { TerminalLimitHandoff } from "./TerminalLimitHandoff";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Terminal } from "@xterm/xterm";
@@ -9,11 +10,14 @@ import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { reportFrontendIssue } from "../../crashReporter";
-import { isDetachedPtyId, type TabKind } from "../../stores/tabs";
-import { agentDeliveryTurn, isInterruptInput, lastPtyOutputAt, noteAgentResting, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
+import { isDetachedPtyId, useTabsStore, type TabKind } from "../../stores/tabs";
+import { agentDeliveryTurn, isDialogNavigationInput, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { noteAgentSubmit } from "../../stores/agents/agentModels";
+import { agentLabelOfCmd, dialogOnScreen } from "../../lib/agents/dialogOnScreen";
+import { notePrompted } from "../../lib/agents/emptyAgentTab";
 import { noteInput } from "../../lib/agents/promptCount";
 import { forgetInputFrom, noteInputFrom } from "../../lib/agents/inputFrom";
 import { METRIC, agentPromptLeaf, sub } from "../../lib/usageMetrics";
@@ -36,6 +40,8 @@ import { isAiOffRefusal, useAiOff, whenAiOn } from "../../lib/aiSwitch";
 import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
+// Aliased: the component has its own `copyText` (a link copy with its toast).
+import { copyText as writeClipboard } from "../../lib/terminal/copyText";
 import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFiles } from "../../lib/files/droppedFiles";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
@@ -60,9 +66,20 @@ import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
 import { relativePathWithin } from "../../lib/paths";
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { SIGN_IN_CARD_CLASS, TerminalSignInCard, TerminalSignInDoneCard } from "./TerminalSignInCard";
+import { SERVER_CHIPS_CLASS, TerminalServerChips } from "./TerminalServerChips";
+import { isLoopbackServerHost, localPageUrl, forwardedUrl, type ServerUrl } from "../../lib/terminal/serverUrls";
+import { watchServers } from "../../lib/terminal/serverWatch";
+import { routeLink, tabLocality, type LinkRoute } from "../../lib/terminal/linkRoute";
+import { forwardAndOpen, hostLabelOf } from "../../lib/remote/portForward";
+import { usePortForwardStore } from "../../stores/remote/portForwards";
 import { TerminalPromptStrip } from "./TerminalPromptStrip";
 import { TerminalReaderView } from "./TerminalReaderView";
 import { changesOffered, readerAgent as readerAgentOf, readerOffered } from "../../lib/agents/agentReader";
+import {
+  publishReaderViewFacts,
+  registerReaderViews,
+  type ReaderViewId,
+} from "../../lib/agents/readerSteering";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
@@ -97,10 +114,10 @@ const WRAPPED_URL_LOOKBACK_ROWS = 40;
  *  time makes it a double-click, which copies the link instead. */
 const LINK_OPEN_DELAY_MS = 300;
 
-/** Whether a pane-level mouse event came from the sign-in card, which the
- *  terminal's own mouse handling must leave alone. */
+/** Whether a pane-level mouse event came from the sign-in card or a server
+ *  chip, which the terminal's own mouse handling must leave alone. */
 function fromSignInCard(e: Event): boolean {
-  return e.target instanceof Element && !!e.target.closest(`.${SIGN_IN_CARD_CLASS}`);
+  return e.target instanceof Element && !!e.target.closest(`.${SIGN_IN_CARD_CLASS}, .${SERVER_CHIPS_CLASS}`);
 }
 
 interface PtyScrollback {
@@ -410,6 +427,84 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     return confirmAction(spec);
   };
 
+  // Where this tab's program runs, from its explicit props and its project —
+  // never from the cwd. A loopback link or server chip means the tab's own
+  // loopback: forwarded for a remote host, refused for a container, opened as
+  // is for a local tab (`lib/terminal/linkRoute`).
+  const projectEntry = useProjectsStore((s) => (projectId ? s.projects.find((p) => p.id === projectId) : undefined));
+  const locality = tabLocality({
+    projectId,
+    localOnly,
+    sandbox,
+    remoteHostId,
+    login: !!login,
+    hostSession,
+    project: projectEntry
+      ? { remote: !!projectEntry.remote, workerIds: (projectEntry.compute_hosts ?? []).map((h) => h.id) }
+      : null,
+  });
+  const localityRef = useRef(locality);
+  localityRef.current = locality;
+  const toast = (text: string) => useProjectsStore.setState({ switchToast: text });
+  // Forward a remote server (confirmed once per session, naming both ends) and
+  // open it in the system browser. Read through a ref by the link handlers.
+  const forwardServerRef = useRef<(forward: Extract<LinkRoute, { forward: unknown }>["forward"], open: boolean, viaLink?: boolean) => Promise<number | null>>(
+    () => Promise.resolve(null),
+  );
+  forwardServerRef.current = (forward, open, viaLink = false) => {
+    const hostLabel = hostLabelOf(projectEntry, forward.hostId);
+    const loopback = isLoopbackServerHost(forward.remoteHost);
+    return forwardAndOpen({
+      target: { projectId: forward.projectId, hostId: forward.hostId, remoteHost: forward.remoteHost, remotePort: forward.remotePort },
+      page: forward,
+      tabUid: id,
+      open,
+      notify: toast,
+      onForwarded: () => void usePortForwardStore.getState().refresh(),
+      confirm: () =>
+        confirmAction({
+          title: (
+            <>
+              {t("portForward.confirm.title")}
+              <UntestedTag id="remote.portForward" />
+              {viaLink && <UntestedTag id="terminal.remoteLoopbackLink" />}
+            </>
+          ),
+          body: (
+            <>
+              {loopback
+                ? t("portForward.confirm.bodyLoopback", { port: forward.remotePort, host: hostLabel })
+                : t("portForward.confirm.bodyNamed", { port: forward.remotePort, remoteHost: forward.remoteHost, host: hostLabel })}
+              <span style={{ display: "block", marginTop: 8 }}>{t("portForward.confirm.note")}</span>
+            </>
+          ),
+          confirmLabel: t("portForward.confirm.confirm"),
+        }),
+    });
+  };
+  // One entry for every clicked link: the OAuth-style confirmation for an
+  // ordinary page, the forward for a remote tab's own server, a message where
+  // a container's loopback cannot be reached yet.
+  const openLinkRef = useRef<(url: string) => Promise<void>>(() => Promise.resolve());
+  openLinkRef.current = async (url) => {
+    const route = routeLink(url, localityRef.current);
+    if (route === "unsupported") {
+      toast(t("terminal.remoteLoopback.unsupported"));
+      return;
+    }
+    if (route !== "external") {
+      await forwardServerRef.current(route.forward, true, true);
+      return;
+    }
+    if (await confirmLinkRef.current(url)) await invoke("open_external_url", { url });
+  };
+
+  // The local servers the program printed (`watchServers`), and the ones whose
+  // chip the user closed.
+  const [servers, setServers] = useState<ServerUrl[]>([]);
+  const [dismissedServers, setDismissedServers] = useState<string[]>([]);
+  const forwardRows = usePortForwardStore((s) => s.rows);
+
   // The sign-in link the program on screen is waiting on (see
   // `TerminalSignInCard`), and the links the user already closed the card for.
   const [signIn, setSignIn] = useState<SignInRequest | null>(null);
@@ -552,6 +647,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           "'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Cascadia Mono', Consolas, Menlo, monospace",
         theme: terminalTheme(colorSchemeRef.current),
         minimumContrastRatio: TERMINAL_MIN_CONTRAST,
+        // Under ConPTY the OS repaints wrapped lines itself on a resize; without
+        // this xterm reflows them too and the output duplicates or garbles. The
+        // build number only has to be past the ConPTY reflow fix (Windows 11).
+        ...(IS_HOST_WINDOWS ? { windowsPty: { backend: "conpty" as const, buildNumber: 22621 } } : {}),
       });
       const fit = new FitAddon();
       built.loadAddon(fit);
@@ -581,9 +680,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       cancelLinkOpen();
       linkOpenTimer = setTimeout(() => {
         linkOpenTimer = null;
-        void confirmLinkRef.current(url).then((ok) => {
-          if (ok) return invoke("open_external_url", { url });
-        }).catch(() => {});
+        void openLinkRef.current(url).catch(() => {});
       }, LINK_OPEN_DELAY_MS);
     };
     const linkHover = {
@@ -633,9 +730,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           linkOpenTimer = setTimeout(() => {
             linkOpenTimer = null;
             const ctx = pathLinkContextRef.current;
-            const scope = splitPtyId(id)?.scope ?? ROOT_SCOPE;
+            const owner = splitPtyId(id);
             openPathLink(entry, at, {
-              scope, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled, t: tRef.current, newSubwindow,
+              scope: owner?.scope ?? ROOT_SCOPE, projectId, projectDir: ctx.projectDir, cwd, disabled: ctx.disabled,
+              t: tRef.current, newSubwindow, fromTab: owner?.key,
             });
           }, LINK_OPEN_DELAY_MS);
         },
@@ -698,6 +796,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       termDisposables.push(term.onWriteParsed(() => {
         signInScanTimer ??= setTimeout(scanForSignIn, 300);
       }));
+    });
+
+    // Local servers the program printed (JupyterLab, Vite, TensorBoard, …): a
+    // chip per server, from the same coalesced parse tick as the sign-in scan.
+    setServers([]);
+    onBuild.push((term) => {
+      termDisposables.push(watchServers(term, setServers));
     });
 
     openedRef.current = false;
@@ -899,7 +1004,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       noteFit(built.cols, built.rows);
       notePtyResize(id);
       invoke("pty_resize", { id, cols: built.cols, rows: built.rows }).catch(() => {});
-      if (focusedRef.current) built.focus();
+      // Over a shown Reader its composer takes the keyboard, not the hidden xterm.
+      if (focusedRef.current && !readerOnRef.current) built.focus();
       // The pane may keep growing right after open — the startup fullscreen
       // transition (especially on a larger screen) and late web-font load both
       // change the final cell geometry after this first fit. Re-fit on the next
@@ -935,6 +1041,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // then ask it.
         markAgentActive(scope, id, sub(METRIC.AGENT_ACTIVE, agentLeaf));
         noteAgentSubmit(id);
+        notePrompted(id);
       } else if (kind === "shell") {
         bumpUsage(scope, METRIC.SHELL_COMMAND);
       }
@@ -1058,7 +1165,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       if (!isTerminalAutoReply(data)) {
         // Read before the keystroke retires the agent's decision verdict.
         const deciding = useActivityStore.getState().attentionByTab[id] === "decision";
-        noteUserInput(id, isInterruptInput(data));
+        // The user types into this pane, so its screen is live: a key that
+        // leaves a dialog up (the next of several questions) keeps the mark.
+        const agentPane = kind === "agent" || kind === "local_agent";
+        noteUserInput(id, isInterruptInput(data), agentPane ? {
+          navigate: isDialogNavigationInput(data),
+          stillAsking: () => dialogOnScreen(id, agentLabelOfCmd(cmd)),
+        } : undefined);
         noteInputFrom(id, "desktop");
         if (noteInput(id, data) > 0) countSubmit();
         // A typed `/clear` (or `/new`) offers "Undo clear" and empties the
@@ -1204,15 +1317,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // the same transient toast the OSC 52 path uses, once the clipboard took it
     // — and a refused one says so.
     //
-    // Through the backend first, like OSC 52: the webview's `navigator.clipboard`
-    // writes only while WebKit still counts the press as a user gesture, and it
-    // dropped some mouse-up copies outright — the "copy works sometimes" report.
-    // The webview stays as the fallback (and for text past the backend's cap).
+    // Through the backend first, like OSC 52 (`copyText`): the webview's
+    // `navigator.clipboard` writes only while WebKit still counts the press as
+    // a user gesture, and it drops some mouse-up copies outright. The webview
+    // stays as the fallback (and for text past the backend's cap).
     const copyToClipboard = (text: string) => {
-      const copied = () => useProjectsStore.setState({ switchToast: copiedNoticeRef.current(text) });
-      invoke("copy_text_to_clipboard", { text })
-        .then(copied)
-        .catch(() => (navigator.clipboard ? navigator.clipboard.writeText(text).then(copied) : Promise.reject()))
+      writeClipboard(text)
+        .then(() => useProjectsStore.setState({ switchToast: copiedNoticeRef.current(text) }))
         .catch(() => useProjectsStore.setState({ switchToast: copyFailedRef.current }));
     };
     let columnSelect = false;
@@ -1530,9 +1641,16 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           // Typed on the user's behalf — they triggered the flow that
           // opened this tab with a command, so its work counts as asked-for.
           noteUserInput(id);
+          // A Windows host's ssh or container tab still ends in a POSIX shell.
+          // A shell tab's default location is "remote", i.e. `remoteHostId`
+          // "primary" even in the root console or a local project, where the
+          // backend resolves it to the local shell: only a worker host or a
+          // project that really is remote makes this a POSIX shell.
+          const onRemote = !localOnly && ((!!remoteHostId && remoteHostId !== "primary") ||
+            !!useProjectsStore.getState().projects.find((p) => p.id === projectId)?.remote);
           writePtyInput(
             id,
-            PTY_ENCODER.encode(initialInputForPty(initialInput, kind)),
+            PTY_ENCODER.encode(initialInputForPty(initialInput, kind, IS_HOST_WINDOWS && !sandbox && !onRemote)),
           ).catch(console.error);
           initialEnterTimer.current = setTimeout(() => {
             initialInputPending.current = false;
@@ -1721,7 +1839,14 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // stayed unstamped and never wore the running ▶.
       if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean } | null>("pty_spawn", {
+        if ((kind === "agent" || kind === "local_agent") && !attachOnly && (tmuxSession || tmuxAttach)) {
+          const owner = splitPtyId(id)?.scope;
+          // A workspace identity is required for self-targeted MCP grants.
+          // An older backend can still launch the agent without that lane.
+          if (owner) await useTabsStore.getState().persistScope(owner, "").catch(() => {});
+          if (cancelled) return;
+        }
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision" } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
           opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
@@ -1737,6 +1862,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // Its last run finished its turn: the agent is at its composer, and
         // the conversation a resume or reattach repaints is not a question.
         if (spawned?.resting === true) noteAgentResting(id);
+        // It only reattached a session whose agent is mid-turn right now (the
+        // headless owner kept it running while no window was open): the turn
+        // its hooks last reported, which the watcher will not repeat.
+        if (spawned?.turn === "working" || spawned?.turn === "decision") noteLiveTurn(id, spawned.turn);
       };
       try {
         await spawn();
@@ -2331,28 +2460,81 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const readerAgent = readerTab ? readerAgentOf(readerTab) : cmd;
   const readerPreferred = useReaderOpen(readerAgent, readerAvailable);
   const readerTopBar = readerAvailable && !readerAlways;
-  /** This pane's Diffs tab: the pane's own, unlike the Chat/Terminal choice
-   * (per CLI) — a full-pane view must not take over every pane of the CLI,
-   * nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
-  const [changesPicked, setChangesPicked] = useState(false);
+  /** This pane's Diffs or Files tab: the pane's own, unlike the Chat/Terminal
+   * choice (per CLI) — a full-pane view must not take over every pane of the
+   * CLI, nor a Tabby chat, which has no tabs to leave it by. Never remembered. */
+  const [panelPicked, setPanelPicked] = useState<"changes" | "files" | null>(null);
   /** The conversation on screen changed a file (`TerminalReaderView`'s probe):
    * until it did, the Diffs tab is greyed out. */
   const [changesKnown, setChangesKnown] = useState(false);
   // Diffs reads the conversation's files here, which a host tab's are not.
-  const changesOn = changesPicked && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
-  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || changesOn);
+  const changesOn = panelPicked === "changes" && readerTopBar && changesOffered(readerAgent) && !readerOnHost;
+  /** The conversation on screen names a file (`TerminalReaderView`'s list):
+   * until it does, the Files tab is greyed out. */
+  const [filesKnown, setFilesKnown] = useState(false);
+  const filesOn = panelPicked === "files" && readerTopBar;
+  const panelOn = changesOn || filesOn;
+  const readerOn = readerAlways ? readerAvailable : readerAvailable && (readerPreferred || panelOn);
   const [readerNavigationSlot, setReaderNavigationSlot] = useState<HTMLSpanElement | null>(null);
   const [readerActionSlot, setReaderActionSlot] = useState<HTMLSpanElement | null>(null);
   const setReader = (on: boolean) => {
-    setChangesPicked(false);
+    setPanelPicked(null);
     useAgentReaderStore.getState().set(readerAgent, on);
     if (!on) setTimeout(() => termRef.current?.focus(), 0);
   };
-  /** Leave Diffs (or the terminal) for this pane's chat. */
+  /** Leave Diffs, Files (or the terminal) for this pane's chat. */
   const showReaderChat = () => {
-    setChangesPicked(false);
+    setPanelPicked(null);
     if (!readerPreferred) useAgentReaderStore.getState().set(readerAgent, true);
   };
+
+  // Keyboard steering switches this pane's view through `readerSteering`: the
+  // view shown now, the views the strip offers (its enabled tabs), and the
+  // switch itself. Registered only while the strip is drawn and the pane is
+  // visible; the target reads the latest render through a ref.
+  const readerViewNow: ReaderViewId = !readerOn ? "terminal" : changesOn ? "changes" : filesOn ? "files" : "chat";
+  const readerViewsOffered: ReaderViewId[] = ["chat"];
+  if (changesOffered(readerAgent) && !readerOnHost && (changesOn || changesKnown)) readerViewsOffered.push("changes");
+  if (readerTopBar && (filesOn || filesKnown)) readerViewsOffered.push("files");
+  readerViewsOffered.push("terminal");
+  /** Put the keys where `view` takes them: the chat's text box, a panel's own
+   * root, else the terminal. */
+  const focusReaderView = (view: ReaderViewId) => {
+    const box = view === "chat" ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
+    if (box) box.focus();
+    else if (view === "changes" || view === "files") host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
+    else termRef.current?.focus();
+  };
+  const selectReaderView = (view: ReaderViewId) => {
+    if (view === readerViewNow) return;
+    if (view === "terminal") {
+      setReader(false); // focuses the terminal itself
+      return;
+    }
+    if (view === "chat") showReaderChat();
+    else setPanelPicked(view);
+    // The panel is not mounted until this render commits.
+    setTimeout(() => focusReaderView(view), 0);
+  };
+  const readerSteerRef = useRef({ view: readerViewNow, offered: readerViewsOffered, select: selectReaderView });
+  readerSteerRef.current = { view: readerViewNow, offered: readerViewsOffered, select: selectReaderView };
+  const readerSteerOn = readerTopBar && visible;
+  useEffect(() => {
+    if (!readerSteerOn) return;
+    return registerReaderViews(id, {
+      view: () => readerSteerRef.current.view,
+      offered: () => readerSteerRef.current.offered,
+      show: (view) => readerSteerRef.current.select(view),
+    });
+  }, [id, readerSteerOn]);
+  const readerOfferedKey = readerViewsOffered.join();
+  useEffect(() => {
+    if (!readerSteerOn) return;
+    const facts = { view: readerViewNow, offered: readerSteerRef.current.offered };
+    publishReaderViewFacts(id, facts);
+    return () => publishReaderViewFacts(id, null, facts);
+    // `readerOfferedKey` stands for the offered list (a new array every render).
+  }, [id, readerSteerOn, readerViewNow, readerOfferedKey]);
 
   // Take keyboard focus only when this pane is the focused one (and opened);
   // over a shown Reader, its composer takes it.
@@ -2363,6 +2545,62 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   const dismissSignIn = (url: string) => {
     dismissedSignIns.current.add(url);
     setSignIn(null);
+  };
+
+  // ── Server chips ───────────────────────────────────────────────────────────
+  // The Ports list is read when a remote tab shows (a forward may have ended
+  // with its host) and whenever the set of servers on screen changes.
+  const remoteForPorts = locality.kind === "remote";
+  useEffect(() => {
+    if (visible && remoteForPorts) void usePortForwardStore.getState().refresh();
+  }, [visible, remoteForPorts, servers]);
+  const forwardOfServer = (server: ServerUrl) =>
+    locality.kind !== "remote"
+      ? null
+      : (forwardRows.find(
+          (r) =>
+            r.projectId === locality.projectId &&
+            r.hostId === locality.hostId &&
+            r.remoteHost === server.host &&
+            r.remotePort === server.port,
+        ) ?? null);
+  const serverForward = (server: ServerUrl) =>
+    locality.kind === "remote"
+      ? { projectId: locality.projectId, hostId: locality.hostId, remoteHost: server.host, remotePort: server.port, scheme: server.scheme, pathAndQuery: server.pathAndQuery }
+      : null;
+  const copyText = (text: string) => {
+    invoke("copy_text_to_clipboard", { text })
+      .then(() => useProjectsStore.setState({ switchToast: linkCopiedRef.current }))
+      .catch(() => {});
+  };
+  const openServer = (server: ServerUrl) => {
+    const forward = serverForward(server);
+    if (forward) {
+      void forwardServerRef.current(forward, true);
+    } else if (locality.kind === "local") {
+      // A server on this machine opens as printed: its host is the loopback, so
+      // no confirmation; a node name is another machine and asks like any link.
+      if (isLoopbackServerHost(server.host)) {
+        void invoke("open_external_url", { url: localPageUrl(server) }).catch(() => {});
+      } else {
+        void openLinkRef.current(localPageUrl(server)).catch(() => {});
+      }
+    } else {
+      toast(t("terminal.remoteLoopback.unsupported"));
+    }
+  };
+  const copyServer = (server: ServerUrl) => {
+    const forward = serverForward(server);
+    if (!forward) {
+      if (locality.kind === "local") copyText(localPageUrl(server));
+      else toast(t("terminal.remoteLoopback.unsupported"));
+      return;
+    }
+    // A remote server's printed address is not reachable from here: forward it
+    // (asking as Open does) and copy the forwarded one.
+    void forwardServerRef.current(forward, false).then((localPort) => {
+      if (localPort !== null) copyText(forwardedUrl(forward, localPort));
+    });
   };
 
   const agentPane = paneKind === "agent" || paneKind === "local_agent";
@@ -2484,13 +2722,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         tabKey={splitId.key}
         background={terminalTheme(colorScheme).background}
         foreground={terminalTheme(colorScheme).foreground ?? "inherit"}
-        onReturnFocus={() => {
-          // Over the chat the keys go back to its text box, not the terminal under it.
-          const box = readerOn && !changesOn ? host?.querySelector<HTMLTextAreaElement>(".terminal-reader-composer textarea") : null;
-          if (box) box.focus();
-          else if (changesOn) host?.querySelector<HTMLElement>(".terminal-changes")?.focus();
-          else termRef.current?.focus();
-        }}
+        // Over the chat the keys go back to its text box, not the terminal under it.
+        onReturnFocus={() => focusReaderView(readerViewNow)}
         chatShown={readerOn}
         topBar={readerTopBar}
         navigationSlot={setReaderNavigationSlot}
@@ -2500,7 +2733,11 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           onToggle: () => setReader(!readerOn),
           changes: changesOffered(readerAgent) && !readerOnHost ? { open: changesOn, empty: !changesKnown, onToggle: () => {
             if (changesOn) showReaderChat();
-            else setChangesPicked(true);
+            else setPanelPicked("changes");
+          } } : undefined,
+          files: readerTopBar ? { open: filesOn, empty: !filesKnown, onToggle: () => {
+            if (filesOn) showReaderChat();
+            else setPanelPicked("files");
           } } : undefined,
           cwd,
           onHost: readerOnHost,
@@ -2528,12 +2765,18 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         cwd={cwd}
         localOnly={localOnly}
         visible={visible && readerOn}
-        focused={focused && readerOn && !changesOn}
+        focused={focused && readerOn && !panelOn}
         shown={readerOn}
         changesOpen={changesOn}
+        filesOpen={filesOn}
         probeChanges={visible && readerTopBar && changesOffered(readerAgent) && !readerOnHost}
         onChangesKnown={setChangesKnown}
         onShowChat={showReaderChat}
+        onShowFiles={readerTopBar ? () => setPanelPicked("files") : undefined}
+        onFilesKnown={setFilesKnown}
+        onOpenUrl={(url) => {
+          void openLinkRef.current(url).catch(() => {});
+        }}
         navigationSlot={readerNavigationSlot}
         actionSlot={readerActionSlot}
       />
@@ -2543,7 +2786,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         key={signIn.url}
         host={host}
         request={signIn}
-        onOpen={() => void invoke("open_external_url", { url: signIn.url }).catch(() => {})}
+        onOpen={() => {
+          // A sign-in link on the tab's own loopback (a dev server's login) is
+          // routed like any link: a remote tab's is forwarded, never this machine's port.
+          if (routeLink(signIn.url, localityRef.current) !== "external") {
+            void openLinkRef.current(signIn.url).catch(() => {});
+          } else {
+            void invoke("open_external_url", { url: signIn.url }).catch(() => {});
+          }
+        }}
         onCopy={() => {
           invoke("copy_text_to_clipboard", { text: signIn.url })
             .then(() => useProjectsStore.setState({ switchToast: signInCopiedRef.current }))
@@ -2563,6 +2814,20 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         onDismiss={() => dismissSignIn(signIn.url)}
       />
     )}
+    {host && visible && !signIn && (
+      <TerminalServerChips
+        host={host}
+        servers={servers.filter((server) => !dismissedServers.includes(server.url))}
+        forwardedLocalPort={(server) => forwardOfServer(server)?.localPort ?? null}
+        onOpen={openServer}
+        onCopy={copyServer}
+        onStop={(server) => {
+          const row = forwardOfServer(server);
+          if (row) void usePortForwardStore.getState().stop(row.id);
+        }}
+        onDismiss={(server) => setDismissedServers((prev) => [...prev, server.url])}
+      />
+    )}
     {signInDone && !signIn && host && (
       <TerminalSignInDoneCard
         host={host}
@@ -2577,6 +2842,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     {undoClearOffered && (!readerOn || readerCleared) && !signIn && !signInDone && host && (
       <TerminalUndoClearCard host={host} ptyId={id} />
     )}
+    {agentPane && !attachOnly && !signIn && !signInDone && <TerminalLimitHandoff ptyId={id} visible={visible} cwd={cwd} />}
     {agentPane && !attachOnly && !signIn && !signInDone && host && (
       <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}

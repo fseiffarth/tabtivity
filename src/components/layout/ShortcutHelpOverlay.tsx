@@ -1,4 +1,3 @@
-import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useRef, useState } from "react";
 import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
@@ -10,12 +9,14 @@ import {
   STEERING_KEYS,
   chordLabel,
   modifierLabel,
+  projectCycleLabels,
   resolveChord,
   steeringRowLabel,
   type ShortcutMap,
 } from "../../lib/shortcuts/shortcuts";
 import type { SteeringKeyMap } from "../../lib/shortcuts/steeringBindings";
-import { CloseIcon } from "../common/icons/Icon";
+import { DialogShell } from "../common/PromptDialogs";
+import { isDetachedWindow } from "../../stores/detachedContext";
 
 /**
  * The keyboard-shortcut cheat sheet (part 2 of the keyboard-only steering
@@ -27,8 +28,8 @@ import { CloseIcon } from "../common/icons/Icon";
  * `resolveChord`, so a user rebind shows its *effective* chord (marked
  * "customized"), plus the `STEERING_KEYS` rows through the user's steering
  * bindings (`steeringRowLabel`) — never a hardcoded key string, so the sheet
- * cannot drift from what `useKeyboard` acts on. Mounted once in `AppShell` on the shared `.modal-backdrop` like the
- * overlay family there.
+ * cannot drift from what `useKeyboard` acts on. Mounted once in `AppShell`;
+ * the frame is the shared `DialogShell` (framed, scrolling body).
  */
 export function ShortcutHelpOverlay() {
   const t = useT();
@@ -50,44 +51,22 @@ export function ShortcutHelpOverlay() {
     // press that opened it — arrows and PageUp/Down scroll with no pointer.
     if (open) scrollRef.current?.focus();
   }, [open]);
-  const modalRef = useModalFocus(() => setOpen(false), open);
-
   if (!open) return null;
 
   const close = () => setOpen(false);
 
   return (
-    /* The canonical framed-dialog chrome, applied as the calendar/mail overlays
-       apply it (accent header band + divider, `.dialog-close-btn`); the
-       `.dialog-scroll` child does the scrolling inside the frame's curve. */
-    <div
-      className="modal-backdrop"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close();
-      }}
+    <DialogShell
+      frame="project-dialog"
+      className="shortcut-help-overlay"
+      scroll
+      title={
+        <>
+          {t("shortcutHelp.title")} <UntestedTag id="shortcutHelp.title" />
+        </>
+      }
+      onDismiss={close}
     >
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        className="project-dialog dialog-framed shortcut-help-overlay"
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("shortcutHelp.title")}
-      >
-        <div className="settings-title-row">
-          <h2>
-            {t("shortcutHelp.title")} <UntestedTag id="shortcutHelp.title" />
-          </h2>
-          <button
-            type="button"
-            className="dialog-close-btn"
-            title={t("common.close")}
-            aria-label={t("common.close")}
-            onClick={close}
-          >
-            <CloseIcon />
-          </button>
-        </div>
         <div className="dialog-scroll" ref={scrollRef} tabIndex={-1}>
           {SHORTCUT_GROUPS.map((g) => (
             <section className="shortcut-help-section" key={g.id}>
@@ -117,14 +96,29 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.overlays" />
               <UntestedTag id="steering.scroll" />
               <UntestedTag id="steering.scrollDocument" />
+              <UntestedTag id="steering.readerView" />
+              <UntestedTag id="steering.insideChanges" />
+              <UntestedTag id="steering.readerFiles" />
               <UntestedTag id="steering.legendGroups" />
+              <UntestedTag id="steering.legendToggle" />
+              <UntestedTag id="steering.bar" />
               <UntestedTag id="steering.handsFreeMic" />
               <UntestedTag id="steering.handoffLegend" />
               <UntestedTag id="steering.dim" />
               <UntestedTag id="steering.popout" />
+              <UntestedTag id="steering.inPopout" />
+              <UntestedTag id="steering.popoutHandover" />
               <UntestedTag id="steering.pointer" />
               <UntestedTag id="steering.landOnTabs" />
+              <UntestedTag id="steering.sidePanelRows" />
+              <UntestedTag id="steering.subagents" />
               <UntestedTag id="steering.shiftPanes" />
+              <UntestedTag id="steering.rootView" />
+              <UntestedTag id="steering.rootChrome" />
+              <UntestedTag id="steering.answerDigits" />
+              <UntestedTag id="steering.queueMoves" />
+              <UntestedTag id="steering.jumpBack" />
+              <UntestedTag id="steering.tabKey" />
             </h3>
             <p className="shortcut-help-intro">
               {t("shortcutHelp.steeringIntro", {
@@ -135,7 +129,10 @@ export function ShortcutHelpOverlay() {
                 (B, P, the status jumps and ? work on every tab-bar level; they
                 are listed once). */}
             {STEERING_CONTEXTS.map((level) => {
-              const rows = STEERING_KEYS.filter((k) => k.levels[0] === level.id);
+              // The Main window key is a popout's: the main window has none.
+              const rows = STEERING_KEYS.filter(
+                (k) => k.levels[0] === level.id && (k.when !== "inPopout" || isDetachedWindow()),
+              );
               if (rows.length === 0) return null;
               return (
                 <div className="shortcut-help-steering-level" key={level.id}>
@@ -145,7 +142,7 @@ export function ShortcutHelpOverlay() {
                       <kbd>{steeringRowLabel(k, steerKeys)}</kbd>
                       <span className="shortcut-help-label">
                         {t(k.labelKey)}
-                        <span className="shortcut-help-desc"> — {t(k.descKey, { modifier: modifierLabel() })}</span>
+                        <span className="shortcut-help-desc"> — {t(k.descKey, { modifier: modifierLabel(), ...projectCycleLabels() })}</span>
                       </span>
                     </div>
                   ))}
@@ -157,7 +154,6 @@ export function ShortcutHelpOverlay() {
             {t("shortcutHelp.footer", { panel: t("nav.shortcuts.title") })}
           </p>
         </div>
-      </div>
-    </div>
+    </DialogShell>
   );
 }

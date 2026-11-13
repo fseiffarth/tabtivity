@@ -42,9 +42,13 @@ pub fn install_env_in(state_dir: &Path) -> Vec<(String, String)> {
 /// common installers honour, all under [`install_root_in`]. On Windows also
 /// `USERPROFILE` (what PowerShell's `$HOME` and npm's `~` read there) and
 /// `APPDATA` (npm's default global prefix, `%APPDATA%\npm`, and most
-/// per-user tool configs) inside the install home. An installer that asks
-/// the shell API for the profile folder instead of the environment still
-/// lands in the user's profile; that is not reachable from here.
+/// per-user tool configs) and `LOCALAPPDATA` inside the install home.
+/// Antigravity's `install.ps1` writes `$env:LOCALAPPDATA\agy\bin\agy.exe` and
+/// Codex's its launcher junction `$env:LOCALAPPDATA\Programs\OpenAI\Codex\bin`;
+/// without it both landed in the user's profile, where Update must not touch
+/// them. An installer that asks the shell API for the profile folder instead
+/// of the environment still lands in the user's profile; that is not
+/// reachable from here.
 pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)> {
     let root = install_root_in(state_dir);
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
@@ -61,6 +65,7 @@ pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)>
     if windows {
         env.push(("USERPROFILE".into(), s(root.clone())));
         env.push(("APPDATA".into(), s(root.join("AppData").join("Roaming"))));
+        env.push(("LOCALAPPDATA".into(), s(root.join("AppData").join("Local"))));
     }
     env
 }
@@ -97,6 +102,10 @@ pub fn bin_dirs_for(windows: bool, state_dir: &Path) -> Vec<PathBuf> {
     .collect();
     if windows {
         dirs.insert(2, root.join("npm"));
+        // The `LOCALAPPDATA` installers' launchers ([`install_env_for`]).
+        let local = root.join("AppData").join("Local");
+        dirs.push(local.join("agy").join("bin"));
+        dirs.push(local.join("Programs").join("OpenAI").join("Codex").join("bin"));
     }
     dirs
 }
@@ -161,6 +170,73 @@ pub fn self_update_argv(agent_id: &str) -> Option<&'static [&'static str]> {
         .iter()
         .find(|(id, _)| *id == agent_id)
         .map(|(_, argv)| *argv)
+}
+
+/// The oldest `uv` Mistral Vibe's `install.sh` works with: it installs and
+/// upgrades `mistral-vibe` with `--python cpython-3.14+gil`, which an older
+/// uv cannot fetch (0.5.9: "No download found for request:
+/// cpython-3.14-linux-x86_64-gnu"). The script pins uv 0.11.26 (2026-11-07)
+/// but installs it only when no `uv` is on PATH at all, so a stale one the
+/// user keeps in `~/.local/bin` failed every Update.
+const VIBE_MIN_UV: &str = "0.11";
+
+/// A current `uv` into the install home's `~/.local/bin` (`HOME` is the
+/// install home; that dir leads the installer's PATH), with Astral's
+/// installer. `UV_UNMANAGED_INSTALL` writes no receipt and edits no shell
+/// profile, so nothing of the user's uv setup changes.
+const FRESH_UV: &str =
+    "curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=\"$HOME/.local/bin\" sh 2>&1 && ";
+
+/// A shell prefix for `agent_id`'s Unix installer line, or `""`. `probe_uv`
+/// says what `uv` the installer would find first on its PATH: `None` none,
+/// `Some(None)` one whose version could not be read. Only called for an
+/// installer that needs it. A missing uv needs nothing: the installer brings
+/// its own.
+pub fn installer_prelude(
+    agent_id: &str,
+    probe_uv: impl FnOnce() -> Option<Option<String>>,
+) -> &'static str {
+    if agent_id != "vibe" {
+        return "";
+    }
+    match probe_uv() {
+        Some(Some(version))
+            if crate::services::agent_versions::version_cmp(&version, VIBE_MIN_UV)
+                != std::cmp::Ordering::Less =>
+        {
+            ""
+        }
+        Some(_) => FRESH_UV,
+        None => "",
+    }
+}
+
+/// CLIs, by registry id, whose installer takes any copy on its PATH for its
+/// own and then upgrades in the install home, where there is none: Vibe's
+/// `install.sh` finds the user's `~/.local/bin/vibe`, runs `uv tool upgrade
+/// mistral-vibe` against the install home's `UV_TOOL_DIR` and fails
+/// ("`mistral-vibe` is not installed; run `uv tool install`", 2026-11-10).
+const INSTALLER_HIDES_HOST_COPY: &[&str] = &["vibe"];
+
+/// Dirs never left off an installer's PATH: without them it has no shell
+/// tools at all. A host copy there still reaches the installer.
+const SYSTEM_BIN_DIRS: &[&str] = &["/bin", "/sbin", "/usr/bin", "/usr/sbin"];
+
+/// The PATH dirs `agent_id`'s installer runs with: `dirs` minus, for a CLI in
+/// [`INSTALLER_HIDES_HOST_COPY`], every dir outside `root` (the install home)
+/// that holds `bin`, so the installer installs fresh into the install home
+/// instead of upgrading a copy it does not own. Pure over the filesystem.
+pub fn installer_path_dirs(agent_id: &str, bin: &str, root: &Path, dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    if !INSTALLER_HIDES_HOST_COPY.contains(&agent_id) {
+        return dirs;
+    }
+    dirs.into_iter()
+        .filter(|d| {
+            d.starts_with(root)
+                || SYSTEM_BIN_DIRS.iter().any(|s| d == Path::new(s))
+                || !d.join(bin).is_file()
+        })
+        .collect()
 }
 
 /// The auto-update switch of a CLI, by command basename. Only switches that
@@ -228,7 +304,49 @@ mod tests {
         assert_eq!(super::self_update_argv("claude"), None);
     }
 
+    #[test]
+    fn vibe_gets_a_fresh_uv_only_when_the_one_on_path_is_stale() {
+        let v = |s: &'static str| move || Some(Some(s.to_string()));
+        // The reported failure: the user's uv 0.5.9 cannot fetch CPython 3.14.
+        assert_eq!(super::installer_prelude("vibe", v("0.5.9")), super::FRESH_UV);
+        assert_eq!(super::installer_prelude("vibe", v("0.10.4")), super::FRESH_UV);
+        assert_eq!(super::installer_prelude("vibe", || Some(None)), super::FRESH_UV);
+        assert_eq!(super::installer_prelude("vibe", v("0.11.0")), "");
+        assert_eq!(super::installer_prelude("vibe", v("0.12.1")), "");
+        // No uv at all: Vibe's installer brings its own pinned one.
+        assert_eq!(super::installer_prelude("vibe", || None), "");
+        // Any other CLI never probes.
+        assert_eq!(super::installer_prelude("claude", || panic!("probed")), "");
+        // The prefix writes only into the install home and chains on success.
+        assert!(super::FRESH_UV.contains("UV_UNMANAGED_INSTALL=\"$HOME/.local/bin\""));
+        assert!(super::FRESH_UV.trim_end().ends_with("&&"));
+    }
+
     use super::*;
+
+    #[test]
+    fn vibe_installer_does_not_see_the_host_copy_on_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("install");
+        let own = root.join(".local").join("bin");
+        let host = tmp.path().join("home").join(".local").join("bin");
+        let other = tmp.path().join("other");
+        for d in [&own, &host, &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(own.join("vibe"), "").unwrap();
+        std::fs::write(host.join("vibe"), "").unwrap();
+        std::fs::write(other.join("uv"), "").unwrap();
+        let dirs = vec![own.clone(), host.clone(), other.clone(), PathBuf::from("/usr/bin")];
+        // The reported failure: the host `~/.local/bin/vibe` made the installer
+        // upgrade a tool the install home never had. Its own copy stays.
+        assert_eq!(
+            installer_path_dirs("vibe", "vibe", &root, dirs.clone()),
+            vec![own.clone(), other.clone(), PathBuf::from("/usr/bin")]
+        );
+        // Every other CLI keeps the PATH as it is.
+        assert_eq!(installer_path_dirs("claude", "vibe", &root, dirs.clone()), dirs);
+    }
 
     #[test]
     fn install_env_points_every_prefix_into_the_install_home() {
@@ -252,6 +370,8 @@ mod tests {
         assert_eq!(get(&unix, "APPDATA"), None);
         assert_eq!(get(&win, "USERPROFILE"), Some(root.clone()));
         assert_eq!(get(&win, "APPDATA"), Some(root.join("AppData").join("Roaming")));
+        assert_eq!(get(&unix, "LOCALAPPDATA"), None);
+        assert_eq!(get(&win, "LOCALAPPDATA"), Some(root.join("AppData").join("Local")));
         // Everything Unix sets, Windows sets the same way.
         for (k, v) in &unix {
             assert_eq!(get(&win, k), Some(PathBuf::from(v)), "{k}");
@@ -264,6 +384,12 @@ mod tests {
         assert!(bin_dirs_for(true, state).contains(&root.join("npm")));
         assert!(!bin_dirs_for(false, state).contains(&root.join("npm")));
         assert!(bin_dirs_for(true, state).contains(&root.join(".local").join("bin")));
+        // The `LOCALAPPDATA` installers' launchers come onto PATH from there.
+        let local = root.join("AppData").join("Local");
+        for dir in [local.join("agy").join("bin"), local.join("Programs").join("OpenAI").join("Codex").join("bin")] {
+            assert!(bin_dirs_for(true, state).contains(&dir), "{}", dir.display());
+            assert!(!bin_dirs_for(false, state).contains(&dir), "{}", dir.display());
+        }
     }
 
     #[test]
