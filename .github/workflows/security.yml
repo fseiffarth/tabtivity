@@ -6,6 +6,9 @@ name: security
 # and a cron on ci-cd.yml would rebuild every package to learn nothing new.
 # The gitleaks scan lives in ci-cd.yml instead: history only changes on a push,
 # so it gains nothing from the cron, and there it can gate the release job.
+# As in ci-cd.yml, a pull request from this repository's own branch runs
+# nothing (every job's `if:`): every branch here has a push run of the same
+# commit. Only a fork's PR is scanned as a PR.
 on:
   push:
   pull_request:
@@ -22,6 +25,7 @@ env:
 jobs:
   dependencies:
     name: dependencies
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Blocking: a new advisory fails the run. Fix it by updating the crate or
@@ -98,6 +102,7 @@ jobs:
   # with no change here.
   workflows:
     name: workflows (zizmor)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
@@ -130,6 +135,7 @@ jobs:
   # the WebKitGTK packages nor a cargo build.
   codeql:
     name: codeql (${{ matrix.language }})
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
