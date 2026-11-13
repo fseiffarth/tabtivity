@@ -90,6 +90,124 @@ in the project or a parent folder.
 
 ## I1 Catalog
 
+Branch `worktree-agent-a5b4aca46e1c4ce6e` (on top of `scaffold-files` 08e549f87).
+Commits, oldest first: a24ec64ef (step 1), 6cd7c151e (step 2), 2ac3a8c88 (whitespace fix), bd5ca6f8d (clippy fix in tests) - squash the two fixes into step 1 if wanted; the handoff commit follows.
+
+### What is done (plan steps 1 and 2)
+
+- New `src-tauri/src/services/scaffold.rs` (+ `scaffold/tests.rs`), registered
+  in `services/mod.rs`. Moved in: `AGENTS_SCAFFOLD`, `AGENTS_HISTORY`, the
+  pointer texts, `PROJECT_SCAFFOLD`, `REMARKS_SCAFFOLD`, `read_scaffold_doc`,
+  `write_scaffold_file`. `SCAFFOLD_FILES`, `CLAUDE_SETTINGS`,
+  `LEGACY_AGENT_STUBS`, `is_legacy_agent_stub`, `scaffold_claude_dir`,
+  `claude_settings_present` are gone. `scaffold_history/*.md` stayed in
+  `commands/scaffold_history/` (`include_str!("../commands/...")`);
+  `AGENTS.2026-11-13.md` added.
+- `commands/projects.rs` callers rewritten on the catalog: `scaffold_project`,
+  `repair_project_scaffold_at`, `scaffold_preview`, `scaffold_is_missing_at`,
+  `agents_empty_at`, `migration_steps_at`, `apply_migration_steps_at`
+  (step ids `file:<name>` / `stub:<name>` stay, only for default docs; the
+  `claude_settings` step is gone). `migrate_legacy_projects`,
+  `project_scaffold_missing` and the three import call sites go through them
+  unchanged. `services/remote/remote_scaffold.rs` follows the lean set
+  (`make_claude_dir` field and all `.claude` logic removed).
+- Step 2: the old AGENTS.md text is `scaffold_history/AGENTS.2026-11-13.md`
+  (hash-pinned), new text has no pointer/PROJECT.md line and gains `## Boundaries`
+  and `## Verify`. The pin test now pins the new hash and the history file's.
+- Tests: integration `tests/projects_commands.rs` (`scaffolds()` is the catalog
+  defaults + `.gitignore`; the seed's `TODO.md` and `.claude/settings.json` are
+  asserted untouched) and `tests/file_ops_tests.rs`
+  (`..._claude_settings_is_valid_json` deleted).
+
+### Catalog API for I3 (`crate::services::scaffold`)
+
+```rust
+pub struct ScaffoldDoc { name, template, default, creatable, pointer, history }
+impl ScaffoldDoc { fn state_of(&self, Option<&str>) -> DocState; fn is_untouched(&self, &str) -> bool; fn upgradable(&self) -> bool }
+pub enum DocState { Missing, Template, Edited, Pointer }      // serde camelCase -> "missing"|...
+pub struct DocStatus { name: &'static str, state: DocState, nested_under: Option<&'static str>, creatable: bool } // serde camelCase
+pub const DOCS: &[ScaffoldDoc];
+pub fn doc(name: &str) -> Option<&'static ScaffoldDoc>;        // exact leaf name; the only lookup for a renderer-sent name
+pub fn defaults() -> impl Iterator<Item = &'static ScaffoldDoc>;
+pub fn read_scaffold_doc(path: &Path) -> Option<String>;       // capped, no-follow
+pub fn state_at(dir: &Path, doc: &ScaffoldDoc) -> DocState;
+pub fn present_at(dir: &Path, name: &str) -> bool;             // symlink_metadata ok
+pub fn missing_defaults_at(dir: &Path) -> Vec<&'static str>;   // for the tag popover
+pub fn create_doc_at(dir: &Path, doc: &ScaffoldDoc) -> io::Result<bool>;   // create-new + O_NOFOLLOW; false = something was there
+pub fn upgrade_doc_at(dir: &Path, doc: &ScaffoldDoc) -> io::Result<bool>; // AGENTS.md only, only while untouched
+pub fn agents_empty_at(dir: &Path) -> bool;
+pub fn docs_status_at(dir: &Path) -> Vec<DocStatus>;
+pub const AGENTS_MD / README_MD / CLAUDE_MD / GEMINI_MD / REMARKS_MD: &str;
+```
+
+- `project_docs_status` = `scaffold_target_for_entry` (private in `projects.rs`,
+  make it `pub(crate)`) -> `docs_status_at(&dir)`. `create_project_doc` =
+  `scaffold::doc(name)` -> refuse `None` and `!creatable` -> `create_doc_at`.
+  A name with a separator is simply not in the catalog.
+- `docs_status_at` lists, in catalog order, every entry that is present, plus
+  the `creatable` absent ones (ghost rows). Absent `REMARKS.md` and absent
+  pointers get no row. `nested_under` is `"AGENTS.md"` for pointers always;
+  the frontend nests only when `AGENTS.md` is itself shown.
+- `.gitignore` and `.git` are not catalog entries and not in the status: the
+  tree already shows them as ordinary rows.
+- The catalog-to-`STANDARD_PROJECT_FILES` check (step 4) can iterate `DOCS`
+  names + `.gitignore`, `.git`.
+- A symlink / FIFO / oversize / non-UTF-8 doc reports `missing` (so a ghost row
+  appears for it) but `create_doc_at` refuses to write there (returns false).
+  The frontend/command should tell that case apart from "created" by the bool.
+
+### Choices and deviations
+
+- Default docs are `creatable: true` (deleted `README.md` gets a ghost row).
+- Repair rewrites only `AGENTS.md` (`ScaffoldDoc::upgradable`): the
+  README/other stubs were never rewritten before either.
+- `scaffold_is_missing_at` does **not** check `.git` (the plan's text says
+  "or (git) no `.git`"): the existing doc comment and tests call `.git` the
+  separate `git_type` axis, and counting it would put the tag on every project
+  whose `.git` was removed. Say so if you want it added.
+- `PROJECT.md` (now create-on-demand) got a new template without the pointer
+  files, `REMARKS.md` and `.claude/settings.json` links; the old text is its
+  `history` entry. Not in the plan; a stale map linking files that are no
+  longer made seemed wrong. Template-state comparison ignores leading/trailing
+  whitespace and CRLF (a bare `# Agents` still matches).
+- Pointer state: an untouched, empty or legacy-stub `CLAUDE.md`/`GEMINI.md`
+  reports `pointer`; a modified one reports `edited`.
+- `write_no_follow` stays in `projects.rs` (used by fs.rs, clipboard.rs,
+  boxes.rs); `scaffold.rs` imports it from there.
+
+### Known follow-ups for others (not touched here)
+
+- i18n still names `CLAUDE.md` / `.claude/settings.json` in the repair texts
+  (`projectSettings...`, `pill.repairScaffoldTitle`) in all five dictionaries (I4).
+- `scaffold_preview` no longer returns a `.claude/settings.json` item and
+  `migration_steps_at` no longer returns the `claude_settings` step: the
+  frontend must not rely on either (I4, step 7).
+- `docs/filemap_backend.md` rows (new `services/scaffold.rs`, changed
+  `projects.rs`/`remote_scaffold.rs`) are left to I5 as planned.
+
+### Gates
+
+Run with `scripts/gates-job.sh start --base scaffold-files` (the plain run sees
+no diff once committed). Frontend gates skipped (no frontend change).
+- brand-check PASS, `git diff --check` PASS.
+- clippy `-p tabtivity -p app-serverd --all-targets`, daemon-lib clippy, `-p app-serverd` clippy: PASS, zero warnings.
+- `cargo test -p tabtivity` lib: 5598 passed, **1 failed**:
+  `services::mcp::git_push_mcp::tests::push_branch_patterns_reads_the_yaml_shapes_...`
+  (a 5 s wall-clock bound on a YAML alias bomb, took 5.8 s under the full parallel
+  run; passes alone in 0.1 s; fails the same way in two full runs; touches nothing
+  of ours - looks load-flaky, not checked against `scaffold-files` without my change).
+- Integration tests (run separately because the lib failure stops cargo): 144 passed
+  (`projects_commands`), 39 passed, 1 passed, 0 failed.
+- Daemon build `cargo test -p tabtivity --no-default-features --lib --test server_secrets`:
+  5413 + 1 passed. New unit tests: `services/scaffold/tests.rs` (9), rewritten/new
+  `commands/projects/tests.rs` scaffold tests, `remote_scaffold` (3). `scaffold`, `projects::`,
+  `remote_scaffold` filter: 148 passed.
+
+### Flagged for user
+
+- `.git` is not part of the "no scaffold" tag (see above).
+- `PROJECT.md` template changed (see above).
+
 ## I2 Agent-home settings
 
 ## R1
