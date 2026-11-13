@@ -4708,3 +4708,30 @@ button.terminal-reader-option:hover:not(:disabled) {
   display: flex; align-items: center; gap: 6px; font-size: var(--text-sm);
 }
 .terminal-reader-code-actions button { color: inherit; cursor: var(--cur-pointer, pointer); }
+
+/* Per-turn checkpoints (docs/turn_checkpoints_plan.md): layout only. The
+   dialog wears the shared `project-dialog` frame; the buttons are the shared
+   `.settings-btn` / `.btn-primary` / `.btn-quiet`. */
+.checkpoint-restore .checkpoint-restore-body { display: flex; flex-direction: column; gap: var(--space-3); }
+.checkpoint-restore-files {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px;
+  max-height: 46vh; overflow-y: auto; font-size: var(--text-sm);
+}
+.checkpoint-restore-files li { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.checkpoint-restore-files label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
+.checkpoint-restore-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.checkpoint-restore-status { font-weight: 650; width: 1.2em; text-align: center; flex: none; }
+.checkpoint-restore-status.status-A { color: var(--success); }
+.checkpoint-restore-status.status-D { color: var(--danger); }
+.checkpoint-restore-flag { color: var(--warning); flex: none; }
+.checkpoint-restore-notes { font-size: var(--text-md); color: var(--text-secondary); }
+.checkpoint-restore-confirm { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-md); }
+.checkpoint-scope { display: flex; flex-direction: column; gap: var(--space-2); }
+.checkpoint-scope-head { display: flex; align-items: center; gap: var(--space-2); }
+.checkpoint-scope-head > span { flex: 1; min-width: 0; }
+.terminal-changes-view.checkpoint-pick { max-width: 14em; }
+/* A prompt bubble's restore action: there on hover or keyboard focus, so a
+   long chat is not a column of buttons. A static opacity step, no animation. */
+.terminal-reader-turn.user .terminal-reader-restore { opacity: 0; margin-left: var(--space-2); }
+.terminal-reader-turn.user:hover .terminal-reader-restore,
+.terminal-reader-turn.user .terminal-reader-restore:focus-visible { opacity: 1; }

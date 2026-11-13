@@ -17,6 +17,7 @@ import { openTabInScope } from "../../lib/tabs/tabScopeContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { ArrowUpRightIcon, CloseIcon } from "../common/icons/Icon";
 import { Dropdown } from "../common/Dropdown";
+import { useCheckpointScope } from "./CheckpointDiffScope";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
 import { registerReaderInside, useSteeringInside, type ReaderInsideResult } from "../../lib/agents/readerSteering";
@@ -126,6 +127,8 @@ interface NoteDraft {
 type NoteFields = Omit<DiffNote, "id" | "at">;
 
 const NO_NOTES: DiffNote[] = [];
+const NO_OP = () => {};
+const NO_SAVE: NoteActions["onSaveNote"] = () => {};
 
 /** The note handlers a card gets, stable across renders. */
 interface NoteActions {
@@ -141,7 +144,7 @@ interface NoteActions {
 
 /** One change, with its time and diff. The first existing edit opens on entry;
  * newly arriving edits stay folded and marked new until opened. */
-const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold, notes, draft, onStartNote, onSaveNote, onCancelNote, onNoteText, onEditNote, onDeleteNote }: {
+export const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold, notes = NO_NOTES, draft = null, onStartNote, onSaveNote = NO_SAVE, onCancelNote = NO_OP, onNoteText = NO_OP, onEditNote = NO_OP, onDeleteNote = NO_OP }: {
   change: FileChange;
   cardKey: string;
   fresh: boolean;
@@ -151,13 +154,15 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
   use24h: boolean;
   split: boolean;
   initialOpen: boolean;
-  onOpenFile: (path: string, newSubwindow: boolean) => void;
-  onOpenDiff: (path: string) => void;
+  /** Absent: the card draws no open buttons (the checkpoint scope's). */
+  onOpenFile?: (path: string, newSubwindow: boolean) => void;
+  onOpenDiff?: (path: string) => void;
   onUnfold: (cardKey: string) => void;
-  /** This card's saved notes, and the note being written when it is here. */
-  notes: DiffNote[];
-  draft: NoteDraft | null;
-} & NoteActions) {
+  /** This card's saved notes, and the note being written when it is here.
+   * Without `onStartNote` the card takes no notes (the checkpoint scope's). */
+  notes?: DiffNote[];
+  draft?: NoteDraft | null;
+} & Partial<NoteActions>) {
   const t = useT();
   const [open, setOpen] = useState(initialOpen);
   // Without its final newline, which would parse as one more (empty) row.
@@ -212,8 +217,10 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
       draft.lines.forEach((index) => noted.add(index));
       hang(draft.lines, <DiffNoteBox key={`box-${draft.serial}`} initial={draft.text} onChange={onNoteText} onSave={save} onCancel={onCancelNote} />);
     }
-    const start = (index: number, event: MouseEvent<HTMLButtonElement>) =>
-      onStartNote(cardKey, hunkIndex, rows[hunkIndex] ?? [], index, event.shiftKey);
+    const start = onStartNote
+      ? (index: number, event: MouseEvent<HTMLButtonElement>) =>
+        onStartNote(cardKey, hunkIndex, rows[hunkIndex] ?? [], index, event.shiftKey)
+      : undefined;
     return { noted, under, start };
   };
   return (
@@ -242,7 +249,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
           <span className="terminal-changes-notechip">{t(notes.length === 1 ? "diffNotes.countOne" : "diffNotes.count", { n: notes.length })}</span>
         )}
         {moment && <small className="terminal-changes-time">{chatTime(moment, use24h)}</small>}
-        {openable && (
+        {openable && onOpenDiff && (
           <button
             type="button"
             className="terminal-changes-open"
@@ -253,7 +260,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
             ±
           </button>
         )}
-        {openable && (
+        {openable && onOpenFile && (
           <button
             type="button"
             className="terminal-changes-open"
@@ -277,7 +284,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
               <div className="diff-hunk" key={hunkIndex}>
                 {split ? <div className="terminal-changes-split">
                   <div className="terminal-changes-split-heading"><span>{t("terminal.changes.before")}</span><span>{t("terminal.changes.after")}</span></div>
-                  <SplitRows lines={hunk.lines} marks={marks} notes={{ label: noteLabel, noted: view.noted, onStart: view.start, under: view.under }} />
+                  <SplitRows lines={hunk.lines} marks={marks} notes={view.start && { label: noteLabel, noted: view.noted, onStart: view.start, under: view.under }} />
                 </div> : hunk.lines.map((line, lineIndex) => (
                   <Fragment key={lineIndex}>
                     <DiffLineRow line={line} marks={marks.get(line)} noteAt={lineIndex} onNote={view.start} noted={view.noted.has(lineIndex)} noteLabel={noteLabel} />
@@ -427,6 +434,8 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const base = tab.cwd || cwd;
+  /** The second scope, Since checkpoint (`CheckpointDiffScope`). */
+  const checkpoints = useCheckpointScope({ uid: tab.sessionId, ptyId: steerId, visible, base, split, card: ChangeCard });
   /** Whose changes a read belongs to — a read of another conversation is
    * never drawn under this one. */
   const readKey = `${tab.sessionId ?? ""}|${chat ?? ""}|${subagent ?? ""}`;
@@ -686,6 +695,7 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
         <Dropdown className="terminal-changes-view" value={split ? "split" : "unified"}
           options={[{ value: "split", label: t("terminal.changes.split") }, { value: "unified", label: t("terminal.changes.unified") }]}
           onChange={(value) => setSplit(value === "split")} />
+        {checkpoints.switchEl}
         <button type="button" className="terminal-changes-close" onClick={onClose} title={t("terminal.changes.close")} aria-label={t("terminal.changes.close")}>
           <CloseIcon />
         </button>
@@ -696,6 +706,7 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
         <small className="terminal-changes-scope" title={chatTitle}>{t("terminal.changes.chat", { name: chatTitle ?? "" })}</small>
       )}
       <div className="terminal-changes-body">
+      {checkpoints.bodyEl ?? <>
       {files.length > 0 && (
         <div className="terminal-changes-files" role="listbox" aria-label={t("terminal.changes.files")}>
           <button type="button" role="option" aria-selected={!filter} className={!filter ? "active" : undefined} onClick={() => setPicked(null)}>
@@ -756,6 +767,7 @@ export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagen
           <small className="terminal-changes-note">{t("terminal.changes.truncated")}</small>
         )}
       </div>
+      </>}
       </div>
       {dialogs}
     </aside>

@@ -1,5 +1,28 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] **Per-turn checkpoints** (implemented 2026-11-13, never live; experimental
+  `turn_checkpoints`). Plan `docs/turn_checkpoints_plan.md`, handoff
+  `docs/turn_checkpoints_handoff.md`, design `docs/context/checkpoints.md`,
+  help topic `checkpoints`; pills `settings.turnCheckpoints`, `checkpoints.now`,
+  `checkpoints.bubble`, `checkpoints.restore`, `checkpoints.scope`. After
+  `npm run backend:stale` is clear:
+  - [ ] 🖐️ Manual QA: switch Settings → Experimental → Per-turn checkpoints on.
+    In a test project (a git repo) let a Claude tab edit two files and create
+    one; Diffs → *Since checkpoint* lists the three; Restore → files back, the
+    new one gone, the note in the composer; *Undo restore* → all three back.
+    Same in a folder that is not a repo, and in a Codex tab. Hover an old prompt
+    → *Restore files to before this* appears only on checkpointed prompts. The
+    Checkpoint chip beside Commit saves a manual one. Restore refuses while the
+    agent works. Check the Settings card's sizes after a day of normal use and
+    that Clear empties a folder's store.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [ ] **Cockpit MCP: rename the calling tab** (implemented 2026-11-06, never live).
   Plan: `docs/cockpit_mcp_plan.md`. Begin with self-only `tab_rename` on a
   separate authenticated lane, using versioned workspace edits; later consider
