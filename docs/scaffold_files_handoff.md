@@ -210,6 +210,15 @@ no diff once committed). Frontend gates skipped (no frontend change).
 
 ## I2 Agent-home settings
 
+- Commit `5d7bbb410` (cherry-picked from `beb94b39e`, worktree branch `worktree-agent-aa4c8557fd593330f`).
+- `agent_hint::register_in_home`: `.gemini/settings.json` gets `add_context_file_names` (via `merge_json`); `.aider.conf.yml` gets new `merge_aider_read` (`serde_norway`). Runs after `agent_global::apply_to_home`.
+- Gemini: user entries keep order, missing `GEMINI.md`/`AGENTS.md` appended; string → `[user, GEMINI.md, AGENTS.md]`; non-object `context` or odd `fileName` never replaced.
+- Aider: absent `read:` → `[AGENTS.md]`; string → list; list appended; comments-only file keeps text; a rewritten mapping loses YAML comments (accepted, plan §7).
+- Extra hardening: `merge_json` reads capped at 1 MiB (also the OpenCode and hook merges) — an over-cap file is left alone instead of read as empty and overwritten.
+- Docs: `docs/third_party_update_checklist.md` per-CLI "reads AGENTS.md" note + known gaps; `docs/filemap_backend.md` agent_hint row.
+- Gates (worktree, `--base scaffold-files`): brand, whitespace, clippy ×3 PASS. `cargo test -p tabtivity -p app-serverd`: 5589 passed, 2 failed — `voice::session` timeouts under parallel load (pre-existing develop code, untouched); rerun alone 18/18 pass. test-dlib not run there (re-run on the integration branch).
+- Flagged for user: no real Aider installed, `verify-cli` not run (behaviour read from Aider source); Aider `read:` is cwd-relative, so a tab started in a subfolder misses it; never live — click-through step 6.
+
 ## R1
 
 ## I3 Commands
