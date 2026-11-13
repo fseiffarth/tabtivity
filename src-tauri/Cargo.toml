@@ -460,7 +460,7 @@ libc = "0.2"
 tempfile = "3"
 # Builds the crafted `.xls` (an OLE compound file) the spreadsheet reader's
 # child-process test feeds calamine; already in the tree via `infer`.
-cfb = "0.14"
+cfb = "0.16"
 # The macOS GPU sampler's `ioreg` plist parser is pure and gated
 # `any(target_os = "macos", test)`, so its fixture test runs on every OS;
 # the crate is already the macOS runtime dependency above.
