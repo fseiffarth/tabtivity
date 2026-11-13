@@ -174,8 +174,14 @@ const RIGHT_EDGE = /\s*[│┃┆┇┊┋]\s*$/u;
 const LABELLED_RULE = /^\s*[╭┌┏╔]?[─━═]+\s+\S.*?\s+[─━═]+[╮┐┓╗]?\s*$/u;
 const RULE_LEFT = /^\s*[╭┌┏╔]?[─━═]+\s+/u;
 const RULE_RIGHT = /\s+[─━═]+[╮┐┓╗]?\s*$/u;
+/** Claude Code's dialog edge (`▔`) with a session notice drawn into it —
+ * `▔▔▔ ● high · /effort ▔`, `▔▔▔ tmux detected · … ▔` (2.1.322, more often
+ * from 2.1.323). The edge is still the dialog's top: kept as text it glued the
+ * heading under it onto the notice and the `/model` sheet went untitled. It
+ * reads as the bare edge does, the notice dropped with it. */
+const LABELLED_DIALOG_EDGE = /^\s*▔{3,}\s+\S.*?\s+▔+\s*$/u;
 /** How a rule goes on when it really did wrap: more of its strokes. */
-const RULE_CONTINUES = /^[─━═]/u;
+const RULE_CONTINUES = /^[─━═▔]/u;
 /** How a row ends that its program filled with blanks: text that really ran
  * over the edge leaves one blank there at most. */
 const PADDED_END = / {2,}$/u;
@@ -191,7 +197,9 @@ const PADDED_END = / {2,}$/u;
 function startsOwnRow(above: ReadableSpan[], spans: ReadableSpan[]) {
   const text = spanText(above);
   if (PADDED_END.test(text)) return true;
-  return text.trim() !== "" && (BORDER_ONLY.test(text) || LABELLED_RULE.test(text)) && !RULE_CONTINUES.test(spanText(spans));
+  return text.trim() !== ""
+    && (BORDER_ONLY.test(text) || LABELLED_RULE.test(text) || LABELLED_DIALOG_EDGE.test(text))
+    && !RULE_CONTINUES.test(spanText(spans));
 }
 
 /** Drops `count` characters from the front of a span run, in place. */
@@ -303,7 +311,7 @@ function spanText(spans: ReadableSpan[]) {
 function undecorate(spans: ReadableSpan[]): { spans: ReadableSpan[]; edge: number } | "blank" | "border" {
   const text = spanText(spans);
   if (!text.trim()) return "blank";
-  if (BORDER_ONLY.test(text)) return "border";
+  if (BORDER_ONLY.test(text) || LABELLED_DIALOG_EDGE.test(text)) return "border";
   const left = LEFT_EDGE.exec(text);
   if (left) trimSpansLeft(spans, left[0].length);
   const right = RIGHT_EDGE.exec(spanText(spans));
