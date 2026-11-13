@@ -253,18 +253,23 @@ const ReadableTurns = memo(function ReadableTurns({ lines, chat, agent, promptLa
  * A one-word setting rides on the rule (`/model opus`); the text of a `/goal`
  * or `/plan` is the reader's own words, so it follows as an ordinary prompt
  * bubble. Both keep the prompt's message menu. */
-function CommandDivider({ command, label, press }: {
+function CommandDivider({ command, label, press, inbox, links }: {
   command: SlashCommand;
   label: string;
   press?: TapHandlers;
+  /** The stored chat's inbox: a `/design @inbox-picture` prompt's picture
+   * shows in the bubble as in any prompt (`PromptBody`). */
+  inbox?: ChatInbox;
+  links?: LinkHandlers;
 }) {
   const inline = commandArgsInline(command.args);
+  const withFiles = !!inbox && !!links && inboxLeaves(command.args).length > 0;
   return <>
     <div className="readable-command" role="separator" aria-label={label} data-prompt={command.args ? `${command.name} ${command.args}` : command.name} {...press}>
       <span className="readable-command-text">{inline && command.args ? `${command.name} ${command.args}` : command.name}</span>
     </div>
-    {!inline && <div className="readable-turn user command-args" role="group" aria-label={label} {...press}>
-      <p className="transcript-text">{command.args}</p>
+    {!inline && <div className={withFiles ? "readable-turn user command-args with-files" : "readable-turn user command-args"} role="group" aria-label={label} {...press}>
+      {withFiles && links ? <PromptBody text={command.args} links={links} inbox={inbox} /> : <p className="transcript-text">{command.args}</p>}
     </div>}
   </>;
 }
@@ -429,7 +434,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
       : turn.questions
       ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)} />
       : turn.command
-      ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} />
+      ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
       : turn.kind === "prompt"
       ? <div className={inbox && inboxLeaves(turn.text).length > 0 ? "readable-turn user with-files" : "readable-turn user"} role="group" aria-label={index === 0 && taskLabel ? taskLabel : promptLabel} data-prompt={turn.text} data-send-failed={turn.failed || undefined} {...tap(turn.key, () => turn.text, turn.held && onEdit && turn.pending !== undefined ? onEdit.bind(null, turn.pending) : undefined)}>
           <PromptBody text={turn.text} links={links} inbox={inbox} />

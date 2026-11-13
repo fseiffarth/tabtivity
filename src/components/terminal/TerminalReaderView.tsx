@@ -555,7 +555,11 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
       <div className="terminal-reader-command" role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
         <span>{inline && turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}</span>
       </div>
-      {!inline && <div className="terminal-reader-turn user"><p>{turn.command.args}</p>{time}</div>}
+      {/* A `/design @inbox-picture` prompt's picture shows as in any prompt. */}
+      {!inline && <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"}>
+        <ReaderPromptBody text={turn.command.args}>{(words) => <p>{words}</p>}</ReaderPromptBody>
+        {time}
+      </div>}
     </>;
   }
   if (turn.kind === "prompt") {
