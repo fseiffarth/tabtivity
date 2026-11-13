@@ -225,6 +225,13 @@ interface SyncStore {
   progressByProject: Record<string, SyncProgressState | null>;
   /** projectId → mirror files the pushes (manual and background) left alone. */
   skippedUnsafeByProject: Record<string, SyncMirrorSkips>;
+  /** projectId → whether auto-sync resolves a file both sides changed by taking
+   *  the newer copy (`services::sync_take_newer`); absent until loaded. */
+  takeNewerByProject: Record<string, boolean>;
+  /** Read the project's "take the newer copy" switch. */
+  loadTakeNewer: (projectId: string) => Promise<void>;
+  /** Turn it on or off; the engine acts on its next pass. */
+  setTakeNewer: (projectId: string, on: boolean) => Promise<void>;
 
   /** Re-stat the host for the project's selected files and refresh the cache. */
   refreshStatus: (projectId: string) => Promise<void>;
@@ -499,6 +506,17 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   byProject: {},
   progressByProject: {},
   skippedUnsafeByProject: {},
+  takeNewerByProject: {},
+
+  loadTakeNewer: async (projectId) => {
+    const on = await invoke<boolean>("sync_take_newer_get", { projectId });
+    set((s) => ({ takeNewerByProject: { ...s.takeNewerByProject, [projectId]: on } }));
+  },
+
+  setTakeNewer: async (projectId, on) => {
+    await invoke("sync_set_take_newer", { projectId, on });
+    set((s) => ({ takeNewerByProject: { ...s.takeNewerByProject, [projectId]: on } }));
+  },
 
   refreshStatus: async (projectId) => {
     try {

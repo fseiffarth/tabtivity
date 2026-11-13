@@ -2418,7 +2418,8 @@ label.settings-toggle-card-row {
   color: var(--danger);
 }
 
-.local-loss-badge-overwritten {
+.local-loss-badge-overwritten,
+.local-loss-badge-overwrittenOnHost {
   color: var(--warning);
 }
 

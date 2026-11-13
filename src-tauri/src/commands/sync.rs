@@ -366,6 +366,22 @@ pub async fn sync_set_auto(
     remote_sync::save_manifest(&project_id, m)
 }
 
+/// Whether the project's auto-sync resolves a file both sides changed by taking
+/// the newer copy (`services::sync_take_newer`). Off for a project never set.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sync_take_newer_get(project_id: String) -> Result<bool, String> {
+    refuse_remote_only(&project_id)?;
+    Ok(crate::services::sync_take_newer::enabled(&project_id))
+}
+
+/// Turn "take the newer copy" on or off for a project. Nothing transfers here: the
+/// auto-sync engine acts on its next pass, on the paths auto-sync covers.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sync_set_take_newer(project_id: String, on: bool) -> Result<(), String> {
+    refuse_remote_only(&project_id)?;
+    crate::services::sync_take_newer::set(&project_id, on)
+}
+
 /// The marker write behind [`sync_set_auto`], on one entry. OFF records an explicit
 /// `auto_off` (overrides an ancestor/project-wide auto); ON marks the path tracked
 /// and clears **both** carve-outs — `auto_off` and `excluded`. The exclusion has to
