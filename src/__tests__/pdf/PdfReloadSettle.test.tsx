@@ -107,7 +107,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-import { PdfView, RELOAD_SETTLE_MS } from "../../components/embed/pdf/PdfViewer";
+import { PdfView } from "../../components/embed/pdf/PdfViewer";
+import { RELOAD_SETTLE_MS } from "../../components/embed/pdf/reloadSettle";
 import { FileScopeContext } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 
