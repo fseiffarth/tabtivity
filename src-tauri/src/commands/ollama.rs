@@ -3207,7 +3207,9 @@ fn fim_layout(model: &str) -> Option<&'static FimLayout> {
 /// word/sentence/line (and, when mid-sentence, biases toward finishing it first),
 /// `Block` completes the current block/paragraph, and `Scope` the whole enclosing
 /// function or scope. When `context` is non-empty it is inserted as a read-only
-/// REFERENCE FILES section before BEFORE/AFTER. Pure + tested.
+/// REFERENCE FILES section before AFTER/BEFORE. Section order is
+/// `Language / references / AFTER / BEFORE / TASK`, so the text that changes
+/// while typing is last (plan B4). Pure + tested.
 fn completion_prompt(
     prefix: &str,
     suffix: &str,
@@ -3265,7 +3267,10 @@ insertion; never output, quote, or repeat them):\n{context}\n"
     let prose = if is_completion_prose(language) {
         "Continue prose in the natural language of BEFORE and AFTER, even when references use another language. Preserve Markdown/LaTeX markup. Do not translate or switch to English.\n"
     } else { "" };
-    format!("Language: {lang}\n{prose}{task}\n\n{reference}BEFORE:\n{prefix}\n\nAFTER:\n{suffix}")
+    // What changes while the user types goes last: the prefix's tail, and the
+    // TASK, which switches at a line start and at `;` or `:`. Everything before
+    // the first changed token is served from the model's prompt cache.
+    format!("Language: {lang}\n{prose}\n{reference}AFTER:\n{suffix}\n\nBEFORE:\n{prefix}\n\n{task}")
 }
 
 /// Strip wrapping artefacts a chat model sometimes adds around a raw completion:

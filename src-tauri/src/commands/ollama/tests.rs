@@ -1232,8 +1232,25 @@ fn completion_prompt_includes_prefix_suffix_and_language() {
     assert!(p.contains("let x ="), "prefix must be embedded");
     assert!(p.contains(" + 1;"), "suffix must be embedded");
     assert!(p.contains("rust"), "language must be named");
-    // Prefix appears before suffix so the model fills in the middle.
-    assert!(p.find("let x =").unwrap() < p.find(" + 1;").unwrap());
+    // B4: the suffix comes first, so the text that changes while typing (the
+    // prefix's tail) sits at the end and the model's prompt cache keeps the rest.
+    assert!(p.find(" + 1;").unwrap() < p.find("let x =").unwrap());
+}
+
+/// B4: TASK changes at the first character of a line and at `;` or `:`; as
+/// the last section it no longer forces everything after it to be re-read.
+#[test]
+fn completion_prompt_puts_the_task_last() {
+    let ctx = build_context_block(&[ContextFile { name: "lib.rs".into(), content: "pub fn answer() {}".into() }]);
+    for (prefix, mode) in [("let x = ", CompletionMode::Sentence), ("// add two numbers", CompletionMode::Block), ("x;", CompletionMode::Scope)] {
+        let p = completion_prompt(prefix, "\n}", "rust", mode, &ctx);
+        let order: Vec<usize> = ["Language:", "REFERENCE FILES", "AFTER:", "BEFORE:", "TASK:"]
+            .iter()
+            .map(|section| p.find(section).unwrap_or_else(|| panic!("{section} in {p}")))
+            .collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{p}");
+        assert!(p.rfind("TASK:").unwrap() > p.find(&format!("BEFORE:\n{prefix}")).unwrap());
+    }
 }
 
 #[test]
@@ -1251,7 +1268,7 @@ fn completion_prompt_labels_before_and_after_sections() {
     let p = completion_prompt("pre", "post", "rust", CompletionMode::Sentence, "");
     assert!(p.contains("BEFORE:\npre"));
     assert!(p.contains("AFTER:\npost"));
-    assert!(p.find("BEFORE:").unwrap() < p.find("AFTER:").unwrap());
+    assert!(p.find("AFTER:").unwrap() < p.find("BEFORE:").unwrap());
 }
 
 #[test]
