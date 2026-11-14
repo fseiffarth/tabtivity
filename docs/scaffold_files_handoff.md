@@ -308,6 +308,99 @@ Reviewer R1 of `08e549f87..scaffold-files` (I1 + I2). Branch `worktree-agent-a62
 
 ## I3 Commands
 
+Branch `worktree-agent-ada22e8711c75010c` (on `scaffold-files` 3feb70193). Commits: `675119b60`
+(R1's two bugs), `add234826` (commands, memory, TS), `0989466ff` (clippy type alias), `48967a5ae` (old status test
+updated to the `edited` contract); the handoff commit follows.
+
+### Commands (all `Core`, `async` over `*_blocking`, args hold no path word)
+
+Rust: `commands/project_docs.rs` (registered in `lib.rs` after `project_scaffold_missing`; rows in
+`command_class.rs`; `commandClasses.ts` regenerated). TS wrappers: **`src/lib/projects/projectDocs.ts`**
+(new file; I4 owns `scaffold.ts`); test `src/__tests__/projects/ProjectDocs.test.ts`.
+
+| Rust command | TS wrapper | Args | Result |
+|---|---|---|---|
+| `project_docs_status` | `projectDocsStatus(projectId)` | `{ projectId }` | `DocStatus[] \| null` |
+| `create_project_doc` | `createProjectDoc(projectId, name)` | `{ projectId, name }` | `boolean` (written?) |
+| `project_agent_memory` | `projectAgentMemory(projectId)` | `{ projectId }` | `AgentMemoryEntry[]` |
+| `project_agent_memory_read` | `projectAgentMemoryRead(projectId, entry)` | `{ projectId, cli, home, name }` | `string` |
+
+JSON shapes:
+
+- `DocStatus = { name: string; state: "missing"|"template"|"edited"|"pointer"; nestedUnder: string|null; creatable: boolean }`
+  in catalog order: AGENTS, README, PROJECT, TODO, ROADMAP, STATUS, DOCUMENTATION, REMARKS, CLAUDE, GEMINI.
+  `null` for the whole result = no local folder (unknown project, remote-only, mirror not made, folder gone):
+  show no status and no ghost rows. **Ghost row = `state === "missing" && creatable`.**
+- **Shape change vs I1 (bug fix a):** a doc that is *there* but is a symlink (dangling too), FIFO, non-UTF-8 or
+  over the 4 MiB cap reports `edited` (not `missing`), so it never gets a ghost row; a `CLAUDE.md -> AGENTS.md`
+  link now shows as an `edited` row nested under `AGENTS.md`. A real folder named like a doc gets **no row** (the
+  tree already lists the folder). No new field or state; `creatable` stays the catalog flag, so key ghost rows on
+  `missing`, not on `creatable` alone. Such a row is "somebody's file": no dim, no badge; a link or FIFO may not
+  open in a viewer (as before).
+- `create_project_doc` rejects (`Err` string) for a name that is not a `creatable` catalog entry (a path, unknown,
+  `CLAUDE.md`, `GEMINI.md`, `REMARKS.md`, `.gitignore`) or a project with no local folder. `false` = something is
+  already at that name (never overwritten, never followed): refresh the status, don't toast an error.
+- `AgentMemoryEntry = { cli: "claude"|"codex"; home: "scope"|"local"; name: string; bytes: number; modifiedSecs: number|null }`.
+  Order: per home (scope, then local-model), Claude then Codex, `MEMORY.md` first in each folder, the rest sorted.
+  Empty array = nothing (hide the sub-group). **Deviation from the plan** (`(projectId, cli, name)`): the scope home
+  and the local-model home can hold the same name, so rows carry `home` and the read takes it.
+  The read rejects when the entry is no longer in the listing, over 1 MiB, or not UTF-8: show "not available".
+
+### Agent memory choices
+
+- New `services/agent_memory.rs` (+tests): pure over `Source { kind, home }` + project dirs; the command resolves
+  `agent_home::scope_home(Some(id))` and `local_model_home(Some(id))`.
+- Claude: `<home>/.claude/projects/<name>/memory/*.md`, `name` = the project dir with every UTF-16 unit that is not an
+  ASCII letter or digit turned into `-` (checked in the installed binary 2.1.321:
+  `replace(/[^a-zA-Z0-9]/g,"-")`; a name over 200 chars gets a hash suffix we do not reproduce, so such a project
+  lists nothing). Both the stored project path and its canonicalization are tried. Codex:
+  `<home>/.codex/memories/*.md`, top level only. **Codex's folder is not verified live**: `~/.codex/memories` does
+  not exist on this machine; a different or absent folder just lists nothing.
+- Everything goes through `home_io` (`HomeDir::open_existing` walks `O_NOFOLLOW` from the home,
+  `HomeFile::open_read`/`read_capped`): a linked `.codex`, memory folder or file is refused; FIFOs are never waited on
+  (tested with `within_deadline`). Only `.md` names, regular files <= 1 MiB (<= 256 per folder, 200 in all).
+  A read looks `(cli, home, name)` up in a fresh scan, so `../x`, `sub/x`, an absolute path or a stale name is refused.
+
+### Bug fixes (R1's two flags)
+
+- (a) `docs_status_at`: see above. Test `something_present_is_never_a_missing_ghost_row`.
+- (b) `upgrade_doc_at`: reads the doc (descriptor + inode), writes the template to an exclusive dot-temp beside it
+  (`write_no_follow` create-new, the old file's mode copied), re-reads the doc and renames over it only if the inode
+  is unchanged and the text still untouched; otherwise removes the temp and returns `false`. The old file is never
+  opened for writing. Residual window: between that second read and the `rename` (microseconds): a save there is
+  lost, and a link swapped in there is replaced by the rename as itself, not followed. Tests (a `between` hook plays
+  the user): in-place save, rename-over with the same bytes (other inode), link swap, no temp left, mode kept.
+
+### Other
+
+- `STANDARD_PROJECT_FILES` dropped `.claude`; `the_ts_fallback_list_is_the_catalog` (scaffold tests) parses the set and
+  compares it to the catalog names + `.gitignore`, `.git`. (It is in the second commit; at `675119b60` alone it
+  would fail, the TS edit is in `add234826`.)
+- `scaffold_target_for_entry` is now `pub(crate)`. Filemap rows added for `project_docs.rs` and `agent_memory.rs`
+  only; the rest of step 9 stays with I5.
+- `core_dispatch`'s `PATH_NAMED` test passes with no row (`projectId`, `name`, `cli`, `home`).
+- No test calls the commands through the project registry (it reads the real state dir); the name checks run before
+  the lookup and are tested, the lookup is the same code as `project_agents_empty`.
+
+### Gates
+
+`scripts/gates-job.sh start --base 3feb70193` (final tree 48967a5ae):
+- PASS: brand, whitespace, lint-fe, clippy `-p tabtivity -p app-serverd --all-targets`, clippy daemon-lib, clippy `-p app-serverd`
+  (zero warnings), `npm run build`, vitest (changed set, incl. new `ProjectDocs.test.ts`).
+- `cargo test -p tabtivity -p app-serverd` lib: 5621 passed, 1 failed = the known `git_push_mcp` YAML alias-bomb 5 s bound
+  (reruns alone: 1 passed). An earlier run also failed `commands::projects::tests::doc_states_follow_the_capped_no_follow_read`
+  - a real consequence of fix (a) (link/FIFO now `edited` in the status); the test now asserts the new contract.
+- Integration (`--test it --test projects_commands`, run by hand because the job stops at the lib failure): 183 passed, 0 failed.
+- test-dlib `cargo test -p tabtivity --no-default-features --lib --test server_secrets` by hand: 5436 + 1 passed.
+- New tests: scaffold 5 (ghost row, upgrade temp/mode, save-during-upgrade, link swap, TS fallback list), `agent_memory` 8,
+  `project_docs` 2, vitest 2.
+
+### Flagged for user
+
+- Codex memory folder layout is from docs, not seen on a live Codex (none installed with memories here); Claude's
+  encoding was read from the installed binary. Never live: none of the four commands has run against the real app.
+- `upgrade_doc_at` keeps a microsecond window (above); closing it fully would need a lock the other writers do not take.
+
 ## R2
 
 ## I4 Desktop
