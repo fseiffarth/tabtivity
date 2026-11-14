@@ -109,6 +109,12 @@ and drag-out calls) into one `buildOpts` value.
 
 **Result:** about 3,000 lines.
 
+**Status (2026-11-14):** done, all eight hooks. `usePdfPresent` takes
+`setError` rather than an `onError`. `PdfMetaPanel` and `PdfFindBar` were not
+split out: their JSX stays in `PdfViewer`. The `buildOpts` fold was not done
+either: the three `buildPdf` calls now sit in `usePdfPrint`, `usePageTransfer`
+and `handleSave`.
+
 ### Phase 3 — the coupled edits
 
 | Hook | From cluster | How the coupling is cut |
@@ -121,6 +127,23 @@ and drag-out calls) into one `buildOpts` value.
 **Result:** about 2,300 lines. What remains in `PdfCanvas` is the core state,
 markup glue, disk and load, zoom and scroll, the host-key dispatch, and the
 JSX.
+
+**Status (2026-11-14):** `usePdfNotes`, `usePdfPrint` and `usePageTransfer`
+are done; `PdfViewer.tsx` is at 2,695 lines. Two hooks were deliberately not
+made:
+- `usePageArrangement`: the load effect resets `sources`, `pages`, `past`
+  and `future` together, and the silent save sets `pages` outside the
+  history. A hook would have to hand every setter back, which moves the state
+  without hiding any of it.
+- `usePdfSave`: `handleSave` reads about fifteen values from every cluster.
+
+Both stay in `PdfCanvas` as its core. The notes hook returns `writing`, the
+guard both saves share, and `noteSaveRef`, as the plan expected.
+
+Hooks receive refs and `useState` setters as parameters. The hooks lint rule
+cannot see those as stable, so they are listed in the dependency arrays. That
+is behaviour-neutral, because their identities never change. Lint shows the one
+warning HEAD already had (the load effect's `viewPos.initial`).
 
 ### Phase 4 — document load and viewport (optional; recommended: not now)
 

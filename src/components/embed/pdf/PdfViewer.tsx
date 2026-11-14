@@ -1,4 +1,3 @@
-import { useSearchText } from "./useSearchText";
 /**
  * The in-app PDF viewer: a pdf.js canvas stack with a zoom/fit toolbar, Ctrl+F
  * find (#71), print, and bidirectional SyncTeX (#66).
@@ -11,10 +10,6 @@ import { useSearchText } from "./useSearchText";
  * the established pattern here and is safe because every use is at call time.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
-import { subscribeTauri } from "../../../hooks/useTauriListener";
-import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { usePdfSyncStore, type PdfHighlight } from "../../../stores/viewers/pdfSync";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
@@ -26,51 +21,24 @@ import {
   readFileBytes,
   writeFileBytes,
   fileMtime,
-  describeFileErrorKey,
 } from "../../../lib/files/fileAccess";
-import { useExperimental } from "../../../lib/experimental";
-import { emptyDeck } from "../../../lib/viewers/deck/model";
-import { deckPathForPdf, serializeDeck } from "../../../lib/viewers/deck/sidecar";
-import { jumpToSource } from "../fileViewer/sourceJump";
 import { SaveButton } from "../fileViewer/toolbar";
 import { useViewerState } from "../fileViewer/viewerState";
-import { canRecompileTexSource, recompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
-import { isServerClient } from "../../../lib/transport/linkState";
-import {
-  renderPdfPagesToImages,
-  printHtmlBody,
-  PDF_PREVIEW_SCALE,
-  PDF_PRINT_CSS,
-  PDF_PRINT_SCALE,
-  type NativePrint,
-} from "../../../lib/viewers/print";
+import { recompileTexSource } from "../../../lib/viewers/tex/openTexWorkspace";
 import {
   SELF,
   initialPages,
   keepPageIds,
-  insertPages,
-  deletePages,
-  pagesOf,
   isPristine,
   isPristineExceptNotes,
   type PageList,
-  type PageRef,
   type PdfNote,
   type PdfQuad,
 } from "../../../lib/viewers/pageModel";
 import {
   newNoteId,
   toPdfDate,
-  addNote,
-  updateNote,
-  removeNote,
-  noteCount,
-  notedSheetCount,
-  placedNotes,
-  stepNote,
-  isHighlight,
   quadsAnchor,
-  type PlacedNote,
 } from "../../../lib/viewers/pdfNotes";
 import {
   addMark,
@@ -85,27 +53,12 @@ import { registerPdfDoc, unregisterPdfDoc, updatePdfDoc } from "../../../lib/tab
 import {
   openSource,
   sourceBytes,
-  newSourceId,
   buildPdf,
-  readPdfMetadata,
   REDACT_DEFAULT_DPI,
   type PdfSources,
-  type PdfMetadata,
 } from "./pdfDoc";
-import {
-  loadOutline,
-  detectHeadings,
-  flattenOutline,
-  outlineIsNavigable,
-  type OutlineNode,
-  type HeadingRun,
-  type PdfDest,
-} from "./outline";
-import { destTopInBigPoints, type PdfLink } from "./links";
-import { HIGHLIGHT_COLORS, loadPageNotes } from "./notes";
+import { HIGHLIGHT_COLORS } from "./notes";
 import { PdfNotesPane } from "./PdfNotesPane";
-import { readViewerSelection, type ViewerSelection } from "./selection";
-import { scrollIntoPdfBox } from "./scrollBox";
 import { PdfLinkConfirmDialog } from "./PdfLinkDialog";
 import { markupStripKey, markupStripKeyUp, PdfMarkupBar, PdfMarkupUndoConfirm } from "./PdfMarkupBar";
 import { PdfMarkupDock } from "./PdfMarkupDock";
@@ -125,40 +78,19 @@ import {
   subscribeMarkupClaims,
 } from "../../../lib/viewers/pdfMarkup";
 import { isDetachedWindow } from "../../../stores/detachedContext";
-import {
-  type PdfPresentReady,
-  type PdfPresentSeed,
-  PDF_PRESENT_READY,
-  pdfPresentLabel,
-  pdfPresentSeedEvent,
-  readPresentScreen,
-} from "../../../lib/viewers/pdfPresent";
-import { openRoutedUri } from "../../../lib/linkTarget";
-import { printPdfNative } from "../../../lib/window/printing";
-import { layoutPrintPdf } from "../../../lib/viewers/pdfPrintLayout";
 import { useSettingsStore } from "../../../stores/settings";
 import { PageStrip } from "../../common/PageStrip";
 import { PrinterIcon } from "../../common/PrinterIcon";
 import { UntestedTag } from "../../common/UntestedTag";
-import { subscribePageDragActive, type PageTransfer } from "../../../stores/drag/pdfDrag";
 import { ContextFilePicker } from "../ContextFilePicker";
 import { useProjectsStore } from "../../../stores/projects";
-import { BOX_SCOPE_PREFIX, boxMembersOfScope, boxScopeId, useBoxesStore } from "../../../stores/boxes";
 import { resolveProjectDirectory } from "../../../types";
-import { basename, dirname, isPathWithin } from "../../../lib/paths";
+import { basename, isPathWithin } from "../../../lib/paths";
 import {
-  pdfPageMatches,
-  synctexEdit,
-  synctexStatus,
-  syncNoticeKind,
-  texSourceCandidates,
-  texPathExists,
   SYNC_NOTICE_MSG,
-  resolveTexRoot,
-  type SyncNoticeKind,
   type SyncRect,
 } from "../../../lib/viewers/tex/tex";
-import { useT, type TranslationKey } from "../../../lib/i18n";
+import { useT } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { pdfFitScale } from "./fitScale";
 import { PdfWorkerSlot } from "../../../lib/viewers/pdfLoad";
@@ -185,6 +117,17 @@ import {
 import { PdfPageCanvas } from "./PdfPageCanvas";
 import { PdfThumb } from "./PdfThumb";
 import { OutlinePane } from "./PdfOutlinePane";
+import { usePdfOutline } from "./usePdfOutline";
+import { usePdfTextSelection } from "./usePdfTextSelection";
+import { usePdfFind } from "./usePdfFind";
+import { usePageJump } from "./usePageJump";
+import { usePdfLinks } from "./usePdfLinks";
+import { usePdfPresent } from "./usePdfPresent";
+import { usePdfMetadata } from "./usePdfMetadata";
+import { usePdfReverseSearch } from "./usePdfReverseSearch";
+import { usePdfNotes } from "./usePdfNotes";
+import { usePdfPrint } from "./usePdfPrint";
+import { usePageTransfer } from "./usePageTransfer";
 
 /** The longest a running build (`beginCompile`) holds the viewer's mtime poll:
  *  a compile that long is not a compile, it is a window that died mid-build. */
@@ -194,12 +137,6 @@ const PDF_COMPILE_HOLD_MAX_MS = 10 * 60_000;
  *  the reverse-search click marker's is, so reduced motion (no fade) still
  *  clears it. */
 export const SYNC_HIGHLIGHT_MS = 2200;
-
-/** How long after the last remark edit the file is written, when autosaving remarks
- *  is on (#pdf-notes). Long enough that writing a sentence, correcting it and moving
- *  its marker is one write rather than three; short enough that a reader who closes
- *  the tab straight after typing does not lose the remark. */
-const NOTE_AUTOSAVE_MS = 1200;
 
 /**
  * How many pages the viewer asks the pdf.js worker about at once, for the two
@@ -241,21 +178,6 @@ const isTextEntry = (target: EventTarget | null): boolean => {
   return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
 };
 
-/** The eight standard `/Info` field names, bound to their wording (#pdf-meta). A
- *  map rather than a derived key, because these are the only names in the dict that
- *  belong to the format: everything else is the producer's own invention, and the
- *  lookup missing is how the panel knows to print the raw name instead. */
-const META_FIELD_KEYS: Record<string, TranslationKey> = {
-  Title: "pdfMeta.field.Title",
-  Author: "pdfMeta.field.Author",
-  Subject: "pdfMeta.field.Subject",
-  Keywords: "pdfMeta.field.Keywords",
-  Creator: "pdfMeta.field.Creator",
-  Producer: "pdfMeta.field.Producer",
-  CreationDate: "pdfMeta.field.CreationDate",
-  ModDate: "pdfMeta.field.ModDate",
-};
-
 // Distinguishes two viewers showing the SAME file (a split view), which would
 // otherwise collide on a tabKey/path-derived strip id.
 let stripSeq = 0;
@@ -295,53 +217,6 @@ function PdfCanvas({
   const scope = useFileScope();
   const paneVisible = usePaneVisible();
 
-  // "Present": turn this PDF into a deck — a sidecar of editable layers beside
-  // it, plus the fullscreen presenter. Experimental, so the button is absent
-  // unless the flag is on. Creating the sidecar is deliberately non-destructive:
-  // the PDF is untouched, and an existing deck is opened rather than replaced.
-  const deckEnabled = useExperimental("deck_presenter");
-  // What an external link in the PDF is routed by (#33). Read here rather than at
-  // the click so the routing sees the same settings the rest of the app does.
-  const settings = useSettingsStore((s) => s.settings);
-  const browserEnabled = useExperimental("web_browser");
-  const mailEnabled = useExperimental("mail_client");
-  const [makingDeck, setMakingDeck] = useState(false);
-  const openAsDeck = useCallback(async () => {
-    setMakingDeck(true);
-    try {
-      const deckPath = deckPathForPdf(path);
-      // "Is there a deck?" by stat, not by reading it: a read also fails for a
-      // deck that is not UTF-8 text or is over the text cap, and that deck must
-      // be opened (and shown broken), never written over with an empty one.
-      const exists = await fileMtime(deckPath, scope).then(
-        () => true,
-        () => false,
-      );
-      if (!exists) {
-        const deck = emptyDeck(basename(path));
-        await writeFileBytes(
-          deckPath,
-          new TextEncoder().encode(serializeDeck(deck)),
-          scope,
-        );
-      }
-      // Imported lazily: `FileViewerPane` already imports this module, so a
-      // static import would close a cycle. The call happens in a callback, long
-      // after both modules have initialised, so deferring it costs nothing and
-      // keeps the dependency one-way on paper — the same reason
-      // `openProjectFilesTab` lives beside its tab rather than in the view.
-      const { openLinkedFile } = await import("../fileViewer/openLinked");
-      openLinkedFile(tabKey, dirname(path) || "/", {
-        path: deckPath,
-        viewer: "eldeck",
-        label: basename(deckPath),
-      });
-    } catch (e) {
-      setError(t(describeFileErrorKey(e)));
-    } finally {
-      setMakingDeck(false);
-    }
-  }, [path, scope, tabKey, t]);
   const viewPos = useViewerState(tabKey);
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -397,13 +272,6 @@ function PdfCanvas({
   const railOpenRef = useRef(false);
   railOpenRef.current = railOpen;
   const railAutoOpenedRef = useRef(false);
-  /** The contents sidebar (the PDF's chapters/outline) is showing. */
-  const [outlineOpen, setOutlineOpen] = useState(false);
-  /** The document's resolved outline: null = not loaded yet, [] = none. */
-  const [outline, setOutline] = useState<OutlineNode[] | null>(null);
-  /** The font-size heading fallback, used only when `outline` is empty: null =
-   *  not scanned yet, [] = none found. */
-  const [headings, setHeadings] = useState<OutlineNode[] | null>(null);
   /** The rail's current selection, so an insert lands where the reader is looking. */
   const [selection, setSelection] = useState<Set<string>>(new Set());
   /** The "Insert PDF…" picker is open. */
@@ -457,19 +325,15 @@ function PdfCanvas({
   const marksTotal = markCount(pages);
   const markedSheets = markedSheetCount(pages);
 
-  // ── Deleting the metadata (#pdf-meta) ────────────────────────────────────
-  // Unlike a blackout, this is not an edit to the arrangement — there is no page it
-  // belongs to — so it rides beside it as one flag on the save. It is deliberately
-  // *pending* rather than immediate: nothing is written until Save, so it is as
-  // cancellable as every other edit in this viewer, and one Save writes the lot.
-  /** The metadata panel is open. */
-  const [metaOpen, setMetaOpen] = useState(false);
-  /** A save would write the file with no metadata at all. */
-  const [stripMeta, setStripMeta] = useState(false);
-  /** What the loaded document says about itself, read once per load. `null` while
-   *  the read is still out — "nothing found" and "not asked yet" are different
-   *  answers, and only the first may be reported as an empty list. */
-  const [meta, setMeta] = useState<PdfMetadata | null>(null);
+  const {
+    metaOpen,
+    setMetaOpen,
+    stripMeta,
+    setStripMeta,
+    meta,
+    setMeta,
+    metaFieldLabel,
+  } = usePdfMetadata({ doc });
 
   /** Unsaved edits: the arrangement no longer describes the file on disk, or the
    *  metadata is pending deletion — which is an edit with no page to sit on, and
@@ -482,93 +346,12 @@ function PdfCanvas({
   dirtyRef.current = dirty;
   useUnsavedWork(dirty);
 
-  // ── Presenting this PDF fullscreen (`present.ts`) ────────────────────────
-  //
-  // A window of its own showing the sheet and nothing else — the toolbar, the
-  // tab bar and the desktop all gone. It opens the file itself from `path`, so
-  // what it shows is the file AS SAVED: an unsaved page arrangement stays in this
-  // tab, which the button's tooltip says while there is one.
-  const presentLabel = useMemo(() => pdfPresentLabel(path), [path]);
-  /** This tab has opened the present window (and so answers its seed requests).
-   *  Not proof it is still on screen — the reader may have closed it with Esc —
-   *  which costs nothing: an emit at a label with no listener is a no-op. */
-  const [presentOpen, setPresentOpen] = useState(false);
-  const seedPresent = useCallback(() => {
-    const payload: PdfPresentSeed = {
-      path,
-      scope,
-      // Where the reader is now, so Present picks up the sheet on screen — and so
-      // pressing it again with the window already open moves it here rather than
-      // doing nothing visible.
-      page: visiblePage,
-    };
-    void emit(pdfPresentSeedEvent(presentLabel), payload);
-  }, [presentLabel, path, scope, visiblePage]);
-  // Read by the subscription below through a ref: `listen()` is async, so
-  // re-subscribing drops any request that lands during the round trip — and this
-  // one would otherwise re-subscribe on every scroll that changes the sheet
-  // number, which is the trap `DeckPresenter` documents.
-  const seedPresentRef = useRef(seedPresent);
-  seedPresentRef.current = seedPresent;
-  const openPresentWindow = useCallback(() => {
-    void (async () => {
-      try {
-        // `fullscreen: true` is what makes this different from the deck's
-        // audience window: that one only takes over a SECOND monitor and stays
-        // windowed on a single-monitor machine, which is the right default for a
-        // talk with a notes view but not for "show me this PDF fullscreen".
-        // Opening is idempotent by label, so a second press re-focuses the window
-        // already up and the seed below moves it to this sheet. `monitor` is the
-        // screen the reader last moved the present window to, if any.
-        await invoke("open_presenter_window", {
-          label: presentLabel,
-          fullscreen: true,
-          monitor: readPresentScreen(),
-        });
-        setPresentOpen(true);
-        seedPresent();
-      } catch (e) {
-        setError(t(describeFileErrorKey(e)));
-      }
-    })();
-  }, [presentLabel, seedPresent, t]);
-
-  // The present window asks until it is answered (it and this listener race on
-  // open). Subscribed only once this tab has opened one: a listener per PDF tab
-  // for a window nobody asked for is a subscription that never pays for itself.
-  useEffect(() => {
-    if (!presentOpen) return;
-    return subscribeTauri(() =>
-      listen<PdfPresentReady>(PDF_PRESENT_READY, (e) => {
-        if (e.payload.label === presentLabel) seedPresentRef.current();
-      }),
-    );
-  }, [presentOpen, presentLabel]);
-
-  /** A metadata field's name. Only the eight standard `/Info` keys are translated —
-   *  everything else is a name the producer invented, and printing an i18n key back
-   *  at the reader is worse than printing the producer's own word. */
-  const metaFieldLabel = useCallback(
-    (key: string) => {
-      const label = META_FIELD_KEYS[key];
-      return label ? t(label) : key;
-    },
-    [t],
-  );
-
-  // Read what the document says about itself, on demand rather than at load: the
-  // panel is the only thing that shows it, and pdf.js has to be asked, so a reader
-  // who never opens it pays nothing — including on the reload of every recompile.
-  useEffect(() => {
-    if (!metaOpen || !doc || meta) return;
-    let cancelled = false;
-    void readPdfMetadata(doc).then((m) => {
-      if (!cancelled) setMeta(m);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [metaOpen, doc, meta]);
+  const {
+    deckEnabled,
+    makingDeck,
+    openAsDeck,
+    openPresentWindow,
+  } = usePdfPresent({ path, scope, tabKey, visiblePage, setError });
 
   /**
    * Take hold of the pristine bytes of every open source that is not holding them.
@@ -643,268 +426,33 @@ function PdfCanvas({
     [applyEdit],
   );
 
-  // ── Remarks (#pdf-notes) ─────────────────────────────────────────────────
-  // Writing, changing and deleting a remark are ordinary arrangement edits, for the
-  // blackouts' reason: undo/redo, the dirty flag, the save and a page dragged into
-  // another document all cover remarks without knowing anything about them. What each
-  // one carries in addition is the `baseline` — the file's own remarks on that sheet,
-  // as read by the page — because the first edit on a page ADOPTS them; without it a
-  // new remark would be the only one the save wrote out.
-  /** The name new remarks are signed with. Remembered for the session only, and only
-   *  because it was typed: nothing here invents an author, and the OS login is
-   *  deliberately not consulted — a document leaves the machine, a real name with it. */
-  const [noteAuthor, setNoteAuthor] = useState("");
-  // ── The file's own remarks, read once per sheet ──────────────────────────
-  // Hoisted out of the page canvas because two things now need the same list and must
-  // agree about it: the page, which draws the markers, and the remarks panel, which
-  // lists every remark in the document — including on sheets nobody has scrolled to.
-  // Ids are minted at the read (a PDF's annotation reference is document-scoped and
-  // is rewritten on every save), so two reads of one page produce two sets of ids for
-  // the same comments and "go to this remark" would address one the page has never
-  // heard of. One read, one owner.
-  //
-  // Keyed by what the remarks actually depend on — which page, of which document, at
-  // which turn — rather than by position in the arrangement, so reordering the sheets
-  // moves nothing here and two copies of one page share the file's set until each is
-  // edited.
-  const noteKey = useCallback((r: PageRef) => `${r.src}:${r.page}:${r.rot}`, []);
-  const [fileNotes, setFileNotes] = useState<Map<string, PdfNote[]>>(() => new Map());
-  /** Per sheet, the file's own highlight annotations the viewer has taken over the
-   *  drawing of — see where it is written for why it is not derived from the map
-   *  above. Read by the page canvas as its repaint key. */
-  const [hiddenHl, setHiddenHl] = useState<Map<string, string>>(() => new Map());
-  // Bumped on every document load: a read still in flight when the file is replaced
-  // belongs to the old bytes and must not land on the new ones.
-  const noteGen = useRef(0);
-  const noteAsked = useRef<Set<string>>(new Set());
-  // Dropped DURING RENDER rather than in an effect, which is the one thing about this
-  // that is not obvious. Effects flush child-first, so a page canvas asking for its
-  // remarks on the commit that loaded a new document would be asking under the *old*
-  // generation — its answer discarded by the guard below, its key already marked as
-  // asked, and nothing left to ask again. Resetting here means every request in that
-  // commit is already the new document's. (React's own "adjust state when a prop
-  // changes" shape: the re-render happens before children are committed.)
-  const [notesDoc, setNotesDoc] = useState<PDFDocumentProxy | null>(null);
-  if (notesDoc !== doc) {
-    setNotesDoc(doc);
-    setFileNotes(new Map());
-    setHiddenHl(new Map());
-    noteGen.current += 1;
-    noteAsked.current = new Set();
-  }
-  /** Read the remarks of every named sheet that has not been read yet. Idempotent and
-   *  safe to call from a render effect — a sheet is asked for once. */
-  const ensureNotes = useCallback((refs: readonly PageRef[]) => {
-    const want = refs.map((r) => `${r.src}:${r.page}:${r.rot}`).filter((k, i, all) => {
-      if (noteAsked.current.has(k)) return false;
-      return all.indexOf(k) === i;
-    });
-    if (want.length === 0) return;
-    for (const k of want) noteAsked.current.add(k);
-    const gen = noteGen.current;
-    void (async () => {
-      const pairs = await Promise.all(
-        want.map(async (k) => {
-          const cut = k.lastIndexOf(":");
-          const mid = k.lastIndexOf(":", cut - 1);
-          const src = k.slice(0, mid);
-          const d = sourcesRef.current.get(src)?.doc;
-          const notes = d
-            ? await loadPageNotes(d, Number(k.slice(mid + 1, cut)), Number(k.slice(cut + 1)))
-            : [];
-          // The viewer draws the highlights it has just read, so the page render must
-          // stop drawing the file's own copies of them — see `ANNOT_MODE`. Written
-          // here, at the read, because that is the moment the two would start
-          // disagreeing, and because a suppression made anywhere else would have to
-          // re-derive which annotation each remark came from.
-          if (d) {
-            for (const n of notes) {
-              if (n.srcId) d.annotationStorage.setValue(n.srcId, { noView: true });
-            }
-          }
-          return [k, notes] as const;
-        }),
-      );
-      if (gen !== noteGen.current) return;
-      setFileNotes((prev) => {
-        const next = new Map(prev);
-        for (const [k, v] of pairs) next.set(k, v);
-        return next;
-      });
-      // The repaint key that goes with the suppression above. Held on its own rather
-      // than derived from `fileNotes`, and that is not tidiness: an autosave replaces
-      // a sheet's cached remarks with the ones it just WROTE, which carry no `srcId`
-      // because they were never read from an annotation — so a derived key would empty
-      // itself, the page would repaint without the suppression, and the file's
-      // original highlights (still in the document object, which a silent save
-      // deliberately does not reload) would come back underneath the ones on screen.
-      // It is only ever added to, and only the whole map is dropped, when the document
-      // is replaced.
-      setHiddenHl((prev) => {
-        const next = new Map(prev);
-        for (const [k, v] of pairs) {
-          const ids = v.filter((n) => n.srcId && isHighlight(n)).map((n) => n.srcId!);
-          if (ids.length > 0 || !next.has(k)) next.set(k, ids.join(","));
-        }
-        return next;
-      });
-    })();
-  }, []);
-
-
-  // ── The remarks panel (#pdf-notes) ───────────────────────────────────────
-  /** The panel is open. While it is, every sheet's remarks are read — that is what
-   *  makes it a list of the document rather than of the pages that happen to have
-   *  been scrolled past. */
-  const [notesOpen, setNotesOpen] = useState(false);
-  useEffect(() => {
-    if (notesOpen) ensureNotes(pages);
-  }, [notesOpen, pages, ensureNotes]);
-  /** Every remark in the arrangement, in reading order — the walk's own order. */
-  const placed = useMemo(
-    () => placedNotes(pages, pages.map((r) => fileNotes.get(noteKey(r)))),
-    [pages, fileNotes, noteKey],
-  );
-  /** The remark the walk is parked on, and the request the page consumes to scroll to
-   *  it. Kept as one piece of state so the highlighted row and the flashed marker are
-   *  the same remark by construction. */
-  const [noteFocus, setNoteFocus] = useState<
-    { entryId: string; noteId: string; sheet: number; x: number; y: number; nonce: number; edit: boolean } | null
-  >(null);
-  const goToNote = useCallback((p: PlacedNote, edit = false) => {
-    setNoteFocus((cur) => ({
-      entryId: p.entryId,
-      noteId: p.note.id,
-      sheet: p.sheet,
-      x: p.note.x,
-      y: p.note.y,
-      nonce: (cur?.nonce ?? 0) + 1,
-      edit,
-    }));
-  }, []);
-  const stepToNote = useCallback(
-    (step: 1 | -1) => {
-      const next = stepNote(placed, noteFocus?.noteId ?? null, step);
-      if (next) goToNote(next);
-    },
-    [placed, noteFocus?.noteId, goToNote],
-  );
-
-  // ── Autosaving a remark (#pdf-notes) ─────────────────────────────────────
-  // A remark is a thing you write while reading, and a reader who writes one has said
-  // everything they mean to say about it — so the file is written for them, shortly
-  // after they stop, rather than waiting for a Save they have no reason to expect.
-  //
-  // The safety is entirely in what it REFUSES to carry along. A save writes the whole
-  // arrangement, so an autosave that fired with a page move pending would commit the
-  // move, and one that fired with a blackout pending would flatten the sheet — the
-  // single irreversible edit in this viewer, and one that is deliberately confirmed.
-  // Hence the gate: remarks may be the ONLY thing pending (`isPristineExceptNotes`),
-  // the file must not have changed underneath, and a pending metadata deletion counts
-  // as something else. When it is holding, the panel says so rather than leaving a
-  // switch that is on and doing nothing.
-  const [autosaveNotes, setAutosaveNotes] = useState(
-    () => viewPos.initial?.pdfAutosaveNotes !== false,
-  );
-  const autosaveRef = useRef(autosaveNotes);
-  autosaveRef.current = autosaveNotes;
-  const setAutosaveNotesPersisted = useCallback(
-    (on: boolean) => {
-      setAutosaveNotes(on);
-      viewPos.persist({ pdfAutosaveNotes: on });
-    },
-    [viewPos],
-  );
-  /** Can an autosave run right now? Read by the panel, and re-derived at the timer
-   *  from the refs below — this is the display copy, that one is the decision. */
-  const notesAutosavable =
-    doc != null && !stripMeta && !staleOnDisk && isPristineExceptNotes(pages, doc.numPages);
-  const docRef = useRef(doc);
-  docRef.current = doc;
-  /** A write is in flight. A ref rather than the `saving` flag, because that one is
-   *  now only the *button's* spinner — a silent save deliberately does not raise it —
-   *  and the "don't write the same file twice at once" guard has to cover both. */
-  const writing = useRef(false);
-  /** A silent (remark) save is in flight. Shown in the remarks panel and nowhere
-   *  else. */
-  const [autosaving, setAutosaving] = useState(false);
-  const staleRef = useRef(staleOnDisk);
-  staleRef.current = staleOnDisk;
-  const stripMetaRef = useRef(stripMeta);
-  stripMetaRef.current = stripMeta;
-  /** Set after `handleSave` is defined; calling it is what a scheduled autosave does. */
-  const noteSaveRef = useRef<(() => void) | null>(null);
-  const autosaveTimer = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (autosaveTimer.current != null) window.clearTimeout(autosaveTimer.current);
-    },
-    [],
-  );
-  /** Write the pending remarks shortly after the last one is made. Debounced rather
-   *  than immediate because a remark is typically one of several — moving three
-   *  markers should be one write of the file, not three. */
-  const scheduleNoteAutosave = useCallback(() => {
-    if (!autosaveRef.current) return;
-    if (autosaveTimer.current != null) window.clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = window.setTimeout(() => {
-      autosaveTimer.current = null;
-      if (!autosaveRef.current) return;
-      const d = docRef.current;
-      const list = pagesRef.current;
-      if (!d || notedSheetCount(list) === 0) return;
-      if (stripMetaRef.current || staleRef.current) return;
-      if (!isPristineExceptNotes(list, d.numPages)) return;
-      // A save already running has its own bytes in flight; wait it out rather than
-      // queueing a second write of the same file.
-      if (writing.current) {
-        scheduleNoteAutosave();
-        return;
-      }
-      noteSaveRef.current?.();
-    }, NOTE_AUTOSAVE_MS);
-  }, []);
-
-  // The three edits themselves. Ordinary arrangement edits (see above), each followed
-  // by the autosave nudge — which is where writing-on-its-own is armed for *every*
-  // way a remark can change, rather than at the card, which is only one of them.
-  const addPdfNote = useCallback(
-    (entryId: string, note: PdfNote, baseline: readonly PdfNote[]) => {
-      if (note.author) setNoteAuthor(note.author);
-      applyEdit(addNote(pagesRef.current, entryId, baseline, note));
-      scheduleNoteAutosave();
-    },
-    [applyEdit, scheduleNoteAutosave],
-  );
-  const updatePdfNote = useCallback(
-    (
-      entryId: string,
-      noteId: string,
-      patch: Partial<Omit<PdfNote, "id">>,
-      baseline: readonly PdfNote[],
-    ) => {
-      if (patch.author) setNoteAuthor(patch.author);
-      applyEdit(updateNote(pagesRef.current, entryId, baseline, noteId, patch));
-      scheduleNoteAutosave();
-    },
-    [applyEdit, scheduleNoteAutosave],
-  );
-  const deletePdfNote = useCallback(
-    (entryId: string, noteId: string, baseline: readonly PdfNote[]) => {
-      applyEdit(removeNote(pagesRef.current, entryId, baseline, noteId));
-      scheduleNoteAutosave();
-    },
-    [applyEdit, scheduleNoteAutosave],
-  );
-  /** How many remarks a save would write out. Only sheets the arrangement has taken
-   *  over are counted — an untouched page's remarks are the file's own and are copied
-   *  across rather than rewritten. */
-  const notesTotal = noteCount(pages);
-  /** How many sheets a save would rewrite the remarks of. Not the same question as
-   *  the count above, and it is the one that decides whether anything is pending at
-   *  all: deleting the last remark on a page leaves nothing to count and still has to
-   *  be written. */
-  const notedSheets = notedSheetCount(pages);
+  const {
+    noteAuthor,
+    noteKey,
+    fileNotes,
+    setFileNotes,
+    hiddenHl,
+    ensureNotes,
+    notesOpen,
+    setNotesOpen,
+    placed,
+    noteFocus,
+    setNoteFocus,
+    goToNote,
+    stepToNote,
+    autosaveNotes,
+    setAutosaveNotesPersisted,
+    notesAutosavable,
+    writing,
+    autosaving,
+    setAutosaving,
+    noteSaveRef,
+    addPdfNote,
+    updatePdfNote,
+    deletePdfNote,
+    notesTotal,
+    notedSheets,
+  } = usePdfNotes({ doc, pages, pagesRef, sourcesRef, applyEdit, viewPos, stripMeta, staleOnDisk });
   // How this reopen starts — the seeded zoom and whether it is the fit baseline.
   // Decided once, by `restoredPdfZoom`, which is where the rule is documented.
   const restored = useState(() => restoredPdfZoom(viewPos.initial))[0];
@@ -1148,63 +696,11 @@ function PdfCanvas({
   // instead of snapping back to fit-width. Set at load-start so it reflects the
   // load that produced the current `doc`, regardless of effect timing.
   const reloadKeepZoom = useRef(false);
-  // True when a `.synctex(.gz)` sits beside the PDF, enabling reverse search.
-  const [syncable, setSyncable] = useState(false);
-  // The `.tex` that built this PDF by its name (`texSourceCandidates`), or null:
-  // what a reverse-search click opens when there is no map to name the line.
-  const [texSource, setTexSource] = useState<string | null>(null);
-  // While Ctrl/⌘ is held the pages show the crosshair cursor (reverse-search
-  // clicks fire only then, leaving plain clicks free for text selection). The
-  // armed mark is an attribute on the scroller that CSS reads, never React
-  // state: a modifier goes down for every shortcut typed anywhere in the window,
-  // and as state each press and release re-rendered every page of this PDF. Not
-  // tracked at all while the pane is hidden.
-  const reverseArmable = syncable || texSource != null;
-  useEffect(() => {
-    if (!reverseArmable || !paneVisible) return;
-    let armed = false;
-    const arm = (next: boolean) => {
-      if (next === armed) return;
-      armed = next;
-      scrollRef.current?.toggleAttribute("data-sync-armed", next);
-    };
-    const sync = (e: KeyboardEvent | MouseEvent) => arm(e.ctrlKey || e.metaKey);
-    const clear = () => arm(false);
-    window.addEventListener("keydown", sync);
-    window.addEventListener("keyup", sync);
-    window.addEventListener("mousemove", sync);
-    window.addEventListener("blur", clear);
-    return () => {
-      window.removeEventListener("keydown", sync);
-      window.removeEventListener("keyup", sync);
-      window.removeEventListener("mousemove", sync);
-      window.removeEventListener("blur", clear);
-      clear();
-    };
-  }, [reverseArmable, paneVisible]);
-
-  // Why a reverse-search click did nothing, or may have landed on the wrong
-  // line — worded from `synctexStatus` after every click (see `syncNoticeKind`).
-  // A Ctrl-click used to fail silently in every one of these cases, which read
-  // as "click-to-source is broken" when the answer was "you haven't recompiled".
-  // `source` is the file the Recompile button builds from (the resolved input on
-  // a hit, the PDF's sibling `.tex` otherwise); `canRecompile` gates the button,
-  // since a PDF opened on its own has no workspace to hand the build to.
-  const [syncNotice, setSyncNotice] = useState<{
-    /** `"remote"`: the PDF is read from a remote host, whose map the SyncTeX
-     *  commands (local disk only) cannot reach — no call is made. */
-    kind: SyncNoticeKind | "remote";
-    /** True when the click opened `source` at its top for want of a map. */
-    opened: boolean;
-    source: string;
-    sources: string[];
-    canRecompile: boolean;
-  } | null>(null);
-  useEffect(() => {
-    if (!syncNotice) return;
-    const id = window.setTimeout(() => setSyncNotice(null), 10000);
-    return () => window.clearTimeout(id);
-  }, [syncNotice]);
+  const {
+    syncNotice,
+    setSyncNotice,
+    onSyncClick,
+  } = usePdfReverseSearch({ path, scope, fileSource, diskVersion, paneVisible, scrollRef });
 
   // SyncTeX forward search: a pending reveal/highlight request for this PDF.
   // Copied into local state so we can consume the store request immediately
@@ -1293,107 +789,16 @@ function PdfCanvas({
     [highlight, pages],
   );
 
-  // ── Selecting text on the page (#pdf-textselect) ─────────────────────────
-  // The selection itself is the browser's — the text layer puts a transparent span
-  // over every run of glyphs and an ordinary drag does the rest. What is owned here is
-  // everything that happens *because* of one: the words on the clipboard, and the bar
-  // that turns a selection into a highlight.
-  //
-  // It is read in ONE place rather than per page, and that is what makes a drag across
-  // a page break work: to the engine that is one selection, to a PDF it is one
-  // annotation per sheet, and only something holding all the page boxes at once can
-  // divide it up (`selection.ts`).
-  const [sel, setSel] = useState<ViewerSelection | null>(null);
-  /** Bumped when the current selection was copied — the bar's "Copied" flash, and
-   *  nothing else: the copy itself has already happened by then. */
-  const [copiedNonce, setCopiedNonce] = useState(0);
-  /** The text most recently put on the clipboard by this viewer — the once-per-
-   *  selection guard the copy effect below explains. */
-  const lastCopied = useRef<string | null>(null);
-  const [copyOnSelect, setCopyOnSelect] = useState(
-    () => viewPos.initial?.pdfCopyOnSelect !== false,
-  );
-  const setCopyOnSelectPersisted = useCallback(
-    (on: boolean) => {
-      setCopyOnSelect(on);
-      // Turning it back on has to be able to copy the selection that is up right now:
-      // the once-per-selection guard below would otherwise treat it as already done.
-      if (on) lastCopied.current = null;
-      viewPos.persist({ pdfCopyOnSelect: on });
-    },
-    [viewPos],
-  );
-  const copyOnSelectRef = useRef(copyOnSelect);
-  copyOnSelectRef.current = copyOnSelect;
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
 
-  /** Re-read the selection. Cheap enough to run on every `selectionchange` (it is
-   *  rectangles off a live range), and it has to be: the bar has to follow a drag
-   *  rather than appear where it started. */
-  const readSelection = useCallback(() => {
-    const host = contentRef.current;
-    setSel(host ? readViewerSelection(host, scaleRef.current) : null);
-  }, []);
-
-  useEffect(() => {
-    if (!doc) return;
-    // `selectionchange` is the only event that fires for every way a selection can
-    // come about — a drag, a double-click on a word, Shift+arrow, Ctrl+A — which is
-    // exactly why the bar is driven off it rather than off pointerup.
-    document.addEventListener("selectionchange", readSelection);
-    return () => document.removeEventListener("selectionchange", readSelection);
-  }, [doc, readSelection]);
-  // A zoom does not change the selection, but it changes where it is on screen, so
-  // the boxes the bar is placed from have to be measured again.
-  useEffect(() => { readSelection(); }, [scale, readSelection]);
-
-  /**
-   * Put the selected words on the clipboard, once the gesture has settled.
-   *
-   * On `mouseup`/`keyup` rather than on `selectionchange`, and that is the whole
-   * subtlety: a drag fires the latter on every pixel, so copying there would write the
-   * clipboard a hundred times for one sentence and leave whichever partial selection
-   * happened to be last if the reader let go outside the window.
-   *
-   * Each selection is written **once**, and that guard is not an optimization. Both
-   * events fire for things that have nothing to do with this viewer — a key pressed in
-   * a terminal in the next pane, a button clicked anywhere in the window — while a
-   * selection made minutes ago is still up on the page. Without it, everything the
-   * reader copied in between would be silently overwritten by the same old sentence,
-   * over and over, which is the worst thing a feature like this can do.
-   *
-   * A failed write is swallowed. The clipboard can be refused (no permission, no
-   * clipboard in the environment) and this is a convenience nobody asked for in the
-   * moment — reporting it would be an error banner over a document for something the
-   * reader did not ask to happen.
-   */
-  useEffect(() => {
-    if (!doc) return;
-    const settle = () => {
-      if (!copyOnSelectRef.current) return;
-      const host = contentRef.current;
-      const now = host ? readViewerSelection(host, scaleRef.current) : null;
-      if (!now || now.text === lastCopied.current) return;
-      lastCopied.current = now.text;
-      navigator.clipboard?.writeText(now.text).catch(() => {});
-      setCopiedNonce((n) => n + 1);
-    };
-    window.addEventListener("mouseup", settle);
-    window.addEventListener("keyup", settle);
-    return () => {
-      window.removeEventListener("mouseup", settle);
-      window.removeEventListener("keyup", settle);
-    };
-  }, [doc]);
-
-  /** The flash belongs to the selection that was copied, so a new one starts unflashed
-   *  rather than inheriting the last one's "Copied". */
-  const copiedFor = useRef<{ nonce: number; text: string } | null>(null);
-  if (copiedFor.current?.nonce !== copiedNonce) {
-    copiedFor.current = { nonce: copiedNonce, text: sel?.text ?? "" };
-  }
-  const copiedNow = !!sel && copiedFor.current?.text === sel.text;
+  const {
+    sel,
+    setSel,
+    copiedNow,
+    copyOnSelect,
+    setCopyOnSelectPersisted,
+  } = usePdfTextSelection({ doc, contentRef, scale, scaleRef, viewPos });
 
   /**
    * Mark the current selection, and optionally open the card to write about it.
@@ -1463,69 +868,13 @@ function PdfCanvas({
         }));
       }
     },
-    [sel, fileNotes, noteKey, noteAuthor, addPdfNote],
+    [sel, fileNotes, noteKey, noteAuthor, addPdfNote, setNoteFocus, setSel],
   );
 
-  // ── Ctrl+F text search (#71) ───────────────────────────────────────
-  // A floating find bar over the page stack with next/previous navigation, a
-  // live match count, and a case toggle. Matches are found in each page's
-  // extracted text (`getTextContent`) and painted as translucent boxes over the
-  // canvases (`pdfPageMatches` → per-page rects), the current one brighter and
-  // scrolled into view — the PDF counterpart to the editors' in-text search.
-  const [findOpen, setFindOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [caseSensitive, setCaseSensitive] = useState(false);
-  const [current, setCurrent] = useState(0);
-  const findInputRef = useRef<HTMLInputElement>(null);
-  // Print: the shared preview arranges the job (paper, margins, sheet order, turns,
-  // selection) from page images — the webview can't show a PDF — but what goes to
-  // the printer is the real PDF: `native` rebuilds the preview's sheets as vector
-  // pages (`layoutPrintPdf`) and hands them to the system print UI
-  // (`printPdfNative`; GTK / WebView2 / PDFKit). Only where there is no native
-  // path does the preview print its images. `printing` disables the button while
-  // the (async) render runs.
-  const [printing, setPrinting] = useState(false);
-  const handlePrint = useCallback(async () => {
-    if (!doc || printing || pages.length === 0) return;
-    setPrinting(true);
-    setEditError(null);
-    try {
-      // The ARRANGEMENT, not the file: printing an edited PDF prints what is on
-      // screen, without having to save it first. Preview sheet n is `sheets[n-1]`.
-      const sheets = pages;
-      const title = basename(path);
-      // The window's native print sends the vector PDF, so its preview images
-      // need only screen sharpness; the browser client keeps paper's.
-      const scale = isServerClient() ? PDF_PRINT_SCALE : PDF_PREVIEW_SCALE;
-      const images = await renderPdfPagesToImages(sheets, (id) => sources.get(id)?.doc, scale);
-      const body = images
-        .map((src) => `<div class="print-page"><img src="${src}" alt=""></div>`)
-        .join("");
-      const native: NativePrint = async (sequence, opts) => {
-        // The bytes Save and a page drag-out write — blackouts burned in, pending
-        // metadata deletion applied — one page per viewer sheet, in its order.
-        const bytes = await buildPdf(sheets, sources, {
-          emptyMsg: t("pdfViewer.pdfBuildEmpty"),
-          sourceClosedMsg: t("pdfViewer.pdfSourceClosed"),
-          redactDpi,
-          stripMetadata: stripMeta,
-        });
-        const laidOut = await layoutPrintPdf(bytes, sequence, opts);
-        return printPdfNative(laidOut, title, {
-          paper: opts.paper,
-          grayscale: opts.grayscale,
-          duplex: opts.duplex,
-        });
-      };
-      await printHtmlBody(body, PDF_PRINT_CSS, title, native);
-    } catch (e) {
-      setEditError(
-        t("pdfViewer.printFailed", { msg: e instanceof Error ? e.message : String(e) }),
-      );
-    } finally {
-      setPrinting(false);
-    }
-  }, [doc, printing, pages, sources, redactDpi, stripMeta, path, t]);
+  const {
+    printing,
+    handlePrint,
+  } = usePdfPrint({ path, doc, pages, sources, redactDpi, stripMeta, setEditError });
 
   /**
    * Write the arrangement back to the file. The ONLY place a PDF is written.
@@ -1650,7 +999,7 @@ function PdfCanvas({
       setSaving(false);
       setAutosaving(false);
     }
-  }, [dirty, pages, sources, path, scope, redactDpi, stripMeta, noteKey, t]);
+  }, [dirty, pages, sources, path, scope, redactDpi, stripMeta, noteKey, t, setAutosaving, setFileNotes, writing]);
 
   // What a scheduled remark autosave calls. Through a ref because the timer is armed
   // by an edit made long before this render's `handleSave` exists, and because the
@@ -1658,186 +1007,47 @@ function PdfCanvas({
   // last saw it, not the one from the render that armed the timer.
   noteSaveRef.current = () => void handleSave(false, true);
 
-  // ── Merge: splice another PDF's pages into this arrangement ──────────────
-  // (`pdfProjectDir` — the project tree the picker lists — is declared beside the
-  // region-capture mode above, which files its screenshots by the same answer.)
-
-  // BOX scope (#41 Phase 5): the merge picker offers EVERY root the scope can
-  // read — the box folder plus each member project's tree — with a root
-  // selector row, so a merge can pull pages from another member's PDF.
-  // Single-project scopes get no `roots` and are unchanged.
-  const pdfPickerRoots = useMemo(() => {
-    if (!scope || !scope.startsWith(BOX_SCOPE_PREFIX)) return null;
-    const { boxes } = useBoxesStore.getState();
-    const { projects } = useProjectsStore.getState();
-    const box = boxes.find((b) => boxScopeId(b.id) === scope);
-    if (!box) return null;
-    const roots: { label: string; dir: string }[] = [];
-    if (box.folder) roots.push({ label: box.name, dir: box.folder });
-    for (const m of boxMembersOfScope(scope, boxes, projects)) {
-      roots.push({ label: m.name, dir: m.dir });
-    }
-    return roots.length > 0 ? roots : null;
-  }, [scope]);
-
-  /** Where an insert lands: after the last selected sheet, else at the end. */
-  const insertAt = useCallback(() => {
-    if (selection.size === 0) return pages.length;
-    let last = -1;
-    pages.forEach((r, i) => {
-      if (selection.has(r.id)) last = i;
-    });
-    return last < 0 ? pages.length : last + 1;
-  }, [pages, selection]);
-
-  /** Open a PDF's bytes as a new source and splice all of its pages in at `at`. */
-  const spliceIn = useCallback(
-    async (bytes: Uint8Array, at: number) => {
-      const src = await openSource(bytes);
-      const id = newSourceId();
-      // The ref is authoritative (the load effect's cleanup frees from it), so it
-      // and the state map are updated together.
-      sourcesRef.current = new Map(sourcesRef.current).set(id, src);
-      setSources(sourcesRef.current);
-      applyEdit(insertPages(pagesRef.current, pagesOf(id, src.doc.numPages), at));
-    },
-    [applyEdit],
-  );
-
-  /** Read a PDF from the project and splice all of its pages in. */
-  const mergePdf = useCallback(
-    async (abs: string) => {
-      setEditError(null);
-      try {
-        // `readFileBytes` already hands back a fresh `Uint8Array` that owns its
-        // buffer, which is what `openSource` needs (pdf.js detaches it) — copying
-        // it again would only double a whole document in memory.
-        await spliceIn(await readFileBytes(abs, scope), insertAt());
-      } catch (e) {
-        setEditError(
-          t("pdfViewer.insertFailed", { name: basename(abs), msg: e instanceof Error ? e.message : String(e) }),
-        );
-      }
-    },
-    [scope, spliceIn, insertAt, t],
-  );
-
-  // ── Dragging pages to another PDF viewer, in this window or another ──────
-  // The bytes cannot ride a JS object across a window boundary (separate WebViews,
-  // separate heaps), so the dragged pages are built into a small PDF and parked in the
-  // backend page clipboard; the drag carries only its token. See `stores/drag/pdfDrag`.
-
-  /** Build the dragged pages into a standalone PDF and park it for the drop. */
-  const exportPages = useCallback(
-    async (ids: string[]): Promise<PageTransfer | null> => {
-      const picked = pagesRef.current.filter((r) => ids.includes(r.id));
-      if (picked.length === 0) return null;
-      try {
-        // A dragged-out page carries its blackouts BURNED IN, not as pending marks:
-        // the bytes are what lands in the other viewer (or the other window), and a
-        // mark that travelled as an editable overlay would arrive as a page whose
-        // text is still there under a black box.
-        // Pending metadata deletion travels with the pages for the blackouts'
-        // reason: these bytes are what lands in the other viewer, and a page that
-        // arrived carrying the XMP packet its reader had just asked to be rid of
-        // would put it back into a document they never associated it with.
-        const bytes = await buildPdf(picked, sourcesRef.current, {
-          emptyMsg: t("pdfViewer.pdfBuildEmpty"),
-          sourceClosedMsg: t("pdfViewer.pdfSourceClosed"),
-          redactDpi,
-          stripMetadata: stripMeta,
-        });
-        const token = await invoke<string>("pdf_clip_set", { bytes: Array.from(bytes) });
-        return { token, count: picked.length };
-      } catch (e) {
-        setEditError(
-          t("pdfViewer.copyPagesFailed", { msg: e instanceof Error ? e.message : String(e) }),
-        );
-        return null;
-      }
-    },
-    [redactDpi, stripMeta, t],
-  );
-
-  /** Take pages dragged out of another viewer and splice them in at `index`. */
-  const importPages = useCallback(
-    (transfer: PageTransfer, index: number) => {
-      // Pages landed here, so the rail is now showing something the reader asked for
-      // — it stays open when the drag ends, however it came to be open. Set
-      // SYNCHRONOUSLY, before the await below: the close is only deferred by a
-      // macrotask, and the fetch takes far longer than that.
-      railAutoOpenedRef.current = false;
-      void (async () => {
-        try {
-          const bytes = await invoke<number[]>("pdf_clip_get", { token: transfer.token });
-          await spliceIn(new Uint8Array(bytes), index);
-        } catch (e) {
-          setEditError(
-            t("pdfViewer.insertPagesFailed", { msg: e instanceof Error ? e.message : String(e) }),
-          );
-        }
-      })();
-    },
-    [spliceIn, t],
-  );
-
-  /** The dragged pages were MOVED (Shift) and the drop was acknowledged: drop them. */
-  const dropMovedPages = useCallback(
-    (ids: string[]) => {
-      applyEdit(deletePages(pagesRef.current, ids));
-    },
-    [applyEdit],
-  );
-
-  // ── The spring-loaded rail ───────────────────────────────────────────────
-  // Dragging pages needs a rail at BOTH ends, and the rail starts closed — so the
-  // feature used to require arming every document by hand before it could be a
-  // destination, which is a setup step nobody discovers. Instead: while a page drag
-  // is in flight, every open PDF shows its rail, and puts it away again afterwards
-  // unless pages actually landed in it.
-  //
-  // This lives on the VIEWER, not on the strip, and that is the whole point — the
-  // strip only exists while the rail is open, so a strip-level subscription could
-  // never hear the drag that ought to open it.
-  useEffect(
-    () =>
-      subscribePageDragActive((active) => {
-        if (active) {
-          if (railOpenRef.current) return; // already the reader's own choice
-          // Marking up holds the arrangement still: no rail, so no drop target.
-          if (markingRef.current) return;
-          railAutoOpenedRef.current = true;
-          setRailOpen(true);
-          return;
-        }
-        if (!railAutoOpenedRef.current) return; // the reader opened it — leave it
-        // Deferred by a macrotask because a drop in ANOTHER window is delivered to
-        // two listeners on one event — this one and the strip's — in registration
-        // order, not in the order the work depends on. Closing here could therefore
-        // unmount the very strip that is about to claim the pages. `onImport` clears
-        // the flag synchronously, so by the time this runs a claimed rail stays open.
-        setTimeout(() => {
-          if (!railAutoOpenedRef.current) return;
-          railAutoOpenedRef.current = false;
-          setRailOpen(false);
-        }, 0);
-      }),
-    [],
-  );
-  const pageText = useSearchText(pages, sources, paneVisible && (findOpen || redacting));
-
-  // Flat list of matches across all pages, in document order; each carries its
-  // 1-based page and the big-point boxes covering it.
-  const matches = useMemo(() => {
-    if (!findOpen || !query || !pageText) return [];
-    const out: { page: number; rects: SyncRect[] }[] = [];
-    pageText.forEach((items, i) => {
-      for (const rects of pdfPageMatches(items, i + 1, query, caseSensitive)) {
-        out.push({ page: i + 1, rects });
-      }
-    });
-    return out;
-  }, [findOpen, query, caseSensitive, pageText]);
+  const {
+    pdfPickerRoots,
+    mergePdf,
+    exportPages,
+    importPages,
+    dropMovedPages,
+  } = usePageTransfer({
+    scope,
+    pages,
+    pagesRef,
+    sourcesRef,
+    setSources,
+    selection,
+    applyEdit,
+    redactDpi,
+    stripMeta,
+    setEditError,
+    railOpenRef,
+    railAutoOpenedRef,
+    setRailOpen,
+    markingRef,
+  });
+  const {
+    findOpen,
+    query,
+    setQuery,
+    caseSensitive,
+    setCaseSensitive,
+    current,
+    findInputRef,
+    pageText,
+    matches,
+    searchScrollNonce,
+    searchByPage,
+    currentPage,
+    markerTops,
+    goToMatch,
+    openFind,
+    closeFind,
+    onFindKeyDown,
+  } = usePdfFind({ pages, sources, paneVisible, redacting, scrollRef, contentRef, scale });
 
   /**
    * Black out every hit of the current search, across the whole document — the fast
@@ -1860,278 +1070,26 @@ function PdfCanvas({
     applyEdit(markMatches(pagesRef.current, byPage));
   }, [matches, applyEdit]);
 
-  // Bumped to ask the page holding the current match to scroll it into view.
-  const [searchScrollNonce, setSearchScrollNonce] = useState(0);
+  const {
+    pageJumpOpen,
+    pageJumpValue,
+    setPageJumpValue,
+    pageJumpInputRef,
+    stepPage,
+    openPageJump,
+    closePageJump,
+    commitPageJump,
+  } = usePageJump({ pages, pagesRef, contentRef, scrollRef, visiblePage, visiblePageRef });
 
-  // Per-page search overlays passed to each PdfPageCanvas: its matches (with the
-  // current one flagged) plus a scroll nonce that only advances for the page the
-  // current match sits on.
-  const searchByPage = useMemo(() => {
-    const map = new Map<number, { rects: SyncRect[]; current: boolean }[]>();
-    matches.forEach((m, i) => {
-      const list = map.get(m.page) ?? [];
-      list.push({ rects: m.rects, current: i === current });
-      map.set(m.page, list);
-    });
-    return map;
-  }, [matches, current]);
-  const currentPage = matches[current]?.page ?? 0;
-
-  // #71 scrollbar markers: one tick per match positioned over the native
-  // scrollbar track at the match's fractional position through the document, so
-  // hits scrolled off-screen are still locatable at a glance. Each tick's `top`
-  // is px within the track (= the scroll area's visible height); the current
-  // match's tick is flagged. Derived from live geometry — the page wraps'
-  // on-screen rects plus the match box's y within its page — so it stays correct
-  // across zoom and resize (recomputed by the effect below).
-  const [markerTops, setMarkerTops] = useState<{ top: number; current: boolean }[]>([]);
-  const recomputeMarkers = useCallback(() => {
-    const scroll = scrollRef.current;
-    const content = contentRef.current;
-    if (!findOpen || !scroll || !content || matches.length === 0) {
-      setMarkerTops((prev) => (prev.length === 0 ? prev : []));
-      return;
-    }
-    const wraps = content.children; // page wraps, in page order
-    const scrollTop0 = scroll.getBoundingClientRect().top;
-    const track = scroll.clientHeight; // scrollbar track height = visible height
-    const total = scroll.scrollHeight;
-    if (total <= 0) return;
-    const tops: { top: number; current: boolean }[] = [];
-    matches.forEach((m, i) => {
-      const wrap = wraps[m.page - 1] as HTMLElement | undefined;
-      if (!wrap) return;
-      // The page's top in scroll-content coordinates (independent of the current
-      // scroll offset), plus the match box's y within the page.
-      const pageTop = wrap.getBoundingClientRect().top - scrollTop0 + scroll.scrollTop;
-      const matchTop = pageTop + (m.rects[0]?.y ?? 0) * scale;
-      tops.push({ top: (matchTop / total) * track, current: i === current });
-    });
-    setMarkerTops(tops);
-  }, [findOpen, matches, current, scale]);
-
-  // Recompute markers when the match set / zoom / find-bar visibility changes,
-  // and whenever the scroll area or page stack resizes (canvases render lazily,
-  // growing the stack over several frames; a window/pane resize changes the
-  // track height).
-  useEffect(() => {
-    recomputeMarkers();
-    const scroll = scrollRef.current;
-    const content = contentRef.current;
-    if (!scroll || !content || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => recomputeMarkers());
-    ro.observe(scroll);
-    ro.observe(content);
-    return () => ro.disconnect();
-  }, [recomputeMarkers]);
-
-  // Clamp the current index when the match set shrinks (query/case change).
-  useEffect(() => {
-    if (current > 0 && current >= matches.length) {
-      setCurrent(matches.length > 0 ? matches.length - 1 : 0);
-    }
-  }, [matches.length, current]);
-
-  // Jump to the first match whenever the query/case changes, the bar opens, or
-  // the page text finishes extracting (so a query typed before extraction
-  // completed still scrolls to its first hit).
-  useEffect(() => {
-    if (!findOpen) return;
-    setCurrent(0);
-    setSearchScrollNonce((n) => n + 1);
-  }, [query, caseSensitive, findOpen, pageText]);
-
-  const goToMatch = useCallback(
-    (dir: 1 | -1) => {
-      if (matches.length === 0) return;
-      setCurrent((c) => (c + dir + matches.length) % matches.length);
-      setSearchScrollNonce((n) => n + 1);
-    },
-    [matches.length],
-  );
-
-  const openFind = useCallback(() => {
-    setFindOpen(true);
-    requestAnimationFrame(() => {
-      findInputRef.current?.focus();
-      findInputRef.current?.select();
-    });
-  }, []);
-  const closeFind = useCallback(() => {
-    setFindOpen(false);
-    scrollRef.current?.focus();
-  }, []);
-
-  // ── Go to page (Ctrl+G) ───────────────────────────────────────────────────
-  // Jumps by ARRANGEMENT position — the same "X / N" the toolbar readout and
-  // `visiblePage` already count in — so it lands right even after pages have
-  // been reordered/merged/deleted, without having to resolve a file page first.
-  const [pageJumpOpen, setPageJumpOpen] = useState(false);
-  const [pageJumpValue, setPageJumpValue] = useState("");
-  const pageJumpInputRef = useRef<HTMLInputElement>(null);
-  const jumpToArrangementIndex = useCallback((pos: number) => {
-    const count = pagesRef.current.length;
-    if (count === 0) return;
-    const idx = Math.min(Math.max(Math.trunc(pos), 1), count) - 1;
-    const wrap = contentRef.current?.children[idx] as HTMLElement | undefined;
-    if (wrap) scrollIntoPdfBox(wrap, "start");
-  }, []);
-  /** ← / → : one sheet per press, the way a deck of slides is read. Returns
-   *  false at either end of the document, where the caller leaves the key to the
-   *  scroller rather than yanking the reader back to the top of the page they
-   *  are already at the bottom of. */
-  const stepPage = useCallback(
-    (delta: number) => {
-      const target = visiblePageRef.current + delta;
-      if (target < 1 || target > pagesRef.current.length) return false;
-      visiblePageRef.current = target;
-      jumpToArrangementIndex(target);
-      return true;
-    },
-    [jumpToArrangementIndex],
-  );
-  const openPageJump = useCallback(() => {
-    if (pages.length === 0) return;
-    setPageJumpValue(String(visiblePage));
-    setPageJumpOpen(true);
-    requestAnimationFrame(() => {
-      pageJumpInputRef.current?.focus();
-      pageJumpInputRef.current?.select();
-    });
-  }, [pages.length, visiblePage]);
-  const closePageJump = useCallback(() => {
-    setPageJumpOpen(false);
-    scrollRef.current?.focus();
-  }, []);
-  const commitPageJump = useCallback(() => {
-    const n = parseInt(pageJumpValue, 10);
-    if (Number.isFinite(n)) jumpToArrangementIndex(n);
-    closePageJump();
-  }, [pageJumpValue, jumpToArrangementIndex, closePageJump]);
-
-  // ── The document's own hyperlinks (#pdf-links) ────────────────────────────
-  // A `hyperref` PDF is full of them — every `\ref`, `\cite`, `\autoref` and
-  // contents row is a GoTo annotation — so following one has to feel like part of
-  // reading, not like navigation: the jump lands ON the target rather than at the
-  // top of its page, marks where it landed, and leaves a way back.
-
-  /** Where the reader was before each followed internal link (newest last). */
-  const [linkBack, setLinkBack] = useState<{ top: number; left: number }[]>([]);
-  /** The landing band: which sheet, how far down it (big points), and a nonce so
-   *  a repeat jump to the same anchor flashes again. */
-  const [destMark, setDestMark] = useState<{ index: number; top: number; nonce: number } | null>(null);
-  const destMarkTimer = useRef<number | null>(null);
-  /** The external address awaiting the confirm, or null. */
-  const [linkConfirm, setLinkConfirm] = useState<string | null>(null);
-  useEffect(
-    () => () => {
-      if (destMarkTimer.current != null) window.clearTimeout(destMarkTimer.current);
-    },
-    [],
-  );
-  // A different file is a different document: its back stack and its landing mark
-  // are positions in a page stack that no longer exists.
-  useEffect(() => {
-    setLinkBack([]);
-    setDestMark(null);
-    setLinkConfirm(null);
-  }, [path]);
-
-  /** How far below the viewport top an internal link's target is parked, so the
-   *  landing line is not flush against the edge (and, on a `\ref`, the line above
-   *  it is readable as context). */
-  const DEST_PAD = 24;
-
-  /** Scroll to a resolved destination. Returns false when nothing was moved —
-   *  the arrangement may no longer contain the target page at all (it was
-   *  deleted), and a back entry must not be pushed for a jump that did nothing. */
-  const jumpToDest = useCallback(
-    async (dest: PdfDest): Promise<boolean> => {
-      const list = pagesRef.current;
-      const idx = list.findIndex((r) => r.src === SELF && r.page === dest.page);
-      if (idx < 0) return false;
-      const scroller = scrollRef.current;
-      const wrap = contentRef.current?.children[idx] as HTMLElement | undefined;
-      if (!scroller || !wrap) return false;
-      // Explicit navigation supersedes a same-path reload's scroll restoration —
-      // the rule `onReveal` already applies to a SyncTeX jump.
-      restoreScroll.current = null;
-      const srcDoc = sourcesRef.current.get(SELF)?.doc;
-      const top = srcDoc ? await destTopInBigPoints(srcDoc, dest, list[idx].rot ?? 0) : null;
-      if (top == null) {
-        // A whole-page destination (`/Fit`) names no line to land on.
-        scrollIntoPdfBox(wrap, "start");
-        return true;
-      }
-      // Measured rather than read off `offsetTop`: the page stack's offset parent
-      // is not guaranteed to be the scroller, and a rect delta is right either way.
-      const delta = wrap.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-      scroller.scrollTop += delta + top * scale - DEST_PAD;
-      setDestMark((m) => ({ index: idx, top, nonce: (m?.nonce ?? 0) + 1 }));
-      if (destMarkTimer.current != null) window.clearTimeout(destMarkTimer.current);
-      destMarkTimer.current = window.setTimeout(() => setDestMark(null), 2200);
-      return true;
-    },
-    [scale],
-  );
-
-  /** Step back to where the last internal link was followed from. */
-  const linkGoBack = useCallback(() => {
-    setLinkBack((s) => {
-      const last = s[s.length - 1];
-      if (!last) return s;
-      const el = scrollRef.current;
-      if (el) {
-        restoreScroll.current = null;
-        el.scrollTop = last.top;
-        el.scrollLeft = last.left;
-      }
-      return s.slice(0, -1);
-    });
-  }, []);
-
-  const onPdfLink = useCallback(
-    (link: PdfLink) => {
-      if (link.kind === "external") {
-        setLinkConfirm(link.url);
-        return;
-      }
-      const el = scrollRef.current;
-      const from = el ? { top: el.scrollTop, left: el.scrollLeft } : null;
-      void jumpToDest(link.dest).then((moved) => {
-        // Bounded: the stack is a way back from a chain of citations, not a
-        // history of the session.
-        if (moved && from) setLinkBack((s) => [...s.slice(-19), from]);
-      });
-    },
-    [jumpToDest],
-  );
-
-  /** Open a confirmed external address through the app's ONE routing table
-   *  (#33). `origin: "viewer"` is the load-bearing argument: a URL that came out
-   *  of a file the user is looking at is untrusted, so it can never become a live
-   *  in-app page in one click. No `openBrowserTab` hook is passed — this viewer
-   *  does not own a tab store — so an in-app target degrades to the user's real
-   *  browser rather than to a click that goes nowhere. */
-  const openPdfLink = useCallback(
-    (url: string) => {
-      openRoutedUri(
-        url,
-        {
-          setting: settings?.browser_link_target,
-          browserEnabled,
-          mailEnabled,
-          origin: "viewer",
-          browserRoleConfigured: !!settings?.global_apps?.browser?.exec,
-        },
-        {
-          globalApps: settings?.global_apps,
-          onRefuse: (reason) => setEditError(t("pdfLinks.refused", { reason })),
-        },
-      );
-    },
-    [settings, browserEnabled, mailEnabled, t],
-  );
+  const {
+    linkBack,
+    destMark,
+    linkConfirm,
+    setLinkConfirm,
+    linkGoBack,
+    onPdfLink,
+    openPdfLink,
+  } = usePdfLinks({ path, scale, pagesRef, sourcesRef, scrollRef, contentRef, restoreScroll, setEditError });
 
   /** The markup strip's bare keys, while marking (`markupStripKey`). */
   const markupKey = useCallback(
@@ -2237,102 +1195,6 @@ function PdfCanvas({
       stepPage,
       handlePrint,
     ],
-  );
-  const onFindKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      goToMatch(e.shiftKey ? -1 : 1);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      closeFind();
-    }
-  };
-
-  // Probe for SyncTeX data beside the PDF; re-checked after each disk change
-  // (a recompile may have just written it). Not for a PDF read from a remote
-  // host: the SyncTeX commands read local disk only, so a map found over SFTP
-  // could arm nothing but a refusal — and the stat ran on every reload.
-  const remoteSource = fileSource === "remote";
-  useEffect(() => {
-    if (remoteSource) {
-      setSyncable(false);
-      return;
-    }
-    let cancelled = false;
-    const base = path.replace(/\.pdf$/i, "");
-    void Promise.all(
-      [`${base}.synctex.gz`, `${base}.synctex`].map((map) => texPathExists(map, scope)),
-    ).then((found) => { if (!cancelled) setSyncable(found.some(Boolean)); });
-    return () => { cancelled = true; };
-  }, [path, scope, diskVersion, remoteSource]);
-
-  // The source by name — a PDF with no map still opens the `.tex` that built it.
-  // Probed once per local file; a remote one is asked only on a click
-  // (`onSyncClick`), never at mount: a stat per restored tab over SFTP, hidden or
-  // not, connected or not, is the probe the map check above declines too.
-  const findTexSource = useCallback(async () => {
-    for (const candidate of texSourceCandidates(path)) {
-      if (await texPathExists(candidate, scope)) return candidate;
-    }
-    return null;
-  }, [path, scope]);
-  useEffect(() => {
-    setTexSource(null);
-    if (remoteSource) return;
-    let cancelled = false;
-    void findTexSource().then((found) => { if (!cancelled) setTexSource(found); });
-    return () => { cancelled = true; };
-  }, [findTexSource, remoteSource]);
-
-  // Reverse search: a click on a page → which source line produced it → jump.
-  // Resolve the clicked source's root (the main `.tex` that produces this PDF) and
-  // pass it as the routing anchor, so a subfile with no tab yet opens in the
-  // subwindow that already holds the main `.tex` rather than the focused group.
-  //
-  // Every outcome is worded: no map beside the PDF (compile with SyncTeX first),
-  // a map the PDF or a source outgrew (recompile — the jump still happens, a
-  // nearby line beats nothing), or an honest miss on a current map. The status
-  // probe runs after the resolve, not before, so a clean hit on a current map
-  // costs one extra command answered from the map cache and a few stats.
-  //
-  // With no map to ask (none beside the PDF, or a remote PDF's out of reach) the
-  // click still opens the `.tex` that built the PDF, at its top, and says why.
-  const onSyncClick = useCallback(
-    async (page: number, x: number, y: number) => {
-      setSyncNotice(null);
-      const jump = async (input: string, line: number) => {
-        const root = await resolveTexRoot(input).catch(() => input);
-        jumpToSource(input, line, 0, root);
-      };
-      const openByName = (source: string | null) => {
-        if (source) void jump(source, 1);
-        return source != null;
-      };
-      // The SyncTeX commands read the map off local disk; a PDF read from a
-      // remote host has none there, so say so and ask nothing. A mirror path is
-      // local and goes on.
-      if (remoteSource) {
-        const found = await findTexSource();
-        setSyncNotice({
-          kind: "remote",
-          opened: openByName(found),
-          source: found ?? path,
-          sources: [],
-          canRecompile: false,
-        });
-        return;
-      }
-      const src = syncable ? await synctexEdit(path, page, x, y, scope) : null;
-      if (src) await jump(src.input, src.line);
-      const status = syncable ? await synctexStatus(path, scope) : null;
-      const kind = syncable ? syncNoticeKind(status, src != null) : "noMap";
-      if (!kind) return;
-      const opened = kind === "noMap" && !src && openByName(texSource);
-      const source = src?.input ?? texSource ?? texSourceCandidates(path)[0] ?? path;
-      const canRecompile = await canRecompileTexSource(source).catch(() => false);
-      setSyncNotice({ kind, opened, source, sources: status?.newer_sources ?? [], canRecompile });
-    },
-    [path, scope, remoteSource, syncable, texSource, findTexSource],
   );
 
   // Poll mtime; on a change (e.g. a recompile wrote a new PDF), bump
@@ -2521,7 +1383,7 @@ function PdfCanvas({
     return () => {
       cancelled = true;
     };
-  }, [path, scope, diskVersion]);
+  }, [path, scope, diskVersion, setMeta, setStripMeta]);
 
   // Safety net: stop re-applying an unreachable target once the VISIBLE pages
   // have had time to lay out. A hidden tab is not merely off screen: its
@@ -2836,109 +1698,15 @@ function PdfCanvas({
     if (doc) updateVisiblePage();
   }, [doc, updateVisiblePage]);
 
-  // ── Contents / outline (#pdf-outline) ────────────────────────────────────
-  // Load the PDF's embedded outline (its chapters) when a document loads. Reset
-  // to "not loaded" first so a file switch never shows the prior file's chapters.
-  useEffect(() => {
-    setOutline(null);
-    setHeadings(null);
-    if (!doc) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const nodes = await loadOutline(doc, t("pdfOutline.untitled"));
-        if (!cancelled) setOutline(nodes);
-      } catch {
-        if (!cancelled) setOutline([]); // treat an unreadable outline as none
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc]);
-
-  // Font-size heading fallback: when the PDF ships NO embedded outline, infer
-  // chapters from the text's typography (`detectHeadings`). Run it lazily — only
-  // once the contents pane is opened on an outline-less document — because it
-  // reads every page's text content, which is far heavier than `getOutline`.
-  useEffect(() => {
-    if (!outlineOpen || !doc) return;
-    // A lone title bookmark (some LaTeX templates ship exactly that) is not real
-    // navigation, so scan for headings as if the outline were absent.
-    if (outline == null || outlineIsNavigable(outline)) return; // usable outline present/pending
-    if (headings != null) return; // already scanned
-    let cancelled = false;
-    void (async () => {
-      const runs: HeadingRun[] = [];
-      // Sequential (not Promise.all): a 500-page document would otherwise fire
-      // 500 concurrent text extractions at the pdf.js worker at once.
-      for (let p = 1; p <= doc.numPages; p++) {
-        if (cancelled) return;
-        try {
-          const page = await doc.getPage(p);
-          const viewport = page.getViewport({ scale: 1 });
-          const content = await page.getTextContent();
-          for (const it of content.items) {
-            if (!("str" in it) || typeof it.str !== "string" || !it.str.trim()) continue;
-            const tx = pdfjs.Util.transform(viewport.transform, it.transform);
-            const size = Math.hypot(tx[2], tx[3]);
-            runs.push({ str: it.str, size, page: p, x: tx[4], y: tx[5] - size });
-          }
-          // Hand the page's parse back before moving on. This walks the WHOLE
-          // document, so without it a scan of a long one ends holding every page
-          // pdf.js had to parse to answer — and the pages the reader is looking at
-          // are re-rendered from the file when they are next painted anyway.
-          page.cleanup();
-        } catch {
-          /* skip an unreadable page */
-        }
-      }
-      if (!cancelled) setHeadings(detectHeadings(runs));
-    })();
-    return () => { cancelled = true; };
-  }, [outlineOpen, doc, outline, headings]);
-
-  // The chapters actually shown: the embedded outline if the PDF has one, else
-  // the inferred headings. `activeOutline` is null while its source is still
-  // loading/scanning; `outlineDerived` says the fallback is in use.
-  // A present-but-degenerate outline (a lone title bookmark) is treated as absent:
-  // the fallback headings stand in, and the sidebar labels them as derived.
-  const outlineUsable = outline != null && outlineIsNavigable(outline);
-  const outlineDerived = outline != null && !outlineUsable;
-  const activeOutline: OutlineNode[] | null =
-    outline == null ? null : outlineUsable ? outline : headings;
-  const outlinePlaceholder =
-    activeOutline && activeOutline.length > 0
-      ? null
-      : outline == null
-        ? t("pdfOutline.reading")
-        : outlineDerived && headings == null
-          ? t("pdfOutline.scanning")
-          : t("pdfOutline.noChapters");
-
-  // Jump the reader to a 1-based FILE page from the contents sidebar. The reader
-  // shows an arrangement, so resolve the file page to whichever sheet is showing
-  // it now (a moved/merged page still lands right; a deleted one is a no-op).
-  const jumpToPage = useCallback((filePage: number) => {
-    const idx = pagesRef.current.findIndex((r) => r.src === SELF && r.page === filePage);
-    if (idx < 0) return;
-    const wrap = contentRef.current?.children[idx] as HTMLElement | undefined;
-    if (wrap) scrollIntoPdfBox(wrap, "start");
-  }, []);
-
-  // The outline entry to highlight: the last chapter (in document order) whose
-  // page is at or before the page currently in view. Recomputed from the flat
-  // outline as the reader scrolls (`visiblePage`) — but keyed off the *file* page
-  // the visible SHEET shows, so it stays right after pages are rearranged.
-  const currentOutlineId = useMemo(() => {
-    if (!activeOutline || activeOutline.length === 0) return null;
-    const sheet = pages[visiblePage - 1];
-    const filePage = sheet && sheet.src === SELF ? sheet.page : visiblePage;
-    let best: string | null = null;
-    for (const { node } of flattenOutline(activeOutline)) {
-      if (node.page != null && node.page <= filePage) best = node.id;
-    }
-    return best;
-  }, [activeOutline, visiblePage, pages]);
+  const {
+    outlineOpen,
+    setOutlineOpen,
+    activeOutline,
+    outlineDerived,
+    outlinePlaceholder,
+    currentOutlineId,
+    jumpToPage,
+  } = usePdfOutline({ doc, pages, pagesRef, visiblePage, contentRef });
 
   // #viewerpos: persist the scroll position as the reader scrolls (throttled,
   // trailing-edge). Ignored while a programmatic restore is still settling so we
