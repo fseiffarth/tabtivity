@@ -628,7 +628,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const pendingScroll = useRef<{ left: number; top: number } | null>(null);
   const pinch = useRef<{ distance: number; zoom: number; mid: [number, number]; left: number; top: number } | null>(null);
   const pageCount = useRef(MAX_FRAME_PAGES);
-  const skipSave = useRef(false);
+  /** What the save effect last handled — the record read for a stored layer
+   * (stamped with the *current* fingerprint, not the stored one), or the
+   * tuple it last put to the store. A render whose key, layer, undo steps and
+   * fingerprint are all these very objects has nothing to write. */
+  const handled = useRef<{ key: string; layer: Layer; past: Layer[]; fingerprint: Fingerprint } | null>(null);
   /** The key a Reload moved the layer to: the marks in hand are the ones to
    * keep there, not read back. */
   const movedTo = useRef<string | null>(null);
@@ -708,9 +712,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       else if (stored) {
         // Not saved straight back: that would stamp the file's new
         // fingerprint on marks drawn against its old one.
-        skipSave.current = true;
         // The undo steps the record kept come back with it (redo does not).
-        setHistory(startHistory(stored.layer, stored.past));
+        const first = startHistory(stored.layer, stored.past);
+        handled.current = { key, layer: first.present, past: first.past, fingerprint: fingerprintRef.current };
+        setHistory(first);
         setChanged(stale(stored, fingerprintRef.current));
         if (opensOnMarks.current && !isEmpty(stored.layer)) setMarking(true);
         if (!isEmpty(stored.layer) || hasSent(stored.layer)) keepCardRef.current();
@@ -724,8 +729,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   // Saved as each change lands — never before the saved one was read.
   useEffect(() => {
     if (!loaded || !canLayer) return;
-    if (skipSave.current) { skipSave.current = false; return; }
+    const last = handled.current;
+    if (last && last.key === key && last.layer === history.present && last.past === history.past && last.fingerprint === fingerprint) return;
     const layer = history.present;
+    handled.current = { key, layer, past: history.past, fingerprint };
     void saveLayer(key, layer, fingerprint, undefined, history.past).then((ok) => {
       setStorage(ok ? "saved" : "unsaved");
       if (ok && (!isEmpty(layer) || hasSent(layer))) keepCardRef.current();
