@@ -2096,9 +2096,12 @@ fn doc_states_follow_the_capped_no_follow_read() {
     let status = crate::services::home_io::within_deadline(move || scaffold::docs_status_at(&dir2));
     let state = |name: &str| status.iter().find(|s| s.name == name).map(|s| s.state);
     assert_eq!(state("README.md"), Some(DocState::Edited));
-    assert_eq!(state("TODO.md"), Some(DocState::Missing), "a link is never read through");
-    assert_eq!(state("STATUS.md"), Some(DocState::Missing));
-    assert_eq!(state("ROADMAP.md"), Some(DocState::Missing));
+    // Present but not readable as a plain file: `edited` (never a ghost row),
+    // and never read through.
+    assert_eq!(state("TODO.md"), Some(DocState::Edited), "a link is never read through");
+    assert_eq!(state("STATUS.md"), Some(DocState::Edited));
+    assert_eq!(state("ROADMAP.md"), Some(DocState::Edited));
+    assert_eq!(scaffold::state_at(&dir, scaffold::doc("TODO.md").unwrap()), DocState::Missing);
     assert_eq!(state("AGENTS.md"), Some(DocState::Missing));
     assert_eq!(state("CLAUDE.md"), None, "an absent pointer has no row");
     assert_eq!(state("REMARKS.md"), None);
