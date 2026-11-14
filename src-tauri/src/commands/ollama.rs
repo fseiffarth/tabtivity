@@ -3113,10 +3113,28 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// section entirely. Pure + tested.
 fn build_context_block(files: &[ContextFile]) -> String {
     let mut out = String::new();
+    for (name, body) in capped_references(files, |_| true) {
+        out.push_str("--- ");
+        out.push_str(name);
+        out.push_str(" ---\n");
+        out.push_str(&body);
+        out.push_str("\n\n");
+    }
+    out
+}
+
+/// The references a request may carry, in order, each trimmed and truncated
+/// to [`MAX_CONTEXT_PER_FILE`] until [`MAX_CONTEXT_TOTAL`] is spent. Empty
+/// files and those `keep` refuses are skipped and cost nothing. Pure.
+fn capped_references<'a>(files: &'a [ContextFile], keep: impl Fn(&ContextFile) -> bool) -> Vec<(&'a str, String)> {
+    let mut out = Vec::new();
     let mut total = 0usize;
     for f in files {
         if total >= MAX_CONTEXT_TOTAL {
             break;
+        }
+        if !keep(f) {
+            continue;
         }
         let cap = MAX_CONTEXT_PER_FILE.min(MAX_CONTEXT_TOTAL - total);
         let body = truncate_chars(f.content.trim(), cap);
@@ -3124,13 +3142,62 @@ fn build_context_block(files: &[ContextFile]) -> String {
             continue;
         }
         total += body.len();
-        out.push_str("--- ");
-        out.push_str(f.name.trim());
-        out.push_str(" ---\n");
-        out.push_str(&body);
-        out.push_str("\n\n");
+        out.push((f.name.trim(), body));
     }
     out
+}
+
+/// A FIM model family whose trained multi-file layout is known, so references
+/// can travel on the FIM path through `raw: true` (plan, fixed decision 2).
+struct FimLayout {
+    /// Matched against the model's family key ([`fim_family_key`]).
+    starts_with: &'static str,
+    repo_name: &'static str,
+    file_sep: &'static str,
+    fim_prefix: &'static str,
+    fim_suffix: &'static str,
+    fim_middle: &'static str,
+    /// The family's other control tokens, sent as stop strings too.
+    extra_stops: &'static [&'static str],
+}
+
+impl FimLayout {
+    /// Every control token: what a raw prompt stops at and what no reference,
+    /// file name or caret text may contain.
+    fn tokens(&self) -> impl Iterator<Item = &'static str> + '_ {
+        [self.repo_name, self.file_sep, self.fim_prefix, self.fim_suffix, self.fim_middle]
+            .into_iter()
+            .chain(self.extra_stops.iter().copied())
+    }
+
+    fn holds_token(&self, text: &str) -> bool {
+        self.tokens().any(|token| text.contains(token))
+    }
+}
+
+/// Families with a known layout. `qwen2.5-coder` is Qwen's repository-level
+/// layout (`<|repo_name|>`, `<|file_sep|>`, then the FIM tokens), as the
+/// model card describes it.
+const FIM_LAYOUTS: &[FimLayout] = &[FimLayout {
+    starts_with: "qwen2.5-coder",
+    repo_name: "<|repo_name|>",
+    file_sep: "<|file_sep|>",
+    fim_prefix: "<|fim_prefix|>",
+    fim_suffix: "<|fim_suffix|>",
+    fim_middle: "<|fim_middle|>",
+    extra_stops: &["<|endoftext|>", "<|fim_pad|>"],
+}];
+
+/// A model name's family key: lower case, between the last `/` and the `:`
+/// (`registry.example/ns/Qwen2.5-Coder:1.5b` → `qwen2.5-coder`). Pure.
+fn fim_family_key(model: &str) -> String {
+    let name = model.trim().rsplit('/').next().unwrap_or("");
+    name.split(':').next().unwrap_or("").to_ascii_lowercase()
+}
+
+fn fim_layout(model: &str) -> Option<&'static FimLayout> {
+    let key = fim_family_key(model);
+    FIM_LAYOUTS.iter().find(|layout| key.starts_with(layout.starts_with))
 }
 
 /// Build the user message paired with [`COMPLETION_SYSTEM`]: a per-caret TASK hint
@@ -3519,10 +3586,107 @@ fn completion_body(
     body
 }
 
+/// Whether a request goes the FIM way first (plan, fixed decision 1): a model
+/// with `insert` always does for code; prose stays on chat so its language and
+/// markup instructions apply. Pure.
+fn uses_fim(language: &str, insert: bool) -> bool {
+    insert && !is_completion_prose(language)
+}
+
+/// What one attempt sends: the endpoint, the body, the bytes of references it
+/// carries and whether this path drops references (a FIM model without a known
+/// layout: true whether or not any were attached, so the editor can stop
+/// sending them).
+#[derive(Debug)]
+struct CompletionPlan {
+    endpoint: &'static str,
+    body: serde_json::Value,
+    reference_bytes: usize,
+    references_dropped: bool,
+}
+
+/// One attempt's request (plan B3). `fim` comes from [`uses_fim`], false for
+/// the chat retry after a FIM refusal. On FIM an empty suffix is sent as
+/// `"\n"`: the published templates take the FIM branch only for a non-empty
+/// `.Suffix`. References ride along only for a family in [`FIM_LAYOUTS`],
+/// through `raw: true` in its trained repository layout, which bypasses the
+/// model's template; a reference whose name or text holds one of the family's
+/// control tokens is left out, and caret text or a file name holding one
+/// keeps the templated body without references. Pure + tested.
+#[allow(clippy::too_many_arguments)]
+fn completion_plan(
+    prefix: &str,
+    suffix: &str,
+    model: &str,
+    language: &str,
+    mode: CompletionMode,
+    references: &[ContextFile],
+    file_name: Option<&str>,
+    fim: bool,
+) -> CompletionPlan {
+    if !fim {
+        let carried = capped_references(references, |_| true);
+        let context = build_context_block(references);
+        return CompletionPlan {
+            endpoint: "chat",
+            body: completion_body(prefix, suffix, model, language, mode, &context, false),
+            reference_bytes: carried.iter().map(|(_, body)| body.len()).sum(),
+            references_dropped: false,
+        };
+    }
+    let suffix = if suffix.is_empty() { "\n" } else { suffix };
+    let mut body = completion_body(prefix, suffix, model, language, mode, "", true);
+    let Some(layout) = fim_layout(model) else {
+        return CompletionPlan { endpoint: "generate", body, reference_bytes: 0, references_dropped: true };
+    };
+    let file_name = file_name.map(str::trim).filter(|name| !name.is_empty()).unwrap_or("file");
+    let carried = capped_references(references, |f| !layout.holds_token(&f.name) && !layout.holds_token(&f.content));
+    let unsafe_text = [prefix, suffix, file_name].iter().any(|text| layout.holds_token(text))
+        || file_name.contains(['\n', '\r']);
+    if carried.is_empty() || unsafe_text {
+        return CompletionPlan { endpoint: "generate", body, reference_bytes: 0, references_dropped: false };
+    }
+    let mut prompt = format!("{}project\n", layout.repo_name);
+    for (name, content) in &carried {
+        prompt.push_str(&format!("{}{name}\n{content}\n", layout.file_sep));
+    }
+    prompt.push_str(&format!(
+        "{}{file_name}\n{}{prefix}{}{suffix}{}",
+        layout.file_sep, layout.fim_prefix, layout.fim_suffix, layout.fim_middle
+    ));
+    let line_stop = body["options"].get("stop").is_some();
+    let mut stops: Vec<&str> = layout.tokens().collect();
+    if line_stop {
+        stops.push("\n");
+    }
+    if let Some(fields) = body.as_object_mut() {
+        fields.remove("suffix");
+    }
+    body["prompt"] = prompt.into();
+    body["raw"] = true.into();
+    body["options"]["stop"] = serde_json::json!(stops);
+    CompletionPlan {
+        endpoint: "generate",
+        body,
+        reference_bytes: carried.iter().map(|(_, content)| content.len()).sum(),
+        references_dropped: false,
+    }
+}
+
+/// A FIM refusal the chat retry may answer: Ollama's 400 for a model without
+/// insert support, matched exactly rather than any text holding "400".
+fn fim_refused(error: &str) -> bool {
+    error == "ollama HTTP 400" || error.contains("does not support insert")
+}
+
 /// Streaming completion through the configured Ollama endpoint. Insert support
 /// comes from /api/show capabilities, carried by list_ollama_models_detailed.
-/// Attached references stay on the chat path to avoid injecting prose into raw
-/// source. Unsupported FIM falls back to chat before any ghost is published.
+/// A model with `insert` completes code through FIM (`/api/generate`), with
+/// references only for a family whose layout [`completion_plan`] knows; prose
+/// and other models use chat. Unsupported FIM falls back to chat before any
+/// ghost is published. `trigger` is `auto` or `manual` (missing: manual);
+/// `file_name` is the edited file's project-relative path for the reference
+/// layout (missing: `file`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn complete_text(
@@ -3537,6 +3701,7 @@ pub async fn complete_text(
     request_id: String,
     candidate: Option<u32>,
     project_id: Option<String>,
+    file_name: Option<String>,
 ) -> Result<String, String> {
     use crate::services::text_completion;
     crate::services::ai_switch::check()?;
@@ -3561,27 +3726,22 @@ pub async fn complete_text(
         .await?;
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
-        let context = context
-            .as_deref()
-            .map(build_context_block)
-            .unwrap_or_default();
+        let references = context.unwrap_or_default();
         // Bound independently of the UI for callers other than the text viewer.
         let prefix = bounded_completion_prefix(&prefix);
         let suffix = truncate_chars(&suffix, 4096);
         let prose = is_completion_prose(&language);
         let sentence = mode == CompletionMode::Sentence && trailing_comment_intent(&prefix, &language).is_none();
-        // Prose always uses chat so language/markup instructions are effective.
-        let fim = !prose && insert == Some(true) && context.is_empty() && !suffix.is_empty();
+        let fim = uses_fim(&language, insert == Some(true));
         for use_fim in if fim { vec![true, false] } else { vec![false] } {
-            let mut body =
-                completion_body(&prefix, &suffix, &model, &language, mode, &context, use_fim);
+            let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(
+                &prefix, &suffix, &model, &language, mode, &references, file_name.as_deref(), use_fim,
+            );
             let candidate = candidate.unwrap_or(0).min(2);
             body["options"]["seed"] = serde_json::json!(candidate + 1);
             if candidate > 0 {
                 body["options"]["temperature"] = serde_json::json!(0.5);
             }
-            let endpoint = if use_fim { "generate" } else { "chat" };
-            let reference_bytes = if use_fim { 0 } else { context.len() };
             let mut published = false;
             let started = Instant::now();
             let mut first_token = None;
@@ -3608,7 +3768,7 @@ pub async fn complete_text(
                 Ok(streamed) => {
                     let text = completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0;
                     let stop = if streamed.record.is_some() { "done" } else { "line" };
-                    let stats = CompletionStats::new(endpoint, &model, stop, first_token, started.elapsed(), reference_bytes, false, streamed.record.as_ref());
+                    let stats = CompletionStats::new(endpoint, &model, stop, first_token, started.elapsed(), reference_bytes, references_dropped, streamed.record.as_ref());
                     // Once, before the final text, on its own event: an older
                     // frontend ignores it, and the return value stays the text.
                     ctx.emit_to_caller(&stats_event, stats);
@@ -3617,7 +3777,7 @@ pub async fn complete_text(
                 Err(e)
                     if use_fim
                         && !published
-                        && (e.contains("400") || e.contains("does not support insert")) =>
+                        && fim_refused(&e) =>
                 {
                     continue
                 }
