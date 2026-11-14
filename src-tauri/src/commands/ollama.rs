@@ -3268,13 +3268,26 @@ fn overlap_len(a: &str, b: &str) -> usize {
 /// cursor (BEFORE "…return " → completion "return a + b") or pre-echo the text just
 /// after it. Trims a leading run of `completion` that repeats the tail of `prefix`
 /// and a trailing run that repeats the head of `suffix`, ignoring whitespace at the
-/// seam. Pure + tested.
-fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str) -> String {
+/// seam. With `keep_break` (see [`keeps_line_break`]) a line break after the
+/// echoed tail survives with the next line's indentation, so code written below
+/// an echoed comment lands on its own line, not inside the comment. Pure + tested.
+fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str, keep_break: bool) -> String {
     // Leading overlap with the end of BEFORE.
     let head = completion.trim_start();
     let p = prefix.trim_end();
     let mut c = match overlap_len(p, head) {
-        n if n >= MIN_SEAM_OVERLAP => head[n..].trim_start(),
+        n if n >= MIN_SEAM_OVERLAP => {
+            let rest = &head[n..];
+            let body = rest.trim_start();
+            let gap = &rest[..rest.len() - body.len()];
+            match gap.rfind('\n') {
+                // The last line break (with its `\r`), then the next line's indent.
+                Some(nl) if keep_break && !body.is_empty() => {
+                    &rest[if gap[..nl].ends_with('\r') { nl - 1 } else { nl }..]
+                }
+                _ => body,
+            }
+        }
         _ => completion,
     };
 
@@ -3300,12 +3313,42 @@ pub fn cancel_text_completion(request_id: String) {
     crate::services::text_completion::cancel(&request_id);
 }
 
+/// Whether a chat answer's leading line break is part of the insertion: only
+/// when the caret's line has text before it (else the break would double) and
+/// the sentence stop is off (else [`completion_stop`] would cut the answer at
+/// that break and return nothing). Pure.
+fn keeps_line_break(prefix: &str, sentence: bool) -> bool {
+    !sentence && !prefix.ends_with('\n')
+}
+
 /// Preserve native FIM whitespace. Chat output still needs conservative wrapper
-/// cleanup; withhold incomplete fence/preamble lines while tokens arrive.
-fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &str) -> String {
+/// cleanup; withhold incomplete fence/preamble lines while tokens arrive. With
+/// `keep_break` one leading line break of the answer is set aside, the wrapper
+/// handling runs on the rest, and the break is put back: a completion that
+/// starts on the next line (code below an intent comment) stays there.
+fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &str, keep_break: bool) -> String {
     if fim {
         return raw.to_string();
     }
+    let lead = if !keep_break {
+        ""
+    } else if raw.starts_with("\r\n") {
+        "\r\n"
+    } else if raw.starts_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+    let rest = chat_preview(&raw[lead.len()..], done, prefix, suffix, keep_break);
+    // Nothing to show yet, or the rest brought its own break (an echoed line).
+    if rest.is_empty() || rest.starts_with(['\n', '\r']) {
+        return rest;
+    }
+    format!("{lead}{rest}")
+}
+
+/// [`completion_preview`] of a chat answer without its kept line break.
+fn chat_preview(raw: &str, done: bool, prefix: &str, suffix: &str, keep_break: bool) -> String {
     if !done && !raw.contains('\n') {
         let first = raw.trim_start().to_ascii_lowercase();
         if first.starts_with('`')
@@ -3330,7 +3373,27 @@ fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &s
     let cleaned = clean_completion(raw);
     // Do not flicker by removing a suffix match that may still grow. The final
     // snapshot applies both seams before the frontend marks it finished.
-    trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned)
+    trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned, keep_break)
+}
+
+/// What the editor shows for the answer so far, and whether the sentence stop
+/// ended it (the stream is then dropped). `sentence` is the stop being on:
+/// Sentence mode without an intent comment. Pure + tested.
+fn completion_snapshot(
+    raw: &str,
+    fim: bool,
+    done: bool,
+    prefix: &str,
+    suffix: &str,
+    sentence: bool,
+    prose: bool,
+) -> (String, bool) {
+    let mut text = completion_preview(raw, fim, done, prefix, suffix, keeps_line_break(prefix, sentence));
+    let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
+    if let Some(end) = stop {
+        text.truncate(end);
+    }
+    (text, stop.is_some())
 }
 
 /// The endpoint one completion request may use, or why it may not run: the
@@ -3466,25 +3529,20 @@ pub async fn complete_text(
                 &format!("http://{addr}/api/{endpoint}"),
                 &body,
                 |raw, done| {
-                    let mut text = completion_preview(raw, use_fim, done, &prefix, &suffix);
-                    let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
-                    if let Some(end) = stop { text.truncate(end); }
+                    let (text, stopped) =
+                        completion_snapshot(raw, use_fim, done, &prefix, &suffix, sentence, prose);
                     published |= !text.is_empty();
                     // Target only the requesting editor's client (the calling
                     // window). IPC Channels bypass the embedded browser's origin
                     // ACL (see browser.rs tests).
                     ctx.emit_to_caller(&event, text);
-                    Ok(stop.is_some())
+                    Ok(stopped)
                 },
             )
             .await;
             match result {
                 Ok(raw) => {
-                    let mut text = completion_preview(&raw, use_fim, true, &prefix, &suffix);
-                    if sentence {
-                        if let Some(end) = completion_stop(&text, prose, true) { text.truncate(end); }
-                    }
-                    return Ok(text);
+                    return Ok(completion_snapshot(&raw, use_fim, true, &prefix, &suffix, sentence, prose).0);
                 }
                 Err(e)
                     if use_fim

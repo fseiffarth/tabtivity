@@ -71,7 +71,7 @@ fn completion_fim_uses_native_suffix_and_preserves_whitespace() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["think"], false);
     assert_eq!(
-        completion_preview("\n    return 1;\n", true, true, "", ""),
+        completion_preview("\n    return 1;\n", true, true, "", "", false),
         "\n    return 1;\n"
     );
 }
@@ -104,23 +104,58 @@ fn completion_chat_keeps_reference_context_and_language_instruction() {
 
 #[test]
 fn completion_stream_withholds_partial_wrappers() {
-    assert_eq!(completion_preview("```py", false, false, "", ""), "");
-    assert_eq!(completion_preview("Here is the", false, false, "", ""), "");
+    assert_eq!(completion_preview("```py", false, false, "", "", false), "");
+    assert_eq!(completion_preview("Here is the", false, false, "", "", false), "");
     assert_eq!(
         completion_preview(
             "Here is the continuation:\n```py\nreturn",
             false,
             false,
             "",
-            ""
+            "",
+            false
         ),
         "return"
     );
     assert_eq!(
-        completion_preview("return a + b", false, true, "return ", ""),
+        completion_preview("return a + b", false, true, "return ", "", false),
         "a + b"
     );
-    assert_eq!(completion_preview("x\nnext", false, true, "", "next"), "x");
+    assert_eq!(completion_preview("x\nnext", false, true, "", "next", false), "x");
+}
+
+/// B2: code a chat model writes below an intent comment stays on its own line
+/// instead of being glued onto the comment.
+#[test]
+fn a_chat_answer_keeps_its_leading_line_break_below_a_comment() {
+    let prefix = "// add two numbers";
+    // An intent comment turns the sentence stop off.
+    assert!(trailing_comment_intent(prefix, "rust").is_some());
+    let snap = |raw: &str| completion_snapshot(raw, false, true, prefix, "", false, false).0;
+    let code = "fn add(a: i32, b: i32) -> i32 { a + b }";
+    assert_eq!(snap(&format!("\n{code}")), format!("\n{code}"));
+    assert_eq!(snap(&format!("\r\n{code}")), format!("\r\n{code}"));
+    // An echoed comment is dropped, the break after it is not.
+    assert_eq!(snap(&format!("{prefix}\n{code}")), format!("\n{code}"));
+    assert_eq!(snap(&format!("{prefix}\n\n    {code}")), format!("\n    {code}"));
+    // Only the preamble goes.
+    assert_eq!(snap(&format!("\nHere is the code:\n{code}")), format!("\n{code}"));
+    // A lone break, or a break still waiting for its line, shows nothing.
+    assert_eq!(completion_snapshot("\n", false, false, prefix, "", false, false).0, "");
+    // A caret already on a fresh line gets no second break.
+    assert_eq!(completion_snapshot("\nfoo", false, true, "// add two numbers\n", "", false, false).0, "foo");
+}
+
+#[test]
+fn the_sentence_stop_still_strips_a_leading_line_break() {
+    // Sentence mode, no intent comment: the stop is on, so a kept break would
+    // cut the answer to nothing.
+    let prefix = "let total = ";
+    assert!(trailing_comment_intent(prefix, "rust").is_none());
+    assert_eq!(completion_snapshot("\nfoo", false, true, prefix, "", true, false), ("foo".into(), false));
+    assert_eq!(completion_snapshot("\nfoo\nbar", false, true, prefix, "", true, false), ("foo".into(), true));
+    assert_eq!(trim_context_overlap("let total = ", "", "let total = \nfoo", true), "\nfoo");
+    assert_eq!(trim_context_overlap("let total = ", "", "let total = \nfoo", false), "foo");
 }
 
 #[test]
@@ -1309,12 +1344,12 @@ fn clean_completion_strips_conversational_preamble() {
 fn trim_context_overlap_drops_echoed_prefix_tail() {
     // The exact case from llama3.2:3b: BEFORE ends with "return ", model echoes it.
     assert_eq!(
-        trim_context_overlap("    return ", "\n\nprint(x)", "return a + b"),
+        trim_context_overlap("    return ", "\n\nprint(x)", "return a + b", false),
         "a + b",
     );
     // Repeated trailing word.
     assert_eq!(
-        trim_context_overlap("The quick brown fox", " over the dog", "fox jumps"),
+        trim_context_overlap("The quick brown fox", " over the dog", "fox jumps", false),
         "jumps",
     );
 }
@@ -1323,7 +1358,7 @@ fn trim_context_overlap_drops_echoed_prefix_tail() {
 fn trim_context_overlap_drops_echoed_suffix_head() {
     // Model pre-echoes the start of AFTER at the end of its insertion.
     assert_eq!(
-        trim_context_overlap("a = ", " + 1", "compute() + 1"),
+        trim_context_overlap("a = ", " + 1", "compute() + 1", false),
         "compute()",
     );
 }
@@ -1332,12 +1367,12 @@ fn trim_context_overlap_drops_echoed_suffix_head() {
 fn trim_context_overlap_keeps_unrelated_completion() {
     // No overlap → returned unchanged.
     assert_eq!(
-        trim_context_overlap("I am writing to ", " Best regards", "express my thanks"),
+        trim_context_overlap("I am writing to ", " Best regards", "express my thanks", false),
         "express my thanks",
     );
     // A 1–2 char incidental match is below the threshold, so it is NOT trimmed.
     assert_eq!(
-        trim_context_overlap("foo a", "", "a list of items"),
+        trim_context_overlap("foo a", "", "a list of items", false),
         "a list of items"
     );
 }
