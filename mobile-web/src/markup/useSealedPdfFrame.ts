@@ -1,3 +1,5 @@
+// Phone only: this hook imports the phone's `api.ts`, so the desktop (which
+// shares the rest of `mobile-web/src/markup/`) must never import it.
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { MAX_INBOX_FILE } from "../api";
 import { formatBytes } from "../../../src/lib/formatBytes";
@@ -5,7 +7,7 @@ import { acceptFrameMessage, MAX_FRAME_PAGES, type FrameFailure, type FromFrame,
 
 export type Size = [number, number];
 export type Picture = { bitmap: ImageBitmap; width: number };
-export type FrameBoxes = { x: number; y: number; w: number; h: number }[];
+type FrameBoxes ={ x: number; y: number; w: number; h: number }[];
 export type Failure = FrameFailure | "tooLarge" | "fetch" | "timeout" | "picture";
 
 /** How long the frame may take to open a document once its bytes are in,

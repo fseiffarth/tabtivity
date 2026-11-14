@@ -1,3 +1,4 @@
+// Phone only, like `useSealedPdfFrame`: the desktop must never import it.
 import { useEffect } from "react";
 import type { PhoneMarkupAsk } from "../api";
 import { RENDER_TIMEOUT, type SealedPdfFrame } from "./useSealedPdfFrame";
