@@ -337,6 +337,30 @@ describe("local autocomplete (#45)", () => {
     expect(timing.firstEvent).toBeLessThanOrEqual(timing.done!);
   });
 
+  it("still takes a stats event that arrives after the command's answer", async () => {
+    autocompleteOn = true;
+    const listeners = new Map<string, (event: { payload: unknown }) => void>();
+    mockListen.mockImplementation((name: string, handler: (event: { payload: unknown }) => void) => {
+      listeners.set(name, handler);
+      return Promise.resolve(() => { listeners.delete(name); });
+    });
+    const stats = {
+      endpoint: "generate", model: "llama3.2:3b", stop: "done", firstTokenMs: 40, totalMs: 90,
+      referenceBytes: 0, referencesDropped: false,
+    };
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    expect((await timingsRing()).slice(-1)[0]).toEqual(expect.objectContaining({ outcome: "ok" }));
+    // The answer is in; the text listener is gone, the stats one waits a moment.
+    expect(listeners.has("text-completion-test-request")).toBe(false);
+    act(() => { listeners.get("text-completion-stats-test-request")?.({ payload: stats }); });
+    expect((await timingsRing()).slice(-1)[0]).toEqual(expect.objectContaining({ outcome: "ok", stats }));
+    await waitFor(() => expect(listeners.has("text-completion-stats-test-request")).toBe(false));
+  });
+
   it("automatically includes imports and refreshes context before reusing a completion", async () => {
     autocompleteOn = true;
     const source = "from helper import answer\nanswer = ";

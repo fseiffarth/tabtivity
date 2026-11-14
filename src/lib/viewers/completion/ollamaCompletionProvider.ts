@@ -12,6 +12,9 @@ import {
 /** Ollama keeps its bounded context and stream/cache behavior behind the same
  * candidate interface as language-server providers. One adapter per request;
  * the cache belongs to the editor. */
+/** How long a finished request still listens for its stats event. */
+const STATS_GRACE_MS = 500;
+
 export class OllamaCompletionProvider implements CompletionProvider {
   readonly id = "ollama";
   readonly capabilities = { streaming: true, lengthModes: true, references: true };
@@ -54,9 +57,14 @@ export class OllamaCompletionProvider implements CompletionProvider {
     let requestId: string | undefined;
     let finished = false;
     const unlisteners: (() => void)[] = [];
+    let dropStats: (() => void) | undefined;
+    let answered = false;
+    let statsSeen = false;
     const cancel = () => {
       if (requestId) void invoke("cancel_text_completion", { requestId }).catch(() => {});
       for (const unlisten of unlisteners.splice(0)) unlisten();
+      dropStats?.();
+      dropStats = undefined;
     };
     signal.addEventListener("abort", cancel, { once: true });
     try {
@@ -110,9 +118,11 @@ export class OllamaCompletionProvider implements CompletionProvider {
       signal.throwIfAborted();
       const onStats = this.options.onStats;
       if (onStats) {
-        unlisteners.push(await listen<CompletionStats>(`text-completion-stats-${requestId}`, (event) => {
+        dropStats = await listen<CompletionStats>(`text-completion-stats-${requestId}`, (event) => {
+          statsSeen = true;
           if (event.payload && typeof event.payload === "object") onStats(event.payload, model.name);
-        }));
+        });
+        if (signal.aborted) cancel();
         signal.throwIfAborted();
       }
       const text = await invoke<string>("complete_text", {
@@ -124,6 +134,7 @@ export class OllamaCompletionProvider implements CompletionProvider {
         projectId: document.projectId ?? this.options.scope,
       });
       signal.throwIfAborted();
+      answered = true;
       if (timing && timing.firstEvent === undefined) timing.firstEvent = performance.now();
       this.cache.set(key, text);
       const result = candidates(text);
@@ -131,6 +142,12 @@ export class OllamaCompletionProvider implements CompletionProvider {
       return result;
     } finally {
       finished = true;
+      // The stats event is sent just before the command answers, but events
+      // and answers travel separately: one that loses the race still counts.
+      if (answered && !statsSeen && dropStats) {
+        setTimeout(dropStats, STATS_GRACE_MS);
+        dropStats = undefined;
+      }
       cancel();
       signal.removeEventListener("abort", cancel);
     }
