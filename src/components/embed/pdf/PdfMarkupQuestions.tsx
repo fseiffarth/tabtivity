@@ -25,7 +25,7 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
 import {
   answersOf,
-  ARRIVAL_GUARD_MS,
+  arrivalGuard,
   MAX_OTHER,
   NO_PICK,
   pagePins,
@@ -86,8 +86,12 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
   const cardRef = useRef<HTMLDivElement>(null);
   const busy = questions.answering !== null;
   const sending = questions.answering === ask.id;
-  const [arrivedAt] = useState(() => Date.now());
-  const settling = () => Date.now() - arrivedAt < ARRIVAL_GUARD_MS;
+  const [guard] = useState(() => {
+    const opened = arrivalGuard();
+    opened.arrive(Date.now());
+    return opened;
+  });
+  const settling = () => guard.settling(Date.now());
   const answers = answersOf(ask.questions, picks);
 
   // A pin was clicked: turn the card to its question and bring it into view.

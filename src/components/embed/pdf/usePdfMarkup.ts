@@ -29,7 +29,7 @@
  * drawn on (`composedPng`) — the phone's picture Submit. A picture has no
  * words, so the text marks find none.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../../hooks/useTauriListener";
 import { fileMtime } from "../../../lib/files/fileAccess";
@@ -57,6 +57,7 @@ import {
 } from "../../../lib/viewers/pdfMarkup";
 import {
   answerMarkupQuestions,
+  arrivalGuard,
   dismissMarkupQuestions,
   listMarkupQuestions,
   listMarkupTicks,
@@ -113,7 +114,7 @@ import type { TextRun } from "../../../../mobile-web/src/markup/findText";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { markupPagePicture } from "./markupPage";
 import { pageTextItemBoxes } from "./pageText";
-import { tickCaption, type TickCaption } from "./PdfMarkupTicks";
+import { tickBadgesByPage, tickCaption, type TickCaption } from "./PdfMarkupTicks";
 import {
   applyPreset as applyPenPreset,
   armDock,
@@ -1313,15 +1314,28 @@ export function usePdfMarkup({
     }
     return out;
   }, [tickedGroups, sentOnly, runsOf]);
+  // Each badge's arrival (`ARRIVAL_GUARD_MS`), before paint: a click already
+  // on its way down where a badge appears must not approve it. It is kept
+  // here, not in the badges (`PdfTickBadges` remounts with the near pages and
+  // would re-arm on scrolling). A group that grew, or a badge that went and
+  // comes back, arrives anew.
+  const [tickGuard] = useState(() => arrivalGuard<Mark>());
+  useLayoutEffect(() => {
+    const shown: Mark[] = [];
+    for (const badges of tickBadgesByPage(sentOnly, tickedGroups).values()) for (const { marks } of badges) shown.push(...marks);
+    tickGuard.see(shown, Date.now());
+  }, [sentOnly, tickedGroups, tickGuard]);
   /** Approves the marks the badge was drawn for, those still on the page and
    *  still ticked in the layer the change lands on — a second click on a gone
-   *  badge removes nothing else. */
+   *  badge removes nothing else. Not in the badge's first moment. */
   const approveTicked = useCallback((page: number, shown: readonly Mark[]) => {
+    if (tickGuard.settlingFor(shown, Date.now())) return;
     setHistory((now) => commit(now, approveShown(now.present, ticksRef.current, page, shown)));
-  }, []);
+  }, [tickGuard]);
   const approveAllTicked = useCallback(() => {
+    if (tickGuard.settlingFor(null, Date.now())) return;
     setHistory((now) => commit(now, approveMarks(now.present, tickedMarks(now.present, ticksRef.current))));
-  }, []);
+  }, [tickGuard]);
   const tickState: MarkupTicks = { marks: ticked, groups: tickedGroups, captions: tickCaptions, approve: approveTicked, approveAll: approveAllTicked };
 
   const hasMarks = !isEmpty(history.present) || sentShown;

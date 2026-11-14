@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import {
-  answersOf, ARRIVAL_GUARD_MS, MAX_OTHER, NO_PICK, toggleOption, toggleOther, type MarkupQuestion, type QuestionPick,
+  answersOf, arrivalGuard, MAX_OTHER, NO_PICK, toggleOption, toggleOther, type MarkupQuestion, type QuestionPick,
 } from "../../../src/lib/viewers/markupQuestionPicks";
 import { answerMarkupQuestions, ApiError, dismissMarkupQuestions, type PhoneMarkupAsk, type PhoneMarkupQuestion } from "../api";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
@@ -74,7 +74,7 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
   const [note, setNote] = useState<string | null>(null);
   const seen = useRef(new Set<string>());
   /** When a new ask last opened the card (`ARRIVAL_GUARD_MS`). */
-  const arrivedAt = useRef(0);
+  const [guard] = useState(() => arrivalGuard());
   const rowsAt = useRef(new Map<string, HTMLDivElement>());
   const [flash, setFlash] = useState<string | null>(null);
   const onBusyRef = useRef(onBusy);
@@ -87,7 +87,7 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
   useLayoutEffect(() => {
     const fresh = asks.filter((ask) => !seen.current.has(ask.id));
     for (const ask of fresh) seen.current.add(ask.id);
-    if (fresh.length) { setOpen(true); setNote(null); arrivedAt.current = Date.now(); }
+    if (fresh.length) { setOpen(true); setNote(null); guard.arrive(Date.now()); }
   }, [asks]);
 
   useEffect(() => {
@@ -104,7 +104,7 @@ export function MarkupQuestionsCard({ tabId, asks, online, focus, onShowPin, onA
 
   const count = asks.reduce((sum, ask) => sum + ask.questions.length, 0);
   if (!count) return null;
-  const settling = () => Date.now() - arrivedAt.current < ARRIVAL_GUARD_MS;
+  const settling = () => guard.settling(Date.now());
 
   const reason = (error: unknown) => {
     const code = error instanceof ApiError ? error.code : "";

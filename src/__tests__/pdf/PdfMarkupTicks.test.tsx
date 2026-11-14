@@ -48,6 +48,7 @@ import { useActivityStore } from "../../stores/activity";
 import { useSettingsStore } from "../../stores/settings";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { SETTLE_MS } from "../../../mobile-web/src/markup/submitState";
+import { ARRIVAL_GUARD_MS } from "../../lib/viewers/markupQuestionPicks";
 import { EMPTY_LAYER, addMark, type Layer, type Mark } from "../../../mobile-web/src/markup/layer";
 import type { MarkupTick } from "../../lib/viewers/markupQuestions";
 
@@ -85,6 +86,11 @@ function Harness({ onReload = () => {}, expose }: { onReload?: () => void; expos
   );
 }
 
+/** The clock runs ahead by this much: past the badges' arrival guard. */
+let skew = 0;
+const settle = () => { skew += ARRIVAL_GUARD_MS; };
+let clock: { mockRestore: () => void } | null = null;
+
 let ticks: MarkupTick[] | "missing" = [];
 let submitMode: { mode: string; undo: string | null } = { mode: "list", undo: null };
 /** Holds the next `pdf_markup_undo` answer until released, when a test sets it. */
@@ -102,6 +108,9 @@ const lastSaved = (): Layer | undefined => {
 };
 
 beforeEach(() => {
+  skew = 0;
+  const real = Date.now.bind(Date);
+  clock = vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
   ticks = [];
   ticksFor = null;
   submitMode = { mode: "list", undo: null };
@@ -130,7 +139,10 @@ beforeEach(() => {
   useActivityStore.setState({ busyByTab: {}, attentionByTab: {} });
   useSettingsStore.setState({ settings: null });
 });
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  clock?.mockRestore();
+});
 
 /** Submits the layer's two marks and answers the round id it went with. */
 async function submitted(): Promise<string> {
@@ -162,6 +174,7 @@ describe("desktop markup ticks", () => {
     expect(badges()[0].style.left).toBe(`${150 + 2}px`);
     expect(badges()[0].style.top).toBe(`${200 - 2 - 22}px`);
     expect(calls("markup_mcp_ticks")[calls("markup_mcp_ticks").length - 1]?.[1]).toEqual({ projectId: "p1", scheduleTargetId: "s1", path: PATH });
+    settle();
     fireEvent.click(badges()[0]);
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE]));
     expect(badges()).toHaveLength(0);
@@ -179,6 +192,7 @@ describe("desktop markup ticks", () => {
     ring();
     await waitFor(() => expect(badges()).toHaveLength(2));
     const first = badges()[0];
+    settle();
     fireEvent.click(first, { detail: 1 });
     fireEvent.click(first, { detail: 2 });
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([BOX]));
@@ -226,6 +240,7 @@ describe("desktop markup ticks", () => {
     ticks = [{ round, page: 1, mark: 1 }, { round, page: 1, mark: 2 }, { round: "other", page: 1, mark: 3 }];
     ring();
     expect(await screen.findByText("2 done")).toBeTruthy();
+    settle();
     fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([{ kind: "text", color: "black", at: [300, 300], size: 12, text: "keep" }]));
     expect(screen.queryByText(/done$/)).toBeNull();
@@ -241,9 +256,35 @@ describe("desktop markup ticks", () => {
     ring();
     await waitFor(() => expect(badges()).toHaveLength(2));
     expect(screen.getByText("2 done")).toBeTruthy();
+    settle();
     fireEvent.click(badges()[1], { detail: 1 });
     await waitFor(() => expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE, BOX]));
     expect(badges()).toHaveLength(1);
+  });
+
+  it("a badge and Approve all take no click in the first moment after a badge appears — Approve all waits for the newest", async () => {
+    render(<Harness />);
+    const round = await submitted();
+    ticks = [{ round, page: 1, mark: 1 }];
+    ring();
+    await waitFor(() => expect(badges()).toHaveLength(1));
+    const saves = mocks.saveLayer.mock.calls.length;
+    // A click right as it appears does nothing.
+    fireEvent.click(badges()[0], { detail: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
+    expect(badges()).toHaveLength(1);
+    expect(mocks.saveLayer.mock.calls.length).toBe(saves);
+    settle();
+    // The box is ticked too: its badge arrives now, and Approve all waits for it.
+    ticks = [{ round, page: 1, mark: 1 }, { round, page: 1, mark: 2 }];
+    ring();
+    await waitFor(() => expect(screen.getByText("2 done")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
+    expect(screen.getByText("2 done")).toBeTruthy();
+    settle();
+    fireEvent.click(screen.getByRole("button", { name: "Approve all" }));
+    await waitFor(() => expect(lastSaved()?.sent?.pages[1]).toBeUndefined());
+    expect(badges()).toHaveLength(0);
   });
 
   it("shows no badge while the sent marks are hidden", async () => {

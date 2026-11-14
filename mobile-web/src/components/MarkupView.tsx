@@ -32,7 +32,7 @@ import type { MarkupBack, MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
 import { useMarkupAsks } from "../markup/questions";
 import { MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
-import { ARRIVAL_GUARD_MS } from "../../../src/lib/viewers/markupQuestionPicks";
+import { arrivalGuard } from "../../../src/lib/viewers/markupQuestionPicks";
 import { EraserIcon } from "../markup/EraserIcon";
 import { DOCK_LABEL_KEYS, DockIcon, ERASER_MODE_KEYS, PROOF_GLYPHS, proofKey } from "../markup/dock";
 import { OptionSheet } from "./OptionSheet";
@@ -560,8 +560,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   ticksRef.current = ticks;
   /** When each shown ✓ badge first appeared (`ARRIVAL_GUARD_MS`), and the
    * newest of them; when the last approve was taken. */
-  const tickSeen = useRef(new Map<Mark, number>());
-  const tickArrived = useRef(0);
+  const [tickGuard] = useState(() => arrivalGuard<Mark>());
   const lastApprove = useRef(0);
   /** Where each question's quote was found on its page (`findText`), by
    * `page\nquote`; absent while the frame has not answered. */
@@ -2059,19 +2058,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   // down where one appears must not approve it. A badge that went and comes
   // back arrives anew.
   useLayoutEffect(() => {
-    const now = Date.now();
-    const next = new Map<Mark, number>();
-    for (const badges of tickBadges.values()) {
-      for (const { marks } of badges) {
-        for (const mark of marks) {
-          const seen = tickSeen.current.get(mark);
-          next.set(mark, seen ?? now);
-          if (seen === undefined) tickArrived.current = now;
-        }
-      }
-    }
-    tickSeen.current = next;
-  }, [tickBadges]);
+    const shown: Mark[] = [];
+    for (const badges of tickBadges.values()) for (const { marks } of badges) shown.push(...marks);
+    tickGuard.see(shown, Date.now());
+  }, [tickBadges, tickGuard]);
   /** Whether a tap may approve now: not while a Submit goes out or a stroke
    * is under way, not in the moment after any of `marks` (or, for Approve
    * all, any badge) appeared — a group that just grew arrives anew — and not
@@ -2079,13 +2069,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const approvable = (marks: readonly Mark[] | null): boolean => {
     if (sending !== null || gesture.current) return false;
     const now = Date.now();
-    const arrived = marks
-      ? marks.reduce<number | undefined>((last, mark) => {
-        const seen = tickSeen.current.get(mark);
-        return seen === undefined || last === undefined ? undefined : Math.max(last, seen);
-      }, 0)
-      : tickArrived.current;
-    if (arrived === undefined || now - arrived < ARRIVAL_GUARD_MS || now - lastApprove.current < TICK_REPEAT_MS) return false;
+    if (tickGuard.settlingFor(marks, now) || now - lastApprove.current < TICK_REPEAT_MS) return false;
     lastApprove.current = now;
     return true;
   };
