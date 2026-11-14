@@ -61,7 +61,7 @@ jq --arg v "$new" '.version = $v' "$tauri" >"$tmp" && overwrite "$tmp" "$tauri"
 # package-lock.json — the root's two copies of the version: the top-level one
 # and packages[""] (the root package). Edited in place rather than through jq,
 # which would re-serialise the whole lockfile; the jq check after it proves both
-# landed. Matched by indentation, as brand-flip.sh matches the lockfile's names:
+# landed. Matched by indentation:
 # the top-level key is the only one at two spaces, and packages[""]'s version is
 # the first six-space "version" after its `"": {`, before any dependency's.
 # Absent lockfile is not an error, as for Cargo.lock below.
