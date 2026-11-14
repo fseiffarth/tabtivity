@@ -4,7 +4,8 @@ import { ArrowUpRightIcon, TrashIcon } from "../../../src/components/common/icon
 
 import { useT } from "../../../src/lib/i18n";
 import { outboxFileUrl, sentName, type OutboxFile, type OutboxScope } from "../api";
-import { fileBadge, openableFile } from "./InboxPreview";
+import { openableFile } from "./InboxPreview";
+import { CAPTION_CHARS, FileName, FileNameCover } from "./FileName";
 import { openingOutsideStrands } from "../platform";
 import { shareAs, shareSize, useOutboxShare } from "../outboxShare";
 import { ShareSizeSheet } from "./ShareSizeSheet";
@@ -13,7 +14,7 @@ import { formatBytes } from "../../../src/lib/formatBytes";
 
 /**
  * The files themselves: a thumbnail for every picture, a card for everything
- * else, newest first — the arrangement the gallery sheet (`OutboxGallery`)
+ * else (a PDF's first page, or the name itself as the cover), newest first — the arrangement the gallery sheet (`OutboxGallery`)
  * shows them in, opened from the Focus screen or the project screen, each
  * reading the same project outbox through its own scope.
  *
@@ -72,11 +73,15 @@ export function OutboxGrid({ scope, files, onOpen, onDetails, onDelete }: {
       const download = !openableFile(file);
       const label = t("mobile.outbox.open", { name: sentName(file) });
       const meta = `${ageLabel(Math.max(0, now - file.modified))} · ${formatBytes(file.size)}`;
+      // A picture or a PDF's first page is the cover, its name under it on up
+      // to two lines; anything else has no picture, so its name is the cover.
+      const preview = isImage
+        ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
+        : file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : null;
       const content = <>
-        {isImage
-          ? <img src={outboxFileUrl(scope, file)} alt="" loading="lazy" decoding="async" />
-          : file.kind === "application/pdf" ? <PdfFileCover scope={scope} file={file} /> : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
-        <strong>{sentName(file)}</strong>
+        {preview
+          ? <>{preview}<FileName name={sentName(file)} max={CAPTION_CHARS} /></>
+          : <FileNameCover name={sentName(file)} />}
         <span>{meta}</span>
       </>;
       return <div key={file.name} className="outbox-entry">

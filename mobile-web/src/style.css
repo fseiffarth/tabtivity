@@ -1139,9 +1139,19 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .sent-index-group .sent-index-list :is(button,a) { border-color:color-mix(in srgb,var(--group) 35%,#2c3a55); }
 .sent-index-thumb { display:grid; place-items:center; width:100%; aspect-ratio:1; overflow:hidden; border-radius:6px; background:#2b2f45; color:#b9c4e0; font-size:1.15rem; font-weight:700; }
 .sent-index-thumb img { width:100%; height:100%; object-fit:cover; }
-.sent-index-name, .sent-index-list small { overflow:hidden; padding:0 2px; text-overflow:ellipsis; white-space:nowrap; }
-.sent-index-name { font-size:.74rem; font-weight:600; }
+.sent-index-list small { overflow:hidden; padding:0 2px; text-overflow:ellipsis; white-space:nowrap; }
+.sent-index-name { padding:0 2px; font-size:.74rem; font-weight:600; }
 .sent-index-list small { color:#95a6c8; font-size:.64rem; }
+.sent-index-thumb.file-name-cover { display:flex; place-items:normal; color:#dbe4f6; font-size:inherit; font-weight:inherit; }
+/* A file's name on a tile (`FileName`): wrapped where a reader breaks it,
+   the extension dimmed, two lines under a picture. With no picture to show
+   (`FileNameCover`) the name is the cover — up to five lines, the type in a
+   chip under it — instead of one glyph over a name cut to a line. */
+.file-name { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; line-height:1.25; font-weight:600; }
+.file-name-ext { color:#95a6c8; font-weight:500; }
+.file-name-cover { display:flex; flex-direction:column; justify-content:space-between; gap:4px; box-sizing:border-box; min-width:0; padding:7px 6px 6px; text-align:left; }
+.file-name-cover .file-name { -webkit-line-clamp:5; padding:0; font-size:.78rem; }
+.file-name-chip { align-self:flex-start; padding:1px 5px; border-radius:4px; background:#2c3a55; color:#b9c4e0; font-size:.6rem; font-weight:700; letter-spacing:.06em; }
 .sent-index-more { padding:0 2px; color:#95a6c8; font-size:.68rem; }
 .git-sheet { max-height:92dvh; }
 .git-body { display:grid; gap:6px; overflow:auto; }
@@ -1886,8 +1896,8 @@ span.files-close { background:transparent; }
    rows, with the name and age under it — no button chrome around it. */
 .outbox-thumb { display:grid; gap:3px; min-width:0; padding:0; border:0; background:transparent; color:#95a6c8; font-size:.68rem; text-align:left; }
 .outbox-thumb img { display:block; width:100%; aspect-ratio:4 / 3; object-fit:cover; border:1px solid #34384a; border-radius:7px; background:#0f131c; }
-.outbox-thumb span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.outbox-gallery-grid .outbox-thumb strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#d8e2f5; font-size:.72rem; font-weight:600; }
+.outbox-thumb > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.outbox-gallery-grid .outbox-thumb strong { color:#d8e2f5; font-size:.72rem; }
 /* One column pinned to the screen's width: an auto column grew to the head's
    widest line and letterboxed the picture into a box wider than the phone. */
 /* A markup view tucked away behind its tab's chat (Terminal's markupAway):
@@ -1950,8 +1960,8 @@ span.files-close { background:transparent; }
 
 .outbox-entry { display:grid; gap:2px; min-width:0; }
 .outbox-file { display:grid; gap:5px; width:160px; padding:9px; border:1px solid #34384a; border-radius:7px; background:#0f131c; color:#d8e2f5; text-align:left; text-decoration:none; font-size:.75rem; }
-.outbox-file strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.outbox-file span { color:#95a6c8; }
+.outbox-file > span:not(.file-name-cover) { color:#95a6c8; }
+.outbox-file > .file-name-cover { width:100%; aspect-ratio:3 / 4; border-radius:5px; background:#2b2f45; }
 /* The agent's files in the Focus chat (`OutboxPost`), drawn as WhatsApp draws
    a picture: the picture is the bubble, inside a 3px rim of the agent's
    bubble colour, with the time laid over its bottom corner on a shade. An

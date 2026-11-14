@@ -4,7 +4,8 @@ import { inboxFileUrl, outboxFileUrl, sentName, viewerFileUrl, type OutboxFile }
 import { fileKey } from "../terminal/chatFiles";
 import { ageLabel } from "../terminal/fileLabels";
 import { formatBytes } from "../../../src/lib/formatBytes";
-import { fileBadge, openableFile } from "./InboxPreview";
+import { openableFile } from "./InboxPreview";
+import { CAPTION_CHARS, FileName, FileNameCover } from "./FileName";
 
 /** How a file came into the conversation: the agent sent it (`tabtivity-send`
  * from this tab, the project outbox), the phone did (a prompt's inbox
@@ -72,7 +73,8 @@ export function sentFiles(
  * into groups (`GROUPS`) — sent by the agent, changed by it, mentioned in its
  * answers (the desktop's Files menu), sent by you — each headed by a line
  * saying what it holds, its tiles rimmed in its colour, a grid of tiles: the
- * file's picture or badge, its name, when and how big. A tap opens the file
+ * file's picture with its name under it — or, for a file with no picture, the
+ * name itself as the cover (`FileNameCover`) — then when and how big. A tap opens the file
  * full screen (the chat's own viewer for its side), or saves bytes the phone
  * cannot show. The pictures stay where they were sent in the chat; this is the
  * way to one without scrolling the conversation for it. `more`: Diffs holds
@@ -114,13 +116,16 @@ export function SentFilesIndex({ tabId, project, files, more = false, open, onTo
             {rows.map((row) => {
               const { file, from } = row;
               const name = sentName(file);
+              // A picture keeps its square, its name under it on up to two
+              // lines; anything else has no picture to show, so its name
+              // takes the square instead of one glyph and a cut-off line.
               const content = <>
-                <span className="sent-index-thumb">
-                  {file.kind.startsWith("image/")
-                    ? <img src={urlOf(row)} alt="" loading="lazy" decoding="async" />
-                    : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
-                </span>
-                <span className="sent-index-name">{name}</span>
+                {file.kind.startsWith("image/")
+                  ? <>
+                    <span className="sent-index-thumb"><img src={urlOf(row)} alt="" loading="lazy" decoding="async" /></span>
+                    <FileName name={name} max={CAPTION_CHARS} className="sent-index-name" />
+                  </>
+                  : <FileNameCover name={name} className="sent-index-thumb" nameClass="sent-index-name" />}
                 <small>{ageLabel(Math.max(0, now - file.modified))} · {formatBytes(file.size)}</small>
               </>;
               const label = `${t("mobile.outbox.open", { name })} · ${t(FROM_LABEL[from])}`;
