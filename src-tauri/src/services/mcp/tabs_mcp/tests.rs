@@ -534,3 +534,24 @@ fn retry_after_is_rounded_up_so_the_call_then_is_admitted() {
     let then = World2 { now: at + Duration::from_secs(secs), ..World2::new() };
     assert_eq!(then.call(&a, TOOL_LIST, json!({}))["status"], "ok", "retry after {secs}s");
 }
+
+/// Messages a tab can no longer read (sent under its old class, before it came
+/// back under another) do not count toward its 20 unread: they would block
+/// every new sibling's send with `inbox_full` for a day.
+#[test]
+fn messages_a_tab_can_no_longer_read_do_not_fill_its_inbox() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let b = grant(state.path(), "p", "b", Class::Cloud);
+    let w = World2::new();
+    for i in 0..MAX_UNREAD_PER_TAB {
+        assert_eq!(w.send(&a, &b, &format!("m{i}"))["status"], "queued");
+    }
+    let b_local = grant(state.path(), "p", "b", Class::Local);
+    let c = grant(state.path(), "p", "c", Class::Local);
+    assert_eq!(w.send(&c, &b_local, "for the local tab")["status"], "queued");
+    let inbox = w.call(&b_local, TOOL_INBOX, json!({}));
+    assert_eq!(inbox["unread"], 1);
+    assert_eq!(inbox["messages"][0]["text"], "for the local tab");
+}

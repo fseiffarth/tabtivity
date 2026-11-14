@@ -226,8 +226,11 @@ struct Message {
 
 impl Message {
     fn in_scope(&self, state: &Path, scope: &str) -> bool { self.from.seat.state == state && self.from.seat.scope == scope }
+    /// Unread by `me` and readable by it: a message sent under another class
+    /// (the tab came back under a new one) is neither returned nor counted
+    /// toward its inbox cap, nor acked by it.
     fn unread_for(&self, me: &Binding) -> bool {
-        !self.acked && self.to == me.seat.id && self.in_scope(&me.seat.state, &me.seat.scope)
+        !self.acked && self.to == me.seat.id && self.in_scope(&me.seat.state, &me.seat.scope) && self.from.class == me.class
     }
 }
 
@@ -708,10 +711,10 @@ fn inbox(me: &Binding, args: &Value, ctx: &Context) -> Value {
         m.acked = true;
         acked = true;
     }
-    // The sender's class is checked again at read: a message whose class no
-    // longer matches this tab's is not returned.
+    // The sender's class is checked again at read (`unread_for`): a message
+    // whose class no longer matches this tab's is not returned.
     let unread: Vec<(String, Binding, String, Option<String>, String)> = w.messages.iter()
-        .filter(|m| m.unread_for(me) && m.from.class == me.class)
+        .filter(|m| m.unread_for(me))
         .map(|m| (m.id.clone(), m.from.clone(), m.sent_at.clone(), m.reply_to.clone(), m.text.clone()))
         .collect();
     drop(w);
