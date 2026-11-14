@@ -520,7 +520,7 @@ pub struct Settings {
     /// milliseconds. Frontend logic only (missing: 600 local, 200 Copilot);
     /// named here so it round-trips. Not a Copilot policy: changing it stops
     /// no server (`commands::settings::copilot_invalidated`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "lenient_autocomplete_delays", skip_serializing_if = "Option::is_none")]
     pub autocomplete_delay_ms: Option<AutocompleteDelays>,
     /// Keep the Copilot language server's GitHub sign-in in the OS keychain
     /// (`services::copilot::credentials`), one entry per app account, so a
@@ -1140,15 +1140,33 @@ fn rev_is_zero(rev: &u64) -> bool {
 }
 
 /// `Settings::autocomplete_delay_ms`: milliseconds per provider; a missing
-/// one is the editor's default. Unknown keys survive a patch.
+/// one is the editor's default. Unknown keys survive a patch. A value that is
+/// not a whole number of milliseconds reads as missing ([`lenient_ms`]): the
+/// editor falls back to its default for anything but its own choices anyway,
+/// and a strict field would fail the whole settings file over it.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct AutocompleteDelays {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "lenient_ms", skip_serializing_if = "Option::is_none")]
     pub ollama: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "lenient_ms", skip_serializing_if = "Option::is_none")]
     pub copilot: Option<u32>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
+}
+
+/// `deserialize_with` for one delay: a whole number that fits is the value,
+/// anything else (negative, fractional, a string, `null`) is absent.
+fn lenient_ms<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u32>, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_u64().and_then(|ms| u32::try_from(ms).ok()))
+}
+
+/// `deserialize_with` for `Settings::autocomplete_delay_ms`: only an object
+/// holds delays; any other value is absent, never a failed settings load.
+fn lenient_autocomplete_delays<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AutocompleteDelays>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(if value.is_object() { serde_json::from_value(value).ok() } else { None })
 }
 
 /// Last-known geometry of the MAIN window, in PHYSICAL desktop pixels — the
@@ -1679,6 +1697,40 @@ mod tests {
         // One provider alone keeps the other absent.
         let one: Settings = serde_json::from_str(r#"{"autocomplete_delay_ms":{"copilot":200}}"#).unwrap();
         assert_eq!(serde_json::to_value(&one).unwrap()["autocomplete_delay_ms"], serde_json::json!({"copilot":200}));
+    }
+
+    /// A delay that is not a whole number of milliseconds (hand-edited, or
+    /// written by another client) is dropped, never a reason to fail the
+    /// whole file: `get_settings` would return an error and every reader that
+    /// falls back to defaults would run without the user's other settings.
+    #[test]
+    fn a_malformed_autocomplete_delay_is_dropped_not_fatal() {
+        for bad in [
+            r#"{"ollama":-5}"#,
+            r#"{"ollama":600.5}"#,
+            r#"{"copilot":"200"}"#,
+            r#"{"ollama":99999999999}"#,
+            r#"{"ollama":null,"copilot":true}"#,
+            r#""fast""#,
+            "7",
+            "[600]",
+            "null",
+        ] {
+            let json = format!(r#"{{"language":"de","autocomplete_delay_ms":{bad},"copilot_stay_signed_in":true}}"#);
+            let s: Settings = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{bad} failed the whole file: {e}"));
+            assert_eq!(s.language.as_deref(), Some("de"), "{bad}");
+            assert_eq!(s.copilot_stay_signed_in, Some(true), "{bad}");
+            let delays = s.autocomplete_delay_ms.unwrap_or_default();
+            assert_eq!((delays.ollama, delays.copilot), (None, None), "{bad}");
+        }
+        // The good half of a half-bad object stays, with its passengers.
+        let s: Settings = serde_json::from_str(r#"{"autocomplete_delay_ms":{"ollama":-5,"copilot":400,"later":1}}"#).unwrap();
+        let delays = s.autocomplete_delay_ms.clone().unwrap();
+        assert_eq!((delays.ollama, delays.copilot), (None, Some(400)));
+        assert_eq!(serde_json::to_value(&s).unwrap()["autocomplete_delay_ms"], serde_json::json!({"copilot":400,"later":1}));
+        // The patch path (`merge_settings_patch`) parses a `Value`, not text.
+        let patched: Settings = serde_json::from_value(serde_json::json!({"autocomplete_delay_ms":{"ollama":1.5,"copilot":100}})).unwrap();
+        assert_eq!(patched.autocomplete_delay_ms.unwrap().copilot, Some(100));
     }
 
     /// "Stay signed in" is off unless written, and a real field.
