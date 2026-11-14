@@ -7,7 +7,9 @@ use std::sync::Mutex;
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use super::rpc::LogSink;
 
-pub const SERVER_VERSION: &str = "1.547.0";
+/// Probed in the fence 2026-11-14 (`docs/context/copilot_completion.md`).
+/// 1.567.5 was one day old then; the plan takes a version at least a week old.
+pub const SERVER_VERSION: &str = "1.565.6";
 
 pub fn install_directory() -> PathBuf {
     crate::storage::state_dir().join("copilot").join(SERVER_VERSION)
@@ -27,10 +29,16 @@ pub fn server_path(installation: &Path) -> Result<PathBuf, String> {
     Ok(executable)
 }
 
+/// Installs the native server package for this machine alone. The umbrella
+/// package (`@github/copilot-language-server`) pulls in every platform's
+/// optional builds, which on 1.565.6 include the Copilot CLI and SDK (about
+/// 600 MB on Linux x64 against 159 MB for the server).
 pub fn install_command() -> Result<String, String> {
     if !supported() { return Err("copilot_unsupported_platform".into()); }
     let path = crate::quote::posix(&install_directory().to_string_lossy());
-    Ok(format!("npm install --prefix {path} --ignore-scripts --no-audit --no-fund @github/copilot-language-server@{SERVER_VERSION}"))
+    let architecture = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
+    Ok(format!("npm install --prefix {path} --ignore-scripts --no-audit --no-fund \
+        @github/copilot-language-server-linux-{architecture}@{SERVER_VERSION}"))
 }
 
 /// Pure plan, deliberately much narrower than the general agent fence: no host

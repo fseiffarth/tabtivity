@@ -52,9 +52,32 @@ re-opens it with current content.
 lost when that server stops (quit, revocation, crash). Persisting it needs a
 verified token-injection interface, which 1.547.0 has not been shown to have.
 
+## Diagnostics and errors (2026-11-14)
+
+Each project keeps its server's last 200 `window/logMessage`, `$/logTrace` and
+stderr lines in `Sessions` (not the session, so they outlive a server that
+died or never finished starting), redacted (`gh?_…`, `github_pat_…`,
+`Bearer …`) and cut to 500 characters; `copilot_diagnostics` serves them from
+memory. A failed launch spends no restart budget, so "not installed" stays
+visible. The document is authorized before a server starts. Proxy and CA
+variables reach the server through bwrap's own environment, not its argument
+list. The AI switch turning off stops every server.
+
 ## Standalone protocol evidence
 
-On 2026-09-18, npm reported `@github/copilot-language-server` 1.547.0. Installed
+**1.565.6 (2026-11-14, pinned).** Installed as the native package alone
+(`@github/copilot-language-server-linux-x64`) under an ignored scratch prefix.
+`scripts/copilot-probe.py --sign-in`, unfenced with an isolated HOME/XDG:
+initialize 1.565.6, incremental sync, error 1000, cancellation -32800, and an
+anonymous `signIn` answered `PromptUserDeviceFlow` with a 9-character user
+code, `https://github.com/login/device` and `github.copilot.finishDeviceFlow`
+(never finished). The same against the umbrella package. The fenced ignored
+test could not run where it was tried: that shell was itself inside an agent
+fence, where bwrap cannot create a nested user namespace (its stderr now shows
+in the test failure). The fenced run of 1.565.6, and with it the fence's
+network binds for `signIn`, is still to be done from a normal shell.
+
+**1.547.0 (2026-09-18).** On 2026-09-18, npm reported `@github/copilot-language-server` 1.547.0. Installed
 without lifecycle scripts under `/tmp/tabtivity-copilot-probe`, outside the app's
 dependencies. The npm package offers native Linux/macOS/Windows builds on x64
 and arm64; upstream also documents Node >=20.8. Only Linux x64 was exercised.

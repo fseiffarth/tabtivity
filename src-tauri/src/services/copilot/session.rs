@@ -993,6 +993,9 @@ mod tests {
 
     /// The real pinned server inside the real fence; needs an installation:
     /// `TABTIVITY_COPILOT_INSTALL=/dir cargo test --lib copilot -- --ignored`.
+    /// Ends with an anonymous `signIn` that stops at the returned user code:
+    /// that reaches GitHub from inside the fence (DNS, TLS, the CA bundle, the
+    /// `/etc` binds) without an account. The sign-in is never finished.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore]
@@ -1001,8 +1004,13 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let root = project.path().canonicalize().unwrap();
         std::fs::write(root.join("a.py"), "def square(x):\n    return ").unwrap();
-        let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root, None).unwrap();
-        let session = Session::start(output, input, Some(process), &root).await.unwrap();
+        let ring = LogRing::default();
+        let log: LogSink = { let ring = ring.clone(); Arc::new(move |line: String| push_log(&ring, &line)) };
+        let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root, Some(log.clone())).unwrap();
+        let session = match Session::start_logged(output, input, Some(process), &root, Some(log)).await {
+            Ok(session) => session,
+            Err(error) => panic!("{error}; server log: {:?}", ring.lock_ok()),
+        };
         assert!(session.alive());
         let uri = url::Url::from_file_path(root.join("a.py")).unwrap();
         let text = "def square(x):\n    return ";
@@ -1011,6 +1019,11 @@ mod tests {
             position: super::super::documents::position(text), automatic: false, tab_size: 4, insert_spaces: true,
         }).await;
         assert_eq!(result, Err("copilot_not_signed_in".into()));
+        let code = session.sign_in().await.expect("signIn reaches GitHub from inside the fence");
+        let code = code.expect("a fresh fence is never already signed in");
+        assert!(!code.user_code.is_empty() && code.user_code.len() <= 64);
+        assert_eq!(code.verification_uri, "https://github.com/login/device");
+        println!("anonymous signIn: user code of {} characters; log lines kept: {}", code.user_code.len(), ring.lock_ok().len());
         session.stop();
         assert!(!session.alive());
     }
