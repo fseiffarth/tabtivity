@@ -12,8 +12,8 @@ their conversations after a restart where the CLI allows it.
 
 ## Rename your agent tab and leave notes through MCP
 
-Eligible local Claude, Codex and Vibe tabs with MCP tools receive a separate
-cockpit MCP. Ask the agent to call `tab_rename` with a short `label`; it can
+Every local agent tab receives a separate cockpit MCP (CLIs that do not list
+it as their own tool reach it through the `tabtivity-mcp` command). Ask the agent to call `tab_rename` with a short `label`; it can
 rename only its own tab. The name is saved and appears in the cockpit and on
 your phone. An optional `expectedLabel` prevents overwriting a changed name.
 The session and focus stay as they are.

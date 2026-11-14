@@ -272,8 +272,8 @@ in the desktop's settings does not reach it.
 ## The agent's questions about your marks
 
 When a mark is ambiguous ("does this arrow move the paragraph or the
-figure?"), a local Claude or Codex tab (or a Local Model tab with the
-**MCP** chip on) can ask you with its `markup_ask` tool instead of in its
+figure?"), a local agent tab (a Local Model tab only with the **MCP**
+chip on) can ask you with its `markup_ask` tool instead of in its
 chat. The questions show in the markup view of that tab's PDF:
 
 - On the desktop, as a card under the **Mark up** bar while marking is on.

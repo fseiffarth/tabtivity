@@ -1103,6 +1103,10 @@ pub async fn prepare(
     // the read-only help lane. All of it is decided in `grant_lanes` against
     // this process's listener (`runtime()`: the window's, or the Mobile
     // host's, which serves no root, reader or markup lane).
+    // Whether an OpenCode inline config was here before the lanes merged
+    // their MCP servers into one (below, the local-models config yields only
+    // to that earlier one).
+    let opencode_inline_before_lanes = opts.env.contains_key(crate::services::agent_api_keys::OPENCODE_INLINE_ENV);
     let root_agent = crate::services::root_mcp::grant_lanes(
         &mut opts,
         agent_spawn,
@@ -1127,18 +1131,23 @@ pub async fn prepare(
     // `services::local_drivers::opencode_loaded_models_config`) — handed over as an
     // inline config, never written into OpenCode's own. A remote run's OpenCode
     // talks to the far host's Ollama, and an inline config the user set wins.
-    const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
+    // The MCP servers the lanes merged into a config of their own carry over.
+    const OPENCODE_INLINE: &str = crate::services::agent_api_keys::OPENCODE_INLINE_ENV;
     // (A chat's profile builds its own config, tools off, and the user's
     // environment's never wins: `assistant::launch_line` sets it.)
     if !remote_agent_run
         && !assistant
-        && !opts.env.contains_key(OPENCODE_INLINE)
+        && !opencode_inline_before_lanes
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
         if let Some(requested) = crate::services::local_drivers::opencode_spawn_model(&opts.cmd, &opts.args) {
             if let Some(cfg) =
                 crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref())
             {
+                let cfg = match opts.env.get(OPENCODE_INLINE) {
+                    Some(lanes) => crate::services::root_mcp::merge_opencode_mcp(&cfg, lanes),
+                    None => cfg,
+                };
                 opts.env.insert(OPENCODE_INLINE.into(), cfg);
             }
         }

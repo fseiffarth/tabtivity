@@ -135,8 +135,8 @@ fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
         apply_schedule_to_spawn_with(&mut spawn, &runtime, "secret", &[]);
         assert_eq!(spawn.env[SCHEDULE_TOKEN_ENV], "secret");
         assert!(!spawn.env.contains_key(TOKEN_ENV));
-        assert!(spawn.args.join(" ").contains(concat!(crate::app_slug!(), "-schedule")));
-        assert!(!spawn.args.join(" ").contains("secret"));
+        assert!(wired(&spawn).contains(concat!(crate::app_slug!(), "-schedule")));
+        assert!(!wired(&spawn).contains("secret"));
     }
     let mut root = opts("claude", &[], None);
     root.schedule_target_id = Some("t".into());
@@ -271,7 +271,7 @@ fn help_wiring_joins_the_other_servers_and_stays_secret_free() {
         apply_to_spawn_with(&mut root, &runtime, "roottok", &[cli.to_string()], &[], false);
         apply_help_to_spawn_with(&mut root, &runtime, "helptok", &[]);
         apply_help_to_spawn_with(&mut root, &runtime, "helptok", &[]);
-        let argv = root.args.join(" ");
+        let argv = wired(&root);
         assert!(argv.contains(concat!("\"", crate::app_slug!(), "\":")) || argv.contains(concat!("mcp_servers.", crate::app_slug!(), ".url")), "{argv}");
         assert!(argv.contains("http://127.0.0.1:4321/mcp/help"), "{argv}");
         assert_eq!(argv.matches("/mcp/help").count(), 1, "never twice: {argv}");
@@ -283,7 +283,7 @@ fn help_wiring_joins_the_other_servers_and_stays_secret_free() {
         project.schedule_target_id = Some("t".into());
         apply_schedule_to_spawn_with(&mut project, &runtime, "schedtok", &[]);
         apply_help_to_spawn_with(&mut project, &runtime, "helptok", &[]);
-        let argv = project.args.join(" ");
+        let argv = wired(&project);
         assert!(argv.contains(concat!(crate::app_slug!(), "-schedule")) && argv.contains(concat!(crate::app_slug!(), "-help")), "{argv}");
         // A container tab.
         let mut boxed = opts(cli, &[], Some("p"));
@@ -378,7 +378,7 @@ fn markup_wiring_needs_a_target_and_joins_the_other_servers() {
         apply_help_to_spawn_with(&mut project, &runtime, "helptok", &[]);
         apply_markup_to_spawn_with(&mut project, &runtime, "marktok", &[]);
         apply_markup_to_spawn_with(&mut project, &runtime, "marktok", &[]);
-        let argv = project.args.join(" ");
+        let argv = wired(&project);
         assert!(argv.contains(concat!(crate::app_slug!(), "-help")) && argv.contains(concat!(crate::app_slug!(), "-markup")), "{argv}");
         assert_eq!(argv.matches("/mcp/markup").count(), 1, "never twice: {argv}");
         assert!(!argv.contains("marktok") && !argv.contains("helptok"));
@@ -518,6 +518,13 @@ impl Fixture {
     }
 }
 
+/// What a spawn names its MCP servers with: its argv, and OpenCode's inline
+/// config (the one wiring that rides the env).
+fn wired(o: &PtyOptions) -> String {
+    let inline = o.env.get(super::super::agent_api_keys::OPENCODE_INLINE_ENV).map(String::as_str).unwrap_or("");
+    [o.args.join(" "), inline.to_string()].join(" ").trim().to_string()
+}
+
 /// Every CLI the spawn tests use, all wearing the "MCP" chip.
 fn every_agent() -> Vec<String> {
     WIRED_CLIS.iter().chain(&["gemini", "vibe"]).map(|c| c.to_string()).collect()
@@ -558,12 +565,96 @@ fn every_wired_cli_is_named_the_server() {
     for cli in WIRED_CLIS {
         let mut o = opts(cli, &[], None);
         apply_to_spawn_with(&mut o, &rt(), "tok", &every_agent(), &[], false);
-        assert!(!o.args.is_empty(), "{cli} is listed as wired but gets no server");
+        assert!(!wired(&o).is_empty(), "{cli} is listed as wired but gets no server");
     }
     // An unlisted CLI gets the env pair only — which is what the chip says.
     let mut o = opts("gemini", &[], None);
     apply_to_spawn_with(&mut o, &rt(), "tok", &every_agent(), &[], false);
     assert!(o.args.is_empty() && o.env.contains_key(TOKEN_ENV));
+}
+
+/// The registry rows and [`WIRED_CLIS`] say the same: every CLI with a
+/// per-launch form is listed, and nothing else is.
+#[test]
+fn wired_clis_are_the_registry_rows_with_a_form() {
+    use super::super::agent_registry::{mcp_wiring, McpWiring};
+    let mut from_rows: Vec<&str> = super::super::agent_registry::agent_bins()
+        .into_iter()
+        .filter(|bin| mcp_wiring(bin) != McpWiring::None)
+        .collect();
+    from_rows.sort_unstable();
+    let mut listed = WIRED_CLIS.to_vec();
+    listed.sort_unstable();
+    assert_eq!(from_rows, listed);
+    assert_eq!(mcp_wiring("not-an-agent"), McpWiring::None);
+}
+
+/// Copilot: one `--additional-mcp-config` per server, first in argv (a global
+/// flag, before `--resume`), the token named, never twice; a sign-in gets none.
+#[test]
+fn copilot_gets_one_additional_config_per_server_first_in_argv() {
+    let runtime = rt();
+    let mut o = opts("copilot", &["--resume", "abc"], Some("p"));
+    o.schedule_target_id = Some("t".into());
+    apply_help_to_spawn_with(&mut o, &runtime, "helptok", &[]);
+    apply_print_to_spawn_with(&mut o, &runtime, "printtok", &[]);
+    apply_print_to_spawn_with(&mut o, &runtime, "printtok", &[]);
+    assert_eq!(o.args.iter().filter(|a| *a == "--additional-mcp-config").count(), 2, "{:?}", o.args);
+    assert_eq!(&o.args[4..], ["--resume", "abc"]);
+    let print: Value = serde_json::from_str(&o.args[1]).unwrap();
+    let server = &print["mcpServers"][super::super::print_mcp::SERVER_NAME];
+    assert_eq!(server["type"], "http");
+    assert_eq!(server["url"], "http://127.0.0.1:4321/mcp/print");
+    assert_eq!(server["headers"]["Authorization"], format!("Bearer ${{{PRINT_TOKEN_ENV}}}"));
+    assert_eq!(server["tools"], json!(["*"]));
+    assert!(!o.args.iter().any(|a| a.contains("helptok") || a.contains("printtok")));
+    assert_eq!(o.env[PRINT_TOKEN_ENV], "printtok");
+    let mut login = opts("copilot", &["login"], Some("p"));
+    apply_print_to_spawn_with(&mut login, &runtime, "printtok", &[]);
+    assert_eq!(login.args, ["login"]);
+}
+
+/// OpenCode: each server merged into one inline config beside what is already
+/// there, the token named as `{env:…}`, argv untouched; a config that is not
+/// a JSON object is left as it is.
+#[test]
+fn opencode_servers_merge_into_its_inline_config() {
+    let key = super::super::agent_api_keys::OPENCODE_INLINE_ENV;
+    let runtime = rt();
+    let mut o = opts("opencode", &["--continue"], Some("p"));
+    o.env.insert(key.into(), json!({"provider": {"ollama": {}}, "mcp": {"mine": {"type": "local"}}}).to_string());
+    apply_help_to_spawn_with(&mut o, &runtime, "helptok", &[]);
+    apply_print_to_spawn_with(&mut o, &runtime, "printtok", &[]);
+    apply_print_to_spawn_with(&mut o, &runtime, "printtok", &[]);
+    assert_eq!(o.args, ["--continue"]);
+    let config: Value = serde_json::from_str(&o.env[key]).unwrap();
+    assert_eq!(config["provider"], json!({"ollama": {}}));
+    assert_eq!(config["mcp"]["mine"], json!({"type": "local"}));
+    let print = &config["mcp"][super::super::print_mcp::SERVER_NAME];
+    assert_eq!(print["type"], "remote");
+    assert_eq!(print["url"], "http://127.0.0.1:4321/mcp/print");
+    assert_eq!(print["headers"]["Authorization"], format!("Bearer {{env:{PRINT_TOKEN_ENV}}}"));
+    assert!(config["mcp"][super::super::help_mcp::SERVER_NAME].is_object());
+    assert_eq!(config["mcp"].as_object().unwrap().len(), 3);
+    assert!(!o.env[key].contains("printtok") && !o.env[key].contains("helptok"));
+    let mut odd = opts("opencode", &[], Some("p"));
+    odd.env.insert(key.into(), "[1]".into());
+    apply_print_to_spawn_with(&mut odd, &runtime, "printtok", &[]);
+    assert_eq!(odd.env[key], "[1]");
+}
+
+/// The local-models config `launch_prep` builds after the lanes keeps their
+/// servers, and its own `mcp` entries win a name clash.
+#[test]
+fn opencode_models_config_keeps_the_lane_servers() {
+    let lanes = json!({"mcp": {"a": {"url": "lane"}, "b": {"url": "lane"}}}).to_string();
+    let base = json!({"provider": {"ollama": {}}, "mcp": {"b": {"url": "own"}}}).to_string();
+    let merged: Value = serde_json::from_str(&merge_opencode_mcp(&base, &lanes)).unwrap();
+    assert_eq!(merged["provider"], json!({"ollama": {}}));
+    assert_eq!(merged["mcp"], json!({"a": {"url": "lane"}, "b": {"url": "own"}}));
+    let plain: Value = serde_json::from_str(&merge_opencode_mcp(r#"{"model":"m"}"#, &lanes)).unwrap();
+    assert_eq!(plain["mcp"]["a"]["url"], "lane");
+    assert_eq!(merge_opencode_mcp("not json", &lanes), "not json");
 }
 
 #[test]
@@ -2458,7 +2549,7 @@ fn cockpit_rename_is_self_only_versioned_and_revocable() {
     grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
     let token = spawn.env[COCKPIT_TOKEN_ENV].clone();
     let session = store.authenticate(Some(&format!("Bearer {token}"))).unwrap();
-    assert!(spawn.args.join(" ").contains("/mcp/cockpit"));
+    assert!(wired(&spawn).contains("/mcp/cockpit"));
     let request = |args: Value| json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
         "params":{"name":"tab_rename","arguments":args}});
     let call = |args| cockpit::handle_message(&session, &request(args)).unwrap()["result"]["structuredContent"].clone();

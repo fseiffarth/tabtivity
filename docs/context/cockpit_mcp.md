@@ -18,9 +18,11 @@ Attach-only tmux tabs are excluded to avoid ambiguous ownership.
 `Settings::cockpit_mcp` is on when absent. Manage CLIs → Tabtivity tools has its switch
 and `cockpit.mcp.rename` untested pill. The setting is read again for every
 rename: off or unreadable settings refuses an existing token. Re-enabling
-adds the tool to newly launched eligible agents. Claude and Codex use the
-existing command-line MCP wiring; tool-enabled local Vibe models merge the
-server into their MCP environment. Other CLIs receive no cockpit grant.
+adds the tool to newly launched eligible agents. Every agent CLI gets the
+grant: the registry's per-launch wiring for Claude, Codex, Copilot and OpenCode
+(`root_mcp::wire_named_cli`), the merged MCP environment for tool-enabled local
+Vibe models, and for every other CLI the env pair the `tabtivity-mcp` command
+reads (`docs/context/agent_mcp_wiring.md`).
 Tabby retains its pinned web/help set; remote, VM, container and reader tabs
 are excluded by the same local-reach checks as the help lane. A local-only
 tab can still qualify when its project runs elsewhere.

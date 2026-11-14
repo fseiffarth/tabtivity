@@ -3222,14 +3222,44 @@ unchanged; the new agents are additive.
 
 ### Agent print MCP — `docs/context/print_mcp.md`
 
-- [ ] Wire every agent CLI into the MCP lanes, not only Claude, Codex and
-  tool-tagged Vibe: `root_mcp::wire_named_cli_args` writes a server only for
-  those, so Gemini, Qwen, OpenCode, Copilot, Droid, Cursor, Auggie, CodeBuddy
-  get the `*_MCP_TOKEN`/`_URL` env pair and no config. One change for all lanes
-  (git, markup, help, cockpit, print): each CLI's own MCP config format
-  (Gemini/Qwen `settings.json` `mcpServers`, OpenCode `opencode.json` `mcp`,
-  Copilot, Droid/Cursor), checked against the real CLI version (`verify-cli`).
-  User decision 2026-11-10: print first, all-CLI wiring as this follow-up.
+- [x] Wire every agent CLI into the MCP lanes (`docs/context/agent_mcp_wiring.md`):
+  a per-CLI `McpWiring` row in the registry (Copilot and OpenCode added,
+  verified on 1.0.110 / 2.3.0 against a loopback stub), and the
+  `tabtivity-mcp` command for every other CLI, announced by the session-start hint.
+- [ ] Give Gemini and Qwen a verified `McpWiring` form: a settings file named by
+  `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` (Qwen: its own variable) with `mcpServers`
+  and `${VAR}` headers, written per tab outside the shared home. Run each
+  binary against the stub first (not done: running freshly downloaded
+  packages needed the user's go-ahead). Then Droid, Cursor, Auggie,
+  CodeBuddy, Kimi as each gets installed and verified.
+- [ ] Tell the CLIs without a hint route (Antigravity, Kiro, Cline, Aider,
+  Goose, …) about `tabtivity-mcp`; they get the env pairs but no line.
+- [ ] 🖐️ Copilot and OpenCode see the tools as their own — a fresh Copilot tab
+  and a fresh OpenCode tab in a local project: ask each to list its
+  `tabtivity-print` and `tabtivity-help` tools, then to print a PDF; the print
+  popup appears as with Claude. OpenCode with a local Ollama model: its
+  model picker still lists the loaded models, and the tools are there too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ `tabtivity-mcp` from a CLI that is not wired (e.g. Gemini or Droid)
+  — a fresh tab in a local project: the start hint mentions `tabtivity-mcp`; ask the
+  agent to print a PDF; it runs `tabtivity-mcp call print print_request …`
+  and the print popup appears. `tabtivity-mcp` alone lists print, git, markup,
+  help, cockpit.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [ ] 🖐️ Agent print request — fresh Claude tab in a local project with a PDF:
   ask it to print the PDF, 2 copies, pages 1-2, with a note. A bottom-left popup
   ("An agent asks to print") and a row in the Print Manager tab's "Agent print

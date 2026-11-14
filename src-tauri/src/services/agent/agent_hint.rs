@@ -52,9 +52,32 @@ use serde_json::{json, Value};
 use crate::services::home_io::HomeFile;
 use crate::storage;
 
-/// What every CLI is told.
-pub const HINT: &str =
-    concat!("When the user asks you to send or show them a file, run `", crate::app_slug!(), "-send <file>` (local and container tabs): it goes to the screen they last typed from, the phone or the desktop. Do what its output says: for the desktop, name the path it prints in your reply, and the chat shows the pictures and PDFs a reply names. Add `--phone` or `--desktop` when the user names a screen.");
+/// The send line, as a literal: [`HINT`] and [`HOOK_HINT`] are built from it.
+macro_rules! send_hint {
+    () => {
+        concat!("When the user asks you to send or show them a file, run `", crate::app_slug!(), "-send <file>` (local and container tabs): it goes to the screen they last typed from, the phone or the desktop. Do what its output says: for the desktop, name the path it prints in your reply, and the chat shows the pictures and PDFs a reply names. Add `--phone` or `--desktop` when the user names a screen.")
+    };
+}
+
+/// What every CLI is told: Claude and Codex through their session hook.
+pub const HINT: &str = send_hint!();
+
+/// The `<slug>-mcp` line: Tabtivity's MCP tools for a CLI the lanes could not
+/// name them to at launch (`agent_registry::McpWiring::None`).
+macro_rules! tools_hint {
+    () => {
+        concat!(
+            "This tab may also hold ", crate::app_name!(), " tools (print a PDF once the user approves it, push, PDF markup questions, ",
+            crate::app_name!(), " help). When they are not among your own tools, run `", crate::app_slug!(),
+            "-mcp` to list the servers, `", crate::app_slug!(), "-mcp tools SERVER` for their tools and arguments, and `",
+            crate::app_slug!(), "-mcp call SERVER TOOL JSON` to call one, with the arguments as one quoted JSON object."
+        )
+    };
+}
+
+/// What the CLIs past Claude and Codex are told, by hook or instructions
+/// file: the send line and the `<slug>-mcp` line.
+pub const HOOK_HINT: &str = concat!(send_hint!(), " ", tools_hint!());
 
 /// The send skill's folder and `name`, which is also Claude's slash command.
 pub const SKILL_NAME: &str = concat!(crate::app_slug!(), "-send");
@@ -164,13 +187,13 @@ impl Shape {
     /// What the hook prints in a Tabtivity project tab.
     fn output(self) -> String {
         match self {
-            Shape::Plain => HINT.to_string(),
+            Shape::Plain => HOOK_HINT.to_string(),
             Shape::Context => json!({
-                "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": HINT }
+                "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": HOOK_HINT }
             })
             .to_string(),
-            Shape::Copilot => json!({ "additionalContext": HINT }).to_string(),
-            Shape::Cursor => json!({ "additional_context": HINT }).to_string(),
+            Shape::Copilot => json!({ "additionalContext": HOOK_HINT }).to_string(),
+            Shape::Cursor => json!({ "additional_context": HOOK_HINT }).to_string(),
         }
     }
 
@@ -252,7 +275,7 @@ fn command(shape: Shape) -> String {
 const HINT_ENV: &[&str] = &["TAB_UID", "TAB_AGENT", "PROJECT_DIR"];
 
 /// POSIX body. Every printed string is a single-quoted literal, which is why
-/// [`HINT`] must never hold a `'` (a test pins that).
+/// [`HOOK_HINT`] must never hold a `'` (a test pins that).
 #[cfg_attr(windows, allow(dead_code))]
 fn posix_script_body() -> String {
     posix_script_body_in(&crate::services::agent_session::live_sessions_dir().to_string_lossy())
@@ -336,7 +359,7 @@ pub fn write_script() -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(instructions_path(), format!("{HINT}\n"))?;
+    std::fs::write(instructions_path(), format!("{HOOK_HINT}\n"))?;
     #[cfg(windows)]
     std::fs::write(&path, powershell_script_body())?;
     #[cfg(not(windows))]
@@ -586,7 +609,7 @@ fn copilot_hooks(cmd: &str) -> String {
 /// `current` with Tabtivity's block in it: replaced in place when the markers are
 /// there, appended otherwise. Nothing outside the markers changes.
 fn with_block(current: &str) -> String {
-    let block = format!("{BLOCK_START}\n{HINT}\n{BLOCK_END}\n");
+    let block = format!("{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\n");
     if let Some(start) = current.find(BLOCK_START) {
         if let Some(end) = current[start..].find(BLOCK_END).map(|i| start + i + BLOCK_END.len()) {
             let rest = current[end..].strip_prefix('\n').unwrap_or(&current[end..]);
@@ -628,7 +651,7 @@ mod tests {
         }
         let v: Value = serde_json::from_str(&Shape::Context.output()).unwrap();
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
-        assert_eq!(v["hookSpecificOutput"]["additionalContext"], HINT);
+        assert_eq!(v["hookSpecificOutput"]["additionalContext"], HOOK_HINT);
     }
 
     #[cfg(unix)]
@@ -956,11 +979,11 @@ mod tests {
     #[test]
     fn the_block_is_replaced_in_place_and_nothing_around_it_moves() {
         let once = with_block("before\n");
-        assert_eq!(once, format!("before\n\n{BLOCK_START}\n{HINT}\n{BLOCK_END}\n"));
+        assert_eq!(once, format!("before\n\n{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\n"));
         let stale = format!("top\n{BLOCK_START}\nold text\n{BLOCK_END}\nbottom\n");
-        assert_eq!(with_block(&stale), format!("top\n{BLOCK_START}\n{HINT}\n{BLOCK_END}\nbottom\n"));
+        assert_eq!(with_block(&stale), format!("top\n{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\nbottom\n"));
         assert_eq!(with_block(&with_block("")), with_block(""));
-        assert_eq!(with_block(""), format!("{BLOCK_START}\n{HINT}\n{BLOCK_END}\n"));
+        assert_eq!(with_block(""), format!("{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\n"));
     }
 
     #[test]

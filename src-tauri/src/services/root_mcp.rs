@@ -45,6 +45,7 @@ pub mod root_mcp_review;
 pub mod root_mcp_security;
 
 use std::collections::HashMap;
+use super::agent_registry::McpWiring;
 use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -693,13 +694,18 @@ fn basename(cmd: &str) -> &str {
     cmd.rsplit(['/', '\\']).next().unwrap_or(cmd)
 }
 
-/// The cloud agent CLIs [`apply_to_spawn_with`] names the server to on their
-/// command line — the ones that can actually *call* the tools. Every other
-/// opted-in root agent gets the env pair only. The Models & agents menu's
+/// The cloud agent CLIs every lane names its server to for one launch — the
+/// registry rows whose [`McpWiring`] is not `None`, the ones that see the
+/// tools as their own. Every other agent gets each lane's env pair only, which
+/// the `<slug>-mcp` command reads. The Models & agents menu's
 /// "MCP" chip reads this (via `root_mcp_status`) to say which CLIs the switch
 /// can do anything for, so a CLI wired below must be listed here; the
 /// `every_wired_cli_is_named_the_server` test holds the two together.
-pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
+pub const WIRED_CLIS: &[&str] = &["claude", "codex", "copilot", "opencode"];
+
+/// The CLIs a `mail_reader` VM's agent is wired for: the argv-only forms, as
+/// the reader lane has nothing but the remote command line to carry them.
+const READER_CLIS: &[&str] = &["claude", "codex"];
 
 /// Hand a root agent the endpoint. Pure over `runtime` so it is testable.
 ///
@@ -727,8 +733,13 @@ pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
 ///   what lets a completion-only model run at all. The tools are narrowed to this
 ///   server's, so a small model gets a short tool list and no shell. The
 ///   token is named (`api_key_env`), not inlined.
-/// - Every other opted-in agent gets the env pair only, until its CLI has a
-///   per-invocation way to name a server.
+/// - **Copilot**: `--additional-mcp-config <json>` first in argv, one per
+///   server, the token named as `${…}` (verified on 1.0.110).
+/// - **OpenCode**: an `mcp` entry merged into `OPENCODE_CONFIG_CONTENT`, the
+///   token named as `{env:…}` (verified on 2.3.0).
+/// - Every other opted-in agent gets the env pair only, which the
+///   `<slug>-mcp` command reads, until its CLI has a verified per-launch form
+///   ([`McpWiring`]).
 ///
 /// `local_only` (`Settings::root_mcp_local_only`) hands a cloud agent nothing
 /// at all. Each spawn gets its own secret; the token map retains its caller class.
@@ -770,31 +781,40 @@ pub fn apply_to_spawn_with(
                 json!([format!("{SERVER_NAME}_*")]).to_string(),
             );
         }
-        bin => wire_cli_args(bin, &mut opts.args, &url),
+        _ => wire_named_cli(opts, &url, SERVER_NAME, TOKEN_ENV),
     }
 }
 
-/// Name the server on a wired CLI's own command line ([`WIRED_CLIS`]); a no-op
-/// for every other binary, and for an argv that already names it.
+/// Name the root server on Claude's or Codex's own command line: the reader
+/// lane's form ([`reader_wiring`]), which has only the argv of a CLI inside a VM.
 fn wire_cli_args(bin: &str, args: &mut Vec<String>, url: &str) {
-    wire_named_cli_args(bin, args, url, SERVER_NAME, TOKEN_ENV);
+    wire_named_cli_args(super::agent_registry::mcp_wiring(bin), args, url, SERVER_NAME, TOKEN_ENV);
 }
 
-fn wire_named_cli_args(bin: &str, args: &mut Vec<String>, url: &str, server: &str, token_env: &str) {
-    match bin {
+/// Name `server` at `url` to this spawn's CLI the one way its registry row
+/// says ([`McpWiring`]), with `token_env` as the token's variable. A no-op for
+/// a CLI without a per-launch form ([`McpWiring::None`]): its tab keeps the
+/// lane's env pair, which the `<slug>-mcp` command reads.
+fn wire_named_cli(opts: &mut PtyOptions, url: &str, server: &str, token_env: &str) {
+    match super::agent_registry::mcp_wiring(basename(&opts.cmd)) {
+        McpWiring::OpenCodeInline => wire_opencode_inline(&mut opts.env, url, server, token_env),
+        wiring => wire_named_cli_args(wiring, &mut opts.args, url, server, token_env),
+    }
+}
+
+fn wire_named_cli_args(wiring: McpWiring, args: &mut Vec<String>, url: &str, server: &str, token_env: &str) {
+    let named = |args: &[String]| args.iter().any(|a| a.contains(&format!("\"{server}\":")));
+    let header = format!("Bearer ${{{token_env}}}");
+    match wiring {
         // The root server keeps its rule (a `--mcp-config` already present wins);
         // the schedule and help servers join whatever is there. None twice.
         // A subcommand (`claude auth login`, a sign-in tab) refuses the flag.
-        "claude" if !super::agent_fence::runs_subcommand(args)
-            && !args.iter().any(|a| a.contains(&format!("\"{server}\":")))
+        McpWiring::ClaudeFlag if !super::agent_fence::runs_subcommand(args)
+            && !named(args)
             && (server != SERVER_NAME || !args.iter().any(|a| a == "--mcp-config")) => {
             let config = json!({
                 "mcpServers": {
-                    server: {
-                        "type": "http",
-                        "url": url,
-                        "headers": { "Authorization": format!("Bearer ${{{token_env}}}") },
-                    }
+                    server: { "type": "http", "url": url, "headers": { "Authorization": header } }
                 }
             });
             if let Some(index) = args.iter().position(|a| a == "--mcp-config") {
@@ -804,7 +824,7 @@ fn wire_named_cli_args(bin: &str, args: &mut Vec<String>, url: &str, server: &st
                 args.push(config.to_string());
             }
         }
-        "codex" if !args.iter().any(|a| a.starts_with(&format!("mcp_servers.{server}."))) => {
+        McpWiring::CodexOverrides if !args.iter().any(|a| a.starts_with(&format!("mcp_servers.{server}."))) => {
             let overrides = [
                 "-c".to_string(),
                 format!("mcp_servers.{server}.url=\"{url}\""),
@@ -813,8 +833,65 @@ fn wire_named_cli_args(bin: &str, args: &mut Vec<String>, url: &str, server: &st
             ];
             args.splice(0..0, overrides);
         }
+        // One flag per server, first in argv: the flag is global and must
+        // precede a subcommand, and a sign-in (`copilot login`) gets none.
+        McpWiring::CopilotFlag if !super::agent_fence::runs_subcommand(args) && !named(args) => {
+            let config = json!({
+                "mcpServers": {
+                    server: { "type": "http", "url": url, "headers": { "Authorization": header }, "tools": ["*"] }
+                }
+            });
+            args.splice(0..0, ["--additional-mcp-config".to_string(), config.to_string()]);
+        }
         _ => {}
     }
+}
+
+/// Merge `server` into OpenCode's inline config (`OPENCODE_CONFIG_CONTENT`):
+/// over the one already in `env` (another lane's, an API route's), or else the
+/// user's own from this process's environment, which must survive since the
+/// spawn's value replaces it. A server of that name already there stays, and
+/// a config that is not a JSON object is left alone (no server, no clobber).
+/// The local-models config `launch_prep` adds later merges these entries in
+/// ([`merge_opencode_mcp`]).
+fn wire_opencode_inline(env: &mut HashMap<String, String>, url: &str, server: &str, token_env: &str) {
+    const KEY: &str = super::agent_api_keys::OPENCODE_INLINE_ENV;
+    let existing = env.get(KEY).cloned().or_else(|| std::env::var(KEY).ok());
+    let mut config = match existing {
+        Some(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(value) if value.is_object() => value,
+            _ => return,
+        },
+        None => json!({}),
+    };
+    let entry = json!({
+        "type": "remote",
+        "url": url,
+        "headers": { "Authorization": format!("Bearer {{env:{token_env}}}") },
+    });
+    match config.get_mut("mcp") {
+        Some(Value::Object(servers)) => { servers.entry(server.to_string()).or_insert(entry); }
+        None => { config["mcp"] = json!({ server: entry }); }
+        Some(_) => return,
+    }
+    env.insert(KEY.to_string(), config.to_string());
+}
+
+/// `base` (an OpenCode inline config) with the `mcp` servers of `lanes` — the
+/// config [`wire_opencode_inline`] built — added where `base` names none of
+/// that name. `base` unchanged when either is not a JSON object.
+pub fn merge_opencode_mcp(base: &str, lanes: &str) -> String {
+    let (Ok(mut config), Ok(lanes)) = (serde_json::from_str::<Value>(base), serde_json::from_str::<Value>(lanes)) else {
+        return base.to_string();
+    };
+    let Some(added) = lanes.get("mcp").and_then(Value::as_object) else { return base.to_string() };
+    if !config.is_object() { return base.to_string(); }
+    if config.get("mcp").is_none() { config["mcp"] = json!({}); }
+    let Some(servers) = config["mcp"].as_object_mut() else { return base.to_string() };
+    for (name, entry) in added {
+        servers.entry(name.clone()).or_insert_with(|| entry.clone());
+    }
+    config.to_string()
 }
 
 /// Whether this spawn is a local-model tab: Vibe, pointed at an Ollama model
@@ -1136,7 +1213,7 @@ pub fn apply_schedule_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, to
         opts.env.insert("VIBE_MCP_SERVERS".into(), json!([{"name":name,"transport":"http","url":url,"api_key_env":SCHEDULE_TOKEN_ENV}]).to_string());
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), json!([format!("{name}_*")]).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, super::schedule_mcp::SERVER_NAME, SCHEDULE_TOKEN_ENV);
+        wire_named_cli(opts, &url, super::schedule_mcp::SERVER_NAME, SCHEDULE_TOKEN_ENV);
     }
 }
 
@@ -1179,7 +1256,7 @@ pub fn apply_git_push_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, to
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, GIT_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, GIT_TOKEN_ENV);
     }
 }
 
@@ -1217,7 +1294,7 @@ pub fn apply_cockpit_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, tok
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, COCKPIT_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, COCKPIT_TOKEN_ENV);
     }
 }
 
@@ -1225,7 +1302,6 @@ pub fn apply_cockpit_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, tok
 /// argument can choose this scope or identity.
 fn grant_cockpit(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, state: &Path, models: &[String]) {
     let Some(binding) = super::cockpit_mcp::binding_for_spawn(state, opts) else { return };
-    if !matches!(basename(&opts.cmd), "claude" | "codex") && !is_local_model(opts) { return; }
     let Some(token) = mint_token() else { return };
     apply_cockpit_to_spawn_with(opts, runtime, &token, models);
     if opts.env.get(COCKPIT_TOKEN_ENV) != Some(&token) { return; }
@@ -1265,7 +1341,7 @@ pub fn apply_help_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token:
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, HELP_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, HELP_TOKEN_ENV);
     }
 }
 
@@ -1316,7 +1392,7 @@ pub fn apply_markup_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, toke
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, MARKUP_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, MARKUP_TOKEN_ENV);
     }
 }
 
@@ -1362,7 +1438,7 @@ pub fn apply_print_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, PRINT_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, PRINT_TOKEN_ENV);
     }
 }
 
@@ -1392,7 +1468,7 @@ pub fn reader_endpoint_url() -> String {
 /// The pure half of the reader lane ([`grant_lanes`]).
 pub fn reader_wiring(agent_cmd: &str, agent_args: &mut Vec<String>, token: &str) -> Option<Vec<(String, String)>> {
     let bin = basename(agent_cmd);
-    if !WIRED_CLIS.contains(&bin) {
+    if !READER_CLIS.contains(&bin) {
         return None;
     }
     let url = reader_endpoint_url();

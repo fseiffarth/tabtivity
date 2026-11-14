@@ -1,5 +1,7 @@
 //! Tabtivity-owned commands reachable from local, fenced and container tabs:
-//! `tabtivity-send`, and one **agent shim** per registry CLI (`agent_shim`).
+//! `tabtivity-send`, `tabtivity-mcp` (Tabtivity's MCP tools for a CLI that was
+//! not told about them at launch), and one **agent shim** per registry CLI
+//! (`agent_shim`).
 //!
 //! The shims sit at the front of every tab's PATH. In a shell tab (never
 //! fenced) a typed `claude` reaches the shim, which asks Tabtivity's own binary
@@ -16,6 +18,10 @@ use std::{fs, io, path::{Path, PathBuf}};
 /// typing it in a shell tab skips the fence. It gets its CLI's own shim.
 const VENDOR_ALIASES: &[(&str, &str)] = &[("opencode2", "opencode")];
 
+/// The command an agent runs to call Tabtivity's MCP tools when its CLI was
+/// not told about them at launch (`agent_registry::McpWiring::None`).
+pub const MCP_CLI: &str = concat!(crate::app_slug!(), "-mcp");
+
 pub fn bin_dir() -> PathBuf { crate::storage::state_dir().join("bin") }
 
 pub fn install() -> io::Result<()> {
@@ -28,8 +34,14 @@ fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {
     // The POSIX script is needed even on Windows for Docker containers.
     // brand-check: allow — an include path is a literal; the script file is renamed at the flip
     write_script(dir, crate::brand::SEND_CLI, include_bytes!("../../../../scripts/tabtivity-send.sh"))?;
+    // brand-check: allow — an include path is a literal; the script file is renamed at the flip
+    write_script(dir, MCP_CLI, include_bytes!("../../../../scripts/tabtivity-mcp.sh"))?;
     #[cfg(windows)]
     {
+        // brand-check: allow — an include path is a literal; the script file is renamed at the flip
+        write_script(dir, concat!(crate::app_slug!(), "-mcp.cmd"), include_bytes!("../../../../scripts/tabtivity-mcp.cmd"))?;
+        // brand-check: allow — an include path is a literal; the script file is renamed at the flip
+        write_script(dir, concat!(crate::app_slug!(), "-mcp.ps1"), include_bytes!("../../../../scripts/tabtivity-mcp.ps1"))?;
         // brand-check: allow — an include path is a literal; the script file is renamed at the flip
         write_script(dir, concat!(crate::app_slug!(), "-send.cmd"), include_bytes!("../../../../scripts/tabtivity-send.cmd"))?;
         // brand-check: allow — an include path is a literal; the script file is renamed at the flip
@@ -139,6 +151,41 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(fs::metadata(script).unwrap().permissions().mode() & 0o777, 0o755);
         }
+    }
+
+    #[test]
+    fn install_writes_the_mcp_command_beside_send() {
+        let dir = tempfile::tempdir().unwrap();
+        install_in(dir.path(), None, &[]).unwrap();
+        // brand-check: allow — an include path is a literal; the script file is renamed at the flip
+        assert_eq!(fs::read(dir.path().join(MCP_CLI)).unwrap(), include_bytes!("../../../../scripts/tabtivity-mcp.sh"));
+    }
+
+    /// The MCP command's PowerShell twin, held to the sh script as the send
+    /// twin is: every literal `fail CODE '…'` line and the lane list, spelled
+    /// the same with the same exit code.
+    #[test]
+    fn powershell_mcp_twin_matches_the_sh_messages() {
+        // brand-check: allow — include paths are literals; the script files are renamed at the flip
+        let sh = include_str!("../../../../scripts/tabtivity-mcp.sh");
+        // brand-check: allow — include paths are literals; the script files are renamed at the flip
+        let ps1 = include_str!("../../../../scripts/tabtivity-mcp.ps1");
+        let mut checked = 0;
+        for line in sh.lines() {
+            let Some(at) = line.find("fail ") else { continue };
+            let rest = &line[at + 5..];
+            let Some((code, quoted)) = rest.split_once(' ') else { continue };
+            let Some(message) = quoted.strip_prefix('\'').and_then(|m| m.split('\'').next()) else { continue };
+            // PowerShell needs no curl.
+            if message.contains("curl") { continue; }
+            assert!(ps1.contains(&format!("Fail {code} '{message}'")), "ps1 lacks Fail {code} '{message}'");
+            checked += 1;
+        }
+        assert!(checked >= 5, "only {checked} messages checked");
+        for lane in ["print", "git", "markup", "help", "cockpit", "schedule", "root"] {
+            assert!(sh.contains(lane) && ps1.contains(&format!("'{lane}'")), "{lane}");
+        }
+        assert!(sh.contains("http://127.0.0.1:") && ps1.contains("http://127\\.0\\.0\\.1:"));
     }
 
     /// The PowerShell twin cannot run here, so it is held to the sh script at
