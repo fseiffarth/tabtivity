@@ -621,19 +621,34 @@ describe("autocomplete window and type-through", () => {
     const after = "line\n" + "later line\n".repeat(5000);
     const window = completionWindow(before + after, before.length);
     expect(window.prefix.length).toBeLessThanOrEqual(4096);
-    expect(window.suffix.length).toBeLessThanOrEqual(1024);
+    expect(window.prefix.length).toBeGreaterThan(3000);
+    expect(window.suffix.length).toBeLessThanOrEqual(2048);
+    expect(window.suffix.length).toBeGreaterThan(1024);
     expect(window.prefix).toMatch(/^old line\n/);
     expect(window.prefix.endsWith("current ")).toBe(true);
     expect(window.suffix.startsWith("line\n")).toBe(true);
     expect(window.suffix.endsWith("\n")).toBe(true);
   });
 
+  it("two nearby carets in a long file share the window start", () => {
+    const text = "const value = compute(1);\n".repeat(2000);
+    const caret = 4096 + 1024 * 5 + 100;
+    const a = completionWindow(text, caret);
+    const b = completionWindow(text, caret + 40);
+    expect(caret - a.prefix.length).toBe(caret + 40 - b.prefix.length);
+    expect(a.prefix.startsWith("const value")).toBe(true);
+    // A start at the next step moves the window by about one step, not a line.
+    const c = completionWindow(text, caret + 1024);
+    expect(caret + 1024 - c.prefix.length - (caret - a.prefix.length)).toBeGreaterThan(1000);
+  });
+
   it("bounds single lines without splitting Unicode characters", () => {
     const text = "😀".repeat(6000);
     const window = completionWindow(text, 6000);
     expect(window.prefix.length).toBeLessThanOrEqual(4096);
-    expect(window.suffix.length).toBeLessThanOrEqual(1024);
-    expect(window.prefix + window.suffix).toBe("😀".repeat(2560));
+    expect(window.suffix.length).toBeLessThanOrEqual(2048);
+    // Start at the step boundary 2048, end at caret + 2048.
+    expect(window.prefix + window.suffix).toBe("😀".repeat(3000));
     const odd = completionWindow("x" + text + "z", 6002);
     expect(odd.prefix).not.toMatch(/^[\uDC00-\uDFFF]/);
     expect(odd.suffix).not.toMatch(/[\uD800-\uDBFF]$/);

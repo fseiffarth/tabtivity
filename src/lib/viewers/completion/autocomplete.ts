@@ -1,8 +1,21 @@
-/** Keep IPC and prompt evaluation independent of document size. Cut at a line
- * boundary where possible, but never discard the line touching the caret. */
+/** Most text before the caret a request carries. */
+const WINDOW_PREFIX = 4096;
+/** The window's start moves in steps this long, so the prefix floats between
+ * about 3 K and 4 K characters and nearby carets share a start. */
+const WINDOW_STEP = 1024;
+/** Most text after the caret a request carries. */
+const WINDOW_SUFFIX = 2048;
+
+/** Keep IPC and prompt evaluation independent of document size. The start
+ * advances in whole steps and then snaps to the next line boundary, so typing
+ * keeps the same window start (and a model's prompt cache) for about a
+ * thousand characters instead of sliding one line at a time. A single line
+ * longer than the window is cut inside it: at most 4096 characters, never
+ * through a surrogate pair. The line touching the caret is never discarded. */
 export function completionWindow(text: string, caret: number) {
-  let start = Math.max(0, caret - 4096);
-  let end = Math.min(text.length, caret + 1024);
+  let start = caret <= WINDOW_PREFIX ? 0
+    : Math.ceil((caret - WINDOW_PREFIX) / WINDOW_STEP) * WINDOW_STEP;
+  let end = Math.min(text.length, caret + WINDOW_SUFFIX);
   if (start > 0) {
     const newline = text.indexOf("\n", start);
     if (newline >= 0 && newline < caret) start = newline + 1;
