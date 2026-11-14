@@ -804,6 +804,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("set_project_tab_messages_wake", Client),
     ("tabs_mcp_clear", Client),
     ("tabs_mcp_deliver", Client),
+    ("tabs_mcp_human_input", Client),
     ("tabs_mcp_traffic", Client),
     ("tabs_mcp_wake_claim", Client),
     // commands/project_runtime.rs

@@ -2426,6 +2426,7 @@ pub fn run() {
             commands::tabs_mcp::tabs_mcp_deliver,
             commands::tabs_mcp::tabs_mcp_clear,
             commands::tabs_mcp::tabs_mcp_wake_claim,
+            commands::tabs_mcp::tabs_mcp_human_input,
             commands::tabs_mcp::set_project_tab_messages_wake,
             // Disk usage analyzer (commands::disk_usage)
             commands::disk_usage::disk_usage_scan,

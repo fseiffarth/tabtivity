@@ -3689,6 +3689,13 @@ fn tabs_lane_grant_matrix() {
     none(spawn("claude"), &serving, "container project");
     projects(json!({"vm": {"enabled": true}}));
     none(spawn("claude"), &serving, "VM project");
+    // Remote projects: the remote tab, a worker's tab and a local-only tab of
+    // a remote project alike (the shared off-host check, as print and markup).
+    projects(json!({"remote": {"host": "h.example", "remote_path": "/srv/p"}}));
+    none(spawn("claude"), &serving, "remote project");
+    none(PtyOptions { local_only: true, ..spawn("claude") }, &serving, "local-only tab of a remote project");
+    projects(json!({"compute_hosts": [{"id": "w1", "host": "gpu.example", "remote_path": "/srv/p"}]}));
+    none(PtyOptions { remote_host_id: Some("w1".into()), ..spawn("claude") }, &serving, "worker tab");
     std::fs::write(state.join("projects.json"), "[]").unwrap();
     none(spawn("claude"), &serving, "unregistered project");
     projects(json!({}));

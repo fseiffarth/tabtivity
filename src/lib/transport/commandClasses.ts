@@ -563,6 +563,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["set_project_tab_messages_wake", "client"],
   ["tabs_mcp_clear", "client"],
   ["tabs_mcp_deliver", "client"],
+  ["tabs_mcp_human_input", "client"],
   ["tabs_mcp_traffic", "client"],
   ["tabs_mcp_wake_claim", "client"],
   ["load_side_panel_folder", "core"],

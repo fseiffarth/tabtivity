@@ -47,7 +47,10 @@ is keeping it exactly that narrow.
   window), so every message is one the window can show.
 - **Local models only** is checked four times (`local_models_only.md`):
   class at grant, the registry re-read on every call, the sender's class
-  stored and filtered at read, and `purge_scope` when the switch flips.
+  stored and filtered at read, and `purge_scope` when the switch flips. The
+  re-read parses only the scope's own entry: another project's malformed
+  entry leaves the lane working; the scope's own failing to parse, or a
+  `projects.json` that is not a list, answers `unavailable` (fail closed).
 
 ## Peer text is never the user's
 
@@ -58,20 +61,40 @@ anything else an agent chose into a prompt. What may reach a prompt is
 inbox:
 
 - **Hook hint** (Claude only until another CLI's hook output is verified):
-  `tabs_send` leaves an empty `<live_dir>/<uid>.mail` marker; the hook prints
-  the notice beside the next `UserPromptSubmit` and removes the marker. A
-  forged or deleted marker costs a spurious or missed hint, nothing more.
+  `tabs_send` leaves an empty `<live_dir>/<uid>.mail` marker, in the root and
+  the project slice; the hook prints the notice beside the next
+  `UserPromptSubmit` and removes the copy it sees, and the host removes both
+  when the tab reads its inbox (`agent_turn::clear_mail`). A forged or
+  deleted marker costs a spurious or missed hint, nothing more.
 - **Deliver** (the cockpit's Messages fold): the user's click asks
   `tabs_mcp_deliver` for the notice and the tab's schedule target, and the
   window queues it through `queuePromptForTab` — the scheduler's idle gate,
-  never `whileBusy`.
+  never `whileBusy`. Only for an open tab with an unread message it can read
+  (its class). It is the user's choice, so it is never refused for a notice
+  already out; it leaves one out itself, so no wake doubles it.
 - **Idle wake** (per project, off by default, `tab_messages_wake` in
   `projects.json`, never mirrored into the tree): `TabMessagesHost` asks
   `tabs_mcp_wake_claim` on every `tabs-mcp-changed` and queues the notice for
-  each target it returns. The claim lives on the host: it re-reads the opt-in
-  and the switch, covers one unread batch once, allows six wakes per tab per
-  hour, and skips tabs no longer listed (a notice for a closed tab would wait
-  for a tab that may not return).
+  each target it returns. The claim lives on the host (`wake_claims_in`): it
+  re-reads the opt-in and the switch, allows six wakes per tab per hour, and
+  skips tabs that are not live (closed, or a spawn that failed before its
+  PTY exit swept it: a notice for them would wait for a tab that may not
+  return). It counts only messages the tab can read (its class) that no wake
+  or inbox read has covered.
+  - **One notice at a time.** A claimed wake (or a Deliver) leaves a notice
+    out for the tab until it next reads its inbox; messages arriving
+    meanwhile wait for that read, so a busy tab never collects a queue of
+    notices. A respawn clears it, so a lost notice cannot leave a tab
+    unwakeable for good.
+  - **No wake from a woken turn.** A tab that reads its inbox while a wake's
+    notice is out is in a woken turn until the user types into it (the
+    window reports a person's input through `noteInputFrom` →
+    `tabs_mcp_human_input`, throttled, only while a project opts in) or
+    presses Deliver for it. What it sends in a woken turn is delivered but
+    wakes no one, so two opted-in tabs cannot keep waking each other; a chain
+    the user started runs one hop. The turn is approximated at the inbox read,
+    so an error suppresses a wake (the hint and Deliver remain), never adds
+    one.
 
 ## The user reads everything
 

@@ -31,6 +31,7 @@
 //! inbox. `AppHandle`-free: the window learns of changes through
 //! [`set_change_hook`].
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -206,6 +207,11 @@ struct Member {
     pty: String,
     /// The lane session's id (`Session::id`), checked live for listing.
     session: String,
+    /// The tab is in a turn an idle wake started: it read its inbox while a
+    /// wake's notice was out for it, and the user has not typed into it since
+    /// ([`human_input`]). What it sends then never wakes the recipient, so two
+    /// opted-in tabs cannot keep waking each other.
+    woken_turn: bool,
 }
 
 struct Message {
@@ -220,8 +226,11 @@ struct Message {
     text: String,
     /// The recipient acked it: out of its inbox, still shown to the user.
     acked: bool,
-    /// A wake already covered it ([`wake_claim`]).
+    /// A wake already covered it, or the recipient's inbox returned it: no
+    /// later wake is claimed for it ([`wake_claims_in`]).
     woken: bool,
+    /// Sent during the sender's wake-started turn: it never wakes anyone.
+    from_woken_turn: bool,
 }
 
 impl Message {
@@ -234,10 +243,29 @@ impl Message {
     }
 }
 
+/// A notice queued for a tab and not yet answered by an inbox read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pending {
+    /// The idle wake queued it: the turn it starts is a woken turn.
+    Wake,
+    /// The user's Deliver click queued it: a turn the user started.
+    Deliver,
+}
+
 #[derive(Default)]
 struct World {
     members: Vec<Member>,
     messages: Vec<Message>,
+    /// Saved tabs ([`seat_key`]) a notice is out for. While one is, no wake is
+    /// claimed for that tab, however many messages arrive: one notice covers
+    /// them all. Cleared when the tab next reads its inbox, when it is
+    /// respawned, and when its scope is purged.
+    pending: HashMap<String, Pending>,
+}
+
+/// The key of a saved tab across the store's maps and the wake budgets.
+fn seat_key(state: &Path, scope: &str, tab: &str) -> String {
+    format!("{}\0{scope}\0{tab}", state.display())
 }
 
 fn world() -> &'static Mutex<World> {
@@ -262,7 +290,10 @@ fn prune_at(world: &mut World, now: Instant) -> bool {
 pub(crate) fn enrol(binding: Binding, pty: &str, session: &str) {
     let mut w = world().lock_ok();
     w.members.retain(|m| !m.binding.same_seat(&binding));
-    w.members.push(Member { binding, pty: pty.to_string(), session: session.to_string() });
+    // A notice queued for the old process may never be answered: a respawn
+    // must not leave the tab unwakeable for good.
+    w.pending.remove(&seat_key(&binding.seat.state, &binding.seat.scope, &binding.seat.id));
+    w.members.push(Member { binding, pty: pty.to_string(), session: session.to_string(), woken_turn: false });
     drop(w);
     changed();
 }
@@ -291,6 +322,7 @@ pub fn purge_scope(scope: &str) -> usize {
     let mut w = world().lock_ok();
     let before = w.messages.len();
     w.messages.retain(|m| m.from.seat.scope != scope);
+    w.pending.retain(|key, _| key.split('\0').nth(1) != Some(scope));
     let gone = before - w.messages.len();
     drop(w);
     if gone > 0 { changed(); }
@@ -341,54 +373,64 @@ pub fn traffic_in(state: &Path, scope: &str, tab: Option<&str>) -> Vec<MessageVi
     views
 }
 
-/// How many messages `tab` (a saved tab id of `scope`) has not acked — the
-/// hover card's unread line and the Deliver button's gate.
-pub fn unread_count(scope: &str, tab: &str) -> usize {
-    traffic(scope, Some(tab)).iter().filter(|m| m.to_tab == tab && !m.read).count()
-}
-
 fn wake_budgets() -> &'static Mutex<RollingWindows> {
     static RATES: OnceLock<Mutex<RollingWindows>> = OnceLock::new();
     RATES.get_or_init(Default::default)
 }
 
-/// The per-project idle wake's host-side claim (plan step 7): `true` when
-/// `tab` (a saved tab id of `scope`) has unread messages no earlier wake
-/// covered and its [`WAKES_PER_HOUR`] budget admits one — those messages are
-/// then marked covered, so one unread batch wakes the tab once. The caller has
-/// checked the project's opt-in; what it queues is [`NOTICE`], nothing else.
-pub fn wake_claim(scope: &str, tab: &str) -> bool {
-    wake_claim_in(&crate::storage::state_dir(), scope, tab, Instant::now())
-}
-
-/// [`wake_claim`] for a given state dir and clock.
-pub fn wake_claim_in(state: &Path, scope: &str, tab: &str, now: Instant) -> bool {
+/// The per-project idle wake's host-side claims (plan step 7) for every live
+/// tab of `scope` — a closed tab, or one whose spawn failed, is not woken: a
+/// notice queued for it would wait for a tab that may never return. A tab is
+/// claimed when no notice is already out for it, it has an unread message it
+/// can read (its class) that no earlier wake or inbox read covered and that
+/// was not sent from a woken turn, and its [`WAKES_PER_HOUR`] budget admits
+/// one. Its unread messages are then covered and a notice is out for it until
+/// it reads its inbox. The saved tab ids claimed, each at most once. The
+/// caller has checked the project's opt-in; what it queues is [`NOTICE`].
+pub fn wake_claims_in(state: &Path, scope: &str, now: Instant, alive: &dyn Fn(&str) -> bool) -> Vec<String> {
     let mut w = world().lock_ok();
     prune_at(&mut w, now);
-    let fresh = |m: &Message| !m.acked && !m.woken && m.to == tab && m.in_scope(state, scope);
-    if !w.messages.iter().any(fresh) { return false; }
-    let key = format!("{}\0{scope}\0{tab}", state.display());
-    if !admit_keyed(&mut wake_budgets().lock_ok(), &key, WAKES_PER_HOUR, HOUR, now) { return false; }
-    for m in w.messages.iter_mut().filter(|m| !m.acked && m.to == tab && m.in_scope(state, scope)) {
-        m.woken = true;
-    }
-    true
-}
-
-/// [`wake_claim`] for every listed tab of `scope` (a closed tab is not woken:
-/// a notice queued for it would wait for a tab that may never return). The
-/// saved tab ids whose claim was granted, each at most once.
-pub fn wake_claims(scope: &str) -> Vec<String> {
-    wake_claims_in(&crate::storage::state_dir(), scope, Instant::now())
-}
-
-/// [`wake_claims`] for a given state dir and clock.
-pub fn wake_claims_in(state: &Path, scope: &str, now: Instant) -> Vec<String> {
-    let listed: Vec<String> = world().lock_ok().members.iter()
-        .filter(|m| m.binding.seat.state == state && m.binding.seat.scope == scope)
-        .map(|m| m.binding.seat.id.clone())
+    let live: Vec<Binding> = w.members.iter()
+        .filter(|m| m.binding.seat.state == state && m.binding.seat.scope == scope && alive(&m.session))
+        .map(|m| m.binding.clone())
         .collect();
-    listed.into_iter().filter(|tab| wake_claim_in(state, scope, tab, now)).collect()
+    let mut claimed = Vec::new();
+    for tab in live {
+        let key = seat_key(state, scope, &tab.seat.id);
+        if w.pending.contains_key(&key) { continue; }
+        let wakes = |m: &Message| m.unread_for(&tab) && !m.woken && !m.from_woken_turn;
+        if !w.messages.iter().any(wakes) { continue; }
+        if !admit_keyed(&mut wake_budgets().lock_ok(), &key, WAKES_PER_HOUR, HOUR, now) { continue; }
+        for m in w.messages.iter_mut().filter(|m| m.unread_for(&tab)) { m.woken = true; }
+        w.pending.insert(key, Pending::Wake);
+        claimed.push(tab.seat.id.clone());
+    }
+    claimed
+}
+
+/// The user's Deliver click for saved tab `tab` of `scope`: `Ok` when the tab
+/// is live and has an unread message it can read; a notice is then out for it
+/// (so no wake doubles it) and the turn it starts counts as the user's.
+/// Otherwise `not_found` (no live tab) or `nothing_unread`. Deliver is the
+/// user's own choice, so it is never refused for a notice already out.
+pub fn deliver_claim_in(state: &Path, scope: &str, tab: &str, alive: &dyn Fn(&str) -> bool) -> Result<(), &'static str> {
+    let mut w = world().lock_ok();
+    let Some(binding) = w.members.iter()
+        .find(|m| m.binding.seat.state == state && m.binding.seat.scope == scope && m.binding.seat.id == tab && alive(&m.session))
+        .map(|m| m.binding.clone())
+    else { return Err("not_found") };
+    if !w.messages.iter().any(|m| m.unread_for(&binding)) { return Err("nothing_unread"); }
+    // Asked for by the user: whatever the tab sends next may wake again.
+    if let Some(member) = w.members.iter_mut().find(|m| m.binding.same_seat(&binding)) { member.woken_turn = false; }
+    w.pending.insert(seat_key(state, scope, tab), Pending::Deliver);
+    Ok(())
+}
+
+/// The user typed into PTY `pty` (the window's `noteInputFrom`, desktop or
+/// phone): a turn the user started, so its tab's woken turn is over.
+pub fn human_input(pty: &str) {
+    let mut w = world().lock_ok();
+    for member in w.members.iter_mut().filter(|m| m.pty == pty) { member.woken_turn = false; }
 }
 
 // ── Budgets ─────────────────────────────────────────────────────────────────
@@ -489,13 +531,20 @@ pub enum Registry {
 }
 
 /// The live registry under `state`, for `scope`.
+/// Only the scope's own entry decides: a malformed entry of another project
+/// does not switch the lane off everywhere, while the scope's own entry
+/// failing to parse (or the file not being a list) still fails closed.
 pub fn registry_at(state: &Path, scope: &str) -> Registry {
-    match crate::storage::read_json::<crate::schema::projects::ProjectsList>(&state.join("projects.json")) {
+    let Ok(list) = crate::storage::read_json::<Vec<Value>>(&state.join("projects.json")) else {
+        return Registry::Unreadable;
+    };
+    let Some(raw) = list.into_iter().find(|e| e.get("id").and_then(Value::as_str) == Some(scope)) else {
+        return Registry::Open;
+    };
+    match serde_json::from_value::<crate::schema::projects::ProjectEntry>(raw) {
         Err(_) => Registry::Unreadable,
-        Ok(list) => match list.iter().find(|e| e.id == scope) {
-            Some(entry) if crate::services::agent_privacy::is_locked(entry) => Registry::Locked,
-            _ => Registry::Open,
-        },
+        Ok(entry) if crate::services::agent_privacy::is_locked(&entry) => Registry::Locked,
+        Ok(_) => Registry::Open,
     }
 }
 
@@ -511,6 +560,9 @@ pub(crate) struct Context<'a> {
     pub alive: &'a dyn Fn(&str) -> bool,
     /// Leave the recipient's hook marker (`agent_turn::note_mail`), by PTY id.
     pub mark: &'a dyn Fn(&str),
+    /// Remove a tab's hook markers once it read its inbox
+    /// (`agent_turn::clear_mail`), by PTY id.
+    pub unmark: &'a dyn Fn(&str),
     pub now: Instant,
 }
 
@@ -541,7 +593,7 @@ pub fn handle_message(session: &Session, message: &Value) -> Option<Value> {
     let mark = |pty: &str| { let _ = crate::services::agent_turn::note_mail(pty); };
     handle_with(session, message, &Context {
         enabled, registry: &registry_at, label: &label, alive: &crate::services::root_mcp::session_alive, mark: &mark,
-        now: Instant::now(),
+        unmark: &crate::services::agent_turn::clear_mail, now: Instant::now(),
     })
 }
 
@@ -654,6 +706,7 @@ fn send(me: &Binding, args: &Value, ctx: &Context) -> Value {
     let Some(id) = new_message_id() else { return refused(UNAVAILABLE, "Messages are unavailable right now.") };
     let mut w = world().lock_ok();
     prune_at(&mut w, ctx.now);
+    let from_woken_turn = w.members.iter().any(|m| m.binding.same_seat(me) && m.woken_turn);
     let unread = w.messages.iter().filter(|m| m.unread_for(&to)).count();
     if unread >= MAX_UNREAD_PER_TAB {
         return refused(INBOX_FULL, "That tab has 20 unread messages. Wait until it has read them.");
@@ -671,7 +724,7 @@ fn send(me: &Binding, args: &Value, ctx: &Context) -> Value {
     w.messages.push(Message {
         id: id.clone(), from: me.clone(), to: to.seat.id.clone(), sent: ctx.now,
         sent_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        reply_to: args.reply_to, text: args.text, acked: false, woken: false,
+        reply_to: args.reply_to, text: args.text, acked: false, woken: false, from_woken_turn,
     });
     drop(w);
     (ctx.mark)(&pty);
@@ -711,6 +764,15 @@ fn inbox(me: &Binding, args: &Value, ctx: &Context) -> Value {
         m.acked = true;
         acked = true;
     }
+    // The notice out for this tab is answered. A wake's starts a woken turn.
+    let answered = w.pending.remove(&seat_key(&me.seat.state, &me.seat.scope, &me.seat.id));
+    let mut pty = None;
+    if let Some(member) = w.members.iter_mut().find(|m| m.binding.same_seat(me)) {
+        if answered == Some(Pending::Wake) { member.woken_turn = true; }
+        pty = Some(member.pty.clone());
+    }
+    // What the inbox returns has been seen: no later wake is claimed for it.
+    for m in w.messages.iter_mut().filter(|m| m.unread_for(me)) { m.woken = true; }
     // The sender's class is checked again at read (`unread_for`): a message
     // whose class no longer matches this tab's is not returned.
     let unread: Vec<(String, Binding, String, Option<String>, String)> = w.messages.iter()
@@ -718,6 +780,7 @@ fn inbox(me: &Binding, args: &Value, ctx: &Context) -> Value {
         .map(|m| (m.id.clone(), m.from.clone(), m.sent_at.clone(), m.reply_to.clone(), m.text.clone()))
         .collect();
     drop(w);
+    if let Some(pty) = pty { (ctx.unmark)(&pty); }
     if acked { changed(); }
     let total = unread.len();
     let messages: Vec<Value> = unread.into_iter().take(INBOX_PAGE).map(|(id, from, sent_at, reply_to, text)| {

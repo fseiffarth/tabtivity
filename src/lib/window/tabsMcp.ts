@@ -68,3 +68,32 @@ export async function claimTabMessageWakes(scope: string): Promise<TabMessagesWa
     return null;
   }
 }
+
+/** Whether some project opts in to the idle wake (set by `TabMessagesHost`):
+ *  only then does the window report the user's typing below. */
+let wakeActive = false;
+/** When each PTY's typing was last reported (throttled). */
+const humanReported = new Map<string, number>();
+const HUMAN_REPORT_MS = 2000;
+
+export function setTabMessagesWakeActive(active: boolean): void {
+  wakeActive = active;
+  if (!active) humanReported.clear();
+}
+
+/**
+ * The user typed into PTY `ptyId` (desktop or phone; called from
+ * `noteInputFrom`): a turn the user started, so the tab's wake-started turn is
+ * over and what it sends next may wake its recipient again
+ * (`tabs_mcp::human_input`). Reported only while a project opts in to the
+ * wake, at most once per {@link HUMAN_REPORT_MS} per PTY.
+ */
+export function noteTabMessagesHumanInput(ptyId: string, now = Date.now()): void {
+  if (!wakeActive) return;
+  const last = humanReported.get(ptyId);
+  if (last !== undefined && now - last < HUMAN_REPORT_MS) return;
+  humanReported.set(ptyId, now);
+  invoke("tabs_mcp_human_input", { id: ptyId }).catch(() => {
+    // An older backend: nothing to end.
+  });
+}

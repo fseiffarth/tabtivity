@@ -40,16 +40,21 @@ struct World2 {
     registry: Registry,
     now: Instant,
     marks: RefCell<Vec<String>>,
+    unmarks: RefCell<Vec<String>>,
 }
 
 impl World2 {
-    fn new() -> Self { World2 { enabled: true, registry: Registry::Open, now: Instant::now(), marks: RefCell::default() } }
+    fn new() -> Self { World2 { enabled: true, registry: Registry::Open, now: Instant::now(), marks: RefCell::default(), unmarks: RefCell::default() } }
 
     fn reply(&self, tab: &Tab, message: &Value) -> Value {
         let registry = |_: &Path, _: &str| self.registry;
         let label = |b: &Binding| if b.class == Class::Cloud { "Cloud tab".to_string() } else { "Local tab".to_string() };
         let mark = |pty: &str| self.marks.borrow_mut().push(pty.to_string());
-        let ctx = Context { enabled: self.enabled, registry: &registry, label: &label, alive: &session_alive, mark: &mark, now: self.now };
+        let unmark = |pty: &str| self.unmarks.borrow_mut().push(pty.to_string());
+        let ctx = Context {
+            enabled: self.enabled, registry: &registry, label: &label, alive: &session_alive, mark: &mark, unmark: &unmark,
+            now: self.now,
+        };
         handle_with(&tab.session, message, &ctx).expect("a reply")
     }
 
@@ -60,6 +65,18 @@ impl World2 {
 
     fn send(&self, from: &Tab, to: &Tab, text: &str) -> Value {
         self.call(from, TOOL_SEND, json!({"to": to.binding.handle, "text": text}))
+    }
+
+    /// The idle wake's claims for scope `p` of `state` now.
+    fn wakes(&self, state: &Path) -> Vec<String> {
+        wake_claims_in(state, "p", self.now, &session_alive)
+    }
+
+    /// Read the inbox and ack everything in it.
+    fn read_all(&self, tab: &Tab) {
+        let ids: Vec<Value> =
+            self.call(tab, TOOL_INBOX, json!({}))["messages"].as_array().unwrap().iter().map(|m| m["id"].clone()).collect();
+        self.call(tab, TOOL_INBOX, json!({"ack": ids}));
     }
 }
 
@@ -457,17 +474,16 @@ fn a_wake_is_claimed_once_per_unread_batch_and_budgeted() {
     let a = grant(state.path(), "p", "a", Class::Cloud);
     let b = grant(state.path(), "p", "b", Class::Cloud);
     let w = World2::new();
-    assert!(!wake_claim_in(state.path(), "p", "b", w.now), "nothing unread");
+    assert!(w.wakes(state.path()).is_empty(), "nothing unread");
     w.send(&a, &b, "one");
     w.send(&a, &b, "two");
-    assert!(wake_claim_in(state.path(), "p", "b", w.now));
-    assert!(!wake_claim_in(state.path(), "p", "b", w.now), "the batch is covered");
+    assert_eq!(w.wakes(state.path()), vec!["b".to_string()]);
+    assert!(w.wakes(state.path()).is_empty(), "the batch is covered");
     let mut claims = 1;
     for i in 0..10 {
+        w.read_all(&b);
         w.send(&a, &b, &format!("more {i}"));
-        if wake_claim_in(state.path(), "p", "b", w.now) { claims += 1; }
-        let ids: Vec<Value> = w.call(&b, TOOL_INBOX, json!({}))["messages"].as_array().unwrap().iter().map(|m| m["id"].clone()).collect();
-        w.call(&b, TOOL_INBOX, json!({"ack": ids}));
+        if w.wakes(state.path()) == vec!["b".to_string()] { claims += 1; }
     }
     assert_eq!(claims, WAKES_PER_HOUR);
 }
@@ -505,15 +521,15 @@ fn wake_claims_cover_listed_tabs_only() {
     let b = grant(state.path(), "p", "b", Class::Cloud);
     let c = grant(state.path(), "p", "c", Class::Cloud);
     let w = World2::new();
-    assert!(wake_claims_in(state.path(), "p", w.now).is_empty(), "nothing unread");
+    assert!(w.wakes(state.path()).is_empty(), "nothing unread");
     w.send(&a, &b, "for b");
     w.send(&a, &c, "for c");
     // c closes: it is no longer listed, so it is not woken.
     revoke_tab(&c.pty);
     sweep_with(&session_alive, w.now);
-    assert_eq!(wake_claims_in(state.path(), "p", w.now), vec!["b".to_string()]);
-    assert!(wake_claims_in(state.path(), "p", w.now).is_empty(), "the batch is covered");
-    assert!(wake_claims_in(state.path(), "q", w.now).is_empty(), "another scope");
+    assert_eq!(w.wakes(state.path()), vec!["b".to_string()]);
+    assert!(w.wakes(state.path()).is_empty(), "the batch is covered");
+    assert!(wake_claims_in(state.path(), "q", w.now, &session_alive).is_empty(), "another scope");
 }
 
 /// `retryAfterSecs` is rounded up: a call made exactly that long after the
@@ -554,4 +570,126 @@ fn messages_a_tab_can_no_longer_read_do_not_fill_its_inbox() {
     let inbox = w.call(&b_local, TOOL_INBOX, json!({}));
     assert_eq!(inbox["unread"], 1);
     assert_eq!(inbox["messages"][0]["text"], "for the local tab");
+}
+
+/// Messages that reach a busy tab while a wake's notice is still out for it
+/// do not queue a second notice: one notice covers them until the tab reads
+/// its inbox. (Two sends while busy → one claim.)
+#[test]
+fn a_notice_out_covers_later_messages_until_the_inbox_is_read() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let b = grant(state.path(), "p", "b", Class::Cloud);
+    let w = World2::new();
+    w.send(&a, &b, "first");
+    assert_eq!(w.wakes(state.path()), vec!["b".to_string()]);
+    w.send(&a, &b, "second, while b is busy");
+    w.send(&a, &b, "third, still busy");
+    assert!(w.wakes(state.path()).is_empty(), "the notice already out covers them");
+    // b reads its inbox (without acking): those are seen, and its markers go.
+    assert_eq!(w.call(&b, TOOL_INBOX, json!({}))["unread"], 3);
+    assert_eq!(*w.unmarks.borrow(), vec![b.pty.clone()]);
+    assert!(w.wakes(state.path()).is_empty(), "nothing new since the read");
+    w.send(&a, &b, "fourth, after the read");
+    assert_eq!(w.wakes(state.path()), vec!["b".to_string()]);
+}
+
+/// What a tab sends in a turn the idle wake started never wakes its
+/// recipient, so two opted-in tabs cannot keep waking each other; once the
+/// user types into it (or presses Deliver), its sends may wake again.
+#[test]
+fn a_woken_turn_does_not_wake_its_recipient() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let b = grant(state.path(), "p", "b", Class::Cloud);
+    let w = World2::new();
+    // The user's turn in a: its message wakes b (one hop).
+    w.send(&a, &b, "ping");
+    assert_eq!(w.wakes(state.path()), vec!["b".to_string()]);
+    // b's woken turn reads and answers: the answer does not wake a.
+    w.read_all(&b);
+    w.send(&b, &a, "pong");
+    assert!(w.wakes(state.path()).is_empty(), "a reply from a woken turn wakes no one");
+    assert_eq!(w.call(&a, TOOL_INBOX, json!({}))["unread"], 1, "it is still delivered");
+    // The user types into b: its next message wakes a again.
+    human_input(&b.pty);
+    w.send(&b, &a, "the user asked me to tell you");
+    assert_eq!(w.wakes(state.path()), vec!["a".to_string()]);
+    // a reads in its woken turn; then the user presses Deliver for a: the turn
+    // Deliver starts is the user's, so a's reply wakes b.
+    w.read_all(&a);
+    w.send(&b, &a, "one more");
+    assert!(deliver_claim_in(state.path(), "p", "a", &session_alive).is_ok());
+    assert!(w.wakes(state.path()).is_empty(), "Deliver's notice is already out for a");
+    w.read_all(&a);
+    w.send(&a, &b, "answer from a Deliver turn");
+    assert_eq!(w.wakes(state.path()), vec!["b".to_string()]);
+}
+
+/// Deliver leaves a notice out, so the wake does not queue a second one.
+#[test]
+fn deliver_is_not_doubled_by_a_wake() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let b = grant(state.path(), "p", "b", Class::Cloud);
+    let w = World2::new();
+    assert_eq!(deliver_claim_in(state.path(), "p", "b", &session_alive), Err("nothing_unread"));
+    w.send(&a, &b, "hello");
+    assert!(deliver_claim_in(state.path(), "p", "b", &session_alive).is_ok());
+    assert!(w.wakes(state.path()).is_empty());
+    assert_eq!(deliver_claim_in(state.path(), "p", "x", &session_alive), Err("not_found"));
+}
+
+/// Neither the wake nor Deliver counts messages the tab can no longer read
+/// (sent under its old class), so neither wakes it to an empty inbox.
+#[test]
+fn wake_and_deliver_count_only_readable_messages() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let b = grant(state.path(), "p", "b", Class::Cloud);
+    let w = World2::new();
+    w.send(&a, &b, "for the cloud tab");
+    // b comes back as a local-model tab: the cloud message is not for it.
+    let b_local = grant(state.path(), "p", "b", Class::Local);
+    assert!(w.wakes(state.path()).is_empty(), "nothing it can read");
+    assert_eq!(deliver_claim_in(state.path(), "p", "b", &session_alive), Err("nothing_unread"));
+    assert_eq!(w.call(&b_local, TOOL_INBOX, json!({}))["unread"], 0);
+}
+
+/// A tab whose session is gone but not yet swept (its spawn failed: token
+/// revoked, no PTY exit) is neither woken nor delivered to.
+#[test]
+fn a_dead_session_is_not_woken_before_the_sweep() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let b = grant(state.path(), "p", "b", Class::Cloud);
+    let w = World2::new();
+    w.send(&a, &b, "hello");
+    revoke_tab(&b.pty);
+    assert!(w.wakes(state.path()).is_empty());
+    assert_eq!(deliver_claim_in(state.path(), "p", "b", &session_alive), Err("not_found"));
+}
+
+/// Only the scope's own registry entry decides: another project's malformed
+/// entry leaves the lane working; the scope's own malformed entry fails closed.
+#[test]
+fn only_the_scopes_own_registry_entry_can_make_it_unreadable() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let write = |v: Value| crate::storage::write_json(&state.path().join("projects.json"), &v).unwrap();
+    let ok = |id: &str, locked: bool| json!({"id": id, "name": id, "status": "active", "position": 0, "local_file": "", "agent_privacy": {"local_models_only": locked}});
+    let broken = json!({"id": "q", "name": 7, "status": ["x"]});
+    write(json!([broken.clone(), ok("p", false)]));
+    assert_eq!(registry_at(state.path(), "p"), Registry::Open);
+    write(json!([broken.clone(), ok("p", true)]));
+    assert_eq!(registry_at(state.path(), "p"), Registry::Locked);
+    assert_eq!(registry_at(state.path(), "q"), Registry::Unreadable, "its own entry is broken");
+    assert_eq!(registry_at(state.path(), "r"), Registry::Open, "no entry");
+    write(json!({"not": "a list"}));
+    assert_eq!(registry_at(state.path(), "p"), Registry::Unreadable);
 }

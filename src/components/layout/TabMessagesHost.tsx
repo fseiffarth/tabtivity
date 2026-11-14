@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { aiIsOff } from "../../lib/aiSwitch";
-import { claimTabMessageWakes, TABS_MCP_CHANGED } from "../../lib/window/tabsMcp";
+import { claimTabMessageWakes, setTabMessagesWakeActive, TABS_MCP_CHANGED } from "../../lib/window/tabsMcp";
 import { queuePromptForTab } from "../../stores/agents/agentPrompts";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
@@ -29,6 +29,8 @@ export function TabMessagesHost() {
 
   useEffect(() => {
     if (!optedIn || aiOff) return;
+    // The user's typing ends a woken turn; reported only while this runs.
+    setTabMessagesWakeActive(true);
     const scopes = optedIn.split("\n");
     let running = false;
     let again = false;
@@ -55,7 +57,11 @@ export function TabMessagesHost() {
       }
     };
     void pass();
-    return subscribeTauri(() => listen(TABS_MCP_CHANGED, () => void pass()));
+    const unlisten = subscribeTauri(() => listen(TABS_MCP_CHANGED, () => void pass()));
+    return () => {
+      setTabMessagesWakeActive(false);
+      unlisten();
+    };
   }, [optedIn, aiOff]);
 
   return null;

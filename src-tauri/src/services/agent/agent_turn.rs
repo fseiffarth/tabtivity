@@ -318,21 +318,45 @@ pub fn note_mail(pty_id: &str) -> std::io::Result<()> {
 }
 
 fn note_mail_in(live_root: &Path, pty_id: &str) -> std::io::Result<()> {
+    for rel in mail_marker_rels(pty_id) {
+        home_io::HomeFile::open(live_root, &rel)
+            .ok_or_else(|| std::io::Error::other(format!("{rel}: not a plain folder")))?
+            .write(b"")?;
+    }
+    Ok(())
+}
+
+/// Remove PTY `pty_id`'s `<uid>.mail` markers, in the root and the project
+/// slice alike (`services::tabs_mcp`: the tab read its inbox, so the notice is
+/// moot). The hook removes only the copy it sees — a fenced agent sees the
+/// slice at the root's path — so without this the other copy would stay. A
+/// link at the name is removed, never followed; a missing marker is fine.
+pub fn clear_mail(pty_id: &str) {
+    clear_mail_in(&live_sessions_dir(), pty_id);
+}
+
+fn clear_mail_in(live_root: &Path, pty_id: &str) {
+    for rel in mail_marker_rels(pty_id) {
+        if let Some(file) = home_io::HomeFile::open_existing(live_root, &rel) {
+            let _ = file.remove();
+        }
+    }
+}
+
+/// Where PTY `pty_id`'s mail markers go, relative to the live-sessions root:
+/// `<uid>.mail` for each uid bound to it, and again in its project's slice.
+fn mail_marker_rels(pty_id: &str) -> Vec<String> {
     let uids: Vec<String> =
         bindings().lock_ok().iter().filter(|(_, v)| v.as_str() == pty_id).map(|(k, _)| k.clone()).collect();
+    let mut rels = Vec::new();
     for uid in uids {
         let name = format!("{uid}{MAIL_SUFFIX}");
-        let mut rels = vec![name.clone()];
         if let Some(pid) = bound_projects().lock_ok().get(&uid) {
             rels.push(format!("{}/{name}", crate::storage::project_key(pid)));
         }
-        for rel in rels {
-            home_io::HomeFile::open(live_root, &rel)
-                .ok_or_else(|| std::io::Error::other(format!("{rel}: not a plain folder")))?
-                .write(b"")?;
-        }
+        rels.push(name);
     }
-    Ok(())
+    rels
 }
 
 fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
@@ -1133,8 +1157,19 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
             assert!(!std::fs::symlink_metadata(slice.join(&name)).unwrap().file_type().is_symlink());
         }
+        // Reading the inbox clears both copies; the hook only reaches one.
+        clear_mail_in(&root, pty);
+        assert!(!root.join(&name).exists() && !slice.join(&name).exists(), "both markers go");
+        clear_mail_in(&root, pty);
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            clear_mail_in(&root, pty);
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep", "the link goes, not its target");
+            assert!(std::fs::symlink_metadata(slice.join(&name)).is_err());
+        }
         on_tab_gone(pty);
-        std::fs::remove_file(root.join(&name)).unwrap();
         note_mail_in(&root, pty).unwrap();
         assert!(!root.join(&name).exists(), "an unbound PTY gets nothing");
     }

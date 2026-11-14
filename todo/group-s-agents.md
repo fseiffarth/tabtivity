@@ -3335,9 +3335,10 @@ unchanged; the new agents are additive.
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
 - [ ] 🖐️ Idle wake (`tabs.mcp.wake`) — Manage CLIs → Tools: turn on the
-  project's wake switch under the tab messaging switch. Send a busy tab a
-  message: the notice is typed once it finishes, once for that batch. With
-  the switch off nothing is typed by itself.
+  project's wake switch under the tab messaging switch. Send a busy tab two
+  messages: the notice is typed once it finishes, once for both. Its reply
+  to the sender does not wake the sender; after you type into it, its next
+  message does. With the switch off nothing is typed by itself.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3349,7 +3350,7 @@ unchanged; the new agents are additive.
 
 #### Follow-ups from the review (`docs/tab_messaging_mcp_handoff.md`, "Flagged for user")
 
-- [ ] **Wake notices stack up** (`tabs.mcp.wake`; blocks the "once for that
+- [x] **Wake notices stack up** (`tabs.mcp.wake`; blocks the "once for that
   batch" box above). A message that arrives while an earlier notice is still
   queued counts as a new batch, so a busy tab collects up to 6 notices and
   runs empty turns; Deliver plus a wake can double up too. Fix on the host
@@ -3357,24 +3358,24 @@ unchanged; the new agents are additive.
   `commands/tabs_mcp.rs`): a claimed wake or Deliver covers every later
   message until the recipient next calls `tabs_inbox`. Regression test: two
   sends while busy → one claim.
-- [ ] **Two opted-in tabs can wake each other in a loop** (design). Each
+- [x] **Two opted-in tabs can wake each other in a loop** (design). Each
   reply is a new batch for the other side; only 6 wakes and 30 sends per tab
   per hour stop it. Decide first: no wake for a message sent during a
   wake-started turn, or a per-pair cooldown that a user prompt resets.
-- [ ] **Wake and Deliver ignore class.** `wake_claim_in` and Deliver's
+- [x] **Wake and Deliver ignore class.** `wake_claim_in` and Deliver's
   `nothing_unread` check count messages the recipient can no longer read
   after a local ↔ cloud change, so they wake a tab to an empty inbox. Use
   the class-filtered `unread_for`, as the inbox and its cap already do.
-- [ ] **The wake skips the liveness check.** `wake_claims_in` trusts
+- [x] **The wake skips the liveness check.** `wake_claims_in` trusts
   `members` and never asks `session_alive`, so a tab whose spawn failed
   (token revoked by `SpawnTokenGuard`, no PTY exit, so no sweep) can still
   be claimed and sent a notice. Check liveness in the claim; add a test.
-- [ ] **One malformed `projects.json` entry turns the lane off everywhere.**
+- [x] **One malformed `projects.json` entry turns the lane off everywhere.**
   A whole-registry parse failure reads as `Unreadable`, so every call in
   every project answers `unavailable`. Keep failing closed for the caller's
   own entry, but read the other entries tolerantly so unlocked projects keep
   working.
-- [ ] **Small cleanups:** remove the uncalled `tabs_mcp::unread_count` and
+- [x] **Small cleanups:** remove the uncalled `tabs_mcp::unread_count` and
   `tabs_mcp::wake_claim` (the forms without `_in`); have the hook remove the
   `<uid>.mail` marker in both the root and the project slice (`note_mail`
   writes both); `docs/context/local_models_only.md` says the class never

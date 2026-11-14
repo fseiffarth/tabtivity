@@ -58,20 +58,21 @@ pub async fn tabs_mcp_traffic(scope: String, tab_id: Option<String>) -> Result<V
 
 /// The user's Deliver click: the notice and the tab's schedule target, which
 /// the window queues through the idle gate. `off` when the lane is switched
-/// off, `nothing_unread` when the tab has no unread message, `not_found` when
-/// the saved tab or its schedule target is gone.
+/// off, `nothing_unread` when the tab has no unread message it can read,
+/// `not_found` when the tab is not open or its schedule target is gone.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn tabs_mcp_deliver(scope: String, tab_id: String) -> Result<Delivery, String> {
-    app_core::rt::spawn_blocking(move || deliver_in(&crate::storage::state_dir(), &scope, &tab_id))
-        .await
-        .map_err(|e| e.to_string())?
+    app_core::rt::spawn_blocking(move || {
+        deliver_in(&crate::storage::state_dir(), &scope, &tab_id, &crate::services::root_mcp::session_alive)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-fn deliver_in(state: &std::path::Path, scope: &str, tab_id: &str) -> Result<Delivery, String> {
+fn deliver_in(state: &std::path::Path, scope: &str, tab_id: &str, alive: &dyn Fn(&str) -> bool) -> Result<Delivery, String> {
     if !tabs_mcp::enabled_in(&state.join("settings.json")) { return Err("off".into()); }
-    let unread = tabs_mcp::traffic_in(state, scope, Some(tab_id)).iter().any(|m| m.to_tab == tab_id && !m.read);
-    if !unread { return Err("nothing_unread".into()); }
     let schedule_target_id = schedule_target_in(state, scope, tab_id).ok_or("not_found")?;
+    tabs_mcp::deliver_claim_in(state, scope, tab_id, alive)?;
     Ok(Delivery { notice: tabs_mcp::NOTICE, schedule_target_id })
 }
 
@@ -95,7 +96,9 @@ pub async fn tabs_mcp_clear(scope: String) -> Result<usize, String> {
 /// The window queues the notice for each target returned, and nothing else.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn tabs_mcp_wake_claim(scope: String) -> Result<Wake, String> {
-    app_core::rt::spawn_blocking(move || wake_in(&crate::storage::state_dir(), &scope, wake_enabled(&scope)))
+    app_core::rt::spawn_blocking(move || {
+        wake_in(&crate::storage::state_dir(), &scope, wake_enabled(&scope), &crate::services::root_mcp::session_alive)
+    })
         .await
         .map_err(|e| e.to_string())
 }
@@ -109,14 +112,23 @@ fn wake_opted_in(extra: &std::collections::HashMap<String, Value>) -> bool {
     extra.get(WAKE_KEY).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn wake_in(state: &std::path::Path, scope: &str, opted_in: bool) -> Wake {
+fn wake_in(state: &std::path::Path, scope: &str, opted_in: bool, alive: &dyn Fn(&str) -> bool) -> Wake {
     let mut wake = Wake { notice: tabs_mcp::NOTICE, schedule_target_ids: Vec::new() };
     if !opted_in || !tabs_mcp::enabled_in(&state.join("settings.json")) { return wake; }
-    wake.schedule_target_ids = tabs_mcp::wake_claims_in(state, scope, std::time::Instant::now())
+    wake.schedule_target_ids = tabs_mcp::wake_claims_in(state, scope, std::time::Instant::now(), alive)
         .iter()
         .filter_map(|tab| schedule_target_in(state, scope, tab))
         .collect();
     wake
+}
+
+/// The user typed into tab PTY `id` (desktop or phone; the window reports it
+/// only while some project opts in to the wake): its woken turn, if any, is
+/// over, so what it sends next may wake its recipient again.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn tabs_mcp_human_input(ctx: crate::tauri_host::Ctx, id: String) {
+    let id = crate::commands::terminal::pty_id_for(&ctx, ctx.get::<crate::terminal::RegistryState>(), id);
+    tabs_mcp::human_input(&id);
 }
 
 /// Store the per-project wake opt-in in `projects.json` (off removes the key:
@@ -148,12 +160,12 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         std::fs::write(state.path().join("settings.json"), "{}").unwrap();
         // No message: nothing to deliver, nothing to wake.
-        assert_eq!(deliver_in(state.path(), "p", "t1"), Err("nothing_unread".to_string()));
-        let wake = wake_in(state.path(), "p", true);
+        assert_eq!(deliver_in(state.path(), "p", "t1", &|_| true), Err("not_found".to_string()), "no saved tab");
+        let wake = wake_in(state.path(), "p", true, &|_| true);
         assert_eq!(wake.notice, tabs_mcp::NOTICE);
         assert!(wake.schedule_target_ids.is_empty());
         // Opted out: nothing is claimed.
-        assert!(wake_in(state.path(), "p", false).schedule_target_ids.is_empty());
+        assert!(wake_in(state.path(), "p", false, &|_| true).schedule_target_ids.is_empty());
         // The serialized shapes carry the fixed notice under fixed keys.
         let json = serde_json::to_value(Delivery { notice: tabs_mcp::NOTICE, schedule_target_id: "s".into() }).unwrap();
         assert_eq!(json, serde_json::json!({"notice": tabs_mcp::NOTICE, "scheduleTargetId": "s"}));
@@ -163,6 +175,6 @@ mod tests {
     fn switched_off_delivers_nothing() {
         let state = tempfile::tempdir().unwrap();
         std::fs::write(state.path().join("settings.json"), r#"{"tabs_mcp": false}"#).unwrap();
-        assert_eq!(deliver_in(state.path(), "p", "t1"), Err("off".to_string()));
+        assert_eq!(deliver_in(state.path(), "p", "t1", &|_| true), Err("off".to_string()));
     }
 }
