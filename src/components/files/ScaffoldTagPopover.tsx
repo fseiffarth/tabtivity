@@ -4,7 +4,6 @@ import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { UntestedTag } from "../common/UntestedTag";
 import { projectDocsStatus } from "../../lib/projects/projectDocs";
 import { useProjectsStore } from "../../stores/projects";
-import { DEFAULT_DOCS } from "./projectDocsGroup";
 
 /**
  * What the header's amber "no scaffold" tag opens: the default files the project
@@ -36,7 +35,7 @@ export function ScaffoldTagPopover({
       .then((status) => {
         if (cancelled) return;
         if (!status) { setNames(null); return; }
-        const missing = DEFAULT_DOCS.filter((n) => status.find((s) => s.name === n)?.state === "missing" || !status.some((s) => s.name === n));
+        const missing = status.filter((s) => s.isDefault && s.state === "missing").map((s) => s.name);
         setNames(missing.length > 0 ? missing : [".gitignore"]);
       })
       .catch(() => { if (!cancelled) setNames(null); });

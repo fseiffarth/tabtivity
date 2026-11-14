@@ -196,13 +196,16 @@ fn the_status_lists_present_docs_and_ghost_rows_only() {
     let row = |name: &str| status.iter().find(|s| s.name == name).cloned();
     assert_eq!(
         row("AGENTS.md"),
-        Some(DocStatus { name: "AGENTS.md", state: DocState::Edited, nested_under: None, creatable: true })
+        Some(DocStatus { name: "AGENTS.md", state: DocState::Edited, nested_under: None, creatable: true, is_default: true })
     );
     assert_eq!(
         row("CLAUDE.md"),
-        Some(DocStatus { name: "CLAUDE.md", state: DocState::Pointer, nested_under: Some("AGENTS.md"), creatable: false })
+        Some(DocStatus { name: "CLAUDE.md", state: DocState::Pointer, nested_under: Some("AGENTS.md"), creatable: false, is_default: false })
     );
     assert_eq!(row("TODO.md").unwrap().state, DocState::Template);
+    // The default flag is the catalog's, so the frontends need no list of their own.
+    let flagged: Vec<&str> = status.iter().filter(|s| s.is_default).map(|s| s.name).collect();
+    assert_eq!(flagged, defaults().map(|d| d.name).collect::<Vec<_>>());
     // A ghost row: missing and creatable.
     assert_eq!(row("README.md").unwrap().state, DocState::Missing);
     assert!(row("README.md").unwrap().creatable);

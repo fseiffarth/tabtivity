@@ -46,7 +46,7 @@ function setupInvoke(memory: unknown[]) {
       return Promise.resolve([{ name: "AGENTS.md", path: "/tmp/test-project/AGENTS.md", is_dir: false, size: 1, extension: ".md", mime: null }]);
     }
     if (cmd === "project_docs_status") {
-      return Promise.resolve([{ name: "AGENTS.md", state: "edited", nestedUnder: null, creatable: true }]);
+      return Promise.resolve([{ name: "AGENTS.md", state: "edited", nestedUnder: null, creatable: true, isDefault: true }]);
     }
     if (cmd === "project_agent_memory") return Promise.resolve(memory);
     if (cmd === "project_agent_memory_read") return Promise.resolve("# Notes\n\nThe build needs **cmake**.");

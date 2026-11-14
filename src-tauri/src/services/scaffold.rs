@@ -117,6 +117,9 @@ pub struct DocStatus {
     /// the listing nests only when that doc is itself shown.
     pub nested_under: Option<&'static str>,
     pub creatable: bool,
+    /// A new project is born with it (the catalog's `default`): what the
+    /// group's `present/total` summary and the "no scaffold" tag count.
+    pub is_default: bool,
 }
 
 /// What `AGENTS.md` is written with. Placeholders only: agents load it every
@@ -521,6 +524,7 @@ pub fn docs_status_at(dir: &Path) -> Vec<DocStatus> {
                 state,
                 nested_under: d.pointer.then_some(AGENTS_MD),
                 creatable: d.creatable,
+                is_default: d.default,
             })
         })
         .collect()

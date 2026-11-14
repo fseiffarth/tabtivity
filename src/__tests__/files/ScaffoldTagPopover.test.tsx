@@ -14,9 +14,9 @@ import { projectTypeTags } from "../../components/projects/projectTypeTags";
 import type { ProjectEntry } from "../../types";
 
 const status = (...missing: string[]) => [
-  { name: "AGENTS.md", state: missing.includes("AGENTS.md") ? "missing" : "edited", nestedUnder: null, creatable: true },
-  { name: "README.md", state: missing.includes("README.md") ? "missing" : "edited", nestedUnder: null, creatable: true },
-  { name: "TODO.md", state: "missing", nestedUnder: null, creatable: true },
+  { name: "AGENTS.md", state: missing.includes("AGENTS.md") ? "missing" : "edited", nestedUnder: null, creatable: true, isDefault: true },
+  { name: "README.md", state: missing.includes("README.md") ? "missing" : "edited", nestedUnder: null, creatable: true, isDefault: true },
+  { name: "TODO.md", state: "missing", nestedUnder: null, creatable: true, isDefault: false },
 ];
 
 async function mount(statusResult: unknown) {

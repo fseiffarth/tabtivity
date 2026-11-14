@@ -6,18 +6,9 @@ import { invoke } from "@tauri-apps/api/core";
  * name, never a path.
  */
 
-/** `missing`: nothing is there (a ghost row when `creatable`). `template`: untouched text Tabtivity wrote. `pointer`: an untouched CLAUDE.md/GEMINI.md stub. `edited`: anything else — also a doc that is there but is a link, a FIFO, not UTF-8 or too large (never `missing`, so never offered for creation). */
-export type DocState = "missing" | "template" | "edited" | "pointer";
+import type { DocStatus } from "./docStatus";
 
-export interface DocStatus {
-  /** The leaf name in the project root, e.g. `AGENTS.md`. */
-  name: string;
-  state: DocState;
-  /** The doc this one is shown beneath (`AGENTS.md` for a pointer file); nest only when that doc is itself in the list. */
-  nestedUnder: string | null;
-  /** The catalog allows creating it from its template. A ghost row is `state === "missing" && creatable`. */
-  creatable: boolean;
-}
+export type { DocState, DocStatus } from "./docStatus";
 
 /**
  * Where each catalog doc stands in the project's root folder, in catalog order:

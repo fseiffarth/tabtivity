@@ -48,10 +48,10 @@ function fileEntry(name: string, is_dir = false) {
 }
 
 const STATUS = [
-  { name: "AGENTS.md", state: "template", nestedUnder: null, creatable: true },
-  { name: "README.md", state: "edited", nestedUnder: null, creatable: true },
-  { name: "PROJECT.md", state: "missing", nestedUnder: null, creatable: true },
-  { name: "CLAUDE.md", state: "pointer", nestedUnder: "AGENTS.md", creatable: false },
+  { name: "AGENTS.md", state: "template", nestedUnder: null, creatable: true, isDefault: true },
+  { name: "README.md", state: "edited", nestedUnder: null, creatable: true, isDefault: true },
+  { name: "PROJECT.md", state: "missing", nestedUnder: null, creatable: true, isDefault: false },
+  { name: "CLAUDE.md", state: "pointer", nestedUnder: "AGENTS.md", creatable: false, isDefault: false },
 ];
 
 function setupInvoke(status: unknown = STATUS) {

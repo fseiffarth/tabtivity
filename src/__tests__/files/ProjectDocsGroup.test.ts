@@ -7,7 +7,7 @@ const entry = (name: string, is_dir = false): FileEntry => ({
   name, path: `/p/${name}`, is_dir, size: 0, extension: null, mime: null,
 });
 const st = (name: string, state: DocState, extra: Partial<DocStatus> = {}): DocStatus => ({
-  name, state, nestedUnder: null, creatable: true, ...extra,
+  name, state, nestedUnder: null, creatable: true, isDefault: name === "AGENTS.md" || name === "README.md", ...extra,
 });
 const names = (rows: ReturnType<typeof buildDocsGroup>["rows"]) =>
   rows.map((r) => (r.kind === "ghost" ? `+${r.name}` : r.entry.name));
