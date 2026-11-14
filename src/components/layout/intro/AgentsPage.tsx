@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../../lib/i18n";
+import { useSettingsStore } from "../../../stores/settings";
 import { HOST_OS } from "../../../lib/platform";
 import {
   NODE_DOWNLOAD_URL,
@@ -39,12 +40,22 @@ export interface IntroAgentInfo {
  * are the one-click open-a-terminal-tab flow (`runInstallInTab`) with the
  * backend registry's own command — the same one Settings → Manage CLIs runs —
  * and the wizard steps aside so the terminal (and any prompt in it) is in view.
+ *
+ * The page opens on the current default CLI (`default_agent_cmd`, Claude when
+ * unset) and an explicit pick saves it as the default: clicking an installed
+ * CLI's chip, its Install button, or a Recheck that finds it installed.
+ * Clicking through uninstalled chips saves nothing, so browsing never moves
+ * the default to a CLI the user only looked at.
  */
 export function AgentsPage({ onClose }: { onClose: () => void }) {
   const t = useT();
   const [agents, setAgents] = useState<IntroAgentInfo[] | null>(null);
   const [node, setNode] = useState<NodeRuntimeStatus | null>(null);
-  const [selected, setSelected] = useState<FeaturedAgentId>("claude");
+  const defaultAgentCmd = useSettingsStore((s) => s.settings?.default_agent_cmd ?? "claude");
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const [selected, setSelected] = useState<FeaturedAgentId>(() =>
+    (FEATURED_AGENT_IDS as readonly string[]).includes(defaultAgentCmd) ? (defaultAgentCmd as FeaturedAgentId) : "claude",
+  );
   const [recheckMiss, setRecheckMiss] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -67,6 +78,13 @@ export function AgentsPage({ onClose }: { onClose: () => void }) {
   const agent = featured.find((a) => a.id === selected) ?? featured[0];
   const needsNode = !!agent && !agent.installed && installNeedsNpm(agent.install_cmd);
   const nodeOk = node ? node.npm && !node.too_old : null;
+  const defaultAgent = agents?.find((a) => a.id === defaultAgentCmd || a.bin === defaultAgentCmd);
+
+  // Same value the Manage CLIs "Default" chip writes (the registry id). A
+  // failed write needs no handling here: the store puts the old value back.
+  const saveDefault = (id: string) => {
+    if (id !== defaultAgentCmd) updateSettings({ default_agent_cmd: id }).catch(() => {});
+  };
 
   const recheck = (id: string) => {
     setRecheckMiss(null);
@@ -75,6 +93,7 @@ export function AgentsPage({ onClose }: { onClose: () => void }) {
         setAgents((prev) => prev?.map((a) => (a.id === id ? { ...a, installed: ok } : a)) ?? prev);
         notifyAgentRegistryChanged();
         if (!ok) setRecheckMiss(id);
+        else saveDefault(id);
       })
       .catch(() => {});
   };
@@ -100,7 +119,10 @@ export function AgentsPage({ onClose }: { onClose: () => void }) {
               type="button"
               className="settings-btn sm"
               aria-pressed={a.id === agent?.id}
-              onClick={() => setSelected(a.id as FeaturedAgentId)}
+              onClick={() => {
+                setSelected(a.id as FeaturedAgentId);
+                if (a.installed) saveDefault(a.id);
+              }}
             >
               <span className={`ollama-status-dot ${a.installed ? "running" : "stopped"}`} />
               {a.label}
@@ -108,6 +130,9 @@ export function AgentsPage({ onClose }: { onClose: () => void }) {
           ))}
           <UntestedTag id="desktop.intro.agents" />
         </div>
+      )}
+      {defaultAgent?.installed && (
+        <IntroStatus ok={true}>{t("intro.agents.isDefault", { label: defaultAgent.label })}</IntroStatus>
       )}
 
       {agent && (
@@ -154,13 +179,17 @@ export function AgentsPage({ onClose }: { onClose: () => void }) {
                       <button
                         type="button"
                         className="settings-btn primary"
-                        onClick={() =>
+                        onClick={() => {
+                          // Installing is the pick: the wizard closes for the
+                          // terminal, so save the default now rather than on a
+                          // later visit that may never come.
+                          saveDefault(agent.id);
                           runInTerminal(
                             t("install.agentTabLabel", { label: agent.label }),
                             agent.install_cmd,
                             agent.shell_kind,
-                          )
-                        }
+                          );
+                        }}
                       >
                         {t("intro.agents.install", { label: agent.label })}
                       </button>

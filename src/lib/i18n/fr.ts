@@ -3812,6 +3812,7 @@ export const dict: Dict = {
   "intro.agents.lead": "Un onglet d’agent exécute une CLI de programmation IA dans le dossier du projet. {app} ne les fournit pas : installez celles que vous utilisez, une fois par machine. Les plus utilisées sont ci-dessous ; Paramètres → Gérer les CLI en propose une trentaine d’autres.",
   "intro.agents.registryUnavailable": "La liste des agents n’est pas disponible pour le moment. Ouvrez plutôt Paramètres → Gérer les CLI.",
   "intro.agents.pick": "Choisir un agent",
+  "intro.agents.isDefault": "{label} est votre CLI d’agent par défaut : celle que {app} lance quand une fonction a besoin d’un agent. Choisissez-en ici une autre installée pour la changer.",
   "intro.agents.step1Title": "Installer {label}",
   "intro.agents.step1Body": "Un clic lance l’installateur officiel de l’éditeur dans un onglet terminal :",
   "intro.agents.install": "Installer {label} dans un terminal",

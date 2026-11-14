@@ -3810,6 +3810,7 @@ export const dict: Dict = {
   "intro.agents.lead": "Una pestaña de agente ejecuta una CLI de programación con IA en la carpeta del proyecto. {app} no las incluye: instala las que uses, una vez por máquina. Abajo están las más usadas; Ajustes → Gestionar CLIs tiene unas treinta más.",
   "intro.agents.registryUnavailable": "La lista de agentes no está disponible ahora. Abre Ajustes → Gestionar CLIs.",
   "intro.agents.pick": "Elige un agente",
+  "intro.agents.isDefault": "{label} es tu CLI de agente predeterminada: la que {app} inicia cuando una función necesita un agente. Elige aquí otra instalada para cambiarla.",
   "intro.agents.step1Title": "Instala {label}",
   "intro.agents.step1Body": "Un clic ejecuta el instalador oficial del proveedor en una pestaña de terminal:",
   "intro.agents.install": "Instalar {label} en un terminal",

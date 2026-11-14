@@ -3815,6 +3815,7 @@ export const dict: Dict = {
   "intro.agents.lead": "Ein Agenten-Tab führt eine KI-Coding-CLI im Projektordner aus. {app} liefert sie nicht mit: Installiere die, die du nutzt, einmal pro Rechner. Unten stehen die meistgenutzten; Einstellungen → CLIs verwalten hat rund dreißig weitere.",
   "intro.agents.registryUnavailable": "Die Agentenliste ist gerade nicht verfügbar. Öffne stattdessen Einstellungen → CLIs verwalten.",
   "intro.agents.pick": "Agent auswählen",
+  "intro.agents.isDefault": "{label} ist deine Standard-Agenten-CLI: {app} startet sie, wenn eine Funktion genau einen Agenten braucht. Wähle hier eine andere installierte, um sie zu ändern.",
   "intro.agents.step1Title": "{label} installieren",
   "intro.agents.step1Body": "Ein Klick führt den offiziellen Installer des Anbieters in einem Terminal-Tab aus:",
   "intro.agents.install": "{label} im Terminal installieren",

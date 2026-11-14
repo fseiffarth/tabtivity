@@ -3822,6 +3822,7 @@ export const enSource = {
   "intro.agents.lead": "An agent tab runs an AI coding CLI in the project folder. {app} does not bundle them: install the ones you use, once per machine. The most used are below; Settings → Manage CLIs has about thirty more.",
   "intro.agents.registryUnavailable": "The agent list is not available right now. Open Settings → Manage CLIs instead.",
   "intro.agents.pick": "Choose an agent",
+  "intro.agents.isDefault": "{label} is your default agent CLI: what {app} starts when a feature needs one agent. Pick another installed one here to change it.",
   "intro.agents.step1Title": "Install {label}",
   "intro.agents.step1Body": "One click runs the vendor's official installer in a terminal tab:",
   "intro.agents.install": "Install {label} in a terminal",

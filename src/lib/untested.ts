@@ -73,7 +73,7 @@ export const UNTESTED = {
   "desktop.welcome": { area: "shell", what: "Project-first welcome and primary dismissal" },
   "desktop.intro.wizard": { area: "shell", what: "How to start wizard · step rail, Back/Skip/Next, ←/→, remembered page" },
   "desktop.intro.projects": { area: "shell", what: "How to start · Projects page: project count, New/Import/Clone open the + menu's dialogs" },
-  "desktop.intro.agents": { area: "shell", what: "How to start · Agent CLIs page: installed chips, install/sign-in in a terminal, Node.js prerequisite" },
+  "desktop.intro.agents": { area: "shell", what: "How to start · Agent CLIs page: installed chips, install/sign-in in a terminal, Node.js prerequisite, the pick saved as the default CLI" },
   "desktop.intro.localModels": { area: "shell", what: "How to start · Local models page: Ollama install/start, recommended pull, GPU load, use for tabs" },
   "desktop.intro.askApp": { area: "shell", what: "How to start · Ask Tabtivity page: help-server status, on/off switch, help search box" },
   "desktop.helpAgent": { area: "shell", what: "Header ? button · opens the default agent as a Help tab in the root console (reused while live); no agent → cloud/local install dialog" },
