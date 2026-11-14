@@ -522,6 +522,12 @@ pub struct Settings {
     /// no server (`commands::settings::copilot_invalidated`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autocomplete_delay_ms: Option<AutocompleteDelays>,
+    /// Keep the Copilot language server's GitHub sign-in in the OS keychain
+    /// (`services::copilot::credentials`), one entry per app account, so a
+    /// restarted server signs in by itself. Opt-in; absent is off. Turning it
+    /// off, or signing out, deletes the entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot_stay_signed_in: Option<bool>,
     /// Hunspell dictionary code (e.g. `en_US`) for the editors' dictionary
     /// spell check (`services::spell`). Unset means the default — an installed
     /// English variant when there is one, else the first dictionary found.
@@ -1673,6 +1679,17 @@ mod tests {
         // One provider alone keeps the other absent.
         let one: Settings = serde_json::from_str(r#"{"autocomplete_delay_ms":{"copilot":200}}"#).unwrap();
         assert_eq!(serde_json::to_value(&one).unwrap()["autocomplete_delay_ms"], serde_json::json!({"copilot":200}));
+    }
+
+    /// "Stay signed in" is off unless written, and a real field.
+    #[test]
+    fn copilot_stay_signed_in_is_off_by_default_and_round_trips() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.copilot_stay_signed_in, None);
+        assert!(serde_json::to_value(&old).unwrap().get("copilot_stay_signed_in").is_none());
+        let on: Settings = serde_json::from_str(r#"{"copilot_stay_signed_in":true}"#).unwrap();
+        assert!(on.extra.is_empty());
+        assert_eq!(serde_json::to_value(&on).unwrap()["copilot_stay_signed_in"], true);
     }
 
     /// The browser's settings must be **named fields**, not `extra` passengers.

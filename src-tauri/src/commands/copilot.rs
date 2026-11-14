@@ -4,6 +4,7 @@
 use crate::schema::settings::CompletionProjectPolicy;
 use crate::schema::Settings;
 use crate::services::copilot::documents::Position;
+use crate::services::copilot::credentials;
 use crate::services::copilot::policy::{self, PolicyError};
 use crate::services::copilot::session::{sessions, CompletionRequest, DeviceCode, Session};
 use crate::services::copilot::process;
@@ -260,13 +261,17 @@ pub async fn copilot_accepted(
 
 /// Never starts a server: a status read must not be what sends a project's
 /// workspace to a subprocess.
+/// `remembered`: a sign-in for this app account is in the keychain ("Stay
+/// signed in"); never the token.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_account(project_id: String) -> Result<Value, String> {
+    let remembered = credentials::remembered(&credentials::keychain()).await;
     let Some(session) = sessions().existing(&project_id).await.filter(|session| session.alive()) else {
-        return Ok(json!({"running": false}));
+        return Ok(json!({"running": false, "remembered": remembered}));
     };
     let account = session.account().await.ok();
-    Ok(json!({"running": true, "status": session.status(), "account": account, "messages": session.account_messages()}))
+    Ok(json!({"running": true, "status": session.status(), "account": account, "messages": session.account_messages(),
+        "remembered": remembered}))
 }
 
 /// The newest log lines of the project's server (its log messages and stderr),
@@ -289,9 +294,15 @@ pub async fn copilot_sign_in(project_id: String) -> Result<Option<DeviceCode>, S
     session(&project_id).await?.0.sign_in().await
 }
 
+/// With "Stay signed in" on, the finished sign-in's token goes to the
+/// keychain; a keychain that refuses (locked) leaves the sign-in working for
+/// this server and is reported.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_finish_sign_in(project_id: String) -> Result<(), String> {
-    session(&project_id).await?.0.finish_sign_in().await
+    let session = session(&project_id).await?.0;
+    session.finish_sign_in().await?;
+    let stay = app_core::rt::blocking("Copilot settings", credentials::enabled).await.unwrap_or(false);
+    credentials::after_sign_in(&session, stay, &credentials::keychain()).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -300,9 +311,14 @@ pub async fn copilot_sign_out(project_id: String) -> Result<(), String> {
         Some(session) => session.sign_out().await,
         None => Ok(()),
     };
-    // Even an offline sign-out releases credentials, cached offers and work.
+    // Even an offline sign-out releases credentials, cached offers and work,
+    // and the remembered sign-in: the next server asks again.
     sessions().stop(&project_id).await;
-    result
+    let store = credentials::keychain();
+    // Asked first so a sign-out with nothing remembered never writes to (or
+    // reports) a locked keychain.
+    let forgotten = if credentials::remembered(&store).await { credentials::forget(&store).await } else { Ok(()) };
+    result.and(forgotten)
 }
 
 /// `RunEvent::Exit`: no language server outlives Tabtivity.

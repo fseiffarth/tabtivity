@@ -97,9 +97,26 @@ fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> R
 }
 
 fn invalidate_copilot(previous: &Settings, next: &Settings) {
+    use crate::services::copilot::{credentials, session::sessions};
     if copilot_invalidated(previous, next) {
-        crate::services::copilot::session::sessions().stop_all_now();
+        sessions().stop_all_now();
     }
+    // "Stay signed in" switched: on keeps a live sign-in's token now, off
+    // deletes the entry. Off the settings write: the keychain may block.
+    if let Some(on) = stay_signed_in_switched(previous, next) {
+        app_core::rt::spawn(async move {
+            let running = sessions().all_running();
+            if let Err(error) = credentials::setting_changed(on, &running, &credentials::keychain()).await {
+                eprintln!("copilot: stay signed in: {error}");
+            }
+        });
+    }
+}
+
+/// The new value of `copilot_stay_signed_in` when a write switched it. Pure.
+fn stay_signed_in_switched(previous: &Settings, next: &Settings) -> Option<bool> {
+    let (was, is) = (previous.copilot_stay_signed_in.unwrap_or(false), next.copilot_stay_signed_in.unwrap_or(false));
+    (was != is).then_some(is)
 }
 
 /// Whether a settings write must stop every Copilot server: the provider,
@@ -400,6 +417,21 @@ mod tests {
         assert!(!copilot_invalidated(&tuned, &on));
         let provider = Settings { code_completion_provider: Some("copilot".into()), ..Settings::default() };
         assert!(copilot_invalidated(&on, &provider));
+    }
+
+    /// B11: only a switch of "Stay signed in" acts on the keychain, and it
+    /// stops no server.
+    #[test]
+    fn stay_signed_in_acts_only_when_it_switches() {
+        let unset = Settings::default();
+        let on = Settings { copilot_stay_signed_in: Some(true), ..Settings::default() };
+        let off = Settings { copilot_stay_signed_in: Some(false), ..Settings::default() };
+        assert_eq!(stay_signed_in_switched(&unset, &on), Some(true));
+        assert_eq!(stay_signed_in_switched(&on, &off), Some(false));
+        assert_eq!(stay_signed_in_switched(&on, &unset), Some(false));
+        assert_eq!(stay_signed_in_switched(&unset, &off), None, "unset is off");
+        assert_eq!(stay_signed_in_switched(&on, &on.clone()), None);
+        assert!(!copilot_invalidated(&unset, &on));
     }
 
     #[test]

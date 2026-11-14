@@ -49,8 +49,21 @@ document when hidden, on file/provider change and on unmount; the next request
 re-opens it with current content.
 
 **Consequence of RAM-only credentials:** sign-in is per project server and is
-lost when that server stops (quit, revocation, crash). Persisting it needs a
-verified token-injection interface, which 1.547.0 has not been shown to have.
+lost when that server stops (quit, revocation, crash), unless "Stay signed in"
+is on.
+
+**Stay signed in** (`credentials.rs`, opt-in `copilot_stay_signed_in`,
+default off): after a finished device sign-in the session asks the server's
+`auth/getGitHubToken` and keeps `{user, token}` in the OS keychain, one entry
+per app account (`remote_credentials`, locked-keyring handling included); every
+server start then sends `signInWithGithubToken {githubToken, user}` after
+`didChangeConfiguration`. A reply of `NotSignedIn` or a server error deletes the
+entry and leaves the server signed out; a timeout keeps it. Switching the
+setting on while a server is signed in stores its token then; switching it off,
+or signing out, deletes the entry. The token never reaches the webview, a log
+line or the diagnostics ring (`copilot_account` reports only `remembered`).
+Both request shapes come from reading the 1.565.6 server bundle (its handler
+table and request schemas), not from a live account.
 
 ## Diagnostics and errors (2026-11-14)
 

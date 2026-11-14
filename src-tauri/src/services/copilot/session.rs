@@ -4,6 +4,7 @@
 //! callers see opaque candidate ids, a device code and coarse error codes.
 use super::documents::{DocumentTicket, Documents, Position};
 use app_core::sync::LockExt;
+use super::credentials;
 use super::process::ManagedProcess;
 use super::rpc::{LogSink, RpcClient, RpcError};
 use serde::Serialize;
@@ -553,6 +554,28 @@ impl Session {
         result
     }
 
+    /// `auth/getGitHubToken`: the signed-in account's GitHub token, for the
+    /// keychain only (`credentials`). `None` when the server has no session.
+    pub async fn github_token(&self) -> Result<Option<String>, String> {
+        let reply = self.request("auth/getGitHubToken", json!({}), ACCOUNT_TIMEOUT).await?;
+        Ok(reply.get("token").and_then(Value::as_str).filter(|token| !token.is_empty()).map(str::to_owned))
+    }
+
+    /// `signInWithGithubToken`: whether the server took the token. A reply
+    /// of `NotSignedIn`, or an error the server sent, is a refusal; a server
+    /// that timed out or closed is an `Err` (nothing was judged).
+    pub async fn sign_in_with_token(&self, token: &str, user: &str) -> Result<bool, String> {
+        let id = self.rpc.next_id();
+        let params = json!({"githubToken": token, "user": user});
+        let reply = self.rpc.request(id, "signInWithGithubToken", params, ACCOUNT_TIMEOUT).await;
+        self.account_changed();
+        match reply {
+            Ok(reply) => Ok(!matches!(reply.get("status").and_then(Value::as_str), None | Some("NotSignedIn"))),
+            Err(RpcError::Server(_)) => Ok(false),
+            Err(error) => Err(error_code(error)),
+        }
+    }
+
     pub fn account_messages(&self) -> Vec<AccountMessage> {
         self.messages.lock_ok().iter().map(|message| message.public.clone()).collect()
     }
@@ -672,8 +695,15 @@ impl Sessions {
     }
 
     /// `root` is the directory `policy::authorize_project` just returned.
+    /// With "Stay signed in" on, a new server is signed in from the keychain
+    /// before it is handed out (`credentials::restore`).
     pub async fn get_or_start(&self, project_id: &str, root: &Path) -> Result<Arc<Session>, String> {
-        self.get_or_start_with(project_id, root, |root, log| {
+        if let Some(session) = self.running(project_id, root) {
+            return Ok(session);
+        }
+        let stay = app_core::rt::blocking("Copilot settings", credentials::enabled).await.unwrap_or(false);
+        let restore = stay.then(credentials::keychain);
+        self.get_or_start_with(project_id, root, restore, |root, log| {
             let (process, output, input) = ManagedProcess::launch(root, Some(log))?;
             Ok((Some(process), output, input))
         })
@@ -686,6 +716,7 @@ impl Sessions {
         &self,
         project_id: &str,
         root: &Path,
+        restore: Option<credentials::Store>,
         launch: impl FnOnce(&Path, LogSink) -> Result<(Option<ManagedProcess>, R, W), String>,
     ) -> Result<Arc<Session>, String>
     where
@@ -715,7 +746,17 @@ impl Sessions {
         let session = tokio::select! {
             biased;
             _ = self.invalidated_since(&mut changes, project_id, epoch) => return Err("copilot_cancelled".into()),
-            session = Session::start_logged(output, input, process, root, Some(log)) => Arc::new(session?),
+            session = async {
+                let session = Session::start_logged(output, input, process, root, Some(log.clone())).await?;
+                if let Some(store) = &restore {
+                    // The server stays up signed out; the code (never the
+                    // token) goes to the project's diagnostics.
+                    if let Err(error) = credentials::restore(&session, store).await {
+                        log(format!("keychain sign-in: {error}"));
+                    }
+                }
+                Ok::<_, String>(session)
+            } => Arc::new(session?),
         };
         // The settings command may invalidate just as initialization finishes.
         let mut entries = self.entries.lock_ok();
@@ -725,6 +766,11 @@ impl Sessions {
         }
         entries.insert(project_id.to_owned(), session.clone());
         Ok(session)
+    }
+
+    /// Every live server, any project.
+    pub fn all_running(&self) -> Vec<Arc<Session>> {
+        self.entries.lock_ok().values().filter(|session| session.alive()).cloned().collect()
     }
 
     pub async fn existing(&self, project_id: &str) -> Option<Arc<Session>> {
@@ -1080,6 +1126,115 @@ mod tests {
         assert!(session.alive());
     }
 
+    // ── B11: stay signed in, against the fake server ─────────────────────
+
+    use super::super::credentials::{self, tests::Memory, Remembered, Store};
+
+    fn store_with(remembered: Option<Remembered>) -> (Arc<Memory>, Store) {
+        let memory = Arc::new(Memory(Mutex::new(remembered)));
+        let store: Store = memory.clone();
+        (memory, store)
+    }
+
+    fn octo() -> Remembered {
+        Remembered { user: "octo".into(), token: "token-value-1".into() }
+    }
+
+    /// Answer the server's half of `remember`: the token, then the account.
+    async fn hand_over_the_token(server: &mut Server) {
+        let call = server.expect("auth/getGitHubToken").await;
+        server.result(&call["id"], json!({"credentialType":"github", "resource":"https://api.github.com", "token":"token-value-1"})).await;
+        let call = server.expect("checkStatus").await;
+        server.result(&call["id"], json!({"status":"OK", "user":"octo"})).await;
+    }
+
+    #[tokio::test]
+    async fn a_finished_sign_in_is_remembered_only_with_the_setting_on() {
+        let (session, mut server) = connected().await;
+        let (memory, store) = store_with(None);
+        credentials::after_sign_in(&session, false, &store).await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(20), server.next()).await.is_err(), "nothing asked");
+        assert_eq!(*memory.0.lock().unwrap(), None, "nothing stored with the setting off");
+
+        let worker = session.clone();
+        let task_store = store.clone();
+        let work = tokio::spawn(async move { credentials::after_sign_in(&worker, true, &task_store).await });
+        hand_over_the_token(&mut server).await;
+        work.await.unwrap().unwrap();
+        assert_eq!(*memory.0.lock().unwrap(), Some(octo()));
+        assert!(credentials::remembered(&store).await);
+    }
+
+    /// Starts a project's server through the registry with `store`, answers
+    /// its handshake, and returns the `signInWithGithubToken` call with the
+    /// server so the test can answer it.
+    async fn start_with_store(store: Store) -> (tokio::task::JoinHandle<Result<Arc<Session>, String>>, Server, Value) {
+        let (client, server) = duplex(64 * 1024);
+        let (read, write) = split(server);
+        let mut server = Server { read: BufReader::new(read), write };
+        let (read, write) = split(client);
+        let root = std::env::temp_dir();
+        let start = tokio::spawn(async move {
+            let sessions = Sessions::default();
+            sessions.get_or_start_with("p", &root, Some(store), move |_, _| Ok((None, read, write))).await
+        });
+        let initialize = server.expect("initialize").await;
+        server.result(&initialize["id"], json!({"serverInfo":{"version":super::super::process::SERVER_VERSION}})).await;
+        server.expect("initialized").await;
+        server.expect("workspace/didChangeConfiguration").await;
+        let call = server.expect("signInWithGithubToken").await;
+        (start, server, call)
+    }
+
+    #[tokio::test]
+    async fn a_starting_server_is_signed_in_from_the_keychain() {
+        let (memory, store) = store_with(Some(octo()));
+        let (start, mut server, call) = start_with_store(store).await;
+        assert_eq!(call["params"], json!({"githubToken":"token-value-1", "user":"octo"}));
+        server.result(&call["id"], json!({"status":"OK", "user":"octo"})).await;
+        assert!(start.await.unwrap().is_ok());
+        assert_eq!(*memory.0.lock().unwrap(), Some(octo()), "an accepted token stays");
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_is_deleted_and_the_server_stays_signed_out() {
+        let (memory, store) = store_with(Some(octo()));
+        let (start, mut server, call) = start_with_store(store).await;
+        server.result(&call["id"], json!({"status":"NotSignedIn"})).await;
+        assert!(start.await.unwrap().is_ok(), "the server still serves, signed out");
+        assert_eq!(*memory.0.lock().unwrap(), None);
+
+        // An error the server sent is a refusal too.
+        let (memory, store) = store_with(Some(octo()));
+        let (start, mut server, call) = start_with_store(store).await;
+        write_frame(&mut server.write, &json!({"jsonrpc":"2.0", "id":call["id"], "error":{"code":1000, "message":"bad credentials"}})).await.unwrap();
+        assert!(start.await.unwrap().is_ok());
+        assert_eq!(*memory.0.lock().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn switching_off_or_signing_out_deletes_the_entry_and_switching_on_keeps_a_live_sign_in() {
+        let (memory, store) = store_with(Some(octo()));
+        credentials::setting_changed(false, &[], &store).await.unwrap();
+        assert_eq!(*memory.0.lock().unwrap(), None, "switched off");
+
+        *memory.0.lock().unwrap() = Some(octo());
+        credentials::forget(&store).await.unwrap();
+        assert_eq!(*memory.0.lock().unwrap(), None, "signed out");
+
+        // Switched on while a server is signed in: its token is kept now.
+        let (session, mut server) = connected().await;
+        let task_store = store.clone();
+        let running = vec![session.clone()];
+        let work = tokio::spawn(async move { credentials::setting_changed(true, &running, &task_store).await });
+        let call = server.expect("checkStatus").await;
+        server.result(&call["id"], json!({"status":"OK", "user":"octo"})).await;
+        let call = server.expect("auth/getGitHubToken").await;
+        server.result(&call["id"], json!({"token":"token-value-1"})).await;
+        work.await.unwrap().unwrap();
+        assert_eq!(*memory.0.lock().unwrap(), Some(octo()));
+    }
+
     #[test]
     fn a_crashing_server_is_not_restarted_forever() {
         let sessions = Sessions::default();
@@ -1101,7 +1256,7 @@ mod tests {
         let root = std::env::temp_dir();
         for _ in 0..MAX_STARTS + 1 {
             let result = sessions
-                .get_or_start_with("one", &root, |_, log| -> Result<(Option<ManagedProcess>, DuplexStream, DuplexStream), String> {
+                .get_or_start_with("one", &root, None, |_, log| -> Result<(Option<ManagedProcess>, DuplexStream, DuplexStream), String> {
                     log("stderr: node: not found".into());
                     Err("copilot_not_installed".into())
                 })
@@ -1165,7 +1320,7 @@ mod tests {
         let (read, write) = split(client);
         let mut pair = Some((read, write));
         let root = std::env::temp_dir();
-        let start = sessions.get_or_start_with("p", &root, |_, log| {
+        let start = sessions.get_or_start_with("p", &root, None, |_, log| {
             log("stderr: starting".into());
             let (read, write) = pair.take().unwrap();
             Ok((None, read, write))
