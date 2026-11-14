@@ -167,6 +167,46 @@ describe("local autocomplete (#45)", () => {
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
   });
 
+  it("Copilot with one candidate hides the Alt+[/] hint", async () => {
+    autocompleteOn = true;
+    copilotOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "copilot_prepare") return Promise.resolve("reservation");
+      if (cmd === "copilot_complete") return Promise.resolve([{ id: "session:1:0", insertText: "return only" }]);
+      return original(cmd, args);
+    });
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    expect(screen.getByText("return only")).toBeTruthy();
+    expect(screen.getByText(/Tab: accept/).textContent).not.toMatch(/candidate/);
+  });
+
+  it("an empty Copilot answer asks the account once and shows an Inactive status", async () => {
+    autocompleteOn = true;
+    copilotOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "copilot_prepare") return Promise.resolve("reservation");
+      if (cmd === "copilot_complete") return Promise.resolve([]);
+      if (cmd === "copilot_account") return Promise.resolve({
+        running: true, status: { kind: "Inactive", message: "Copilot is disabled for this account." },
+        account: { status: "OK", user: "octo" },
+      });
+      return original(cmd, args);
+    });
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    await waitFor(() => expect(screen.getByText("Copilot: Copilot is disabled for this account.")).toBeTruthy());
+    expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "copilot_account")).toHaveLength(1);
+  });
+
   it("cycles three candidates on demand and reuses both caches when revisiting", async () => {
     autocompleteOn = true;
     const original = mockInvoke.getMockImplementation()!;

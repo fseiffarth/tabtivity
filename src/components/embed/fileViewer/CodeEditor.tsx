@@ -1917,6 +1917,19 @@ export function CodeEditor({
       settle(result);
       countRequest(timing.cached ? "cache" : result.length ? "ok" : "empty");
       setAcStatus(result.length || auto ? null : t("fileViewer.noSuggestion"));
+      // Copilot answered nothing: an inactive account or plan is one reason the
+      // server only states in its status, never in the answer. Ask once; show
+      // it unless something newer has the pill (the backend sends no event).
+      if (providerId === "copilot" && !result.length && scope) {
+        void invoke<{ status?: { kind?: string; message?: string | null } }>("copilot_account", { projectId: scope })
+          .then((account) => {
+            const message = account?.status?.kind === "Inactive" ? account.status.message : null;
+            if (message && !acAbort.current && draftRef.current === snapshot) {
+              setAcStatus(t("fileViewer.copilotInactive", { message }));
+            }
+          })
+          .catch(() => {});
+      }
     } catch (e) {
       if (ctl.signal.aborted) { timing.outcome = "cancelled"; return; }
       acOffers.end();
@@ -2831,7 +2844,9 @@ export function CodeEditor({
       )}
       {suggestion && !acStatus && (
         <div className="file-viewer-ac-status" role="status">
-          {acCopilot ? t("fileViewer.copilotControls", AC_KEY_LABELS) : suggestion.candidate?.model
+          {/* Alt+[/] is offered only when Copilot returned more than one. */}
+          {acCopilot ? t(acCandidates.current.length > 1 ? "fileViewer.copilotControls" : "fileViewer.copilotControlsSingle", AC_KEY_LABELS)
+            : suggestion.candidate?.model
             // The model that answered, first: with no role set it may be any
             // resident model, and the user should see which one.
             ? t("fileViewer.autocompleteFrom", {

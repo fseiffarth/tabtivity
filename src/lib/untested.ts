@@ -412,6 +412,8 @@ export const UNTESTED = {
   "settings.calendarGlobalApp": { area: "layout", what: "SettingsPanel · Calendar in the header" },
   "settings.copilotCompletion": { area: "layout", what: "SettingsPanel · GitHub Copilot autocomplete" },
   "settings.copilotProjectText": { area: "layout", what: "CopilotCompletionCard · Text files too: Copilot also completes the project's Markdown, LaTeX and plain-text files (.env and key files never)" },
+  "settings.copilotDetails": { area: "layout", what: "CopilotCompletionCard · Details fold: the project's language-server log lines (copilot_diagnostics), Refresh" },
+  "settings.copilotAccountStatus": { area: "layout", what: "CopilotCompletionCard · account lines from the server's verdict: signed in only for OK/MaybeOK; NotAuthorized and a failed sign-in get their own line" },
   "settings.corners": { area: "layout", what: "ThemeCustomizer · Corners" },
   "settings.cursor": { area: "layout", what: "ThemeCustomizer · Mouse cursor" },
   "settings.fastMode": { area: "layout", what: "SettingsPanel · Fast mode" },
