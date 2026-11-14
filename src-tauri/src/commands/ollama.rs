@@ -3572,9 +3572,14 @@ fn completion_body(
     } else {
         mode.num_predict()
     };
+    // No penalties: code repeats identifiers and brackets by nature. The first
+    // candidate is greedy (`top_k` 1); [`sample_candidate`] widens alternates.
     let mut body = serde_json::json!({
         "model": model, "stream": true, "think": false,
-        "options": { "temperature": 0.1, "num_predict": cap }
+        "options": {
+            "temperature": 0.1, "num_predict": cap, "top_k": 1,
+            "repeat_penalty": 1.0, "presence_penalty": 0,
+        }
     });
     if fim {
         body["prompt"] = prefix.into();
@@ -3589,6 +3594,20 @@ fn completion_body(
         ]);
     }
     body
+}
+
+/// Alt+[ / Alt+] cycle through up to three candidates: each has its own seed,
+/// and an alternate samples at temperature 0.5 with the model's own `top_k`
+/// rather than the first candidate's greedy pick. Pure + tested.
+fn sample_candidate(body: &mut serde_json::Value, candidate: u32) {
+    let candidate = candidate.min(2);
+    body["options"]["seed"] = serde_json::json!(candidate + 1);
+    if candidate > 0 {
+        body["options"]["temperature"] = serde_json::json!(0.5);
+        if let Some(options) = body["options"].as_object_mut() {
+            options.remove("top_k");
+        }
+    }
 }
 
 /// Whether a request goes the FIM way first (plan, fixed decision 1): a model
@@ -3742,11 +3761,7 @@ pub async fn complete_text(
             let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(
                 &prefix, &suffix, &model, &language, mode, &references, file_name.as_deref(), use_fim,
             );
-            let candidate = candidate.unwrap_or(0).min(2);
-            body["options"]["seed"] = serde_json::json!(candidate + 1);
-            if candidate > 0 {
-                body["options"]["temperature"] = serde_json::json!(0.5);
-            }
+            sample_candidate(&mut body, candidate.unwrap_or(0));
             let mut published = false;
             let started = Instant::now();
             let mut first_token = None;

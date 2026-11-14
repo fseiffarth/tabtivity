@@ -201,6 +201,30 @@ fn a_reference_holding_a_control_token_is_left_out() {
     assert_eq!(plan.reference_bytes, 0);
 }
 
+/// B5: no repetition penalties on either path; the first candidate is greedy,
+/// alternates sample at 0.5 with the model's own top_k.
+#[test]
+fn completion_sampling_has_no_penalties_and_a_greedy_first_candidate() {
+    for fim in [true, false] {
+        let mut body = completion_body("let x = ", ";", "m", "rust", CompletionMode::Block, "", fim);
+        let options = &body["options"];
+        assert_eq!((options["repeat_penalty"].as_f64(), options["presence_penalty"].as_f64()), (Some(1.0), Some(0.0)));
+        assert_eq!(options["top_k"], 1);
+        sample_candidate(&mut body, 0);
+        assert_eq!((body["options"]["seed"].as_u64(), body["options"]["temperature"].as_f64()), (Some(1), Some(0.1)));
+        assert_eq!(body["options"]["top_k"], 1);
+        for candidate in [1, 2, 7] {
+            let mut body = completion_body("let x = ", ";", "m", "rust", CompletionMode::Block, "", fim);
+            sample_candidate(&mut body, candidate);
+            let options = &body["options"];
+            assert_eq!(options["seed"].as_u64(), Some(u64::from(candidate.min(2)) + 1));
+            assert_eq!(options["temperature"].as_f64(), Some(0.5));
+            assert!(options.get("top_k").is_none(), "the model's own top_k");
+            assert_eq!(options["repeat_penalty"].as_f64(), Some(1.0));
+        }
+    }
+}
+
 #[test]
 fn only_ollamas_exact_400_retries_on_chat() {
     assert!(fim_refused("ollama HTTP 400"));
