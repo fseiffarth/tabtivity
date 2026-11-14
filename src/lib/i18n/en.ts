@@ -12240,6 +12240,8 @@ export const enSource = {
   "checkpoints.restore.nested": "Nested repositories are not captured, so their files are never restored: {list}.",
   "checkpoints.restore.leftOut": "{n} files now in the folder are too large or not regular files and are left alone.",
   "checkpoints.restore.othersWorking": "Another agent tab in this folder is working. Restore anyway.",
+  "checkpoints.restore.othersUnknown": "Another agent tab in this folder doesn't report its turns, so it may be working. Restore anyway.",
+  "checkpoints.restore.turnUnknown": "This tab's agent doesn't report its turns (its hooks are off or not trusted yet), so {app} can't tell whether it is working. Restore anyway.",
   "checkpoints.restore.note": "Put a note about it into the message box",
   "checkpoints.restore.noteText": "Files were restored to how they were at {time}. Re-read any file you rely on before you continue.",
   "checkpoints.restore.action": "Restore {n} files",

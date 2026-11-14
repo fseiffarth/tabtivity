@@ -1,6 +1,8 @@
 //! Tauri commands for per-turn checkpoints (`services::checkpoints`).
 //!
-//! The renderer names a tab (its launch uid, `tab_key`) and a checkpoint id;
+//! The renderer names a tab by its checkpoint key (`tab_key`: random, minted
+//! per launch and handed only to the window in `pty_spawn`'s answer, never
+//! the launch uid the agent itself holds) and a checkpoint by its id;
 //! the folder is the one the backend bound that tab to at launch, found among
 //! the project's own roots. A file list (`only`) is a filter on the paths the
 //! backend's diff reports, never a path handed to git. Every body is
@@ -33,9 +35,10 @@ pub async fn checkpoint_restore(
     id: String,
     only: Option<Vec<String>>,
     confirm_others: Option<bool>,
+    confirm_unknown: Option<bool>,
 ) -> Result<Restored, String> {
     app_core::rt::spawn_blocking(move || {
-        checkpoints::restore(&tab_key, &id, only.as_deref(), confirm_others.unwrap_or(false))
+        checkpoints::restore(&tab_key, &id, only.as_deref(), confirm_others.unwrap_or(false), confirm_unknown.unwrap_or(false))
     })
     .await
     .map_err(|e| e.to_string())?

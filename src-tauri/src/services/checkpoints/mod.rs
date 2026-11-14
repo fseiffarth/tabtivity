@@ -183,6 +183,14 @@ struct Bound {
     folder: PathBuf,
     project_id: String,
     cli: String,
+    /// What the window names the tab by ([`bind`]'s answer): random, minted
+    /// per launch, handed to the window in `pty_spawn`'s answer and never put
+    /// in the agent's environment. The launch uid is in it (`TAB_UID`), so the
+    /// uid alone is never taken as the caller's say-so.
+    key: String,
+    /// The tab's hooks have reported a turn (this launch, or the previous
+    /// run's record): a missing turn state then means idle, not unknown.
+    turns_known: bool,
 }
 
 fn bindings() -> &'static Mutex<HashMap<String, Bound>> {
@@ -230,11 +238,21 @@ pub fn unsuitable(folder: &Path, state_dir: &Path) -> bool {
 }
 
 /// Remember that agent tab `uid`, launched in `cwd` of project `project_id`,
-/// is checkpointed as the folder `roots` put it in. `roots`: `None` for a
-/// launch that gets no checkpoints (remote project, the root console's Host
-/// session, the assistant): the tab is unbound. Called by `launch_prep`
-/// beside `agent_turn::bind_tab`.
-pub fn bind(uid: &str, cwd: &str, project_id: Option<&str>, cmd: &str, roots: Option<&[PathBuf]>) {
+/// is checkpointed as the folder `roots` put it in; the key the window names
+/// it by from now on (see [`Bound::key`]). `roots`: `None` for a launch that
+/// gets no checkpoints (remote project, the root console's Host session, the
+/// assistant): the tab is unbound and there is no key. `turns_known`: the
+/// previous run's turn record showed the tab's hooks work
+/// (`agent_turn::bind_tab`'s answer). Called by `launch_prep` beside
+/// `agent_turn::bind_tab`.
+pub fn bind(
+    uid: &str,
+    cwd: &str,
+    project_id: Option<&str>,
+    cmd: &str,
+    roots: Option<&[PathBuf]>,
+    turns_known: bool,
+) -> Option<String> {
     let bound = (|| {
         let (project_id, roots) = (project_id?, roots?);
         if crate::storage::is_reserved_scope(project_id) {
@@ -245,13 +263,33 @@ pub fn bind(uid: &str, cwd: &str, project_id: Option<&str>, cmd: &str, roots: Op
             folder,
             project_id: project_id.to_string(),
             cli: crate::services::agent_fence::basename(cmd).to_string(),
+            key: new_key(),
+            turns_known,
         })
     })();
     let mut map = bindings().lock_ok();
     match bound {
-        Some(b) => map.insert(uid.to_string(), b),
-        None => map.remove(uid),
-    };
+        Some(b) => {
+            let key = b.key.clone();
+            map.insert(uid.to_string(), b);
+            Some(key)
+        }
+        None => {
+            map.remove(uid);
+            None
+        }
+    }
+}
+
+/// 128 random bits as hex.
+fn new_key() -> String {
+    let mut bytes = [0u8; 16];
+    if getrandom::fill(&mut bytes).is_err() {
+        // No randomness: no key anyone could guess either; the tab gets none
+        // that matches (`by_key` refuses an empty one).
+        return String::new();
+    }
+    crate::digest::hex(&bytes)
 }
 
 /// Forget a tab that is gone.
@@ -259,12 +297,31 @@ pub fn unbind(uid: &str) {
     bindings().lock_ok().remove(uid);
 }
 
+const NO_CHECKPOINTS: &str = "this tab has no checkpoints (a remote, root or assistant tab, or its folder is not a project's)";
+
 fn bound(uid: &str) -> Result<Bound, String> {
+    bindings().lock_ok().get(uid).cloned().ok_or_else(|| NO_CHECKPOINTS.to_string())
+}
+
+/// The tab the window's `key` names, and its uid.
+fn by_key(key: &str) -> Result<(String, Bound), String> {
+    if key.is_empty() {
+        return Err(NO_CHECKPOINTS.into());
+    }
     bindings()
         .lock_ok()
-        .get(uid)
-        .cloned()
-        .ok_or_else(|| "this tab has no checkpoints (a remote, root or assistant tab, or its folder is not a project's)".to_string())
+        .iter()
+        .find(|(_, b)| !b.key.is_empty() && b.key == key)
+        .map(|(uid, b)| (uid.clone(), b.clone()))
+        .ok_or_else(|| NO_CHECKPOINTS.to_string())
+}
+
+/// Whether nothing tells if tab `uid`'s agent is working: it has no turn
+/// state and its hooks have never reported one (Codex before its hooks are
+/// trusted, a CLI without hooks, a tab not prompted yet).
+fn turn_unknown(uid: &str) -> bool {
+    crate::services::agent_turn::state_of(uid).is_none()
+        && !bindings().lock_ok().get(uid).is_some_and(|b| b.turns_known)
 }
 
 fn who_for(uid: &str, bound: &Bound, label: Option<&str>) -> Who {
@@ -297,6 +354,9 @@ pub fn kind_for(prev: Option<TurnState>, state: TurnState) -> Option<Kind> {
 /// since the epoch). Returns at once: the snapshot is queued on the folder's
 /// worker. Not under `agent_turn`'s locks.
 pub fn on_turn(uid: &str, prev: Option<TurnState>, state: TurnState, prompt_at: Option<u64>) {
+    if let Some(b) = bindings().lock_ok().get_mut(uid) {
+        b.turns_known = true;
+    }
     let Some(kind) = kind_for(prev, state) else { return };
     if !capturing_in(&state_root()) || !git_supported_by(git_version()) {
         return;
@@ -326,9 +386,9 @@ pub struct Listing {
     pub failure: Option<String>,
 }
 
-pub fn list(uid: &str) -> Listing {
+pub fn list(key: &str) -> Listing {
     let enabled = capturing_in(&state_root());
-    let Ok(bound) = bound(uid) else { return Listing { enabled, bound: false, rows: Vec::new(), failure: None } };
+    let Ok((_, bound)) = by_key(key) else { return Listing { enabled, bound: false, rows: Vec::new(), failure: None } };
     let mut rows = Store::for_bound(&root(), &bound.folder).map(|s| s.rows()).unwrap_or_default();
     let skip = rows.len().saturating_sub(LIST_ROWS);
     rows.drain(..skip);
@@ -350,20 +410,28 @@ fn note_failure(folder: &Path, error: Option<&String>) {
     };
 }
 
-fn store_row(uid: &str, id: &str) -> Result<(Bound, Store, Row), String> {
-    let bound = bound(uid)?;
+fn store_row(key: &str, id: &str) -> Result<(String, Bound, Store, Row), String> {
+    let (uid, bound) = by_key(key)?;
     let store = Store::for_bound(&root(), &bound.folder)?;
     let row = store.row(id).filter(Row::has_snapshot).ok_or("that checkpoint is gone")?;
-    Ok((bound, store, row))
+    Ok((uid, bound, store, row))
 }
 
 /// What differs in the tab's folder from checkpoint `id`. `paths`: only those
 /// files' diff text is read.
-pub fn since(uid: &str, id: &str, paths: Option<&[String]>) -> Result<SinceView, String> {
+pub fn since(key: &str, id: &str, paths: Option<&[String]>) -> Result<SinceView, String> {
     ready()?;
-    let (bound, store, row) = store_row(uid, id)?;
-    let since = restore::since(&store, &row, &who_for(uid, &bound, None), paths)?;
-    Ok(SinceView { since, others_working: other_tabs_working(uid, &bound.folder), raced: row.raced, partial: row.partial })
+    let (uid, bound, store, row) = store_row(key, id)?;
+    let since = restore::since(&store, &row, &who_for(&uid, &bound, None), paths)?;
+    let others = other_tabs(&uid, &bound.folder);
+    Ok(SinceView {
+        since,
+        others_working: others.working,
+        others_unknown: others.unknown,
+        turn_unknown: turn_unknown(&uid),
+        raced: row.raced,
+        partial: row.partial,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -373,43 +441,79 @@ pub struct SinceView {
     pub since: Since,
     /// Another agent tab in this folder is mid-turn.
     pub others_working: bool,
+    /// Another agent tab in this folder can't be told working or not
+    /// ([`turn_unknown`]).
+    pub others_unknown: bool,
+    /// This tab's own agent can't be told working or not: a restore needs
+    /// `confirm_unknown`.
+    pub turn_unknown: bool,
     pub raced: bool,
     pub partial: bool,
 }
 
-/// Whether another bound tab of `folder` is working or waiting on a decision.
-fn other_tabs_working(uid: &str, folder: &Path) -> bool {
+/// The other bound tabs of a folder: is one working (or waiting on a
+/// decision), can one not be told.
+struct Others {
+    working: bool,
+    unknown: bool,
+}
+
+fn other_tabs(uid: &str, folder: &Path) -> Others {
     let tabs: Vec<String> = bindings()
         .lock_ok()
         .iter()
         .filter(|(other, b)| other.as_str() != uid && b.folder == folder)
         .map(|(other, _)| other.clone())
         .collect();
-    tabs.iter().any(|other| matches!(crate::services::agent_turn::state_of(other), Some(TurnState::Working | TurnState::Decision)))
+    Others {
+        working: tabs
+            .iter()
+            .any(|other| matches!(crate::services::agent_turn::state_of(other), Some(TurnState::Working | TurnState::Decision))),
+        unknown: tabs.iter().any(|other| turn_unknown(other)),
+    }
+}
+
+/// Why a restore must not go ahead now, or `None`: this tab's agent works
+/// (always refused), or can't be told and `confirm_unknown` is not given,
+/// or another tab's works or can't be told and `confirm_others` is not given.
+/// Pure over the three readings.
+pub fn restore_refusal(own: Option<TurnState>, own_unknown: bool, others_working: bool, others_unknown: bool, confirm_others: bool, confirm_unknown: bool) -> Option<&'static str> {
+    if matches!(own, Some(TurnState::Working | TurnState::Decision)) {
+        return Some("the agent in this tab is working; restore when it has finished");
+    }
+    if own_unknown && !confirm_unknown {
+        return Some("this tab's agent does not report its turns (its hooks are off or not trusted yet), so whether it is working can't be told; confirm to restore anyway");
+    }
+    if !confirm_others && others_working {
+        return Some("another agent tab in this folder is working");
+    }
+    if !confirm_others && others_unknown {
+        return Some("another agent tab in this folder does not report its turns, so whether it is working can't be told; confirm to restore anyway");
+    }
+    None
 }
 
 /// Put the tab's folder back to checkpoint `id` (`paths`: only those; `None`
-/// = every differing file). Refused while this tab's agent works, and while
-/// another tab's does unless `confirm_others`.
-pub fn restore(uid: &str, id: &str, paths: Option<&[String]>, confirm_others: bool) -> Result<Restored, String> {
+/// = every differing file). See [`restore_refusal`] for when it is refused.
+pub fn restore(key: &str, id: &str, paths: Option<&[String]>, confirm_others: bool, confirm_unknown: bool) -> Result<Restored, String> {
     ready()?;
-    let (bound, store, row) = store_row(uid, id)?;
-    if matches!(crate::services::agent_turn::state_of(uid), Some(TurnState::Working | TurnState::Decision)) {
-        return Err("the agent in this tab is working; restore when it has finished".into());
+    let (uid, bound, store, row) = store_row(key, id)?;
+    let others = other_tabs(&uid, &bound.folder);
+    let own = crate::services::agent_turn::state_of(&uid);
+    if let Some(why) = restore_refusal(own, turn_unknown(&uid), others.working, others.unknown, confirm_others, confirm_unknown) {
+        return Err(why.into());
     }
-    if !confirm_others && other_tabs_working(uid, &bound.folder) {
-        return Err("another agent tab in this folder is working".into());
-    }
-    let result = restore::restore(&store, &row, &who_for(uid, &bound, None), paths)?;
-    announce(uid, &result.undo_id, Kind::PreRestore);
+    let result = restore::restore(&store, &row, &who_for(&uid, &bound, None), paths)?;
+    announce(&uid, &result.undo_id, Kind::PreRestore);
     Ok(result)
 }
 
 /// A checkpoint now, for the tab (the Reader's and the tab menu's
 /// "Checkpoint now"). Waits for the folder's worker.
-pub fn now(uid: &str, label: Option<&str>) -> Result<Row, String> {
+pub fn now(key: &str, label: Option<&str>) -> Result<Row, String> {
     ready()?;
-    let bound = bound(uid)?;
+    let (uid, bound) = by_key(key)?;
+    let uid = uid.as_str();
     let (tx, rx) = std::sync::mpsc::channel();
     worker::submit(worker::Job {
         folder: bound.folder.clone(),

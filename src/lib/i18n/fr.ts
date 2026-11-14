@@ -12146,6 +12146,8 @@ export const dict: Dict = {
   "checkpoints.restore.nested": "Les dépôts imbriqués ne sont pas capturés ; leurs fichiers ne sont jamais restaurés : {list}.",
   "checkpoints.restore.leftOut": "{n} fichiers du dossier sont trop gros ou ne sont pas des fichiers ordinaires ; ils sont laissés tels quels.",
   "checkpoints.restore.othersWorking": "Un autre onglet d'agent de ce dossier travaille. Restaurer quand même.",
+  "checkpoints.restore.othersUnknown": "Un autre onglet d'agent de ce dossier ne signale pas ses tours, il travaille peut-être. Restaurer quand même.",
+  "checkpoints.restore.turnUnknown": "L'agent de cet onglet ne signale pas ses tours (ses hooks sont désactivés ou pas encore approuvés), donc {app} ne peut pas savoir s'il travaille. Restaurer quand même.",
   "checkpoints.restore.note": "Mettre une note à ce sujet dans la zone de message",
   "checkpoints.restore.noteText": "Les fichiers ont été restaurés dans l'état où ils étaient à {time}. Relisez les fichiers sur lesquels vous vous appuyez avant de continuer.",
   "checkpoints.restore.action": "Restaurer {n} fichiers",

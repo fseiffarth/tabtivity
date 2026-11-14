@@ -68,6 +68,11 @@ export interface CheckpointSince {
   leftOut: number;
   nested: string[];
   othersWorking: boolean;
+  /** Another agent tab in this folder doesn't report its turns: it may be working. */
+  othersUnknown: boolean;
+  /** This tab's agent doesn't report its turns (Codex before its hooks are
+   *  trusted, a CLI without hooks): a restore needs `confirmUnknown`. */
+  turnUnknown: boolean;
   raced: boolean;
   partial: boolean;
 }
@@ -99,16 +104,41 @@ export interface CheckpointSettings {
 /** The event a finished snapshot is announced with. */
 export const CHECKPOINT_EVENT = "checkpoint-added";
 
-export const checkpointList = (tabKey: string) => invoke<CheckpointListing>("checkpoint_list", { tabKey });
+/**
+ * Each tab's checkpoint key, by launch uid: the backend mints it at every
+ * launch and hands it only to the window, in `pty_spawn`'s answer
+ * (`checkpointKey`). The uid is in the agent's own environment, so the
+ * backend never takes it as the caller's word; this key is never persisted
+ * and never reaches the agent. A relaunch brings a new one.
+ */
+const keys = new Map<string, string>();
 
-export const checkpointDiff = (tabKey: string, id: string, only?: string[]) =>
-  invoke<CheckpointSince>("checkpoint_diff", { tabKey, id, only: only ?? null });
+/** Remember (or, with none, forget) the key tab `uid`'s launch answered with. */
+export function noteCheckpointKey(uid: string, key: string | null | undefined): void {
+  if (key) keys.set(uid, key);
+  else keys.delete(uid);
+}
 
-export const checkpointRestore = (tabKey: string, id: string, only: string[] | null, confirmOthers: boolean) =>
-  invoke<CheckpointRestored>("checkpoint_restore", { tabKey, id, only, confirmOthers });
+const NO_KEY = "this tab has no checkpoints";
+const UNBOUND: CheckpointListing = { enabled: false, bound: false, rows: [], failure: null };
 
-export const checkpointNow = (tabKey: string, label?: string) =>
-  invoke<CheckpointRow>("checkpoint_now", { tabKey, label: label ?? null });
+/** `call` with tab `uid`'s key, or a refusal when this window has none for it. */
+function withKey<T>(uid: string, call: (tabKey: string) => Promise<T>): Promise<T> {
+  const tabKey = keys.get(uid);
+  return tabKey ? call(tabKey) : Promise.reject(new Error(NO_KEY));
+}
+
+export const checkpointList = (uid: string) =>
+  keys.has(uid) ? withKey(uid, (tabKey) => invoke<CheckpointListing>("checkpoint_list", { tabKey })) : Promise.resolve(UNBOUND);
+
+export const checkpointDiff = (uid: string, id: string, only?: string[]) =>
+  withKey(uid, (tabKey) => invoke<CheckpointSince>("checkpoint_diff", { tabKey, id, only: only ?? null }));
+
+export const checkpointRestore = (uid: string, id: string, only: string[] | null, confirmOthers: boolean, confirmUnknown: boolean) =>
+  withKey(uid, (tabKey) => invoke<CheckpointRestored>("checkpoint_restore", { tabKey, id, only, confirmOthers, confirmUnknown }));
+
+export const checkpointNow = (uid: string, label?: string) =>
+  withKey(uid, (tabKey) => invoke<CheckpointRow>("checkpoint_now", { tabKey, label: label ?? null }));
 
 export const checkpointSettingsGet = () => invoke<CheckpointSettings>("checkpoint_settings_get");
 

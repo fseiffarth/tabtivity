@@ -85,14 +85,24 @@ in that window count too.
 
 ## Restore
 
-The renderer names a tab (its launch uid) and an opaque id. The folder is the
+The renderer names a tab by its checkpoint key and a checkpoint by an opaque
+id. The key is minted per launch (`checkpoints::bind`, 128 random bits) and
+handed only to the window, in `pty_spawn`'s answer; it is never in the agent's
+environment and never persisted. The launch uid is not taken: the agent holds
+it (`TAB_UID`), and a command keyed by it would make the agent's own
+credential the caller's say-so. A server client that joins another client's
+tab gets no key. The folder is the
 one `launch_prep` bound the tab to, found among the fence roots (`projects.json`
 / `boxes.json`), never from the renderer. A file list from the renderer is only
 a filter on what git's diff reports. Before any write each path is checked
 (`restore::plain_path`: no `..`, no `.git`, no leading link). A swap between
 check and write remains a race with another process in the same folder; the
 restore refuses while this tab's agent works and the dialog confirms for other
-tabs'. A restore takes a `pre-restore` snapshot first: that is Undo restore.
+tabs'. A tab whose hooks have never reported a turn (Codex before its hooks are
+trusted, a CLI without hooks, a tab not prompted yet; the previous run's record
+counts) can't be told working or not (`turn_unknown`): its own restore needs a
+tick saying so (`confirmUnknown`), and such a tab elsewhere in the folder
+needs the other-tabs tick (`restore_refusal`). A restore takes a `pre-restore` snapshot first: that is Undo restore.
 A file that is now over the snapshot cap (or not an ordinary file) is dropped
 from the store's index, so git would call the checkpoint's copy "deleted since";
 `restore::left_alone` keeps it out of the list and of the restore, since the

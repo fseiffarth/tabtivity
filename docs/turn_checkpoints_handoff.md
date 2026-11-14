@@ -133,8 +133,9 @@ frees the unreachable commits, and `purge_project` on forget and archive.
 Also fixed 2026-11-14, found while fixing these: an exclude line in the
 store's ignore file (the size cap, the budget, the worktrees folder) could be
 taken back by a `.gitignore` negation (`!big.bin` outranks
-`core.excludesFile`); they are exclude pathspecs now. Still open: Codex with
-untrusted hooks, and the authorization by launch uid (below).
+`core.excludesFile`); they are exclude pathspecs now. The two items still open
+then (Codex with untrusted hooks, the authorization by launch uid) were fixed
+the same day too.
 
 - **Old git — resolved 2026-11-14:** `checkpoints::MIN_GIT = (2, 40)`; turning
   them on is refused, snapshots/since/restore/now refuse, and the settings
@@ -179,17 +180,28 @@ untrusted hooks, and the authorization by launch uid (below).
   `settings.json` or a Debug-mode profile can leave the flag on with the backend
   off (the card says so, controls hidden: safe) or the flag off with the backend
   still capturing (invisible but running).
-- **Codex with untrusted hooks** reports no turn state, so the "agent is
-  working" refusal cannot see it; a restore is then allowed mid-turn.
+- **Codex with untrusted hooks — resolved 2026-11-14:** a tab whose hooks have
+  never reported a turn (this launch, or the previous run's record) can't be
+  told working or not (`checkpoints::turn_unknown`); a restore then needs the
+  dialog's extra tick (`confirmUnknown`), and such a tab elsewhere in the
+  folder counts with the other-tabs tick. Original note: Codex with untrusted
+  hooks reports no turn state, so the "agent is working" refusal cannot see
+  it; a restore is then allowed mid-turn.
 - **Resolved 2026-11-14:** `remove_store` renames the store aside under its
   lock, and `since`/`restore` re-read the row under it. Original note:
   `remove_store` drops the store lock before `remove_dir_all`; a snapshot
   starting in between fails or recreates the store. `restore`/`since` read the
   row before taking the lock; a row pruned in that window (14 days old, plus a
   gc) makes the checkout fail with every path listed as failed (nothing lost).
-- The authorization is the tab's launch uid (the same credential
-  `agent_turn` uses); the commands are `core`, so any client that can call
-  commands and knows a uid can list or restore that tab's folder.
+- **Authorization by launch uid — resolved 2026-11-14:** the commands take a
+  per-launch key (`checkpoints::bind` mints 128 random bits, `pty_spawn`
+  answers it as `checkpointKey`, the window keeps it in memory only); the uid,
+  which the agent holds as `TAB_UID`, names nothing. A relaunch mints a new
+  key. A server client that joins another client's tab gets none (no
+  checkpoint controls there). Original note: the authorization is the tab's
+  launch uid (the same credential `agent_turn` uses); the commands are `core`,
+  so any client that can call commands and knows a uid can list or restore
+  that tab's folder.
 
 ### Review gates
 

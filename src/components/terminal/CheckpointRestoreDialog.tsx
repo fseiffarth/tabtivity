@@ -31,8 +31,10 @@ const STATUS_KEY: Record<CheckpointChange["status"], TranslationKey> = {
  * user to send or delete. A restore takes its own `pre-restore` checkpoint
  * first, so the result step offers **Undo restore**.
  *
- * `uid` is the tab's launch uid and `row` the checkpoint: the backend finds
- * the folder, the window never names one.
+ * `uid` is the tab's launch uid (the calls swap in its checkpoint key) and
+ * `row` the checkpoint: the backend finds the folder, the window never names
+ * one. An agent that doesn't report its turns can't be told working or not:
+ * the restore then waits for a tick saying so.
  */
 export function CheckpointRestoreDialog({ uid, ptyId, row, rows, onClose }: {
   uid: string;
@@ -51,6 +53,7 @@ export function CheckpointRestoreDialog({ uid, ptyId, row, rows, onClose }: {
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const [note, setNote] = useState(true);
   const [others, setOthers] = useState(false);
+  const [unknown, setUnknown] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ restored: CheckpointRestored; undone: boolean } | null>(null);
   const when = chatTime(new Date(target.at), use24h);
@@ -77,13 +80,13 @@ export function CheckpointRestoreDialog({ uid, ptyId, row, rows, onClose }: {
   const previous = target.raced ? previousPost(rows, target) : undefined;
   const flagged = useMemo(() => new Set(since?.others ?? []), [since]);
   const chosen = since?.files.filter((file) => ticked.has(file.path)) ?? [];
-  const blocked = !!since?.othersWorking && !others;
+  const blocked = (!!(since?.othersWorking || since?.othersUnknown) && !others) || (!!since?.turnUnknown && !unknown);
 
   const run = async (id: string, only: string[] | null) => {
     setBusy(true);
     setError(null);
     try {
-      const done = await checkpointRestore(uid, id, only, others);
+      const done = await checkpointRestore(uid, id, only, others, unknown);
       void useCheckpointsStore.getState().refresh(uid);
       return done;
     } catch (reason) {
@@ -191,10 +194,16 @@ export function CheckpointRestoreDialog({ uid, ptyId, row, rows, onClose }: {
           {since && since.leftOut > 0 && (
             <div className="checkpoint-restore-notes">{t("checkpoints.restore.leftOut", { n: since.leftOut })}</div>
           )}
-          {since?.othersWorking && (
+          {since?.turnUnknown && (
+            <label className="checkpoint-restore-confirm">
+              <input type="checkbox" checked={unknown} onChange={(e) => setUnknown(e.target.checked)} />
+              {t("checkpoints.restore.turnUnknown")}
+            </label>
+          )}
+          {(since?.othersWorking || since?.othersUnknown) && (
             <label className="checkpoint-restore-confirm">
               <input type="checkbox" checked={others} onChange={(e) => setOthers(e.target.checked)} />
-              {t("checkpoints.restore.othersWorking")}
+              {t(since.othersWorking ? "checkpoints.restore.othersWorking" : "checkpoints.restore.othersUnknown")}
             </label>
           )}
           {ptyId && (

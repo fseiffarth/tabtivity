@@ -659,21 +659,95 @@ fn a_launch_without_roots_or_a_project_is_unbound() {
     std::fs::create_dir_all(&dir).unwrap();
     let roots = vec![dir.clone()];
     let cwd = dir.display().to_string();
-    bind("uid-bind-1", &cwd, Some("proj-1"), "/usr/bin/claude", Some(&roots));
+    assert!(bind("uid-bind-1", &cwd, Some("proj-1"), "/usr/bin/claude", Some(&roots), false).is_some());
     assert_eq!(bound("uid-bind-1").unwrap().folder, dir);
     assert_eq!(bound("uid-bind-1").unwrap().cli, "claude");
-    // The root console (no project), a remote or Host launch (no roots): none.
-    bind("uid-bind-1", &cwd, None, "claude", Some(&roots));
+    // The root console (no project), a remote or Host launch (no roots): none,
+    // and no key.
+    assert!(bind("uid-bind-1", &cwd, None, "claude", Some(&roots), false).is_none());
     assert!(bound("uid-bind-1").is_err());
-    bind("uid-bind-1", &cwd, Some("proj-1"), "claude", Some(&roots));
-    bind("uid-bind-1", &cwd, Some("proj-1"), "claude", None);
+    bind("uid-bind-1", &cwd, Some("proj-1"), "claude", Some(&roots), false);
+    assert!(bind("uid-bind-1", &cwd, Some("proj-1"), "claude", None, false).is_none());
     assert!(bound("uid-bind-1").is_err());
     // A reserved scope is no project.
-    bind("uid-bind-1", &cwd, Some("root"), "claude", Some(&roots));
+    bind("uid-bind-1", &cwd, Some("root"), "claude", Some(&roots), false);
     assert!(bound("uid-bind-1").is_err());
-    bind("uid-bind-2", &cwd, Some("proj-1"), "claude", Some(&roots));
+    bind("uid-bind-2", &cwd, Some("proj-1"), "claude", Some(&roots), false);
     unbind("uid-bind-2");
     assert!(bound("uid-bind-2").is_err());
+}
+
+#[test]
+fn the_window_names_a_tab_by_its_launch_key_never_by_the_uid_its_agent_holds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap().join("p");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (roots, cwd) = (vec![dir.clone()], dir.display().to_string());
+    let key = bind("uid-key-1", &cwd, Some("proj-1"), "claude", Some(&roots), false).unwrap();
+    assert_eq!(key.len(), 32);
+    assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(by_key(&key).unwrap().0, "uid-key-1");
+    // The uid (in the agent's environment as TAB_UID) is no key.
+    assert!(by_key("uid-key-1").is_err());
+    assert!(!list("uid-key-1").bound);
+    assert!(by_key("").is_err());
+    // A relaunch mints a new key; the old one names nothing any more.
+    let again = bind("uid-key-1", &cwd, Some("proj-1"), "claude", Some(&roots), false).unwrap();
+    assert_ne!(again, key);
+    assert!(by_key(&key).is_err());
+    assert!(by_key(&again).is_ok());
+    unbind("uid-key-1");
+    assert!(by_key(&again).is_err());
+}
+
+#[test]
+fn a_tab_whose_hooks_never_spoke_cannot_be_told_working_or_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap().join("p");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (roots, cwd) = (vec![dir.clone()], dir.display().to_string());
+    // Codex with untrusted hooks: no record from a previous run, no turn yet.
+    bind("uid-unknown-1", &cwd, Some("proj-1"), "codex", Some(&roots), false);
+    assert!(turn_unknown("uid-unknown-1"));
+    // Its hooks speak (any transition, a session end too): known from now on.
+    on_turn("uid-unknown-1", None, TurnState::Idle, None);
+    assert!(!turn_unknown("uid-unknown-1"));
+    // The previous run's record showed working hooks.
+    bind("uid-unknown-2", &cwd, Some("proj-1"), "claude", Some(&roots), true);
+    assert!(!turn_unknown("uid-unknown-2"));
+    let others = other_tabs("uid-unknown-2", &dir);
+    assert!(!others.unknown && !others.working, "the only other tab has spoken");
+    // Another tab of the folder that can't be told counts as "others".
+    bind("uid-unknown-3", &cwd, Some("proj-1"), "codex", Some(&roots), false);
+    let others = other_tabs("uid-unknown-2", &dir);
+    assert!(others.unknown && !others.working);
+    for uid in ["uid-unknown-1", "uid-unknown-2", "uid-unknown-3"] {
+        unbind(uid);
+    }
+}
+
+#[test]
+fn a_restore_waits_for_a_working_agent_and_asks_when_it_cannot_tell() {
+    use TurnState::*;
+    // (own state, own unknown, others working, others unknown, confirm others, confirm unknown) → allowed
+    let cases = [
+        (Some(Done), false, false, false, false, false, true),
+        (None, false, false, false, false, false, true),
+        (Some(Working), false, false, false, true, true, false),
+        (Some(Decision), false, false, false, true, true, false),
+        (None, true, false, false, false, false, false),
+        (None, true, false, false, false, true, true),
+        (Some(Done), false, true, false, false, false, false),
+        (Some(Done), false, true, false, true, false, true),
+        (Some(Done), false, false, true, false, false, false),
+        (Some(Done), false, false, true, true, false, true),
+        (None, true, true, true, true, false, false),
+        (None, true, true, true, true, true, true),
+    ];
+    for (own, own_unknown, working, unknown, c_others, c_unknown, allowed) in cases {
+        let refusal = restore_refusal(own, own_unknown, working, unknown, c_others, c_unknown);
+        assert_eq!(refusal.is_none(), allowed, "{own:?} {own_unknown} {working} {unknown} {c_others} {c_unknown}: {refusal:?}");
+    }
 }
 
 // ── Worker ───────────────────────────────────────────────────────────────

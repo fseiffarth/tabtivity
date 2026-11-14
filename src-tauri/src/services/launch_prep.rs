@@ -622,6 +622,10 @@ pub struct PreparedLaunch {
     pub live_turn: Option<crate::services::agent_turn::TurnState>,
     /// The local folder the tab works in, `None` for a remote tab.
     pub drop_dir: Option<String>,
+    /// The key the window names the tab's checkpoints by
+    /// (`checkpoints::bind`), `None` when it has none. Only the window gets
+    /// it; it is never in the agent's environment.
+    pub checkpoint_key: Option<String>,
     /// The tab runs an AI ([`is_ai_spawn`]): while the AI switch is off its
     /// input is refused (`commands::terminal::pty_write`).
     pub ai: bool,
@@ -1201,11 +1205,15 @@ pub async fn prepare(
             let checkpoint_roots = fence_roots
                 .as_deref()
                 .filter(|_| agent_spawn && !assistant && !remote_agent_run && !opts.host_session && local_project);
-            crate::services::checkpoints::bind(&uid, &opts.cwd, project.as_deref(), &opts.cmd, checkpoint_roots);
-            left
+            // The previous run's record shows its hooks work: no turn state
+            // then means idle (a restore needs no "can't tell" confirmation).
+            let turns_known = left.cut_off || left.resting || left.live.is_some();
+            let key = crate::services::checkpoints::bind(&uid, &opts.cwd, project.as_deref(), &opts.cmd, checkpoint_roots, turns_known);
+            (left, key)
         }
         None => Default::default(),
     };
+    let (left, checkpoint_key) = left;
     let (interrupted, resting, live_turn) = (left.cut_off, left.resting, left.live);
 
     // Codex resume, without the hook. Codex will not run Tabtivity's SessionStart
@@ -1595,6 +1603,7 @@ pub async fn prepare(
         interrupted,
         resting,
         live_turn,
+        checkpoint_key,
         mcp_spawn_guard,
         resume_claim,
         fenced_scope,
@@ -1708,7 +1717,7 @@ mod tests {
             local_model: false, schedule_target_id: None, host_session: false, api_key: None,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, live_turn: None, drop_dir: None, ai: true, mcp_spawn_guard: None,
+            opts, named: false, interrupted: false, resting: false, live_turn: None, checkpoint_key: None, drop_dir: None, ai: true, mcp_spawn_guard: None,
             resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, privacy_check: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }

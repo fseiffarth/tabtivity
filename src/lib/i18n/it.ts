@@ -12144,6 +12144,8 @@ export const dict: Dict = {
   "checkpoints.restore.nested": "I repository annidati non vengono catturati, quindi i loro file non sono mai ripristinati: {list}.",
   "checkpoints.restore.leftOut": "{n} file nella cartella sono troppo grandi o non sono file normali e non vengono toccati.",
   "checkpoints.restore.othersWorking": "Un'altra scheda agente in questa cartella sta lavorando. Ripristina comunque.",
+  "checkpoints.restore.othersUnknown": "Un'altra scheda agente in questa cartella non segnala i suoi turni, quindi potrebbe essere al lavoro. Ripristina comunque.",
+  "checkpoints.restore.turnUnknown": "L'agente di questa scheda non segnala i suoi turni (i suoi hook sono disattivati o non ancora considerati attendibili), quindi {app} non può sapere se sta lavorando. Ripristina comunque.",
   "checkpoints.restore.note": "Metti una nota in proposito nella casella del messaggio",
   "checkpoints.restore.noteText": "I file sono stati ripristinati a com'erano alle {time}. Rileggi i file su cui ti basi prima di continuare.",
   "checkpoints.restore.action": "Ripristina {n} file",

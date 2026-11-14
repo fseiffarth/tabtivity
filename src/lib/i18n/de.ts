@@ -12148,6 +12148,8 @@ export const dict: Dict = {
   "checkpoints.restore.nested": "Verschachtelte Repositories werden nicht erfasst, ihre Dateien werden nie wiederhergestellt: {list}.",
   "checkpoints.restore.leftOut": "{n} Dateien im Ordner sind zu groß oder keine normalen Dateien und bleiben unberührt.",
   "checkpoints.restore.othersWorking": "Ein anderer Agent-Tab in diesem Ordner arbeitet gerade. Trotzdem wiederherstellen.",
+  "checkpoints.restore.othersUnknown": "Ein anderer Agent-Tab in diesem Ordner meldet seine Züge nicht und arbeitet vielleicht gerade. Trotzdem wiederherstellen.",
+  "checkpoints.restore.turnUnknown": "Der Agent dieses Tabs meldet seine Züge nicht (seine Hooks sind aus oder noch nicht vertraut), daher kann {app} nicht erkennen, ob er gerade arbeitet. Trotzdem wiederherstellen.",
   "checkpoints.restore.note": "Einen Hinweis dazu in das Nachrichtenfeld schreiben",
   "checkpoints.restore.noteText": "Die Dateien wurden auf den Stand von {time} zurückgesetzt. Lies Dateien, auf die du dich stützt, neu ein, bevor du weitermachst.",
   "checkpoints.restore.action": "{n} Dateien wiederherstellen",

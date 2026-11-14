@@ -37,7 +37,10 @@ so, and hovering it says why.
 Hover one of your prompts in the Chat and press **Restore files to before this**.
 A dialog lists every file that differs now, all ticked: files the agent added are
 removed, the rest are put back. Files another tab's turn changed are flagged.
-Nothing is restored while the tab's agent is working.
+Nothing is restored while the tab's agent is working. An agent that doesn't
+report its turns (a Codex tab whose hooks aren't trusted yet, or a tab you
+haven't prompted since it opened) can't be told working or not: the dialog then
+asks you to tick that you know it isn't.
 
 Only the files go back. The conversation stays as it is, so a box is ticked to put
 a short note into the message box ("files were restored to ..."), for you to send

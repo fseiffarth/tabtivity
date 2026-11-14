@@ -12144,6 +12144,8 @@ export const dict: Dict = {
   "checkpoints.restore.nested": "Los repositorios anidados no se capturan, así que sus archivos nunca se restauran: {list}.",
   "checkpoints.restore.leftOut": "{n} archivos de la carpeta son demasiado grandes o no son archivos normales y no se tocan.",
   "checkpoints.restore.othersWorking": "Otra pestaña de agente en esta carpeta está trabajando. Restaurar de todos modos.",
+  "checkpoints.restore.othersUnknown": "Otra pestaña de agente en esta carpeta no informa de sus turnos, así que quizá esté trabajando. Restaurar de todos modos.",
+  "checkpoints.restore.turnUnknown": "El agente de esta pestaña no informa de sus turnos (sus hooks están desactivados o aún no son de confianza), así que {app} no puede saber si está trabajando. Restaurar de todos modos.",
   "checkpoints.restore.note": "Poner una nota al respecto en el cuadro de mensaje",
   "checkpoints.restore.noteText": "Los archivos se restauraron a como estaban a las {time}. Vuelve a leer los archivos en los que te apoyes antes de continuar.",
   "checkpoints.restore.action": "Restaurar {n} archivos",

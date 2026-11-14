@@ -13,6 +13,9 @@ vi.mock("../../lib/terminal/terminalDrop", async (importOriginal) => ({
 import { CheckpointRestoreDialog } from "../../components/terminal/CheckpointRestoreDialog";
 import { ReaderComposerChips } from "../../components/terminal/ReaderComposerChips";
 import {
+  checkpointDiff,
+  checkpointList,
+  noteCheckpointKey,
   preForPrompt,
   previousPost,
   sizeLabel,
@@ -69,18 +72,23 @@ describe("the restore dialog", () => {
     leftOut: 0,
     nested: [],
     othersWorking: false,
+    othersUnknown: false,
+    turnUnknown: false,
     raced: false,
     partial: false,
   };
   const target = row({ id: "ck", kind: "pre", at: Date.parse("2026-11-13T10:00:00Z"), promptAt: 1 });
   let working = false;
+  let unknown = false;
 
   beforeEach(() => {
     invoke.mockReset();
     insertIntoReader.mockClear();
+    noteCheckpointKey("u1", "k1");
     working = false;
+    unknown = false;
     invoke.mockImplementation((command: string, args?: Record<string, unknown>) => {
-      if (command === "checkpoint_diff") return Promise.resolve({ ...since, othersWorking: working });
+      if (command === "checkpoint_diff") return Promise.resolve({ ...since, othersWorking: working, turnUnknown: unknown });
       if (command === "checkpoint_restore") return Promise.resolve({ restored: 2, removed: 1, failed: [], undoId: "undo-1" });
       if (command === "checkpoint_list") return Promise.resolve({ enabled: true, bound: true, rows: [] });
       return Promise.reject(new Error(`unexpected ${command} ${JSON.stringify(args)}`));
@@ -97,14 +105,14 @@ describe("the restore dialog", () => {
     fireEvent.click(screen.getByLabelText(/new\.txt/));
     fireEvent.click(screen.getByRole("button", { name: "Restore 2 files" }));
     await screen.findByText("Restored 2 files and removed 1.");
-    expect(invoke).toHaveBeenCalledWith("checkpoint_restore", { tabKey: "u1", id: "ck", only: ["a.txt", "gone.txt"], confirmOthers: false });
+    expect(invoke).toHaveBeenCalledWith("checkpoint_restore", { tabKey: "k1", id: "ck", only: ["a.txt", "gone.txt"], confirmOthers: false, confirmUnknown: false });
     expect(insertIntoReader).toHaveBeenCalledTimes(1);
     expect(String(insertIntoReader.mock.calls[0][1])).toContain("Files were restored");
 
     // Undo restore restores the pre-restore checkpoint, every file.
     fireEvent.click(screen.getByRole("button", { name: "Undo restore" }));
     await screen.findByText(/Undone/);
-    expect(invoke).toHaveBeenCalledWith("checkpoint_restore", { tabKey: "u1", id: "undo-1", only: null, confirmOthers: false });
+    expect(invoke).toHaveBeenCalledWith("checkpoint_restore", { tabKey: "k1", id: "undo-1", only: null, confirmOthers: false, confirmUnknown: false });
   });
 
   it("leaves the note out when its box is unticked, and holds the button while another tab works", async () => {
@@ -120,6 +128,25 @@ describe("the restore dialog", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("checkpoint_restore", expect.objectContaining({ confirmOthers: true })));
     await screen.findByText("Restored 2 files and removed 1.");
     expect(insertIntoReader).not.toHaveBeenCalled();
+  });
+
+  it("holds the button for an agent that can't be told working until that is ticked", async () => {
+    unknown = true;
+    render(<CheckpointRestoreDialog uid="u1" ptyId="p:agent-1" row={target} rows={[target]} onClose={() => {}} />);
+    await screen.findByText("a.txt");
+    const restore = screen.getByRole("button", { name: "Restore 3 files" }) as HTMLButtonElement;
+    expect(restore.disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/doesn't report its turns/));
+    expect(restore.disabled).toBe(false);
+    fireEvent.click(restore);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("checkpoint_restore", expect.objectContaining({ confirmUnknown: true, confirmOthers: false })));
+  });
+
+  it("asks nothing of the backend for a tab this window holds no key for", async () => {
+    noteCheckpointKey("u9", null);
+    await expect(checkpointList("u9")).resolves.toMatchObject({ bound: false, enabled: false });
+    await expect(checkpointDiff("u9", "ck")).rejects.toThrow(/no checkpoints/);
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("shows the backend's refusal and restores nothing", async () => {
@@ -141,7 +168,7 @@ describe("the restore dialog", () => {
     render(<CheckpointRestoreDialog uid="u1" ptyId="p:agent-1" row={raced} rows={[previous, raced]} onClose={() => {}} />);
     await screen.findByText("a.txt");
     fireEvent.click(screen.getByText(/Use the end of the previous turn instead/));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("checkpoint_diff", { tabKey: "u1", id: "ck1", only: null }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("checkpoint_diff", { tabKey: "k1", id: "ck1", only: null }));
   });
 });
 
