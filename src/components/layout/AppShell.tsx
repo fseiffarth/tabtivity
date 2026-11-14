@@ -58,6 +58,7 @@ import { PrintRequestsHost } from "../printing/PrintRequests";
 import { AgentContinueHost } from "./AgentContinueHost";
 import { AgentCronHost } from "./AgentCronHost";
 import { AgentScheduleHost } from "./AgentScheduleHost";
+import { TabMessagesHost } from "./TabMessagesHost";
 import { TimerLeaseHost } from "./TimerLeaseHost";
 import { WorkspacePatchHost } from "./WorkspacePatchHost";
 import { CalDavConflictDialog } from "../calendar/CalDavConflictDialog";
@@ -1493,6 +1494,7 @@ export function AppShell() {
           <AgentContinueHost />
           <AgentCronHost />
           <AgentScheduleHost />
+          <TabMessagesHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
           terminal — a one-click install (`runInstallInTab`) and a parked login

@@ -8,6 +8,7 @@ import { CockpitMcpSettings } from "./CockpitMcpSettings";
 import { GitPushMcpSettings } from "./GitPushMcp";
 import { MarkupMcpSettings } from "./MarkupMcpSettings";
 import { PrintMcpSettings } from "./PrintMcpSettings";
+import { TabsMcpSettings } from "./TabsMcpSettings";
 
 /** One visual home for the app's MCP lanes; each keeps its own authority. */
 export function AppToolsSettings() {
@@ -29,6 +30,7 @@ export function AppToolsSettings() {
       <div className="agents-option"><GitPushMcpSettings /></div>
       <div className="agents-option"><MarkupMcpSettings /></div>
       <div className="agents-option"><PrintMcpSettings /></div>
+      <div className="agents-option"><TabsMcpSettings /></div>
       <div className="agents-option">
         <SettingRow label={t("agents.tools.root")} help={t("agents.tools.rootHelp")} control={
           <button type="button" className="settings-btn sm" aria-label={t("agents.tools.root")} onClick={() => configure("settings-anchor-rootConsole")}>

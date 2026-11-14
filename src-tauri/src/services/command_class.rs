@@ -797,6 +797,14 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("print_mcp_decide", Client),
     ("print_mcp_pdf", Client),
     ("print_mcp_requests", Client),
+    // commands/tabs_mcp.rs — tab messaging is served by the window alone
+    // (`Runtime::serves_tabs`); its state, the Deliver button and the idle
+    // wake live where the window runs. Nothing crosses the phone.
+    ("set_project_tab_messages_wake", Client),
+    ("tabs_mcp_clear", Client),
+    ("tabs_mcp_deliver", Client),
+    ("tabs_mcp_traffic", Client),
+    ("tabs_mcp_wake_claim", Client),
     // commands/project_runtime.rs
     ("load_side_panel_folder", Core),
     ("save_side_panel_folder", Core),

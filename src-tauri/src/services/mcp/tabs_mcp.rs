@@ -372,6 +372,22 @@ pub fn wake_claim_in(state: &Path, scope: &str, tab: &str, now: Instant) -> bool
     true
 }
 
+/// [`wake_claim`] for every listed tab of `scope` (a closed tab is not woken:
+/// a notice queued for it would wait for a tab that may never return). The
+/// saved tab ids whose claim was granted, each at most once.
+pub fn wake_claims(scope: &str) -> Vec<String> {
+    wake_claims_in(&crate::storage::state_dir(), scope, Instant::now())
+}
+
+/// [`wake_claims`] for a given state dir and clock.
+pub fn wake_claims_in(state: &Path, scope: &str, now: Instant) -> Vec<String> {
+    let listed: Vec<String> = world().lock_ok().members.iter()
+        .filter(|m| m.binding.seat.state == state && m.binding.seat.scope == scope)
+        .map(|m| m.binding.seat.id.clone())
+        .collect();
+    listed.into_iter().filter(|tab| wake_claim_in(state, scope, tab, now)).collect()
+}
+
 // ── Budgets ─────────────────────────────────────────────────────────────────
 
 fn send_budgets() -> &'static Mutex<RollingWindows> {

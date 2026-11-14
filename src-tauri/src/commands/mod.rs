@@ -96,6 +96,10 @@ pub mod connect;
 pub mod sync;
 pub mod sync_handoff;
 pub mod synctex;
+// Window-only (`client`): tab messaging's window surface; the lane is served
+// by the window alone (`Runtime::serves_tabs`).
+#[cfg(feature = "desktop")]
+pub mod tabs_mcp;
 pub mod tfevents;
 pub mod terminal;
 pub mod tex;

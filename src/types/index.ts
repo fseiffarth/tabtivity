@@ -366,6 +366,10 @@ export interface Settings {
    *  project-agent tabs; every print waits for the user's Approve.
    *  **Default true** — absent means on. */
   print_mcp?: boolean;
+  /** Tab messaging (`services::tabs_mcp`, `tabs_list`/`tabs_send`/`tabs_inbox`)
+   *  between the local agent tabs of one project. **Default true** — absent
+   *  means on. */
+  tabs_mcp?: boolean;
   root_mcp_review?: "all" | "destructive" | "off";
   /** Root console: serve the MCP tools to local-model tabs only. Absent means
    *  off. On, cloud agent CLIs get no endpoint and running ones are refused. */
@@ -1392,6 +1396,9 @@ export interface AgentPrivacy {
 export interface ProjectEntry {
   agent_privacy?: AgentPrivacy;
   schedule_mcp?: "off" | "propose" | "apply";
+  /** Tab messaging's idle wake (`commands::tabs_mcp`): a tab with new unread
+   *  messages gets the host's fixed notice queued once it is idle. Absent = off. */
+  tab_messages_wake?: boolean;
   git_push_mcp?: GitPushMcpPolicy;
   id: string;
   name: string;

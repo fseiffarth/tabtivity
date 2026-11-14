@@ -496,3 +496,22 @@ fn cli_names_are_plain_stems() {
     assert_eq!(cli_name("weird name!"), "agent");
     assert_eq!(cli_name(""), "agent");
 }
+
+#[test]
+fn wake_claims_cover_listed_tabs_only() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let b = grant(state.path(), "p", "b", Class::Cloud);
+    let c = grant(state.path(), "p", "c", Class::Cloud);
+    let w = World2::new();
+    assert!(wake_claims_in(state.path(), "p", w.now).is_empty(), "nothing unread");
+    w.send(&a, &b, "for b");
+    w.send(&a, &c, "for c");
+    // c closes: it is no longer listed, so it is not woken.
+    revoke_tab(&c.pty);
+    sweep_with(&session_alive, w.now);
+    assert_eq!(wake_claims_in(state.path(), "p", w.now), vec!["b".to_string()]);
+    assert!(wake_claims_in(state.path(), "p", w.now).is_empty(), "the batch is covered");
+    assert!(wake_claims_in(state.path(), "q", w.now).is_empty(), "another scope");
+}

@@ -566,6 +566,8 @@ fn serve_everything(ctx: &CoreCtx, notify: NoticeSink) -> NoticeSink {
     crate::commands::markup_mcp::install_change_hook(ctx);
     #[cfg(feature = "desktop")]
     crate::commands::print_mcp::install_change_hook(ctx);
+    #[cfg(feature = "desktop")]
+    crate::commands::tabs_mcp::install_change_hook(ctx);
     let events = ctx.clone();
     Arc::new(move |notice| {
         notify(notice.clone());

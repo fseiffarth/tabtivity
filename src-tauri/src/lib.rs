@@ -2422,6 +2422,11 @@ pub fn run() {
             commands::print_mcp::print_mcp_requests,
             commands::print_mcp::print_mcp_pdf,
             commands::print_mcp::print_mcp_decide,
+            commands::tabs_mcp::tabs_mcp_traffic,
+            commands::tabs_mcp::tabs_mcp_deliver,
+            commands::tabs_mcp::tabs_mcp_clear,
+            commands::tabs_mcp::tabs_mcp_wake_claim,
+            commands::tabs_mcp::set_project_tab_messages_wake,
             // Disk usage analyzer (commands::disk_usage)
             commands::disk_usage::disk_usage_scan,
             commands::disk_usage::disk_usage_cancel,
