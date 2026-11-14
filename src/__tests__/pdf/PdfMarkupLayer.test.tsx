@@ -3,7 +3,7 @@
  * mark in the page's own units — its points after `/Rotate`, what the phone
  * draws in and the backend bakes from — whatever the viewer's zoom.
  */
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PdfMarkupLayer } from "../../components/embed/pdf/PdfMarkupLayer";
 import type { MarkupEdit } from "../../components/embed/pdf/usePdfMarkup";
@@ -174,6 +174,94 @@ describe("PdfMarkupLayer", () => {
     expect(mark.style).toBe("dashed");
     expect(mark.points[0]).toEqual([50, 60, 0.5]);
     expect(mark.points[mark.points.length - 1]).toEqual([110, 60, 0.5]);
+  });
+
+  describe("dashed outlines, op for op", () => {
+    /** The calls and property writes of the canvas context since its last clear. */
+    function recordOps() {
+      const log: string[] = [];
+      const ctx = new Proxy({}, {
+        get: (_target, name: string) => (...args: unknown[]) => {
+          if (name === "clearRect") log.length = 0;
+          else log.push(`${name}(${args.join(",")})`);
+        },
+        set: (_target, name: string, value: unknown) => {
+          log.push(`${name}=${String(value)}`);
+          return true;
+        },
+      }) as unknown as CanvasRenderingContext2D;
+      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as never);
+      return log;
+    }
+
+    it("draws the area eraser's rectangle white under dark, dashed", () => {
+      const log = recordOps();
+      const edit = stubEdit({ tool: "eraser", pen: { ...DEFAULT_PEN_PREFS, eraser: "area" } });
+      const { layer, at } = mount(1, edit);
+      fireEvent.pointerDown(layer, { pointerId: 1, pointerType: "mouse", button: 0, ...at(100, 100) });
+      fireEvent.pointerMove(layer, { pointerId: 1, pointerType: "mouse", ...at(160, 130) });
+      expect(log).toEqual([
+        "save()", "lineWidth=2", "strokeStyle=white", "strokeRect(100,100,60,30)",
+        "setLineDash(4,3)", "lineWidth=1", "strokeStyle=#333", "strokeRect(100,100,60,30)", "restore()",
+      ]);
+    });
+
+    it("draws the lasso's loop the same way, with round joins", () => {
+      const log = recordOps();
+      const edit = stubEdit({ tool: "select" });
+      const { layer, at } = mount(1, edit);
+      fireEvent.pointerDown(layer, { pointerId: 1, pointerType: "mouse", button: 0, ...at(100, 100) });
+      for (const [x, y] of [[140, 100], [140, 160]]) fireEvent.pointerMove(layer, { pointerId: 1, pointerType: "mouse", ...at(x, y) });
+      const trace = ["beginPath()", "moveTo(100,100)", "lineTo(140,100)", "lineTo(140,160)", "stroke()"];
+      expect(log).toEqual([
+        "save()", "lineJoin=round", "lineWidth=2", "strokeStyle=white", ...trace,
+        "setLineDash(4,3)", "lineWidth=1", "strokeStyle=#333", ...trace, "restore()",
+      ]);
+    });
+  });
+
+  describe("the note and comment cards", () => {
+    const draft = (text: string, index: number | null = null) => ({ n: 1, pageSize: SIZE, at: [40, 70] as [number, number], index, text, color: "blue" as const, size: 15 });
+    const keys = (element: Element, key: string, init: object = {}) => fireEvent.keyDown(element, { key, ...init });
+
+    it("saves a note on Enter, cancels on Escape, and keeps the viewer's keys out", () => {
+      const outer = vi.fn();
+      const edit = stubEdit({ tool: "text", note: draft("teh") });
+      const { container } = render(<div onKeyDown={outer}><PdfMarkupLayer n={1} size={SIZE} scale={1} edit={edit} /></div>);
+      const field = container.querySelector(".file-viewer-pdf-markup-note textarea")!;
+      keys(field, "Enter", { shiftKey: true });
+      keys(field, "Enter", { altKey: true });
+      expect(edit.saveNote).not.toHaveBeenCalled();
+      keys(field, "Enter");
+      expect(edit.saveNote).toHaveBeenCalledWith("teh");
+      keys(field, "Escape");
+      expect(edit.cancelNote).toHaveBeenCalledTimes(1);
+      keys(field, "z");
+      expect(outer).not.toHaveBeenCalled();
+    });
+
+    it("does not save an empty note on Enter, and offers Delete only for an edited one", () => {
+      const edit = stubEdit({ tool: "text", note: draft("  ") });
+      const { container, rerender } = render(<PdfMarkupLayer n={1} size={SIZE} scale={1} edit={edit} />);
+      keys(container.querySelector(".file-viewer-pdf-markup-note textarea")!, "Enter");
+      expect(edit.saveNote).not.toHaveBeenCalled();
+      expect(screen.queryByText("Delete")).toBeNull();
+      rerender(<PdfMarkupLayer n={1} size={SIZE} scale={1} edit={stubEdit({ tool: "text", note: draft("x", 0) })} />);
+      expect(screen.getByText("Delete")).toBeTruthy();
+    });
+
+    it("saves a comment on Enter and cancels it on Escape", () => {
+      const base = addMark(EMPTY_LAYER, 1, SIZE, { kind: "box", color: "yellow", rect: [100, 100, 50, 50] });
+      const edit = stubEdit({ tool: "select", comment: { n: 1, index: 0, text: "fix this" } }, base);
+      const { container } = render(<PdfMarkupLayer n={1} size={SIZE} scale={1} edit={edit} />);
+      const field = container.querySelector(".file-viewer-pdf-markup-comment textarea")!;
+      keys(field, "Enter", { shiftKey: true });
+      expect(edit.saveComment).not.toHaveBeenCalled();
+      keys(field, "Enter");
+      expect(edit.saveComment).toHaveBeenCalledWith("fix this");
+      keys(field, "Escape");
+      expect(edit.cancelComment).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("ignores a right or middle button", () => {

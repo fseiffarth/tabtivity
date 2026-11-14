@@ -16,7 +16,7 @@
  * of the selection moves them; a lone mark takes a comment in a card). A pen
  * stroke held still at its end snaps to a line or an ellipse (`snapStroke`).
  */
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { textMarks } from "../../../../mobile-web/src/markup/anchors";
 import {
@@ -118,41 +118,37 @@ type Gesture =
 
 
 
-/** A dashed outline, white under dark so it shows on any page — the area
- *  eraser's rectangle, the select tool's box and its selection. */
-function dashedRect(ctx: CanvasRenderingContext2D, rect: readonly number[], k: number, dpr: number) {
-  const [x0, y0, x1, y1] = rect.map((v) => v * k);
+/** A dashed outline, white under dark so it shows on any page: `stroke` draws
+ *  the shape with whatever line is set (twice — the white line, then the
+ *  dashed dark one over it). */
+function dashedStroke(ctx: CanvasRenderingContext2D, dpr: number, stroke: () => void, join?: CanvasLineJoin) {
   ctx.save();
+  if (join) ctx.lineJoin = join;
   ctx.lineWidth = 2 * dpr;
   ctx.strokeStyle = "white";
-  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  stroke();
   ctx.setLineDash([4 * dpr, 3 * dpr]);
   ctx.lineWidth = dpr;
   ctx.strokeStyle = "#333";
-  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  stroke();
   ctx.restore();
+}
+
+/** The area eraser's rectangle, the select tool's box and its selection. */
+function dashedRect(ctx: CanvasRenderingContext2D, rect: readonly number[], k: number, dpr: number) {
+  const [x0, y0, x1, y1] = rect.map((v) => v * k);
+  dashedStroke(ctx, dpr, () => ctx.strokeRect(x0, y0, x1 - x0, y1 - y0));
 }
 
 /** The lasso's loop as it is drawn, dashed like the select tool's box. */
 function dashedLoop(ctx: CanvasRenderingContext2D, loop: readonly [number, number][], k: number, dpr: number) {
   if (loop.length < 2) return;
-  const trace = () => {
+  dashedStroke(ctx, dpr, () => {
     ctx.beginPath();
     ctx.moveTo(loop[0][0] * k, loop[0][1] * k);
     for (const [x, y] of loop.slice(1)) ctx.lineTo(x * k, y * k);
-  };
-  ctx.save();
-  ctx.lineJoin = "round";
-  ctx.lineWidth = 2 * dpr;
-  ctx.strokeStyle = "white";
-  trace();
-  ctx.stroke();
-  ctx.setLineDash([4 * dpr, 3 * dpr]);
-  ctx.lineWidth = dpr;
-  ctx.strokeStyle = "#333";
-  trace();
-  ctx.stroke();
-  ctx.restore();
+    ctx.stroke();
+  }, "round");
 }
 
 /** The selection's resize handle at its bottom-right corner. */
@@ -680,29 +676,83 @@ function MarkupSelectionBar({ box, scale, pageWidth, edit }: { box: [number, num
 /** The width of the note card, CSS pixels — the remark card's. */
 const CARD_W = 260;
 
-/** The typed note, edited where it sits on the page — the remark card's chrome. */
-function MarkupNoteEditor({ note, scale, pageWidth, edit }: { note: NoteDraft; scale: number; pageWidth: number; edit: MarkupEdit }) {
-  const t = useT();
+/** The card the note and the comment are typed in, on the remark card's
+ *  chrome: where it sits, the keys it keeps from the viewer (Escape lets the
+ *  text be, Enter alone saves it), and the row of actions under `children`. */
+function MarkupCard({ kind, label, left, top, onEscape, onEnter, children, actions }: {
+  kind: "note" | "comment";
+  label: string;
+  left: number;
+  top: number;
+  onEscape: () => void;
+  onEnter: () => void;
+  children: ReactNode;
+  actions: ReactNode;
+}) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // The viewer's own keys (undo, page steps, leaving markup) stay out of a
-    // note being typed.
+    // The viewer's own keys (undo, page steps, Delete, leaving markup) stay out
+    // of a card being typed in.
     event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      edit.cancelNote();
+      onEscape();
     } else if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
       event.preventDefault();
-      if (note.text.trim()) edit.saveNote(note.text);
+      onEnter();
     }
   };
   return (
     <div
-      className="file-viewer-pdf-note-card file-viewer-pdf-markup-note"
-      style={{ left: Math.max(0, Math.min(note.at[0] * scale, pageWidth * scale - CARD_W)), top: note.at[1] * scale }}
+      className={`file-viewer-pdf-note-card file-viewer-pdf-markup-${kind}`}
+      style={{ left, top }}
       role="group"
-      aria-label={t("pdfMarkup.noteLabel")}
+      aria-label={label}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={onKeyDown}
+    >
+      {children}
+      <div className="file-viewer-pdf-note-actions">{actions}</div>
+    </div>
+  );
+}
+
+/** The typed note, edited where it sits on the page — the remark card's chrome. */
+function MarkupNoteEditor({ note, scale, pageWidth, edit }: { note: NoteDraft; scale: number; pageWidth: number; edit: MarkupEdit }) {
+  const t = useT();
+  return (
+    <MarkupCard
+      kind="note"
+      label={t("pdfMarkup.noteLabel")}
+      left={Math.max(0, Math.min(note.at[0] * scale, pageWidth * scale - CARD_W))}
+      top={note.at[1] * scale}
+      onEscape={edit.cancelNote}
+      onEnter={() => {
+        if (note.text.trim()) edit.saveNote(note.text);
+      }}
+      actions={
+        <>
+          <button
+            type="button"
+            className="file-viewer-zoom-btn file-viewer-zoom-text"
+            onClick={() => edit.saveNote(note.text)}
+            disabled={!note.text.trim()}
+          >
+            {t("mobile.markup.noteDone")}
+          </button>
+          <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelNote}>
+            {t("mobile.markup.noteCancel")}
+          </button>
+          {note.index !== null && (
+            <button
+              type="button"
+              className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
+              onClick={() => edit.saveNote(null)}
+            >
+              {t("mobile.markup.noteDelete")}
+            </button>
+          )}
+        </>
+      }
     >
       <textarea
         autoFocus
@@ -719,29 +769,7 @@ function MarkupNoteEditor({ note, scale, pageWidth, edit }: { note: NoteDraft; s
       <div className="file-viewer-pdf-markup-colors file-viewer-pdf-markup-note-colors" role="group" aria-label={t("mobile.markup.noteColor")}>
         <SwatchButtons colors={colorsFor("text", "pen")} chosen={note.color} onPick={edit.editNoteColor} />
       </div>
-      <div className="file-viewer-pdf-note-actions">
-        <button
-          type="button"
-          className="file-viewer-zoom-btn file-viewer-zoom-text"
-          onClick={() => edit.saveNote(note.text)}
-          disabled={!note.text.trim()}
-        >
-          {t("mobile.markup.noteDone")}
-        </button>
-        <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelNote}>
-          {t("mobile.markup.noteCancel")}
-        </button>
-        {note.index !== null && (
-          <button
-            type="button"
-            className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
-            onClick={() => edit.saveNote(null)}
-          >
-            {t("mobile.markup.noteDelete")}
-          </button>
-        )}
-      </div>
-    </div>
+    </MarkupCard>
   );
 }
 
@@ -763,25 +791,38 @@ function MarkupCommentEditor({
   const t = useT();
   const [x, y, , h] = markBox(mark);
   const had = mark.kind !== "text" && !!mark.comment;
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // The viewer's own keys (Delete deletes the selection) stay out of it.
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      event.preventDefault();
-      edit.cancelComment();
-    } else if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
-      event.preventDefault();
-      edit.saveComment(comment.text);
-    }
-  };
   return (
-    <div
-      className="file-viewer-pdf-note-card file-viewer-pdf-markup-comment"
-      style={{ left: Math.max(0, Math.min(x * scale, pageWidth * scale - CARD_W)), top: (y + h) * scale + 6 }}
-      role="group"
-      aria-label={t("mobile.markup.comment")}
-      onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={onKeyDown}
+    <MarkupCard
+      kind="comment"
+      label={t("mobile.markup.comment")}
+      left={Math.max(0, Math.min(x * scale, pageWidth * scale - CARD_W))}
+      top={(y + h) * scale + 6}
+      onEscape={edit.cancelComment}
+      onEnter={() => edit.saveComment(comment.text)}
+      actions={
+        <>
+          <button
+            type="button"
+            className="file-viewer-zoom-btn file-viewer-zoom-text"
+            onClick={() => edit.saveComment(comment.text)}
+            disabled={!comment.text.trim() && !had}
+          >
+            {t("mobile.markup.commentSave")}
+          </button>
+          <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelComment}>
+            {t("mobile.markup.noteCancel")}
+          </button>
+          {had && (
+            <button
+              type="button"
+              className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
+              onClick={() => edit.saveComment(null)}
+            >
+              {t("mobile.markup.commentRemove")}
+            </button>
+          )}
+        </>
+      }
     >
       <textarea
         autoFocus
@@ -793,28 +834,6 @@ function MarkupCommentEditor({
         aria-label={t("mobile.markup.commentPlaceholder")}
         onChange={(event) => edit.editComment(event.target.value)}
       />
-      <div className="file-viewer-pdf-note-actions">
-        <button
-          type="button"
-          className="file-viewer-zoom-btn file-viewer-zoom-text"
-          onClick={() => edit.saveComment(comment.text)}
-          disabled={!comment.text.trim() && !had}
-        >
-          {t("mobile.markup.commentSave")}
-        </button>
-        <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelComment}>
-          {t("mobile.markup.noteCancel")}
-        </button>
-        {had && (
-          <button
-            type="button"
-            className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
-            onClick={() => edit.saveComment(null)}
-          >
-            {t("mobile.markup.commentRemove")}
-          </button>
-        )}
-      </div>
-    </div>
+    </MarkupCard>
   );
 }
