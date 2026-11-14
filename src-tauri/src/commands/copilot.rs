@@ -160,6 +160,17 @@ pub async fn copilot_complete(
     crate::services::ai_switch::check()?;
     let editor = editor_key(&ctx, &editor)?;
     let mut lease = requests::start(&request_owner(&project_id, &editor), &request_id)?;
+    // The document is judged before any server starts: a file Copilot may not
+    // see never starts a network-capable process for its project.
+    let settings = load_settings()?;
+    let root = match authorize_in(&settings, &project_id) {
+        Ok(root) => root,
+        Err(error) => {
+            sessions().stop(&project_id).await;
+            return Err(error);
+        }
+    };
+    let file = authorize_file(&settings, &project_id, &root, &path)?;
     // Detached: a keystroke cancels this request, never the server launch
     // behind it. Dropping the launch would kill the starting server, and three
     // of those spend the project's restart budget.
@@ -167,29 +178,42 @@ pub async fn copilot_complete(
         let project_id = project_id.clone();
         async move { session(&project_id).await }
     });
-    let (session, root) = tokio::select! {
+    let (session, launched_root) = tokio::select! {
         biased;
         _ = requests::cancelled(&mut lease.signal) => return Err("copilot_cancelled".into()),
         result = launch => result.map_err(|_| "copilot_server_closed")??,
     };
     // Consent may have changed while initialization was waiting on the server.
     let settings = load_settings()?;
-    if authorize_in(&settings, &project_id).as_ref() != Ok(&root) {
+    if launched_root != root || authorize_in(&settings, &project_id).as_ref() != Ok(&root) {
         sessions().stop(&project_id).await;
         return Err("copilot_no_consent".into());
     }
-    let file = policy::authorize_document(&root, Path::new(&path)).map_err(policy_code)?;
-    // A file of a local-models-only project opened through a project that
-    // contains it is never sent to GitHub, whatever this project's consent is
-    // (`services::agent_privacy`).
-    if crate::services::agent_privacy::inside_locked(&file) {
-        return Err("copilot_local_only".into());
-    }
+    let file = match authorize_file(&settings, &project_id, &root, &path) {
+        Ok(again) if again == file => file,
+        Ok(_) => return Err("copilot_invalid_path".into()),
+        Err(error) => return Err(error),
+    };
     let uri = url::Url::from_file_path(&file).map_err(|_| "copilot_invalid_path")?;
     session.complete_cancellable(CompletionRequest {
         uri: uri.as_str(), editor: &editor, client_version: version, text: &text, language: &language,
         allow_text: policy::text_consented(&settings, &project_id), position, automatic, tab_size: tab_size.clamp(1, 16), insert_spaces,
     }, lease.signal.clone()).await
+}
+
+/// The file a completion may send, judged on the path `authorize_document`
+/// resolved: inside the consented project, not credential-shaped, not inside
+/// a local-models-only project (whatever this project's consent is,
+/// `services::agent_privacy`), and prose only with the text consent.
+fn authorize_file(settings: &Settings, project_id: &str, root: &Path, path: &str) -> Result<PathBuf, String> {
+    let file = policy::authorize_document(root, Path::new(path)).map_err(policy_code)?;
+    if crate::services::agent_privacy::inside_locked(&file) {
+        return Err("copilot_local_only".into());
+    }
+    if policy::text_file(&file) && !policy::text_consented(settings, project_id) {
+        return Err("copilot_code_only".into());
+    }
+    Ok(file)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -243,6 +267,13 @@ pub async fn copilot_account(project_id: String) -> Result<Value, String> {
     };
     let account = session.account().await.ok();
     Ok(json!({"running": true, "status": session.status(), "account": account, "messages": session.account_messages()}))
+}
+
+/// The newest log lines of the project's server (its log messages and stderr),
+/// redacted, from memory only. Never starts a server.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn copilot_diagnostics(project_id: String) -> Value {
+    json!({"lines": sessions().diagnostics(&project_id)})
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]

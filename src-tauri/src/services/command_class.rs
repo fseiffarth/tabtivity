@@ -406,6 +406,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copilot_cancel", Core),
     ("copilot_close_editor", Core),
     ("copilot_complete", Core),
+    ("copilot_diagnostics", Core),
     ("copilot_finish_sign_in", Core),
     ("copilot_message_action", Core),
     ("copilot_prepare", Core),

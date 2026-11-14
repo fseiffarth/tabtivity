@@ -516,6 +516,12 @@ pub struct Settings {
     pub copilot_completion: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_project_policies: Option<HashMap<String, CompletionProjectPolicy>>,
+    /// The editor's automatic-trigger idle delay per completion provider, in
+    /// milliseconds. Frontend logic only (missing: 600 local, 200 Copilot);
+    /// named here so it round-trips. Not a Copilot policy: changing it stops
+    /// no server (`commands::settings::copilot_invalidated`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autocomplete_delay_ms: Option<AutocompleteDelays>,
     /// Hunspell dictionary code (e.g. `en_US`) for the editors' dictionary
     /// spell check (`services::spell`). Unset means the default — an installed
     /// English variant when there is one, else the first dictionary found.
@@ -1127,6 +1133,18 @@ fn rev_is_zero(rev: &u64) -> bool {
     *rev == 0
 }
 
+/// `Settings::autocomplete_delay_ms`: milliseconds per provider; a missing
+/// one is the editor's default. Unknown keys survive a patch.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AutocompleteDelays {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot: Option<u32>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
 /// Last-known geometry of the MAIN window, in PHYSICAL desktop pixels — the
 /// canonical cross-window coordinate space (see `src/lib/window/coords.ts`). Tauri's
 /// `outerPosition`/`outerSize`/`set_position`/`set_size` are all physical; only a
@@ -1633,6 +1651,28 @@ mod tests {
             .expect("parse a profile that still has the cockpit key");
         assert_eq!(s.experimental_explicit, Some(true));
         assert_eq!(s.extra.get("cockpit"), Some(&serde_json::json!(true)));
+    }
+
+    /// The autocomplete delays round-trip, and a file without them loads and
+    /// writes back without the key.
+    #[test]
+    fn autocomplete_delays_round_trip_and_stay_absent_when_unset() {
+        let old: Settings = serde_json::from_str(r#"{"language":"de"}"#).expect("an older file loads");
+        assert_eq!(old.autocomplete_delay_ms, None);
+        let written = serde_json::to_value(&old).unwrap();
+        assert!(written.get("autocomplete_delay_ms").is_none(), "{written}");
+        assert_eq!(written["language"], "de");
+
+        let json = r#"{"autocomplete_delay_ms":{"ollama":400,"copilot":100,"later":1}}"#;
+        let s: Settings = serde_json::from_str(json).expect("settings parse");
+        let delays = s.autocomplete_delay_ms.clone().unwrap();
+        assert_eq!((delays.ollama, delays.copilot), (Some(400), Some(100)));
+        assert!(s.extra.is_empty(), "a real field, not an `extra` passenger");
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["autocomplete_delay_ms"], serde_json::json!({"ollama":400,"copilot":100,"later":1}));
+        // One provider alone keeps the other absent.
+        let one: Settings = serde_json::from_str(r#"{"autocomplete_delay_ms":{"copilot":200}}"#).unwrap();
+        assert_eq!(serde_json::to_value(&one).unwrap()["autocomplete_delay_ms"], serde_json::json!({"copilot":200}));
     }
 
     /// The browser's settings must be **named fields**, not `extra` passengers.

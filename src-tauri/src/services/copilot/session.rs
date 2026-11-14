@@ -5,7 +5,7 @@
 use super::documents::{DocumentTicket, Documents, Position};
 use app_core::sync::LockExt;
 use super::process::ManagedProcess;
-use super::rpc::{RpcClient, RpcError};
+use super::rpc::{LogSink, RpcClient, RpcError};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -62,12 +62,91 @@ pub struct CompletionRequest<'a> {
 pub fn error_code(error: RpcError) -> String {
     match error {
         RpcError::Server(1000) => "copilot_not_signed_in",
-        RpcError::Cancelled | RpcError::Server(-32800) => "copilot_cancelled",
+        // The server's own sign-in failures (device flow, token, account).
+        RpcError::Server(1001 | 1004 | 1005 | 1006) => "copilot_sign_in_failed",
+        // LSP's RequestCancelled and ServerCancelled.
+        RpcError::Cancelled | RpcError::Server(-32800 | -32802) => "copilot_cancelled",
+        // LSP's ContentModified: the document moved on under the request.
+        RpcError::Server(-32801) => "copilot_stale_document",
         RpcError::Timeout => "copilot_timeout",
         RpcError::Closed | RpcError::InvalidFrame => "copilot_server_closed",
         RpcError::Server(_) => "copilot_server_error",
     }
     .into()
+}
+
+/// Log lines kept per project for `copilot_diagnostics`, and each line's
+/// length after redaction.
+const LOG_LINES: usize = 200;
+const LOG_LINE_CHARS: usize = 500;
+
+/// A project's newest server log lines, redacted. Kept by [`Sessions`], not by
+/// the session, so they outlive a server that died or never finished starting.
+type LogRing = Arc<Mutex<VecDeque<String>>>;
+
+/// Whether a GitHub token (`gho_…`, `ghu_…`, `github_pat_…`) starts at the head
+/// of `text`; returns the length of its prefix and of the whole token.
+fn github_token_at(text: &str) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let prefix = if text.starts_with("github_pat_") {
+        "github_pat_".len()
+    } else if bytes.len() > 4 && bytes.starts_with(b"gh") && bytes[2].is_ascii_lowercase() && bytes[3] == b'_' {
+        4
+    } else {
+        return None;
+    };
+    let body = bytes[prefix..].iter().take_while(|b| b.is_ascii_alphanumeric() || **b == b'_').count();
+    (body > 0).then_some((prefix, prefix + body))
+}
+
+/// One log line as it may be kept: GitHub tokens and `Bearer` credentials
+/// replaced, then cut to [`LOG_LINE_CHARS`] characters (after redaction, so a
+/// cut never leaves half a token behind). Pure + tested.
+pub fn redact_log_line(line: &str) -> String {
+    const HIDDEN: &str = "[redacted]";
+    let mut out = String::with_capacity(line.len().min(LOG_LINE_CHARS * 4));
+    let mut rest = line;
+    let mut after_word = false;
+    while let Some(ch) = rest.chars().next() {
+        if !after_word {
+            if let Some((prefix, end)) = github_token_at(rest) {
+                out.push_str(&rest[..prefix]);
+                out.push_str(HIDDEN);
+                rest = &rest[end..];
+                after_word = true;
+                continue;
+            }
+            if rest.get(..7).is_some_and(|head| head.eq_ignore_ascii_case("bearer ")) {
+                let credential = rest[7..].trim_start();
+                let skip = credential.find(char::is_whitespace).unwrap_or(credential.len());
+                out.push_str(&rest[..6]);
+                out.push(' ');
+                out.push_str(HIDDEN);
+                rest = &credential[skip..];
+                after_word = true;
+                continue;
+            }
+        }
+        after_word = ch.is_alphanumeric() || ch == '_';
+        out.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+    match out.char_indices().nth(LOG_LINE_CHARS) {
+        Some((cut, _)) => out[..cut].to_string(),
+        None => out,
+    }
+}
+
+fn push_log(ring: &LogRing, line: &str) {
+    let line = redact_log_line(line.trim_end());
+    if line.is_empty() {
+        return;
+    }
+    let mut ring = ring.lock_ok();
+    if ring.len() >= LOG_LINES {
+        ring.pop_front();
+    }
+    ring.push_back(line);
 }
 
 /// The caret must name a real UTF-16 boundary of the text being synchronized;
@@ -132,9 +211,24 @@ impl Session {
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
+        Self::start_logged(reader, writer, process, root, None).await
+    }
+
+    /// [`start`](Self::start), handing the server's log messages to `log`.
+    pub async fn start_logged<R, W>(
+        reader: R,
+        writer: W,
+        process: Option<ManagedProcess>,
+        root: &Path,
+        log: Option<LogSink>,
+    ) -> Result<Self, String>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
         static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let session_id = NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (rpc, mut receive) = RpcClient::connect(reader, writer);
+        let (rpc, mut receive) = RpcClient::connect_logged(reader, writer, log);
         let rpc = Arc::new(rpc);
         let status = Arc::new(Mutex::new(Status::default()));
         let messages = Arc::new(Mutex::new(VecDeque::<MessageRequest>::new()));
@@ -495,6 +589,8 @@ pub struct Sessions {
     starts: Mutex<HashMap<String, VecDeque<Instant>>>,
     launching: AsyncMutex<()>,
     invalidated: tokio::sync::watch::Sender<Invalidations>,
+    /// Per project, across its servers (see [`LogRing`]).
+    logs: Mutex<HashMap<String, LogRing>>,
 }
 
 /// One project's revocation must not cancel another project's launch.
@@ -504,7 +600,13 @@ struct Invalidations { all: u64, projects: HashMap<String, u64> }
 impl Default for Sessions {
     fn default() -> Self {
         let (invalidated, _) = tokio::sync::watch::channel(Invalidations::default());
-        Self { entries: Mutex::default(), starts: Mutex::default(), launching: AsyncMutex::default(), invalidated }
+        Self {
+            entries: Mutex::default(),
+            starts: Mutex::default(),
+            launching: AsyncMutex::default(),
+            invalidated,
+            logs: Mutex::default(),
+        }
     }
 }
 
@@ -514,17 +616,38 @@ pub fn sessions() -> &'static Sessions {
 }
 
 impl Sessions {
-    fn allow_start(&self, project_id: &str, now: Instant) -> bool {
+    /// Whether the project's restart budget allows another server now.
+    fn may_start(&self, project_id: &str, now: Instant) -> bool {
         let mut starts = self.starts.lock_ok();
         let recent = starts.entry(project_id.to_owned()).or_default();
         while recent.front().is_some_and(|at| now.duration_since(*at) > START_WINDOW) {
             recent.pop_front();
         }
-        if recent.len() >= MAX_STARTS {
-            return false;
-        }
-        recent.push_back(now);
-        true
+        recent.len() < MAX_STARTS
+    }
+
+    /// Spend one start of the budget: only for a launch that produced a
+    /// process, so "not installed" keeps saying so instead of turning into
+    /// the restart limit.
+    fn record_start(&self, project_id: &str, now: Instant) {
+        self.starts.lock_ok().entry(project_id.to_owned()).or_default().push_back(now);
+    }
+
+    fn log_ring(&self, project_id: &str) -> LogRing {
+        self.logs.lock_ok().entry(project_id.to_owned()).or_default().clone()
+    }
+
+    /// Where a project's server, and its process's stderr, log to.
+    fn log_sink(&self, project_id: &str) -> LogSink {
+        let ring = self.log_ring(project_id);
+        Arc::new(move |line: String| push_log(&ring, &line))
+    }
+
+    /// The project's newest log lines, oldest first, already redacted. Memory
+    /// only; never starts a server.
+    pub fn diagnostics(&self, project_id: &str) -> Vec<String> {
+        let ring = self.logs.lock_ok().get(project_id).cloned();
+        ring.map(|ring| ring.lock_ok().iter().cloned().collect()).unwrap_or_default()
     }
 
     fn epoch(&self, project_id: &str) -> (u64, u64) {
@@ -550,6 +673,25 @@ impl Sessions {
 
     /// `root` is the directory `policy::authorize_project` just returned.
     pub async fn get_or_start(&self, project_id: &str, root: &Path) -> Result<Arc<Session>, String> {
+        self.get_or_start_with(project_id, root, |root, log| {
+            let (process, output, input) = ManagedProcess::launch(root, Some(log))?;
+            Ok((Some(process), output, input))
+        })
+        .await
+    }
+
+    /// [`get_or_start`](Self::get_or_start) with the launch passed in, so a
+    /// test can launch something other than the installed server.
+    async fn get_or_start_with<R, W>(
+        &self,
+        project_id: &str,
+        root: &Path,
+        launch: impl FnOnce(&Path, LogSink) -> Result<(Option<ManagedProcess>, R, W), String>,
+    ) -> Result<Arc<Session>, String>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
         // A running project never queues behind another project's launch.
         if let Some(session) = self.running(project_id, root) {
             return Ok(session);
@@ -564,14 +706,16 @@ impl Sessions {
         if let Some(session) = self.running(project_id, root) {
             return Ok(session);
         }
-        if !self.allow_start(project_id, Instant::now()) {
+        if !self.may_start(project_id, Instant::now()) {
             return Err("copilot_restart_limit".into());
         }
-        let (process, output, input) = ManagedProcess::launch(root)?;
+        let log = self.log_sink(project_id);
+        let (process, output, input) = launch(root, log.clone())?;
+        self.record_start(project_id, Instant::now());
         let session = tokio::select! {
             biased;
             _ = self.invalidated_since(&mut changes, project_id, epoch) => return Err("copilot_cancelled".into()),
-            session = Session::start(output, input, Some(process), root) => Arc::new(session?),
+            session = Session::start_logged(output, input, process, root, Some(log)) => Arc::new(session?),
         };
         // The settings command may invalidate just as initialization finishes.
         let mut entries = self.entries.lock_ok();
@@ -857,7 +1001,7 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let root = project.path().canonicalize().unwrap();
         std::fs::write(root.join("a.py"), "def square(x):\n    return ").unwrap();
-        let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root).unwrap();
+        let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root, None).unwrap();
         let session = Session::start(output, input, Some(process), &root).await.unwrap();
         assert!(session.alive());
         let uri = url::Url::from_file_path(root.join("a.py")).unwrap();
@@ -928,10 +1072,101 @@ mod tests {
         let sessions = Sessions::default();
         let now = Instant::now();
         for _ in 0..MAX_STARTS {
-            assert!(sessions.allow_start("one", now));
+            assert!(sessions.may_start("one", now));
+            sessions.record_start("one", now);
         }
-        assert!(!sessions.allow_start("one", now));
-        assert!(sessions.allow_start("two", now));
-        assert!(sessions.allow_start("one", now + START_WINDOW + Duration::from_secs(1)));
+        assert!(!sessions.may_start("one", now));
+        assert!(sessions.may_start("two", now));
+        assert!(sessions.may_start("one", now + START_WINDOW + Duration::from_secs(1)));
+    }
+
+    /// B9: a launch that never produced a process spends no restart budget,
+    /// so "not installed" stays visible instead of the restart limit.
+    #[tokio::test]
+    async fn failed_launches_do_not_spend_the_restart_budget() {
+        let sessions = Sessions::default();
+        let root = std::env::temp_dir();
+        for _ in 0..MAX_STARTS + 1 {
+            let result = sessions
+                .get_or_start_with("one", &root, |_, log| -> Result<(Option<ManagedProcess>, DuplexStream, DuplexStream), String> {
+                    log("stderr: node: not found".into());
+                    Err("copilot_not_installed".into())
+                })
+                .await;
+            assert_eq!(result.err(), Some("copilot_not_installed".to_string()));
+        }
+        // What the failed starts logged is still there for the diagnostics.
+        assert_eq!(sessions.diagnostics("one").len(), MAX_STARTS + 1);
+        assert!(sessions.diagnostics("two").is_empty());
+    }
+
+    #[test]
+    fn server_error_codes_map_to_the_editors_codes() {
+        assert_eq!(error_code(RpcError::Server(-32802)), "copilot_cancelled");
+        assert_eq!(error_code(RpcError::Server(-32800)), "copilot_cancelled");
+        assert_eq!(error_code(RpcError::Server(-32801)), "copilot_stale_document");
+        for code in [1001, 1004, 1005, 1006] {
+            assert_eq!(error_code(RpcError::Server(code)), "copilot_sign_in_failed", "{code}");
+        }
+        assert_eq!(error_code(RpcError::Server(1000)), "copilot_not_signed_in");
+        assert_eq!(error_code(RpcError::Server(1002)), "copilot_server_error");
+    }
+
+    #[test]
+    fn log_lines_lose_their_credentials_and_length() {
+        let token = "gho_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; // privacy-check: ok — fake test token
+        assert_eq!(redact_log_line(&format!("token {token} used")), "token gho_[redacted] used");
+        assert_eq!(redact_log_line("auth ghu_x1_Y2,ghs_z"), "auth ghu_[redacted],ghs_[redacted]");
+        assert_eq!(redact_log_line("pat github_pat_11ABC_def end"), "pat github_pat_[redacted] end");
+        assert_eq!(redact_log_line("Authorization: Bearer abc.def-ghi rest"), "Authorization: Bearer [redacted] rest");
+        assert_eq!(redact_log_line("authorization: bearer  xyz"), "authorization: bearer [redacted]");
+        // Words that merely contain the letters stay.
+        assert_eq!(redact_log_line("sigh_of relief, ghost_town, gh_x"), "sigh_of relief, ghost_town, gh_x");
+        // The cut comes after redaction and counts characters.
+        let long = format!("{}{token}", "ä".repeat(LOG_LINE_CHARS - 3));
+        let kept = redact_log_line(&long);
+        assert_eq!(kept.chars().count(), LOG_LINE_CHARS);
+        assert!(kept.ends_with("ghu") || kept.ends_with("gho"), "{kept}");
+        assert!(!kept.contains("aaaa"));
+    }
+
+    #[test]
+    fn the_log_ring_keeps_the_newest_lines() {
+        let ring = LogRing::default();
+        for i in 0..LOG_LINES + 5 {
+            push_log(&ring, &format!("line {i}\n"));
+        }
+        push_log(&ring, "   ");
+        let lines = ring.lock_ok();
+        assert_eq!(lines.len(), LOG_LINES);
+        assert_eq!(lines.front().map(String::as_str), Some("line 5"));
+        assert_eq!(lines.back().map(String::as_str), Some(format!("line {}", LOG_LINES + 4).as_str()));
+    }
+
+    #[tokio::test]
+    async fn server_log_messages_reach_the_projects_ring() {
+        let sessions = Sessions::default();
+        let (client, server) = duplex(64 * 1024);
+        let (read, write) = split(server);
+        let mut server = Server { read: BufReader::new(read), write };
+        let (read, write) = split(client);
+        let mut pair = Some((read, write));
+        let root = std::env::temp_dir();
+        let start = sessions.get_or_start_with("p", &root, |_, log| {
+            log("stderr: starting".into());
+            let (read, write) = pair.take().unwrap();
+            Ok((None, read, write))
+        });
+        let serve = async {
+            let initialize = server.expect("initialize").await;
+            write_frame(&mut server.write, &json!({"jsonrpc":"2.0", "method":"window/logMessage",
+                "params":{"type":3, "message":"Authorization: Bearer secret-value"}})).await.unwrap();
+            server.result(&initialize["id"], json!({"serverInfo":{"version":super::super::process::SERVER_VERSION}})).await;
+            server.expect("initialized").await;
+            server.expect("workspace/didChangeConfiguration").await;
+        };
+        let (session, ()) = tokio::join!(start, serve);
+        session.unwrap();
+        assert_eq!(sessions.diagnostics("p"), vec!["stderr: starting", "log: Authorization: Bearer [redacted]"]);
     }
 }

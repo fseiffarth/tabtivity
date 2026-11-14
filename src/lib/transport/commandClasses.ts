@@ -211,6 +211,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["copilot_cancel", "core"],
   ["copilot_close_editor", "core"],
   ["copilot_complete", "core"],
+  ["copilot_diagnostics", "core"],
   ["copilot_finish_sign_in", "core"],
   ["copilot_message_action", "core"],
   ["copilot_prepare", "core"],

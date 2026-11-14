@@ -2747,6 +2747,7 @@ pub fn run() {
             commands::copilot::copilot_shown,
             commands::copilot::copilot_accepted,
             commands::copilot::copilot_account,
+            commands::copilot::copilot_diagnostics,
             commands::copilot::copilot_message_action,
             commands::copilot::copilot_sign_in,
             commands::copilot::copilot_finish_sign_in,

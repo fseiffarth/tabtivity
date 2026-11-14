@@ -97,11 +97,21 @@ fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> R
 }
 
 fn invalidate_copilot(previous: &Settings, next: &Settings) {
-    if previous.code_completion_provider != next.code_completion_provider
-        || previous.completion_project_policies != next.completion_project_policies
-        || previous.copilot_completion() != next.copilot_completion() {
+    if copilot_invalidated(previous, next) {
         crate::services::copilot::session::sessions().stop_all_now();
     }
+}
+
+/// Whether a settings write must stop every Copilot server: the provider,
+/// consent or flag changed, or the AI switch just turned off (a server is a
+/// network-capable process holding a signed-in session). Editor tuning such
+/// as `autocomplete_delay_ms` is not among them. Pure + tested.
+fn copilot_invalidated(previous: &Settings, next: &Settings) -> bool {
+    use crate::services::ai_switch::off_now;
+    previous.code_completion_provider != next.code_completion_provider
+        || previous.completion_project_policies != next.completion_project_policies
+        || previous.copilot_completion() != next.copilot_completion()
+        || (!off_now(previous.ai_off, previous.ai_off_until) && off_now(next.ai_off, next.ai_off_until))
 }
 
 fn merge_settings_patch(settings: &mut Settings, patch: Map<String, Value>) -> Result<(), String> {
@@ -369,6 +379,28 @@ fn detect_macos_global_apps(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B9: switching AI off stops every Copilot server; switching it back on,
+    /// or tuning the editor's delay, stops none.
+    #[test]
+    fn the_ai_switch_turning_off_stops_copilot_and_editor_tuning_does_not() {
+        let on = Settings::default();
+        let off = Settings { ai_off: Some(true), ..Settings::default() };
+        assert!(copilot_invalidated(&on, &off));
+        assert!(!copilot_invalidated(&off, &on));
+        assert!(!copilot_invalidated(&off, &off.clone()));
+        // A switch whose "off for a while" already passed is on: no change.
+        let lapsed = Settings { ai_off: Some(true), ai_off_until: Some(1), ..Settings::default() };
+        assert!(!copilot_invalidated(&on, &lapsed));
+        let tuned = Settings {
+            autocomplete_delay_ms: Some(crate::schema::settings::AutocompleteDelays { ollama: Some(400), copilot: Some(100), ..Default::default() }),
+            ..Settings::default()
+        };
+        assert!(!copilot_invalidated(&on, &tuned));
+        assert!(!copilot_invalidated(&tuned, &on));
+        let provider = Settings { code_completion_provider: Some("copilot".into()), ..Settings::default() };
+        assert!(copilot_invalidated(&on, &provider));
+    }
 
     #[test]
     fn settings_patch_is_shallow_and_preserves_unrelated_fields() {
