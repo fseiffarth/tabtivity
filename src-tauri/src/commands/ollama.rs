@@ -3376,6 +3376,63 @@ fn chat_preview(raw: &str, done: bool, prefix: &str, suffix: &str, keep_break: b
     trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned, keep_break)
 }
 
+/// `text-completion-stats-<requestId>`: how one completion went, emitted once
+/// before `complete_text` returns successfully (the plan's IPC contract). The
+/// Ollama counts are absent when the socket was dropped before its final
+/// record (sentence stop, time budget).
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct CompletionStats {
+    endpoint: &'static str,
+    model: String,
+    /// `done` (the model finished), `line` (sentence stop), `budget` (time budget).
+    stop: &'static str,
+    first_token_ms: Option<u64>,
+    total_ms: u64,
+    reference_bytes: usize,
+    references_dropped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_eval_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_eval_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eval_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eval_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    load_ms: Option<u64>,
+}
+
+impl CompletionStats {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        endpoint: &'static str,
+        model: &str,
+        stop: &'static str,
+        first_token: Option<Duration>,
+        total: Duration,
+        reference_bytes: usize,
+        references_dropped: bool,
+        record: Option<&crate::services::text_completion::FinalRecord>,
+    ) -> Self {
+        let ms = |ns: Option<u64>| ns.map(|ns| ns / 1_000_000);
+        Self {
+            endpoint,
+            model: model.to_string(),
+            stop,
+            first_token_ms: first_token.map(|d| d.as_millis() as u64),
+            total_ms: total.as_millis() as u64,
+            reference_bytes,
+            references_dropped,
+            prompt_eval_count: record.and_then(|r| r.prompt_eval_count),
+            prompt_eval_ms: ms(record.and_then(|r| r.prompt_eval_duration)),
+            eval_count: record.and_then(|r| r.eval_count),
+            eval_ms: ms(record.and_then(|r| r.eval_duration)),
+            load_ms: ms(record.and_then(|r| r.load_duration)),
+        }
+    }
+}
+
 /// What the editor shows for the answer so far, and whether the sentence stop
 /// ended it (the stream is then dropped). `sentence` is the stop being on:
 /// Sentence mode without an intent comment. Pure + tested.
@@ -3484,6 +3541,7 @@ pub async fn complete_text(
     use crate::services::text_completion;
     crate::services::ai_switch::check()?;
     let event = format!("text-completion-{request_id}");
+    let stats_event = format!("text-completion-stats-{request_id}");
     text_completion::run(request_id, async move {
         // Judged afresh for every request, off the async worker: a cached lock
         // verdict would let a project that was just locked reach a remote host.
@@ -3523,12 +3581,18 @@ pub async fn complete_text(
                 body["options"]["temperature"] = serde_json::json!(0.5);
             }
             let endpoint = if use_fim { "generate" } else { "chat" };
+            let reference_bytes = if use_fim { 0 } else { context.len() };
             let mut published = false;
+            let started = Instant::now();
+            let mut first_token = None;
             let result = text_completion::stream(
                 &client,
                 &format!("http://{addr}/api/{endpoint}"),
                 &body,
                 |raw, done| {
+                    if first_token.is_none() && !raw.is_empty() {
+                        first_token = Some(started.elapsed());
+                    }
                     let (text, stopped) =
                         completion_snapshot(raw, use_fim, done, &prefix, &suffix, sentence, prose);
                     published |= !text.is_empty();
@@ -3541,8 +3605,14 @@ pub async fn complete_text(
             )
             .await;
             match result {
-                Ok(raw) => {
-                    return Ok(completion_snapshot(&raw, use_fim, true, &prefix, &suffix, sentence, prose).0);
+                Ok(streamed) => {
+                    let text = completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0;
+                    let stop = if streamed.record.is_some() { "done" } else { "line" };
+                    let stats = CompletionStats::new(endpoint, &model, stop, first_token, started.elapsed(), reference_bytes, false, streamed.record.as_ref());
+                    // Once, before the final text, on its own event: an older
+                    // frontend ignores it, and the return value stays the text.
+                    ctx.emit_to_caller(&stats_event, stats);
+                    return Ok(text);
                 }
                 Err(e)
                     if use_fim

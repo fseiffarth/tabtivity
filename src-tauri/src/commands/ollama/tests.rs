@@ -146,6 +146,33 @@ fn a_chat_answer_keeps_its_leading_line_break_below_a_comment() {
     assert_eq!(completion_snapshot("\nfoo", false, true, "// add two numbers\n", "", false, false).0, "foo");
 }
 
+/// B7: the stats event's shape is the plan's IPC contract, keys and all.
+#[test]
+fn completion_stats_serialize_to_the_contract() {
+    use crate::services::text_completion::FinalRecord;
+    let record = FinalRecord {
+        prompt_eval_count: Some(37),
+        prompt_eval_duration: Some(4_500_000),
+        eval_count: Some(3),
+        eval_duration: Some(12_900_000),
+        load_duration: Some(800),
+    };
+    let full = CompletionStats::new("generate", "coder:1.5b", "done", Some(Duration::from_millis(41)),
+        Duration::from_millis(97), 120, false, Some(&record));
+    assert_eq!(serde_json::to_value(&full).unwrap(), serde_json::json!({
+        "endpoint": "generate", "model": "coder:1.5b", "stop": "done", "firstTokenMs": 41, "totalMs": 97,
+        "referenceBytes": 120, "referencesDropped": false, "promptEvalCount": 37, "promptEvalMs": 4,
+        "evalCount": 3, "evalMs": 12, "loadMs": 0,
+    }));
+    // A dropped socket has no final record: the five counts are absent, and a
+    // stream that never produced a token has a null first-token time.
+    let cut = CompletionStats::new("chat", "m", "line", None, Duration::from_millis(5), 0, true, None);
+    assert_eq!(serde_json::to_value(&cut).unwrap(), serde_json::json!({
+        "endpoint": "chat", "model": "m", "stop": "line", "firstTokenMs": null, "totalMs": 5,
+        "referenceBytes": 0, "referencesDropped": true,
+    }));
+}
+
 #[test]
 fn the_sentence_stop_still_strips_a_leading_line_break() {
     // Sentence mode, no intent comment: the stop is on, so a kept break would
