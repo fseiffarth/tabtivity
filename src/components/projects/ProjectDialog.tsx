@@ -23,6 +23,7 @@ import {
   buildScaffoldFillPrompt,
   collectScaffoldAgentFills,
   describeDetectedSpecSource,
+  hostFolderNameProblem,
   isCloneUrl,
   joinRemotePath,
   providerFromCloneUrl,
@@ -115,6 +116,9 @@ export function ProjectDialog({
   // `default_remote_mirror`; editable via the "Local location" picker.
   const [mirrorParent, setMirrorParent] = useState("");
   const [name, setName] = useState("");
+  // The folder a remote New (or host clone) makes on the host, as the user typed
+  // it. `null` = not edited: it follows the project's sanitized name.
+  const [hostFolder, setHostFolder] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [descriptionFillMode, setDescriptionFillMode] = useState("manual");
   // Same default the import-source dropdown applies when the source is switched
@@ -322,7 +326,11 @@ export function ProjectDialog({
   // a copy import is the destination rather than the source it copies from.
   // A host clone lands in `<browsed>/<name>`, made empty by the backend, like a New.
   const remoteJoinsName = kind === "new" || hostClone;
-  const checkedRemote = isRemoteProject ? buildRemoteSpec(safeName, remoteJoinsName) : undefined;
+  // That folder's name: the user's own spelling once edited, else the project name.
+  const hostFolderName = hostFolder === null ? safeName : hostFolder.trim();
+  const hostFolderProblem =
+    isRemoteProject && remoteJoinsName && hostFolder !== null ? hostFolderNameProblem(hostFolder) : "";
+  const checkedRemote = isRemoteProject ? buildRemoteSpec(hostFolderName, remoteJoinsName) : undefined;
   const checkedDir = isRemoteProject
     ? ""
     : kind === "new" || isCloneImport || mode === "copy"
@@ -977,7 +985,7 @@ export function ProjectDialog({
           ? selectedScaffoldAgentFills()
           : new Map<string, string[]>();
       const descriptionAgent = selectedDescriptionAgent();
-      const builtSpec = buildRemoteSpec(safeName, remoteJoinsName);
+      const builtSpec = buildRemoteSpec(hostFolderName, remoteJoinsName);
       // D14: the remote-only auto-connect card rides the spec as `auto_connect`.
       const remoteSpec = builtSpec && autoConnect ? { ...builtSpec, auto_connect: true } : builtSpec;
       // Clone first, then import the resulting directory in place: the clone owns
@@ -1161,9 +1169,15 @@ export function ProjectDialog({
         !remoteReady
         ? false
         : kind === "new"
-          ? Boolean(name.trim() && safeName && remoteChosenPath && (remoteOnly || mirrorParent.trim()))
+          ? Boolean(
+              name.trim() && safeName && hostFolderName && !hostFolderProblem && remoteChosenPath &&
+                (remoteOnly || mirrorParent.trim()),
+            )
           : hostClone
-            ? Boolean(name.trim() && safeName && remoteChosenPath && isCloneUrl(repoUrl))
+            ? Boolean(
+                name.trim() && safeName && hostFolderName && !hostFolderProblem && remoteChosenPath &&
+                  isCloneUrl(repoUrl),
+              )
             : Boolean(name.trim() && remoteChosenPath && (remoteOnly || mirrorParent.trim()))
       : kind === "new"
         ? Boolean(name.trim() && targetDir && safeName)
@@ -1231,6 +1245,36 @@ export function ProjectDialog({
         }}
       />
       {nameError && <span id="project-name-error" className="ssh-optional-hint">{nameError}</span>}
+    </label>
+  );
+
+  // The folder a remote New / host clone makes on the host. It follows the
+  // project name until edited; typing the name's own folder spelling back
+  // makes it follow again.
+  const hostFolderError = hostFolderProblem
+    ? t(hostFolderProblem === "required" ? "projectDialog.hostFolderRequired" : "projectDialog.hostFolderInvalid")
+    : "";
+  const hostFolderField = (
+    <label>
+      <span>
+        {t("projectDialog.hostFolderLabel")} <UntestedTag id="projectDialog.hostFolder" />
+      </span>
+      <input
+        value={hostFolder ?? safeName}
+        aria-invalid={!!hostFolderError}
+        aria-describedby={hostFolderError ? "project-hostFolder-error" : undefined}
+        placeholder={safeName || undefined}
+        spellCheck={false}
+        onChange={(e) => setHostFolder(e.target.value === safeName ? null : e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && canSubmit && !busy) void submit();
+        }}
+      />
+      {hostFolderError ? (
+        <span id="project-hostFolder-error" className="ssh-optional-hint">{hostFolderError}</span>
+      ) : (
+        <span className="ssh-optional-hint">{t("projectDialog.hostFolderHint")}</span>
+      )}
     </label>
   );
 
@@ -1342,13 +1386,14 @@ export function ProjectDialog({
             </label>
             )}
             {nameField}
+            {remoteJoinsName && hostFolderField}
             {descriptionField}
           </>
         )}
 
         <RemoteProjectSection
           kind={kind}
-          safeName={safeName}
+          hostFolder={remoteJoinsName ? hostFolderName : null}
           onClose={onClose}
           onUseThisFolder={useThisRemoteFolder}
           remote={remote}
@@ -1876,7 +1921,7 @@ export function ProjectDialog({
               <span className="remote-chosen-summary">
                 <span className="remote-chosen-text">
                   {remoteJoinsName
-                    ? t("projectDialog.remoteDestinationLabel", { path: joinRemotePath(remoteChosenPath, safeName || "<name>") })
+                    ? t("projectDialog.remoteDestinationLabel", { path: joinRemotePath(remoteChosenPath, hostFolderName || "<name>") })
                     : t("projectDialog.remoteLocationLabel", { path: remoteChosenPath })}
                 </span>
                 {/* Wrong folder committed at the browse step? Jump straight back

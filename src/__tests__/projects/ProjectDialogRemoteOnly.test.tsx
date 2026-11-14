@@ -316,4 +316,29 @@ describe("ProjectDialog · remote-only", () => {
     expect(req.req.mirrorParent).toBe("/tmp/projects-ssh");
     expect(calls("remote_project_init_host")).toHaveLength(0);
   });
+
+  it("the host folder follows the name until edited, then is the user's own", async () => {
+    await renderDialog("new");
+    await typeName("My App");
+    const folder = screen.getByLabelText(/Folder name on the host/) as HTMLInputElement;
+    expect(folder.value).toBe("my-app");
+    expect(screen.getByText("Remote destination: /srv/my-app")).toBeTruthy();
+
+    // A slash is refused and blocks Create.
+    await act(async () => {
+      fireEvent.change(folder, { target: { value: "a/b" } });
+    });
+    expect(screen.getByText(/^Use one folder name/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(true);
+
+    // Any one-segment spelling goes through, and renaming the project no longer moves it.
+    await act(async () => {
+      fireEvent.change(folder, { target: { value: "Thesis 2026" } });
+    });
+    await typeName("Other");
+    expect(folder.value).toBe("Thesis 2026");
+    await click("Create");
+    const req = calls("create_project")[0][1] as { req: Record<string, unknown> };
+    expect(req.req).toMatchObject({ name: "Other", remote: { remote_path: "/srv/Thesis 2026" } });
+  });
 });

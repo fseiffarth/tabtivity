@@ -280,6 +280,20 @@ export function providerFromCloneUrl(raw: string): "github" | "gitlab" | "" {
 }
 
 /** Join a remote directory path with a child segment using POSIX separators. */
+/**
+ * Why `folder` can't be the one folder a new remote project makes on its host
+ * ("" = it can). Any spelling the host accepts is fine — case, spaces, dots —
+ * but it must stay one segment, and it must pass the backend's `validate_arg`
+ * (no leading `-`, no control or formatting characters).
+ */
+export function hostFolderNameProblem(folder: string): "" | "required" | "invalid" {
+  const name = folder.trim();
+  if (!name) return "required";
+  if (name === "." || name === ".." || /[/\\]/.test(name) || name.startsWith("-")) return "invalid";
+  if (/[\p{Cc}\p{Cf}]/u.test(name)) return "invalid";
+  return "";
+}
+
 export function joinRemotePath(base: string, child: string): string {
   if (!base || base === "/") return `/${child}`;
   return `${base.replace(/\/+$/, "")}/${child}`;

@@ -68,6 +68,7 @@ export const UNTESTED = {
   "desktop.settingsNavigation": { area: "shell", what: "Grouped settings pages, per-page scroll restoration, and the left-hand search box: ranked results per setting (synonyms, English in any language; e.g. \"claude api\" → Anthropic API key) that open the page, unfold the setting's group, scroll to it and highlight it" },
   "desktop.modalFocus": { area: "common", what: "Modal focus containment, restoration and nested Escape" },
   "desktop.projectForms": { area: "projects", what: "Project form sections, field guidance and pinned actions" },
+  "projectDialog.hostFolder": { area: "projects", what: "New remote project (and host clone, Extend to remote) · Folder name on the host: follows the project name until edited, any one-segment name; the destination line and the created folder use it" },
   "desktop.headerMenus": { area: "shell", what: "Header menu keyboard navigation" },
   "desktop.welcome": { area: "shell", what: "Project-first welcome and primary dismissal" },
   "desktop.intro.wizard": { area: "shell", what: "How to start wizard · step rail, Back/Skip/Next, ←/→, remembered page" },
