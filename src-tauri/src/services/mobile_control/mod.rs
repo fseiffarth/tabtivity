@@ -34,6 +34,7 @@ pub mod phone_origin;
 pub mod presence;
 pub mod project_docs;
 pub mod limits;
+pub mod linked;
 pub mod protocol;
 pub mod pty_bridge;
 pub mod remarks;

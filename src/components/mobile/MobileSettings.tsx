@@ -370,6 +370,7 @@ export function MobileSettings() {
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
           root_devices: stored?.root_devices,
+          linked_desktops: stored?.linked_desktops,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -482,6 +483,7 @@ export function MobileSettings() {
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
           root_devices: stored?.root_devices,
+          linked_desktops: stored?.linked_desktops,
         },
       });
     } catch (reason) {
@@ -527,6 +529,7 @@ export function MobileSettings() {
           assistant_access: stored?.assistant_access,
           assistant_devices: stored?.assistant_devices,
           root_devices: stored?.root_devices,
+          linked_desktops: stored?.linked_desktops,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });

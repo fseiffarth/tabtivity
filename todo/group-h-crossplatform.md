@@ -4896,8 +4896,9 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
   or not on its list), then filter both the desktop answer and the headless
   one per device (`Catalog::for_device` already knows the set).
 
-- [ ] **31cs — One phone app, several desktops** (2026-11-14; planned, nothing
-  built). Plan: `docs/phone_multi_desktop_plan.md`. One installed app switches
+- [ ] **31cs — One phone app, several desktops** (2026-11-14; Phases 0–1
+  code-complete — the sidecar's linked-desktop headers, `mobile_control/linked.rs`;
+  nothing a user can see yet, never live). Plan: `docs/phone_multi_desktop_plan.md`. One installed app switches
   between linked desktops; every other desktop's own phone UI is framed from
   its own origin (same tailnet, `linked_desktops` on both desktops). v1 push =
   switcher badges + Android browser opt-in, relay later; a framed desktop keeps

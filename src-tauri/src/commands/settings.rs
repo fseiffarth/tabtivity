@@ -458,6 +458,7 @@ mod tests {
             "project_files": true,
             "project_uploads": true,
             "browser_client": true,
+            "linked_desktops": ["https://laptop.example.ts.net"],
             "some_future_switch": {"a": [1, 2]}
         });
         let mut settings = Settings::default();
@@ -466,6 +467,7 @@ mod tests {
         let typed = settings.app_mobile_host.as_ref().unwrap();
         assert_eq!(typed.project_uploads, Some(true));
         assert_eq!(typed.browser_client, Some(true));
+        assert_eq!(typed.linked_desktops.as_deref(), Some(&["https://laptop.example.ts.net".to_string()][..]));
 
         // An unrelated patch, then a write → read through the file shape.
         merge_settings_patch(&mut settings, patch(serde_json::json!({"language": "de"}))).unwrap();

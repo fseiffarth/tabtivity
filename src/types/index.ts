@@ -228,6 +228,13 @@ export interface Settings {
      * phone paired later starts off root. Narrows `root_access`, never opens
      * it. Carried by every writer of this block, like `assistant_devices`. */
     root_devices?: string[];
+    /** The other desktops' phone-host origins (same tailnet,
+     * `https://<machine>.<tailnet>.ts.net[:port]`) whose phone app may frame
+     * this desktop's phone UI and be framed by it
+     * (`docs/phone_multi_desktop_plan.md`). The sidecar re-validates every
+     * entry per request and drops a bad one. Carried by every writer of this
+     * block, like `root_devices`. */
+    linked_desktops?: string[];
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */

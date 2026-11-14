@@ -5368,6 +5368,112 @@ async fn new_folder_is_add_only_and_a_folder_downloads_as_a_zip() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// `[MOBILE_HOST_KEY].linked_desktops` written into the fixture's settings.
+fn link_desktops(host: &Fixture, origins: &[&str]) {
+    let key = crate::brand::MOBILE_HOST_KEY;
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        serde_json::to_vec(&json!({ key: { "enabled": true, "linked_desktops": origins } })).unwrap(),
+    )
+    .unwrap();
+}
+
+/// A GET as a linked desktop's page would send it: with its `Origin`.
+fn get_from(uri: &str, origin: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(header::ORIGIN, origin)
+        .body(Body::empty())
+        .expect("request")
+}
+
+#[tokio::test]
+async fn with_no_linked_desktop_the_headers_are_exactly_the_closed_ones() {
+    let host = Fixture::bare();
+    // An entry that does not validate links nothing.
+    link_desktops(&host, &["https://laptop.other.ts.net", "https://evil.example.com"]);
+    for uri in ["/", "/index.html", "/healthz", "/api/v1/status"] {
+        let (_, headers, _) = host.send(get_from(uri, "https://laptop.other.ts.net")).await;
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY", "{uri}");
+        assert_eq!(headers["permissions-policy"], MOBILE_PERMISSIONS_POLICY, "{uri}");
+        assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "{uri}");
+        if uri != "/healthz" && uri != "/api/v1/status" {
+            assert_eq!(headers[header::CONTENT_SECURITY_POLICY], PHONE_CSP, "{uri}");
+        }
+    }
+    assert_eq!(phone_csp(&[]), PHONE_CSP);
+    assert_eq!(permissions_policy(&[]), MOBILE_PERMISSIONS_POLICY);
+    assert!(!pdf_frame_policy(None, &[]).contains(".ts.net"));
+}
+
+#[tokio::test]
+async fn a_linked_desktop_may_frame_the_phone_pages_and_read_the_health_probe() {
+    const LAPTOP: &str = "https://laptop.example.ts.net";
+    const SECOND: &str = "https://desk.example.ts.net:10000";
+    let host = Fixture::bare();
+    link_desktops(&host, &[LAPTOP, SECOND]);
+
+    for uri in ["/", "/index.html"] {
+        let (_, headers, _) = host.send(get_request(uri)).await;
+        assert!(headers.get(header::X_FRAME_OPTIONS).is_none(), "{uri}");
+        let csp = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+        assert!(csp.contains(&format!("frame-ancestors {LAPTOP} {SECOND};")), "{csp}");
+        assert!(csp.contains(&format!("frame-src 'self' {LAPTOP} {SECOND};")), "{csp}");
+        assert!(csp.contains(&format!("connect-src 'self' {LAPTOP} {SECOND};")), "{csp}");
+        assert!(csp.contains("script-src 'self';") && csp.contains("default-src 'self';"), "{csp}");
+        let policy = headers["permissions-policy"].to_str().unwrap();
+        assert!(policy.contains(&format!("microphone=(self \"{LAPTOP}\" \"{SECOND}\")")), "{policy}");
+        assert!(policy.contains(&format!("on-device-speech-recognition=(self \"{LAPTOP}\" \"{SECOND}\")")), "{policy}");
+        assert!(policy.contains("camera=()"), "{policy}");
+    }
+    // The API, the scripts and the browser client stay closed.
+    for uri in ["/api/v1/status", "/assets/app.js", "/desktop/"] {
+        let (_, headers, _) = host.send(get_request(uri)).await;
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY", "{uri}");
+        assert_eq!(headers["permissions-policy"], MOBILE_PERMISSIONS_POLICY, "{uri}");
+        if let Some(csp) = headers.get(header::CONTENT_SECURITY_POLICY) {
+            assert!(!csp.to_str().unwrap().contains("laptop"), "{uri}");
+        }
+    }
+    // The pdf.js frame names the linked desktops among its ancestors.
+    let policy = pdf_frame_policy(None, &[LAPTOP.to_string()]);
+    assert!(policy.ends_with(&format!("frame-ancestors 'self' {LAPTOP}")), "{policy}");
+
+    // The health probe answers a linked origin with CORS, nobody else.
+    let (_, headers, body) = host.send(get_from("/healthz", LAPTOP)).await;
+    assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], LAPTOP);
+    assert_eq!(headers[header::VARY], "Origin");
+    assert_eq!(json(&body), json!({ "ok": true }));
+    for stranger in ["https://evil.example.com", "https://laptop.other.ts.net", "null"] {
+        let (_, headers, _) = host.send(get_from("/healthz", stranger)).await;
+        assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "{stranger}");
+    }
+    // A linked origin is still not this host's origin to the API.
+    let (status, _, body) = host
+        .send(post_json("/api/v1/auth/challenge", LAPTOP, &json!({ "device_id": "x" })))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(json(&body)["error"], "invalid_origin");
+
+    // A signed-in phone reads the list from its status.
+    let cookie = host.pair_device(&signing_key(33)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(json(&body)["linked_desktops"], json!([{ "origin": LAPTOP }, { "origin": SECOND }]));
+}
+
+#[test]
+fn behind_the_gateway_nothing_is_linked() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = crate::brand::MOBILE_HOST_KEY;
+    std::fs::write(
+        dir.path().join("settings.json"),
+        serde_json::to_vec(&json!({ key: { "linked_desktops": ["https://laptop.example.ts.net"] } })).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(linked_for(false, dir.path(), ORIGIN), ["https://laptop.example.ts.net"]);
+    assert!(linked_for(true, dir.path(), ORIGIN).is_empty());
+}
+
 #[tokio::test]
 async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
     let host = Fixture::bare();
@@ -5397,8 +5503,8 @@ async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
     }
     // A host header that is not a host name is left out of the policy.
     let forged = HeaderValue::from_static("evil.example; script-src *");
-    assert!(!pdf_frame_policy(Some(&forged)).contains("evil"));
-    assert!(pdf_frame_policy(None).contains("script-src 'self';"));
+    assert!(!pdf_frame_policy(Some(&forged), &[]).contains("evil"));
+    assert!(pdf_frame_policy(None, &[]).contains("script-src 'self';"));
 }
 
 #[tokio::test]

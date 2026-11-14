@@ -57,7 +57,14 @@ machine. Verify, then put a non-default port into the cookie name
 legacy-style lookup). Test: two ports, two cookies, no cross-read. Framed
 siblings on one machine depend on this.
 
-## Phase 1 — sidecar (`src-tauri`)
+## Phase 1 — sidecar (`src-tauri`) — done 2026-11-14, never live
+
+As built: `mobile_control/linked.rs`; the list is written like `root_devices`
+(the desktop's whole-block settings writes carry it), so no new Tauri command
+or `command_class` row — the desktop's own check on add comes with Phase 2.
+`/assets/*` keeps the closed headers (never framed). Lock down keeps the list:
+with every phone forgotten a link grants nothing.
+
 
 - `config.rs`: `MobileHostSettings.linked_desktops: Vec<String>`, read from
   `settings.json` per request (like `files_open`). `validate_linked_origin`:

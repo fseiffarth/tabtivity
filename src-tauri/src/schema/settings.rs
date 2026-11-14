@@ -116,6 +116,13 @@ pub struct AppMobileHostSettings {
     /// settings patch does not drop it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_client: Option<bool>,
+    /// The other desktops' phone-host origins (`https://<machine>.<tailnet>.ts.net[:port]`)
+    /// whose phone app may frame this desktop's phone UI and be framed by it
+    /// (`docs/phone_multi_desktop_plan.md`). Read and re-validated by the
+    /// sidecar per request (`mobile_control::linked`); named here so a
+    /// settings patch does not drop it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_desktops: Option<Vec<String>>,
     /// Keys a newer build writes into this block survive a patch from this one.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
