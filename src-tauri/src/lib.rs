@@ -2293,7 +2293,6 @@ pub fn run() {
             commands::power::get_power_state,
             // SSH-sync (Phase 1): selective local↔remote mirror sync.
             commands::sync::sync_pull,
-            commands::sync::sync_whole_project,
             commands::sync::sync_push,
             commands::sync::sync_mark_selected,
             commands::sync::sync_set_auto,

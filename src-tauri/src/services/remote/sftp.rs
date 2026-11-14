@@ -1072,6 +1072,18 @@ pub async fn metadata_opt_with_mode_on(
     }
 }
 
+/// Whether `path` is a directory (a link counts as its target), with
+/// [`metadata_opt_on`]'s three outcomes: `Ok(None)` only for the server's
+/// `NoSuchFile`, `Err` for a stat that could not be made.
+pub async fn is_dir_opt_on(sftp: &Sftp, path: &str) -> Result<Option<bool>, String> {
+    use openssh_sftp_client::error::{Error as SftpClientError, SftpErrorKind};
+    match sftp.fs().metadata(path).await {
+        Ok(meta) => Ok(Some(meta.file_type().is_some_and(|t| t.is_dir()))),
+        Err(SftpClientError::SftpError(SftpErrorKind::NoSuchFile, _)) => Ok(None),
+        Err(e) => Err(format!("sftp metadata failed: {e}")),
+    }
+}
+
 // ── One-shot wrappers (open a session, run one op, tear it down) ─────────────
 //
 // The cold-pool fallback for `commands::fs` (mirrors `list_dir` over

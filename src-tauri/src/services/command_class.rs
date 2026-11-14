@@ -1004,7 +1004,6 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_set_excluded", Core),
     ("sync_status", Core),
     ("sync_transfer_preview", Core),
-    ("sync_whole_project", Core),
     // commands/terminal.rs
     ("agent_fence_marks", Core),
     ("agent_fence_status", Core),

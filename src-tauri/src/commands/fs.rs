@@ -588,24 +588,9 @@ fn walk_dir_size_breakdown(
     (total, ignored_total)
 }
 
-/// Join a remote project root (`remote_path`) with a project-relative path,
-/// mirroring `ssh_exec::remote_subdir`-style joining: trim a trailing '/', then
-/// append the non-empty rel. Pure, so it is unit-tested without a live host.
-pub(crate) fn join_remote_dir(remote_path: &str, rel: &str) -> String {
-    let base = remote_path.trim_end_matches('/');
-    let rel = rel.trim_start_matches('/');
-    if rel.is_empty() {
-        if base.is_empty() {
-            "/".to_string()
-        } else {
-            base.to_string()
-        }
-    } else if base.is_empty() {
-        format!("/{rel}")
-    } else {
-        format!("{base}/{rel}")
-    }
-}
+/// Join a remote project root (`remote_path`) with a project-relative path:
+/// trim a trailing '/', then append the non-empty rel.
+pub(crate) use crate::services::remote_sync::join_remote as join_remote_dir;
 
 /// Map one SFTP [`Entry`](crate::services::sftp::Entry) into a `FileEntry`. The
 /// `path` is the **absolute remote path** (`remote_dir`/name) so the frontend's

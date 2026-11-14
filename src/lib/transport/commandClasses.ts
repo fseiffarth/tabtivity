@@ -750,7 +750,6 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["sync_set_excluded", "core"],
   ["sync_status", "core"],
   ["sync_transfer_preview", "core"],
-  ["sync_whole_project", "core"],
   ["agent_fence_marks", "core"],
   ["agent_fence_status", "core"],
   ["agent_tab_features", "core"],
