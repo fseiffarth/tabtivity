@@ -613,7 +613,11 @@ fn the_completion_paths_call_their_guards() {
     assert!(complete.contains("agent_privacy::completion_locked(") && complete.contains("agent_privacy::completion_refusal("));
     let copilot = source("commands/copilot.rs");
     let complete = body_of(&copilot, "pub async fn copilot_complete(");
-    assert!(complete.contains("agent_privacy::inside_locked("), "a file of a locked project opened through its parent");
+    // The document is judged by `authorize_file`, before the server starts
+    // and again after it did.
+    assert_eq!(complete.matches("authorize_file(").count(), 2, "judged before and after the launch");
+    let judge = body_of(&copilot, "fn authorize_file(");
+    assert!(judge.contains("agent_privacy::inside_locked("), "a file of a locked project opened through its parent");
 }
 
 /// `remote: null` is "not remote" everywhere else (`remote_target_for`), so the
