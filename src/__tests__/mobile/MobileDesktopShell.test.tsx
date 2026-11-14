@@ -153,6 +153,50 @@ describe("the desktop shell", () => {
     await unlock();
     await waitFor(() => expect(frame()).not.toBeNull());
   });
+
+  it("the home's lock still takes the frame away while the home is down", async () => {
+    localStorage.setItem(KEY, JSON.stringify({ desktops: [{ origin: B }], selected: B }));
+    vi.mocked(resumeAuth).mockResolvedValue({ kind: "unavailable", reason: "host_down" });
+    render(<DesktopShell />);
+    await unlock();
+    await waitFor(() => expect(frame()).not.toBeNull());
+    // Let the home's connect fail behind the frame.
+    await act(async () => { await Promise.resolve(); });
+    expect(frame()).not.toBeNull();
+
+    // Back after the idle window: the home locks although it never connected.
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 200_000);
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    await screen.findByRole("button", { name: "Unlock now" });
+    expect(frame()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Switch desktop" })).toBeNull();
+
+    await unlock();
+    await waitFor(() => expect(frame()).not.toBeNull());
+  });
+
+  it("a connect still running at the lock does not undo it", async () => {
+    localStorage.setItem(KEY, JSON.stringify({ desktops: [{ origin: B }], selected: B }));
+    let answer: (value: { kind: "paired" }) => void = () => undefined;
+    vi.mocked(resumeAuth).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    render(<DesktopShell />);
+    await unlock();
+    await waitFor(() => expect(frame()).not.toBeNull());
+
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 200_000);
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    await screen.findByRole("button", { name: "Unlock now" });
+    expect(frame()).toBeNull();
+
+    // The connect started before the lock answers now: the lock holds.
+    await act(async () => { answer({ kind: "paired" }); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
+    expect(screen.getByRole("button", { name: "Unlock now" })).toBeTruthy();
+    expect(screen.queryByText("Alpha")).toBeNull();
+    expect(frame()).toBeNull();
+  });
 });
 
 describe("Back with the picker over a frame", () => {

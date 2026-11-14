@@ -322,6 +322,8 @@ export function App() {
   }, []);
   /** When the reader last passed the local lock; 0 once the app locks. */
   const unlockedAt = useRef(0);
+  /** Bumped by every idle lock: a `resume()` started before it is stale. */
+  const lockGen = useRef(0);
   /** Whether this page's unlock still holds: passed, and someone here within
    * the idle window since — the rule the running app locks by. The failure
    * splash's Retry signs in again without the lock while it holds, and a page
@@ -380,13 +382,18 @@ export function App() {
   const resume = useCallback(() => {
     setPastLock(true);
     setAuth("loading");
+    const gen = lockGen.current;
     void resumeAuth().then(async (result) => {
+      // Locked while it ran (a framed desktop on screen meanwhile): the
+      // answer is for an unlock that no longer holds.
+      if (gen !== lockGen.current) return;
       if (result.kind === "paired") {
         clearConnectReload();
         clearConnectGrace();
         const pending = pendingPlace.current;
         pendingPlace.current = null;
         const restored = pending ? await resolvePlace(pending) : await restoreLastPlace();
+        if (gen !== lockGen.current) return;
         reset();
         if (restored) goTo(restored);
         void refreshPush().catch(() => undefined);
@@ -405,7 +412,9 @@ export function App() {
         return;
       }
       setAuth(result.kind);
-    }).catch((error: unknown) => fail(classifyUnavailable(error), unavailableDetail(error)));
+    }).catch((error: unknown) => {
+      if (gen === lockGen.current) fail(classifyUnavailable(error), unavailableDetail(error));
+    });
   }, [reset, goTo, fail]);
 
   const begin = useCallback(() => {
@@ -558,7 +567,19 @@ export function App() {
 
   useEffect(() => {
     const lock = () => {
-      if (authRef.current !== "paired") return;
+      if (authRef.current !== "paired") {
+        // Another desktop framed past this lock while this one is down or
+        // still connecting: the lock takes the frame away all the same. A
+        // connect still running cannot undo it (`lockGen`).
+        if (!framedShownRef.current) return;
+        lockGen.current += 1;
+        reset();
+        unlockedAt.current = 0;
+        setPastLock(false);
+        setAuth("locked");
+        return;
+      }
+      lockGen.current += 1;
       // Detach terminal UI and remove its opaque route. The server receives a
       // best-effort logout; the next local unlock always performs the signed
       // challenge login anew.

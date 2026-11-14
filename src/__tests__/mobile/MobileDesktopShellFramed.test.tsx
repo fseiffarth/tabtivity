@@ -36,6 +36,8 @@ import { SHELL_CHANNEL } from "../../../mobile-web/src/shell/frameBridge";
 import { Pair } from "../../../mobile-web/src/screens/Pair";
 import { NotificationsSheet } from "../../../mobile-web/src/components/NotificationsSheet";
 import { pushSupport } from "../../../mobile-web/src/push";
+import { resetLinkedDesktopsForTests } from "../../../mobile-web/src/shell/linkedDesktops";
+import { storageDashKey } from "../../lib/brand";
 
 const SHELL = "https://home.example.ts.net";
 const parent = { postMessage: vi.fn() };
@@ -43,6 +45,7 @@ const fetchMock = vi.fn();
 
 beforeEach(() => {
   localStorage.clear();
+  resetLinkedDesktopsForTests();
   vi.spyOn(window, "parent", "get").mockReturnValue(parent as unknown as Window);
   Object.defineProperty(window.location, "ancestorOrigins", { configurable: true, value: { length: 1, 0: SHELL, item: () => SHELL, contains: (s: string) => s === SHELL } });
   vi.stubGlobal("fetch", fetchMock);
@@ -84,6 +87,19 @@ describe("inside another desktop's frame", () => {
     fireEvent.click(screen.getByRole("button", { name: "Switch desktop" }));
     expect(sent()).toEqual([{ data: { channel: SHELL_CHANNEL, type: "openPicker" }, target: SHELL }]);
     expect(screen.queryByRole("dialog", { name: "Desktops" })).toBeNull();
+  });
+
+  it("is never a shell of its own in a frame whose parent it cannot name", async () => {
+    // No ancestorOrigins and no referrer (Firefox, a `no-referrer` parent):
+    // this desktop's own cached selection must not frame a third desktop.
+    Reflect.deleteProperty(window.location, "ancestorOrigins");
+    vi.spyOn(document, "referrer", "get").mockReturnValue("");
+    localStorage.setItem(storageDashKey("linked-desktops"), JSON.stringify({ desktops: [{ origin: "https://desk.example.ts.net" }], selected: "https://desk.example.ts.net" }));
+    render(<DesktopShell />);
+    fireEvent.click(await screen.findByRole("button", { name: "Unlock now" }));
+    await screen.findByText("Alpha");
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Switch desktop" })).toBeNull();
   });
 
   it("suggests a device name that says which app the pairing lives in", () => {

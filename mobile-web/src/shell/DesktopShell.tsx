@@ -25,9 +25,19 @@ import { ShellContext, type DesktopShellApi } from "./shellContext";
 
 /** The page's root: the shell at the top, the plain app inside a frame. */
 export function DesktopShell() {
-  // Read once: whether a page is framed does not change while it lives.
-  const [framed] = useState(() => shellOrigin() !== null);
+  // Read once: whether a page is framed does not change while it lives. Any
+  // parent counts, even one whose origin cannot be known (no
+  // `ancestorOrigins`, no referrer): a frame is never a shell of its own.
+  const [framed] = useState(() => shellOrigin() !== null || inAnyFrame());
   return framed ? <App /> : <TopShell />;
+}
+
+function inAnyFrame(): boolean {
+  try {
+    return window.parent !== window;
+  } catch {
+    return true;
+  }
 }
 
 function TopShell() {

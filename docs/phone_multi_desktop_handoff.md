@@ -159,3 +159,47 @@ Real-phone checks (the plan's "Must verify" list, all still open), plus:
   (Chrome shows its broken-frame page until then).
 - Focus lands in the frame after a switch (keyboard).
 - iOS: safe-area padding of the stage (the shell pads; `env()` reads 0 inside).
+
+### Reviewer (independent review, 2026-11-14)
+
+Fixed (the `fix(mobile)` commit on top of 51a0782c8, each with a regression
+test that fails without it):
+- **The home's lock never fired while the home was down or connecting.**
+  `App`'s idle `lock()` returned unless `auth === "paired"`, but the frame is
+  shown from `loading`/`unavailable` too (the home-down case). A phone left
+  hidden past the idle window with B framed came back to B with the home's
+  lock skipped. Now `lock()` also locks (and so unmounts the frame) when a
+  frame is on screen in those states; a `lockGen` counter makes a `resume()`
+  started before the lock drop its late answer, which would otherwise have
+  set `auth` back to `paired`/`unavailable` past the lock. Tests:
+  `MobileDesktopShell.test.tsx` "the home's lock still takes the frame away
+  while the home is down", "a connect still running at the lock does not undo
+  it".
+- **A frame whose parent's origin is unknown became a shell of its own.**
+  `DesktopShell` chose the shell by `shellOrigin() !== null`, so without
+  `ancestorOrigins` and without a referrer (Firefox; a self-navigated frame; a
+  `no-referrer` parent) a framed B rendered `TopShell` and, with a selection
+  cached in B's own storage, framed a third desktop inside A's frame. Any
+  parent now means "framed" (plain `App`, no switch button) — fail closed, as
+  the bridge's comment says. Test: `MobileDesktopShellFramed.test.tsx` "is
+  never a shell of its own in a frame whose parent it cannot name".
+
+Flagged, not changed:
+- In such an unknown-parent frame `pushSupport()` still says `supported` (it
+  asks `isFramed()`, i.e. a known shell origin), so the Notifications sheet
+  offers a permission prompt a cross-origin frame cannot get. Cosmetic; could
+  use "any parent" as well.
+- The test "Back closes the picker and leaves the frame; the frame's own pops
+  never reach the home" dispatches `popstate` on the iframe's own `about:blank`
+  window, which by construction can never reach the home's listener — it does
+  not test the real risk. That risk is B's own `history.back()` (its guard
+  coming off) traversing the joint session history while the home's picker
+  guard is the current entry: it pops the home's guard, and the home's
+  `onPopState` (no `ownPops` pending) takes it for a user Back and closes the
+  picker. jsdom has no joint history; device check only.
+- A connect started before a lock that answers `paired` afterwards is ignored
+  but leaves that sign-in's session open on the home until it expires (no
+  `logoutAuth`, deliberately: a newer unlock's sign-in may already be running).
+- With the home paired and a frame visible, the home never idle-locks while
+  the screen stays on, even untouched (decision 1 above): only B's own idle
+  lock stands then. Worth weighing when deciding 1.
