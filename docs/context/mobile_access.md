@@ -118,6 +118,9 @@ every layer above still decides what it reaches. Known gap: a linked origin
 could overlay this host's framed UI (clickjacking) — the link is the consent.
 A service worker serves its cached shell with the headers it was cached
 with, so a list change reaches an open phone at the shell's next update.
+The desktop edits the list in Settings → Mobile → Linked desktops
+(`mobile/LinkedDesktops.tsx`); its add check (`src/lib/linkedDesktops.ts`)
+mirrors `linked.rs` only to say why an address is refused.
 
 ## Where it is enforced
 

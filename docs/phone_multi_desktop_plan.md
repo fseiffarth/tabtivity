@@ -1,6 +1,6 @@
 # One phone, several desktops — plan
 
-Status: planned 2026-11-14, nothing built. TODO: `todo/group-h-crossplatform.md`
+Status: planned 2026-11-14; Phases 0–2 built, never live. TODO: `todo/group-h-crossplatform.md`
 31cs (this plan), 31ct (Phase 0's cookie bug). One installed phone app (the
 "home": the desktop it was installed from) switches between several running
 Tabtivity desktops, one on screen at a time. Access model this extends:
@@ -91,7 +91,14 @@ with every phone forgotten a link grants nothing.
   `src/lib/transport/commandClasses.ts`.
 - After edits: `npm run backend:stale`.
 
-## Phase 2 — desktop Settings → Mobile
+## Phase 2 — desktop Settings → Mobile — done 2026-11-14, never live
+
+As built: `mobile/LinkedDesktops.tsx` (under "This computer", hidden in the
+browser client), its add check `src/lib/linkedDesktops.ts` mirroring
+`linked.rs` plus duplicate and limit; without a saved `ts.net` Serve origin it
+says so instead of offering the field. One `UntestedTag` id,
+`mobile.linkedDesktops`; strings in all five languages. Tests:
+`src/__tests__/mobile/MobileLinkedDesktops.test.tsx`.
 
 `src/components/mobile/MobileSettings.tsx`: a **Linked desktops** section —
 this desktop's own address with Copy, add (validation errors: invalid, other

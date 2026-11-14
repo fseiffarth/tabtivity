@@ -20,6 +20,7 @@ import type { ProjectEntry } from "../../types";
 import { usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
+import { LinkedDesktops } from "./LinkedDesktops";
 
 interface RuntimeStatus {
   configured: boolean;
@@ -1010,6 +1011,7 @@ export function MobileSettings() {
           </button>
         </div>
       )}
+      <LinkedDesktops busy={busy} />
       <ConnectToServer />
       {dialogs}
     </SettingsCard>
