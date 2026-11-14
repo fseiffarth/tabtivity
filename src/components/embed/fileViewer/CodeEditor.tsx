@@ -2,7 +2,7 @@ import { isTabKey } from "../../../lib/shortcuts/keyNames";
 import { lineStarts, indexedLine } from "../lineIndex";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CompletionCache, caretAtLineEnd, completionLineLength, completionWindow, typeThrough, type CompletionGhost } from "../../../lib/viewers/completion/autocomplete";
+import { CompletionCache, caretAtLineEnd, completionLineLength, completionWindow, editKind, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
 import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
@@ -126,9 +126,10 @@ export function LinkOpenHint({
 // suggestion is requested for the focused editor. Long enough not to fire on
 // every keystroke, short enough to feel responsive.
 const AUTO_AC_DEBOUNCE_MS = 600;
-// Copilot's automatic requests spend the account's completions, so it waits
-// for a real pause rather than a breath between words.
-const COPILOT_AUTO_AC_DEBOUNCE_MS = 1200;
+// Copilot's automatic delay. Its default trigger stays "on request" (each
+// automatic request spends the account's completions); a user who switched a
+// tab to automatic chose speed, and the server answers fast enough for 200 ms.
+const COPILOT_AUTO_AC_DEBOUNCE_MS = 200;
 
 // Dictionary spell check (the Hunspell `spell_check` command): idle time after
 // the last keystroke before the draft is re-checked. A lookup, not a model call.
@@ -442,6 +443,12 @@ export function CodeEditor({
   const acCandidate = useRef(0);
   const acCandidates = useRef<CompletionCandidate[]>([]);
   const acDismissed = useRef<{ draft: string; caret: number } | null>(null);
+  // What the last change was: the idle timer asks only after typing, never
+  // straight after a deletion, an accept, undo, redo or a reload. An IME
+  // composition holds it until it ends; its end restarts the timer.
+  const acLastEdit = useRef<EditKind>("external");
+  const acComposing = useRef(false);
+  const [acImeEnds, bumpAcImeEnds] = useReducer((n: number) => n + 1, 0);
   const acOutcome = useRef<{ model: string; mode: AutocompleteMode | "copilot" } | null>(null);
   const acEndpoint = useSettingsStore((s) => JSON.stringify([
     s.settings?.ollama_host, s.settings?.ollama_allow_remote_host,
@@ -1056,6 +1063,7 @@ export function CodeEditor({
         acAbort.current = null;
         setAcStatus(null);
         const before = draftRef.current;
+        acLastEdit.current = editKind(before, next);
         if (suggestion) {
           const inserted = next.slice(suggestion.at, suggestion.at + next.length - before.length);
           const matches = next.length > before.length && suggestion.text.startsWith(inserted) &&
@@ -1777,6 +1785,7 @@ export function CodeEditor({
     setAcStatus(null);
     acCandidates.current = [];
     if (draft !== lastEditRef.current) {
+      acLastEdit.current = "external";
       recordAcOutcome(false);
       setSuggestion(null);
     }
@@ -1839,6 +1848,7 @@ export function CodeEditor({
       }) : new OllamaCompletionProvider({
         endpoint: acEndpoint, scope: scope ?? undefined, preferred: autocomplete.preferred,
         preferredProse: autocomplete.preferredProse, mode, candidate, context,
+        trigger: auto ? "auto" : "manual",
       }, acCache.current);
       const result = await provider.complete({
         path, text: snapshot, caret, language: lang, version,
@@ -1874,11 +1884,12 @@ export function CodeEditor({
   const acAuto = effectiveAcTrigger(autocomplete?.trigger, acCopilot) === "auto";
   useEffect(() => {
     if (!autocomplete?.enabled || !acAuto || !loaded || !acVisible) return;
-    if (suggestion || compl) return;
-    const id = window.setTimeout(() => void requestCompletion({ auto: true }),
-      acCopilot ? COPILOT_AUTO_AC_DEBOUNCE_MS : AUTO_AC_DEBOUNCE_MS);
+    if (suggestion || compl || acLastEdit.current !== "insert") return;
+    const id = window.setTimeout(() => {
+      if (!acComposing.current) void requestCompletion({ auto: true });
+    }, acCopilot ? COPILOT_AUTO_AC_DEBOUNCE_MS : AUTO_AC_DEBOUNCE_MS);
     return () => window.clearTimeout(id);
-  }, [autocomplete?.enabled, acAuto, acCopilot, loaded, draft, suggestion, compl, requestCompletion, acVisible]);
+  }, [autocomplete?.enabled, acAuto, acCopilot, loaded, draft, suggestion, compl, requestCompletion, acVisible, acImeEnds]);
 
   // The ghost mounts fresh (scrollTop 0) each time a suggestion appears; align it
   // to the editor's current scroll so the inserted preview lands at the caret.
@@ -1894,6 +1905,7 @@ export function CodeEditor({
     const at = suggestion.at;
     const next = draft.slice(0, at) + suggestion.text + draft.slice(at);
     edit(next);
+    acLastEdit.current = "accept";
     const caret = at + suggestion.text.length;
     setSuggestion(null);
     requestAnimationFrame(() => {
@@ -1915,6 +1927,7 @@ export function CodeEditor({
     const rest = text.slice(take);
     const next = draft.slice(0, at) + chunk + draft.slice(at);
     edit(next);
+    acLastEdit.current = "accept";
     const caret = at + chunk.length;
     // Keep the rest ghosted at the new caret; clear once it's fully consumed.
     setSuggestion(rest ? { ...suggestion, text: rest, at: caret } : null);
@@ -2652,6 +2665,8 @@ export function CodeEditor({
           spellCheck={false}
           wrap={wrap ? "soft" : "off"}
           onChange={onTextChange}
+          onCompositionStart={() => { acComposing.current = true; }}
+          onCompositionEnd={() => { acComposing.current = false; bumpAcImeEnds(); }}
           onKeyDown={onKeyDown}
           onKeyUp={(e) => { if (!(e.ctrlKey || e.metaKey)) setLinkHover(false); emitCaret(); }}
           // Fires before the double-click that re-arms them, so a plain click

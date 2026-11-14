@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import { isProseLang } from "../../../lib/viewers/completion/autocomplete";
@@ -162,9 +162,16 @@ export function useTabAiPrefs(tabKey: string | undefined, type: InternalViewer):
     [persist],
   );
   const trigger = override.trigger;
+  // One object per change, not per render: the editor's request callback and
+  // its idle timer depend on it, so a fresh object restarted the debounce on
+  // every parent re-render.
+  const ac = useMemo(
+    () => ({ enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, mode, trigger }),
+    [autocomplete, acPreferred, acProseRole, mode, trigger],
+  );
 
   return {
-    ac: { enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, mode, trigger },
+    ac,
     sc: { enabled: spelling, language: spellLanguage },
     autocomplete,
     spelling,

@@ -81,6 +81,27 @@ export function typeThrough(before: string, after: string, ghost: CompletionGhos
   return text ? { ...ghost, text, at: ghost.at + count } : null;
 }
 
+/** What the last change to an editor's text was. An automatic request follows
+ * typing only: after a deletion, an accepted suggestion, or a change that did
+ * not come from the keyboard (undo, redo, reload: "external") the editor waits
+ * for the next keystroke or Ctrl+Space. */
+export type EditKind = "insert" | "delete" | "accept" | "external";
+
+/** An edit that put new text in is typing, even over a selection; one that only
+ * took text out is a deletion. Pares off the common prefix and suffix. */
+export function editKind(before: string, after: string): "insert" | "delete" {
+  const max = Math.min(before.length, after.length);
+  let start = 0;
+  while (start < max && before[start] === after[start]) start++;
+  let endBefore = before.length;
+  let endAfter = after.length;
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore--;
+    endAfter--;
+  }
+  return endAfter > start ? "insert" : "delete";
+}
+
 /** Whether only whitespace and closers (brackets, quotes, `$`) follow the
  * caret on its line — where an automatic suggestion can land. */
 export function caretAtLineEnd(text: string, caret: number): boolean {

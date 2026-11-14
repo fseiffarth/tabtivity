@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
-import { caretAtLineEnd, completionModelOrder, completionWindow, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
+import { caretAtLineEnd, completionModelOrder, completionWindow, editKind, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
 
 const { mockInvoke, mockListen, mockBump } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockListen: vi.fn(), mockBump: vi.fn() }));
 vi.mock("../../stores/usage", () => ({ bumpUsage: mockBump }));
@@ -503,6 +503,108 @@ describe("autocomplete trigger (spending)", () => {
     el.selectionStart = el.selectionEnd = 4;
     await idle();
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+  });
+
+  it("an automatic request says so; Ctrl+Space says manual", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.focus();
+    const typed = SOURCE + "r";
+    await act(async () => { fireEvent.change(el, { target: { value: typed } }); });
+    el.selectionStart = el.selectionEnd = typed.length;
+    await idle();
+    expect(mockInvoke).toHaveBeenCalledWith("complete_text", expect.objectContaining({ trigger: "auto" }));
+    await act(async () => { fireEvent.keyDown(el, { key: "Escape" }); });
+    await act(async () => { fireEvent.change(el, { target: { value: typed + "x" } }); });
+    el.selectionStart = el.selectionEnd = typed.length + 1;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    const requests = mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text");
+    expect(requests).toHaveLength(2);
+    expect(requests[1][1]).toEqual(expect.objectContaining({ trigger: "manual" }));
+  });
+
+  it("no automatic request after a deletion; typing asks again", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.focus();
+    const cut = SOURCE.slice(0, -1);
+    await act(async () => { fireEvent.change(el, { target: { value: cut } }); });
+    el.selectionStart = el.selectionEnd = cut.length;
+    await idle();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+    await act(async () => { fireEvent.change(el, { target: { value: cut + "r" } }); });
+    el.selectionStart = el.selectionEnd = cut.length + 1;
+    await idle();
+    expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(1);
+  });
+
+  it("no automatic request straight after Tab accepted a suggestion", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.focus();
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    await act(async () => { fireEvent.keyDown(el, { key: "Tab" }); });
+    expect(el.value).toBe(SOURCE + "return 42");
+    el.selectionStart = el.selectionEnd = el.value.length;
+    await idle();
+    expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(1);
+  });
+
+  it("no automatic request after undo", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.focus();
+    await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "ret" } }); });
+    await act(async () => { fireEvent.keyDown(el, { key: "z", ctrlKey: true }); });
+    expect(el.value).toBe(SOURCE);
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await idle();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+  });
+
+  it("the tab's autocomplete config keeps its identity across re-renders", async () => {
+    const { renderHook } = await import("@testing-library/react");
+    const { useTabAiPrefs } = await import("../../components/embed/fileViewer/editorPrefs");
+    const { result, rerender } = renderHook(() => useTabAiPrefs(undefined, "text"));
+    const first = result.current.ac;
+    rerender();
+    expect(result.current.ac).toBe(first);
+  });
+
+  it("waits for an IME composition to end before asking", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.focus();
+    const typed = SOURCE + "re";
+    await act(async () => {
+      fireEvent.compositionStart(el);
+      fireEvent.change(el, { target: { value: typed } });
+    });
+    el.selectionStart = el.selectionEnd = typed.length;
+    await idle();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+    await act(async () => { fireEvent.compositionEnd(el); });
+    await idle();
+    expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(1);
+  });
+
+  it("the edit kind tells typing from deletion", () => {
+    expect(editKind("abc", "abxc")).toBe("insert");
+    expect(editKind("abc", "ac")).toBe("delete");
+    // Typing over a longer selection still put text in.
+    expect(editKind("a long word", "a w")).toBe("insert");
+    expect(editKind("aaa", "aa")).toBe("delete");
   });
 
   it("caret at line end tolerates closers and whitespace only", () => {

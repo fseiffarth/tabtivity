@@ -20,6 +20,9 @@ export class OllamaCompletionProvider implements CompletionProvider {
     preferredProse?: string;
     mode: AutocompleteMode;
     candidate: number;
+    /** Sent to `complete_text`: an automatic request may be cut at a time
+     * budget once it holds a complete line. Unset means manual. */
+    trigger?: "auto" | "manual";
     context: (signal: AbortSignal) => Promise<CompletionReference[]>;
   }, cache?: CompletionCache) {
     if (cache) this.cache = cache;
@@ -71,6 +74,7 @@ export class OllamaCompletionProvider implements CompletionProvider {
       const text = await invoke<string>("complete_text", {
         prefix, suffix, model: model.name, language: document.language === "plain" ? "" : document.language,
         mode, candidate, insert: model.capabilities?.includes("insert") === true,
+        trigger: this.options.trigger ?? "manual",
         requestId, context: context.length ? context : undefined,
         projectId: document.projectId ?? this.options.scope,
       });
