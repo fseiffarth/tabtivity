@@ -192,6 +192,10 @@ struct Preamble {
     /// `X Offset:` / `Y Offset:`, in scaled points, added after the unit scale.
     x_offset: f64,
     y_offset: f64,
+    /// Byte offset of each page's `{N` line in the text this was parsed from
+    /// (the first, should a number repeat), so reverse search starts at its page
+    /// instead of reading every earlier one — see {@link each_hbox}.
+    pages: BTreeMap<u32, usize>,
 }
 
 /// Raw scaled points → big points from the page's top-left.
@@ -213,12 +217,19 @@ fn parse_preamble(text: &str) -> Preamble {
         ..Default::default()
     };
     let mut in_header = true;
-    for raw in text.lines() {
+    let mut at = 0usize;
+    // Every line, with its own terminator, so `at` is its byte offset in `text`
+    // without a second scan. `trim_end` drops the terminator again.
+    for raw in text.split_inclusive('\n') {
+        let line_at = at;
+        at += raw.len();
         let l = raw.trim_end();
         if in_header && l.starts_with("Content:") {
             in_header = false;
         }
-        if let Some(rest) = l.strip_prefix("Input:") {
+        if let Some(page) = l.strip_prefix('{').and_then(|n| n.trim().parse::<u32>().ok()) {
+            p.pages.entry(page).or_insert(line_at);
+        } else if let Some(rest) = l.strip_prefix("Input:") {
             let mut it = rest.splitn(2, ':');
             let Some(tag) = it.next().and_then(|t| t.trim().parse::<u32>().ok()) else {
                 continue;
@@ -313,7 +324,12 @@ fn each_hbox(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>, mut emit: i
     let mut stack: Vec<(Rec, bool, Vec<Rec>)> = Vec::new();
     let mut page: u32 = 0;
 
-    for raw in text.lines() {
+    // Reverse search starts where its first page opens: on a long document the
+    // pages before it are most of the map, and every line of them would only be
+    // read to be skipped. Nothing else about the walk changes, since each page
+    // opens with a `{` that resets the state.
+    let from = only.and_then(|pages| walk_start(text, p, pages)).unwrap_or(0);
+    for raw in text[from..].lines() {
         let l = raw.trim_end();
         let Some(c) = l.chars().next() else { continue };
         match c {
@@ -372,6 +388,30 @@ fn each_hbox(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>, mut emit: i
             _ => {}
         }
     }
+}
+
+/// Where `each_hbox` may begin for `pages`: the earliest of their page-open lines,
+/// or None to walk from the top. Each recorded offset is checked against `text`
+/// (a line start, holding that very `{N`), because a {@link Preamble} and a text
+/// are not always from the same read; one page without a usable offset means the
+/// old whole-file walk rather than a guess.
+fn walk_start(text: &str, p: &Preamble, pages: &BTreeSet<u32>) -> Option<usize> {
+    let mut start: Option<usize> = None;
+    for page in pages {
+        let at = *p.pages.get(page)?;
+        let rest = text.get(at..)?;
+        let opens = (at == 0 || text.as_bytes()[at - 1] == b'\n')
+            && rest
+                .lines()
+                .next()
+                .and_then(|l| l.trim_end().strip_prefix('{'))
+                .is_some_and(|n| n.trim().parse::<u32>() == Ok(*page));
+        if !opens {
+            return None;
+        }
+        start = Some(start.map_or(at, |s| s.min(at)));
+    }
+    start
 }
 
 /// Every hbox on `page` with its direct children — reverse search's per-page view.
@@ -770,6 +810,19 @@ pub struct MapStatus {
     /// main document's directory — saved after the map was written. The lines
     /// SyncTeX answers with are those of the build *before* that edit.
     pub newer_sources: Vec<String>,
+}
+
+impl MapStatus {
+    /// A map exists and the PDF has not outgrown it: its pages are this PDF's.
+    pub fn is_current(&self) -> bool {
+        self.has_map && !self.pdf_newer_than_map
+    }
+
+    /// `input` (spelled as the map spells it) was saved after the build, so the
+    /// map's line numbers for it are those of the text before that edit.
+    pub fn is_edited(&self, input: &str) -> bool {
+        self.newer_sources.iter().any(|s| s == input)
+    }
 }
 
 /// Two files closed by the same compile can land in either order within a

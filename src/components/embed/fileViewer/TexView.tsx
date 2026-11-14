@@ -145,6 +145,7 @@ export function TexView({
   onDiagnostics,
   compileOpts,
   onCompileOptsChange,
+  completions,
 }: {
   path: string;
   onOpenExternally: () => void;
@@ -194,6 +195,13 @@ export function TexView({
   compileOpts?: TexCompileOpts;
   /** Patch the shared configuration. Present exactly when `compileOpts` is. */
   onCompileOptsChange?: (patch: Partial<TexCompileOpts>) => void;
+  /** The document's ref/cite/command candidates, gathered ONCE by the workspace
+   *  for all of its panes (they walk the same files, so one walk per pane was N
+   *  identical reads, each a network round trip over SFTP). `null` = the host is
+   *  still gathering, so this pane waits instead of starting its own walk.
+   *  Used only when it covers this pane's file (`files`); a file the host's walk
+   *  never reached gathers by itself. Absent ⇒ a standalone tab, which does. */
+  completions?: TexCompletions | null;
 }) {
   const t = useT();
   const texInstallLabel = IS_HOST_WINDOWS ? t("fileViewer.texInstallMiktex") : t("fileViewer.texInstallLatex");
@@ -201,6 +209,10 @@ export function TexView({
     error, draft, setDraft, loaded, isDirty, saving, saveError, save,
     undo, redo, canUndo, canRedo, externalChange, reloadFromDisk, keepMine, baseline,
   } = useEditableFile(path);
+  // The latest text for callbacks that must not change identity per keystroke
+  // (compile, follow-link): they read it at call time, not at render time.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const scope = useFileScope();
   // The SyncTeX commands read the map off local disk; a file read from a remote
   // host (not its local mirror) has none there.
@@ -280,7 +292,8 @@ export function TexView({
       const disabled = disabledViewers(
         useSettingsStore.getState().settings?.viewer_prefs,
       );
-      const target = findTexRefAt(draft, caret);
+      const draftNow = draftRef.current;
+      const target = findTexRefAt(draftNow, caret);
       if (target) {
         // A reference naming a file that isn't there yet is an ordinary state of
         // a document being written, so offer to CREATE it (#tex-create-ref)
@@ -307,11 +320,11 @@ export function TexView({
       // editor jump, and only opens a file when the definition is in another one.
       // A key nothing defines is left alone: a `\ref` written before its label is
       // an ordinary state of a document, not an error to report at a click.
-      const keyRef = findTexKeyRefAt(draft, caret);
+      const keyRef = findTexKeyRefAt(draftNow, caret);
       if (!keyRef) return false;
       const loc = await resolveTexKeyRef(path, keyRef, {
         projectId: scope,
-        currentText: draft,
+        currentText: draftNow,
         disabled,
       });
       if (!loc) return false;
@@ -327,7 +340,7 @@ export function TexView({
       useEditorJumpStore.getState().requestJump(loc.path, loc.line, loc.column);
       return true;
     },
-    [draft, path, tabKey, scope, onFollowChild, openTexRef],
+    [path, tabKey, scope, onFollowChild, openTexRef],
   );
 
   // The offer's yes: make the file (and its folder, when the reference named one
@@ -447,19 +460,28 @@ export function TexView({
   // dropdown is actually open, and only for the family it shows. Merging them
   // here, on every keystroke, was three whole-document parses per character
   // typed in any TeX file, dropdown or not.
-  const [gathered, setGathered] = useState<TexCompletions>({
+  const [ownGathered, setOwnGathered] = useState<TexCompletions>({
     labels: [],
     cites: [],
     commands: TEX_STANDARD_COMMANDS,
     envs: TEX_STANDARD_ENVIRONMENTS,
   });
+  // A workspace's shared gather stands in for this pane's own walk when its walk
+  // reached this file (then the answer is the same one); while the host is still
+  // gathering (`null`) the pane waits for it. A standalone tab, or a file outside
+  // the host's walk, gathers by itself.
+  const sharedWaiting = completions === null;
+  const shared = completions?.files?.has(path) ? completions : null;
+  const ownWalk = !sharedWaiting && !shared;
   useEffect(() => {
+    if (!ownWalk) return;
     let cancelled = false;
     gatherTexCompletions(path, scope)
-      .then((c) => { if (!cancelled) setGathered(c); })
+      .then((c) => { if (!cancelled) setOwnGathered(c); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [path, scope, pdfVersion]);
+  }, [path, scope, pdfVersion, ownWalk]);
+  const gathered = shared ?? ownGathered;
 
   // #54 compiler options: an optional output folder (relative to the source or
   // absolute) and extra engine flags (space-separated), both above with the
@@ -476,8 +498,6 @@ export function TexView({
   // Preferred over `caretRef` at compile time because it reads the real cursor,
   // not a snapshot that can be a stale 0 when the editor was never focused.
   const caretApiRef = useRef<(() => number | null) | null>(null);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
   // Read by forward search, which counts unsaved edits above the caret's line
   // as a stale source: the saved text when the draft differs from it, else null.
   const unsavedBaseRef = useRef<string | null>(null);

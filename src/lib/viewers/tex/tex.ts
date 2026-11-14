@@ -1788,14 +1788,6 @@ export function texSnippetRanges(source: string): TexSnippetRange[] {
   return kept;
 }
 
-/** The previewable fragment containing `offset`, or null. Pure. */
-export function texSnippetAt(source: string, offset: number): TexSnippetRange | null {
-  for (const r of texSnippetRanges(source)) {
-    if (offset >= r.start && offset < r.end) return r;
-  }
-  return null;
-}
-
 /**
  * The preamble of `source` — everything before `\begin{document}` — or null when
  * this file has none.
@@ -3149,6 +3141,12 @@ export interface TexCompletions {
    *  walk because the class line is regularly in a file the editor is not in —
    *  a child fragment of a deck is still a deck. Absent means unknown/not. */
   beamer?: boolean;
+  /** The `.tex` files the walk read, i.e. the ones whose labels and macros are in
+   *  this answer. A host that gathers once for several panes of one document
+   *  hands the result to a pane only when the pane's own file is in here: a file
+   *  the walk never reached (an orphan, or one past the 60-file cap) would get
+   *  none of its own labels from it. Absent on a hand-built value. */
+  files?: ReadonlySet<string>;
 }
 
 /**
@@ -3241,10 +3239,12 @@ export async function gatherTexCompletions(
   const envs: TexEnvEntry[] = [];
   const seenEnv = new Set(TEX_STANDARD_ENVIRONMENTS.map((e) => e.name));
   let beamer = false;
+  const files = new Set<string>();
   const bibPaths = await walkTexSources(
     currentPath,
     projectId,
-    (_file, text) => {
+    (file, text) => {
+      files.add(file);
       if (!beamer && isBeamerDocument(text)) beamer = true;
       for (const l of parseTexLabels(text)) {
         if (seenLabel.has(l.key)) continue;
@@ -3289,6 +3289,7 @@ export async function gatherTexCompletions(
     commands: [...commands, ...TEX_STANDARD_COMMANDS],
     envs: [...envs, ...TEX_STANDARD_ENVIRONMENTS],
     beamer,
+    files,
   };
 }
 
