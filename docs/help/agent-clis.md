@@ -60,6 +60,38 @@ too. Turn it on before launching a new agent to give that agent the tools.
 Existing MCP tools retain their separate permissions. Tabby keeps its web and
 help tools.
 
+## Let agent tabs of a project message each other
+
+Local agent tabs of one project can leave each other short messages through
+the tab messaging MCP (`tabtivity-mcp call tabs …` for CLIs that do not list it
+as their own tool). Ask an agent to list the other tabs (`tabs_list`), send
+one of them a message (`tabs_send`) or read its inbox (`tabs_inbox`). A
+message is plain text up to 4,000 characters for one tab; it stays unread
+until the recipient acknowledges it and disappears after 24 hours or when the
+app quits.
+
+A message reaches the other agent as written by another agent tab, never as
+your prompt. The other agent learns of it when it reads its inbox, and a
+Claude tab sees a short hint beside your next prompt. To prompt an idle tab to
+read its messages, open its row in the cockpit: **Messages** lists every
+message it sent or received, as written, and **Deliver** queues a fixed
+"read your inbox" notice that is typed once the tab is idle; the message text
+itself is never typed. **Clear** removes the project's messages. The tab's
+hover card shows how many are unread.
+
+Only tabs of the same project on this computer reach each other. Tabs of
+another project, box tabs, the Root console, Tabby, and remote, worker, VM
+and container tabs do not. In a project set to **Local models only**, its
+local tabs reach only each other; elsewhere local-model tabs and cloud agent
+tabs never mix. An agent is limited to 30 sends and 120 list or inbox calls an
+hour.
+
+Manage CLIs → Tools → **Let agent tabs of a project message each other
+(MCP)** is on by default; off, running tabs' calls are refused. Below it, each
+project has an off-by-default switch to wake idle tabs: with it on, a tab that
+gets new unread messages is sent the fixed notice by itself once idle, at
+most six times an hour.
+
 ## Install an agent CLI
 
 1. Click the **Models & agents** button in the header (chip icon) and pick

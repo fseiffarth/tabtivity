@@ -1,7 +1,7 @@
 # Agent MCP wiring — how every agent CLI reaches Tabtivity's lanes
 
 Every local project agent tab is granted the MCP lanes (`root_mcp::grant_lanes`:
-schedule, git, help, markup, print, cockpit; root in the root console). Each grant puts
+schedule, git, help, markup, print, cockpit, tabs; root in the root console). Each grant puts
 an env pair in the spawn: `TABTIVITY_<LANE>_MCP_URL` and `_TOKEN`. How the CLI
 learns that the server exists is decided per CLI, in two ways.
 

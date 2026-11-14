@@ -3277,3 +3277,72 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+
+### Tab messaging MCP — `docs/context/tab_messaging_mcp.md`
+
+- [ ] 🖐️ Tab messaging lane (`tabs.mcp.lane`) — Manage CLIs → Tools: "Let agent
+  tabs of a project message each other" is on. Open two fresh Claude tabs and
+  one Codex tab in a local project. In tab A: "list the other tabs and send
+  the Codex tab 'ping'". Type a prompt into a Claude tab you sent a message:
+  the read-your-inbox hint appears beside it. From another project, sending
+  to a handle copied from the first answers `not_found`. Tabby and a root
+  console agent do not list the tools. Restart one tab: its unread is still
+  there. Turn the switch off: a send answers `off`.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Tab messaging and Local models only (`tabs.mcp.lane`) — mark the
+  project Local models only: its messages disappear from the cockpit and
+  cloud tabs close; two local tabs can message each other. In an unlocked
+  project a local-model tab and a Claude tab do not list each other.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Messages fold and hover card (`tabs.mcp.traffic`) — after a send,
+  open the recipient's row in the cockpit (Now): Messages lists it with
+  sender, time and "unread", the text exactly as sent (send `<b>x</b>
+  **y**` and it stays literal). Hovering the recipient's tab shows
+  "messages: 1 unread". After the recipient acks, it reads "read" and the
+  hover line goes. Clear asks first, then empties the project's messages.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Deliver (`tabs.mcp.deliver`) — with a message unread for the Codex
+  tab, press Deliver in its Messages fold: once the tab is idle the fixed
+  read-your-inbox notice is typed as its prompt (never the message text) and
+  the agent reads its inbox. Deliver is greyed out with nothing unread.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Idle wake (`tabs.mcp.wake`) — Manage CLIs → Tools: turn on the
+  project's wake switch under the tab messaging switch. Send a busy tab a
+  message: the notice is typed once it finishes, once for that batch. With
+  the switch off nothing is typed by itself.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
