@@ -2649,3 +2649,35 @@ fn a_failed_host_git_init_downgrades_the_label() {
     assert_eq!(project.git_type.as_deref(), Some("none"));
     assert_eq!(project.git_provider, None);
 }
+
+/// A LaTeX folder's new `.gitignore` is the generic list plus the LaTeX
+/// section; an empty folder's is the generic list alone.
+#[test]
+fn a_latex_folder_gets_the_latex_section_on_top_of_the_defaults() {
+    let empty = tempfile::tempdir().unwrap();
+    assert_eq!(gitignore_for(empty.path()), GITIGNORE_DEFAULT);
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("paper.tex"), "\\documentclass{article}").unwrap();
+    scaffold_project(dir.path(), true).unwrap();
+    let written = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    assert!(written.starts_with(GITIGNORE_DEFAULT), "the generic list stays whole");
+    assert!(written.contains("\n# LaTeX build files\n*.aux\n"));
+    assert!(written.lines().any(|l| l == "*.synctex.gz"));
+}
+
+/// Repair appends a detected section's missing patterns to an existing
+/// `.gitignore`, without its heading, and reports only those.
+#[test]
+fn repair_appends_the_missing_latex_patterns_only() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("thesis.tex"), "").unwrap();
+    fs::write(dir.path().join(".gitignore"), format!("{GITIGNORE_DEFAULT}*.aux\n")).unwrap();
+    let added = ensure_gitignore_defaults(dir.path()).unwrap();
+    assert!(!added.contains(&"*.aux".to_string()));
+    assert!(added.contains(&"*.synctex.gz".to_string()));
+    assert!(!added.iter().any(|l| l.starts_with('#')));
+    let after = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    assert_eq!(after.matches("*.aux").count(), 1);
+    assert!(ensure_gitignore_defaults(dir.path()).unwrap().is_empty(), "a second repair adds nothing");
+}

@@ -1144,7 +1144,7 @@ missing (nothing is overwritten):
 |------|---------|
 | `AGENTS.md` | Canonical agent instructions — the single source of truth. Every agent CLI Tabtivity wraps reads it by itself (Gemini through the `context.fileName` Tabtivity sets in its own agent homes, never in the project), so no pointer files are written. |
 | `README.md` | Project overview. |
-| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output (git projects only). |
+| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output (git projects only); a folder holding `.tex` files also gets the LaTeX build files (`*.aux`, `*.synctex.gz`, …), and Repair adds them later. |
 
 These are created **on demand** from the file tree's *Project docs* group (below),
 each from a short template: `PROJECT.md` (what the project is), `TODO.md`

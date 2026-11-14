@@ -3467,6 +3467,23 @@ fn project_generated_dir_blocking(project_dir: String, kind: String) -> Result<S
 // the list for good.
 pub const GITIGNORE_DEFAULT: &str = concat!("__pycache__/\n*.pyc\n.venv/\nnode_modules/\ntarget/\ndist/\nbuild/\n.env\n.env.local\n.DS_Store\n*.log\n*.swp\n*.swo\n.idea/\n.", crate::app_slug!(), "/\n", crate::app_slug!(), "-screenshots/\n", crate::app_slug!(), "-emails/\n", crate::legacy_slug!(), "-screenshots/\n", crate::legacy_slug!(), "-emails/\nscreenshots/\nemails/\nproject.json\n");
 
+/// The `.gitignore` a project in `dir` is given: [`GITIGNORE_DEFAULT`] plus
+/// each section its folder calls for (`scaffold::gitignore_sections_at`, e.g.
+/// LaTeX build files beside a `.tex`). Only ever adds to the generic list.
+pub fn gitignore_for(dir: &Path) -> String {
+    let mut text = GITIGNORE_DEFAULT.to_string();
+    for section in scaffold::gitignore_sections_at(dir) {
+        text.push('\n');
+        text.push_str(section.heading);
+        text.push('\n');
+        for pattern in section.patterns {
+            text.push_str(pattern);
+            text.push('\n');
+        }
+    }
+    text
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScaffoldPreviewItem {
@@ -3489,7 +3506,7 @@ pub fn scaffold_project(dir: &Path, with_git: bool) -> std::io::Result<()> {
         scaffold::create_doc_at(dir, doc)?;
     }
     if with_git {
-        write_scaffold_file(&dir.join(".gitignore"), GITIGNORE_DEFAULT)?;
+        write_scaffold_file(&dir.join(".gitignore"), &gitignore_for(dir))?;
     }
     if with_git && !dir.join(".git").exists() {
         let _ = crate::services::git_init::init_repo(dir);
@@ -3564,8 +3581,9 @@ fn git_head_unborn(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// The `GITIGNORE_DEFAULT` patterns absent from `dir/.gitignore` — a missing
-/// file reports every default. Read-only: this is the migration plan's preview
+/// The [`gitignore_for`] patterns (the generic defaults plus the sections the
+/// folder calls for) absent from `dir/.gitignore` — a missing file reports
+/// every one. Read-only: this is the migration plan's preview
 /// of what `ensure_gitignore_defaults` would append.
 ///
 /// Anything but a regular file at that name (a link, dangling or not, or a
@@ -3573,9 +3591,10 @@ fn git_head_unborn(dir: &Path) -> bool {
 /// reports nothing, so the plan and the repair go on with their other steps
 /// instead of failing on it.
 fn missing_gitignore_lines_at(dir: &Path) -> std::io::Result<Vec<String>> {
-    let defaults: Vec<&str> = GITIGNORE_DEFAULT
+    let wanted = gitignore_for(dir);
+    let defaults: Vec<&str> = wanted
         .lines()
-        .filter(|l| !l.is_empty())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
     let path = dir.join(".gitignore");
     if fs::symlink_metadata(&path).is_ok_and(|meta| !meta.file_type().is_file()) {
@@ -3614,7 +3633,7 @@ pub(crate) fn read_project_gitignore(path: &Path) -> std::io::Result<Option<Stri
         .ok_or_else(|| std::io::Error::other(".gitignore is not a readable UTF-8 file of at most 4 MB"))
 }
 
-/// Append any `GITIGNORE_DEFAULT` pattern missing from `dir/.gitignore` to the
+/// Append any [`gitignore_for`] pattern missing from `dir/.gitignore` to the
 /// end of the file, creating it fresh if absent. Existing lines are never
 /// reordered or removed — this only ever adds patterns Tabtivity scaffolds by
 /// default (e.g. a new one like `project.json` added after the project's
@@ -3626,7 +3645,7 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
     }
     let path = dir.join(".gitignore");
     let Some(mut updated) = read_project_gitignore(&path)? else {
-        write_no_follow(&path, GITIGNORE_DEFAULT.as_bytes(), true)?;
+        write_no_follow(&path, gitignore_for(dir).as_bytes(), true)?;
         return Ok(missing);
     };
     if !updated.is_empty() && !updated.ends_with('\n') {
@@ -3643,7 +3662,7 @@ fn ensure_gitignore_defaults(dir: &Path) -> std::io::Result<Vec<String>> {
 /// Write the default `dir/.gitignore` unless there is something at that name
 /// — a dangling link included, whose target would land outside the project.
 fn write_default_gitignore_if_missing(dir: &Path) -> std::io::Result<()> {
-    match write_no_follow(&dir.join(".gitignore"), GITIGNORE_DEFAULT.as_bytes(), true) {
+    match write_no_follow(&dir.join(".gitignore"), gitignore_for(dir).as_bytes(), true) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         other => other,
     }
@@ -3754,7 +3773,7 @@ impl ScaffoldRepairReport {
 /// scaffold has drifted behind current defaults (e.g. a default doc was
 /// deleted or a `.gitignore` pattern was added since). Fills in whatever is missing —
 /// same never-overwrite rule for existing files — and additionally merges any
-/// missing `GITIGNORE_DEFAULT` pattern into an already-present `.gitignore`
+/// missing [`gitignore_for`] pattern into an already-present `.gitignore`
 /// (plain `scaffold_project` leaves a pre-existing `.gitignore` untouched).
 fn repair_project_scaffold_at(dir: &Path, with_git: bool) -> std::io::Result<ScaffoldRepairReport> {
     fs::create_dir_all(dir)?;

@@ -394,8 +394,9 @@ const CHECK = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5
  * A landed file's row offers Undo while the library stays in that folder; the
  * desktop deletes it only while it is still unchanged.
  *
- * The project root's scaffold files and everything git ignores sit in
- * collapsed sections after the rest, as in the desktop's file tree.
+ * The project root's "Project docs" group sits above the rest and everything
+ * git ignores after it, both collapsed until opened, as in the desktop's file
+ * tree.
  *
  * The phone never holds a path: each folder and file is a sealed token the
  * sidecar handed out, and the trail is the tokens walked so far. The trail is

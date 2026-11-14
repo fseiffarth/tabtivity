@@ -548,5 +548,77 @@ pub fn docs_status_at(dir: &Path) -> Vec<DocStatus> {
         .collect()
 }
 
+/// A `.gitignore` section a project gets on top of the generic default when
+/// its folder shows that kind of work (`gitignore_sections_at`). Only adds:
+/// the generic list (`commands::projects::GITIGNORE_DEFAULT`) already covers
+/// Python, Node and Rust build folders and `*.log`.
+pub struct GitignoreSection {
+    /// The comment line heading the section in a freshly written file.
+    pub heading: &'static str,
+    pub patterns: &'static [&'static str],
+    /// A file name (lower-cased) whose presence marks the kind.
+    marks: fn(&str) -> bool,
+}
+
+pub const GITIGNORE_SECTIONS: &[GitignoreSection] = &[GitignoreSection {
+    heading: "# LaTeX build files",
+    patterns: &["*.aux", "*.out", "*.toc", "*.fls", "*.fdb_latexmk", "*.synctex.gz", "*.bbl", "*.blg"],
+    marks: |name| name.ends_with(".tex"),
+}];
+
+/// Directory entries `gitignore_sections_at` looks at, all folders together.
+const SECTION_SCAN_ENTRIES: usize = 2048;
+/// Subfolders of the root it also lists (one level down: `chapters/`).
+const SECTION_SCAN_SUBDIRS: usize = 32;
+
+/// The [`GITIGNORE_SECTIONS`] whose marker file sits in `dir` or in one of its
+/// direct subfolders. The tree is attacker-controlled: only directory
+/// listings, never a file read; a link is neither followed nor counted; dot
+/// folders and the generic list's build folders are skipped; both the entries
+/// and the subfolders looked at are capped. An unreadable folder detects
+/// nothing.
+pub fn gitignore_sections_at(dir: &Path) -> Vec<&'static GitignoreSection> {
+    let mut found = vec![false; GITIGNORE_SECTIONS.len()];
+    let mut budget = SECTION_SCAN_ENTRIES;
+    let mut subdirs = Vec::new();
+    scan_for_sections(dir, &mut found, &mut budget, Some(&mut subdirs));
+    for sub in subdirs {
+        if found.iter().all(|f| *f) {
+            break;
+        }
+        scan_for_sections(&sub, &mut found, &mut budget, None);
+    }
+    GITIGNORE_SECTIONS.iter().zip(found).filter(|(_, f)| *f).map(|(s, _)| s).collect()
+}
+
+fn scan_for_sections(dir: &Path, found: &mut [bool], budget: &mut usize, mut subdirs: Option<&mut Vec<std::path::PathBuf>>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let Ok(entry) = entry else { continue };
+        // `DirEntry::file_type` does not follow a link.
+        let Ok(kind) = entry.file_type() else { continue };
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if kind.is_file() {
+            for (section, hit) in GITIGNORE_SECTIONS.iter().zip(found.iter_mut()) {
+                *hit = *hit || (section.marks)(&name);
+            }
+        } else if kind.is_dir() {
+            let skipped = name.starts_with('.')
+                || ["node_modules", "target", "dist", "build", "__pycache__"].contains(&name.as_str());
+            if let Some(list) = subdirs.as_deref_mut() {
+                if !skipped && list.len() < SECTION_SCAN_SUBDIRS {
+                    list.push(entry.path());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

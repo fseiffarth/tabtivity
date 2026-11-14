@@ -732,3 +732,23 @@ lint-fe (0 errors), clippy x3 (zero warnings), `npm run build` PASS; vitest `--c
 known `git_push_mcp` YAML alias-bomb 5 s bound (8.2 s under load; alone 1 passed, 0.11 s);
 `--test server_secrets` by hand 1 passed. (An earlier run of the job failed clippy on my own
 test; fixed in `eb3cc3741` and rerun.)
+
+## User decisions on the open flags (2026-11-14)
+
+- **`.git` missing:** not counted by the "no scaffold" tag; the tag stays docs-only.
+- **Phone docs group:** stays first, **collapsed by default** until opened
+  once — already so since I5 (`readDocsOpen`, `MobileProjectDocs.test.tsx`
+  "aria-expanded false"); only a stale doc comment in `FilesLibrary.tsx` fixed.
+- **AGENTS.md upgrade by rename:** acceptable as is (hardlink/ACL loss,
+  read-only folder skip).
+- **`.gitignore` per project type:** yes, by **detection from the folder** (no
+  dialog field). The generic `GITIGNORE_DEFAULT` stays as it is; a detected
+  type only adds its section on top (first: LaTeX — `*.aux`, `*.log`, `*.out`,
+  `*.toc`, `*.fls`, `*.fdb_latexmk`, `*.synctex.gz`, `*.bbl`, `*.blg`). Create,
+  import and Repair append a detected section's missing patterns. Detection
+  reads an attacker-controlled tree: bounded, no-follow. Implemented:
+  `scaffold::gitignore_sections_at` (directory listings only, root + one
+  folder down, links not followed or counted, dot/build folders skipped, 2048
+  entries / 32 subfolders) and `commands::projects::gitignore_for`, used by
+  create, git re-enable, Repair and the migration preview. Remote-only
+  projects (host-side scaffold) keep the generic list.

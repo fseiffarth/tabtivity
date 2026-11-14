@@ -74,10 +74,11 @@ The display has its own problems (`src/components/files/FileTree.tsx:3069`,
    extraction, preview behind a flag). The docs group gets an "Agent memory"
    entry that lists them (§4, step 8).
 
-Not decided, recommended for a later round (not in this plan's steps):
-a project-kind hint (code / LaTeX / data / notes) that picks the `.gitignore`
-content. Today's one list has Python/Node/Rust entries, no TeX aux entries,
-and `build/`, `dist/`, `*.log` can hide real files in some kinds.
+Decided 2026-11-14 (after the run): the `.gitignore` kind is **detected
+from the folder**, no dialog field. The generic list stays whole; a detected
+kind only adds its section (`scaffold::GITIGNORE_SECTIONS`, LaTeX first) at
+create, import, git re-enable and Repair. Remote-only projects (scaffolded on
+the host) keep the generic list.
 
 ## 3. Model: one catalog, three states
 

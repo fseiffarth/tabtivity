@@ -438,3 +438,69 @@ fn the_ts_fallback_list_is_the_catalog() {
     in_catalog.sort_unstable();
     assert_eq!(in_ts, in_catalog, "update STANDARD_PROJECT_FILES in src/lib/viewers/fileUtils.ts");
 }
+
+fn section_headings(dir: &Path) -> Vec<&'static str> {
+    gitignore_sections_at(dir).iter().map(|s| s.heading).collect()
+}
+
+/// A `.tex` at the root or one folder down calls for the LaTeX section;
+/// an empty folder, a deeper one, or a skipped folder does not.
+#[test]
+fn a_tex_file_at_the_root_or_one_folder_down_detects_latex() {
+    let empty = tempfile::tempdir().unwrap();
+    assert!(section_headings(empty.path()).is_empty());
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("Main.TEX"), "").unwrap();
+    assert_eq!(section_headings(root.path()), ["# LaTeX build files"]);
+
+    let sub = tempfile::tempdir().unwrap();
+    std::fs::create_dir(sub.path().join("chapters")).unwrap();
+    std::fs::write(sub.path().join("chapters").join("intro.tex"), "").unwrap();
+    assert_eq!(section_headings(sub.path()), ["# LaTeX build files"]);
+
+    let deep = tempfile::tempdir().unwrap();
+    let two_down = deep.path().join("a").join("b");
+    std::fs::create_dir_all(&two_down).unwrap();
+    std::fs::write(two_down.join("x.tex"), "").unwrap();
+    std::fs::create_dir(deep.path().join("node_modules")).unwrap();
+    std::fs::write(deep.path().join("node_modules").join("y.tex"), "").unwrap();
+    std::fs::create_dir(deep.path().join(".hidden")).unwrap();
+    std::fs::write(deep.path().join(".hidden").join("z.tex"), "").unwrap();
+    assert!(section_headings(deep.path()).is_empty());
+}
+
+/// The tree is attacker-controlled: a link named `*.tex`, or a linked folder
+/// holding one, is neither followed nor counted.
+#[cfg(unix)]
+#[test]
+fn a_linked_tex_or_linked_folder_detects_nothing() {
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("real.tex"), "").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path().join("real.tex"), dir.path().join("main.tex")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("chapters")).unwrap();
+    assert!(section_headings(dir.path()).is_empty());
+}
+
+/// The scan stops after its entry budget: a marker past it is not seen.
+#[test]
+fn the_section_scan_is_capped() {
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("many");
+    std::fs::create_dir(&sub).unwrap();
+    for i in 0..SECTION_SCAN_ENTRIES {
+        std::fs::write(sub.join(format!("f{i}")), "").unwrap();
+    }
+    std::fs::create_dir(dir.path().join("zz")).unwrap();
+    std::fs::write(dir.path().join("zz").join("late.tex"), "").unwrap();
+    // Two subfolders: whichever lists first, `many` spends the whole budget
+    // either before `zz` is listed or `zz` is found first — so check the
+    // budget directly instead of the listing order.
+    let mut found = vec![false; GITIGNORE_SECTIONS.len()];
+    let mut budget = SECTION_SCAN_ENTRIES;
+    scan_for_sections(&sub, &mut found, &mut budget, None);
+    assert_eq!(budget, 0);
+    scan_for_sections(&dir.path().join("zz"), &mut found, &mut budget, None);
+    assert!(!found[0], "nothing is read past the budget");
+}
