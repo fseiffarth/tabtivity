@@ -2576,7 +2576,7 @@ export function CodeEditor({
   // caret line's tail (closers) are painted, on a cover over the originals.
   // Every case it cannot draw exactly stays on the opaque projection.
   const ghostTail = suggestion
-    ? inlineGhostTail(draft, suggestion.at, suggestion.text, { highlighted: highlighted != null, wrapped: wrap })
+    ? inlineGhostTail(draft, suggestion.at, suggestion.text, { highlighted: highlighted != null, wrapped: wrap === true })
     : null;
 
   // In wrap mode, pin every overlay <pre> to the textarea's content width so

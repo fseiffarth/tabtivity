@@ -294,7 +294,7 @@ describe("local autocomplete (#45)", () => {
     el.selectionStart = el.selectionEnd = SOURCE.length;
     await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
     expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.request.error.ollama/none");
-    expect((await timingsRing()).at(-1)).toEqual(expect.objectContaining({ outcome: "error", provider: "ollama", trigger: "manual" }));
+    expect((await timingsRing()).slice(-1)[0]).toEqual(expect.objectContaining({ outcome: "error", provider: "ollama", trigger: "manual" }));
     models = [{ name: "coder", running: true }];
     // The model lookup is cached for 5 s; a new endpoint key would bypass it,
     // so wait it out through the clock instead.
@@ -330,7 +330,7 @@ describe("local autocomplete (#45)", () => {
     await waitFor(() => expect(el.value).toBe(SOURCE));
     el.selectionStart = el.selectionEnd = SOURCE.length;
     await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
-    const timing = (await timingsRing()).at(-1)!;
+    const timing = (await timingsRing()).slice(-1)[0];
     expect(timing).toEqual(expect.objectContaining({ model: "llama3.2:3b", outcome: "ok", stats }));
     expect(timing.request).toBeLessThanOrEqual(timing.contextReady!);
     expect(timing.contextReady).toBeLessThanOrEqual(timing.firstEvent!);
