@@ -139,7 +139,7 @@ import {
   type PenTool,
   type ProofPick,
 } from "../../../../mobile-web/src/markup/pen";
-import { layerKey, loadLayer, saveLayer, stale, type Fingerprint } from "../../../../mobile-web/src/markup/store";
+import { fingerprintChanged, layerKey, loadLayer, saveLayer, type Fingerprint } from "../../../../mobile-web/src/markup/store";
 import { composedPng, layerPng } from "../../../../mobile-web/src/markup/rasterize";
 import {
   canApply,
@@ -422,11 +422,16 @@ export function usePdfMarkup({
   /** The agent's ticks for this file, with the tabs and file they were read for. */
   const [tickList, setTickList] = useState<{ key: string; ticks: MarkupTick[] } | null>(null);
 
-  const skipSave = useRef(false);
-  const pendingSave = useRef(false);
-  /** A Reload is under way from the file read as this fingerprint: the record
-   *  waits for the new one. */
-  const reloadingRef = useRef<Fingerprint | null | false>(false);
+  /** The layer the store holds, as far as this window knows: the object read
+   *  from it, or put to it when a save was *started* (a failed save is not
+   *  retried until the next change). A `history.present` that is this very
+   *  object has nothing to write. */
+  const persisted = useRef<Layer | null>(null);
+  /** A Reload is under way from the file read as `from` (`beforeReload`): the
+   *  record waits for the new fingerprint — a different *object*, even one
+   *  equal in value, since a Reload of an unchanged file must still end — and
+   *  until then the stale check is muted. */
+  const restamp = useRef<{ from: Fingerprint | null } | null>(null);
   const fingerprintRef = useRef(fingerprint);
   fingerprintRef.current = fingerprint;
   const docSizeRef = useRef(docSize);
@@ -459,23 +464,19 @@ export function usePdfMarkup({
       setRound(null);
       setRoundTargetId(null);
       setChanged(false);
-      // Nothing to write back until the first change.
-      skipSave.current = true;
+      // The undo steps the record kept come back too (redo never does).
+      const first = stored && stored !== "unavailable" ? startHistory(stored.layer, stored.past) : startHistory();
+      // Nothing to write back until the first change — and a record read is
+      // not saved straight back: that would stamp the file's current
+      // fingerprint on marks drawn against an older one.
+      persisted.current = first.present;
+      setHistory(first);
       if (stored === "unavailable") {
         setStorage("unsaved");
-        setHistory(startHistory());
         setStoredFingerprint(null);
-      } else if (stored) {
-        // Not saved straight back: that would stamp the file's current
-        // fingerprint on marks drawn against an older one.
-        setStorage("saved");
-        // The undo steps the record kept come back too (redo never does).
-        setHistory(startHistory(stored.layer, stored.past));
-        setStoredFingerprint(stored.fingerprint);
       } else {
         setStorage("saved");
-        setHistory(startHistory());
-        setStoredFingerprint(null);
+        setStoredFingerprint(stored ? stored.fingerprint : null);
       }
       setLoadedKey(key);
     });
@@ -486,34 +487,31 @@ export function usePdfMarkup({
 
   // Marks drawn against another version of the file say so until a Reload.
   useEffect(() => {
-    if (!loaded || !storedFingerprint || !fingerprint || reloadingRef.current !== false) return;
-    if (stale({ layer: history.present, fingerprint: storedFingerprint, saved: 0 }, fingerprint)
+    if (!loaded || !storedFingerprint || !fingerprint || restamp.current) return;
+    if (fingerprintChanged(storedFingerprint, fingerprint)
       && (!isEmpty(history.present) || hasSent(history.present))) {
       setChanged(true);
     }
   }, [loaded, storedFingerprint, fingerprint, history.present]);
 
   // ── Saved as each change lands, with the file it was drawn on ────────────
+  // After the stale check above, which must run first: in the very commit that
+  // delivers a Reload's new fingerprint it is still muted by `restamp`, which
+  // this effect then ends.
   useEffect(() => {
-    if (!loaded || !key) return;
-    if (skipSave.current) {
-      skipSave.current = false;
-      return;
-    }
-    pendingSave.current = true;
-  }, [history.present, loaded, key]);
-  useEffect(() => {
-    if (!loaded || !key || !pendingSave.current || !fingerprint) return;
-    // Reloading: the marks are saved as they change, and once more with the new
-    // file's fingerprint when it has been read — from then on they sit on it.
-    const waiting = reloadingRef.current !== false && fingerprint === reloadingRef.current;
-    if (reloadingRef.current !== false && !waiting) {
-      reloadingRef.current = false;
+    if (!loaded || !key || !fingerprint) return;
+    // Reloading: the marks are saved as they change (stamped with the file
+    // they were drawn on), and once more with the new file's fingerprint when
+    // it has been read — from then on they sit on it.
+    const arrived = restamp.current !== null && fingerprint !== restamp.current.from;
+    if (arrived) {
+      restamp.current = null;
       setChanged(false);
     }
-    pendingSave.current = waiting;
+    if (!arrived && history.present === persisted.current) return;
     const layer = history.present;
     const at = fingerprint;
+    persisted.current = layer;
     void saveLayer(key, layer, at, undefined, history.past).then((ok) => {
       setStorage(ok ? "saved" : "unsaved");
       if (ok) setStoredFingerprint(at);
@@ -1281,8 +1279,7 @@ export function usePdfMarkup({
     setPdfStale(false);
     setReloaded(true);
     setAutoReloaded(auto);
-    reloadingRef.current = fingerprintRef.current;
-    pendingSave.current = true;
+    restamp.current = { from: fingerprintRef.current };
   }, []);
 
   // ── The agent's ticks: a ✓ on each group of ticked sent marks ───────────

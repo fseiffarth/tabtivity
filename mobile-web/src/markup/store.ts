@@ -222,7 +222,12 @@ export async function moveLayer(from: string, to: string, fingerprint: Fingerpri
   return clearLayer(from, backend);
 }
 
+/** Whether two fingerprints name different versions of a file. */
+export function fingerprintChanged(a: Fingerprint, b: Fingerprint): boolean {
+  return a.size !== b.size || a.modified !== b.modified;
+}
+
 /** Whether the file changed since its layer was drawn. */
 export function stale(stored: StoredLayer, current: Fingerprint): boolean {
-  return stored.fingerprint.size !== current.size || stored.fingerprint.modified !== current.modified;
+  return fingerprintChanged(stored.fingerprint, current);
 }
