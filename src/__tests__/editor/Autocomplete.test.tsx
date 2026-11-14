@@ -94,6 +94,9 @@ function setup() {
   });
 }
 
+/** Resolve after the next animation frame (the ghost's render cadence). */
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
 /** Move `performance.now()` forward without waiting (the offer clock). */
 function skewClock() {
   const real = performance.now.bind(performance);
@@ -414,7 +417,8 @@ describe("local autocomplete (#45)", () => {
     el.selectionStart = el.selectionEnd = SOURCE.length;
     await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
     const publish = mockListen.mock.calls.find(([event]) => event === "text-completion-test-request")![1];
-    await act(async () => { publish({ payload: "return 42" }); });
+    // Streamed text renders once per frame.
+    await act(async () => { publish({ payload: "return 42" }); await nextFrame(); });
     expect(screen.getByText("return 42")).toBeTruthy();
     await act(async () => {
       fireEvent.keyDown(el, { key: "r" });
@@ -427,6 +431,31 @@ describe("local autocomplete (#45)", () => {
     expect(screen.queryByText("return 999")).toBeNull();
     fireEvent.keyDown(el, { key: "Tab" });
     expect(el.value).toBe(SOURCE + "return 42");
+  });
+
+  it("renders a burst of streamed tokens once, on the next frame; the final text lands at once", async () => {
+    autocompleteOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    let finish!: (value: string) => void;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => cmd === "complete_text"
+      ? new Promise<string>((resolve) => { finish = resolve; }) : original(cmd, args));
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    const publish = mockListen.mock.calls.find(([event]) => event === "text-completion-test-request")![1];
+    await act(async () => {
+      for (const payload of ["r", "ret", "return"]) publish({ payload });
+    });
+    expect(screen.queryByText("return")).toBeNull();
+    await act(async () => { await nextFrame(); });
+    expect(screen.getByText("return")).toBeTruthy();
+    await act(async () => { publish({ payload: "return 4" }); finish("return 42"); });
+    // The final answer cancelled the pending frame and rendered without one.
+    expect(screen.getByText("return 42")).toBeTruthy();
+    await act(async () => { await nextFrame(); });
+    expect(screen.getByText("return 42")).toBeTruthy();
   });
 
   it("cancels while waiting for the first token and rejects late output", async () => {

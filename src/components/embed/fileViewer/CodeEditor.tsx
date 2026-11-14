@@ -1838,7 +1838,7 @@ export function CodeEditor({
     setSuggestion(null);
     setAcRoleMissing(null);
     setAcStatus(acCopilot ? t("fileViewer.copilotStatus") : t("fileViewer.autocompleteStatus", { mode: acModeLabel(mode, t) }));
-    const publish = (candidates: CompletionCandidate[]) => {
+    const publishNow = (candidates: CompletionCandidate[]) => {
       if (ctl.signal.aborted || acDocumentVersion.current !== version || draftRef.current !== snapshot ||
           el.selectionStart !== caret || el.selectionEnd !== caret) return;
       // Copilot returns its alternatives at once; Alt+[/] walks that list.
@@ -1848,6 +1848,27 @@ export function CodeEditor({
       else acOffers.end();
       setSuggestion(item ? { text: item.text, at: item.at, candidate: item } : null);
       if (item) setAcStatus(null);
+    };
+    // A stream publishes per token; the editor re-renders once per frame with
+    // the newest text. The final answer cancels a pending frame and lands at
+    // once (`settle`).
+    let frame = 0;
+    let pending: CompletionCandidate[] | null = null;
+    const publish = (candidates: CompletionCandidate[]) => {
+      pending = candidates;
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const next = pending;
+        pending = null;
+        if (next) publishNow(next);
+      });
+    };
+    const settle = (final?: CompletionCandidate[]) => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      pending = null;
+      if (final) publishNow(final);
     };
     const providerId = acCopilot && scope ? "copilot" : "ollama";
     const timing = startCompletionTiming(providerId, auto ? "auto" : "manual", acLastEditAt.current ?? undefined);
@@ -1893,6 +1914,7 @@ export function CodeEditor({
         path, text: snapshot, caret, language: lang, version,
       }, ctl.signal, publish);
       if (ctl.signal.aborted) { timing.outcome = "cancelled"; return; }
+      settle(result);
       countRequest(timing.cached ? "cache" : result.length ? "ok" : "empty");
       setAcStatus(result.length || auto ? null : t("fileViewer.noSuggestion"));
     } catch (e) {
@@ -1920,6 +1942,7 @@ export function CodeEditor({
         ? "fileViewer.autocompleteUnavailable"
         : acCopilot ? "fileViewer.copilotFailed" : "fileViewer.autocompleteFailed"));
     } finally {
+      settle();
       ctl.abort();
       if (acAbort.current === ctl) acAbort.current = null;
     }
@@ -1959,7 +1982,8 @@ export function CodeEditor({
 
   // The ghost mounts fresh (scrollTop 0) each time a suggestion appears; align it
   // to the editor's current scroll so the inserted preview lands at the caret.
-  useEffect(() => {
+  // Before paint, so a ghost never shows one frame at the top of the file.
+  useLayoutEffect(() => {
     if (suggestion) syncScroll();
   }, [suggestion, syncScroll]);
 
@@ -2474,6 +2498,58 @@ export function CodeEditor({
     }
   };
 
+  // The line-number cells, rebuilt only when what they show changes: a streamed
+  // ghost token (a render per frame) or a keystroke within a line leaves them be.
+  const gutterLines = useMemo(() => Array.from({ length: lineCount }, (_, i) => {
+    const n = i + 1;
+    const h = wrap ? lineHeights[i] : undefined;
+    const broken = breakpoints?.has(n) ?? false;
+    const cls =
+      (n === currentMatchLine
+        ? "file-viewer-gutter-line current-match"
+        : matchLineSet.has(n)
+          ? "file-viewer-gutter-line has-match"
+          : "file-viewer-gutter-line") +
+      (n === caretLine ? " caret" : "") +
+      (unclosedLineSet.has(n) ? " has-unclosed-bracket" : "") +
+      (onToggleBreakpoint ? " is-breakable" : "") +
+      (broken ? " has-breakpoint" : "");
+    const style = h != null ? { height: h } : undefined;
+
+    if (!onToggleBreakpoint) {
+      return (
+        <div key={i} className={cls} style={style}>
+          {n}
+        </div>
+      );
+    }
+    return (
+      <button
+        key={i}
+        type="button"
+        className={cls}
+        style={style}
+        // Keep the caret where it is: clicking the gutter sets a
+        // breakpoint, it does not move the cursor or steal focus.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onToggleBreakpoint(n)}
+        title={
+          broken
+            ? t("fileViewer.removeBreakpoint", { line: n })
+            : t("fileViewer.addBreakpoint", { line: n })
+        }
+        aria-pressed={broken}
+        aria-label={
+          broken
+            ? t("fileViewer.removeBreakpoint", { line: n })
+            : t("fileViewer.addBreakpoint", { line: n })
+        }
+      >
+        {n}
+      </button>
+    );
+  }), [lineCount, wrap, lineHeights, breakpoints, currentMatchLine, matchLineSet, caretLine, unclosedLineSet, onToggleBreakpoint, t]);
+
   if (error != null) return <div className="file-viewer-error">{error}</div>;
   if (!loaded) return <div className="file-viewer-loading">{t("common.loading")}</div>;
 
@@ -2561,55 +2637,7 @@ export function CodeEditor({
           unreachable without a mouse. */}
       <div className="file-viewer-gutter" aria-hidden={onToggleBreakpoint ? undefined : "true"}>
         <div className="file-viewer-gutter-inner" ref={gutterInnerRef}>
-          {Array.from({ length: lineCount }, (_, i) => {
-            const n = i + 1;
-            const h = wrap ? lineHeights[i] : undefined;
-            const broken = breakpoints?.has(n) ?? false;
-            const cls =
-              (n === currentMatchLine
-                ? "file-viewer-gutter-line current-match"
-                : matchLineSet.has(n)
-                  ? "file-viewer-gutter-line has-match"
-                  : "file-viewer-gutter-line") +
-              (n === caretLine ? " caret" : "") +
-              (unclosedLineSet.has(n) ? " has-unclosed-bracket" : "") +
-              (onToggleBreakpoint ? " is-breakable" : "") +
-              (broken ? " has-breakpoint" : "");
-            const style = h != null ? { height: h } : undefined;
-
-            if (!onToggleBreakpoint) {
-              return (
-                <div key={i} className={cls} style={style}>
-                  {n}
-                </div>
-              );
-            }
-            return (
-              <button
-                key={i}
-                type="button"
-                className={cls}
-                style={style}
-                // Keep the caret where it is: clicking the gutter sets a
-                // breakpoint, it does not move the cursor or steal focus.
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onToggleBreakpoint(n)}
-                title={
-                  broken
-                    ? t("fileViewer.removeBreakpoint", { line: n })
-                    : t("fileViewer.addBreakpoint", { line: n })
-                }
-                aria-pressed={broken}
-                aria-label={
-                  broken
-                    ? t("fileViewer.removeBreakpoint", { line: n })
-                    : t("fileViewer.addBreakpoint", { line: n })
-                }
-              >
-                {n}
-              </button>
-            );
-          })}
+          {gutterLines}
         </div>
       </div>
       <div
