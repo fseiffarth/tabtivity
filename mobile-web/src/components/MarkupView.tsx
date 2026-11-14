@@ -2,8 +2,10 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { CloseIcon } from "../glyphs";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
-import { ApiError, holdPrompt, listProjectFiles, markupUndoConflict, MAX_INBOX_FILE, previewMarkupUndo, runMarkupUndo, saveRemarks, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
-import { acceptFrameMessage, MAX_FRAME_PAGES, MAX_RENDER_WIDTH, type FrameFailure, type FromFrame, type ToFrame } from "../markup/frameProtocol";
+import { ApiError, holdPrompt, listProjectFiles, markupUndoConflict, previewMarkupUndo, runMarkupUndo, saveRemarks, sentName, settleMarkupUndo, submitMarkup, uploadToInbox, viewerFileUrl, type MarkupSource, type MarkupUndoChanges, type OutboxFile, type TabRow, type ViewerScope } from "../api";
+import { MAX_RENDER_WIDTH } from "../markup/frameProtocol";
+import { useSealedPdfFrame, type Failure, type Picture, type Size } from "../markup/useSealedPdfFrame";
+import { useFrameRenderQueue } from "../markup/useFrameRenderQueue";
 import { anchorsFor, textMarks, wordsIn, type Anchor } from "../markup/anchors";
 import type { TextRun } from "../markup/findText";
 import { readFlag, writeFlag } from "../prefs";
@@ -61,9 +63,6 @@ const REMARKS_FAILURES: Record<string, TranslationKey> = {
 const SELECT_PX = 12;
 /** How long a favourite is held before it is taken out. */
 const FAVOURITE_HOLD_MS = 600;
-type Size = [number, number];
-type Picture = { bitmap: ImageBitmap; width: number };
-type Failure = FrameFailure | "tooLarge" | "fetch" | "timeout" | "picture";
 
 /** Room between pages, CSS pixels. */
 const GAP = 12;
@@ -75,41 +74,6 @@ const FIT_WIDTH = 960;
 const MAX_ZOOM = 4;
 /** Page pictures kept alive at once — Safari's canvas memory is the limit. */
 const MAX_ALIVE = 6;
-/** How long the frame may take to open a document once its bytes are in,
- * and to draw one page before that page is. The download has no limit of
- * its own: a slow link is fine as long as bytes keep coming, and only
- * `STALL_TIMEOUT` without one gives it up. */
-const OPEN_TIMEOUT = 45_000;
-const RENDER_TIMEOUT = 20_000;
-const STALL_TIMEOUT = 30_000;
-
-/** `response`'s body as it comes in, `onChunk` told the bytes so far (and the
- * declared length, 0 when there is none) after each piece; `null` once it
- * grows past `max`. */
-async function readBody(response: Response, max: number, onChunk: (got: number, total: number) => void): Promise<ArrayBuffer | null> {
-  const total = Number(response.headers.get("content-length")) || 0;
-  if (total > max) { void response.body?.cancel().catch(() => {}); return null; }
-  if (!response.body) {
-    const data = await response.arrayBuffer();
-    return data.byteLength > max ? null : data;
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    got += value.byteLength;
-    if (got > max) { void reader.cancel().catch(() => {}); return null; }
-    chunks.push(value);
-    onChunk(got, total);
-  }
-  const whole = new Uint8Array(got);
-  let at = 0;
-  for (const chunk of chunks) { whole.set(chunk, at); at += chunk.byteLength; }
-  return whole.buffer;
-}
-
 /** Remembered once a pen has drawn here: from then on only the pen draws,
  * unless the reader turns "pen only" off again. */
 const PEN_KEY = storageDashKey("markup-pen");
@@ -462,12 +426,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   fingerprintRef.current = fingerprint;
   const stem = stemOf(sentName(file));
 
-  const [sizes, setSizes] = useState<Size[] | null>(null);
-  /** The PDF's bytes so far while they come in; `null` once they are in. */
-  const [download, setDownload] = useState<{ got: number; total: number } | null>(null);
-  const [failure, setFailure] = useState<Failure | null>(null);
-  const [pictures, setPictures] = useState<Record<number, Picture>>({});
-  const [pageFailures, setPageFailures] = useState<Set<number>>(() => new Set());
   const [history, setHistory] = useState<History>(() => startHistory());
   const [scratch, setScratch] = useState<Layer | null>(null);
   const [preview, setPreview] = useState<{ n: number; marks: readonly Mark[] } | null>(null);
@@ -582,15 +540,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * newest of them; when the last approve was taken. */
   const [tickGuard] = useState(() => arrivalGuard<Mark>());
   const lastApprove = useRef(0);
-  /** Where each question's quote was found on its page (`findText`), by
-   * `page\nquote`; absent while the frame has not answered. */
-  const [found, setFound] = useState<Record<string, { x: number; y: number; w: number; h: number }[]>>({});
-  const findAsked = useRef(new Map<string, number>());
-  const findKeys = useRef(new Map<number, string>());
-  const findId = useRef(0);
-  /** Submit's own questions to the frame (`snapshot`, `text`), by id. */
-  const frameCalls = useRef(new Map<number, (answer: FromFrame | null) => void>());
-  const frameCallId = useRef(0);
   /** Print, while the frame draws the pages for paper: the page it is at. */
   const [printing, setPrinting] = useState<{ n: number; count: number } | null>(null);
   const [printFailure, setPrintFailure] = useState<string | null>(null);
@@ -640,14 +589,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const gesture = useRef<Gesture | null>(null);
   const penDown = useRef(false);
   const touches = useRef(new Set<number>());
-  const bytes = useRef<ArrayBuffer | null>(null);
-  const frameReady = useRef(false);
-  const opened = useRef(false);
-  const inFlight = useRef<number | null>(null);
-  const [renderTick, setRenderTick] = useState(0);
+  const sealed = useSealedPdfFrame({ isPdf, url, size: file.size, generation, frame, setReopening });
+  const { sizes, setSizes, pictures, pageFailures, download, failure, setFailure, found, askFrame, nextCallId, ready: frameOpen, restart: restartFrame } = sealed;
   const pendingScroll = useRef<{ left: number; top: number } | null>(null);
   const pinch = useRef<{ distance: number; zoom: number; mid: [number, number]; left: number; top: number } | null>(null);
-  const pageCount = useRef(MAX_FRAME_PAGES);
   /** What the save effect last handled — the record read for a stored layer
    * (stamped with the *current* fingerprint, not the stored one), or the
    * tuple it last put to the store. A render whose key, layer, undo steps and
@@ -660,10 +605,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   refreshRef.current = refresh;
   const fileRef = useRef(file);
   fileRef.current = file;
-  const awaitingMeta = useRef(true);
-  const renderTimer = useRef<number | undefined>(undefined);
-  const picturesRef = useRef(pictures);
-  picturesRef.current = pictures;
   const scratchRef = useRef<Layer | null>(null);
   const zoomRef = useRef(zoom);
   const markingRef = useRef(marking);
@@ -793,174 +734,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     return () => { window.removeEventListener("online", update); window.removeEventListener("offline", update); };
   }, []);
 
-  // --- The sealed frame (PDF only) ------------------------------------------
-  const post = useCallback((message: unknown, transfer: Transferable[] = []) => {
-    frame.current?.contentWindow?.postMessage(message, "*", transfer);
-  }, []);
-  /** The page in flight could not be drawn (or never answered): it is marked
-   * failed so the queue moves on to the next one. */
-  const renderFailed = useCallback((n = inFlight.current) => {
-    window.clearTimeout(renderTimer.current);
-    if (n === null) return;
-    if (inFlight.current === n) inFlight.current = null;
-    setPageFailures((known) => new Set(known).add(n));
-    setRenderTick((tick) => tick + 1);
-  }, []);
-  const openIfReady = useCallback(() => {
-    if (opened.current || !frameReady.current || !bytes.current) return;
-    opened.current = true;
-    const data = bytes.current;
-    bytes.current = null;
-    post({ type: "open", bytes: data }, [data]);
-  }, [post]);
-
-  /** One question to the frame for Submit; `null` when it does not answer in
-   * time or the frame is remounted meanwhile. */
-  const askFrame = useCallback((message: ToFrame & { id: number }): Promise<FromFrame | null> => new Promise((resolve) => {
-    const timer = window.setTimeout(() => settle(null), RENDER_TIMEOUT);
-    const settle = (answer: FromFrame | null) => {
-      window.clearTimeout(timer);
-      frameCalls.current.delete(message.id);
-      resolve(answer);
-    };
-    frameCalls.current.set(message.id, settle);
-    post(message);
-  }), [post]);
-  // A remounted frame answers nothing it was asked before.
-  useEffect(() => () => {
-    for (const settle of [...frameCalls.current.values()]) settle(null);
-  }, [generation]);
-
-  useEffect(() => {
-    if (!isPdf) return;
-    if (file.size > MAX_INBOX_FILE) { setFailure("tooLarge"); return; }
-    const controller = new AbortController();
-    let stalled = false;
-    let stallTimer: number | undefined;
-    let openTimer: number | undefined;
-    const arm = () => {
-      window.clearTimeout(stallTimer);
-      stallTimer = window.setTimeout(() => { stalled = true; controller.abort(); }, STALL_TIMEOUT);
-    };
-    arm();
-    setDownload({ got: 0, total: file.size });
-    // Redrawn only when the line's words change: a tenth of a MB, not each piece.
-    let shown = "";
-    void fetch(url, { credentials: "same-origin", cache: "no-store", signal: controller.signal })
-      .then((response) => (response.ok ? readBody(response, MAX_INBOX_FILE, (got, total) => {
-        arm();
-        const label = formatBytes(got);
-        if (label === shown) return;
-        shown = label;
-        setDownload({ got, total: total || file.size });
-      }) : Promise.reject(new Error("fetch"))))
-      .then((data) => {
-        window.clearTimeout(stallTimer);
-        setDownload(null);
-        if (!data) { setFailure("tooLarge"); return; }
-        bytes.current = data;
-        openIfReady();
-        openTimer = window.setTimeout(() => { if (awaitingMeta.current) setFailure((was) => was ?? "timeout"); }, OPEN_TIMEOUT);
-      }, () => {
-        window.clearTimeout(stallTimer);
-        if (stalled || !controller.signal.aborted) { setDownload(null); setFailure("fetch"); }
-      });
-    return () => { controller.abort(); window.clearTimeout(stallTimer); window.clearTimeout(openTimer); };
-    // `generation`: a Reload fetches the bytes again, for the new frame.
-  }, [isPdf, url, file.size, openIfReady, generation]);
-
-  useEffect(() => {
-    if (!isPdf) return;
-    const onMessage = (event: MessageEvent) => {
-      const message = acceptFrameMessage(event, frame.current?.contentWindow, pageCount.current);
-      if (!message) {
-        // A page the checks refused still came from the frame: give its
-        // bitmap back and let the queue move on rather than wait forever.
-        const data = event.data as { type?: unknown; bitmap?: unknown } | null;
-        if (frame.current && event.source === frame.current.contentWindow && data && typeof data === "object" && data.type === "page") {
-          if (typeof ImageBitmap !== "undefined" && data.bitmap instanceof ImageBitmap) data.bitmap.close();
-          renderFailed();
-        }
-        return;
-      }
-      if (message.type === "ready") {
-        frameReady.current = true;
-        openIfReady();
-      } else if (message.type === "meta") {
-        pageCount.current = message.pages.length;
-        awaitingMeta.current = false;
-        setReopening(false);
-        setSizes(message.pages.map(({ w, h }) => [w, h]));
-      } else if (message.type === "page") {
-        window.clearTimeout(renderTimer.current);
-        inFlight.current = null;
-        setPictures((known) => {
-          known[message.n]?.bitmap.close?.();
-          return { ...known, [message.n]: { bitmap: message.bitmap, width: message.width } };
-        });
-        setRenderTick((tick) => tick + 1);
-      } else if (message.type === "snapshot" || message.type === "text") {
-        const answer = frameCalls.current.get(message.id);
-        if (answer) answer(message);
-        else if (message.type === "snapshot") message.bitmap?.close();
-      } else if (message.type === "found") {
-        const key = findKeys.current.get(message.id);
-        if (key !== undefined) setFound((known) => ({ ...known, [key]: message.rects }));
-      } else if (message.n !== undefined) {
-        renderFailed(message.n);
-      } else {
-        setFailure(message.code);
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [isPdf, openIfReady, renderFailed]);
-
-  // One page in flight at a time, the nearest to where the reader is first;
-  // pictures far away are let go.
-  useEffect(() => {
-    if (!isPdf || !sizes || failure || reopening) return;
-    const keep = new Set(alive);
-    setPictures((known) => {
-      const drop = Object.keys(known).map(Number).filter((n) => !keep.has(n));
-      if (!drop.length) return known;
-      const next = { ...known };
-      for (const n of drop) { next[n].bitmap.close?.(); delete next[n]; }
-      return next;
-    });
-    if (inFlight.current !== null) return;
-    const wanted = alive.find((n) => !pageFailures.has(n) && (!pictures[n] || pictures[n].width < pixelWidth * 0.9));
-    if (wanted === undefined) return;
-    inFlight.current = wanted;
-    post({ type: "render", n: wanted, width: pixelWidth });
-    // A frame that never answers (wedged on a hostile page) must not hold
-    // up every other page.
-    window.clearTimeout(renderTimer.current);
-    renderTimer.current = window.setTimeout(() => renderFailed(wanted), RENDER_TIMEOUT);
-  }, [isPdf, sizes, failure, reopening, alive, pictures, pageFailures, pixelWidth, post, renderTick, renderFailed]);
-
-  // Each question's quote is looked for once per document: the sealed frame
-  // reads the page's text and answers boxes (`findText`), never the text.
-  useEffect(() => {
-    if (!isPdf || !sizes || failure || reopening) return;
-    for (const ask of asks) {
-      for (const question of ask.questions) {
-        if (!question.quote || question.page === undefined || question.page > sizes.length) continue;
-        const key = `${question.page}\n${question.quote}`;
-        if (findAsked.current.has(key)) continue;
-        const id = ++findId.current;
-        findAsked.current.set(key, id);
-        findKeys.current.set(id, key);
-        post({ type: "findText", id, page: question.page, quote: question.quote });
-      }
-    }
-  }, [isPdf, sizes, failure, reopening, asks, post]);
-
-  useEffect(() => () => {
-    // Bitmaps are GPU memory; hand them back as the view goes.
-    for (const picture of Object.values(picturesRef.current)) picture.bitmap.close?.();
-    window.clearTimeout(renderTimer.current);
-  }, []);
+  // --- The sealed frame (PDF only): which pages it draws, and what it finds ---
+  useFrameRenderQueue({ sealed, isPdf, reopening, alive, pixelWidth, asks });
 
   // --- Touch: palm rejection, finger drawing, two-finger pan and pinch -------
   useEffect(() => {
@@ -1436,7 +1211,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     try {
       for (let n = 1; n <= count; n++) {
         setPrinting({ n, count });
-        const shot = await askFrame({ type: "snapshot", id: ++frameCallId.current, n, width: PRINT_WIDTH });
+        const shot = await askFrame({ type: "snapshot", id: nextCallId(), n, width: PRINT_WIDTH });
         if (printRun.current !== run) { if (shot?.type === "snapshot") shot.bitmap?.close(); return; }
         if (shot?.type !== "snapshot" || !shot.bitmap) throw new Error("page");
         pictures.push(await bitmapDataUrl(shot.bitmap));
@@ -1522,12 +1297,12 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const words: Record<number, (string | null)[]> = {};
     // The frame draws each page and reads its words while it holds the
     // document; past a failure, the marks go alone.
-    let frameUp = isPdf && frameReady.current && opened.current && sizes !== null && !failure && !reopening;
+    let frameUp = isPdf && frameOpen() && sizes !== null && !failure && !reopening;
     /** The frame is asked for a page's picture and its words together (it
      * serves its requests one after the other). */
     const askPage = (n: number) => ({
-      shot: askFrame({ type: "snapshot", id: ++frameCallId.current, n, width: LAYER_WIDTH }),
-      text: askFrame({ type: "text", id: ++frameCallId.current, page: n }),
+      shot: askFrame({ type: "snapshot", id: nextCallId(), n, width: LAYER_WIDTH }),
+      text: askFrame({ type: "text", id: nextCallId(), page: n }),
     });
     /** The page whose upload is under way while the next page is drawn. */
     let uploading: { n: number; done: Promise<void> } | null = null;
@@ -1876,23 +1651,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     } else if (auto) {
       setReloadNote("mobile.markup.autoReloaded");
     }
-    window.clearTimeout(renderTimer.current);
-    frameReady.current = false;
-    opened.current = false;
-    inFlight.current = null;
-    bytes.current = null;
-    pageCount.current = MAX_FRAME_PAGES;
-    awaitingMeta.current = true;
-    setPictures((known) => {
-      for (const picture of Object.values(known)) picture.bitmap.close?.();
-      return {};
-    });
-    setPageFailures(new Set());
-    // The new document's text is looked through afresh.
-    findAsked.current.clear();
-    findKeys.current.clear();
-    setFound({});
-    setFailure(null);
+    restartFrame();
     setChanged(false);
     setCheck(null);
     setReloaded(true);
@@ -2085,11 +1844,11 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     for (const n of runsWanted) {
       if (runsAsked.current.has(n)) continue;
       runsAsked.current.add(n);
-      void askFrame({ type: "text", id: ++frameCallId.current, page: n }).then((answer) => {
+      void askFrame({ type: "text", id: nextCallId(), page: n }).then((answer) => {
         if (answer?.type === "text" && answer.page === n) setPageRuns((known) => ({ ...known, [n]: answer.runs }));
       });
     }
-  }, [runsWanted, askFrame]);
+  }, [runsWanted, askFrame, nextCallId]);
   // A Reload's document has its own text.
   useEffect(() => {
     runsAsked.current.clear();
