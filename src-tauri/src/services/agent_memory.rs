@@ -82,17 +82,67 @@ pub fn claude_project_dir_name(root: &Path) -> Option<String> {
 }
 
 /// The project folders to look under: the path as the project holds it, and
-/// where it resolves to, since a CLI may record either.
+/// where it resolves to, since a CLI may record either — and the canonical git
+/// root of each, because Claude Code keys a project's auto memory by that root
+/// (the installed 2.1.321: the working-copy root, else `findCanonicalGitRoot`,
+/// else the folder itself), so a project that is a subfolder of a repository
+/// shares the repository's memory, and a linked worktree its main working
+/// copy's.
 fn roots_of(project_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
     for dir in project_dirs {
-        for candidate in [Some(dir.clone()), std::fs::canonicalize(dir).ok()].into_iter().flatten() {
+        let resolved = std::fs::canonicalize(dir).ok();
+        for candidate in [Some(dir.clone()), resolved.clone()].into_iter().flatten() {
             if !roots.contains(&candidate) {
                 roots.push(candidate);
             }
         }
+        for base in [Some(dir.as_path()), resolved.as_deref()].into_iter().flatten() {
+            if let Some(root) = canonical_git_root(base) {
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+        }
     }
     roots
+}
+
+/// The longest a `.git` file (a worktree's pointer) or `commondir` is read.
+const GIT_POINTER_CAP: u64 = 4096;
+
+/// The repository root `dir` lives in, the way Claude Code names it: the
+/// nearest ancestor holding a `.git` directory; for a `.git` *file* (a linked
+/// worktree) the main working copy that its `commondir` names; a `.git` file
+/// without one (a submodule) is its own root. `None` outside any repository.
+///
+/// The project folder is attacker-controlled, so this only reads small plain
+/// files through `home_io` (never through a link, never waiting on a FIFO) and
+/// only ever yields a *name* to look up under the agent home.
+fn canonical_git_root(dir: &Path) -> Option<PathBuf> {
+    use crate::services::home_io::read_record_capped;
+    for ancestor in dir.ancestors() {
+        let dot_git = ancestor.join(".git");
+        let Ok(meta) = std::fs::symlink_metadata(&dot_git) else { continue };
+        if meta.is_dir() {
+            return Some(ancestor.to_path_buf());
+        }
+        if !meta.is_file() {
+            continue;
+        }
+        let pointer = read_record_capped(&dot_git, GIT_POINTER_CAP)?;
+        let gitdir = Path::new(pointer.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim());
+        let gitdir = if gitdir.is_absolute() { gitdir.to_path_buf() } else { ancestor.join(gitdir) };
+        let Some(common) = read_record_capped(&gitdir.join("commondir"), GIT_POINTER_CAP) else {
+            return Some(ancestor.to_path_buf());
+        };
+        let common = std::fs::canonicalize(gitdir.join(common.trim())).ok()?;
+        return match common.file_name() {
+            Some(n) if n == ".git" => common.parent().map(Path::to_path_buf),
+            _ => Some(ancestor.to_path_buf()),
+        };
+    }
+    None
 }
 
 /// A memory file found: the entry and the handle to read it through.
@@ -156,6 +206,12 @@ fn ordered_names(dir: &HomeDir) -> Vec<String> {
         .into_iter()
         .filter(|n| n.len() > ".md".len() && n.to_ascii_lowercase().ends_with(".md"))
         .collect();
+    // The listing is cut at the cap in directory order, which says nothing about
+    // where the index falls: ask for it by name too. `scan` skips it when it is
+    // not there (or not a plain file), and a name already listed is not doubled.
+    if !names.iter().any(|n| n == "MEMORY.md") {
+        names.push("MEMORY.md".to_string());
+    }
     names.sort_by(|a, b| (a != "MEMORY.md").cmp(&(b != "MEMORY.md")).then_with(|| a.cmp(b)));
     names
 }

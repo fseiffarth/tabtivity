@@ -174,3 +174,77 @@ fn the_entry_count_is_capped() {
     assert!(listed.len() <= MAX_ENTRIES);
     assert!(listed.iter().filter(|e| e.cli == "claude").count() <= MAX_ENTRIES_PER_DIR);
 }
+
+fn put_claude_memory(home: &Path, root: &Path) {
+    let mem = home
+        .join(".claude")
+        .join("projects")
+        .join(claude_project_dir_name(root).unwrap())
+        .join("memory");
+    put(&mem.join("MEMORY.md"), "# repo index\n");
+}
+
+/// Claude Code keys a project's auto memory by the *canonical git root* of its
+/// folder (read from the installed binary, 2.1.321: the working-copy root, else
+/// `findCanonicalGitRoot`, else the folder itself): a Tabtivity project that is
+/// a subfolder of a repository shares the repository's memory.
+#[test]
+fn a_project_inside_a_git_repository_lists_the_memory_keyed_by_the_repository_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let project = repo.join("sub").join("proj");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    let home = tmp.path().join("home");
+    put_claude_memory(&home, &repo);
+    let sources = vec![Source { kind: HOME_SCOPE, home }];
+
+    let listed = list(&sources, &[project.clone()]);
+    assert_eq!(names(&listed), [("claude", "scope", "MEMORY.md")]);
+    assert_eq!(read(&sources, &[project], "claude", "scope", "MEMORY.md").unwrap(), "# repo index\n");
+
+    // Outside any repository nothing is found by that rule.
+    let loose = tmp.path().join("loose");
+    fs::create_dir_all(&loose).unwrap();
+    assert!(list(&sources, &[loose]).is_empty());
+}
+
+/// A linked worktree's canonical root is the main working copy.
+#[test]
+fn a_linked_worktree_lists_the_memory_keyed_by_the_main_working_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    let gitdir = main.join(".git").join("worktrees").join("wt");
+    fs::create_dir_all(&gitdir).unwrap();
+    fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+    let wt = tmp.path().join("wt");
+    fs::create_dir_all(&wt).unwrap();
+    fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+    let home = tmp.path().join("home");
+    put_claude_memory(&home, &main);
+    let sources = vec![Source { kind: HOME_SCOPE, home }];
+
+    assert_eq!(names(&list(&sources, &[wt])), [("claude", "scope", "MEMORY.md")]);
+}
+
+/// The index is always listed, however many notes sit beside it: the folder
+/// listing is cut at a cap in directory order, which says nothing about where
+/// `MEMORY.md` falls. (Thousands of names, so it lands past the cap on any
+/// filesystem order with near certainty.)
+#[test]
+fn the_index_is_listed_even_in_a_folder_past_the_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (sources, dirs) = home_with_memory(tmp.path());
+    let mem = sources[0]
+        .home
+        .join(".claude")
+        .join("projects")
+        .join(claude_project_dir_name(&dirs[0]).unwrap())
+        .join("memory");
+    for i in 0..4000 {
+        fs::write(mem.join(format!("m{i:04}.md")), "x").unwrap();
+    }
+    let listed = list(&sources, &dirs);
+    assert_eq!(listed[0].name, "MEMORY.md");
+    assert_eq!(read(&sources, &dirs, "claude", "scope", "MEMORY.md").unwrap(), "# index\n");
+}
