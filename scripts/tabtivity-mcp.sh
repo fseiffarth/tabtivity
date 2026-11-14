@@ -16,9 +16,9 @@ usage() {
         "$me call SERVER TOOL [JSON]  call a tool; JSON is its arguments object (default {}, - reads stdin)" \
         "$me --help" \
         '' \
-        "SERVER is a name from the list (print, git, markup, help, cockpit, schedule, root)."
+        "SERVER is a name from the list (print, git, markup, help, cockpit, tabs, schedule, root)."
 }
-LANES='print git markup help cockpit schedule root'
+LANES='print git markup help cockpit tabs schedule root'
 
 # The env pair of a lane: its URL and token, or empty when this tab has none.
 lane_env() {

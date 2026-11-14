@@ -11,9 +11,9 @@ function Usage {
         "$me call SERVER TOOL [JSON]  call a tool; JSON is its arguments object (default {}, - reads stdin)",
         "$me --help",
         '',
-        'SERVER is a name from the list (print, git, markup, help, cockpit, schedule, root).')
+        'SERVER is a name from the list (print, git, markup, help, cockpit, tabs, schedule, root).')
 }
-$lanes = @('print', 'git', 'markup', 'help', 'cockpit', 'schedule', 'root')
+$lanes = @('print', 'git', 'markup', 'help', 'cockpit', 'tabs', 'schedule', 'root')
 
 # The env pair of a lane: its URL and token, or $null when this tab has none.
 function LaneEnv($Lane) {

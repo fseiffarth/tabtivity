@@ -68,7 +68,7 @@ macro_rules! tools_hint {
     () => {
         concat!(
             "This tab may also hold ", crate::app_name!(), " tools (print a PDF once the user approves it, push, PDF markup questions, ",
-            crate::app_name!(), " help). When they are not among your own tools, run `", crate::app_slug!(),
+            "messages to the other agent tabs of the project, ", crate::app_name!(), " help). When they are not among your own tools, run `", crate::app_slug!(),
             "-mcp` to list the servers, `", crate::app_slug!(), "-mcp tools SERVER` for their tools and arguments, and `",
             crate::app_slug!(), "-mcp call SERVER TOOL JSON` to call one, with the arguments as one quoted JSON object."
         )

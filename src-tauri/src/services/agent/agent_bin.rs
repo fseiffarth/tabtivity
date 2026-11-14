@@ -182,7 +182,7 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 5, "only {checked} messages checked");
-        for lane in ["print", "git", "markup", "help", "cockpit", "schedule", "root"] {
+        for lane in ["print", "git", "markup", "help", "cockpit", "tabs", "schedule", "root"] {
             assert!(sh.contains(lane) && ps1.contains(&format!("'{lane}'")), "{lane}");
         }
         assert!(sh.contains("http://127.0.0.1:") && ps1.contains("http://127\\.0\\.0\\.1:"));
