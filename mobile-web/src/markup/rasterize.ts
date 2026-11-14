@@ -185,12 +185,13 @@ export function badgeSize(page: PageLayer): number {
   return Math.max(page.size[0], page.size[1]) / 84;
 }
 
-/** Draws every mark of `page`, `scale` canvas pixels per page unit. */
-export function drawPage(ctx: Paint, page: PageLayer, scale: number): void {
+/** Draws the marks of `page` from the `from`-th up to the `to`-th (all by
+ * default), `scale` canvas pixels per page unit. */
+export function drawPage(ctx: Paint, page: PageLayer, scale: number, from = 0, to = page.marks.length): void {
   ctx.save();
   ctx.scale(scale, scale);
   const badge = badgeSize(page);
-  for (const mark of page.marks) drawMark(ctx, mark, badge);
+  for (let i = from; i < to; i++) drawMark(ctx, page.marks[i], badge);
   ctx.restore();
 }
 
@@ -207,6 +208,75 @@ export function paintLayer(ctx: Paint, page: PageLayer | undefined, sent: PageLa
     ctx.restore();
   }
   if (page) drawPage(ctx, page, scale);
+}
+
+/** `paintLayer` for the length of a gesture that repaints a page on every
+ * pointer move: the sent marks and the page's marks the gesture has not
+ * changed are painted once, onto a copy, and each move copies that and draws
+ * only the rest — in the layer's own paint order, so overlapping and
+ * see-through marks come out as a whole repaint would. The copy is rebuilt
+ * (never patched) when the unchanged marks shrink, the sent side or the size
+ * changes; `drop` gives its backing store back as the gesture ends. */
+export class CommittedMarks {
+  private held: { sent: PageLayer | undefined; source: readonly Mark[]; count: number; w: number; h: number; canvas: HTMLCanvasElement } | null = null;
+
+  /** `paintLayer(ctx, page, sent, scale)` onto `canvas`' context `ctx`.
+   * `base` is the page as it stood before the gesture: the marks `page`
+   * shares with it, from the first, are the unchanged ones. */
+  paint(ctx: CanvasRenderingContext2D, canvas: { width: number; height: number }, page: PageLayer | undefined, base: PageLayer | undefined, sent: PageLayer | undefined, scale: number): void {
+    const marks = page?.marks ?? [];
+    let held = this.held;
+    if (!held || held.sent !== sent || held.w !== canvas.width || held.h !== canvas.height || !sharesPrefix(held.source, held.count, marks)) {
+      this.drop();
+      const count = page && base ? commonPrefix(marks, base.marks) : 0;
+      if (count === 0 && !sent) {
+        paintLayer(ctx, page, sent, scale);
+        return;
+      }
+      const copy = document.createElement("canvas");
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const copyCtx = copy.getContext("2d");
+      if (!copyCtx) {
+        paintLayer(ctx, page, sent, scale);
+        return;
+      }
+      if (sent) {
+        copyCtx.save();
+        copyCtx.globalAlpha = SENT_ALPHA;
+        drawPage(copyCtx, sent, scale);
+        copyCtx.restore();
+      }
+      if (page && count) drawPage(copyCtx, page, scale, 0, count);
+      held = { sent, source: marks, count, w: canvas.width, h: canvas.height, canvas: copy };
+      this.held = held;
+    }
+    ctx.drawImage(held.canvas, 0, 0);
+    if (page && held.count < marks.length) drawPage(ctx, page, scale, held.count);
+  }
+
+  drop(): void {
+    const held = this.held;
+    if (held) {
+      held.canvas.width = 0;
+      held.canvas.height = 0;
+    }
+    this.held = null;
+  }
+}
+
+/** How many marks `a` and `b` share, object for object, from the first. */
+function commonPrefix(a: readonly Mark[], b: readonly Mark[]): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+/** Whether `marks` still begin with the first `count` of `source`. */
+function sharesPrefix(source: readonly Mark[], count: number, marks: readonly Mark[]): boolean {
+  if (marks.length < count) return false;
+  for (let i = 0; i < count; i++) if (source[i] !== marks[i]) return false;
+  return true;
 }
 
 /** The newest piece of a stroke in progress, `scale` canvas pixels per page

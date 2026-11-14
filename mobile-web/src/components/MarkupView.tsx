@@ -13,7 +13,7 @@ import {
   addMarks, canAddAll, copyMarks, markAt, marksIn, marksInLoop, MAX_COMMENT, moveMarks, removeMarks, restyleMarks, setComment, snapStroke, stampSize, straightenStroke,
   type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type StampMark, type TextMark,
 } from "../markup/layer";
-import { composedPng, drawMark, INK, LAYER_WIDTH, layerPng, pagePng, paintLayer, paintStrokePiece } from "../markup/rasterize";
+import { CommittedMarks, composedPng, drawMark, INK, LAYER_WIDTH, layerPng, pagePng, paintLayer, paintStrokePiece } from "../markup/rasterize";
 import {
   colorOf, colorsFor, ERASER_MODES, eraserPx, inkStyle, PEN_ONLY_STYLES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
   applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX,
@@ -217,11 +217,16 @@ function PagePicture({ picture }: { picture: Picture | undefined }) {
 }
 
 /** The marks of one page, drawn over its picture. */
-function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handlers }: {
+function LayerCanvas({ size, page, sent, base, baseSent, preview, pixelWidth, register, n, handlers }: {
   size: Size;
   page: PageLayer | undefined;
   /** The page's marks from earlier rounds, drawn dimmed under `page`. */
   sent: PageLayer | undefined;
+  /** `page` and `sent` as they stand committed: a gesture's scratch layer
+   * differs from them, and the one page it draws on repaints from a copy of
+   * the marks it has not changed (`CommittedMarks`). */
+  base: PageLayer | undefined;
+  baseSent: PageLayer | undefined;
   /** Marks being made — a box dragged out, a styled or snapped stroke, the
    * text marks of a drag, a stamp — drawn on top until let go. */
   preview: readonly Mark[] | null;
@@ -235,7 +240,14 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
   };
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
+  const committed = useRef(new CommittedMarks());
+  const repainting = !!preview || page !== base || sent !== baseSent;
+  // A committed gesture leaves the page as it was drawn last: only the copy goes.
+  useEffect(() => {
+    if (!repainting) committed.current.drop();
+  }, [repainting]);
   useEffect(() => () => {
+    committed.current.drop();
     const element = canvas.current;
     if (element) { element.width = 0; element.height = 0; }
   }, []);
@@ -251,13 +263,21 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
     if (!ctx) return;
     ctx.clearRect(0, 0, element.width, element.height);
     const scale = pixelWidth / size[0];
-    paintLayer(ctx, page, sent, scale);
+    if (repainting) {
+      committed.current.paint(ctx, element, page, base, sent, scale);
+    } else {
+      committed.current.drop();
+      paintLayer(ctx, page, sent, scale);
+    }
     if (preview) {
       ctx.save();
       ctx.scale(scale, scale);
       for (const mark of preview) drawMark(ctx, mark);
       ctx.restore();
     }
+    // `base` and `baseSent` only say which mode this paint is in: a gesture
+    // starting or ending comes with a change in `page`, `sent` or `preview`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, sent, preview, pixelWidth, size]);
   return <canvas
     ref={(element) => { canvas.current = element; register(n, element); }}
@@ -2203,7 +2223,8 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   };
   const editNote = (text: string) => setNote((draft) => draft && { ...draft, text });
   const layerCanvas = (n: number, size: Size) => canLayer && <>
-    <LayerCanvas n={n} size={size} page={layer.pages[n]} sent={showSent ? layer.sent?.pages[n] : undefined} preview={preview?.n === n ? preview.marks : null}
+    <LayerCanvas n={n} size={size} page={layer.pages[n]} sent={showSent ? layer.sent?.pages[n] : undefined}
+      base={history.present.pages[n]} baseSent={showSent ? history.present.sent?.pages[n] : undefined} preview={preview?.n === n ? preview.marks : null}
       pixelWidth={pixelWidth} register={register} handlers={handlers} />
     {/* What the area eraser will take, or the select tool pick, while it is dragged. */}
     {area?.n === n && <span className={`markup-area${area.select ? " is-select" : ""}`} aria-hidden="true" style={{

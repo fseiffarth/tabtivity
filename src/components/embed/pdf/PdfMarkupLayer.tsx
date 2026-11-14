@@ -45,13 +45,12 @@ import {
   stylusErases,
   type InkMark,
   type Mark,
-  type PageLayer,
   PEN_STYLES,
   type PenStyle,
   type StampMark,
   type TextMark,
 } from "../../../../mobile-web/src/markup/layer";
-import { drawMark, INK, paintLayer, paintStrokePiece } from "../../../../mobile-web/src/markup/rasterize";
+import { CommittedMarks, drawMark, INK, paintLayer, paintStrokePiece } from "../../../../mobile-web/src/markup/rasterize";
 import { colorsFor, eraserPx, inkStyle, penCursor, SNAP_HOLD_MS, SNAP_SLOP_PX, strokePressure, strokeWidth } from "../../../../mobile-web/src/markup/pen";
 import { selectionColors } from "./PdfMarkupBar";
 import { PEN_STYLE_KEYS, SwatchButtons } from "./PdfMarkupDock";
@@ -198,43 +197,16 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   const selKey = selBox?.join(",") ?? "";
 
   /** The committed marks drawn once, for the length of a gesture that repaints
-   *  the layer on every pointer move (a box, an arrow, a stamp, an area): each
-   *  move then copies this instead of redrawing every mark. Dropped as the
-   *  gesture ends, so it holds no second backing store at rest. */
-  const committed = useRef<{ page: PageLayer | undefined; sent: PageLayer | undefined; w: number; h: number; canvas: HTMLCanvasElement } | null>(null);
-  const dropCommitted = () => {
-    const held = committed.current;
-    if (held) {
-      held.canvas.width = 0;
-      held.canvas.height = 0;
-    }
-    committed.current = null;
-  };
-  /** Paints the committed marks onto `ctx`, from the copy while a gesture is
-   *  in flight. */
-  const paintCommitted = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, k: number, gesturing: boolean) => {
-    if (!gesturing) {
-      dropCommitted();
-      paintLayer(ctx, page, sent, k);
-      return;
-    }
-    let held = committed.current;
-    if (!held || held.page !== page || held.sent !== sent || held.w !== canvas.width || held.h !== canvas.height) {
-      dropCommitted();
-      const copy = document.createElement("canvas");
-      copy.width = canvas.width;
-      copy.height = canvas.height;
-      const copyCtx = copy.getContext("2d");
-      if (!copyCtx) {
-        paintLayer(ctx, page, sent, k);
-        return;
-      }
-      paintLayer(copyCtx, page, sent, k);
-      held = { page, sent, w: canvas.width, h: canvas.height, canvas: copy };
-      committed.current = held;
-    }
-    ctx.drawImage(held.canvas, 0, 0);
-  };
+   *  the layer on every pointer move (a box, an arrow, a stamp, an area, a
+   *  move, a resize, the eraser): each move then copies this and draws only the
+   *  marks the gesture changed. Dropped as the gesture ends, so it holds no
+   *  second backing store at rest. */
+  const committed = useRef(new CommittedMarks());
+  /** The page and its sent marks as they stood before a gesture changed them. */
+  const basePage = edit.base.pages[n];
+  const baseSent = edit.showSent ? edit.base.sent?.pages[n] : undefined;
+  /** A gesture is changing this page: it repaints from the copy. */
+  const repainting = preview.length > 0 || area !== null || loop !== null || page !== basePage || sent !== baseSent;
 
   const redraw = () => {
     const canvas = canvasRef.current;
@@ -242,7 +214,12 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const k = canvas.width / size[0];
-    paintCommitted(ctx, canvas, k, preview.length > 0 || area !== null || loop !== null);
+    if (repainting) {
+      committed.current.paint(ctx, canvas, page, basePage, sent, k);
+    } else {
+      committed.current.drop();
+      paintLayer(ctx, page, sent, k);
+    }
     if (preview.length) {
       ctx.save();
       ctx.scale(k, k);
@@ -267,13 +244,17 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, sent, preview, area, loop, selKey, pixelW, pixelH]);
+  // A committed gesture leaves the page as it was drawn last: only the copy goes.
+  useEffect(() => {
+    if (!repainting) committed.current.drop();
+  }, [repainting]);
   // A canvas gives its backing store back the moment it goes; a snap's timer
   // goes with the layer.
   useEffect(
     () => () => {
       const g = gesture.current;
       if (g?.kind === "ink" && g.timer !== null) window.clearTimeout(g.timer);
-      dropCommitted();
+      committed.current.drop();
       const canvas = canvasRef.current;
       if (canvas) {
         canvas.width = 0;

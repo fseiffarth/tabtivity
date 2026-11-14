@@ -7,7 +7,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PdfMarkupLayer } from "../../components/embed/pdf/PdfMarkupLayer";
 import type { MarkupEdit } from "../../components/embed/pdf/usePdfMarkup";
-import { EMPTY_LAYER, addMark, pagePoint, type Layer } from "../../../mobile-web/src/markup/layer";
+import { EMPTY_LAYER, addMark, eraseAt, moveMarks, pagePoint, type Layer } from "../../../mobile-web/src/markup/layer";
 import { DEFAULT_PEN_PREFS } from "../../../mobile-web/src/markup/pen";
 
 const SIZE: [number, number] = [600, 800];
@@ -126,6 +126,33 @@ describe("PdfMarkupLayer", () => {
     for (const x of [120, 140, 160, 180]) fireEvent.pointerMove(layer, { pointerId: 1, pointerType: "mouse", ...at(x, 130) });
     // Each move repaints from the copy of the committed marks.
     expect(calls.drawImage ?? 0).toBeGreaterThanOrEqual(4);
+  });
+
+  it.each(["a move", "the eraser"])("repaints %s over a copy of the marks below the first it changes, and gives the copy back after", (gesture) => {
+    const calls = new Map<HTMLCanvasElement, string[]>();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      const log: string[] = [];
+      calls.set(this, log);
+      return new Proxy({}, {
+        get: (_target, name: string) => (...args: unknown[]) => { log.push(args.length ? `${name}(${args.length})` : name); },
+        set: () => true,
+      }) as never;
+    } as never);
+    let base = EMPTY_LAYER;
+    for (let i = 0; i < 4; i++) base = addMark(base, 1, SIZE, { kind: "box", color: "yellow", rect: [100 + 120 * i, 100, 100, 50] });
+    const scratch = gesture === "a move" ? moveMarks(base, 1, [2], 10, 10) : eraseAt(base, 1, 360, 120, 4, { whole: true });
+    const { rerender, container } = render(<PdfMarkupLayer n={1} size={SIZE} scale={1} edit={stubEdit({ layer: scratch }, base)} />);
+    const copies = () => [...calls.keys()].filter((canvas) => canvas.className === "");
+    // The first two boxes sit in the copy; the main canvas draws the rest over it.
+    expect(copies()).toHaveLength(1);
+    expect(calls.get(copies()[0])!.filter((c) => c === "fillRect(4)")).toHaveLength(2);
+    const main = container.querySelector("canvas") as HTMLCanvasElement;
+    expect(calls.get(main)).toContain("drawImage(3)");
+    expect(calls.get(main)!.filter((c) => c === "fillRect(4)")).toHaveLength(gesture === "a move" ? 2 : 1);
+    expect(copies()[0].width).toBeGreaterThan(0);
+    // The gesture over (the scratch layer is the base), the copy's store goes.
+    rerender(<PdfMarkupLayer n={1} size={SIZE} scale={1} edit={stubEdit({ layer: scratch, base: scratch }, scratch)} />);
+    expect(copies()[0].width).toBe(0);
   });
 
   it("ignores a right or middle button", () => {
