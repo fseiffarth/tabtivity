@@ -283,7 +283,7 @@ describe("Mobile project — read-only file browser", () => {
       .toEqual({ layout: "grid", sort: "kind", desc: true, foldersFirst: false, thumbs: true });
 
     // The sections follow the rest, sorted on their own.
-    fireEvent.click(within(library).getByRole("button", { name: "scaffold (2)" }));
+    fireEvent.click(within(library).getByRole("button", { name: "Project docs (2)" }));
     expect(shownNames(library)).toEqual(["notes.md", "plot.png", "paper.pdf", "src", "AGENTS.md", "README.md"]);
   });
 
@@ -413,7 +413,7 @@ describe("Mobile project — read-only file browser", () => {
     vi.stubGlobal("fetch", hostWith(true));
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const sheet = await openLibrary();
-    const scaffold = await within(sheet).findByRole("button", { name: "scaffold (2)" });
+    const scaffold = await within(sheet).findByRole("button", { name: "Project docs (2)" });
     const ignored = within(sheet).getByRole("button", { name: "gitignored (2)" });
     expect([scaffold.getAttribute("aria-expanded"), ignored.getAttribute("aria-expanded")]).toEqual(["false", "false"]);
     expect(within(sheet).queryByRole("button", { name: "Open README.md" })).toBeNull();
@@ -428,7 +428,7 @@ describe("Mobile project — read-only file browser", () => {
     fireEvent.click(ignored);
     expect(within(sheet).getByRole("button", { name: "Open run.log" }).closest("li")?.classList.contains("files-folded")).toBe(true);
     fireEvent.click(within(sheet).getByRole("button", { name: "Open the folder build" }));
-    await waitFor(() => expect(within(sheet).queryByRole("button", { name: "scaffold (2)" })).toBeNull());
+    await waitFor(() => expect(within(sheet).queryByRole("button", { name: "Project docs (2)" })).toBeNull());
 
     // Below the root a README is an ordinary entry.
     fireEvent.click(within(sheet).getByRole("button", { name: "Up to Alpha" }));

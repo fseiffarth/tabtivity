@@ -55,6 +55,7 @@ import {
 import { basename, dirname } from "../../lib/paths";
 import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
 import { projectTypeTags } from "../projects/projectTypeTags";
+import { ScaffoldTagPopover } from "./ScaffoldTagPopover";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { IdeHeaderButton } from "../projects/IdeMenuItems";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -539,6 +540,9 @@ export function ProjectFilesView({
   // Whether the project is missing scaffold files — drives the "no scaffold"
   // type tag shown beside its name, mirroring ProjectPill's hover tags.
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
+  // The "no scaffold" tag's popover (missing defaults + Repair), anchored under the tag.
+  const [scaffoldTagMenu, setScaffoldTagMenu] = useState<{ x: number; y: number } | null>(null);
+  const [scaffoldProbe, setScaffoldProbe] = useState(0);
   // Nested-repo detection: when the browsed folder lives in a git repo distinct
   // from the project's own repo, `nestedRoot` holds that repo's root and the git
   // section re-roots at it. `preferProjectRepo` is the manual toggle override
@@ -1270,9 +1274,20 @@ export function ProjectFilesView({
       .then((v) => { if (!cancelled) setScaffoldMissing(v); })
       .catch(() => { if (!cancelled) setScaffoldMissing(false); });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, scaffoldProbe]);
 
-  const typeTags = project ? projectTypeTags(project, scaffoldMissing, t) : [];
+  const typeTags = project
+    ? projectTypeTags(project, scaffoldMissing, t, {
+        // Only a local scaffold can be repaired from here (a host-pinned
+        // project's lives on the host; the backend answers it has no target).
+        onScaffoldClick: projectId && !project.remote?.remote_only
+          ? (ev) => {
+              const r = ev.currentTarget.getBoundingClientRect();
+              setScaffoldTagMenu({ x: r.left, y: r.bottom + 4 });
+            }
+          : undefined,
+      })
+    : [];
 
   // Right-click menu on the SSH (remote) tag: open the one unified "Remote machines"
   // hub, which connects/manages every host and adds workers
@@ -1602,6 +1617,7 @@ export function ProjectFilesView({
               // The SSH tag carries a right-click menu (connect / manage · remote
               // machines); the rest stay pure labels.
               const isSsh = tag.key === "ssh" && !!project?.remote && !!projectId;
+              const onTagClick = tag.onClick;
               return (
                 <span
                   key={tag.key}
@@ -1613,8 +1629,17 @@ export function ProjectFilesView({
                   }
                   style={{
                     "--tag-color": tag.color,
-                    cursor: isSsh ? "context-menu" : undefined,
+                    cursor: isSsh ? "context-menu" : onTagClick ? "pointer" : undefined,
                   } as React.CSSProperties}
+                  role={onTagClick ? "button" : undefined}
+                  tabIndex={onTagClick ? 0 : undefined}
+                  onClick={onTagClick}
+                  onKeyDown={onTagClick ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onTagClick(e);
+                    }
+                  } : undefined}
                   onContextMenu={
                     isSsh
                       ? (e) => {
@@ -1680,6 +1705,15 @@ export function ProjectFilesView({
           />
         )}
         {mobileAccessError && <ErrorNote className="side-panel-mobile-access-error" role="alert" error={mobileAccessError} />}
+        {scaffoldTagMenu && projectId && (
+          <ScaffoldTagPopover
+            projectId={projectId}
+            x={scaffoldTagMenu.x}
+            y={scaffoldTagMenu.y}
+            onClose={() => setScaffoldTagMenu(null)}
+            onRepaired={() => setScaffoldProbe((n) => n + 1)}
+          />
+        )}
         {sshTagMenu && projectId && (
           <ContextMenuPortal
             x={sshTagMenu.x}
