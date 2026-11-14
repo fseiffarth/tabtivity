@@ -96,7 +96,6 @@ import {
   listenDetachedHost,
   shutdownDetachedWindows,
 } from "../../stores/detached";
-import { listenPdfReveal } from "../../stores/viewers/pdfSync";
 import { listenSyncProgress } from "../../stores/remote/sync";
 import { autoConnectVpnOnLaunch } from "../../lib/remote/vpn/vpnAutoConnect";
 import { initRemoteAutoReconnect } from "../../lib/remote/remoteAutoReconnect";
@@ -104,9 +103,7 @@ import { initExperimentalSweep } from "../../lib/experimentalSweep";
 import { migrateExperimentalOnce, useExperimental } from "../../lib/experimental";
 import { initMachineSync } from "../../lib/remote/machineSync";
 import { installWindowsEvents } from "../../stores/windows";
-import { listenEditorJump } from "../../stores/viewers/editorJump";
-import { listenTexCenter } from "../../stores/viewers/texCenter";
-import { listenSourceJump } from "../embed/fileViewer/sourceJump";
+import { listenSourceJump, listenTexPdfChannels } from "../embed/fileViewer/sourceJump";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { listenSettingsChanged, useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../stores/tabs";
@@ -700,25 +697,13 @@ export function AppShell() {
   // write would silently spread its stale copy back over the popout's change.
   useTauriListener(listenSettingsChanged, []);
 
-  // #42: SyncTeX forward search may reveal a PDF that's popped out into a detached
-  // window (a separate webview/store). Listen for cross-window reveal broadcasts
-  // so this window's PdfCanvas reveals the box even when the TeX editor that asked
-  // lives in another window. (The detached window registers its own listener.)
-  useTauriListener(listenPdfReveal, []);
+  // #42: the TeX ↔ PDF channels cross windows (a PDF or an editor may be popped
+  // out into its own webview): apply here what another window broadcast.
+  useTauriListener(listenTexPdfChannels, []);
 
-  // #42: the mirror image — SyncTeX reverse search (Ctrl+click in a popped-out
-  // PDF) lands the source-line jump here, the window that owns the editor layout.
+  // #42: SyncTeX reverse search (Ctrl+click in a popped-out PDF) whose source no
+  // window has open lands here, the window that owns the editor layout.
   useTauriListener(listenSourceJump, []);
-
-  // #42: a reverse-search jump applied in another window (e.g. a detached PDF
-  // that owns its source editor) broadcasts here so an editor for that path in
-  // THIS window scrolls too. Mirror image of the detached window's listener.
-  useTauriListener(listenEditorJump, []);
-
-  // #42: a reverse-search center switch aimed at a TeX workspace mounted in THIS
-  // window (e.g. a popped-out PDF's click resolved in its own window, which does
-  // not render the workspace). The registry-side twin of the two listeners above.
-  useTauriListener(listenTexCenter, []);
 
   useEffect(() => {
     const win = getCurrentWindow();

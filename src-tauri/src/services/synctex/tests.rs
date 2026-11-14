@@ -607,9 +607,8 @@ fn a_network_input_is_neither_resolved_nor_reported() {
             "Input:1:{net}\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n{{1\n[1,33:0,0:23146168,12000000,0\n\
                  (1,33:1857863,3637000:26011770,544000,150000\nx1,33:2457000,3637000\n)\n]\n}}1\n"
         );
-        let pre = parse_preamble(&text);
-        let boxes = page_hboxes(&text, 1, &pre);
-        let map = Map { text, pre };
+        let map = Map::new(text);
+        let boxes = page_hboxes(&map.text, 1, &map.pre);
         assert_eq!(resolve_point(&map, &spelling, &boxes, bp(3000000.0), bp(3637000.0)), None);
     }
 }

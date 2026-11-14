@@ -141,9 +141,13 @@ export function TexWorkspaceView({
     [tabKey],
   );
 
+  // What every read below goes through: the store's fields where it holds the
+  // tab, the local mirror's otherwise.
+  const vs = useMemo<ViewerState>(() => ({ ...localVs, ...storeVs }), [localVs, storeVs]);
+
   // The centered file: the persisted `texActivePath` when it still resolves in the
   // structure, else the main document (a stale id is inert).
-  const storedActive = storeVs?.texActivePath ?? localVs.texActivePath;
+  const storedActive = vs.texActivePath;
   const activePath = useMemo(() => {
     if (!storedActive || storedActive === mainPath) return mainPath;
     if (structure && !texWorkspaceContains(structure, storedActive)) return mainPath;
@@ -388,12 +392,7 @@ export function TexWorkspaceView({
   // document that only builds under `lualatex` builds under it in every sitting,
   // instead of reverting to the backend's default on the next launch and failing
   // the first compile of the day for a reason the toolbar no longer shows.
-  // Read like `texActivePath` above: the store when it holds this tab, the local
-  // mirror in a popout where it never will.
-  const compileOpts = useMemo<TexCompileOpts>(
-    () => texCompileOptsFrom({ ...localVs, ...storeVs }),
-    [storeVs, localVs],
-  );
+  const compileOpts = useMemo<TexCompileOpts>(() => texCompileOptsFrom(vs), [vs]);
   const patchCompileOpts = useCallback(
     (patch: Partial<TexCompileOpts>) => patchViewerState(texCompileViewerState(patch)),
     [patchViewerState],
@@ -425,8 +424,8 @@ export function TexWorkspaceView({
 
   // Sidebar width and fold, persisted per tab (store-or-local, see
   // `patchViewerState`). Absent `texSidebarHidden` means shown.
-  const sidebarWidth = (storeVs?.texSidebarWidth ?? localVs.texSidebarWidth) ?? TEX_WS_SIDEBAR_DEFAULT;
-  const sidebarHidden = (storeVs?.texSidebarHidden ?? localVs.texSidebarHidden) ?? false;
+  const sidebarWidth = vs.texSidebarWidth ?? TEX_WS_SIDEBAR_DEFAULT;
+  const sidebarHidden = vs.texSidebarHidden ?? false;
   const onResizeSidebar = useCallback(
     (w: number) => patchViewerState({ texSidebarWidth: w }),
     [patchViewerState],
@@ -521,7 +520,7 @@ export function TexWorkspaceView({
           structure={structure}
           activePath={activePath}
           width={sidebarWidth}
-          onSelect={(p, _v, line) => {
+          onSelect={(p, line) => {
             goTo(p);
             // A badge click carries the line; a plain row click does not, and
             // leaves the caret where that file was last left.

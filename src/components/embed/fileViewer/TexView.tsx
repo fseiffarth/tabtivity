@@ -55,6 +55,8 @@ import {
   synctexView,
   synctexStatus,
   syncNoticeKind,
+  SYNC_NOTICE_MSG,
+  texOutputPdf,
   withUnsavedSource,
   editedAboveLine,
   type SyncNoticeKind,
@@ -618,12 +620,13 @@ export function TexView({
     [path, tabKey, onOpenPdf],
   );
 
-  // The PDF this source builds to: the last compile's actual output when known
-  // (it honours the #54 out-dir), else the conventional sibling of the built
-  // root. Used by on-demand forward search without recompiling.
+  // The PDF this source builds to: the last compile's actual output when known,
+  // else where a build of the root would put it — in the #54 out-dir when one is
+  // set (a host build takes none), so a PDF built in an earlier sitting is found
+  // there. Used by on-demand forward search without recompiling.
   const targetPdf = useCallback(
-    () => pdfPath ?? root.replace(/\.tex$/i, ".pdf"),
-    [pdfPath, root],
+    () => pdfPath ?? texOutputPdf(root, hostBuild ? null : outDir),
+    [pdfPath, root, hostBuild, outDir],
   );
 
   // SyncTeX forward search, for both callers — a Ctrl/⌘+click and the reveal
@@ -1180,15 +1183,9 @@ export function TexView({
           {t(
             syncNote.kind === "noPdf"
               ? "fileViewer.syncNoPdfMsg"
-              : syncNote.kind === "remote"
-                ? "pdfViewer.syncRemoteMsg"
-                : syncNote.kind === "noMap"
-                  ? "pdfViewer.syncNoMapMsg"
-                  : syncNote.kind === "pdfNewer"
-                    ? "pdfViewer.syncPdfNewerMsg"
-                    : syncNote.kind === "stale"
-                      ? "pdfViewer.syncStaleMsg"
-                      : "fileViewer.syncMissMsg",
+              : syncNote.kind === "miss"
+                ? "fileViewer.syncMissMsg"
+                : SYNC_NOTICE_MSG[syncNote.kind],
             {
               modifier: modifierLabel(),
               files: syncNote.files.map((f) => basename(f)).join(", "),

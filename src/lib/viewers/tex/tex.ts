@@ -361,11 +361,8 @@ export type SyncSource = {
   /** Absolute path to the source `.tex`, spelled under the caller's spelling of
    *  the PDF's folder (a symlinked project keeps its link path). */
   input: string;
-  /** 1-based source line. */
+  /** 1-based source line. There is no column: SyncTeX records none. */
   line: number;
-  /** Always 0: SyncTeX records no column for reverse search. Kept so the jump
-   *  target's shape matches every other `line`/`column` caller. */
-  column: number;
 };
 
 /** A PDF box from SyncTeX forward search; mirrors backend `SyncRect`. Units are
@@ -432,6 +429,16 @@ export function syncNoticeKind(
   return hit ? null : "miss";
 }
 
+/** The wording both directions share for a notice the map's state decides (each
+ *  side words its own miss). `remote`: the PDF is read from a remote host, whose
+ *  map the SyncTeX commands (local disk only) cannot reach — nothing is asked. */
+export const SYNC_NOTICE_MSG = {
+  remote: "pdfViewer.syncRemoteMsg",
+  noMap: "pdfViewer.syncNoMapMsg",
+  pdfNewer: "pdfViewer.syncPdfNewerMsg",
+  stale: "pdfViewer.syncStaleMsg",
+} as const;
+
 /** Where the `.tex` that built `pdfPath` may sit, best guess first: beside it
  *  (`<dir>/<stem>.tex`, what Compile writes), then one folder up (an `-outdir`
  *  such as `build/` beside the source). What a reverse-search click opens when
@@ -439,11 +446,21 @@ export function syncNoticeKind(
 export function texSourceCandidates(pdfPath: string): string[] {
   if (!/\.pdf$/i.test(pdfPath)) return [];
   const dir = dirname(pdfPath);
-  const name = `${basename(pdfPath).replace(/\.pdf$/i, "")}.tex`;
   const sibling = pdfPath.replace(/\.pdf$/i, ".tex");
   const parent = dir ? dirname(dir) : "";
   if (!parent || parent === dir) return [sibling];
-  return [sibling, resolvePath(parent, name)];
+  return [sibling, resolvePath(parent, basename(sibling))];
+}
+
+/** The PDF a build of the main document `root` writes: beside it, or in `outDir`
+ *  — a folder relative to the root's own, or an absolute one — when the build
+ *  is given one. The backend's rule (`compile_tex`), for a caller that has no
+ *  compile result to read the path from; {@link texSourceCandidates} is its
+ *  rough inverse. Pure / unit-tested. */
+export function texOutputPdf(root: string, outDir?: string | null): string {
+  const pdf = root.replace(/\.tex$/i, ".pdf");
+  const dir = outDir?.trim();
+  return dir ? resolvePath(resolvePath(dirname(root), dir), basename(pdf)) : pdf;
 }
 
 /** `status` with `source` counted among the files edited since the build — what
@@ -875,16 +892,23 @@ function texWords(s: string): string[] {
  */
 export function wordAt(source: string, caret: number): string | null {
   if (caret < 0 || caret > source.length) return null;
-  const isWord = (ch: string) => WORD_CHAR.test(ch) || ch === "-" || ch === "'" || ch === "’";
-  let start = caret;
-  let end = caret;
-  while (start > 0 && isWord(source[start - 1])) start--;
-  while (end < source.length && isWord(source[end])) end++;
+  const { start, end } = wordSpanAt(source, caret);
   // Trim any leading/trailing connector chars so "word-" → "word".
   let s = source.slice(start, end);
   s = s.replace(/^[-'’]+/, "").replace(/[-'’]+$/, "");
   // Require at least one real word character (not a lone connector run).
   return WORD_CHAR.test(s) ? s : null;
+}
+
+/** The run of word characters (letters, digits and the connectors `-`, `'`,
+ *  `’`) around `caret`, as offsets into `source`. */
+function wordSpanAt(source: string, caret: number): { start: number; end: number } {
+  const isWord = (ch: string) => WORD_CHAR.test(ch) || ch === "-" || ch === "'" || ch === "’";
+  let start = caret;
+  let end = caret;
+  while (start > 0 && isWord(source[start - 1])) start--;
+  while (end < source.length && isWord(source[end])) end++;
+  return { start, end };
 }
 
 /** The clicked word plus its same-line neighbours, for disambiguating which
@@ -910,12 +934,7 @@ export interface CaretPhrase {
 export function phraseAt(source: string, caret: number, radius = 3): CaretPhrase | null {
   const clicked = wordAt(source, caret);
   if (!clicked) return null;
-  const isWord = (ch: string) =>
-    !!ch && (WORD_CHAR.test(ch) || ch === "-" || ch === "'" || ch === "’");
-  let ws = caret;
-  let we = caret;
-  while (ws > 0 && isWord(source[ws - 1])) ws--;
-  while (we < source.length && isWord(source[we])) we++;
+  const { start: ws, end: we } = wordSpanAt(source, caret);
   const lineStart = source.lastIndexOf("\n", ws - 1) + 1;
   const nl = source.indexOf("\n", we);
   const lineEnd = nl < 0 ? source.length : nl;
@@ -1205,6 +1224,25 @@ function isBackslashEscaped(text: string, pos: number): boolean {
 }
 
 /**
+ * `scan` keeping its last answer. The editor asks the document-wide scans below
+ * about the same draft again on every caret move (the delimiter-match overlay),
+ * and each of them reads the whole text; with this, moving the caret through an
+ * unchanged draft scans nothing. The answer is shared between callers, which
+ * only ever read it.
+ */
+function lastScan<T>(scan: (text: string) => T): (text: string) => T {
+  let from: string | null = null;
+  let to: T;
+  return (text) => {
+    if (text !== from) {
+      to = scan(text);
+      from = text;
+    }
+    return to;
+  };
+}
+
+/**
  * Blank every TeX line comment — an unescaped `%` to the end of its line — with
  * spaces, leaving the string the SAME length (offsets, and every `\n`, are
  * preserved) so a caller can keep scanning it with the module's offset-based
@@ -1217,11 +1255,21 @@ function isBackslashEscaped(text: string, pos: number): boolean {
  * inside verbatim, never a real one. Pure.
  */
 export function blankTexComments(source: string): string {
+  // The TeX editor asks four times per keystroke with the same draft (link
+  // layer, key layers, snippet ranges): the last answer is kept, so three of the
+  // four are a string comparison that ends at the first pointer check.
+  if (source === blankedFrom) return blankedTo;
+  blankedFrom = source;
+  blankedTo = blankComments(source);
+  return blankedTo;
+}
+let blankedFrom = "";
+let blankedTo = "";
+
+function blankComments(source: string): string {
   // Hops from `%` to `%` with `indexOf` and copies the stretches between them
-  // whole. The character-at-a-time version this replaced was called four times
-  // per keystroke from the TeX editor (link layer, key layer, and the live
-  // completion merge) and was the single largest share of a keystroke on a
-  // long document.
+  // whole: a character-at-a-time loop was the single largest share of a
+  // keystroke on a long document.
   let out = "";
   let last = 0;
   let i = source.indexOf("%");
@@ -1257,7 +1305,7 @@ export function blankTexComments(source: string): string {
  * parity rule {@link isBackslashEscaped} states is enforced by the walk itself
  * rather than re-tested per token. Pure.
  */
-function texMathTokens(text: string): MathToken[] {
+const texMathTokens = lastScan((text: string): MathToken[] => {
   const out: MathToken[] = [];
   for (let i = 0; i < text.length; i++) {
     if (text[i] === "\\") {
@@ -1275,7 +1323,7 @@ function texMathTokens(text: string): MathToken[] {
     }
   }
   return out;
-}
+});
 
 /**
  * Pair up a token stream from {@link texMathTokens}: `\(`/`\)` and `\[`/`\]`
@@ -1378,9 +1426,12 @@ export function findUnclosedTexBrackets(source: string): TexUnclosedDelimiter[] 
     ["{", []],
   ]);
   const openFor: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if ((ordinary.has(ch) || openFor[ch]) && isBackslashEscaped(text, i)) continue;
+  // Bracket to bracket, not character by character: this runs per keystroke.
+  const bracket = /[()[\]{}]/g;
+  for (let m = bracket.exec(text); m; m = bracket.exec(text)) {
+    const i = m.index;
+    const ch = m[0];
+    if (isBackslashEscaped(text, i)) continue;
     const stack = ordinary.get(ch);
     if (stack) {
       stack.push(i);
@@ -1502,7 +1553,7 @@ interface EnvToken {
   end: number;
 }
 
-function texEnvTokens(text: string): EnvToken[] {
+const texEnvTokens = lastScan((text: string): EnvToken[] => {
   const out: EnvToken[] = [];
   TEX_ENV_TOKEN_RE.lastIndex = 0;
   for (let m = TEX_ENV_TOKEN_RE.exec(text); m; m = TEX_ENV_TOKEN_RE.exec(text)) {
@@ -1514,7 +1565,7 @@ function texEnvTokens(text: string): EnvToken[] {
     });
   }
   return out;
-}
+});
 
 /**
  * The `\begin{…}`/`\end{…}` pair straddling `caret`, if any — the "begin/end
@@ -1589,7 +1640,7 @@ interface EnvNameToken {
  *  {@link TEX_ENV_TOKEN_RE} matches, split so the name can be addressed. */
 const TEX_ENV_NAME_RE = /\\(begin|end)(\s*)\{([^{}]*)\}/g;
 
-function texEnvNameTokens(text: string): EnvNameToken[] {
+const texEnvNameTokens = lastScan((text: string): EnvNameToken[] => {
   const out: EnvNameToken[] = [];
   TEX_ENV_NAME_RE.lastIndex = 0;
   for (let m = TEX_ENV_NAME_RE.exec(text); m; m = TEX_ENV_NAME_RE.exec(text)) {
@@ -1603,7 +1654,7 @@ function texEnvNameTokens(text: string): EnvNameToken[] {
     });
   }
   return out;
-}
+});
 
 // ── Hover-preview snippets (#tex-hover-preview) ──────────────────────────────
 //
@@ -2168,8 +2219,11 @@ const GRAPHICS_EXTS = [
   ".gif", ".webp", ".bmp", ".tif", ".tiff", ".svg",
 ];
 
+const listTexDir = (dir: string) => invoke<FileEntry[]>("list_dir", { projectDir: dir, relPath: "" });
+
 /**
- * Resolve a reference, probing the filesystem when needed. Falls back to the
+ * Resolve a reference, probing the filesystem when needed. `listDir` lets a
+ * caller resolving many references list each directory once. Falls back to the
  * pure `resolveTexRef` for tokens whose path is fully determined; for a bare
  * `\includegraphics{…}` (no extension — the common case) it lists the target
  * directory and matches the stem against the graphics extensions in preference
@@ -2179,6 +2233,7 @@ export async function resolveTexRefAsync(
   currentPath: string,
   target: TexRefTarget,
   disabled?: ReadonlySet<InternalViewer>,
+  listDir: (dir: string) => Promise<FileEntry[]> = listTexDir,
 ): Promise<ResolvedTexRef | null> {
   const direct = resolveTexRef(currentPath, target, disabled);
   if (direct) return direct;
@@ -2199,7 +2254,7 @@ export async function resolveTexRefAsync(
 
   let entries: FileEntry[];
   try {
-    entries = await invoke<FileEntry[]>("list_dir", { projectDir: absDir, relPath: "" });
+    entries = await listDir(absDir);
   } catch {
     return null;
   }
@@ -3123,25 +3178,38 @@ async function walkTexSources(
   const queue = options.currentFirst ? [currentPath, root] : [root, currentPath];
   const bibPaths = new Set<string>();
 
+  // A file's read starts the moment the walk learns its name and is taken up in
+  // walk order: what `visit` sees, and when, is a one-file-at-a-time walk's, but
+  // the siblings of a level travel together — over SFTP each read is a round
+  // trip, and a 40-file document used to be 40 of them end to end. Capped like
+  // the walk; null for a file that cannot be read.
+  const reads = new Map<string, Promise<string | null>>();
+  const read = (file: string): Promise<string | null> => {
+    let text = reads.get(file);
+    if (!text) {
+      // The file being edited is read from the caller's DRAFT when it offers
+      // one: a `\label` typed a minute ago is not on disk yet, and a jump that
+      // cannot find the label you are looking at reads as a broken feature.
+      text =
+        options.currentText != null && file === currentPath
+          ? Promise.resolve(options.currentText)
+          : invoke<string>("read_file_text", { path: file, projectId }).then((t) => t, () => null);
+      reads.set(file, text);
+    }
+    return text;
+  };
+  for (const file of queue) void read(file);
+
   while (queue.length && seenTex.size < 60) {
     const file = queue.shift()!;
     if (seenTex.has(file)) continue;
     seenTex.add(file);
-    let text: string;
-    // The file being edited is read from the caller's DRAFT when it offers one:
-    // a `\label` typed a minute ago is not on disk yet, and a jump that cannot
-    // find the label you are looking at reads as a broken feature.
-    if (options.currentText != null && file === currentPath) {
-      text = options.currentText;
-    } else {
-      try {
-        text = await invoke<string>("read_file_text", { path: file, projectId });
-      } catch {
-        continue;
-      }
-    }
+    const text = await read(file);
+    if (text == null) continue;
     for (const t of texCommandTokens(text, TEX_INPUT_CMDS)) {
-      queue.push(resolveSibling(file, t, ".tex"));
+      const child = resolveSibling(file, t, ".tex");
+      queue.push(child);
+      if (reads.size < 60) void read(child);
     }
     for (const t of texCommandTokens(text, TEX_BIB_CMDS)) {
       bibPaths.add(resolveSibling(file, t, ".bib"));
@@ -3540,6 +3608,25 @@ export async function gatherTexStructure(
   disabled?: ReadonlySet<InternalViewer>,
 ): Promise<TexStructure> {
   const seen = new Set<string>();
+  // One listing per folder for the whole gather: thirty figures in `figures/`
+  // are one `list_dir`, not thirty.
+  const listings = new Map<string, Promise<FileEntry[]>>();
+  const listDir = (dir: string) => {
+    let entries = listings.get(dir);
+    if (!entries) listings.set(dir, (entries = listTexDir(dir)));
+    return entries;
+  };
+  // Each file is read once, starting when its parent names it (see
+  // `walkTexSources`): the tree is still built depth-first, in document order.
+  const reads = new Map<string, Promise<string | null>>();
+  const read = (file: string) => {
+    let text = reads.get(file);
+    if (!text) {
+      text = invoke<string>("read_file_text", { path: file, projectId }).then((t) => t, () => null);
+      reads.set(file, text);
+    }
+    return text;
+  };
 
   const build = async (filePath: string, section: string | undefined): Promise<TexFileNode> => {
     seen.add(filePath);
@@ -3550,12 +3637,8 @@ export async function gatherTexStructure(
       graphics: [],
       children: [],
     };
-    let text: string;
-    try {
-      text = await invoke<string>("read_file_text", { path: filePath, projectId });
-    } catch {
-      return node; // missing/unreadable → a leaf, still shown
-    }
+    const text = await read(filePath);
+    if (text == null) return node; // missing/unreadable → a leaf, still shown
     // Scan a comment-blanked copy (same length, so section offsets still line
     // up): a commented-out `\input{…}`/`\includegraphics{…}` — or a commented
     // `\section` — must not plant a phantom entry in the sidebar.
@@ -3588,14 +3671,19 @@ export async function gatherTexStructure(
         else childJobs.push({ token, section: sec, line, column });
       }
     }
+    const childPaths = childJobs.map((c) => resolveSibling(filePath, c.token, ".tex"));
+    for (const childPath of childPaths) {
+      if (reads.size < 60 && !seen.has(childPath)) void read(childPath);
+    }
     // Resolve graphics (async — a bare stem lists its directory). Skipped when
     // nothing resolves, so a stale/removed figure never plants a dead entry.
-    for (const g of graphicJobs) {
-      const resolved = await resolveTexRefAsync(
-        filePath,
-        { command: "includegraphics", token: g.token },
-        disabled,
-      );
+    const resolvedGraphics = await Promise.all(
+      graphicJobs.map((g) =>
+        resolveTexRefAsync(filePath, { command: "includegraphics", token: g.token }, disabled, listDir),
+      ),
+    );
+    graphicJobs.forEach((g, i) => {
+      const resolved = resolvedGraphics[i];
       if (resolved) {
         node.graphics.push({
           path: resolved.path,
@@ -3606,12 +3694,12 @@ export async function gatherTexStructure(
           column: g.column,
         });
       }
-    }
+    });
     // Recurse into inputted children in document order, honouring the cap and
     // skipping anything already visited (a cycle, or a file inputted twice).
-    for (const c of childJobs) {
+    for (const [i, c] of childJobs.entries()) {
       if (seen.size >= 60) break;
-      const childPath = resolveSibling(filePath, c.token, ".tex");
+      const childPath = childPaths[i];
       if (seen.has(childPath)) continue;
       const child = await build(childPath, c.section);
       child.line = c.line;

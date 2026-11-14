@@ -38,12 +38,12 @@ import {
   emitPdfDragMove,
   emitPdfDragEnd,
   awaitDropAck,
-  currentWindowLabel,
   listenForeignPageDrags,
   setPageDragActive,
   type PageTransfer,
   type DropTarget,
 } from "../../stores/drag/pdfDrag";
+import { currentWindowLabel } from "../../lib/window/crossWindow";
 import {
   snapshotFrame,
   startCursorPoll,

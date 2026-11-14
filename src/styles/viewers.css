@@ -5899,7 +5899,9 @@ select.file-viewer-run-args-input {
      every one of them in the wrong place on top of the squashed page. */
 }
 
-.file-viewer-pdf-page.is-syncable {
+/* Armed: Ctrl/⌘ is held over a PDF that reverse search can answer. The mark is
+   an attribute on the reader's scroller, so arming is a style change only. */
+[data-sync-armed] .file-viewer-pdf-page.is-syncable {
   cursor: var(--cur-crosshair, crosshair);
 }
 
@@ -6021,9 +6023,8 @@ select.file-viewer-run-args-input {
 }
 /* While reverse search is armed (Ctrl/⌘ held) a click on a link box performs the
    SyncTeX jump instead of following the link, so the boxes must not go on
-   promising a link cursor. The canvas carries the armed marker and the boxes are
-   its later siblings. */
-.file-viewer-pdf-page.is-syncable ~ .file-viewer-pdf-link {
+   promising a link cursor. The boxes are later siblings of the page's canvas. */
+[data-sync-armed] .file-viewer-pdf-page.is-syncable ~ .file-viewer-pdf-link {
   cursor: var(--cur-crosshair, crosshair);
 }
 

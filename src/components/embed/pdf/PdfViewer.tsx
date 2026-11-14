@@ -16,7 +16,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../../hooks/useTauriListener";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
-import { usePdfSyncStore } from "../../../stores/viewers/pdfSync";
+import { usePdfSyncStore, type PdfHighlight } from "../../../stores/viewers/pdfSync";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
 import { usePdfMarkupLink } from "../../../stores/viewers/markupLinks";
 import {
@@ -170,13 +170,13 @@ import {
   synctexStatus,
   syncNoticeKind,
   texSourceCandidates,
+  texPathExists,
+  SYNC_NOTICE_MSG,
   resolveTexRoot,
   refineToWord,
   type SyncNoticeKind,
   type SyncRect,
-  type SyncSource,
   type TextItemBox,
-  type CaretPhrase,
 } from "../../../lib/viewers/tex/tex";
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
@@ -611,7 +611,6 @@ function PdfPageCanvas({
   scale,
   cssSize,
   onSyncClick,
-  syncArmed,
   highlight,
   onReveal,
   searchMatches,
@@ -661,14 +660,12 @@ function PdfPageCanvas({
   /** SyncTeX reverse search: a click maps to big points in this page's own,
    *  unturned space. */
   onSyncClick?: (page: number, xBp: number, yBp: number) => void;
-  /** True while Ctrl/⌘ is held, so the page shows the reverse-search cursor. */
-  syncArmed?: boolean;
   /** SyncTeX forward search: when this page is the target, the box (big points,
    *  the page's unturned space) to scroll into view and flash. `nonce`
    *  re-triggers a repeat reveal.
    *  `phrase`, when set, narrows the box to the clicked word via the page's text
    *  content (using the surrounding words to disambiguate). */
-  highlight?: { rect: SyncRect; nonce: number; phrase?: CaretPhrase } | null;
+  highlight?: PdfHighlight | null;
   /** Explicit navigation supersedes a same-path reload's scroll restoration. */
   onReveal?: () => void;
   /** Ctrl+F search hits on THIS page: each match is its constituent boxes (big
@@ -1331,7 +1328,9 @@ function PdfPageCanvas({
     >
       <canvas
         ref={canvasRef}
-        className={`file-viewer-pdf-page${onSyncClick && syncArmed ? " is-syncable" : ""}`}
+        // The reverse-search cursor shows only while the reader's scroller is
+        // armed (`data-sync-armed`, Ctrl/⌘ held) — CSS, so arming renders nothing.
+        className={`file-viewer-pdf-page${onSyncClick ? " is-syncable" : ""}`}
         // Reserve the page's true size up-front (the async render sets the same
         // values once pixels are ready), so the stack's scroll height is correct
         // immediately and a restored scroll position is reachable on the first
@@ -1874,7 +1873,6 @@ function PdfCanvas({
   onOpenExternally,
   tabKey,
   groupId,
-  onReverseSource,
   onHoldChange,
 }: {
   path: string;
@@ -1885,13 +1883,6 @@ function PdfCanvas({
   tabKey?: string;
   /** Hosting subwindow (group) id, for proportional scroll-linking (scrollSync). */
   groupId?: string | null;
-  /** SyncTeX reverse-search host seam. When present, a Ctrl/⌘-click on a page
-   *  routes the resolved source location here (with the PDF's main-`.tex`
-   *  `anchor`) INSTEAD of the module `jumpToSource` — the TeX workspace uses it
-   *  to switch its own center to the producing child rather than open a tab.
-   *  Absent ⇒ today's standalone behavior (a real source tab), so the plain PDF
-   *  tab and its tests are unaffected. */
-  onReverseSource?: (src: SyncSource, anchor: string) => void;
   /** Tells the host whether this canvas holds unsaved work (marks not yet
    *  written, page edits not yet saved), which must keep it from sleeping. */
   onHoldChange?: (held: boolean) => void;
@@ -2690,15 +2681,21 @@ function PdfCanvas({
     setRailOpen(false);
     setMarking(true);
   }, []);
+  /** Take the file's current mtime as the poll's baseline: the viewer is about
+   *  to read these bytes itself, so the poll must not notice the same write
+   *  afterwards and reload a second time. */
+  const seedMtime = useCallback(() => {
+    void fileMtime(path, scope)
+      .then((mtime) => { lastMtime.current = mtime; })
+      .catch(() => {});
+  }, [path, scope]);
   /** **Reload PDF** under the marks: the viewer's own same-path reload, which
    *  keeps zoom, scroll and page ids. */
   const reloadUnderMarks = useCallback(() => {
     markupRef.current.beforeReload();
-    void fileMtime(path, scope)
-      .then((mtime) => { lastMtime.current = mtime; })
-      .catch(() => {});
+    seedMtime();
     setDiskVersion((v) => v + 1);
-  }, [path, scope]);
+  }, [seedMtime]);
   /** The one door for "the file changed on disk" — the mtime poll, a compile's
    *  re-read request and a SyncTeX reveal after a compile (`diskChangeAction`).
    *  While marking, the new pages load under the marks on their own unless
@@ -2753,15 +2750,23 @@ function PdfCanvas({
   // The `.tex` that built this PDF by its name (`texSourceCandidates`), or null:
   // what a reverse-search click opens when there is no map to name the line.
   const [texSource, setTexSource] = useState<string | null>(null);
-  // True while Ctrl/⌘ is held: reverse-search clicks fire and pages show the
-  // crosshair cursor only then, leaving plain clicks free for text selection.
-  const [syncArmed, setSyncArmed] = useState(false);
+  // While Ctrl/⌘ is held the pages show the crosshair cursor (reverse-search
+  // clicks fire only then, leaving plain clicks free for text selection). The
+  // armed mark is an attribute on the scroller that CSS reads, never React
+  // state: a modifier goes down for every shortcut typed anywhere in the window,
+  // and as state each press and release re-rendered every page of this PDF. Not
+  // tracked at all while the pane is hidden.
   const reverseArmable = syncable || texSource != null;
   useEffect(() => {
-    if (!reverseArmable) return;
-    const sync = (e: KeyboardEvent | MouseEvent) =>
-      setSyncArmed(e.ctrlKey || e.metaKey);
-    const clear = () => setSyncArmed(false);
+    if (!reverseArmable || !paneVisible) return;
+    let armed = false;
+    const arm = (next: boolean) => {
+      if (next === armed) return;
+      armed = next;
+      scrollRef.current?.toggleAttribute("data-sync-armed", next);
+    };
+    const sync = (e: KeyboardEvent | MouseEvent) => arm(e.ctrlKey || e.metaKey);
+    const clear = () => arm(false);
     window.addEventListener("keydown", sync);
     window.addEventListener("keyup", sync);
     window.addEventListener("mousemove", sync);
@@ -2771,8 +2776,9 @@ function PdfCanvas({
       window.removeEventListener("keyup", sync);
       window.removeEventListener("mousemove", sync);
       window.removeEventListener("blur", clear);
+      clear();
     };
-  }, [reverseArmable]);
+  }, [reverseArmable, paneVisible]);
 
   // Why a reverse-search click did nothing, or may have landed on the wrong
   // line — worded from `synctexStatus` after every click (see `syncNoticeKind`).
@@ -2802,7 +2808,7 @@ function PdfCanvas({
   // (avoiding a re-fire) while keeping the highlight mounted to animate.
   const reveal = usePdfSyncStore((s) => s.byPath[path] ?? null);
   const consumeReveal = usePdfSyncStore((s) => s.consume);
-  const [highlight, setHighlight] = useState<{ rect: SyncRect; nonce: number; phrase?: CaretPhrase } | null>(null);
+  const [highlight, setHighlight] = useState<PdfHighlight | null>(null);
   // The highlight is a flash, gone with its fade (1.6 s) — but under reduced
   // motion the fade is off and the box would stay for good. Dropped after the
   // click marker's 2.2 s either way, so "briefly" holds for both. The clock runs
@@ -2814,47 +2820,33 @@ function PdfCanvas({
     return () => window.clearTimeout(id);
   }, [highlight, paneVisible]);
   const [reloadReveal, setReloadReveal] = useState<{
-    rect: SyncRect;
-    nonce: number;
-    phrase?: CaretPhrase;
+    highlight: PdfHighlight;
     targetVersion: number;
   } | null>(null);
   useEffect(() => {
     if (!reveal) return;
-    if (reveal.afterReload) {
+    const { afterReload, ...target } = reveal;
+    if (afterReload) {
       // An already-open PDF must read the bytes the compiler just replaced.
       // A newly mounted PDF is already loading those bytes, so wait on its
       // current version instead of starting a redundant second read.
       const targetVersion = doc ? diskVersion + 1 : diskVersion;
-      setReloadReveal({
-        rect: reveal.rect,
-        nonce: reveal.nonce,
-        phrase: reveal.phrase,
-        targetVersion,
-      });
+      setReloadReveal({ highlight: target, targetVersion });
       if (doc) {
-        // Keep the ordinary mtime poll from noticing the same compiler write
-        // afterward and performing a duplicate reload.
-        void fileMtime(path, scope)
-          .then((mtime) => { lastMtime.current = mtime; })
-          .catch(() => {});
+        seedMtime();
         // Held back like any other disk change (unsaved edits, marks on the
         // pages); the reveal waits for the version the reader then loads.
         diskChanged(() => setDiskVersion(targetVersion));
       }
     } else {
-      setHighlight({ rect: reveal.rect, nonce: reveal.nonce, phrase: reveal.phrase });
+      setHighlight(target);
     }
     consumeReveal(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reveal?.nonce]);
   useEffect(() => {
     if (!doc || !reloadReveal || loadedDiskVersion < reloadReveal.targetVersion) return;
-    setHighlight({
-      rect: reloadReveal.rect,
-      nonce: reloadReveal.nonce,
-      phrase: reloadReveal.phrase,
-    });
+    setHighlight(reloadReveal.highlight);
     setReloadReveal(null);
   }, [doc, loadedDiskVersion, reloadReveal]);
 
@@ -2881,9 +2873,7 @@ function PdfCanvas({
   useEffect(() => {
     if (!reloadNonce || (!doc && !error)) return;
     diskChanged(() => {
-      void fileMtime(path, scope)
-        .then((mtime) => { lastMtime.current = mtime; })
-        .catch(() => {});
+      seedMtime();
       setDiskVersion((v) => v + 1);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3867,11 +3857,9 @@ function PdfCanvas({
     }
     let cancelled = false;
     const base = path.replace(/\.pdf$/i, "");
-    const exists = (p: string) =>
-      fileMtime(p, scope).then(() => true).catch(() => false);
-    void Promise.all([exists(`${base}.synctex.gz`), exists(`${base}.synctex`)]).then(
-      ([gz, raw]) => { if (!cancelled) setSyncable(gz || raw); },
-    );
+    void Promise.all(
+      [`${base}.synctex.gz`, `${base}.synctex`].map((map) => texPathExists(map, scope)),
+    ).then((found) => { if (!cancelled) setSyncable(found.some(Boolean)); });
     return () => { cancelled = true; };
   }, [path, scope, diskVersion, remoteSource]);
 
@@ -3881,7 +3869,7 @@ function PdfCanvas({
   // not, connected or not, is the probe the map check above declines too.
   const findTexSource = useCallback(async () => {
     for (const candidate of texSourceCandidates(path)) {
-      if (await fileMtime(candidate, scope).then(() => true, () => false)) return candidate;
+      if (await texPathExists(candidate, scope)) return candidate;
     }
     return null;
   }, [path, scope]);
@@ -3909,28 +3897,22 @@ function PdfCanvas({
   const onSyncClick = useCallback(
     async (page: number, x: number, y: number) => {
       setSyncNotice(null);
-      const jump = async (src: SyncSource) => {
-        const anchor = await resolveTexRoot(src.input).catch(() => src.input);
-        // In a TeX workspace the host handles reverse search itself (it switches
-        // the docked editor's center to the producing child); standalone falls
-        // back to the module jump (open/focus the source tab).
-        if (onReverseSource) onReverseSource(src, anchor);
-        else jumpToSource(src.input, src.line, src.column, anchor);
+      const jump = async (input: string, line: number) => {
+        const root = await resolveTexRoot(input).catch(() => input);
+        jumpToSource(input, line, 0, root);
       };
       const openByName = (source: string | null) => {
-        if (!source) return false;
-        void jump({ input: source, line: 1, column: 0 });
-        return true;
+        if (source) void jump(source, 1);
+        return source != null;
       };
       // The SyncTeX commands read the map off local disk; a PDF read from a
       // remote host has none there, so say so and ask nothing. A mirror path is
       // local and goes on.
       if (remoteSource) {
         const found = await findTexSource();
-        const opened = openByName(found);
         setSyncNotice({
           kind: "remote",
-          opened,
+          opened: openByName(found),
           source: found ?? path,
           sources: [],
           canRecompile: false,
@@ -3938,18 +3920,16 @@ function PdfCanvas({
         return;
       }
       const src = syncable ? await synctexEdit(path, page, x, y, scope) : null;
-      if (src) await jump(src);
+      if (src) await jump(src.input, src.line);
       const status = syncable ? await synctexStatus(path, scope) : null;
-      const kind = syncable
-        ? syncNoticeKind(status, src != null)
-        : ("noMap" satisfies SyncNoticeKind);
+      const kind = syncable ? syncNoticeKind(status, src != null) : "noMap";
       if (!kind) return;
       const opened = kind === "noMap" && !src && openByName(texSource);
-      const source = src?.input ?? texSource ?? path.replace(/\.pdf$/i, ".tex");
+      const source = src?.input ?? texSource ?? texSourceCandidates(path)[0] ?? path;
       const canRecompile = await canRecompileTexSource(source).catch(() => false);
       setSyncNotice({ kind, opened, source, sources: status?.newer_sources ?? [], canRecompile });
     },
-    [path, remoteSource, syncable, texSource, findTexSource, onReverseSource],
+    [path, scope, remoteSource, syncable, texSource, findTexSource],
   );
 
   // Poll mtime; on a change (e.g. a recompile wrote a new PDF), bump
@@ -5220,19 +5200,13 @@ function PdfCanvas({
         <div className="file-viewer-banner" role="status">
           <span>
             {t(
-              syncNotice.kind === "remote"
-                ? syncNotice.opened
+              syncNotice.opened
+                ? syncNotice.kind === "remote"
                   ? "pdfViewer.syncRemoteOpenedMsg"
-                  : "pdfViewer.syncRemoteMsg"
-                : syncNotice.kind === "noMap"
-                  ? syncNotice.opened
-                    ? "pdfViewer.syncNoMapOpenedMsg"
-                    : "pdfViewer.syncNoMapMsg"
-                  : syncNotice.kind === "pdfNewer"
-                    ? "pdfViewer.syncPdfNewerMsg"
-                    : syncNotice.kind === "stale"
-                      ? "pdfViewer.syncStaleMsg"
-                      : "pdfViewer.syncMissMsg",
+                  : "pdfViewer.syncNoMapOpenedMsg"
+                : syncNotice.kind === "miss"
+                  ? "pdfViewer.syncMissMsg"
+                  : SYNC_NOTICE_MSG[syncNotice.kind],
               {
                 files: syncNotice.sources.map((f) => basename(f)).join(", "),
                 file: basename(syncNotice.source),
@@ -5385,7 +5359,6 @@ function PdfCanvas({
                     // explains itself (a "recompile" notice) instead of doing
                     // nothing. The crosshair cursor still only arms with a map.
                     onSyncClick={ref.src === SELF ? onSyncClick : undefined}
-                    syncArmed={syncArmed}
                     highlight={highlight && i === syncSheetIndex ? highlight : null}
                     onReveal={() => { restoreScroll.current = null; }}
                     searchMatches={searchByPage.get(i + 1)}
@@ -5500,15 +5473,11 @@ export function PdfView({
   onOpenExternally,
   tabKey,
   groupId,
-  onReverseSource,
 }: {
   path: string;
   onOpenExternally: () => void;
   tabKey?: string;
   groupId?: string | null;
-  /** SyncTeX reverse-search host seam (see `PdfCanvas`). The TeX workspace passes
-   *  it to keep a reverse click inside its own tab; a standalone PDF omits it. */
-  onReverseSource?: (src: SyncSource, anchor: string) => void;
 }) {
   // Sleep (§4.3): a tab hidden for `PDF_DOC_RELEASE_MS` unmounts its canvas —
   // whose own teardown destroys the documents and ends the worker — and mounts
@@ -5545,7 +5514,6 @@ export function PdfView({
             onOpenExternally={onOpenExternally}
             tabKey={tabKey}
             groupId={groupId}
-            onReverseSource={onReverseSource}
             onHoldChange={setHeld}
           />
         )}

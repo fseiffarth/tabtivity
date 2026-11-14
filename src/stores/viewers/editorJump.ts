@@ -1,11 +1,10 @@
 import { create } from "zustand";
-import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { broadcast, listenOtherWindows } from "../../lib/window/crossWindow";
 
 /**
  * Cross-tab "jump to this source line" channel for SyncTeX reverse search.
  *
- * Clicking a point in a PDF resolves (via `synctex edit`) to a source file +
+ * Clicking a point in a PDF resolves (through SyncTeX) to a source file +
  * line. The source tab may already be open — `openLinkedFile` re-activates it
  * rather than mounting a fresh component — so we cannot pass the target line as
  * a prop. Instead the PDF side posts a request here keyed by the absolute source
@@ -15,14 +14,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
  * #42 cross-window: the PDF may be popped out into a detached OS window, which is
  * a SEPARATE webview with its own Zustand heap, so a local store write would never
  * reach the editor when it lives in another window. Mirroring the forward-search
- * channel (`pdfSync`), `requestJump` also broadcasts over a global Tauri event;
+ * channel (`pdfSync`), `requestJump` also broadcasts (`lib/window/crossWindow`);
  * every window registers `listenEditorJump` and applies an incoming jump to its
- * own store, so the editor scrolls regardless of which window hosts it. The
- * originating window stamps `from` and skips its own echo.
+ * own store, so the editor scrolls regardless of which window hosts it.
  */
 export interface JumpRequest {
   line: number;
-  /** 1-based source column from SyncTeX (0 when none was reported). */
+  /** 1-based source column (0: the line's start — SyncTeX records none; error
+   *  rows, `\ref` jumps and code links name one). */
   column: number;
   nonce: number;
 }
@@ -30,28 +29,10 @@ export interface JumpRequest {
 /** Tauri event carrying an editor jump across the main/detached window boundary. */
 export const EDITOR_JUMP_EVENT = "editor-jump";
 
-/** Envelope for a cross-window jump (the request plus the originating window's
- *  label, so a window ignores the echo of its own broadcast). */
-export interface EditorJumpEnvelope {
-  path: string;
-  line: number;
-  column: number;
-  from: string;
-}
-
-/** The current window's Tauri label, or "" outside a Tauri context (tests). */
-function currentLabel(): string {
-  try {
-    return getCurrentWindow().label;
-  } catch {
-    return "";
-  }
-}
-
 interface EditorJumpStore {
   requestsByPath: Record<string, JumpRequest>;
   /** Ask the editor showing `path` to move the caret to (1-based) `line`/
-   *  `column`. `column` 0 means "line start" (SyncTeX reported no column).
+   *  `column`. `column` 0 means "line start".
    *  Applies locally AND broadcasts so an editor hosted in another (detached)
    *  window scrolls too (#42). */
   requestJump: (path: string, line: number, column?: number) => void;
@@ -76,18 +57,8 @@ export const useEditorJumpStore = create<EditorJumpStore>((set, get) => ({
     }),
   requestJump: (path, line, column = 0) => {
     get().applyJump(path, line, column);
-    // Broadcast to the other window(s) in case the editor is popped out there
-    // (#42). Best-effort: a non-Tauri env (tests) simply skips the broadcast.
-    try {
-      emit(EDITOR_JUMP_EVENT, {
-        path,
-        line,
-        column,
-        from: currentLabel(),
-      } satisfies EditorJumpEnvelope).catch(() => {});
-    } catch {
-      /* no Tauri event bus available (synchronous failure) */
-    }
+    // In case the editor is popped out into another window (#42).
+    broadcast(EDITOR_JUMP_EVENT, { path, line, column });
   },
   consume: (path) =>
     set((s) => {
@@ -106,17 +77,11 @@ export const useEditorJumpStore = create<EditorJumpStore>((set, get) => ({
  * window the PDF the user clicked lives in. Returns an unlisten. No-ops outside
  * a Tauri context.
  */
-export async function listenEditorJump(): Promise<() => void> {
-  const self = currentLabel();
-  try {
-    return await listen<EditorJumpEnvelope>(EDITOR_JUMP_EVENT, (ev) => {
-      const { path, line, column, from } = ev.payload;
-      if (from === self) return; // we already applied our own jump locally
-      useEditorJumpStore.getState().applyJump(path, line, column);
-    });
-  } catch {
-    return () => {};
-  }
+export function listenEditorJump(): Promise<() => void> {
+  return listenOtherWindows<{ path: string; line: number; column: number }>(
+    EDITOR_JUMP_EVENT,
+    ({ path, line, column }) => useEditorJumpStore.getState().applyJump(path, line, column),
+  );
 }
 
 /**

@@ -448,11 +448,7 @@ fn run_in_within_env<S: AsRef<std::ffi::OsStr>>(
             let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&out.stderr));
             if ran.timed_out {
-                text.push_str(&format!(
-                    "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
-                    timeout.as_secs(),
-                    app = crate::brand::DISPLAY
-                ));
+                text.push_str(&stuck_note(bin, timeout));
                 return Ok(RunOut { ok: false, text });
             }
             if ran.cut {
@@ -668,9 +664,7 @@ fn latexmk_args(
     if let Some(dir) = out_dir {
         args.push(format!("-outdir={dir}"));
     }
-    for f in extra {
-        args.push(f.clone());
-    }
+    args.extend_from_slice(extra);
     args.push(NO_SHELL_ESCAPE.to_string());
     args.push(file_name.to_string());
     args
@@ -691,9 +685,7 @@ fn engine_args(file_name: &str, out_dir: Option<&str>, extra: &[String]) -> Vec<
     if let Some(dir) = out_dir {
         args.push(format!("-output-directory={dir}"));
     }
-    for f in extra {
-        args.push(f.clone());
-    }
+    args.extend_from_slice(extra);
     args.push(NO_SHELL_ESCAPE.to_string());
     args.push(file_name.to_string());
     args
@@ -821,11 +813,28 @@ fn latexmk_summary(log: &str) -> Option<String> {
     Some(out.join("; "))
 }
 
+/// The log line for a build stopped at its ceiling ({@link RUN_TIMEOUT}), local
+/// or on the host.
+fn stuck_note(bin: &str, timeout: std::time::Duration) -> String {
+    format!(
+        "\n! {app} stopped {bin} after {} seconds — the build appears to be stuck.\n",
+        timeout.as_secs(),
+        app = crate::brand::DISPLAY
+    )
+}
+
 /// Modification time of the PDF, or `None` when it does not exist. Compared
 /// across a run to tell a PDF this build wrote from one left by an earlier one:
 /// forgiving a non-zero exit status is only safe when the output is actually new.
 fn pdf_stamp(pdf: &Path) -> Option<std::time::SystemTime> {
     fs::metadata(pdf).ok().and_then(|m| m.modified().ok())
+}
+
+/// Whether the PDF is there and is not the one `before` ({@link pdf_stamp}, taken
+/// ahead of the build) saw: this run wrote it.
+fn pdf_is_fresh(pdf: &Path, before: Option<std::time::SystemTime>) -> bool {
+    let now = pdf_stamp(pdf);
+    now.is_some() && now != before
 }
 
 /// Whether a build counts as a success, for both the latexmk and the direct
@@ -1210,12 +1219,7 @@ fn compile_tex_blocking(
     extra_flags: Option<Vec<String>>,
 ) -> Result<TexCompileResult, String> {
     let src = fs::canonicalize(&path).map_err(|e| format!("canonicalize {path}: {e}"))?;
-    let is_tex = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("tex"))
-        .unwrap_or(false);
-    if !is_tex {
+    if !src.extension().is_some_and(|e| e.eq_ignore_ascii_case("tex")) {
         return Err(format!("not a .tex file: {}", src.display()));
     }
     let dir = src
@@ -1240,22 +1244,10 @@ fn compile_tex_blocking(
     // source's directory, an absolute one is used as-is. Created if missing so the
     // engine can write into it. The PDF then lands there (not beside the source),
     // so `pdf_path` points into it.
-    let out_dir = out_dir.and_then(|d| {
-        let d = d.trim().to_string();
-        if d.is_empty() {
-            None
-        } else {
-            Some(d)
-        }
-    });
-    let out_path = match &out_dir {
+    let out_path = match out_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
         Some(d) => {
-            let p = Path::new(d);
-            let abs = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                dir.join(p)
-            };
+            // `join` keeps an absolute `d` as it is.
+            let abs = dir.join(d);
             fs::create_dir_all(&abs)
                 .map_err(|e| format!("create output dir {}: {e}", abs.display()))?;
             Some(abs)
@@ -1264,6 +1256,9 @@ fn compile_tex_blocking(
     };
     // The string form passed to the engine/latexmk flags.
     let out_arg = out_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+    // Where the build's files land: the output dir if one was given, else
+    // beside the source.
+    let build_dir = out_path.as_deref().unwrap_or(dir);
 
     // SECURITY: filter user-supplied flags so none can enable shell-escape.
     let extra = filter_extra_flags(&extra_flags.unwrap_or_default());
@@ -1275,11 +1270,7 @@ fn compile_tex_blocking(
     let engine = engine
         .filter(|e| cap.engines.iter().any(|g| g == e))
         .or_else(|| auto_engine(&src, &cap.engines));
-    // The PDF lands in the output dir if one was given, else beside the source.
-    let pdf = match &out_path {
-        Some(p) => p.join(format!("{stem}.pdf")),
-        None => dir.join(format!("{stem}.pdf")),
-    };
+    let pdf = build_dir.join(format!("{stem}.pdf"));
     let mut log = String::new();
 
     // The cached-preamble fast path (see the "Precompiled document preambles"
@@ -1342,11 +1333,7 @@ fn compile_tex_blocking(
         log.push_str(&out.text);
         // `driver_note` carries latexmk's reason whichever way this lands, so a
         // forgiven build still says what latexmk was unhappy about.
-        let pdf_fresh = {
-            let now = pdf_stamp(&pdf);
-            now.is_some() && now != pdf_before
-        };
-        let success = build_succeeded(out.ok, pdf.exists(), pdf_fresh, doc_errors);
+        let success = build_succeeded(out.ok, pdf.exists(), pdf_is_fresh(&pdf, pdf_before), doc_errors);
         if success {
             // Record this file as the build root for every .tex it pulls in, so
             // pressing Compile in a child later redirects here (resolve_tex_root).
@@ -1410,11 +1397,7 @@ fn compile_tex_blocking(
     let mut doc_errors = log_has_tex_error(&first.text);
     log.push_str(&first.text);
 
-    // The aux lands in the output dir too when one is set.
-    let aux = match &out_path {
-        Some(p) => p.join(format!("{stem}.aux")),
-        None => dir.join(format!("{stem}.aux")),
-    };
+    let aux = build_dir.join(format!("{stem}.aux"));
     let mut pass = |log: &mut String| -> Result<(), String> {
         let out = run_in(dir, &eng, &engine_args)?;
         last_ok = out.ok;
@@ -1423,10 +1406,9 @@ fn compile_tex_blocking(
         Ok(())
     };
     if cap.bibtex && aux_needs_bibtex(&aux) {
-        // bibtex resolves its aux relative to its own CWD; run it in the output
-        // dir when one is set so it finds the aux written there.
-        let bib_dir = out_path.as_deref().unwrap_or(dir);
-        let bib = run_in(bib_dir, "bibtex", std::slice::from_ref(&stem))?;
+        // bibtex resolves its aux relative to its own CWD, so it runs where the
+        // aux was written.
+        let bib = run_in(build_dir, "bibtex", std::slice::from_ref(&stem))?;
         log.push_str(&bib.text);
         for _ in 0..2 {
             pass(&mut log)?;
@@ -1436,11 +1418,7 @@ fn compile_tex_blocking(
         pass(&mut log)?;
     }
 
-    let pdf_fresh = {
-        let now = pdf_stamp(&pdf);
-        now.is_some() && now != pdf_before
-    };
-    let success = build_succeeded(last_ok, pdf.exists(), pdf_fresh, doc_errors);
+    let success = build_succeeded(last_ok, pdf.exists(), pdf_is_fresh(&pdf, pdf_before), doc_errors);
     if success {
         record_root_mappings(&src);
     }
@@ -2352,8 +2330,15 @@ fn magic_root(source: &str, dir: &Path) -> Option<std::path::PathBuf> {
 ///   2. the stored child→root map (if the root still exists and still includes
 ///      this child), else
 ///   3. `path` itself.
+///
+/// Off the main thread: for a child file, step 2 re-reads the root's whole
+/// include tree, and a reverse-search click asks more than once.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn resolve_tex_root(path: String) -> Result<String, String> {
+pub async fn resolve_tex_root(path: String) -> Result<String, String> {
+    app_core::rt::try_blocking("resolve_tex_root", move || resolve_tex_root_blocking(path)).await
+}
+
+fn resolve_tex_root_blocking(path: String) -> Result<String, String> {
     let src = fs::canonicalize(&path).unwrap_or_else(|_| Path::new(&path).to_path_buf());
     let dir = src.parent().unwrap_or_else(|| Path::new("."));
 

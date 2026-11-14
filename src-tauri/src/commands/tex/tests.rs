@@ -968,11 +968,11 @@ fn resolve_tex_root_prefers_magic_comment() {
     )
     .unwrap();
 
-    let resolved = resolve_tex_root(child.to_string_lossy().into_owned()).unwrap();
+    let resolved = resolve_tex_root_blocking(child.to_string_lossy().into_owned()).unwrap();
     assert_eq!(resolved, main_disp.to_string_lossy());
 
     // A file that is its own root resolves to itself.
-    let solo = resolve_tex_root(main.to_string_lossy().into_owned()).unwrap();
+    let solo = resolve_tex_root_blocking(main.to_string_lossy().into_owned()).unwrap();
     assert_eq!(solo, main_disp.to_string_lossy());
     let _ = fs::remove_dir_all(&dir);
 }

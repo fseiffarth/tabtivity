@@ -1,5 +1,5 @@
-import { ROOT_SCOPE, orderedTabKeys, useTabsStore, type TabEntry } from "../../../stores/tabs";
-import { rootViewShown, useRootOverlayStore } from "../../../stores/rootOverlay";
+import { orderedTabKeys, useTabsStore, type TabEntry } from "../../../stores/tabs";
+import { tabsOnScreen } from "../../../stores/rootOverlay";
 import {
   centerTexWorkspace,
   compileTexWorkspace,
@@ -10,6 +10,10 @@ import {
 import { resolveTexRoot } from "./tex";
 import { basename, dirname } from "../../paths";
 import { openTabInScope } from "../../tabs/tabScopeContext";
+
+/** Whether a tab is THE workspace tab of the main document `root`. */
+const isWorkspaceFor = (root: string) => (t: TabEntry) =>
+  t.kind === "embed" && t.viewer === "texworkspace" && t.embedPath === root;
 
 /**
  * The single open-a-LaTeX-file policy: open (or focus) the ONE "TeX workspace"
@@ -67,10 +71,10 @@ export async function openTexWorkspace(
   const store = useTabsStore.getState();
   const scopeTabs = scope ? store.tabsByScope[scope] ?? [] : store.tabs;
 
-  // Represent "center shows the main document" as texActivePath === root (store
-  // the root path), not undefined, so focusing an existing workspace on its own
-  // main is an ordinary merge write with nothing to clear.
-  const activePath = clickedPath === root ? root : clickedPath;
+  // "Center shows the main document" is texActivePath === root (the root path
+  // itself), not undefined, so focusing an existing workspace on its own main is
+  // an ordinary merge write with nothing to clear.
+  const activePath = clickedPath;
 
   // The tab that already holds this document, if any. A bare `tex` tab ON THE
   // ROOT counts as one: `viewer` is persisted, so a `.tex` opened as a plain
@@ -83,9 +87,7 @@ export async function openTexWorkspace(
   // is not the root the click resolved to.
   const isLegacyEditor = (t: TabEntry) =>
     t.kind === "embed" && t.viewer === "tex" && t.embedPath === root;
-  const existing = scopeTabs.find(
-    (t) => (t.kind === "embed" && t.viewer === "texworkspace" && t.embedPath === root) || isLegacyEditor(t),
-  );
+  const existing = scopeTabs.find((t) => isWorkspaceFor(root)(t) || isLegacyEditor(t));
   if (existing) {
     if (isLegacyEditor(existing)) store.setTabViewer(existing.key, "texworkspace");
     if (drop && clickedPath !== root) {
@@ -140,7 +142,9 @@ export async function openTexWorkspace(
  * Route a SyncTeX reverse-search target (a `.tex` source) into an ALREADY-OPEN
  * workspace, when one owns it. Resolves the build root and looks for an existing
  * workspace tab keyed on it; if found, focuses that tab and switches its center
- * to `sourcePath` (via `texActivePath`), returning `true`. Returns `false` — and
+ * to `sourcePath` (via `texActivePath`), returning `true`. `knownRoot` is that
+ * root when the caller has it already (each resolve is a command that, for a
+ * child file, re-reads the document's include tree). Returns `false` — and
  * touches nothing — when no workspace tab is open for the document, so the caller
  * falls back to the standalone open.
  *
@@ -161,20 +165,17 @@ export async function openTexWorkspace(
  *     look dead for a popped-out workspace.
  *  3. An in-layout tab keeps the direct store write.
  */
-export async function focusTexWorkspaceForSource(sourcePath: string): Promise<boolean> {
-  const root = await resolveTexRoot(sourcePath);
+export async function focusTexWorkspaceForSource(
+  sourcePath: string,
+  knownRoot?: string,
+): Promise<boolean> {
+  const root = knownRoot ?? (await resolveTexRoot(sourcePath));
   if (centerTexWorkspace(root, sourcePath)) return true;
   const store = useTabsStore.getState();
-  const isWorkspace = (t: TabEntry) =>
-    t.kind === "embed" && t.viewer === "texworkspace" && t.embedPath === root;
-  // The root console's tabs are on screen too while its Root view floats over a project
-  // (the same rule as `tabKeyForPath`): missing its workspace here sent every
-  // reverse click from a console PDF to the standalone open, one more tab each.
-  const existing =
-    store.tabs.find(isWorkspace) ??
-    (rootViewShown(useRootOverlayStore.getState())
-      ? store.tabsByScope[ROOT_SCOPE]?.find(isWorkspace)
-      : undefined);
+  // On screen, not just the active scope: missing the root console's workspace
+  // here sent every reverse click from a console PDF to the standalone open, one
+  // more tab each.
+  const existing = tabsOnScreen().find(isWorkspaceFor(root));
   if (!existing) return false;
   const detachedGroups = store.detachedGroupsByScope[existing.scope ?? store.scope] ?? [];
   if (detachedGroups.some((g) => orderedTabKeys(g.subtree).includes(existing.key))) {
@@ -182,9 +183,9 @@ export async function focusTexWorkspaceForSource(sourcePath: string): Promise<bo
     return true;
   }
   store.setActive(existing.key);
-  // "center on the main" is represented as texActivePath === root, matching
-  // `openTexWorkspace`, so nothing has to special-case the main document.
-  store.setViewerState(existing.key, { texActivePath: sourcePath === root ? root : sourcePath });
+  // "Center on the main" is texActivePath === root, as in `openTexWorkspace`, so
+  // nothing has to special-case the main document.
+  store.setViewerState(existing.key, { texActivePath: sourcePath });
   return true;
 }
 
@@ -199,9 +200,7 @@ export async function focusTexWorkspaceForSource(sourcePath: string): Promise<bo
 export async function canRecompileTexSource(sourcePath: string): Promise<boolean> {
   const root = await resolveTexRoot(sourcePath).catch(() => sourcePath);
   if (hasTexCompiler(sourcePath) || hasTexCompiler(root)) return true;
-  return useTabsStore
-    .getState()
-    .tabs.some((t) => t.kind === "embed" && t.viewer === "texworkspace" && t.embedPath === root);
+  return tabsOnScreen().some(isWorkspaceFor(root));
 }
 
 /**
@@ -215,7 +214,7 @@ export async function canRecompileTexSource(sourcePath: string): Promise<boolean
 export async function recompileTexSource(sourcePath: string): Promise<boolean> {
   const root = await resolveTexRoot(sourcePath).catch(() => sourcePath);
   if (compileTexWorkspace(sourcePath) || compileTexWorkspace(root)) return true;
-  if (!(await focusTexWorkspaceForSource(sourcePath))) return false;
+  if (!(await focusTexWorkspaceForSource(sourcePath, root))) return false;
   // Focusing mounted the editor in this window (a keep-mounted center switch),
   // or the workspace lives in a popout — either way, one more local try before
   // the broadcast.
