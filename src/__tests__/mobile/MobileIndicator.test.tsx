@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -192,6 +192,42 @@ describe("MobileIndicator reconnect", () => {
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("locks down like Settings → Mobile: the host off, Browser access closed, the rest kept", async () => {
+    useSettingsStore.setState({
+      settings: {
+        [MOBILE_HOST_KEY]: { enabled: true, browser_client: true, project_files: true, linked_desktops: ["https://laptop.example.ts.net"] },
+        mobile_indicator: true,
+      } as Settings,
+      loaded: true,
+    });
+    invokeMock.mockImplementation((command: string, args?: unknown) => {
+      if (command === "mobile_host_status") return Promise.resolve(connected);
+      if (command === "mobile_admin") {
+        const request = (args as { request: { type: string } }).request;
+        return Promise.resolve(request.type === "devices" ? { status: "devices", devices: [] } : { status: "ok" });
+      }
+      if (command === "patch_settings") {
+        return Promise.resolve({ ...useSettingsStore.getState().settings, ...(args as { patch: Partial<Settings> }).patch });
+      }
+      return Promise.resolve(null);
+    });
+    const user = userEvent.setup();
+    render(<MobileIndicator />);
+
+    await user.click(await screen.findByLabelText(`${BRAND.display} Mobile connected`));
+    await user.click(await screen.findByRole("button", { name: "Lock down" }));
+    const question = await screen.findByRole("dialog", { name: "Lock down now" });
+    await user.click(within(question).getByRole("button", { name: "Lock down now" }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("mobile_host_apply", { enabled: false }));
+    expect(invokeMock).toHaveBeenCalledWith("mobile_admin", { request: { type: "forget_all" } });
+    const writes = invokeMock.mock.calls.filter(([command]) => command === "patch_settings");
+    expect(writes).toHaveLength(1);
+    const written = JSON.parse(JSON.stringify((writes[0][1] as { patch: Settings }).patch[MOBILE_HOST_KEY]));
+    expect(written).toEqual({ enabled: false, project_files: true, linked_desktops: ["https://laptop.example.ts.net"] });
+    await waitFor(() => expect(useHeaderHoverMenuStore.getState().openId).toBeNull());
   });
 });
 

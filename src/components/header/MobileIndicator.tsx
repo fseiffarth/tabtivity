@@ -226,7 +226,9 @@ export function MobileIndicator() {
     try {
       const response = await invoke<{ status: string; message?: string }>("mobile_admin", { request: { type: "forget_all" } });
       if (response.status === "error") throw new Error(response.message ?? translateNow("mobile.indRevokeError"));
-      await updateSettings({ [MOBILE_HOST_KEY]: { ...mobileHost, enabled: false } });
+      // `browser_client` cleared on purpose, as Settings → Mobile's Lock down
+      // does: lockdown closes browser access too.
+      await updateSettings({ [MOBILE_HOST_KEY]: { ...mobileHost, enabled: false, browser_client: undefined } });
       await invoke("mobile_host_apply", { enabled: false });
       addDevice.clear();
       closeMenu(MENU_ID);
