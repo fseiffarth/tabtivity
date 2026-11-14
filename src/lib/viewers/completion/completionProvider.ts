@@ -26,6 +26,26 @@ export type CompletionCandidate = {
   acceptedPrefix: number;
 };
 
+/** `text-completion-stats-<requestId>`: emitted once by a backend that has it,
+ * before `complete_text` returns successfully. An older backend sends none,
+ * so every reader treats it as optional. The last five fields are absent when
+ * the stream was cut before Ollama's final record. */
+export type CompletionStats = {
+  endpoint: "generate" | "chat";
+  model: string;
+  stop: "done" | "line" | "budget";
+  firstTokenMs: number | null;
+  totalMs: number;
+  referenceBytes: number;
+  /** True for every FIM request to a model without a known reference layout. */
+  referencesDropped: boolean;
+  promptEvalCount?: number;
+  promptEvalMs?: number;
+  evalCount?: number;
+  evalMs?: number;
+  loadMs?: number;
+};
+
 export type CompletionDocument = {
   path: string;
   projectId?: string;

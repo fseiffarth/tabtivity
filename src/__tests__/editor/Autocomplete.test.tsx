@@ -87,6 +87,13 @@ function setup() {
   });
 }
 
+/** The edited file and one import exist; every other path is missing. */
+function readOnly(path: string | undefined, source: string) {
+  if (path === "/p/helper.py") return Promise.resolve("answer = 42");
+  if (path === "/p/foo.py") return Promise.resolve(source);
+  return Promise.reject(new Error("missing"));
+}
+
 async function renderTextView(path = "/p/foo.py") {
   vi.resetModules();
   const { FileViewerPane } = await import("../../components/embed/FileViewerPane");
@@ -202,6 +209,92 @@ describe("local autocomplete (#45)", () => {
     await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
     expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(2);
     expect(mockInvoke).toHaveBeenLastCalledWith("cancel_text_completion", expect.anything());
+  });
+
+  it("freezes references: a second automatic request reads no file", async () => {
+    autocompleteOn = true;
+    const source = "from helper import answer\nanswer = ";
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: { path?: string }) => cmd === "read_file_text"
+      ? readOnly(args.path, source) : original(cmd, args));
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(source));
+    el.focus();
+    const helperReads = () => mockInvoke.mock.calls.filter(([cmd, args]) =>
+      cmd === "read_file_text" && (args as { path: string }).path !== "/p/foo.py").length;
+    for (const typed of [source + "x", source + "xy"]) {
+      await act(async () => { fireEvent.change(el, { target: { value: typed } }); });
+      el.selectionStart = el.selectionEnd = typed.length;
+      await act(async () => { await new Promise((r) => setTimeout(r, 900)); });
+    }
+    const requests = mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text");
+    expect(requests).toHaveLength(2);
+    for (const [, args] of requests) {
+      expect(args).toEqual(expect.objectContaining({
+        context: [{ name: "helper.py", content: "answer = 42" }], fileName: "foo.py",
+      }));
+    }
+    // Reads happen once: the second request reused the frozen set.
+    const once = helperReads();
+    expect(once).toBeGreaterThan(0);
+    await act(async () => { fireEvent.change(el, { target: { value: source + "xyz" } }); });
+    el.selectionStart = el.selectionEnd = source.length + 3;
+    await act(async () => { await new Promise((r) => setTimeout(r, 900)); });
+    expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(3);
+    expect(helperReads()).toBe(once);
+  });
+
+  it("starts the model lookup, reference reads and reservation together", async () => {
+    autocompleteOn = true;
+    const source = "from helper import answer\nanswer = ";
+    const original = mockInvoke.getMockImplementation()!;
+    let release!: (text: string) => void;
+    mockInvoke.mockImplementation((cmd: string, args: { path?: string }) => cmd === "read_file_text"
+      ? args.path === "/p/helper.py" ? new Promise<string>((r) => { release = r; }) : Promise.resolve(source)
+      : original(cmd, args));
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(source));
+    el.selectionStart = el.selectionEnd = source.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    expect(mockInvoke).toHaveBeenCalledWith("prepare_text_completion");
+    expect(mockInvoke).toHaveBeenCalledWith("list_ollama_models_detailed");
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+    await act(async () => { release("answer = 42"); });
+    await waitFor(() => expect(screen.getByText("return 42")).toBeTruthy());
+  });
+
+  it("sends a model no references once its stats said it drops them", async () => {
+    autocompleteOn = true;
+    const listeners = new Map<string, (event: { payload: unknown }) => void>();
+    mockListen.mockImplementation((name: string, handler: (event: { payload: unknown }) => void) => {
+      listeners.set(name, handler);
+      return Promise.resolve(() => {});
+    });
+    const source = "from helper import answer\nanswer = ";
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: { path?: string; candidate?: number }) => {
+      if (cmd === "read_file_text") return readOnly(args.path, source);
+      if (cmd === "complete_text") {
+        listeners.get("text-completion-stats-test-request")?.({ payload: {
+          endpoint: "generate", model: "llama3.2:3b", stop: "done", firstTokenMs: 5, totalMs: 9,
+          referenceBytes: 0, referencesDropped: true,
+        } });
+        return Promise.resolve(`choice${args.candidate}`);
+      }
+      return original(cmd, args);
+    });
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(source));
+    el.selectionStart = el.selectionEnd = source.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    await act(async () => { fireEvent.keyDown(el, { key: "]", altKey: true }); });
+    const requests = mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text");
+    expect(requests).toHaveLength(2);
+    expect(requests[0][1]).toEqual(expect.objectContaining({ context: [{ name: "helper.py", content: "answer = 42" }] }));
+    expect((requests[1][1] as { context?: unknown }).context).toBeUndefined();
   });
 
   it("streams before completion, cancels on matching input, and retains only the untyped ghost", async () => {

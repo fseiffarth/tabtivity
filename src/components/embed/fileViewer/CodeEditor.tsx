@@ -6,7 +6,7 @@ import { CompletionCache, caretAtLineEnd, completionLineLength, completionWindow
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
 import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
-import { completionContext } from "../../../lib/viewers/completion/completionContext";
+import { completionContext, ReferenceReads } from "../../../lib/viewers/completion/completionContext";
 import { bumpUsage } from "../../../stores/usage";
 import { METRIC } from "../../../lib/usageMetrics";
 import { ROOT_SCOPE, useTabsStore } from "../../../stores/tabs";
@@ -15,7 +15,7 @@ import { useExperimental } from "../../../lib/experimental";
 import { useProjectsStore } from "../../../stores/projects";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
 import { highlight, languageForPath, lineCommentMarker } from "../../../lib/viewers/highlight";
-import { basename, isPathWithin } from "../../../lib/paths";
+import { basename, isPathWithin, relativePathWithin } from "../../../lib/paths";
 import { resolveProjectDirectory, type AutocompleteMode, type AutocompleteTrigger, type GrammarIssue } from "../../../types";
 import { ContextFilePicker } from "../ContextFilePicker";
 import { useFileScope, usePaneVisible, readFileText } from "../../../lib/files/fileAccess";
@@ -444,6 +444,10 @@ export function CodeEditor({
   // composition holds it until it ends; its end restarts the timer.
   const acLastEdit = useRef<EditKind>("external");
   const acComposing = useRef(false);
+  // The frozen reference reads (fixed decision 4) and the models a stats event
+  // said drop references on the FIM path: this editor sends those none.
+  const acReads = useRef(new ReferenceReads());
+  const acDropsReferences = useRef(new Set<string>());
   const [acImeEnds, bumpAcImeEnds] = useReducer((n: number) => n + 1, 0);
   const acOutcome = useRef<{ model: string; mode: AutocompleteMode | "copilot" } | null>(null);
   const acEndpoint = useSettingsStore((s) => JSON.stringify([
@@ -1837,6 +1841,7 @@ export function CodeEditor({
           ...(texCompletions?.cites.map((c) => c.key) ?? []),
         ].join("\n") : undefined,
         read: (file) => readFileText(file, scope), signal,
+        explicit: !auto, reads: acReads.current,
       });
       const provider: CompletionProvider = acCopilot && scope ? new CopilotCompletionProvider({
         projectId: scope, editor: acEditorId, automatic: auto,
@@ -1845,6 +1850,11 @@ export function CodeEditor({
         endpoint: acEndpoint, scope: scope ?? undefined, preferred: autocomplete.preferred,
         preferredProse: autocomplete.preferredProse, mode, candidate, context,
         trigger: auto ? "auto" : "manual",
+        fileName: (acProjectDir && relativePathWithin(acProjectDir, path)) || undefined,
+        referencesDropped: (model) => acDropsReferences.current.has(model),
+        onStats: (stats, model) => {
+          if (stats.referencesDropped) acDropsReferences.current.add(model);
+        },
       }, acCache.current);
       const result = await provider.complete({
         path, text: snapshot, caret, language: lang, version,

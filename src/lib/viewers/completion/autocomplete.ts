@@ -36,7 +36,11 @@ export type CompletionGhost = {
   candidate?: import("./completionProvider").CompletionCandidate;
 };
 
-export type CompletionModel = { name: string; running: boolean; capabilities?: string[] };
+export type CompletionModel = {
+  name: string; running: boolean; capabilities?: string[];
+  /** The context window it is loaded with; absent on an older backend. */
+  context_length?: number | null;
+};
 
 /** Share concurrent lookups and expire even an empty result quickly. Errors are
  * never cached. The endpoint/policy key keeps settings changes isolated. */
