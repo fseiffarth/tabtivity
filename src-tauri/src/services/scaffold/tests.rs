@@ -371,6 +371,47 @@ fn a_link_swapped_in_during_an_upgrade_is_left_alone() {
     assert!(temp_leftovers(&dir).is_empty());
 }
 
+/// A write into the upgrade's temporary that fails after the file exists (a
+/// full disk) must not leave the temporary in the project; a temporary
+/// somebody else planted at that name is not ours to remove.
+#[test]
+fn a_failed_write_into_the_upgrade_temp_removes_the_temp() {
+    let agents = doc("AGENTS.md").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("AGENTS.md"), "# Agents\n").unwrap();
+    let err = upgrade_doc_via(
+        dir,
+        agents,
+        || {},
+        |path, _, create_new| {
+            write_no_follow(path, b"", create_new)?;
+            Err(io::Error::other("no space left on device"))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.to_string(), "no space left on device");
+    assert!(temp_leftovers(dir).is_empty(), "the half-written temp is gone");
+    assert_eq!(std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(), "# Agents\n");
+
+    // A planted name at the temp is refused by create-new and left alone.
+    let planted = std::cell::RefCell::new(None);
+    let err = upgrade_doc_via(
+        dir,
+        agents,
+        || {},
+        |path, _, _| {
+            std::fs::write(path, "planted").unwrap();
+            *planted.borrow_mut() = Some(path.to_path_buf());
+            Err(io::Error::from(io::ErrorKind::AlreadyExists))
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    let planted = planted.into_inner().unwrap();
+    assert_eq!(std::fs::read_to_string(planted).unwrap(), "planted");
+}
+
 /// `STANDARD_PROJECT_FILES` (`fileUtils.ts`) is the fallback list shown before
 /// the status arrives: the catalog's names plus `.gitignore` and `.git`, no
 /// more, no less. Hand-written TS, checked here.

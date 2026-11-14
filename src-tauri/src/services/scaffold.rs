@@ -404,6 +404,17 @@ pub fn upgrade_doc_at(dir: &Path, doc: &ScaffoldDoc) -> io::Result<bool> {
 /// [`upgrade_doc_at`] with `between` run after the temporary is written and
 /// before the doc is read again: where a test plays the user's save.
 fn upgrade_doc_with(dir: &Path, doc: &ScaffoldDoc, between: impl FnOnce()) -> io::Result<bool> {
+    upgrade_doc_via(dir, doc, between, write_no_follow)
+}
+
+/// [`upgrade_doc_with`] with the temporary's writer as an argument: where a
+/// test makes the write fail after the temporary exists, as a full disk does.
+fn upgrade_doc_via(
+    dir: &Path,
+    doc: &ScaffoldDoc,
+    between: impl FnOnce(),
+    write_temp: impl FnOnce(&Path, &[u8], bool) -> io::Result<()>,
+) -> io::Result<bool> {
     if !doc.upgradable() {
         return Ok(false);
     }
@@ -420,7 +431,14 @@ fn upgrade_doc_with(dir: &Path, doc: &ScaffoldDoc, between: impl FnOnce()) -> io
     }
     let tmp = dir.join(temp_name(doc.name));
     // Create-new + no-follow: a name somebody planted is an error, not a target.
-    write_no_follow(&tmp, doc.template.as_bytes(), true)?;
+    // Any failure but "the name is taken" may have left a half-written temp
+    // (create-new makes the file before the bytes go in): it is ours, so it goes.
+    if let Err(err) = write_temp(&tmp, doc.template.as_bytes(), true) {
+        if err.kind() != io::ErrorKind::AlreadyExists {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return Err(err);
+    }
     let swapped = (|| {
         copy_permissions(&path, &tmp);
         between();
