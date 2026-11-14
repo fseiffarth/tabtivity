@@ -474,6 +474,16 @@ export function WindowIcon(p: IconProps) {
   );
 }
 
+/** A window with its left column marked off — show or hide a side list. */
+export function SidebarIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="1.5" />
+      <path d="M9.5 4.5v15" />
+    </Frame>
+  );
+}
+
 /** A screen with an arrow leaving it to the right — "move to the next monitor". */
 export function NextScreenIcon(p: IconProps) {
   return (

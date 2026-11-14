@@ -30,6 +30,7 @@ import { Mail } from "./screens/Mail";
 import { Calendar } from "./screens/Calendar";
 import { DiamondIcon, SECTION_ICON } from "./glyphs";
 import { useTier } from "./useTier";
+import { readFlag, writeFlag } from "./prefs";
 import type { SubagentStep } from "./terminal/subagents";
 import type { MarkupBack } from "./components/OutboxViewer";
 /** The bundle this phone is running, on every splash: a connect that hangs or
@@ -291,8 +292,17 @@ export function App() {
   /** A tablet in landscape keeps Home's list on the left and the chosen
    * project on the right (`useTier.ts`); only the Projects section does — the
    * others, the terminal and Tabby stay full-window. The route is the same
-   * `projectView`: the list is simply not unmounted by a project being chosen. */
-  const splitProjects = useTier() === "split" && tab === "projects";
+   * `projectView`: the list is simply not unmounted by a project being chosen.
+   * The project header's sidebar button folds the list away (`splitListHidden`,
+   * kept per device): the project then takes the window as on a portrait
+   * tablet, and with no project chosen Home stands alone as usual. */
+  const splitTier = useTier() === "split" && tab === "projects";
+  const [splitListHidden, setSplitListHidden] = useState(() => readFlag("splitListHidden"));
+  const toggleSplitList = () => {
+    writeFlag("splitListHidden", !splitListHidden);
+    setSplitListHidden(!splitListHidden);
+  };
+  const splitProjects = splitTier && !(splitListHidden && projectView.kind === "project");
   const [terminal, setTerminal] = useState<{ project: string; tab: TabRow; pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack } | null>(null);
   const [todoCard, setTodoCard] = useState<string | undefined>(undefined);
   /** Home's Tabby FAB was tapped: the assistant scope's id while its one chat
@@ -840,7 +850,7 @@ export function App() {
     mail={() => setTab("mail")}
   />;
   const project = projectView.kind === "project"
-    ? <Project key={`project:${projectView.id}`} id={projectView.id} back={leaveProject} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
+    ? <Project key={`project:${projectView.id}`} id={projectView.id} back={leaveProject} splitList={splitTier ? { hidden: splitListHidden, toggle: toggleSplitList } : undefined} terminal={(row, opts) => openTerminal(projectView.id, row, opts?.pickModel, opts?.signIn, opts?.subagent, opts?.markupBack)} />
     : null;
   return <div className={splitProjects ? "tabbed split" : "tabbed"}><BackNest>
     {tab === "todo" ? <Todo key={reseed} card={todoCard} />

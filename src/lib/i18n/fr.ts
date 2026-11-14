@@ -353,6 +353,8 @@ export const dict: Dict = {
   "mobile.project.sectionFiles": "Fichiers",
   "mobile.split.emptyTitle": "Choisir un projet",
   "mobile.split.emptyHint": "Ses agents et fichiers apparaissent ici.",
+  "mobile.split.hideList": "Masquer la liste des projets",
+  "mobile.split.showList": "Afficher la liste des projets",
   "mobile.project.draftMark": "Non envoyé",
   "mobile.project.noPromptsRead": "Rien n’a encore été lu dans la transcription de cette session.",
   "mobile.project.openCodeHistory": "L’historique propre d’OpenCode n’est pas encore lu — les prompts envoyés depuis {app} s’affichent ici.",

@@ -358,6 +358,8 @@ export const enSource = {
   "mobile.project.sectionFiles": "Files",
   "mobile.split.emptyTitle": "Choose a project",
   "mobile.split.emptyHint": "Its agents and files appear here.",
+  "mobile.split.hideList": "Hide project list",
+  "mobile.split.showList": "Show project list",
   "mobile.project.draftMark": "Not sent",
   "mobile.project.noPromptsRead": "Nothing read from this session's transcript yet.",
   "mobile.project.openCodeHistory": "OpenCode's own history is not read yet — prompts sent from {app} show here.",

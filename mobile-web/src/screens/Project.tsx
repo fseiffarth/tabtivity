@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { goBack } from "../backStack";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, UndoIcon, WindowIcon } from "../glyphs";
+import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, SidebarIcon, UndoIcon, WindowIcon } from "../glyphs";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
@@ -148,7 +148,13 @@ function cardViewerFile(file: FileTab, outbox: readonly OutboxFile[]): OutboxFil
     ?? { name: file.name, kind: file.kind, size: file.size, modified: file.modified, ...(file.label ? { original: file.label } : {}) };
 }
 
-export function Project({ id, back, terminal }: { id: string; back: () => void; terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
+export function Project({ id, back, splitList, terminal }: {
+  id: string;
+  back: () => void;
+  /** Beside Home's list (the split tier): whether the list is folded away, and
+   * the header button that folds it or brings it back (App.tsx). */
+  splitList?: { hidden: boolean; toggle: () => void };
+  terminal: (tab: TabRow, opts?: { pickModel?: boolean; signIn?: boolean; subagent?: SubagentStep; markupBack?: MarkupBack }) => void }) {
   const t = useT();
   /** The tablet tiers (`useTier.ts`): the same screen with its two sections,
    * the header's actions and, beside Home's list, no way back of its own. */
@@ -740,6 +746,14 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         text while there is only one tab to order. */}
     <header className="project-header">
       {!split && <button className="back" onClick={back} aria-label={t("common.back")} title={t("common.back")}><ChevronLeftIcon size="1em" /></button>}
+      {split && splitList && <button
+        className="back project-list-toggle"
+        onClick={splitList.toggle}
+        aria-pressed={!splitList.hidden}
+        aria-label={t(splitList.hidden ? "mobile.split.showList" : "mobile.split.hideList")}
+        title={t(splitList.hidden ? "mobile.split.showList" : "mobile.split.hideList")}
+      ><SidebarIcon size="1em" /></button>}
+      {split && splitList && isUntested("mobile.split.hideList") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       <div className="terminal-title">{tabs.length > 1
         ? <><h1><button
           className="project-title"
