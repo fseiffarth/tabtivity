@@ -558,4 +558,104 @@ final run all passed). New tests: `ProjectDocsGroup.test.ts` (8), `ProjectDocsTr
 
 ## I5 Phone + docs
 
+Branch `worktree-agent-a7e77b24eb092f724` (on `scaffold-files` 988c4af8e). Commits: `50be79b79` (`isDefault`),
+`908f4e73b` (phone backend: listing `docs` + create route + tests), `3c398e073` (phone UI, i18n, register),
+`674455e39` (step 9 docs); the handoff commit follows. Plan steps 6 and 9 are done; agent memory on the phone is
+deferred, as planned.
+
+### `isDefault` (the small addition)
+
+`services::scaffold::DocStatus` gained `is_default: bool` (serde `isDefault`, the catalog's `default`): AGENTS.md and
+README.md. Same flag in `DocStatus` (TS). The hardcoded `DEFAULT_DOCS` is gone: `buildDocsGroup`'s `present/total` is
+`status.filter(isDefault)`, and `ScaffoldTagPopover` lists `status.filter(isDefault && missing)`. No other shape
+changed. **New file `src/lib/projects/docStatus.ts`** holds `DocState`/`DocStatus` (no Tauri import);
+`projectDocs.ts` re-exports them, so desktop imports are unchanged. It exists because
+`MobileSteeringImports.test.ts` walks the phone's import graph and fails on any module that imports `@tauri-apps`
+(even for a type) - the phone and `projectDocsGroup.ts` import from `docStatus`. Rust pin: the scaffold status test
+asserts the flagged rows are exactly `scaffold::defaults()`.
+
+### Routes (`mobile_control/project_docs.rs`, wired in `host.rs`)
+
+- `GET /api/v1/projects/{id}/files` (root of this computer's side only; not in a folder, not `&on=host`) adds
+  `docs: DocStatus[]` = `[{ name, state: "missing"|"template"|"edited"|"pointer", nestedUnder: string|null, creatable,
+  isDefault }]`, catalog order, the exact desktop shape. Names only. Read by `docs_status_at` under `deadline::local`;
+  a timed-out/stalled read **omits** `docs` (the listing still answers) and the phone shows the plain group.
+- `POST /api/v1/projects/{id}/files/docs?name=<leaf>` (no body; 1 KiB body limit). Guards = `upload_scope` (session,
+  exact origin, `files_off`/`project_not_found`/`uploads_off`). `name` is matched against the catalog's *creatable*
+  leaves (`scaffold::doc(..).creatable`), never joined: a path, unknown name, `CLAUDE.md`, `GEMINI.md`, `REMARKS.md`,
+  `.gitignore`, a case variant, empty -> `400 invalid_request`. Write = `create_doc_at` (create-new, `O_NOFOLLOW`),
+  off the executor under `deadline::local`. `201 {"entry": <sealed listing row>}`; taken name -> `409 already_exists`
+  (nothing touched); IO -> `500 write_failed`; stalled mount -> `504 timeout`. No upload-log entry, no Undo.
+- Tests (`host/tests.rs`): a row for the create route in all three refusal matrices (assistant scope, folder-less
+  project, "unknown id answers like a stranger"); new `the_root_lists_its_catalog_docs_and_a_ghost_row_creates_one`
+  (files off / uploads off / wrong origin write nothing; `docs` only at the root; states, `isDefault`; create, 409, the
+  400 name matrix; no host path or raw id in any body). Module tests in `project_docs.rs` (3). All cross-OS (tempdir,
+  `Path::join`).
+
+### Phone UI (`mobile-web/src/components/FilesLibrary.tsx`)
+
+- `sectionsOf` runs the desktop's `buildDocsGroup` (made generic over the entry type) over the sorted standard files
+  and the listing's `docs`. `docsSection()` replaces the old scaffold fold: header "Project docs  2/2 · 1 template"
+  (the desktop's keys `fileTree.docsSection/docsSummary/docsTemplates*`; plain "Project docs (n)" with no status),
+  template/pointer pills (`fileTree.docTemplate/docPointer` + titles), only `template` rows dimmed (`files-folded`),
+  pointer files nested (`files-doc-nested`), ghost rows (`+ name`, "create" pill) after the files.
+- **Position:** the group leads the list, like the desktop (the old phone fold came last). `MobileProjectFiles` sort test
+  updated accordingly. Say if the phone should keep it at the end.
+- **Create:** tap a ghost row -> option sheet titled with the name, one choice "Create" (`mobile.files.docs.*`) ->
+  `createProjectDoc` -> relist and open the new file in the viewer. `already_exists` relists and says so; `uploads_off`
+  /`files_off` say uploads are off; anything else "could not be created" (a `p.sheet-note.error`). Ghost rows show only
+  when `listing.uploads === true` and not on the host side (read-only, no status there: the host side never gets `docs`).
+- Fold persisted per project in `libraryView.ts` (`readDocsOpen`/`writeDocsOpen`, key `mobile.filesDocsOpen`, array of
+  project ids, try/catch via `readJson`/`writeJson`); shut by default. The gitignored fold stays unpersisted as before.
+- i18n: six new keys `mobile.files.docs.*` in en/de/es/fr/it. UntestedTag-equivalent on the phone: register row
+  `mobile.files.docs` (`untested.ts`), included in the library header's `untested` pill expression like its siblings.
+- Tests: new `MobileProjectDocs.test.tsx` (5); `MobileProjectFiles.test.tsx` expectation moved (group first).
+
+### Docs (step 9)
+
+Filemap rows: backend `services/scaffold.rs` (new), `mobile_control/project_docs.rs` (new), `projects.rs` and
+`remote_scaffold.rs` rows corrected; frontend `FilesLibrary.tsx`, `libraryView.ts`, the projectDocs row (`docStatus.ts`,
+generic builder). `docs/guide/building.md` and `DOCUMENTATION.md` ("Scaffold Files": lean set, on-demand docs, the
+Project docs group, repair/tag semantics) rewritten; README step 2 no longer promises CLAUDE.md/GEMINI.md;
+`docs/context/mobile_access.md` gained a "Project docs" paragraph in the upload section (threat note).
+The rest of README was checked: no other pointer mention.
+
+### Phone click-through (never run live; needs a restart of the desktop window for the new route)
+
+1. `npm run backend:stale` says the running window lacks the route: the new `docs` array and `files/docs` exist only
+   after the desktop is restarted/rebuilt; an old window answers no `docs` (the phone shows the old plain group) and
+   404/405 on create.
+2. Phone -> project -> Files (settings: "Project files on the phone" on; for Create also "Phone may add files to
+   projects"). Root: "Project docs 2/2" first, shut. Open it: AGENTS.md (dim + "template" while untouched), README.md,
+   then ghost rows "+ PROJECT.md create" ... (only with uploads on).
+3. Tap "+ TODO.md" -> sheet "TODO.md" -> Create: the file is made on the desktop and opens in the viewer; back in the
+   library the ghost row is gone and the header says "· 1 template".
+4. Edit it on the desktop (or the phone): the pill goes. Close/reopen the library: the fold is as left. A project with
+   CLAUDE.md: indented under AGENTS.md with a "pointer" pill, not dimmed.
+5. Switch uploads off on the desktop: ghost rows vanish, pills and summary stay. Remote project, "Remote computer" side:
+   the plain count, no ghost rows.
+
+### Gates
+
+`scripts/gates-job.sh start --base 988c4af8e` on tree `674455e39` (exit 0, 20m44s), all ten PASS: brand, whitespace,
+lint-fe (no new warnings), clippy `-p tabtivity -p app-serverd --all-targets`, clippy daemon lib, clippy `-p app-serverd`
+(zero warnings), `npm run build` (tsc 7 + desktop, mobile, web bundles; the mobile bundle was rebuilt by it), vitest
+`--changed` (changed set), `cargo test -p tabtivity -p app-serverd`, test-dlib `--no-default-features --lib --test
+server_secrets`. No load flake this run. The job log keeps no per-suite counts; by hand before the job: the new route
+test + 3 `project_docs` module tests + the scaffold `is_default` assertion pass; vitest `src/__tests__/mobile` +
+`src/__tests__/files`: 280 files, 2850 tests (the one failure, `MobileSteeringImports` flagging `projectDocs.ts` ->
+Tauri, was fixed by `docStatus.ts` before the job); `MobileProjectDocs.test.tsx` 5 of 5. `npm run mobile:bundle` ran
+as part of `npm run build`.
+
+### Flagged for user
+
+- The docs group now leads the phone list (desktop parity; before it was last).
+- Phone shows no status for the remote side of a remote project (plan), and none from an older desktop (graceful: the
+  plain group), so a phone updated before its desktop shows no ghost rows or pills.
+- Create does not write an upload-log entry or notice on the desktop (plan); the new file is untracked until the user
+  commits it, like any new file.
+- A Create on the phone writes a file the agents then read (`AGENTS.md`/`TODO.md`...): the same note as a root Makefile
+  upload (`mobile_access.md`), nothing new in kind.
+- Never live: neither the route nor the group has run against the real desktop.
+
 ## Final review
