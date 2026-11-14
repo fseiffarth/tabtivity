@@ -101,6 +101,7 @@ export function PdfPageCanvas({
   onNoteAdd,
   onNoteUpdate,
   onNoteDelete,
+  onPrintFrom,
   markup,
   questionPins,
   tickBadges,
@@ -184,6 +185,8 @@ export function PdfPageCanvas({
     baseline: readonly PdfNote[],
   ) => void;
   onNoteDelete?: (noteId: string, baseline: readonly PdfNote[]) => void;
+  /** Right-click → Print from here: the preview opens on this sheet to the end. */
+  onPrintFrom?: () => void;
   /** This sheet is near the viewport and its remarks are wanted. Called instead of
    *  reading them here, so one owner holds one set of ids for one page. */
   onNeedNotes?: () => void;
@@ -976,6 +979,7 @@ export function PdfPageCanvas({
           onCloseMenu={() => setNoteMenu(null)}
           onEdit={setNoteEdit}
           onDelete={(noteId) => onNoteDelete?.(noteId, baseline)}
+          onPrintFrom={onPrintFrom}
           onRecolor={(noteId, color) =>
             onNoteUpdate?.(noteId, { color, modified: toPdfDate(new Date()) }, baseline)
           }

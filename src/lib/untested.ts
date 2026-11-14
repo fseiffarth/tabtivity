@@ -193,6 +193,7 @@ export const UNTESTED = {
   "mdGraph.zoom": { area: "embed", what: "MdGraphView · Zoom, pan, and markdown hover previews" },
   "pdfLinkDialog.1": { area: "embed", what: "PdfLinkDialog · Open this link?" },
   "pdfNoteLayer.1": { area: "embed", what: "PdfNoteLayer · Add remark here" },
+  "pdfNotes.printFromHere": { area: "embed", what: "PDF page right-click · Print from here: the print preview opens with Pages = Custom, range \"<this page>-\"; the strip shows only those pages" },
   "pdfNotesPane.1": { area: "embed", what: "PdfNotesPane · Remarks" },
   "pdfSelectionBar.1": { area: "embed", what: "PdfSelectionBar · Copied" },
   "pdfViewer.1": { area: "embed", what: "PdfViewer · Contents" },

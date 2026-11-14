@@ -2552,6 +2552,7 @@ function PdfCanvas({
                       updatePdfNote(ref.id, noteId, patch, baseline)
                     }
                     onNoteDelete={(noteId, baseline) => deletePdfNote(ref.id, noteId, baseline)}
+                    onPrintFrom={() => void handlePrint(i + 1)}
                     redacting={redacting}
                     hiddenHighlights={hiddenHl.get(noteKey(ref)) ?? ""}
                     selBar={

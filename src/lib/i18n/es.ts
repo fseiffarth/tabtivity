@@ -9179,6 +9179,7 @@ export const dict: Dict = {
   "pdfRedact.confirmMessage": "Al guardar se tacharán {areas} zonas y se reescribirán {pages} páginas como imágenes. El texto que hay debajo —y el resto del texto de esas páginas— se elimina permanentemente.",
   "pdfRedact.confirmSaveButton": "Tachar y guardar",
   "pdfNotes.addHere": "Añadir comentario aquí",
+  "pdfNotes.printFromHere": "Imprimir desde aquí",
   "pdfNotes.edit": "Editar comentario",
   "pdfNotes.delete": "Eliminar comentario",
   "pdfNotes.reading": "Leyendo los comentarios de esta página…",

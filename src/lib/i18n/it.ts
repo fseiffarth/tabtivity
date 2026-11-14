@@ -9179,6 +9179,7 @@ export const dict: Dict = {
   "pdfRedact.confirmMessage": "Il salvataggio oscurerà {areas} aree e riscriverà {pages} pagine come immagini. Il testo sottostante — e il resto del testo di quelle pagine — viene rimosso definitivamente.",
   "pdfRedact.confirmSaveButton": "Oscura e salva",
   "pdfNotes.addHere": "Aggiungi un'osservazione qui",
+  "pdfNotes.printFromHere": "Stampa da qui",
   "pdfNotes.edit": "Modifica l'osservazione",
   "pdfNotes.delete": "Elimina l'osservazione",
   "pdfNotes.reading": "Lettura delle osservazioni di questa pagina…",

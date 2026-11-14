@@ -9181,6 +9181,7 @@ export const dict: Dict = {
   "pdfRedact.confirmMessage": "L'enregistrement masquera {areas} zones et réécrira {pages} pages sous forme d'images. Le texte en dessous — et le reste du texte de ces pages — est supprimé définitivement.",
   "pdfRedact.confirmSaveButton": "Masquer et enregistrer",
   "pdfNotes.addHere": "Ajouter une remarque ici",
+  "pdfNotes.printFromHere": "Imprimer à partir d'ici",
   "pdfNotes.edit": "Modifier la remarque",
   "pdfNotes.delete": "Supprimer la remarque",
   "pdfNotes.reading": "Lecture des remarques de cette page…",

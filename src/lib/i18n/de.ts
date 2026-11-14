@@ -9185,6 +9185,7 @@ export const dict: Dict = {
   "pdfRedact.confirmMessage": "Beim Speichern werden {areas} Flächen geschwärzt und {pages} Seiten als Bild neu geschrieben. Der Text darunter – und der übrige Text dieser Seiten – wird endgültig entfernt.",
   "pdfRedact.confirmSaveButton": "Schwärzen und speichern",
   "pdfNotes.addHere": "Anmerkung hier einfügen",
+  "pdfNotes.printFromHere": "Ab hier drucken",
   "pdfNotes.edit": "Anmerkung bearbeiten",
   "pdfNotes.delete": "Anmerkung löschen",
   "pdfNotes.reading": "Anmerkungen dieser Seite werden gelesen…",

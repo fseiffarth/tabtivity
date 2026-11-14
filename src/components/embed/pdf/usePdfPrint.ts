@@ -49,7 +49,9 @@ export function usePdfPrint({
   // path does the preview print its images. `printing` disables the button while
   // the (async) render runs.
   const [printing, setPrinting] = useState(false);
-  const handlePrint = useCallback(async () => {
+  // `fromSheet` (1-based, an arrangement position like the preview's range):
+  // right-click → Print from here opens the preview on that sheet to the end.
+  const handlePrint = useCallback(async (fromSheet?: number) => {
     if (!doc || printing || pages.length === 0) return;
     setPrinting(true);
     setEditError(null);
@@ -81,7 +83,14 @@ export function usePdfPrint({
           duplex: opts.duplex,
         });
       };
-      await printHtmlBody(body, PDF_PRINT_CSS, title, native);
+      await printHtmlBody(
+        body,
+        PDF_PRINT_CSS,
+        title,
+        native,
+        undefined,
+        fromSheet && fromSheet > 1 ? { pages: "custom", range: `${fromSheet}-` } : undefined,
+      );
     } catch (e) {
       setEditError(
         t("pdfViewer.printFailed", { msg: e instanceof Error ? e.message : String(e) }),

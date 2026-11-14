@@ -9564,6 +9564,7 @@ export const enSource = {
   "pdfRedact.confirmMessage": "Save will black out {areas} areas and rewrite {pages} pages as images. The text under them — and the rest of the text on those pages — is removed permanently.",
   "pdfRedact.confirmSaveButton": "Black out and save",
   "pdfNotes.addHere": "Add remark here",
+  "pdfNotes.printFromHere": "Print from here",
   "pdfNotes.edit": "Edit remark",
   "pdfNotes.delete": "Delete remark",
   "pdfNotes.reading": "Reading this page's remarks…",
