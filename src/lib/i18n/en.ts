@@ -12257,6 +12257,8 @@ export const enSource = {
   "checkpoints.now.hint": "Save the project's files now, so you can come back to them from the Diffs tab",
   "checkpoints.now.done": "Saved",
   "checkpoints.now.failed": "Not saved",
+  "checkpoints.now.failing": "Checkpoints failing",
+  "checkpoints.now.failingHint": "The last checkpoint of this folder failed: {error}",
   "checkpoints.kind.pre": "Before a turn · {time}",
   "checkpoints.kind.post": "After a turn · {time}",
   "checkpoints.kind.manual": "Checkpoint · {time}",

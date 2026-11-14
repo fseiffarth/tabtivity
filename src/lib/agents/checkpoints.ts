@@ -10,7 +10,9 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type CheckpointKind = "pre" | "post" | "manual" | "pre-restore" | "restore";
 
-/** A file a snapshot left out (`reason`: size, budget, special, unreadable). */
+/** A file a snapshot left out (`reason`: size, budget, special, unreadable),
+ *  or a folder git can't enter (`blocked`: its `.gitignore` is a pipe; the
+ *  path ends in `/`). */
 export interface CheckpointSkipped {
   path: string;
   bytes: number;
@@ -39,10 +41,13 @@ export interface CheckpointRow {
 }
 
 export interface CheckpointListing {
+  /** Taken at all: the backend switch and the window's flag are both on. */
   enabled: boolean;
   bound: boolean;
   /** Oldest first. */
   rows: CheckpointRow[];
+  /** Why the folder's last automatic snapshot failed, until one succeeds. */
+  failure: string | null;
 }
 
 export interface CheckpointChange {

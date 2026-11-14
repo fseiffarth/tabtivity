@@ -44,11 +44,18 @@ const GC_AFTER: u32 = 50;
 /// Rows a list answers.
 const LIST_ROWS: usize = 200;
 
+/// A folder's store past this many bytes drops its oldest checkpoints, a
+/// quarter at a time with a repack in between, until it fits.
+pub const MAX_STORE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize)]
 struct AddedPayload {
     uid: String,
     id: String,
     kind: Kind,
+    /// The snapshot failed (`id` is empty): why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 // ── Git version ───────────────────────────────────────────────────────────
@@ -101,7 +108,7 @@ pub fn git_refusal(version: Option<(u32, u32)>) -> Option<String> {
 
 /// Checkpoints are on and the local git can run them.
 fn ready() -> Result<(), String> {
-    if !enabled_in(&state_root()) {
+    if !capturing_in(&state_root()) {
         return Err("checkpoints are off".into());
     }
     git_refusal(git_version()).map_or(Ok(()), Err)
@@ -122,9 +129,20 @@ fn settings_path(state_dir: &Path) -> PathBuf {
     state_dir.join("checkpoints.json")
 }
 
-/// Whether checkpoints are on. A missing or unreadable file reads as off.
+/// Whether the backend switch is on. A missing or unreadable file reads as off.
 pub fn enabled_in(state_dir: &Path) -> bool {
     crate::storage::read_json::<Settings>(&settings_path(state_dir)).map(|s| s.enabled).unwrap_or(false)
+}
+
+/// Whether checkpoints are taken: the backend switch and the window's
+/// experimental flag (`settings.json` `turn_checkpoints`, by the experiments'
+/// own rule) are both on. The card sets both in one click; when they disagree
+/// (an edited `settings.json`, a profile whose flag went off elsewhere) none
+/// are taken, so nothing is captured that the window does not show.
+pub fn capturing_in(state_dir: &Path) -> bool {
+    enabled_in(state_dir)
+        && crate::storage::read_json::<crate::schema::Settings>(&state_dir.join("settings.json"))
+            .is_ok_and(|s| s.turn_checkpoints())
 }
 
 /// [`set_enabled_in`], refusing to turn checkpoints on over a git of
@@ -280,7 +298,7 @@ pub fn kind_for(prev: Option<TurnState>, state: TurnState) -> Option<Kind> {
 /// worker. Not under `agent_turn`'s locks.
 pub fn on_turn(uid: &str, prev: Option<TurnState>, state: TurnState, prompt_at: Option<u64>) {
     let Some(kind) = kind_for(prev, state) else { return };
-    if !enabled_in(&state_root()) || !git_supported_by(git_version()) {
+    if !capturing_in(&state_root()) || !git_supported_by(git_version()) {
         return;
     }
     let Ok(bound) = bound(uid) else { return };
@@ -304,15 +322,32 @@ pub struct Listing {
     pub bound: bool,
     /// Newest last.
     pub rows: Vec<Row>,
+    /// Why the folder's last automatic snapshot failed, until one succeeds.
+    pub failure: Option<String>,
 }
 
 pub fn list(uid: &str) -> Listing {
-    let enabled = enabled_in(&state_root());
-    let Ok(bound) = bound(uid) else { return Listing { enabled, bound: false, rows: Vec::new() } };
+    let enabled = capturing_in(&state_root());
+    let Ok(bound) = bound(uid) else { return Listing { enabled, bound: false, rows: Vec::new(), failure: None } };
     let mut rows = Store::for_bound(&root(), &bound.folder).map(|s| s.rows()).unwrap_or_default();
     let skip = rows.len().saturating_sub(LIST_ROWS);
     rows.drain(..skip);
-    Listing { enabled, bound: true, rows }
+    let failure = failures().lock_ok().get(&bound.folder).cloned();
+    Listing { enabled, bound: true, rows, failure }
+}
+
+fn failures() -> &'static Mutex<HashMap<PathBuf, String>> {
+    static F: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    F.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remember (`Some`) or forget (`None`) why `folder`'s last snapshot failed.
+fn note_failure(folder: &Path, error: Option<&String>) {
+    let mut map = failures().lock_ok();
+    match error {
+        Some(e) => map.insert(folder.to_path_buf(), e.clone()),
+        None => map.remove(folder),
+    };
 }
 
 fn store_row(uid: &str, id: &str) -> Result<(Bound, Store, Row), String> {
@@ -383,11 +418,15 @@ pub fn now(uid: &str, label: Option<&str>) -> Result<Row, String> {
         prompt_at: None,
         reply: Some(tx),
     });
-    rx.recv().map_err(|_| "the checkpoint was not taken (quitting)".to_string())?
+    rx.recv().map_err(|_| "the checkpoint was not taken (quitting, or it failed)".to_string())?
 }
 
 fn announce(uid: &str, id: &str, kind: Kind) {
-    worker::emit(AddedPayload { uid: uid.to_string(), id: id.to_string(), kind });
+    worker::emit(AddedPayload { uid: uid.to_string(), id: id.to_string(), kind, error: None });
+}
+
+fn announce_failure(uid: &str, kind: Kind, error: &str) {
+    worker::emit(AddedPayload { uid: uid.to_string(), id: String::new(), kind, error: Some(error.to_string()) });
 }
 
 // ── Settings card ─────────────────────────────────────────────────────────
@@ -453,11 +492,21 @@ pub fn clear_in(root: &Path, key: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+/// Remove a store: renamed aside under its lock (a snapshot in flight
+/// finishes first; one that starts after finds no store and begins a new
+/// one, never half of the old), then deleted. Windows can't rename a folder
+/// holding an open lock file, so there the rename follows the lock.
 fn remove_store(s: &Store) -> Result<(), String> {
-    let lock = s.lock()?;
-    // Under the lock so a snapshot in flight finishes first; then it ends.
-    drop(lock);
-    std::fs::remove_dir_all(&s.dir).map_err(|e| format!("{}: {e}", s.dir.display()))
+    let root = s.dir.parent().ok_or("the store has no checkpoints folder")?;
+    let trash = root.join(format!("{}{}-{}", store::TRASH_PREFIX, s.key(), store::new_id(crate::clock::now_ms())));
+    let moved = {
+        let _lock = s.lock()?;
+        std::fs::rename(&s.dir, &trash)
+    };
+    if moved.is_err() {
+        std::fs::rename(&s.dir, &trash).map_err(|e| format!("{}: {e}", s.dir.display()))?;
+    }
+    std::fs::remove_dir_all(&trash).map_err(|e| format!("{}: {e}", trash.display()))
 }
 
 pub fn clear(key: Option<&str>) -> Result<SettingsView, String> {
@@ -526,6 +575,57 @@ pub fn prune_locked(store: &Store, now_ms: u64) -> Result<usize, String> {
     Ok(dropped)
 }
 
+/// The rows a store over its byte cap keeps (one step): all but the oldest
+/// quarter (at least one) of its snapshots, never the newest one and never a
+/// `pre-restore` of the last [`PRE_RESTORE_KEEP_MS`]. Restore rows hold no
+/// snapshot and stay. Pure; the rows are oldest first.
+pub fn trimmed(rows: &[Row], now_ms: u64) -> Vec<bool> {
+    let newest = rows.iter().rposition(Row::has_snapshot);
+    let droppable: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| {
+            r.has_snapshot()
+                && Some(*i) != newest
+                && !(r.kind == Kind::PreRestore && now_ms.saturating_sub(r.at) <= PRE_RESTORE_KEEP_MS)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let mut keep = vec![true; rows.len()];
+    for &i in droppable.iter().take(droppable.len().div_ceil(4)) {
+        keep[i] = false;
+    }
+    keep
+}
+
+/// When `store` has outgrown `max_bytes`, drop one [`trimmed`] step and make
+/// the next idle repack due (the bytes only go with it). Waits while a repack
+/// is already due, so queued snapshots don't drop a step each before it ran.
+/// How many snapshots went. The caller holds the lock.
+pub fn cap_locked(store: &Store, now_ms: u64, max_bytes: u64) -> Result<usize, String> {
+    if store.meta().is_some_and(|m| m.gc_pending >= GC_AFTER) || store.size() <= max_bytes {
+        return Ok(0);
+    }
+    let rows = store.rows();
+    let keep = trimmed(&rows, now_ms);
+    let mut dropped = 0;
+    let mut kept = Vec::with_capacity(rows.len());
+    for (row, keep) in rows.into_iter().zip(keep) {
+        if keep {
+            kept.push(row);
+        } else {
+            let _ = store.run(&["update-ref", "-d", &format!("{}{}", store::REF_PREFIX, row.id)], None, 1 << 16);
+            dropped += 1;
+        }
+    }
+    if dropped == 0 {
+        return Ok(0);
+    }
+    store.write_rows(&kept)?;
+    store.update_meta(|m| m.gc_pending = m.gc_pending.max(GC_AFTER))?;
+    Ok(dropped)
+}
+
 /// Repack `store` once enough refs were dropped since the last time. The
 /// caller holds the lock.
 pub fn gc_locked(store: &Store) -> Result<bool, String> {
@@ -538,9 +638,15 @@ pub fn gc_locked(store: &Store) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Stores whose folder is gone and whose last row is past retention.
+/// Stores whose folder is gone and whose last row is past retention, and
+/// stores a removal left renamed aside (it was stopped halfway).
 pub fn sweep_orphans_in(root: &Path, now_ms: u64) -> usize {
     let mut removed = 0;
+    for entry in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        if entry.file_name().to_string_lossy().starts_with(store::TRASH_PREFIX) && std::fs::remove_dir_all(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
     for s in store::all_in(root) {
         if s.folder.exists() {
             continue;

@@ -12165,6 +12165,8 @@ export const dict: Dict = {
   "checkpoints.now.hint": "Die Projektdateien jetzt sichern, damit du im Tab „Änderungen“ darauf zurückkommen kannst",
   "checkpoints.now.done": "Gesichert",
   "checkpoints.now.failed": "Nicht gesichert",
+  "checkpoints.now.failing": "Checkpoints scheitern",
+  "checkpoints.now.failingHint": "Der letzte Checkpoint dieses Ordners ist gescheitert: {error}",
   "checkpoints.kind.pre": "Vor einem Durchgang · {time}",
   "checkpoints.kind.post": "Nach einem Durchgang · {time}",
   "checkpoints.kind.manual": "Checkpoint · {time}",

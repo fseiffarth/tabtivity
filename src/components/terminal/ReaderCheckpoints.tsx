@@ -50,12 +50,15 @@ export function useReaderCheckpoints({ uid, ptyId, visible }: {
 /**
  * The composer's **Checkpoint now**: `run` takes a manual checkpoint of the
  * tab's folder (`undefined` where checkpoints are off or the tab has none),
- * and `done` is true for a moment after one landed.
+ * and `done` is true for a moment after one landed. `error`: why the last
+ * one failed (this click's, or the folder's last automatic one), until one
+ * succeeds — an automatic snapshot fails out of sight otherwise.
  */
-export function useCheckpointNow(uid: string | undefined, visible: boolean): { run: (() => void) | undefined; done: boolean; failed: boolean } {
+export function useCheckpointNow(uid: string | undefined, visible: boolean): { run: (() => void) | undefined; done: boolean; failed: boolean; error: string | null } {
   const flag = useExperimental("turn_checkpoints");
   const listing = useTabCheckpoints(uid, visible && flag);
   const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+  const [manualError, setManualError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(timer.current), []);
   const available = flag && listing.enabled && listing.bound && !!uid;
@@ -64,13 +67,18 @@ export function useCheckpointNow(uid: string | undefined, visible: boolean): { r
     checkpointNow(uid).then(
       () => {
         setState("done");
+        setManualError(null);
         void useCheckpointsStore.getState().refresh(uid);
       },
-      () => setState("failed"),
+      (reason) => {
+        setState("failed");
+        setManualError(String(reason));
+      },
     ).finally(() => {
       clearTimeout(timer.current);
       timer.current = setTimeout(() => setState("idle"), 2500);
     });
   }, [uid]);
-  return { run: available ? run : undefined, done: state === "done", failed: state === "failed" };
+  const error = available ? manualError ?? listing.failure : null;
+  return { run: available ? run : undefined, done: state === "done", failed: state === "failed", error };
 }

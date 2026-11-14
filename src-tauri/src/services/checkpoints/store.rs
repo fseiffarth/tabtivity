@@ -9,14 +9,17 @@
 //!   meta.json                         { folder, projectId, created, gcPending }
 //!   log.jsonl                         one row per checkpoint / restore
 //!   store.lock                        advisory lock (this process's worker and any other process)
+//!   blocked                           folders git must not enter (their `.gitignore` is a pipe), NUL-separated
 //! ```
 //!
 //! Nothing here is under the folder's own `.git`, and the folder's repo config
 //! is never read: [`Store::git`] builds every call through
 //! `git_hardened::checkpoint_git_command`.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -124,6 +127,49 @@ pub struct Meta {
 /// size the snapshot writes.
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 
+/// A path as git lists it: `/`-separated bytes. A file name need not be UTF-8,
+/// so it is kept as git wrote it until it is shown.
+pub type GitPath = Vec<u8>;
+
+/// `rel` (a [`GitPath`]) as a path to join onto the folder. On Windows git's
+/// paths are UTF-8.
+pub fn rel_path(rel: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        PathBuf::from(std::ffi::OsStr::from_bytes(rel))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(rel).into_owned())
+    }
+}
+
+/// `rel` as the window shows it (a name that is not UTF-8 is shown lossily;
+/// it is never looked up by that text).
+pub fn shown(rel: &[u8]) -> String {
+    String::from_utf8_lossy(rel).into_owned()
+}
+
+/// A pathspec argument `<magic><rel>` (`:(literal)`, `:(exclude,literal)`),
+/// the bytes kept as they are.
+pub fn spec_arg(magic: &str, rel: &[u8]) -> OsString {
+    let mut bytes = magic.as_bytes().to_vec();
+    bytes.extend_from_slice(rel);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        OsString::from(String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+/// A store being removed is first renamed to `<root>/<TRASH_PREFIX><key>-<id>`.
+pub const TRASH_PREFIX: &str = ".removing-";
+
 /// The checkpoints folder under `state_dir`.
 pub fn root_in(state_dir: &Path) -> PathBuf {
     state_dir.join(DIR)
@@ -212,6 +258,34 @@ impl Store {
         self.dir.join("log.jsonl")
     }
 
+    fn blocked_path(&self) -> PathBuf {
+        self.dir.join("blocked")
+    }
+
+    /// The folders a snapshot found git cannot enter, remembered so the next
+    /// one keeps out of them without waiting for git first.
+    pub fn blocked(&self) -> Vec<GitPath> {
+        // The store is under the state dir, out of every fence's reach.
+        let Ok(bytes) = std::fs::read(self.blocked_path()) else { return Vec::new() };
+        bytes.split(|b| *b == 0).filter(|s| !s.is_empty()).map(<[u8]>::to_vec).collect()
+    }
+
+    /// Replace [`Self::blocked`]. The caller holds [`Self::lock`].
+    pub fn set_blocked(&self, dirs: &[GitPath]) -> Result<(), String> {
+        if dirs.is_empty() {
+            return match std::fs::remove_file(self.blocked_path()) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("checkpoint store: {e}")),
+                _ => Ok(()),
+            };
+        }
+        let mut bytes = Vec::new();
+        for dir in dirs {
+            bytes.extend_from_slice(dir);
+            bytes.push(0);
+        }
+        crate::storage::write_private_atomic(&self.blocked_path(), &bytes)
+    }
+
     /// The store's lock, held for the length of a snapshot, restore or prune:
     /// serial across this process's worker and any other Tabtivity process
     /// working on the same folder.
@@ -227,13 +301,29 @@ impl Store {
         checkpoint_git_command(&repo, args)
     }
 
+    /// Run a command built by [`Self::git`], bounded (`timeout`: `None` = its
+    /// verb's own ceiling): its output, and whether stdout was stopped at `cap`
+    /// bytes (git was stopped there too). The folder's own repo is not
+    /// prechecked: the store's git reads none of its files, and a pipe an
+    /// agent plants there must not switch the checkpoints off. The one
+    /// work-tree file that can block it, a `.gitignore`, is the snapshot's to
+    /// check.
+    pub(crate) fn exec(
+        &self,
+        mut cmd: std::process::Command,
+        stdin: Option<Vec<u8>>,
+        cap: u64,
+        timeout: Option<Duration>,
+    ) -> Result<(Output, bool), bounded::RunError> {
+        let opts = bounded::Opts { stdin, stdout_cap: Some(cap), timeout, no_precheck: true, ..Default::default() };
+        let ran = bounded::run(&mut cmd, opts)?;
+        Ok((ran.output, ran.cut))
+    }
+
     /// Run `git <args>` against the store, bounded: its output, and whether
     /// stdout was stopped at `cap` bytes (git was stopped there too).
     pub fn run_capped(&self, args: &[&str], stdin: Option<Vec<u8>>, cap: u64) -> Result<(Output, bool), String> {
-        let mut cmd = self.git(args);
-        let opts = bounded::Opts { stdin, stdout_cap: Some(cap), ..Default::default() };
-        let ran = bounded::run(&mut cmd, opts).map_err(String::from)?;
-        Ok((ran.output, ran.cut))
+        self.exec(self.git(args), stdin, cap, None).map_err(String::from)
     }
 
     /// [`Self::run_capped`] where a longer stdout is an error, never a short
@@ -379,12 +469,14 @@ fn dir_bytes(dir: &Path, depth: usize) -> u64 {
         .sum()
 }
 
-/// Every store folder under `root`, as stores that carry a readable meta.
+/// Every store folder under `root`, as stores that carry a readable meta. A
+/// dot-named folder is a store on its way out ([`TRASH_PREFIX`]).
 pub fn all_in(root: &Path) -> Vec<Store> {
     let Ok(entries) = std::fs::read_dir(root) else { return Vec::new() };
     entries
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
         .filter_map(|e| Store::at(e.path()))
         .collect()
 }

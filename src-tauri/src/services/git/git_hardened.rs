@@ -774,6 +774,9 @@ pub(crate) fn checkpoint_git_command<S: AsRef<str>>(repo: &CheckpointRepo<'_>, a
         .env("GIT_ATTR_SOURCE", CHECKPOINT_EMPTY_TREE)
         .env("GIT_NO_LAZY_FETCH", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
+        // Its messages are matched (`snapshot::stage_with`): never translated.
+        .env("LC_ALL", "C")
+        .env_remove("LANGUAGE")
         .env("GIT_AUTHOR_NAME", crate::brand::DISPLAY)
         .env("GIT_AUTHOR_EMAIL", "checkpoints@localhost")
         .env("GIT_COMMITTER_NAME", crate::brand::DISPLAY)

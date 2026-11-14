@@ -25,8 +25,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::snapshot::{snapshot_locked, stage, Who, MAX_FILE_BYTES};
-use super::store::{new_id, Kind, Row, Store};
+use super::snapshot::{snapshot_locked, special, stage, Who, MAX_FILE_BYTES};
+use super::store::{new_id, rel_path, shown, spec_arg, GitPath, Kind, Row, Store};
 
 /// The most stdout read of a listing.
 const LIST_CAP: u64 = 256 * 1024 * 1024;
@@ -88,12 +88,21 @@ pub struct Failure {
 }
 
 /// Whether a restore leaves `path` alone: on disk it is now a file over the
-/// snapshot cap or not an ordinary file. Such a file is dropped from the
-/// store's index, so git reports the checkpoint's copy as "deleted since", but
-/// the `pre-restore` snapshot did not capture it either: writing the old
-/// version over it could not be undone. (The dialog counts these as left out.)
-fn left_alone(folder: &Path, path: &str) -> bool {
-    match std::fs::symlink_metadata(folder.join(path)) {
+/// snapshot cap or not an ordinary file, or it lies in a folder whose
+/// `.gitignore` blocks git. Such a file is dropped from the store's index, so
+/// git reports the checkpoint's copy as "deleted since", but the `pre-restore`
+/// snapshot did not capture it either: writing the old version over it could
+/// not be undone. (The dialog counts these as left out.)
+fn left_alone(folder: &Path, path: &[u8]) -> bool {
+    let mut dir = folder.to_path_buf();
+    let parts: Vec<&[u8]> = path.split(|b| *b == b'/').collect();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        dir.push(rel_path(part));
+        if special(&dir.join(".gitignore")).is_some() {
+            return true;
+        }
+    }
+    match std::fs::symlink_metadata(folder.join(rel_path(path))) {
         Ok(meta) => {
             let kind = meta.file_type();
             if kind.is_file() {
@@ -108,7 +117,7 @@ fn left_alone(folder: &Path, path: &str) -> bool {
 
 /// `git diff-index --cached --name-status` of `row`'s tree against the
 /// (already staged) index, without what [`left_alone`] names.
-fn name_status(store: &Store, tree: &str) -> Result<Vec<(char, String)>, String> {
+fn name_status(store: &Store, tree: &str) -> Result<Vec<(char, GitPath)>, String> {
     let out = store.run_ok(
         &["diff-index", "--cached", "--name-status", "-z", "-r", "--no-renames", "--ignore-submodules=all", tree],
         None,
@@ -121,18 +130,16 @@ fn name_status(store: &Store, tree: &str) -> Result<Vec<(char, String)>, String>
         if !matches!(status, 'A' | 'D' | 'M' | 'T') {
             continue;
         }
-        let path = String::from_utf8_lossy(path).into_owned();
-        if left_alone(&store.folder, &path) {
+        if left_alone(&store.folder, path) {
             continue;
         }
-        changes.push((status, path));
+        changes.push((status, path.to_vec()));
     }
     Ok(changes)
 }
 
-/// `(added, removed)` per path; `None` for a binary file.
 /// A path with its line counts, `None` for a binary file.
-type Counted = (String, Option<(u32, u32)>);
+type Counted = (GitPath, Option<(u32, u32)>);
 
 fn numstat(store: &Store, tree: &str) -> Result<Vec<Counted>, String> {
     let out = store.run_ok(
@@ -144,23 +151,20 @@ fn numstat(store: &Store, tree: &str) -> Result<Vec<Counted>, String> {
         .split(|b| *b == 0)
         .filter(|s| !s.is_empty())
         .filter_map(|record| {
-            let text = String::from_utf8_lossy(record);
-            let mut fields = text.splitn(3, '\t');
+            let mut fields = record.splitn(3, |b| *b == b'\t');
             let (added, removed, path) = (fields.next()?, fields.next()?, fields.next()?);
-            let counts = added.parse().ok().zip(removed.parse().ok());
-            Some((path.to_string(), counts))
+            let number = |field: &[u8]| std::str::from_utf8(field).ok()?.parse::<u32>().ok();
+            let counts = number(added).zip(number(removed));
+            Some((path.to_vec(), counts))
         })
         .collect())
 }
 
 /// The unified diff of one path, checkpoint → now, and whether it was cut.
-fn file_diff(store: &Store, tree: &str, path: &str) -> Result<(String, bool), String> {
-    let spec = format!(":(literal){path}");
-    let (out, cut) = store.run_capped(
-        &["diff-index", "-p", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "-U3", tree, "--", &spec],
-        None,
-        FILE_DIFF_BYTES,
-    )?;
+fn file_diff(store: &Store, tree: &str, path: &[u8]) -> Result<(String, bool), String> {
+    let mut cmd = store.git(&["diff-index", "-p", "--cached", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "-U3", tree, "--"]);
+    cmd.arg(spec_arg(":(literal)", path));
+    let (out, cut) = store.exec(cmd, None, FILE_DIFF_BYTES, None).map_err(String::from)?;
     if !out.status.success() && !cut {
         return Err(format!("git diff-index: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
@@ -172,9 +176,16 @@ fn file_diff(store: &Store, tree: &str, path: &str) -> Result<(String, bool), St
 /// without diff text); `None` reads the first [`EAGER_DIFFS`].
 pub fn since(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) -> Result<Since, String> {
     let _lock = store.lock()?;
+    // Read again under the lock: a prune may have dropped it meanwhile.
+    let row = &current(store, row)?;
     store.ensure(who.project_id.as_deref())?;
     let staged = stage(store, None)?;
     since_locked(store, row, who, paths, &staged)
+}
+
+/// `row` as the log has it now (the caller holds the lock).
+fn current(store: &Store, row: &Row) -> Result<Row, String> {
+    store.row(&row.id).filter(Row::has_snapshot).ok_or_else(|| "that checkpoint is gone".to_string())
 }
 
 fn since_locked(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>, staged: &super::snapshot::Staged) -> Result<Since, String> {
@@ -182,12 +193,13 @@ fn since_locked(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>, s
         return Err("that checkpoint has no snapshot".into());
     }
     let status = name_status(store, &row.tree)?;
-    let counts: std::collections::HashMap<String, Option<(u32, u32)>> = numstat(store, &row.tree)?.into_iter().collect();
+    let counts: std::collections::HashMap<GitPath, Option<(u32, u32)>> = numstat(store, &row.tree)?.into_iter().collect();
     let wanted: Option<HashSet<&str>> = paths.map(|p| p.iter().map(String::as_str).collect());
     let mut files = Vec::with_capacity(status.len());
     let mut spent = 0usize;
-    for (i, (code, path)) in status.into_iter().enumerate() {
-        let (added, removed, binary) = match counts.get(&path) {
+    for (i, (code, raw)) in status.into_iter().enumerate() {
+        let path = shown(&raw);
+        let (added, removed, binary) = match counts.get(&raw) {
             Some(Some((a, r))) => (Some(*a), Some(*r), false),
             Some(None) => (None, None, true),
             None => (None, None, false),
@@ -196,7 +208,7 @@ fn since_locked(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>, s
             Some(set) => set.contains(path.as_str()),
             None => i < EAGER_DIFFS && spent < EAGER_DIFF_BYTES,
         };
-        let (diff, cut) = if wants_diff && !binary { file_diff(store, &row.tree, &path).map(|(d, c)| (Some(d), c))? } else { (None, false) };
+        let (diff, cut) = if wants_diff && !binary { file_diff(store, &row.tree, &raw).map(|(d, c)| (Some(d), c))? } else { (None, false) };
         spent += diff.as_ref().map_or(0, String::len);
         files.push(Change { path, status: code, added, removed, binary, diff, cut });
     }
@@ -239,20 +251,21 @@ fn others_changed(store: &Store, row: &Row, my_uid: &str) -> Vec<String> {
 /// `folder`: relative, no `.`/`..`/empty/`.git` component, and no leading
 /// component that is a link or not a folder. A leading component that does
 /// not exist yet is fine (git creates it).
-pub fn plain_path(folder: &Path, rel: &str) -> Result<(), String> {
-    let parts: Vec<&str> = rel.split('/').collect();
-    if rel.is_empty() || parts.iter().any(|c| c.is_empty() || *c == "." || *c == ".." || c.eq_ignore_ascii_case(".git")) {
+pub fn plain_path(folder: &Path, rel: impl AsRef<[u8]>) -> Result<(), String> {
+    let rel = rel.as_ref();
+    let parts: Vec<&[u8]> = rel.split(|b| *b == b'/').collect();
+    if rel.is_empty() || parts.iter().any(|c| c.is_empty() || *c == b"." || *c == b".." || c.eq_ignore_ascii_case(b".git")) {
         return Err("not a path inside the folder".into());
     }
-    if cfg!(windows) && parts.iter().any(|c| c.contains(['\\', ':'])) {
+    if cfg!(windows) && parts.iter().any(|c| c.iter().any(|b| matches!(b, b'\\' | b':'))) {
         return Err("not a path inside the folder".into());
     }
     let mut at = folder.to_path_buf();
     for part in &parts[..parts.len() - 1] {
-        at.push(part);
+        at.push(rel_path(part));
         match std::fs::symlink_metadata(&at) {
-            Ok(meta) if meta.file_type().is_symlink() => return Err(format!("{part} is a link")),
-            Ok(meta) if !meta.is_dir() => return Err(format!("{part} is not a folder")),
+            Ok(meta) if meta.file_type().is_symlink() => return Err(format!("{} is a link", shown(part))),
+            Ok(meta) if !meta.is_dir() => return Err(format!("{} is not a folder", shown(part))),
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
             Err(e) => return Err(e.to_string()),
@@ -268,6 +281,7 @@ pub fn restore(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) ->
         return Err("that checkpoint has no snapshot".into());
     }
     let _lock = store.lock()?;
+    let row = &current(store, row)?;
     store.ensure(who.project_id.as_deref())?;
     // The way back first: this stages the folder too, so the diff below is
     // against exactly what the undo would restore.
@@ -279,11 +293,11 @@ pub fn restore(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) ->
     let mut remove = Vec::new();
     let mut checkout = Vec::new();
     for (code, path) in status {
-        if wanted.as_ref().is_some_and(|set| !set.contains(path.as_str())) {
+        if wanted.as_ref().is_some_and(|set| !set.contains(shown(&path).as_str())) {
             continue;
         }
         if let Err(error) = plain_path(&store.folder, &path) {
-            result.failed.push(Failure { path, error });
+            result.failed.push(Failure { path: shown(&path), error });
             continue;
         }
         if code == 'A' {
@@ -293,8 +307,9 @@ pub fn restore(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) ->
         }
     }
 
-    for path in remove {
-        let target = store.folder.join(&path);
+    for raw in remove {
+        let target = store.folder.join(rel_path(&raw));
+        let path = shown(&raw);
         match std::fs::symlink_metadata(&target) {
             Ok(meta) if meta.is_dir() => result.failed.push(Failure { path, error: "is now a folder".into() }),
             Ok(_) => match std::fs::remove_file(&target) {
@@ -310,40 +325,39 @@ pub fn restore(store: &Store, row: &Row, who: &Who, paths: Option<&[String]>) ->
     // A file the checkpoint had where a folder is now: the folder's added
     // files were just removed, so an empty one can go.
     for path in &checkout {
-        let target = store.folder.join(path);
+        let target = store.folder.join(rel_path(path));
         if std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir()) {
             let _ = std::fs::remove_dir(&target);
         }
     }
 
-    let mut chunk: Vec<String> = Vec::new();
+    let mut chunk: Vec<GitPath> = Vec::new();
     let mut bytes = 0;
-    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut batches: Vec<Vec<GitPath>> = Vec::new();
     for path in checkout {
-        let spec = format!(":(literal){path}");
-        if bytes + spec.len() > CHUNK_BYTES && !chunk.is_empty() {
+        let len = ":(literal)".len() + path.len();
+        if bytes + len > CHUNK_BYTES && !chunk.is_empty() {
             batches.push(std::mem::take(&mut chunk));
             bytes = 0;
         }
-        bytes += spec.len() + 1;
-        chunk.push(spec);
+        bytes += len + 1;
+        chunk.push(path);
     }
     if !chunk.is_empty() {
         batches.push(chunk);
     }
     for batch in batches {
-        let mut args: Vec<&str> = vec!["checkout", &row.commit, "--"];
-        args.extend(batch.iter().map(String::as_str));
-        match store.run(&args, None, 1 << 20) {
-            Ok(out) if out.status.success() => result.restored += batch.len(),
-            Ok(out) => {
-                let error = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                result.failed.extend(batch.iter().map(|spec| Failure { path: spec.trim_start_matches(":(literal)").to_string(), error: error.clone() }));
+        let mut cmd = store.git(&["checkout", &row.commit, "--"]);
+        cmd.args(batch.iter().map(|path| spec_arg(":(literal)", path)));
+        let error = match store.exec(cmd, None, 1 << 20, None) {
+            Ok((out, _)) if out.status.success() => {
+                result.restored += batch.len();
+                continue;
             }
-            Err(error) => {
-                result.failed.extend(batch.iter().map(|spec| Failure { path: spec.trim_start_matches(":(literal)").to_string(), error: error.clone() }));
-            }
-        }
+            Ok((out, _)) => String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            Err(error) => error.to_string(),
+        };
+        result.failed.extend(batch.iter().map(|path| Failure { path: shown(path), error: error.clone() }));
     }
 
     let at = crate::clock::now_ms();

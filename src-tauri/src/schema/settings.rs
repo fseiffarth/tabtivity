@@ -1317,6 +1317,12 @@ impl Settings {
         self.experimental(self.copilot_completion)
     }
 
+    /// Whether per-turn checkpoints' window flag is on; the backend takes
+    /// them only with its own switch on too (`services::checkpoints::capturing_in`).
+    pub fn turn_checkpoints(&self) -> bool {
+        self.experimental(self.turn_checkpoints)
+    }
+
     /// Whether the experimental Python Run/Debug buttons and breakpoint gutter are
     /// offered in the code viewer. Run *executes the file*, so it is opt-in.
     pub fn python_run_debug(&self) -> bool {

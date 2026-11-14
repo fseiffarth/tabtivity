@@ -12163,6 +12163,8 @@ export const dict: Dict = {
   "checkpoints.now.hint": "Sauvegarder maintenant les fichiers du projet pour y revenir depuis l'onglet Modifications",
   "checkpoints.now.done": "Enregistré",
   "checkpoints.now.failed": "Non enregistré",
+  "checkpoints.now.failing": "Points de contrôle en échec",
+  "checkpoints.now.failingHint": "Le dernier point de contrôle de ce dossier a échoué : {error}",
   "checkpoints.kind.pre": "Avant un tour · {time}",
   "checkpoints.kind.post": "Après un tour · {time}",
   "checkpoints.kind.manual": "Point de contrôle · {time}",

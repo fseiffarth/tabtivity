@@ -1,8 +1,10 @@
 //! The per-folder serial worker: two tabs in one folder never snapshot at
 //! once, and a queued duplicate is coalesced. A worker thread exists only while
-//! its folder has jobs.
+//! its folder has jobs. A job that panics is logged and the queue goes on (its
+//! waiting caller is told it failed): a panic must not strand the folder.
 
 use std::collections::{HashMap, VecDeque};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
@@ -107,10 +109,15 @@ impl Queues {
                 }
                 continue;
             }
-            (runner.run)(job);
+            // The reply sender drops with the job, so a waiting caller hears.
+            if std::panic::catch_unwind(AssertUnwindSafe(|| (runner.run)(job))).is_err() {
+                eprintln!("checkpoints: a snapshot of {} panicked", folder.display());
+            }
         }
-        if !self.stopping.load(Ordering::SeqCst) {
-            (runner.idle)(folder);
+        if !self.stopping.load(Ordering::SeqCst)
+            && std::panic::catch_unwind(AssertUnwindSafe(|| (runner.idle)(folder))).is_err()
+        {
+            eprintln!("checkpoints: maintenance of {} panicked", folder.display());
         }
         self.active.fetch_sub(1, Ordering::SeqCst);
     }
@@ -178,12 +185,17 @@ fn run_job(job: Job) {
     let result = snapshot::snapshot(&root, &job.folder, job.kind, &job.who, job.prompt_at);
     match &result {
         Ok(row) => {
+            super::note_failure(&job.folder, None);
             super::announce(&job.who.tab_uid, &row.id, row.kind);
             if let Err(e) = prune(&root, &job.folder) {
                 eprintln!("checkpoints: prune: {e}");
             }
         }
-        Err(e) => eprintln!("checkpoints: snapshot of {}: {e}", job.folder.display()),
+        Err(e) => {
+            eprintln!("checkpoints: snapshot of {}: {e}", job.folder.display());
+            super::note_failure(&job.folder, Some(e));
+            super::announce_failure(&job.who.tab_uid, job.kind, e);
+        }
     }
     if let Some(reply) = job.reply {
         let _ = reply.send(result);
@@ -193,7 +205,9 @@ fn run_job(job: Job) {
 fn prune(root: &Path, folder: &Path) -> Result<(), String> {
     let store = Store::for_folder(root, folder)?;
     let _lock = store.lock()?;
-    super::prune_locked(&store, crate::clock::now_ms()).map(|_| ())
+    let now = crate::clock::now_ms();
+    super::prune_locked(&store, now)?;
+    super::cap_locked(&store, now, super::MAX_STORE_BYTES).map(|_| ())
 }
 
 /// Repack when the folder's worker has nothing left to do.

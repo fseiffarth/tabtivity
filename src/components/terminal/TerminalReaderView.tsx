@@ -1269,6 +1269,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onCommit={assistantChat ? undefined : commit}
     onCheckpoint={assistantChat ? undefined : checkpointNow.run}
     checkpointNote={checkpointNow.done ? "done" : checkpointNow.failed ? "failed" : undefined}
+    checkpointError={checkpointNow.error}
     extra={voice.button ? voiceLoop.chips : null}
   />;
   return <>

@@ -11,6 +11,7 @@ vi.mock("../../lib/terminal/terminalDrop", async (importOriginal) => ({
 }));
 
 import { CheckpointRestoreDialog } from "../../components/terminal/CheckpointRestoreDialog";
+import { ReaderComposerChips } from "../../components/terminal/ReaderComposerChips";
 import {
   preForPrompt,
   previousPost,
@@ -141,5 +142,22 @@ describe("the restore dialog", () => {
     await screen.findByText("a.txt");
     fireEvent.click(screen.getByText(/Use the end of the previous turn instead/));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("checkpoint_diff", { tabKey: "u1", id: "ck1", only: null }));
+  });
+});
+
+describe("the Checkpoint chip", () => {
+  const chips = (props: Partial<Parameters<typeof ReaderComposerChips>[0]>) => (
+    <ReaderComposerChips prefixes={[]} active={null} disabled={false} onPrefix={() => {}} onClear={() => {}} onCheckpoint={() => {}} {...props} />
+  );
+
+  it("says the folder's checkpoints are failing, and why on hover, until one lands", () => {
+    const { rerender } = render(chips({ checkpointError: "d/.gitignore is a named pipe" }));
+    const chip = screen.getByRole("button", { name: /Checkpoints failing/ });
+    expect(chip.getAttribute("title")).toBe("The last checkpoint of this folder failed: d/.gitignore is a named pipe");
+    // A click's own answer still shows first.
+    rerender(chips({ checkpointError: "x", checkpointNote: "done" }));
+    expect(screen.getByRole("button", { name: /Saved/ })).toBeTruthy();
+    rerender(chips({ checkpointError: null }));
+    expect(screen.getByRole("button", { name: /^Checkpoint/ }).getAttribute("title")).toContain("Save the project's files now");
   });
 });

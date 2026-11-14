@@ -917,3 +917,287 @@ fn a_tracked_file_that_became_a_pipe_is_dropped_and_named() {
     assert!(staged.skipped.iter().any(|s| s.path == "swap" && s.reason == "special"), "{:?}", staged.skipped);
     assert_eq!(st.text(&["ls-tree", "-r", "--name-only", &staged.tree]).unwrap(), "a.txt");
 }
+
+// ── Flagged in review: blocking `.gitignore`, byte names, panics, byte cap,
+// the two switches ───────────────────────────────────────────────────────
+
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    assert!(std::process::Command::new("mkfifo").arg(path).status().unwrap().success());
+}
+
+/// Run `body` with every git call of this thread stopped after `secs`.
+#[cfg(unix)]
+fn with_git_timeout<T>(secs: u64, body: impl FnOnce() -> T) -> T {
+    use crate::services::git_bounded::TEST_TIMEOUT;
+    TEST_TIMEOUT.with(|t| t.set(Some(Duration::from_secs(secs))));
+    let out = body();
+    TEST_TIMEOUT.with(|t| t.set(None));
+    out
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_gitignore_in_a_stored_folder_keeps_that_folder_out_without_a_stall() {
+    let fx = fixture();
+    put(&fx.folder, "a.txt", "one");
+    put(&fx.folder, "d/b.txt", "two");
+    put(&fx.folder, "d/e/c.txt", "three");
+    snap(&fx, Kind::Manual, "t1");
+    mkfifo(&fx.folder.join("d/.gitignore"));
+    // Found by a stat of the folders the store holds files in: git never
+    // waits, so the ceiling is never reached.
+    let started = std::time::Instant::now();
+    let row = with_git_timeout(30, || snap(&fx, Kind::Manual, "t1"));
+    assert!(started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
+    assert_eq!(tree_paths(&store(&fx), &row), ["a.txt"]);
+    assert!(row.partial);
+    assert!(row.skipped.iter().any(|s| s.path == "d/" && s.reason == "blocked"), "{:?}", row.skipped);
+    assert_eq!(store(&fx).blocked(), [b"d".to_vec()]);
+    // The files in the blocked folder are left alone by "since" and a restore.
+    let st = store(&fx);
+    let first = st.rows()[0].clone();
+    let seen = since(&st, &first, &who("t1"), None).unwrap();
+    assert!(seen.files.is_empty(), "{:?}", seen.files);
+    // Once the pipe is gone, the folder is back.
+    std::fs::remove_file(fx.folder.join("d/.gitignore")).unwrap();
+    let row = snap(&fx, Kind::Manual, "t1");
+    assert_eq!(tree_paths(&store(&fx), &row), ["a.txt", "d/b.txt", "d/e/c.txt"]);
+    assert!(store(&fx).blocked().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_gitignore_in_a_new_folder_is_found_once_the_listing_stalls_and_remembered() {
+    let fx = fixture();
+    put(&fx.folder, "a.txt", "one");
+    put(&fx.folder, "new/deep/x.txt", "x");
+    mkfifo(&fx.folder.join("new/deep/.gitignore"));
+    // The first walk stalls at the test's ceiling; the search finds the pipe.
+    let row = with_git_timeout(3, || snap(&fx, Kind::Manual, "t1"));
+    assert_eq!(tree_paths(&store(&fx), &row), ["a.txt"]);
+    assert!(row.skipped.iter().any(|s| s.path == "new/deep/" && s.reason == "blocked"), "{:?}", row.skipped);
+    // Remembered: the next snapshot does not wait for git at all.
+    let started = std::time::Instant::now();
+    let row = with_git_timeout(30, || snap(&fx, Kind::Manual, "t1"));
+    assert!(started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
+    assert_eq!(tree_paths(&store(&fx), &row), ["a.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_gitignore_negation_cannot_draw_git_into_a_blocked_folder() {
+    let fx = fixture();
+    put(&fx.folder, "a.txt", "one");
+    put(&fx.folder, "d/b.txt", "two");
+    snap(&fx, Kind::Manual, "t1");
+    put(&fx.folder, ".gitignore", "!/d/\n!d/**\n");
+    mkfifo(&fx.folder.join("d/.gitignore"));
+    let row = with_git_timeout(20, || snap(&fx, Kind::Manual, "t1"));
+    assert_eq!(tree_paths(&store(&fx), &row), [".gitignore", "a.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_as_the_top_gitignore_fails_at_once_and_says_why() {
+    let fx = fixture();
+    put(&fx.folder, "a.txt", "one");
+    mkfifo(&fx.folder.join(".gitignore"));
+    let started = std::time::Instant::now();
+    let err = snapshot(&fx.root, &fx.folder, Kind::Manual, &who("t1"), None).unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(20));
+    assert!(err.contains(".gitignore") && err.contains("named pipe"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pipe_in_the_folders_own_git_dir_does_not_stop_its_checkpoints() {
+    let fx = fixture();
+    init_repo(&fx.folder);
+    put(&fx.folder, "a.txt", "one");
+    let packed = fx.folder.join(".git").join("packed-refs");
+    let _ = std::fs::remove_file(&packed);
+    mkfifo(&packed);
+    let row = with_git_timeout(20, || snap(&fx, Kind::Manual, "t1"));
+    assert_eq!(tree_paths(&store(&fx), &row), ["a.txt"]);
+}
+
+#[test]
+fn a_gitignore_negation_cannot_take_back_a_left_out_file_or_the_worktrees() {
+    let fx = fixture();
+    let worktrees = crate::brand::WORKTREES_DIR;
+    put(&fx.folder, ".gitignore", &format!("!/big.bin\n!/{worktrees}/\n"));
+    put(&fx.folder, "big.bin", &"x".repeat(4096));
+    put(&fx.folder, &format!("{worktrees}/feat/inner.txt"), "x");
+    let st = store(&fx);
+    std::fs::create_dir_all(&st.dir).unwrap();
+    let _lock = st.lock().unwrap();
+    st.ensure(None).unwrap();
+    let staged = stage_with(&st, None, Limits { max_file: 1024, budget: 1 << 20 }).unwrap();
+    assert_eq!(st.text(&["ls-tree", "-r", "--name-only", &staged.tree]).unwrap(), ".gitignore");
+    assert!(staged.skipped.iter().any(|s| s.path == "big.bin" && s.reason == "size"), "{:?}", staged.skipped);
+}
+
+#[test]
+fn only_the_folders_own_repo_or_its_worktree_roots_ignore_file_applies() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outer = tmp.path().canonicalize().unwrap().join("outer");
+    std::fs::create_dir_all(&outer).unwrap();
+    init_repo(&outer);
+    put(&outer, ".git/info/exclude", "secret.txt\n");
+    // A plain folder inside someone else's repo: that repo's rules are not its own.
+    let folder = outer.join("proj");
+    put(&folder, "secret.txt", "x");
+    assert_eq!(snapshot::repo_git_dir(&folder), None);
+    let root = tmp.path().join("checkpoints");
+    let row = snapshot(&root, &folder, Kind::Manual, &who("t1"), None).unwrap();
+    let st = Store::for_folder(&root, &folder).unwrap();
+    assert_eq!(tree_paths(&st, &row), ["secret.txt"]);
+    // A linked worktree of the root reads the root's.
+    let wt = crate::brand::WORKTREES_DIR.split('/').fold(outer.clone(), |p, seg| p.join(seg)).join("feat");
+    std::fs::create_dir_all(&wt).unwrap();
+    put(&wt, ".git", "gitdir: ../../.git/worktrees/feat\n");
+    assert_eq!(snapshot::repo_git_dir(&wt), Some(outer.join(".git")));
+    assert_eq!(snapshot::repo_git_dir(&outer), Some(outer.join(".git")));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn file_names_that_are_not_utf8_are_capped_restored_and_removed_by_their_own_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let fx = fixture();
+    let name = |bytes: &[u8]| fx.folder.join(std::ffi::OsStr::from_bytes(bytes));
+    put(&fx.folder, "a.txt", "one");
+    std::fs::write(name(b"kept\xff.txt"), "before").unwrap();
+    let st = store(&fx);
+    std::fs::create_dir_all(&st.dir).unwrap();
+    {
+        let _lock = st.lock().unwrap();
+        st.ensure(None).unwrap();
+        // Over the cap: left out, though `lstat` of a lossy name would miss it.
+        std::fs::write(name(b"big\xfe.bin"), "x".repeat(4096)).unwrap();
+        let staged = stage_with(&st, None, Limits { max_file: 1024, budget: 1 << 20 }).unwrap();
+        assert!(staged.skipped.iter().any(|s| s.reason == "size" && s.path.starts_with("big")), "{:?}", staged.skipped);
+        let listed = st.run_ok(&["ls-files", "-z"], None, 1 << 20).unwrap();
+        assert!(!listed.windows(4).any(|w| w == b"big\xfe"), "{listed:?}");
+        std::fs::remove_file(name(b"big\xfe.bin")).unwrap();
+    }
+    let ckpt = snap(&fx, Kind::Pre, "t1");
+    std::fs::write(name(b"kept\xff.txt"), "after").unwrap();
+    std::fs::write(name(b"added\xfd.txt"), "new").unwrap();
+    let seen = since(&st, &ckpt, &who("t1"), None).unwrap();
+    assert_eq!(seen.files.len(), 2, "{:?}", seen.files);
+    assert!(seen.files.iter().all(|f| f.diff.is_some()), "{:?}", seen.files);
+    let done = restore(&st, &ckpt, &who("t1"), None).unwrap();
+    assert!(done.failed.is_empty(), "{:?}", done.failed);
+    assert_eq!((done.restored, done.removed), (1, 1));
+    assert_eq!(std::fs::read(name(b"kept\xff.txt")).unwrap(), b"before");
+    assert!(std::fs::symlink_metadata(name(b"added\xfd.txt")).is_err(), "the added file is really gone");
+}
+
+#[test]
+fn a_job_that_panics_does_not_strand_its_folders_queue() {
+    let queues = Queues::new();
+    let ran = Arc::new(AtomicUsize::new(0));
+    let idle = Arc::new(AtomicUsize::new(0));
+    let runner = Arc::new(Runner {
+        run: {
+            let ran = ran.clone();
+            Box::new(move |job: Job| {
+                if job.kind == Kind::Pre {
+                    panic!("a snapshot panicked");
+                }
+                ran.fetch_add(1, Ordering::SeqCst);
+            })
+        },
+        idle: {
+            let idle = idle.clone();
+            Box::new(move |_| {
+                idle.fetch_add(1, Ordering::SeqCst);
+            })
+        },
+    });
+    let folder = PathBuf::from("/work/panics");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut first = job(&folder, Kind::Pre, "a");
+    first.reply = Some(tx);
+    queues.submit(first, runner.clone());
+    queues.submit(job(&folder, Kind::Post, "a"), runner.clone());
+    // The waiting caller hears (its sender went with the job) instead of hanging.
+    assert!(rx.recv_timeout(Duration::from_secs(10)).is_err());
+    assert!(crate::test_util::wait_until(crate::test_util::PATIENCE, || queues.is_idle()));
+    assert_eq!(ran.load(Ordering::SeqCst), 1, "the job after the panic ran");
+    assert_eq!(idle.load(Ordering::SeqCst), 1);
+    // The folder takes work again.
+    queues.submit(job(&folder, Kind::Post, "b"), runner.clone());
+    assert!(crate::test_util::wait_until(crate::test_util::PATIENCE, || ran.load(Ordering::SeqCst) == 2 && queues.is_idle()));
+}
+
+#[test]
+fn over_the_byte_cap_the_oldest_quarter_goes_but_never_the_newest_or_a_recent_undo() {
+    let now = 100 * KEEP_MS;
+    let mut rows: Vec<Row> = (0..9).map(|i| row_at(Kind::Post, now - 1000 + i)).collect();
+    rows[1] = row_at(Kind::PreRestore, now - 999);
+    rows.push(row_at(Kind::Restore, now));
+    let keep = trimmed(&rows, now);
+    // Droppable: rows 0, 2..=7 (7 of them; row 8 is the newest snapshot, row 1
+    // a recent undo, row 9 holds none): the oldest two go.
+    assert_eq!(keep, [false, true, false, true, true, true, true, true, true, true]);
+    // Nothing droppable: nothing goes.
+    assert_eq!(trimmed(&rows[8..9], now), [true]);
+}
+
+#[test]
+fn a_store_over_its_byte_cap_drops_a_step_then_waits_for_the_repack() {
+    let fx = fixture();
+    for i in 0..5 {
+        put(&fx.folder, "a.txt", &format!("version {i}"));
+        snap(&fx, Kind::Post, "t1");
+    }
+    let st = store(&fx);
+    let _lock = st.lock().unwrap();
+    let now = crate::clock::now_ms();
+    // Under the cap: nothing.
+    assert_eq!(cap_locked(&st, now, u64::MAX).unwrap(), 0);
+    // Over: a quarter of the four droppable ones, and a repack is due.
+    assert_eq!(cap_locked(&st, now, 1).unwrap(), 1);
+    assert_eq!(st.rows().len(), 4);
+    assert!(st.meta().unwrap().gc_pending >= 50);
+    // Still over, but the repack hasn't run: no second step yet.
+    assert_eq!(cap_locked(&st, now, 1).unwrap(), 0);
+    assert!(gc_locked(&st).unwrap());
+    assert_eq!(cap_locked(&st, now, 1).unwrap(), 1);
+    assert_eq!(st.rows().len(), 3);
+}
+
+#[test]
+fn capture_needs_the_backend_switch_and_the_windows_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let settings = tmp.path().join("settings.json");
+    set_enabled_in(tmp.path(), true).unwrap();
+    assert!(!capturing_in(tmp.path()), "no settings: the flag is off");
+    std::fs::write(&settings, r#"{"experimental_explicit":true,"turn_checkpoints":true}"#).unwrap();
+    assert!(capturing_in(tmp.path()));
+    std::fs::write(&settings, r#"{"experimental_explicit":true,"turn_checkpoints":false}"#).unwrap();
+    assert!(!capturing_in(tmp.path()), "the flag went off elsewhere: nothing is taken");
+    std::fs::write(&settings, r#"{"experimental_explicit":true,"turn_checkpoints":true}"#).unwrap();
+    set_enabled_in(tmp.path(), false).unwrap();
+    assert!(!capturing_in(tmp.path()), "the backend switch off: nothing is taken");
+}
+
+#[test]
+fn a_store_renamed_aside_is_not_listed_and_is_swept() {
+    let fx = fixture();
+    put(&fx.folder, "a.txt", "one");
+    snap(&fx, Kind::Manual, "t1");
+    let trash = fx.root.join(format!("{}abc", store::TRASH_PREFIX));
+    std::fs::create_dir_all(&trash).unwrap();
+    std::fs::write(trash.join("meta.json"), r#"{"folder":"/gone"}"#).unwrap();
+    assert_eq!(store::all_in(&fx.root).len(), 1);
+    assert_eq!(sweep_orphans_in(&fx.root, crate::clock::now_ms()), 1);
+    assert!(!trash.exists());
+    clear_in(&fx.root, None).unwrap();
+    assert!(store::all_in(&fx.root).is_empty());
+    assert_eq!(std::fs::read_dir(&fx.root).unwrap().count(), 0, "nothing left behind");
+}

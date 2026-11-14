@@ -6,7 +6,7 @@ import { CHECKPOINT_EVENT, checkpointList, type CheckpointListing } from "../../
 
 /**
  * Each agent tab's checkpoints (`lib/agents/checkpoints`), read from the
- * backend's log and refreshed when it announces a snapshot
+ * backend's log and refreshed when it announces a snapshot or a failed one
  * (`checkpoint-added`). Keyed by the tab's launch uid.
  */
 
@@ -23,7 +23,7 @@ export const useCheckpointsStore = create<CheckpointsStore>((set) => ({
   },
 }));
 
-const NONE: CheckpointListing = { enabled: false, bound: false, rows: [] };
+const NONE: CheckpointListing = { enabled: false, bound: false, rows: [], failure: null };
 
 /**
  * The checkpoints of tab `uid` while `active` (the Reader is shown): read once

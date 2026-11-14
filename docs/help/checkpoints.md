@@ -25,8 +25,12 @@ folder that is not a git repository works too. Files that git would ignore
 restore, and a file over 25 MiB is skipped and named. A repository nested inside
 the project is recorded as one entry; its files are not saved.
 
-A folder keeps checkpoints for 14 days, at most 300. Settings shows each
-folder's size and a **Clear** button.
+A folder keeps checkpoints for 14 days, at most 300, and at most about 2 GiB:
+past that the oldest go first. Settings shows each folder's size and a
+**Clear** button. A folder whose `.gitignore` is not a regular file (a named
+pipe) would make git wait forever, so it is left out of the checkpoint and
+named on it. When a checkpoint fails, the Chat's **Checkpoint** button says
+so, and hovering it says why.
 
 ## Putting files back
 

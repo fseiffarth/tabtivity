@@ -12161,6 +12161,8 @@ export const dict: Dict = {
   "checkpoints.now.hint": "Guardar ahora los archivos del proyecto para poder volver a ellos desde la pestaña Cambios",
   "checkpoints.now.done": "Guardado",
   "checkpoints.now.failed": "No guardado",
+  "checkpoints.now.failing": "Los puntos de control fallan",
+  "checkpoints.now.failingHint": "El último punto de control de esta carpeta falló: {error}",
   "checkpoints.kind.pre": "Antes de un turno · {time}",
   "checkpoints.kind.post": "Después de un turno · {time}",
   "checkpoints.kind.manual": "Punto de control · {time}",

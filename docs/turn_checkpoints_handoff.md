@@ -128,7 +128,13 @@ frees the unreachable commits, and `purge_project` on forget and archive.
   `a_bound_folder_swapped_for_a_link_is_not_snapshotted_as_the_place_it_points_to`
   (fails before).
 
-### Flagged for the user (not changed)
+### Flagged for the user
+
+Also fixed 2026-11-14, found while fixing these: an exclude line in the
+store's ignore file (the size cap, the budget, the worktrees folder) could be
+taken back by a `.gitignore` negation (`!big.bin` outranks
+`core.excludesFile`); they are exclude pathspecs now. Still open: Codex with
+untrusted hooks, and the authorization by launch uid (below).
 
 - **Old git — resolved 2026-11-14:** `checkpoints::MIN_GIT = (2, 40)`; turning
   them on is refused, snapshots/since/restore/now refuse, and the settings
@@ -142,30 +148,42 @@ frees the unreachable commits, and `purge_project` on forget and archive.
   folder-defined program can run (nothing defines one), but the snapshot would
   hold pointers instead of content. Suggest: refuse to enable (or snapshot)
   below 2.40, with a line in the settings card.
-- **A named pipe as `.gitignore`** (or any nested `.gitignore`) blocks git's
+- **A named pipe as `.gitignore` — resolved 2026-11-14:** a nested one keeps its
+  folder out of the snapshot (`blocked` on the row, a restore leaves it alone,
+  remembered in `<store>/blocked`), found by a `stat` of stored folders or
+  after a 45 s stall; the top one fails at once with the reason, shown on the
+  Checkpoint chip. The folder's own `.git` is no longer prechecked. Original
+  note: a named pipe as `.gitignore` (or any nested `.gitignore`) blocks git's
   listing until `git_bounded`'s timeout (2 min), under the store lock, on every
   snapshot, `since` and restore of that folder. The agent can thereby switch off
   its own undo history. Bounded, and a log line on stderr, but silent in the UI.
-- **Non-UTF-8 file names** are decoded lossily: the size cap and the budget do
+- **Non-UTF-8 file names — resolved 2026-11-14:** paths stay bytes
+  (`store::GitPath`) to the file system. Original note: they are decoded lossily: the size cap and the budget do
   not see them (`look` finds no such path) and a restore that "removes" one
   counts a success for a path that does not exist.
-- **`repo_ignore` walks up four ancestors** for a plain folder too, so a
+- **`repo_ignore` walks up four ancestors — resolved 2026-11-14:**
+  `snapshot::repo_git_dir`. Original note: it walks up four ancestors for a plain folder too, so a
   dotfiles-style repo above the project can exclude its files from the store;
   the context doc says only the folder's own rules apply. Should be limited to
   the linked-worktree case.
-- **A panic in a snapshot** strands the folder's queue (map entry never
+- **A panic in a snapshot — resolved 2026-11-14:** `catch_unwind` in
+  `Queues::drain`. Original note: a panic strands the folder's queue (map entry never
   removed, `active` never decremented): later jobs for that folder are never run
   until restart. Wrapping `run_job` in `catch_unwind` (or a drop guard) would
   close it.
-- **No total store cap**: 14 days / 300 rows / 25 MiB per file / 256 MiB new per
+- **No total store cap — resolved 2026-11-14:** `MAX_STORE_BYTES` (2 GiB per
+  folder), a quarter at a time with a repack between. Original note: 14 days / 300 rows / 25 MiB per file / 256 MiB new per
   snapshot, but a large folder that changes a lot grows without a byte cap.
-- **Window flag vs backend switch**: the card sets both; editing
+- **Window flag vs backend switch — resolved 2026-11-14:** capture needs both
+  (`capturing_in`). Original note: the card sets both; editing
   `settings.json` or a Debug-mode profile can leave the flag on with the backend
   off (the card says so, controls hidden: safe) or the flag off with the backend
   still capturing (invisible but running).
 - **Codex with untrusted hooks** reports no turn state, so the "agent is
   working" refusal cannot see it; a restore is then allowed mid-turn.
-- `remove_store` drops the store lock before `remove_dir_all`; a snapshot
+- **Resolved 2026-11-14:** `remove_store` renames the store aside under its
+  lock, and `since`/`restore` re-read the row under it. Original note:
+  `remove_store` drops the store lock before `remove_dir_all`; a snapshot
   starting in between fails or recreates the store. `restore`/`since` read the
   row before taking the lock; a row pruned in that window (14 days old, plus a
   gc) makes the checkout fail with every path listed as failed (nothing lost).
