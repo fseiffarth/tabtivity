@@ -10,7 +10,7 @@ async fn main() -> Result<(), String> {
     let root = project.path().canonicalize().map_err(|_| "temporary project failed")?;
     let path = root.join("square.py");
     std::fs::write(&path, "# Synthetic protocol probe\n").map_err(|_| "synthetic file failed")?;
-    let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root)?;
+    let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root, None)?;
     let session = Session::start(output, input, Some(process), &root).await?;
     println!("Pinned server initialized inside the project fence.");
     // Catch namespace/parent-monitor exits before asking for authorization.
@@ -40,7 +40,7 @@ async fn main() -> Result<(), String> {
     session.sign_out().await?;
     println!("Sign-out acknowledged.");
     session.stop();
-    let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root)?;
+    let (process, output, input) = ManagedProcess::launch_installed(Path::new(&install), &root, None)?;
     let fresh = Session::start(output, input, Some(process), &root).await?;
     let result = fresh.complete(request(1)).await;
     println!("Fresh server without sign-in: {}", result.err().unwrap_or_else(|| "UNEXPECTED completion".into()));
