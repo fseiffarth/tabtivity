@@ -1827,6 +1827,7 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
         ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
         ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable", "files_off"]),
+        ("POST", format!("/api/v1/projects/{p}/files/docs?name=TODO.md"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
         // Outbox and inbox, by project and by tab.
         ("GET", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
         ("DELETE", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
@@ -2259,6 +2260,7 @@ async fn a_folder_less_project_is_no_project_to_any_folder_route() {
             ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
             ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
             ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable"]),
+            ("POST", format!("/api/v1/projects/{p}/files/docs?name=TODO.md"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
             ("DELETE", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
             ("GET", format!("/api/v1/projects/{p}/outbox/a.txt"), Value::Null, &["not_a_project"]),
@@ -4995,6 +4997,78 @@ async fn upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it() {
     assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
 }
 
+/// The "Project docs" group on the phone: the root listing carries the catalog
+/// docs' states (names only), a ghost row's Create writes one template file
+/// behind the upload guards, and nothing but a creatable catalog leaf is taken.
+#[tokio::test]
+async fn the_root_lists_its_catalog_docs_and_a_ghost_row_creates_one() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(61)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    let base = format!("/api/v1/projects/{project_id}/files");
+    std::fs::create_dir_all(host.root.join("sub")).unwrap();
+    std::fs::write(host.root.join("README.md"), "# mine\n").unwrap();
+    let switches = |files: bool, uploads: bool| {
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_uploads": uploads } }).to_string(),
+        )
+        .unwrap();
+    };
+    let create = |name: &str, origin: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("{base}/docs?name={name}"))
+            .header(header::ORIGIN, origin)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::empty())
+            .expect("request")
+    };
+    let refused = |answer: (StatusCode, HeaderMap, String)| (answer.0, json(&answer.2)["error"].clone());
+
+    // Closed with the switches, and by the origin check, before anything is written.
+    switches(false, true);
+    assert_eq!(refused(host.send(create("TODO.md", ORIGIN)).await), (StatusCode::NOT_FOUND, json!("files_off")));
+    switches(true, false);
+    assert_eq!(refused(host.send(create("TODO.md", ORIGIN)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
+    switches(true, true);
+    assert_eq!(refused(host.send(create("TODO.md", "https://elsewhere.example")).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+    assert!(!host.root.join("TODO.md").exists());
+
+    // The root says where the docs stand; a folder does not.
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let docs = json(&body)["docs"].clone();
+    let row = |name: &str| docs.as_array().expect("docs").iter().find(|row| row["name"] == name).cloned().unwrap_or(Value::Null);
+    assert_eq!(row("README.md")["state"], "edited", "{body}");
+    assert_eq!((row("README.md")["isDefault"].clone(), row("AGENTS.md")["state"].clone()), (json!(true), json!("missing")), "{body}");
+    assert_eq!((row("TODO.md")["state"].clone(), row("TODO.md")["creatable"].clone(), row("TODO.md")["isDefault"].clone()), (json!("missing"), json!(true), json!(false)));
+    assert!(!body.contains(host.root.to_str().unwrap()), "{body}");
+    let sub = json(&body)["entries"].as_array().unwrap().iter().find(|e| e["name"] == "sub").unwrap()["token"].as_str().unwrap().to_string();
+    let (_, _, body) = host.send(get_as(&format!("{base}?dir={sub}"), &cookie)).await;
+    assert!(json(&body).get("docs").is_none(), "only the root: {body}");
+
+    // Created from the template, answered as the new row; never over anything.
+    let (status, _, body) = host.send(create("TODO.md", ORIGIN)).await;
+    assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+    assert_eq!(json(&body)["entry"]["name"], "TODO.md");
+    assert!(!body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
+    let written = std::fs::read_to_string(host.root.join("TODO.md")).unwrap();
+    assert!(!written.is_empty());
+    assert_eq!(refused(host.send(create("TODO.md", ORIGIN)).await), (StatusCode::CONFLICT, json!("already_exists")));
+    assert_eq!(std::fs::read_to_string(host.root.join("TODO.md")).unwrap(), written);
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let docs = json(&body)["docs"].clone();
+    let todo = docs.as_array().unwrap().iter().find(|row| row["name"] == "TODO.md").unwrap();
+    assert_eq!(todo["state"], "template", "{body}");
+
+    // Only a creatable catalog leaf is taken: no path, no pointer file, no other name.
+    for name in ["..%2Fx.md", "sub%2Fx.md", "x.md", "CLAUDE.md", "REMARKS.md", ".gitignore", "todo.md", ""] {
+        assert_eq!(refused(host.send(create(name, ORIGIN)).await), (StatusCode::BAD_REQUEST, json!("invalid_request")), "{name:?}");
+    }
+    assert!(!host.root.join("x.md").exists() && !host.root.join("CLAUDE.md").exists() && !host.root.join("sub").join("x.md").exists());
+}
+
 #[tokio::test]
 async fn annotate_appends_remarks_to_a_project_pdf_behind_its_own_switch() {
     let host = Fixture::with_project();
@@ -6494,6 +6568,7 @@ async fn a_project_open_to_one_phone_is_an_unknown_id_to_the_other() {
             ("GET", format!("/api/v1/projects/{project}/files/entry?name=paper.pdf"), None),
             ("POST", format!("/api/v1/projects/{project}/files/upload?name=paper.pdf"), None),
             ("DELETE", format!("/api/v1/projects/{project}/files/upload?f={token}"), None),
+            ("POST", format!("/api/v1/projects/{project}/files/docs?name=TODO.md"), None),
             ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),
             ("POST", format!("/api/v1/tabs/{tab}/schedules"), Some(schedule.clone())),
             ("POST", format!("/api/v1/projects/{project}/prompts/p-1/send"), Some(json!({ "tab_id": tab }))),

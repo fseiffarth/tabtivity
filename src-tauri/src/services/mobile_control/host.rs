@@ -57,6 +57,7 @@ use super::{
         MAX_TAB_LABEL,
     },
     presence,
+    project_docs,
     pty_bridge::{self, TerminalRegistry},
     remarks,
     scheduler,
@@ -7671,12 +7672,21 @@ async fn project_files_list(
     };
     let key = state.auth.lock_ok().host_key().to_vec();
     let accepts = uploads::accepts(&rel);
+    // The root also says where its catalog docs stand (the "Project docs"
+    // group): names and states, read under the same deadline. A stalled read
+    // leaves the array out, which the phone shows as the plain group.
+    let docs_root = rel.is_empty().then(|| root.clone());
     // A directory walk that opens every kept file to type it: off the
     // executor, under the local deadline (a stalled mount answers `timeout`).
     let listed = deadline::local(move || files::list(&root, &rel, &key, &raw_id)).await;
     match listed {
         Ok(listing) => {
             let mut answer = json!(listing);
+            if let Some(root) = docs_root {
+                if let Ok(docs) = deadline::local(move || Ok(project_docs::status(&root))).await {
+                    answer["docs"] = json!(docs);
+                }
+            }
             answer["uploads"] = json!(accepts && uploads::uploads_open(&state.config.state_dir));
             answer["remarks"] = json!(remarks::remarks_open(&state.config.state_dir));
             (StatusCode::OK, Json(answer))
@@ -8049,6 +8059,46 @@ async fn project_files_folder(
         Ok(Some(entry)) => (StatusCode::CREATED, Json(json!({ "entry": entry }))),
         Ok(None) => upload_error(uploads::UploadError::NotFound),
         Err(error) => upload_error(error),
+    }
+}
+
+/// `POST /api/v1/projects/{project_id}/files/docs?name=<leaf>` — a ghost row's
+/// **Create** in the "Project docs" group: the catalog doc `name` written into
+/// the project root from its template, behind the upload guards (session,
+/// exact origin, both switches). Create-new: a taken name is `already_exists`
+/// and nothing is touched; a name outside the catalog's creatable docs is
+/// `invalid_request`. No upload-log entry and no Undo — it is a template file
+/// the user can delete. The answer is the new file's listing row.
+async fn project_files_docs_create(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<UploadQuery>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let name = query.name;
+    // Creates a file (and opens the new one to type it): off the executor,
+    // under the local deadline.
+    let made = deadline::local(move || {
+        Ok(project_docs::create(&root, &name).map(|()| files::lookup(&root, &name, &key, &raw_id)))
+    })
+    .await;
+    match made {
+        Ok(Ok(Some(entry))) => (StatusCode::CREATED, Json(json!({ "entry": entry }))),
+        Ok(Ok(None)) => api_error(StatusCode::NOT_FOUND, "file_not_found"),
+        Ok(Err(error)) => api_error(
+            match error {
+                project_docs::CreateError::NotCreatable => StatusCode::BAD_REQUEST,
+                project_docs::CreateError::Exists => StatusCode::CONFLICT,
+                project_docs::CreateError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            error.code(),
+        ),
+        Err(error) => files_error(error),
     }
 }
 
@@ -8489,6 +8539,10 @@ fn router(state: HostState) -> Router {
         .route(
             "/api/v1/projects/{project_id}/files/folder",
             delete(project_files_folder_undo).merge(post(project_files_folder).layer(DefaultBodyLimit::max(1024))),
+        )
+        .route(
+            "/api/v1/projects/{project_id}/files/docs",
+            post(project_files_docs_create).layer(DefaultBodyLimit::max(1024)),
         )
         .route("/api/v1/projects/{project_id}/files/zip", get(project_files_zip))
         .route(

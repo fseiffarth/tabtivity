@@ -262,6 +262,20 @@ nothing for a hostile phone; the risk it answers is a private document one
 names that tools pick up (`conftest.py`, a root `Makefile` in a project
 without one) are not refused — within that threat note.
 
+**Project docs (`mobile_control/project_docs.rs`).** The root listing of this
+computer's side also carries `docs` — the catalog docs of `services::scaffold`
+(`AGENTS.md`, `README.md`, `TODO.md`, …) with `state` (`missing` / `template` /
+`edited` / `pointer`), `nestedUnder`, `creatable`, `isDefault`: names only, from
+the same capped no-follow read the desktop tree uses. A ghost row's **Create**
+is `POST …/files/docs?name=<leaf>` behind the upload guards (`upload_scope`:
+session, exact origin, both switches). `name` is matched against the catalog's
+*creatable* leaves, never joined (a path, `CLAUDE.md`, `REMARKS.md`, `.gitignore`
+are `invalid_request`); the write is create-new + no-follow, so a taken name is
+`already_exists` and nothing is touched. It writes a fixed template into the
+project root (a root file `PROJECT.md`/`TODO.md`/… a tool might read, same
+note as a root `Makefile`); no upload-log entry and no Undo — the user deletes
+it like any file. The remote side (`&on=host`) has no `docs` and no create.
+
 ## Known gaps
 
 - **Downgrade.** An older build ignores the list, so after a downgrade every
