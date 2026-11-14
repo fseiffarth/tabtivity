@@ -230,6 +230,7 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .subagent-index-list .agent-worktree span { font-size:inherit; line-height:inherit; }
 .subagents-sheet .subagent-index-list { max-height:none; padding-top:0; }
 .subagents-sheet .subagent-index-list small em { color:#a99cff; font-style:normal; }
+.tab-files-sheet .sent-index-groups { max-height:none; padding-top:0; }
 .card.in-plan { border-color:#7b6ee0; }
 .card.in-goal { border-color:#4fb3c0; }
 .card.in-plan.has-tab-color,.card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
@@ -2540,6 +2541,34 @@ ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) 
   /* Under the list's own layers (z-index 7) the tray would paint over them: a
      sheet, and the files library or viewer Favorites opens. */
   .tabbed.split:has(.sheet-backdrop,.files-library,.outbox-viewer) > .mobile-tabbar { visibility:hidden; }
+}
+
+/* A phone held sideways (844×390 and the like): too short for the tablet
+   tiers, so it would otherwise keep the portrait layout stretched across the
+   width. `PHONE_LANDSCAPE_QUERY` in `useTier.ts` spells the same query (a test
+   keeps the copies equal). The agent tab's head drops to 44px and keeps clear
+   of the notch. The Chat view reads at the whole width and docks the composer
+   (with the notes, the facts row, the tips and the key row over it) as a
+   column on the right, so the transcript keeps the full height under the head:
+   height is what a phone on its side is short of. It stays docked while the
+   keyboard is up, so the field being typed in never jumps. The Terminal view
+   keeps its composer underneath. */
+@media (orientation:landscape) and (min-width:560px) and (max-height:599px) {
+  .terminal-screen > header { min-height:44px; padding-left:max(2px,env(safe-area-inset-left)); padding-right:max(8px,env(safe-area-inset-right)); }
+  .terminal-screen.agent-tab[data-view="focus"] { grid-template-columns:minmax(0,1fr) 272px; grid-template-rows:auto minmax(0,1fr); }
+  .terminal-screen.agent-tab[data-view="focus"] > header { grid-column:1 / -1; }
+  .terminal-screen.agent-tab[data-view="focus"] > .terminal-body { grid-column:1; grid-row:2; }
+  .terminal-screen.agent-tab[data-view="focus"] > .terminal-controls { grid-column:2; grid-row:2; display:flex; flex-direction:column; gap:4px; padding:6px max(8px,env(safe-area-inset-right)) 6px 0; border-left:1px solid var(--hairline); }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(20px,env(safe-area-inset-left)) 18px; }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-pinned-prompt { right:18px; }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-lines .readable-turn.user { max-width:70%; }
+  .terminal-screen.agent-tab[data-view="focus"] .session-facts { flex:0 0 auto; margin-inline:8px 0; }
+  /* The field takes the column's height; `!important` outranks the inline
+     height the composer's auto-grow writes, which would pin it to its lines. */
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer { flex:1 1 auto; min-height:120px; margin:0 0 0 8px; }
+  .terminal-screen.agent-tab[data-view="focus"] .composer-field { flex:1 1 auto; min-height:0; }
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer textarea { align-self:stretch; height:auto !important; max-height:none; }
+  .terminal-screen.agent-tab[data-view="focus"] .composer-bar { flex-wrap:wrap; }
 }
 /* The desktop switcher (`shell/`). A framed desktop fills the page; the shell
    pads the safe areas, since `env()` reads 0 inside a frame. */
