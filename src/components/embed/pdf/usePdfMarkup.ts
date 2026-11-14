@@ -1109,19 +1109,38 @@ export function usePdfMarkup({
         body.push({ n: 1, size: page.size, marks: page.marks, layerPng: await blobBase64(await layerPng(page)) });
         picturePng = await blobBase64(await composedPng(picture, page));
       } else {
-        for (const n of pages) {
-          const page = present.pages[n];
-          const drawn = await markupPagePicture(doc, n, page);
-          if (drawn.words) words[n] = drawn.words;
-          body.push({
-            n,
-            size: page.size,
-            marks: page.marks,
-            layerPng: await blobBase64(drawn.png),
-            ...(drawn.composed ? { composed: true } : {}),
-            ...(drawn.anchors.length ? { anchors: drawn.anchors } : {}),
-          });
+        // A page's encoding runs while the next page is drawn: two pages at
+        // most are in flight, the request keeps page order, and a failure is
+        // the earliest page's.
+        const encoded: Promise<PdfMarkupPage>[] = [];
+        let failed: { error: unknown } | null = null;
+        try {
+          for (const [i, n] of pages.entries()) {
+            if (i >= 2) await encoded[i - 2];
+            const page = present.pages[n];
+            const drawn = await markupPagePicture(doc, n, page);
+            if (drawn.words) words[n] = drawn.words;
+            const work = blobBase64(drawn.png).then((layerPng): PdfMarkupPage => ({
+              n,
+              size: page.size,
+              marks: page.marks,
+              layerPng,
+              ...(drawn.composed ? { composed: true } : {}),
+              ...(drawn.anchors.length ? { anchors: drawn.anchors } : {}),
+            }));
+            // Settled below with the rest; not an unhandled rejection meanwhile.
+            work.catch(() => {});
+            encoded.push(work);
+          }
+        } catch (error) {
+          failed = { error };
         }
+        const settled = await Promise.allSettled(encoded);
+        for (const result of settled) {
+          if (result.status === "rejected") throw result.reason;
+        }
+        if (failed) throw failed.error;
+        for (const result of settled) if (result.status === "fulfilled") body.push(result.value);
       }
       const settings = useSettingsStore.getState().settings;
       const instruction = pdfMarkupInstruction(settings?.pdf_markup_instruction);

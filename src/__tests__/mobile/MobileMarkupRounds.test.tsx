@@ -293,6 +293,42 @@ describe("MarkupView · rounds", () => {
     }]);
   });
 
+  it("shows the earliest page's failure when an upload fails on page 2 of 3, with page 3 already asked of the frame", async () => {
+    const calls = desktop();
+    const inbox = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).includes("name=paper-p2-")) {
+        calls.push({ url: String(input), method: "POST", body: init?.body });
+        return jsonResponse(507, { error: "inbox_full" });
+      }
+      return inbox(input, init);
+    }));
+    let layer: Layer = EMPTY_LAYER;
+    for (const n of [1, 2, 3]) layer = addMark(layer, n, [800, 600], { kind: "ink", color: "red", width: 2, points: [[10, 10, 0.5], [40, 30, 0.5]] });
+    store.loadLayer.mockResolvedValue({ layer, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
+    const { container } = render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} onClose={() => {}} />);
+    openAgent();
+    const frame = (container.querySelector("iframe.markup-frame") as HTMLIFrameElement).contentWindow!;
+    const say = (data: unknown) => window.dispatchEvent(new MessageEvent("message", { data, origin: "null", source: frame }));
+    const asked: string[] = [];
+    vi.spyOn(frame, "postMessage").mockImplementation((message: unknown) => {
+      const ask = message as { type: string; id: number; n?: number; page?: number };
+      asked.push(ask.type === "open" ? "open" : `${ask.type}${ask.n ?? ask.page}`);
+      if (ask.type === "snapshot") queueMicrotask(() => say({ type: "snapshot", id: ask.id, n: ask.n }));
+      if (ask.type === "text") queueMicrotask(() => say({ type: "text", id: ask.id, page: ask.page, runs: [] }));
+    });
+    await waitFor(() => expect(calls.some((call) => call.url.endsWith(".pdf"))).toBe(true));
+    act(() => { say({ type: "ready" }); say({ type: "meta", pages: [{ w: 800, h: 600 }, { w: 800, h: 600 }, { w: 800, h: 600 }] }); });
+    await waitFor(() => expect(asked).toContain("open"));
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    expect(await screen.findByText(/page 2 could not be uploaded \(the project's inbox is full\)/)).toBeTruthy();
+    // Page 3 was asked of the frame while page 2 uploaded; nothing was sent on.
+    expect(asked.filter((ask) => /^(snapshot|text)/.test(ask))).toEqual(["snapshot1", "text1", "snapshot2", "text2", "snapshot3", "text3"]);
+    expect(calls.some((call) => call.url.endsWith("/markup"))).toBe(false);
+    expect(calls.some((call) => call.url.includes("name=paper-p3-"))).toBe(false);
+  });
+
   it("loads the changed PDF under the marks once the agent finished, by default", async () => {
     desktop();
     store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });

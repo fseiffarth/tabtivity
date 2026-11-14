@@ -1523,31 +1523,70 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     // The frame draws each page and reads its words while it holds the
     // document; past a failure, the marks go alone.
     let frameUp = isPdf && frameReady.current && opened.current && sizes !== null && !failure && !reopening;
-    for (const n of marked) {
+    /** The frame is asked for a page's picture and its words together (it
+     * serves its requests one after the other). */
+    const askPage = (n: number) => ({
+      shot: askFrame({ type: "snapshot", id: ++frameCallId.current, n, width: LAYER_WIDTH }),
+      text: askFrame({ type: "text", id: ++frameCallId.current, page: n }),
+    });
+    /** The page whose upload is under way while the next page is drawn. */
+    let uploading: { n: number; done: Promise<void> } | null = null;
+    /** `uploading` finished: `false` after it failed (the failure is shown). */
+    const uploaded = async (): Promise<boolean> => {
+      const last = uploading;
+      uploading = null;
+      if (!last) return true;
+      try {
+        await last.done;
+        return true;
+      } catch (error) {
+        fail(t("mobile.markup.sendFailed.layer", { n: last.n, reason: reason(error) }));
+        return false;
+      }
+    };
+    let asked = frameUp ? askPage(marked[0]) : null;
+    for (const [i, n] of marked.entries()) {
       setSending(t("mobile.markup.sendingPage", { n }));
       const page = present.pages[n];
+      let png: Blob | null = null;
+      let failedWith: unknown = null;
       try {
-        let png: Blob | null = null;
-        if (frameUp) {
-          const shot = await askFrame({ type: "snapshot", id: ++frameCallId.current, n, width: LAYER_WIDTH });
+        if (frameUp && asked) {
+          const { shot: shotAsked, text: textAsked } = asked;
+          const [shot, text] = await Promise.all([shotAsked, textAsked]);
           if (shot?.type === "snapshot" && shot.bitmap) {
             try { png = await pagePng(shot.bitmap, page); } catch { png = null; } finally { shot.bitmap.close(); }
           }
-          const text = shot ? await askFrame({ type: "text", id: ++frameCallId.current, page: n }) : null;
-          const runs: TextRun[] = text?.type === "text" ? text.runs : [];
+          // The words of a page whose picture never came are not used.
+          const runs: TextRun[] = shot && text?.type === "text" ? text.runs : [];
           const found = anchorsFor(page, runs);
           if (found.length) anchors.set(n, found);
           if (runs.length) words[n] = page.marks.map((mark) => wordsIn(runs, markBox(mark)) || null);
           // A frame that stopped answering is not waited on page after page.
           if (!shot || !text) frameUp = false;
         }
-        if (png) composed.add(n);
-        refs.set(n, (await uploadToInbox(tabId, png ?? await layerPng(page), `${stem}-p${n}-${png ? "marked" : "layer"}.png`)).reference);
       } catch (error) {
-        fail(t("mobile.markup.sendFailed.layer", { n, reason: reason(error) }));
+        failedWith = error;
+      }
+      asked = null;
+      // An earlier page's upload that failed comes first; the picture of
+      // this page is closed by now either way.
+      if (!(await uploaded())) return;
+      if (failedWith !== null) {
+        fail(t("mobile.markup.sendFailed.layer", { n, reason: reason(failedWith) }));
         return;
       }
+      if (png) composed.add(n);
+      const upload = (async () => {
+        refs.set(n, (await uploadToInbox(tabId, png ?? await layerPng(page), `${stem}-p${n}-${png ? "marked" : "layer"}.png`)).reference);
+      })();
+      // Judged when the next page has been drawn (or after the last).
+      upload.catch(() => {});
+      uploading = { n, done: upload };
+      // The next page is drawn while this one uploads.
+      if (frameUp && i + 1 < marked.length) asked = askPage(marked[i + 1]);
     }
+    if (!(await uploaded())) return;
     let picture: string | undefined;
     if (!isPdf) {
       setSending(t("mobile.markup.sendingPicture"));

@@ -38,6 +38,17 @@ export function visibleRuns(runs: readonly TextRun[], pixels: PagePixels, scale:
   return runs.filter((run) => !run.str.trim() || inked(run, pixels, scale));
 }
 
+/** One count buffer per channel, cleared at each use: `inked` runs for every
+ * run on a page and is not re-entered. */
+const COUNTS = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+
+/** The first index of the buffer's largest count (`indexOf` of the maximum). */
+function commonest(count: Uint32Array): number {
+  let best = 0;
+  for (let i = 1; i < count.length; i++) if (count[i] > count[best]) best = i;
+  return best;
+}
+
 function inked(run: TextRun, { width, height, data }: PagePixels, scale: number): boolean {
   if (!(run.h >= MIN_VISIBLE_EM) || !(run.w > 0)) return false;
   // The glyph band: cap height to just under the baseline (a run's box is
@@ -49,7 +60,8 @@ function inked(run: TextRun, { width, height, data }: PagePixels, scale: number)
   const y1 = Math.min(height, Math.ceil((run.y + 0.95 * run.h) * scale));
   if (!(x1 > x0 && y1 > y0)) return false;
   // The background is each channel's commonest value in the box.
-  const counts = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+  const counts = COUNTS;
+  for (const count of counts) count.fill(0);
   for (let y = y0; y < y1; y++) {
     for (let i = (y * width + x0) * 4, end = (y * width + x1) * 4; i < end; i += 4) {
       counts[0][data[i]]++;
@@ -57,7 +69,7 @@ function inked(run: TextRun, { width, height, data }: PagePixels, scale: number)
       counts[2][data[i + 2]]++;
     }
   }
-  const bg = counts.map((count) => count.indexOf(Math.max(...count)));
+  const bg = counts.map(commonest);
   const area = (x1 - x0) * (y1 - y0);
   const needed = Math.max(MIN_INK, Math.ceil(INK_SHARE * area));
   let ink = 0;

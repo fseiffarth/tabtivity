@@ -82,6 +82,8 @@ const lastSaved = (): Layer | undefined => {
 };
 
 beforeEach(() => {
+  // Back to the real picture routine after a test that stood one in.
+  vi.mocked(markupPagePicture).mockReset();
   mocks.invoke.mockReset();
   mocks.invoke.mockImplementation(async (command: string) => {
     if (command === "file_mtime") return 1_790_000_000;
@@ -116,6 +118,44 @@ describe("desktop markup Submit", () => {
       n: 1, size: SIZE, marks: [STROKE], layerPng: btoa("page"), composed: true,
       anchors: [{ mark: 0, how: "through", words: "teh", line: "teh result" }],
     }]);
+  });
+
+  it("pipelines the pages: the request keeps page order, and a page that cannot be drawn is the failure shown", async () => {
+    const pages = [1, 2, 3];
+    let layer = EMPTY_LAYER;
+    for (const n of pages) layer = addMark(layer, n, SIZE, STROKE);
+    mocks.loadLayer.mockResolvedValue({ layer, fingerprint: { size: 9_000, modified: 1_790_000_000 }, saved: 1 });
+    // Page 1 takes longest to come back: the pages still go out in order.
+    vi.mocked(markupPagePicture).mockImplementation(async (_doc, n) => {
+      await new Promise((resolve) => setTimeout(resolve, n === 1 ? 20 : 0));
+      return { png: new Blob([`page${n}`], { type: "image/png" }), composed: true, anchors: [] };
+    });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mocks.holdPhonePrompt).toHaveBeenCalled());
+    const call = mocks.invoke.mock.calls.find(([command]) => command === "pdf_markup_submit")!;
+    expect(call[1].pages.map((page: { n: number; layerPng: string }) => [page.n, page.layerPng])).toEqual(pages.map((n) => [n, btoa(`page${n}`)]));
+  });
+
+  it("says page 2 could not be drawn, and sends nothing on", async () => {
+    let layer = EMPTY_LAYER;
+    for (const n of [1, 2, 3]) layer = addMark(layer, n, SIZE, STROKE);
+    mocks.loadLayer.mockResolvedValue({ layer, fingerprint: { size: 9_000, modified: 1_790_000_000 }, saved: 1 });
+    const drawn: number[] = [];
+    vi.mocked(markupPagePicture).mockImplementation(async (_doc, n) => {
+      drawn.push(n);
+      if (n === 2) throw "hidden_path";
+      return { png: new Blob([`page${n}`], { type: "image/png" }), composed: true, anchors: [] };
+    });
+    render(<Harness />);
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    expect(await screen.findByText(new RegExp(`Nothing was sent: PDFs in \\.git, \\.${BRAND.slug} or \\.env folders can't be marked up`))).toBeTruthy();
+    expect(drawn).toEqual([1, 2]);
+    expect(mocks.invoke.mock.calls.some(([command]) => command === "pdf_markup_submit")).toBe(false);
+    expect(mocks.queuePromptForTab).not.toHaveBeenCalled();
+    expect(submitButton().disabled).toBe(false);
   });
 
   it("bakes the marks, queues the prompt for the agent tab and holds it for its queue", async () => {
