@@ -64,7 +64,10 @@ fn authorize(project_id: &str) -> Result<PathBuf, String> {
 }
 
 /// A refusal is also a revocation: whatever was running for the project stops.
+/// The one place a server starts: with AI switched off none does, whichever
+/// command asked (a completion, or a click on Sign in).
 async fn session(project_id: &str) -> Result<(Arc<Session>, PathBuf), String> {
+    crate::services::ai_switch::check()?;
     match authorize(project_id) {
         Ok(root) => {
             let session = sessions().get_or_start(project_id, &root).await?;
@@ -263,11 +266,12 @@ pub async fn copilot_accepted(
 
 /// Never starts a server: a status read must not be what sends a project's
 /// workspace to a subprocess.
-/// `remembered`: a sign-in for this app account is in the keychain ("Stay
-/// signed in"); never the token.
+/// `remembered`: "Stay signed in" is on and a sign-in for this app account is
+/// in the keychain; never the token. With the setting off the keychain is not
+/// read.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn copilot_account(project_id: String) -> Result<Value, String> {
-    let remembered = credentials::remembered(&credentials::keychain()).await;
+    let remembered = credentials::restorable(credentials::stay_signed_in().await, &credentials::keychain()).await;
     let Some(session) = sessions().existing(&project_id).await.filter(|session| session.alive()) else {
         return Ok(json!({"running": false, "remembered": remembered}));
     };
@@ -303,8 +307,7 @@ pub async fn copilot_sign_in(project_id: String) -> Result<Option<DeviceCode>, S
 pub async fn copilot_finish_sign_in(project_id: String) -> Result<(), String> {
     let session = session(&project_id).await?.0;
     session.finish_sign_in().await?;
-    let stay = app_core::rt::blocking("Copilot settings", credentials::enabled).await.unwrap_or(false);
-    credentials::after_sign_in(&session, stay, &credentials::keychain()).await
+    credentials::after_sign_in(&session, credentials::stay_signed_in().await, &credentials::keychain()).await
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -326,4 +329,20 @@ pub async fn copilot_sign_out(project_id: String) -> Result<(), String> {
 /// `RunEvent::Exit`: no language server outlives Tabtivity.
 pub async fn stop_all_for_exit() {
     sessions().stop_all().await;
+}
+
+#[cfg(test)]
+mod tests {
+    /// Source scan: `session` is the only caller of `get_or_start`, and it
+    /// asks the AI switch first, so no command can start a server while AI is
+    /// off (Sign in used to).
+    #[test]
+    fn no_server_starts_while_ai_is_switched_off() {
+        let source = include_str!("copilot.rs");
+        let code = source.split("#[cfg(test)]").next().unwrap();
+        assert_eq!(code.matches("get_or_start(").count(), 1, "a second place starts a server");
+        let body = code.split("async fn session(").nth(1).expect("the session helper");
+        let check = body.find("ai_switch::check()?").expect("session asks the AI switch");
+        assert!(check < body.find("get_or_start(").unwrap(), "the switch is asked before a server starts");
+    }
 }

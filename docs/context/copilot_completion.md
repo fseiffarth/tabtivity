@@ -64,6 +64,9 @@ network, HTTP 429), which judges nothing. Switching the
 setting on while a server is signed in stores its token then; switching it off,
 or signing out, deletes the entry. The token never reaches the webview, a log
 line or the diagnostics ring (`copilot_account` reports only `remembered`).
+With the setting off the keychain is never read: neither the card's status
+poll nor the idle timer asks it (`credentials::restorable`), and `remembered`
+is false.
 Both request shapes come from reading the 1.565.6 server bundle (its handler
 table and request schemas), not from a live account.
 
@@ -82,7 +85,9 @@ died or never finished starting), redacted (`gh?_…`, `github_pat_…`,
 memory. A failed launch spends no restart budget, so "not installed" stays
 visible. The document is authorized before a server starts. Proxy and CA
 variables reach the server through bwrap's own environment, not its argument
-list. The AI switch turning off stops every server.
+list. The AI switch turning off stops every server, and none starts while it
+is off: `session()` in `commands/copilot.rs`, the one caller of `get_or_start`,
+asks the switch first (a click on Sign in included).
 
 ## Standalone protocol evidence
 
