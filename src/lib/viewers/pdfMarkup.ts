@@ -127,11 +127,10 @@ export function _clearMarkupClaimsForTest(): void {
 
 // ── The command ───────────────────────────────────────────────────────────
 
-/** One marked page as `pdf_markup_submit` takes it: the phone's own shape,
- * with the layer PNG inline (standard base64, no `data:` prefix). */
-/** One marked page for `pdf_markup_submit`: `layerPng` is the page with its
- *  marks drawn on (`composed`) or the marks alone; `anchors` the page's words
- *  each mark is on (`mobile-web/src/markup/anchors.ts`). */
+/** One marked page for `pdf_markup_submit` (the phone's own shape, the PNG
+ *  inline as standard base64, no `data:` prefix): `layerPng` is the page with
+ *  its marks drawn on (`composed`) or the marks alone; `anchors` the page's
+ *  words each mark is on (`mobile-web/src/markup/anchors.ts`). */
 export type PdfMarkupPage = { n: number; size: [number, number]; marks: Mark[]; layerPng: string; composed?: boolean; anchors?: Anchor[] };
 /** `apply`: the agent makes the changes and an undo snapshot backs them;
  *  `list`: it lists them first (**Make these changes**). */

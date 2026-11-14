@@ -9062,7 +9062,6 @@ export const dict: Dict = {
   "pdfMarkup.picture.toggleTitle": "Annota questa immagine e invia i segni a una scheda agente di questo progetto",
   "pdfMarkup.picture.toggleAsks": "Una scheda agente chiede di questa immagine — Annota per vedere le domande",
   "pdfMarkup.picture.toggleClaimed": "Questa immagine è in fase di annotazione in un altro riquadro",
-  "pdfMarkup.picture.hint": "Disegna sull'immagine — resta su questo computer finché non invii.",
   "pdfMarkup.picture.stale": "L'immagine è cambiata sul disco — Ricarica per vederla sotto i tuoi segni.",
   "pdfMarkup.picture.autoReloaded": "L'immagine è cambiata sul disco ed è stata ricaricata sotto i tuoi segni.",
   "pdfMarkup.picture.reload": "Ricarica immagine",

@@ -39,9 +39,23 @@ function cut(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join("")}…`;
 }
 
+/** Lines already built, by the page's runs array — a text-mark drag asks on
+ * every pointer move, and each mark's words at Submit ask again. The runs a
+ * page read are never changed in place, and the lines are only read. */
+const builtLines = new WeakMap<readonly TextRun[], Line[]>();
+
 /** The runs grouped into lines: runs whose middles sit within half a line of
  * each other, split where a gap is wide enough to be a column's gutter. */
 function linesOf(runs: readonly TextRun[]): Line[] {
+  let lines = builtLines.get(runs);
+  if (!lines) {
+    lines = buildLines(runs);
+    builtLines.set(runs, lines);
+  }
+  return lines;
+}
+
+function buildLines(runs: readonly TextRun[]): Line[] {
   const usable = runs.filter((run) => run.str && [run.x, run.y, run.w, run.h].every(Number.isFinite) && run.h > 0 && run.w >= 0);
   const sorted = [...usable].sort((a, b) => a.y + a.h / 2 - (b.y + b.h / 2) || a.x - b.x);
   const bands: TextRun[][] = [];

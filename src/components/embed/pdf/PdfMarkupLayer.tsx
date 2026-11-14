@@ -20,16 +20,17 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as R
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { textMarks } from "../../../../mobile-web/src/markup/anchors";
 import {
-  clampToPage,
+  boxBetween,
   selectionBox,
   eraseAlong,
   eraseAt,
   eraseRect,
   finishStroke,
-  inkWidth,
   markAt,
   markBox,
   marksIn,
+  noteSize,
+  pagePoint,
   marksInLoop,
   MAX_COMMENT,
   moveMarks,
@@ -42,24 +43,20 @@ import {
   straightenStroke,
   stampSize,
   stylusErases,
-  type BoxMark,
   type InkMark,
   type Mark,
-  type MarkColor,
   type PageLayer,
   PEN_STYLES,
   type PenStyle,
   type StampMark,
   type TextMark,
 } from "../../../../mobile-web/src/markup/layer";
-import { drawMark, drawPage, INK, type Paint } from "../../../../mobile-web/src/markup/rasterize";
+import { drawMark, INK, paintLayer, paintStrokePiece } from "../../../../mobile-web/src/markup/rasterize";
 import { colorsFor, eraserPx, inkStyle, penCursor, SNAP_HOLD_MS, SNAP_SLOP_PX, strokePressure, strokeWidth } from "../../../../mobile-web/src/markup/pen";
 import { selectionColors } from "./PdfMarkupBar";
 import { PEN_STYLE_KEYS, SwatchButtons } from "./PdfMarkupDock";
 import type { CommentDraft, MarkupEdit, NoteDraft } from "./usePdfMarkup";
 
-/** How strongly the marks of earlier rounds show — sent, never sent again. */
-export const SENT_ALPHA = 0.35;
 /** The widest the layer canvas is backed at, in device pixels. */
 const MAX_BACKING = 8192;
 /** How far a pointer travels on a note before it is a drag, not a click. */
@@ -120,40 +117,7 @@ type Gesture =
       moved: boolean;
     };
 
-/** The sent marks dimmed, then the unsent ones over them. */
-function paintLayer(ctx: Paint, page: PageLayer | undefined, sent: PageLayer | undefined, scale: number) {
-  if (sent) {
-    ctx.save();
-    ctx.globalAlpha = SENT_ALPHA;
-    drawPage(ctx, sent, scale);
-    ctx.restore();
-  }
-  if (page) drawPage(ctx, page, scale);
-}
 
-function boxOf(a: [number, number], b: [number, number], color: MarkColor): BoxMark {
-  const x = Math.min(a[0], b[0]);
-  const y = Math.min(a[1], b[1]);
-  return { kind: "box", color, rect: [round(x), round(y), round(Math.abs(a[0] - b[0])), round(Math.abs(a[1] - b[1]))] };
-}
-
-/** A pointer's spot on the page, in page units, kept on the page. Measured off
- *  the layer's own box, so it holds at any zoom; `scale` stands in where the
- *  box has no size yet. */
-export function pagePoint(
-  box: { left: number; top: number; width: number; height: number },
-  size: Size,
-  scale: number,
-  clientX: number,
-  clientY: number,
-): [number, number] {
-  const width = box.width || size[0] * scale;
-  const height = box.height || size[1] * scale;
-  return clampToPage(((clientX - box.left) * size[0]) / width, ((clientY - box.top) * size[1]) / height, size);
-}
-
-/** The marks at `indices` of `page` boxed together `[x0, y0, x1, y1]`, or `null`. */
-const boxAround = selectionBox;
 
 /** A dashed outline, white under dark so it shows on any page — the area
  *  eraser's rectangle, the select tool's box and its selection. */
@@ -228,7 +192,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   const sent = edit.showSent ? edit.layer.sent?.pages[n] : undefined;
   const selection = edit.selection?.n === n ? edit.selection : null;
   /** The selection's outline, following a move in flight. */
-  const selBox = selection ? boxAround(page, selection.indices) : null;
+  const selBox = selection ? selectionBox(page, selection.indices) : null;
   /** The selection's outline as drawn, padded a little off the marks. */
   const selPad = 3 / scale;
   const selKey = selBox?.join(",") ?? "";
@@ -296,8 +260,10 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = pixelW;
-    canvas.height = pixelH;
+    // Setting a size reallocates the backing store even when unchanged:
+    // only on a resize, not on every preview move (`redraw` clears).
+    if (canvas.width !== pixelW) canvas.width = pixelW;
+    if (canvas.height !== pixelH) canvas.height = pixelH;
     redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, sent, preview, area, loop, selKey, pixelW, pixelH]);
@@ -326,38 +292,11 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     return size[0] / width;
   };
 
-  /** The newest piece of the stroke in progress, straight onto the canvas:
-   *  the curve from the midpoint before the last sample, through it, to the
-   *  midpoint after it — the curves `rasterize.ts` draws the finished stroke
-   *  with, so nothing jumps when the pen lifts. The first sample is a dot. */
+  /** The newest piece of the stroke in progress, straight onto the canvas. */
   const paintPiece = (mark: InkMark) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
-    const points = mark.points;
-    if (!canvas || !ctx || !points.length) return;
-    const k = canvas.width / size[0];
-    const at = points.length - 1;
-    const mid = (a: readonly number[], b: readonly number[]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    ctx.save();
-    ctx.scale(k, k);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = INK[mark.color];
-    ctx.beginPath();
-    if (at === 0) {
-      ctx.lineWidth = inkWidth(mark.width, points[0][2]);
-      ctx.moveTo(points[0][0], points[0][1]);
-      ctx.lineTo(points[0][0], points[0][1]);
-    } else {
-      const control = points[at - 1];
-      const from = at >= 2 ? mid(points[at - 2], control) : [control[0], control[1]];
-      const to = mid(control, points[at]);
-      ctx.lineWidth = inkWidth(mark.width, control[2]);
-      ctx.moveTo(from[0], from[1]);
-      ctx.quadraticCurveTo(control[0], control[1], to[0], to[1]);
-    }
-    ctx.stroke();
-    ctx.restore();
+    if (canvas && ctx) paintStrokePiece(ctx, canvas.width / size[0], mark);
   };
 
   /** A real pen's reading bends by the pressure curve; a mouse or a finger
@@ -538,7 +477,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     } else if (g.kind === "area") {
       setArea(areaOf(g.start, toPage(event.clientX, event.clientY)));
     } else if (g.kind === "box") {
-      setPreview([boxOf(g.start, toPage(event.clientX, event.clientY), edit.color)]);
+      setPreview([boxBetween(g.start, toPage(event.clientX, event.clientY), edit.color)]);
     } else if (g.kind === "textmark") {
       setPreview(textMarksTo(g.start, toPage(event.clientX, event.clientY)));
     } else if (g.kind === "stamp") {
@@ -598,7 +537,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       if (next !== edit.base) edit.commit(next);
     } else if (g.kind === "box") {
       setPreview([]);
-      const box = boxOf(g.start, toPage(event.clientX, event.clientY), edit.color);
+      const box = boxBetween(g.start, toPage(event.clientX, event.clientY), edit.color);
       if (box.rect[2] >= 2 && box.rect[3] >= 2) edit.add(n, size, box);
     } else if (g.kind === "textmark") {
       setPreview([]);
@@ -646,7 +585,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
             index: null,
             text: "",
             color: edit.color,
-            size: Math.min(200, Math.max(4, Math.round(size[0] / 40))),
+            size: noteSize(size[0]),
           };
       edit.openNote(draft);
     }

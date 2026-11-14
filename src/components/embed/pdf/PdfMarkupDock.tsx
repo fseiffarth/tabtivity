@@ -15,8 +15,8 @@ import { useT, type TranslationKey } from "../../../lib/i18n";
 import { storageKey } from "../../../lib/brand";
 import { readJson, writeJson } from "../../../lib/persist";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
-import { COLOR_KEYS, PdfMarkupMore, STAMP_GLYPHS, TextMarkGlyph } from "./PdfMarkupBar";
-import { DOCK_LABEL_KEYS, DockIcon, ERASER_MODE_KEYS, LASSO_KEYS, proofKey } from "../../../../mobile-web/src/markup/dock";
+import { COLOR_KEYS, PdfMarkupMore, TextMarkGlyph } from "./PdfMarkupBar";
+import { DOCK_LABEL_KEYS, DockIcon, ERASER_MODE_KEYS, LASSO_KEYS, PROOF_GLYPHS, proofKey } from "../../../../mobile-web/src/markup/dock";
 import { UntestedTag } from "../../common/UntestedTag";
 import { SquareIcon } from "../../common/icons/Icon";
 import { INK } from "../../../../mobile-web/src/markup/rasterize";
@@ -36,7 +36,7 @@ import {
   type PenPreset,
   type ProofPick,
 } from "../../../../mobile-web/src/markup/pen";
-import type { MarkColor, PenStyle, StampSymbol } from "../../../../mobile-web/src/markup/layer";
+import type { MarkColor, PenStyle } from "../../../../mobile-web/src/markup/layer";
 import type { PdfMarkup } from "./usePdfMarkup";
 
 export type DockEdge = "bottom" | "top" | "left" | "right";
@@ -77,7 +77,7 @@ export const PEN_STYLE_KEYS: Record<PenStyle, TranslationKey> = {
 export function ProofGlyph({ pick }: { pick: ProofPick }) {
   if (pick === "box") return <SquareIcon />;
   if (pick === "strike" || pick === "underline" || pick === "highlight") return <TextMarkGlyph mode={pick} />;
-  return <span aria-hidden="true">{STAMP_GLYPHS[pick as StampSymbol]}</span>;
+  return <span aria-hidden="true">{PROOF_GLYPHS[pick]}</span>;
 }
 
 /** A favourite drawn as a dot of its colour, as wide as its size draws (the

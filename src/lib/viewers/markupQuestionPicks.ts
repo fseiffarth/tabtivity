@@ -9,6 +9,13 @@
  * checks against the ask (`services::markup_mcp::Answer`).
  */
 
+/** The longest typed **Other…** answer (`markup_mcp::MAX_OTHER_CHARS`). */
+export const MAX_OTHER = 500;
+/** How long a card that just opened for a new ask takes no taps or clicks:
+ * the reader may be mid-stroke where it lands, and a pen, finger or click
+ * already on its way down must not pick or send for them. */
+export const ARRIVAL_GUARD_MS = 1_200;
+
 export type MarkupChoice = { label: string; description?: string };
 export type MarkupQuestion = {
   question: string;

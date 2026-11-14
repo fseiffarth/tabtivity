@@ -5,9 +5,9 @@
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PdfMarkupLayer, pagePoint } from "../../components/embed/pdf/PdfMarkupLayer";
+import { PdfMarkupLayer } from "../../components/embed/pdf/PdfMarkupLayer";
 import type { MarkupEdit } from "../../components/embed/pdf/usePdfMarkup";
-import { EMPTY_LAYER, addMark, type Layer } from "../../../mobile-web/src/markup/layer";
+import { EMPTY_LAYER, addMark, pagePoint, type Layer } from "../../../mobile-web/src/markup/layer";
 import { DEFAULT_PEN_PREFS } from "../../../mobile-web/src/markup/pen";
 
 const SIZE: [number, number] = [600, 800];

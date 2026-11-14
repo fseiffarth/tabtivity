@@ -9062,7 +9062,6 @@ export const dict: Dict = {
   "pdfMarkup.picture.toggleTitle": "Marcar esta imagen y enviar las marcas a una pestaña de agente de este proyecto",
   "pdfMarkup.picture.toggleAsks": "Una pestaña de agente pregunta por esta imagen — Marcar muestra sus preguntas",
   "pdfMarkup.picture.toggleClaimed": "Esta imagen se está marcando en otro panel",
-  "pdfMarkup.picture.hint": "Dibuja sobre la imagen — se guarda en este equipo hasta que la envíes.",
   "pdfMarkup.picture.stale": "La imagen cambió en el disco — Recargar la muestra bajo tus marcas.",
   "pdfMarkup.picture.autoReloaded": "La imagen cambió en el disco y se recargó bajo tus marcas.",
   "pdfMarkup.picture.reload": "Recargar imagen",

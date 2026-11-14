@@ -9068,7 +9068,6 @@ export const dict: Dict = {
   "pdfMarkup.picture.toggleTitle": "Dieses Bild markieren und die Markierungen an einen Agenten-Tab dieses Projekts senden",
   "pdfMarkup.picture.toggleAsks": "Ein Agenten-Tab fragt zu diesem Bild — Markieren zeigt seine Fragen",
   "pdfMarkup.picture.toggleClaimed": "Dieses Bild wird in einem anderen Bereich markiert",
-  "pdfMarkup.picture.hint": "Auf das Bild zeichnen — bleibt auf diesem Computer, bis du absendest.",
   "pdfMarkup.picture.stale": "Das Bild hat sich auf der Festplatte geändert — Neu laden zeigt es unter deinen Markierungen.",
   "pdfMarkup.picture.autoReloaded": "Das Bild hat sich auf der Festplatte geändert und wurde unter deinen Markierungen neu geladen.",
   "pdfMarkup.picture.reload": "Bild neu laden",

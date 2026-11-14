@@ -77,6 +77,11 @@ export function stampSize(pageWidth: number): number {
   return Math.min(200, Math.max(4, Math.round(pageWidth / 30)));
 }
 
+/** A new typed note's text size on a page `pageWidth` units wide. */
+export function noteSize(pageWidth: number): number {
+  return Math.min(200, Math.max(4, Math.round(pageWidth / 40)));
+}
+
 /** A stamp's polylines in page units. */
 export function stampLines(mark: StampMark): [number, number][][] {
   return STAMP_SHAPES[mark.symbol].map((line) => line.map(([x, y]): [number, number] => [mark.at[0] + x * mark.size, mark.at[1] + y * mark.size]));
@@ -163,7 +168,32 @@ export function clampToPage(x: number, y: number, size: [number, number]): [numb
   return [Math.min(size[0], Math.max(0, x)), Math.min(size[1], Math.max(0, y))];
 }
 
-function distanceToSegment(p: [number, number], a: [number, number], b: [number, number]): number {
+/** A pointer's spot on the page, in page units, kept on the page. Measured off
+ * the layer canvas's own box, so it holds at any zoom; `scale` (CSS pixels per
+ * page unit) stands in where the box has no size yet. */
+export function pagePoint(
+  box: { left: number; top: number; width: number; height: number },
+  size: [number, number],
+  scale: number,
+  clientX: number,
+  clientY: number,
+): [number, number] {
+  const width = box.width || size[0] * scale;
+  const height = box.height || size[1] * scale;
+  return clampToPage(((clientX - box.left) * size[0]) / width, ((clientY - box.top) * size[1]) / height, size);
+}
+
+/** The box mark spanning corners `a` and `b`, either way round. */
+export function boxBetween(a: [number, number], b: [number, number], color: MarkColor): BoxMark {
+  const x = Math.min(a[0], b[0]);
+  const y = Math.min(a[1], b[1]);
+  return { kind: "box", color, rect: [round(x), round(y), round(Math.abs(a[0] - b[0])), round(Math.abs(a[1] - b[1]))] };
+}
+
+/** How far `p` lies from the segment `a`–`b`; each is read as `[x, y, …]`,
+ * so a stroke's samples go in as they are — the eraser calls this per
+ * segment per step, and builds no arrays for it. */
+function distanceToSegment(p: readonly number[], a: readonly number[], b: readonly number[]): number {
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
   const length = dx * dx + dy * dy;
@@ -184,7 +214,7 @@ export function simplify(points: [number, number, number][], tolerance: number):
     let worst = -1;
     let at = -1;
     for (let i = first + 1; i < last; i++) {
-      const d = distanceToSegment([points[i][0], points[i][1]], [points[first][0], points[first][1]], [points[last][0], points[last][1]]);
+      const d = distanceToSegment(points[i], points[first], points[last]);
       if (d > worst) { worst = d; at = i; }
     }
     if (at > 0 && worst > tolerance) {
@@ -312,10 +342,9 @@ export function touches(mark: Mark, x: number, y: number, radius: number): boole
   if (mark.kind === "ink") {
     const reach = radius + inkWidth(mark.width, 1) / 2;
     if (mark.points.length === 1) return Math.hypot(mark.points[0][0] - x, mark.points[0][1] - y) <= reach;
+    const at = [x, y];
     for (let i = 1; i < mark.points.length; i++) {
-      const a = mark.points[i - 1];
-      const b = mark.points[i];
-      if (distanceToSegment([x, y], [a[0], a[1]], [b[0], b[1]]) <= reach) return true;
+      if (distanceToSegment(at, mark.points[i - 1], mark.points[i]) <= reach) return true;
     }
     return false;
   }
@@ -468,7 +497,8 @@ function eraseMarks(marks: Mark[], x: number, y: number, radius: number, whole: 
  * and are never trimmed, so it only keeps the record finite. */
 export const SENT_LIMITS = { marks: LIMITS.marks * 4, points: LIMITS.points * 4 } as const;
 
-function within(pages: Record<number, PageLayer>, limits: { marks: number; points: number }): boolean {
+/** Whether `pages` stay under `limits`' mark and point ceilings. */
+export function within(pages: Record<number, PageLayer>, limits: { marks: number; points: number }): boolean {
   const { marks, points } = markCount({ pages });
   return marks <= limits.marks && points <= limits.points;
 }
@@ -874,6 +904,20 @@ export const TICK_GROUP_GAP = 0.01;
 /** Ticked marks of one page that sit together — one remark, often written in
  * many strokes — badged and approved as one (`tickGroups`). `box` is their
  * marks' boxes together, `marks` in page order. */
+/** A mark's identity as a React key — not its index, so a badge or an
+ * editor goes with its mark, and a second tap never lands on the next mark
+ * that slides into its place. */
+const markIds = new WeakMap<Mark, number>();
+let nextMarkId = 0;
+export function markKey(mark: Mark): number {
+  let id = markIds.get(mark);
+  if (id === undefined) {
+    id = ++nextMarkId;
+    markIds.set(mark, id);
+  }
+  return id;
+}
+
 export type TickGroup = { page: number; marks: TickedMark[]; box: [number, number, number, number] };
 
 /** Which of one page's marks sit together: any two whose boxes come within
@@ -1201,6 +1245,12 @@ export function copyMarks(layer: Layer, n: number, indices: readonly number[], d
   return { layer: withPage(layer, n, { ...page, marks }), indices: copies.map((_, i) => page.marks.length + i) };
 }
 
+/** A typed note's text as stored: control characters other than line breaks
+ * dropped, the ends trimmed — the desktop refuses the rest. */
+export function cleanNote(text: string | null | undefined): string {
+  return (text ?? "").replace(/(?!\n)\p{Cc}/gu, "").trim();
+}
+
 /** A comment as stored: one plain line — control characters (line breaks
  * among them) become spaces, the ends trimmed — cut to `MAX_COMMENT`
  * characters. The desktop refuses anything else (`markup::validate_body`). */
@@ -1267,7 +1317,7 @@ export function snapStroke(mark: InkMark): InkMark | null {
     }
     return { ...mark, points: ring };
   }
-  const worst = points.reduce((most, p) => Math.max(most, distanceToSegment([p[0], p[1]], [first[0], first[1]], [last[0], last[1]])), 0);
+  const worst = points.reduce((most, p) => Math.max(most, distanceToSegment(p, first, last)), 0);
   return worst <= Math.max(1, 0.07 * chord) ? line() : null;
 }
 
@@ -1292,6 +1342,13 @@ const MAX_UNDO = 200;
  * never kept. */
 export function startHistory(layer: Layer = EMPTY_LAYER, past?: readonly Layer[]): History {
   return { past: past ? past.slice(-MAX_UNDO) : [], present: layer, future: [] };
+}
+
+/** `forgetRound` over every step of `history`: an undone round's ticks mean
+ * nothing on any of them (the marks stay). */
+export function forgetRoundInHistory(history: History, roundId: string): History {
+  const forget = (entry: Layer) => forgetRound(entry, roundId);
+  return { past: history.past.map(forget), present: forget(history.present), future: history.future.map(forget) };
 }
 
 export function commit(history: History, next: Layer): History {

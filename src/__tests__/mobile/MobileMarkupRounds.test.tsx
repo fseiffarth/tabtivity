@@ -239,7 +239,7 @@ describe("MarkupView · rounds", () => {
     rerender(view("idle"));
     openAgent();
     await act(async () => { vi.advanceTimersByTime(SETTLE_MS); });
-    fireEvent.click(screen.getByRole("button", { name: /Make these changes/ }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Make these changes/ })); });
     expect(onSend).toHaveBeenLastCalledWith("Go ahead with all of them.");
     expect(screen.getByText("Sent — waiting for the agent")).toBeTruthy();
     // The follow-up's own turn: no second offer once it is done.

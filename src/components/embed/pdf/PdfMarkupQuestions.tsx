@@ -25,6 +25,8 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
 import {
   answersOf,
+  ARRIVAL_GUARD_MS,
+  MAX_OTHER,
   NO_PICK,
   pagePins,
   splitRecommended,
@@ -40,10 +42,6 @@ import { pageTextItemBoxes } from "./pageText";
 import { scrollIntoPdfBox } from "./scrollBox";
 import type { MarkupQuestions, QuestionFocus } from "./usePdfMarkup";
 
-/** The longest an **Other…** answer may be (`markup_mcp::MAX_OTHER_CHARS`). */
-const MAX_OTHER = 500;
-/** How long a newly shown ask takes no clicks (the phone card's rule). */
-export const ARRIVAL_GUARD_MS = 1_200;
 
 /** Where a pin's key in the card's `pinned` set comes from. */
 export const pinKey = (askId: string, index: number) => `${askId}:${index}`;

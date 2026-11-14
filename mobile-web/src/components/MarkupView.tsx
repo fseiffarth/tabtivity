@@ -8,12 +8,12 @@ import { anchorsFor, textMarks, wordsIn, type Anchor } from "../markup/anchors";
 import type { TextRun } from "../markup/findText";
 import { readFlag, writeFlag } from "../prefs";
 import {
-  addMark, approveMarks, approveShown, canAdd, canReplace, clampToPage, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, eraseRect, finishStroke, forgetRound, stylusErases, hasSent, inkWidth, isEmpty, markAnchors, markBox, markedPages,
+  addMark, approveMarks, approveShown, boxBetween, canAdd, canReplace, cleanNote, clearAll, clearPage, clearSent, commit, eraseAlong, eraseAt, eraseRect, finishStroke, forgetRoundInHistory, stylusErases, hasSent, isEmpty, markAnchors, markBox, markedPages, markKey, noteSize, pagePoint,
   markSent, mintRound, moveNote, noteAt, redo, replaceMark, round, startHistory, tickBadgeSpot, tickedMarks, tickGroups, undo,
   addMarks, canAddAll, copyMarks, markAt, marksIn, marksInLoop, MAX_COMMENT, moveMarks, removeMarks, restyleMarks, setComment, snapStroke, stampSize, straightenStroke,
-  type BoxMark, type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type StampMark, type TextMark,
+  type History, type InkMark, type Layer, type Mark, type MarkColor, type PageLayer, type StampMark, type TextMark,
 } from "../markup/layer";
-import { composedPng, drawMark, drawPage, INK, LAYER_WIDTH, layerPng, pagePng, type Paint } from "../markup/rasterize";
+import { composedPng, drawMark, INK, LAYER_WIDTH, layerPng, pagePng, paintLayer, paintStrokePiece } from "../markup/rasterize";
 import {
   colorOf, colorsFor, ERASER_MODES, eraserPx, inkStyle, PEN_ONLY_STYLES, PEN_STYLES, readPenPrefs, strokePressure, strokeWidth, withColor, writePenPrefs,
   applyPreset, PALM_MODES, palmRejects, PRESSURE_CURVES, resetPresets, savePreset, SNAP_HOLD_MS, SNAP_SLOP_PX,
@@ -22,7 +22,7 @@ import {
 } from "../markup/pen";
 import { openMarkupTab, useOpenedTabAgent } from "../markup/newTab";
 import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
-import { canApply, canUndo, followRound, holdsUndo, nextCheck, startRound, stepRound, undoneRound, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
+import { canApply, canUndo, followRound, holdsUndo, nextCheck, NO_UNDO_KEYS, ROUND_KEYS, startRound, stepRound, undoneRound, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
 import { DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, markupForSubagent, markupUndoNote, readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction } from "../markupInstruction";
 import { readMarkupOpen } from "../markupOpen";
 import { keepMarkupTab, type FileTabFile } from "../filesPlace";
@@ -31,7 +31,8 @@ import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
 import type { MarkupBack, MarkupNewTab, MarkupSend } from "./OutboxViewer";
 import { storageDashKey } from "../../../src/lib/brand";
 import { useMarkupAsks } from "../markup/questions";
-import { ARRIVAL_GUARD_MS, MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
+import { MarkupQuestionsCard, type QuestionFocus } from "./MarkupQuestionsCard";
+import { ARRIVAL_GUARD_MS } from "../../../src/lib/viewers/markupQuestionPicks";
 import { EraserIcon } from "../markup/EraserIcon";
 import { DOCK_LABEL_KEYS, DockIcon, ERASER_MODE_KEYS, PROOF_GLYPHS, proofKey } from "../markup/dock";
 import { OptionSheet } from "./OptionSheet";
@@ -116,8 +117,6 @@ const PEN_KEY = storageDashKey("markup-pen");
 const DRAG_SLOP = 8;
 /** The eraser's reach, CSS pixels. */
 const ERASE_PX = 12;
-/** How strongly the marks of earlier rounds show — sent, never sent again. */
-const SENT_ALPHA = 0.35;
 /** How far, CSS pixels, a mark must lie past where the view is for Previous /
  * Next mark to go to it — so a repeated tap moves on rather than landing on
  * the mark it just showed. */
@@ -128,28 +127,6 @@ const TICK_BADGE = 26;
  * take whichever badge lies under the finger next. */
 const TICK_REPEAT_MS = 350;
 
-/** A ✓ badge's React key: its mark's identity, not its index — an approved
- * mark's badge goes with it, so a second tap never lands on the next mark
- * that slides into its index (as the desktop's `PdfMarkupTicks`). */
-const tickIds = new WeakMap<Mark, number>();
-let nextTickId = 0;
-function tickKey(mark: Mark): number {
-  let id = tickIds.get(mark);
-  if (id === undefined) {
-    id = ++nextTickId;
-    tickIds.set(mark, id);
-  }
-  return id;
-}
-
-/** The round pill's words, by phase; `finished` takes the PDF check's. */
-const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
-  sent: "mobile.markup.round.sent",
-  queued: "mobile.markup.round.queued",
-  working: "mobile.markup.round.working",
-  question: "mobile.markup.round.question",
-  unconfirmed: "mobile.markup.round.unconfirmed",
-};
 /** The desktop's glyph the pill wears, where a phase has one. */
 const ROUND_GLYPH: Partial<Record<RoundPhase, "working" | "question" | "done">> = { working: "working", question: "question", finished: "done" };
 
@@ -178,16 +155,6 @@ const REASON_KEYS: Record<string, TranslationKey> = {
   desktop_unavailable: "mobile.markup.reason.desktop",
 };
 
-/** Why an asked-for `apply` round runs as `list` (the desktop's `noUndo`). */
-const NO_UNDO_KEYS: Record<string, TranslationKey> = {
-  not_git: "mobile.markup.noUndo.notGit",
-  no_git: "mobile.markup.noUndo.noGit",
-  too_big: "mobile.markup.noUndo.tooBig",
-  filtered: "mobile.markup.noUndo.filtered",
-  git_failed: "mobile.markup.noUndo.gitFailed",
-  remote: "mobile.markup.noUndo.remote",
-  not_pdf: "mobile.markup.noUndo.notPdf",
-};
 
 /** `none`: no pen has drawn here, so a finger draws. `pen`: only the pen
  * draws and fingers scroll. `fingers`: a pen has drawn, but fingers draw too. */
@@ -217,17 +184,6 @@ function fingerprintOf(file: OutboxFile): Fingerprint {
 /** Whether `next` is another file than `shown`, or the same one changed. */
 function otherFile(shown: OutboxFile, next: OutboxFile): boolean {
   return next.name !== shown.name || next.size !== shown.size || next.modified !== shown.modified;
-}
-
-/** The sent marks dimmed, then the unsent ones over them. */
-function paintLayer(ctx: Paint, page: PageLayer | undefined, sent: PageLayer | undefined, scale: number) {
-  if (sent) {
-    ctx.save();
-    ctx.globalAlpha = SENT_ALPHA;
-    drawPage(ctx, sent, scale);
-    ctx.restore();
-  }
-  if (page) drawPage(ctx, page, scale);
 }
 
 /** One page's place in the scroller: its top and height, CSS pixels. */
@@ -286,8 +242,11 @@ function LayerCanvas({ size, page, sent, preview, pixelWidth, register, n, handl
   useEffect(() => {
     const element = canvas.current;
     if (!element) return;
-    element.width = pixelWidth;
-    element.height = Math.max(1, Math.round(pixelWidth * size[1] / size[0]));
+    // Setting a size reallocates the backing store even when unchanged: only
+    // on a resize, not on every preview move (it is cleared below).
+    const height = Math.max(1, Math.round(pixelWidth * size[1] / size[0]));
+    if (element.width !== pixelWidth) element.width = pixelWidth;
+    if (element.height !== height) element.height = height;
     const ctx = element.getContext("2d");
     if (!ctx) return;
     ctx.clearRect(0, 0, element.width, element.height);
@@ -683,8 +642,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   fileRef.current = file;
   const awaitingMeta = useRef(true);
   const renderTimer = useRef<number | undefined>(undefined);
-  const sizesRef = useRef<Size[] | null>(null);
-  sizesRef.current = sizes;
   const picturesRef = useRef(pictures);
   picturesRef.current = pictures;
   const scratchRef = useRef<Layer | null>(null);
@@ -1060,10 +1017,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const pageSize = (n: number): Size | null => sizes?.[n - 1] ?? null;
   const toPage = (n: number, canvas: HTMLCanvasElement, clientX: number, clientY: number): [number, number] => {
     const size = pageSize(n)!;
-    const rect = canvas.getBoundingClientRect();
-    const width = rect.width || cssWidth;
-    const height = rect.height || cssWidth * size[1] / size[0];
-    return clampToPage((clientX - rect.left) * size[0] / width, (clientY - rect.top) * size[1] / height, size);
+    return pagePoint(canvas.getBoundingClientRect(), size, cssWidth / size[0], clientX, clientY);
   };
   const unitsPerPixel = (n: number, canvas: HTMLCanvasElement) => pageSize(n)![0] / (canvas.getBoundingClientRect().width || cssWidth);
 
@@ -1224,38 +1178,12 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   };
 
   /** Draws the newest piece of the stroke in progress straight onto the
-   * page's layer canvas: the curve from the midpoint before the last sample,
-   * through it, to the midpoint after it — the curves `rasterize.ts` draws the
-   * finished stroke with, so nothing jumps when the pen lifts. */
+   * page's layer canvas. */
   const paintPiece = (n: number, mark: InkMark) => {
     const canvas = overlays.current.get(n);
     const size = pageSize(n);
     const ctx = canvas?.getContext("2d");
-    const points = mark.points;
-    if (!canvas || !size || !ctx || !points.length) return;
-    const scale = canvas.width / size[0];
-    const at = points.length - 1;
-    const mid = (a: readonly number[], b: readonly number[]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    ctx.save();
-    ctx.scale(scale, scale);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = INK[mark.color];
-    ctx.beginPath();
-    if (at === 0) {
-      ctx.lineWidth = inkWidth(mark.width, points[0][2]);
-      ctx.moveTo(points[0][0], points[0][1]);
-      ctx.lineTo(points[0][0], points[0][1]);
-    } else {
-      const control = points[at - 1];
-      const from = at >= 2 ? mid(points[at - 2], control) : [control[0], control[1]];
-      const to = mid(control, points[at]);
-      ctx.lineWidth = inkWidth(mark.width, control[2]);
-      ctx.moveTo(from[0], from[1]);
-      ctx.quadraticCurveTo(control[0], control[1], to[0], to[1]);
-    }
-    ctx.stroke();
-    ctx.restore();
+    if (canvas && size && ctx) paintStrokePiece(ctx, canvas.width / size[0], mark);
   };
   const overlayRedraw = (n: number) => {
     const canvas = overlays.current.get(n);
@@ -1292,7 +1220,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       setArea({ n: g.n, rect: [Math.min(g.start[0], g.end[0]), Math.min(g.start[1], g.end[1]), Math.max(g.start[0], g.end[0]), Math.max(g.start[1], g.end[1])] });
     } else if (g.kind === "box") {
       g.end = toPage(g.n, canvas, event.clientX, event.clientY);
-      setPreview({ n: g.n, marks: [boxOf(g.start, g.end, color)] });
+      setPreview({ n: g.n, marks: [boxBetween(g.start, g.end, color)] });
     } else if (g.kind === "textmark") {
       const size = pageSize(g.n);
       g.end = toPage(g.n, canvas, event.clientX, event.clientY);
@@ -1385,7 +1313,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       if (next !== history.present) setHistory((now) => commit(now, next));
     } else if (g.kind === "box") {
       setPreview(null);
-      const box = boxOf(g.start, g.end, color);
+      const box = boxBetween(g.start, g.end, color);
       if (box.rect[2] >= 2 && box.rect[3] >= 2) add(g.n, box);
     } else if (g.kind === "erase") {
       const erased = scratchRef.current;
@@ -1403,7 +1331,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       const index = g.index;
       setNote(existing
         ? { n: g.n, at: existing.at, index, text: existing.text, color: existing.color, size: existing.size }
-        : { n: g.n, at: [round(g.start[0]), round(g.start[1])], index: null, text: "", color, size: Math.min(200, Math.max(4, Math.round(size[0] / 40))) });
+        : { n: g.n, at: [round(g.start[0]), round(g.start[1])], index: null, text: "", color, size: noteSize(size[0]) });
     }
   };
   const handlers = { onPointerDown, onPointerMove, onPointerUp };
@@ -1414,7 +1342,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     setNote(null);
     if (!draft) return history.present;
     // Every control character but the line break — the desktop refuses them.
-    const clean = (text ?? "").replace(/(?!\n)\p{Cc}/gu, "").trim();
+    const clean = cleanNote(text);
     const mark: TextMark | null = clean ? { kind: "text", color: draft.color, at: draft.at, size: draft.size, text: clean } : null;
     if (draft.index !== null) {
       if (mark && !canReplace(history.present, draft.n, draft.index, mark)) { setLimitHit(true); return history.present; }
@@ -1544,6 +1472,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const marked = sendable;
     if (!marked.length || sending) return;
     setSendFailure(null);
+    const fail = (text: string) => {
+      setSending(null);
+      setSendFailure(text);
+    };
     let tabId = givenTabId;
     if (!onSend) {
       if (!newTab) return;
@@ -1553,8 +1485,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
           markupTab.current = await openMarkupTab(newTab.projectId, markupTabKey.current);
           setOpenedTab(markupTab.current);
         } catch (error) {
-          setSending(null);
-          setSendFailure(t("mobile.markup.sendFailed.tab", { reason: reason(error) }));
+          fail(t("mobile.markup.sendFailed.tab", { reason: reason(error) }));
           return;
         }
       }
@@ -1590,8 +1521,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         if (png) composed.add(n);
         refs.set(n, (await uploadToInbox(tabId, png ?? await layerPng(page), `${stem}-p${n}-${png ? "marked" : "layer"}.png`)).reference);
       } catch (error) {
-        setSending(null);
-        setSendFailure(t("mobile.markup.sendFailed.layer", { n, reason: reason(error) }));
+        fail(t("mobile.markup.sendFailed.layer", { n, reason: reason(error) }));
         return;
       }
     }
@@ -1603,8 +1533,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         if (!image) throw new Error("picture");
         picture = (await uploadToInbox(tabId, await composedPng(image, present.pages[1]), `${stem}-marked.png`)).reference;
       } catch (error) {
-        setSending(null);
-        setSendFailure(t("mobile.markup.sendFailed.picture", { reason: reason(error) }));
+        fail(t("mobile.markup.sendFailed.picture", { reason: reason(error) }));
         return;
       }
     }
@@ -1637,29 +1566,19 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       prompt = answer.prompt;
       if (subagents) prompt = markupForSubagent(prompt);
     } catch (error) {
-      setSending(null);
-      setSendFailure(t("mobile.markup.sendFailed.marks", { reason: reason(error) }));
+      fail(t("mobile.markup.sendFailed.marks", { reason: reason(error) }));
       return;
     }
     let sent: MarkupSend;
-    if (!onSend && markupTab.current) {
-      // Held, not typed: the new CLI may still be starting, and the desktop
-      // types a held prompt once the tab has started.
-      try {
-        await holdPrompt(markupTab.current.id, prompt);
-      } catch (error) {
-        setSending(null);
-        setSendFailure(t("mobile.markup.sendFailed.newTab", { reason: reason(error) }));
-        return;
-      }
-      sent = agent !== "idle" ? "queued" : "sent";
-    } else {
-      sent = onSend?.(prompt) ?? false;
-      if (!sent) {
-        setSending(null);
-        setSendFailure(t("mobile.markup.sendFailed.chat"));
-        return;
-      }
+    try {
+      sent = await deliver(prompt);
+    } catch (error) {
+      fail(t("mobile.markup.sendFailed.newTab", { reason: reason(error) }));
+      return;
+    }
+    if (!sent) {
+      fail(t("mobile.markup.sendFailed.chat"));
+      return;
     }
     // The round's marks go to the sent side — dimmed, never sent again, past
     // undo — and the view stays open for the next round; the save effect
@@ -1675,7 +1594,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     setReloadNote(null);
     // The mode the desktop gave the round decides its follow-up — Undo or
     // Make these changes — never this phone's switch.
-    const undo = answer.mode === "apply" && typeof answer.undo === "string" && answer.undo ? answer.undo : null;
+    const undo = answer.mode === "apply" ? answer.undo || null : null;
     undoRounds.current.clear();
     if (undo) undoRounds.current.set(undo, roundId);
     undoTab.current = tabId;
@@ -1688,14 +1607,23 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     keepCard(tabId);
   };
 
+  /** Puts `text` to the agent: held in the tab a new-tab Submit opened (not
+   * typed: the new CLI may still be starting, and the desktop types a held
+   * prompt once the tab has started), else into the chat. Throws when the
+   * hold fails; `false` when there is nowhere to send. */
+  const deliver = async (text: string): Promise<MarkupSend> => {
+    if (!onSend && markupTab.current) {
+      await holdPrompt(markupTab.current.id, text);
+      return agent !== "idle" ? "queued" : "sent";
+    }
+    return onSend?.(text) ?? false;
+  };
+
   /** A line into the agent's chat that is not a round — the note after an
    * Undo: sent as **Make these changes** sends its prompt. */
   const sendNote = async (text: string): Promise<boolean> => {
-    if (onSend) return onSend(text) !== false;
-    if (!markupTab.current) return false;
     try {
-      await holdPrompt(markupTab.current.id, text);
-      return true;
+      return (await deliver(text)) !== false;
     } catch {
       return false;
     }
@@ -1735,9 +1663,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       if (holdsUndo(submittedRef.current, id)) setUndoSheet({ id, changes });
     } catch (error) {
       if (holdsUndo(submittedRef.current, id)) undoFailed(error, "preview", id);
+    } finally {
+      undoBusyRef.current = false;
+      setUndoBusy(false);
     }
-    undoBusyRef.current = false;
-    setUndoBusy(false);
   };
 
   /** The sheet's **Undo**: the files go back, the PDF is drawn again (the
@@ -1750,28 +1679,28 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (!id || undoBusyRef.current || !tab) return;
     undoBusyRef.current = true;
     setUndoBusy(true);
-    let done: MarkupUndoChanges;
     try {
-      done = await runMarkupUndo(tab, id);
-    } catch (error) {
-      undoFailed(error, "undo", id);
+      let done: MarkupUndoChanges;
+      try {
+        done = await runMarkupUndo(tab, id);
+      } catch (error) {
+        undoFailed(error, "undo", id);
+        return;
+      }
+      setSubmitted((was) => was && undoneRound(was, id));
+      // Its ticks mean nothing now: the round leaves the log (the marks stay).
+      const undoneId = undoRounds.current.get(id);
+      if (undoneId) {
+        undoRounds.current.delete(id);
+        setHistory((now) => forgetRoundInHistory(now, undoneId));
+      }
+      // The files went back, whatever else happened since: the agent is told.
+      const told = await sendNote(markupUndoNote(done.files.map((file) => file.path), done.more));
+      setUndoNote(told ? { text: t("mobile.markup.undo.done"), alert: false } : { text: t("mobile.markup.undo.noteFailed"), alert: true });
+    } finally {
       undoBusyRef.current = false;
       setUndoBusy(false);
-      return;
     }
-    setSubmitted((was) => was && undoneRound(was, id));
-    // Its ticks mean nothing now: the round leaves the log (the marks stay).
-    const undoneId = undoRounds.current.get(id);
-    if (undoneId) {
-      undoRounds.current.delete(id);
-      const forget = (entry: Layer) => forgetRound(entry, undoneId);
-      setHistory((now) => ({ past: now.past.map(forget), present: forget(now.present), future: now.future.map(forget) }));
-    }
-    // The files went back, whatever else happened since: the agent is told.
-    const told = await sendNote(markupUndoNote(done.files.map((file) => file.path), done.more));
-    setUndoNote(told ? { text: t("mobile.markup.undo.done"), alert: false } : { text: t("mobile.markup.undo.noteFailed"), alert: true });
-    undoBusyRef.current = false;
-    setUndoBusy(false);
     if (!isPdf || !viewUp.current) return;
     if ("files" in scope) {
       // The project file itself: the undo put it back (or says it kept it).
@@ -1812,17 +1741,12 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (sending !== null) return;
     const text = readMarkupApply() ?? DEFAULT_MARKUP_APPLY;
     setSendFailure(null);
-    let sent: MarkupSend = false;
-    if (onSend) sent = onSend(text);
-    else if (markupTab.current) {
-      // The tab a new-tab Submit opened: held, as that Submit's prompt was.
-      try {
-        await holdPrompt(markupTab.current.id, text);
-        sent = agent !== "idle" ? "queued" : "sent";
-      } catch (error) {
-        setSendFailure(t("mobile.markup.sendFailed.newTab", { reason: reason(error) }));
-        return;
-      }
+    let sent: MarkupSend;
+    try {
+      sent = await deliver(text);
+    } catch (error) {
+      setSendFailure(t("mobile.markup.sendFailed.newTab", { reason: reason(error) }));
+      return;
     }
     if (!sent) {
       setSendFailure(t("mobile.markup.sendFailed.chat"));
@@ -1940,18 +1864,15 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     if (!autoReload || check !== "changed" || reloaded || reloading || sending || note) return;
     void reloadRef.current(true);
   }, [autoReload, check, reloaded, reloading, sending, note]);
-  const toggleAutoReload = () => {
-    setAutoReload((was) => {
-      writeFlag("markupAutoReload", !was);
+  /** Flips a remembered switch and keeps it. */
+  const toggleFlag = (name: "markupAutoReload" | "markupSubagents", set: typeof setAutoReload) => {
+    set((was) => {
+      writeFlag(name, !was);
       return !was;
     });
   };
-  const toggleSubagents = () => {
-    setSubagents((was) => {
-      writeFlag("markupSubagents", !was);
-      return !was;
-    });
-  };
+  const toggleAutoReload = () => toggleFlag("markupAutoReload", setAutoReload);
+  const toggleSubagents = () => toggleFlag("markupSubagents", setSubagents);
 
   /** Previous / Next mark (a PDF's): every mark on show as the scroll top
    * that puts it on the reading line a third of the way down — the line
@@ -1960,16 +1881,17 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const markStops = useMemo(() => {
     if (!isPdf || !sizes) return [];
     const last = Math.max(0, contentHeight - viewHeight);
-    return markAnchors(layer, showSent).flatMap(({ page, y }) => {
+    // The committed marks, not a gesture's scratch: no rescan per pointer move.
+    return markAnchors(history.present, showSent).flatMap(({ page, y }) => {
       const spot = places[page - 1];
       const size = sizes[page - 1];
       return spot && size ? [Math.min(last, Math.max(0, spot.top + y * cssWidth / size[0] - viewHeight / 3))] : [];
     });
-  }, [isPdf, sizes, layer, showSent, places, cssWidth, contentHeight, viewHeight]);
+  }, [isPdf, sizes, history.present, showSent, places, cssWidth, contentHeight, viewHeight]);
   const previousStop = [...markStops].reverse().find((top) => top < scrollTop - JUMP_SLACK);
   const nextStop = markStops.find((top) => top > scrollTop + JUMP_SLACK);
   const jumpShown = canMark && loaded && markStops.length > 0;
-  /** Scrolls exactly as `showPin` does. */
+  /** Scrolls the pages to `top` — Previous / Next mark and `showPin`. */
   const jumpTo = (top: number | undefined) => {
     const element = scroller.current;
     if (top === undefined || !element) return;
@@ -2032,9 +1954,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const size = sizes[question.page - 1];
     if (!place || !size) return;
     const hit = question.quote ? found[`${question.page}\n${question.quote}`]?.[0] : undefined;
-    const top = Math.max(0, place.top + (hit ? hit.y * cssWidth / size[0] : 0) - viewHeight / 3);
-    if (typeof element.scrollTo === "function") element.scrollTo({ top });
-    else element.scrollTop = top;
+    jumpTo(Math.max(0, place.top + (hit ? hit.y * cssWidth / size[0] : 0) - viewHeight / 3));
     setPinFlash(`${askId}/${index}`);
   };
   useEffect(() => {
@@ -2074,34 +1994,38 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * on a badge approves its group — its marks leave the layer, undoably — and
    * nothing else ever removes one: ticks that vanish (the agent's session
    * ended, a day passed) take the badge only. */
+  // Ticks are about sent marks only: the chain follows the sent side, not
+  // every stroke drawn on the unsent one.
+  const sentSide = history.present.sent;
+  const sentOnly = useMemo<Layer>(() => ({ pages: {}, sent: sentSide }), [sentSide]);
   const ticked = useMemo(
-    () => (canMark && showSent ? tickedMarks(history.present, ticks) : []),
-    [canMark, showSent, history.present, ticks],
+    () => (canMark && showSent ? tickedMarks(sentOnly, ticks) : []),
+    [canMark, showSent, sentOnly, ticks],
   );
-  const tickedGroups = useMemo(() => tickGroups(history.present, ticked), [history.present, ticked]);
+  const tickedGroups = useMemo(() => tickGroups(sentOnly, ticked), [sentOnly, ticked]);
   const tickBadges = useMemo(() => {
     const byPage = new Map<number, { marks: Mark[]; box: [number, number, number, number] }[]>();
     for (const { page, marks, box } of tickedGroups) {
-      const shown = marks.map(({ index }) => history.present.sent?.pages[page]?.marks[index]).filter((mark): mark is Mark => !!mark);
+      const shown = marks.map(({ index }) => sentSide?.pages[page]?.marks[index]).filter((mark): mark is Mark => !!mark);
       if (!shown.length) continue;
       const list = byPage.get(page) ?? [];
       list.push({ marks: shown, box });
       byPage.set(page, list);
     }
     return byPage;
-  }, [tickedGroups, history.present]);
+  }, [tickedGroups, sentSide]);
   /** The words each sent mark was on at its Submit (`SentRound.words`), by
    * the mark object the log and the sent side share. */
   const loggedWords = useMemo(() => {
     const byMark = new Map<Mark, string>();
-    for (const entry of history.present.sent?.log ?? []) {
+    for (const entry of sentSide?.log ?? []) {
       for (const [page, said] of Object.entries(entry.words ?? {})) {
         const marks = entry.pages[Number(page)] ?? [];
         said.forEach((words, i) => { if (words && marks[i]) byMark.set(marks[i], words); });
       }
     }
     return byMark;
-  }, [history.present]);
+  }, [sentSide]);
   /** The near pages whose text the sealed frame is asked for: every one
    * while the text-mark tool is armed, else those with a ✓ group whose words
    * were logged. */
@@ -2124,23 +2048,31 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     runsAsked.current.clear();
     setPageRuns({});
   }, [generation]);
-  /** A ✓ group's words at Submit and under it now, once the page's text is
-   * known — `null` unless both are and they differ (the agent changed them). */
-  const tickDiff = (n: number, marks: readonly Mark[]): { before: string; after: string } | null => {
-    const runs = pageRuns[n];
-    if (!runs) return null;
-    const before: string[] = [];
-    const after: string[] = [];
-    for (const mark of marks) {
-      const was = loggedWords.get(mark);
-      if (!was) return null;
-      before.push(was);
-      after.push(wordsIn(runs, markBox(mark)));
+  /** Each ✓ group's words at Submit and under it now, once the page's text
+   * is known — none unless both are and they differ (the agent changed
+   * them). Worked out when the badges or the text change, not per render. */
+  const tickDiffs = useMemo(() => {
+    const out = new Map<readonly Mark[], { before: string; after: string }>();
+    for (const [n, badges] of tickBadges) {
+      const runs = pageRuns[n];
+      if (!runs) continue;
+      for (const { marks } of badges) {
+        const before: string[] = [];
+        const after: string[] = [];
+        for (const mark of marks) {
+          const was = loggedWords.get(mark);
+          if (!was) break;
+          before.push(was);
+          after.push(wordsIn(runs, markBox(mark)));
+        }
+        if (before.length < marks.length) continue;
+        const was = [...new Set(before)].join(" … ");
+        const now = [...new Set(after.filter(Boolean))].join(" … ");
+        if (now && now !== was) out.set(marks, { before: was, after: now });
+      }
     }
-    const was = [...new Set(before)].join(" … ");
-    const now = [...new Set(after.filter(Boolean))].join(" … ");
-    return now && now !== was ? { before: was, after: now } : null;
-  };
+    return out;
+  }, [tickBadges, pageRuns, loggedWords]);
   // Each badge's arrival, before paint: a pen or finger already on its way
   // down where one appears must not approve it. A badge that went and comes
   // back arrives anew.
@@ -2197,10 +2129,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     const page: [number, number] = [cssWidth, size[1] * scale];
     return badges.map(({ marks, box }) => {
       const [left, top] = tickBadgeSpot(box, scale, page, TICK_BADGE);
-      const diff = tickDiff(n, marks);
+      const diff = tickDiffs.get(marks);
       // Beside the badge where the page has room, else under it, flush right.
       const roomy = cssWidth - (left + TICK_BADGE + 4) >= 120;
-      return <Fragment key={`${tickKey(marks[0])}:${marks.length}`}>
+      return <Fragment key={`${markKey(marks[0])}:${marks.length}`}>
         <button className="markup-pin is-tick" style={{ left, top }} disabled={sending !== null}
           aria-label={t("mobile.markup.ticks.approveTitle")} title={t("mobile.markup.ticks.approveTitle")}
           onClick={(event) => { if (event.detail <= 1) approveTicked(n, marks); }}>✓</button>
@@ -2551,7 +2483,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
             </div>
             {/* A comment on the one selected stroke, box or stamp; keyed by the
                 mark, so a saved comment (a new mark object) starts afresh. */}
-            {commentable && <CommentBox key={tickKey(commentable)} comment={commentable.comment ?? ""} onSave={saveComment} />}
+            {commentable && <CommentBox key={markKey(commentable)} comment={commentable.comment ?? ""} onSave={saveComment} />}
             <div className="markup-pen-row markup-pen-actions">
               <button onClick={copySelected}>{t("mobile.markup.copy")}</button>
               <button onClick={deleteSelected}>{t("mobile.markup.deleteSelected")}</button>
@@ -2683,12 +2615,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       onClose={() => setUndoSheet(null)}
     />}
   </div>;
-}
-
-function boxOf(a: [number, number], b: [number, number], color: MarkColor): BoxMark {
-  const x = Math.min(a[0], b[0]);
-  const y = Math.min(a[1], b[1]);
-  return { kind: "box", color, rect: [round(x), round(y), round(Math.abs(a[0] - b[0])), round(Math.abs(a[1] - b[1]))] };
 }
 
 /** The typed note, edited where it sits on the page. */

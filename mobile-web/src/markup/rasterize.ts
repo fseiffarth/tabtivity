@@ -194,6 +194,52 @@ export function drawPage(ctx: Paint, page: PageLayer, scale: number): void {
   ctx.restore();
 }
 
+/** How strongly the marks of earlier rounds show — sent, never sent again. */
+export const SENT_ALPHA = 0.35;
+
+/** The sent marks dimmed, then the unsent ones over them — the layer both
+ * hosts show while marking. */
+export function paintLayer(ctx: Paint, page: PageLayer | undefined, sent: PageLayer | undefined, scale: number): void {
+  if (sent) {
+    ctx.save();
+    ctx.globalAlpha = SENT_ALPHA;
+    drawPage(ctx, sent, scale);
+    ctx.restore();
+  }
+  if (page) drawPage(ctx, page, scale);
+}
+
+/** The newest piece of a stroke in progress, `scale` canvas pixels per page
+ * unit: the curve from the midpoint before the last sample, through it, to
+ * the midpoint after it — the curves `drawPage` draws the finished stroke
+ * with, so nothing jumps when the pen lifts. The first sample is a dot. */
+export function paintStrokePiece(ctx: Paint, scale: number, mark: InkMark): void {
+  const points = mark.points;
+  if (!points.length) return;
+  const at = points.length - 1;
+  const mid = (a: readonly number[], b: readonly number[]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  ctx.save();
+  ctx.scale(scale, scale);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = INK[mark.color];
+  ctx.beginPath();
+  if (at === 0) {
+    ctx.lineWidth = inkWidth(mark.width, points[0][2]);
+    ctx.moveTo(points[0][0], points[0][1]);
+    ctx.lineTo(points[0][0], points[0][1]);
+  } else {
+    const control = points[at - 1];
+    const from = at >= 2 ? mid(points[at - 2], control) : [control[0], control[1]];
+    const to = mid(control, points[at]);
+    ctx.lineWidth = inkWidth(mark.width, control[2]);
+    ctx.moveTo(from[0], from[1]);
+    ctx.quadraticCurveTo(control[0], control[1], to[0], to[1]);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
 function toPng(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("encode_failed"))), "image/png");

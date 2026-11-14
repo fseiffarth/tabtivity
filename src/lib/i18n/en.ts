@@ -9447,7 +9447,6 @@ export const enSource = {
   "pdfMarkup.picture.toggleTitle": "Mark up this picture and send the marks to an agent tab of this project",
   "pdfMarkup.picture.toggleAsks": "An agent tab asks about this picture — Mark up to see its questions",
   "pdfMarkup.picture.toggleClaimed": "This picture is being marked up in another pane",
-  "pdfMarkup.picture.hint": "Draw on the picture — kept on this computer until you submit.",
   "pdfMarkup.picture.stale": "The picture changed on disk — Reload to see it under your marks.",
   "pdfMarkup.picture.autoReloaded": "The picture changed on disk and was reloaded under your marks.",
   "pdfMarkup.picture.reload": "Reload picture",

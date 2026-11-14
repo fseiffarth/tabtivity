@@ -9,13 +9,13 @@
  * strip (`file-viewer-pdf-redact-bar`), no new chrome.
  *
  * Also here, shared by the dock, the layer and both viewers: the ⋯ menu, the
- * colour, stamp and text-mark names, and the markup keys (`markupStripKey`).
+ * colour names, and the markup keys (`markupStripKey`).
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { useT, type TranslationKey } from "../../../lib/i18n";
-import { type Layer, type MarkColor, type StampSymbol } from "../../../../mobile-web/src/markup/layer";
+import { type Layer, type MarkColor } from "../../../../mobile-web/src/markup/layer";
 import { colorsFor, type PressureCurve, type TextMarkMode } from "../../../../mobile-web/src/markup/pen";
-import { undoSummary, type RoundPhase } from "../../../../mobile-web/src/markup/submitState";
+import { ROUND_KEYS as PHONE_ROUND_KEYS, undoSummary, type RoundPhase } from "../../../../mobile-web/src/markup/submitState";
 import { ConfirmDialog } from "../../common/PromptDialogs";
 import { UntestedTag } from "../../common/UntestedTag";
 import { PdfMarkupModel } from "./PdfMarkupModel";
@@ -25,18 +25,6 @@ import type { MarkSelection, MarkupTool, PdfMarkup } from "./usePdfMarkup";
 export function TextMarkGlyph({ mode }: { mode: TextMarkMode }) {
   return <span className={`file-viewer-pdf-markup-tm is-${mode}`} aria-hidden="true">ab</span>;
 }
-export const STAMP_GLYPHS: Record<StampSymbol, string> = { insert: "⁁", delete: "✕", paragraph: "¶", swap: "⇄" };
-export const STAMP_KEYS: Record<StampSymbol, TranslationKey> = {
-  insert: "mobile.markup.stamp.insert",
-  delete: "mobile.markup.stamp.delete",
-  paragraph: "mobile.markup.stamp.paragraph",
-  swap: "mobile.markup.stamp.swap",
-};
-export const TEXT_MARK_KEYS: Record<TextMarkMode, TranslationKey> = {
-  strike: "mobile.markup.textMark.strike",
-  underline: "mobile.markup.textMark.underline",
-  highlight: "mobile.markup.textMark.highlight",
-};
 const PRESSURE_KEYS: Record<PressureCurve, TranslationKey> = {
   light: "mobile.markup.pressure.light",
   normal: "mobile.markup.pressure.normal",
@@ -64,24 +52,11 @@ export const COLOR_KEYS: Record<MarkColor, TranslationKey> = {
   pink: "mobile.markup.color.pink",
 };
 
-/** The pill's words, by phase; `finished` says whether the PDF changed. */
+/** The pill's words, by phase; `finished` says whether the PDF changed. The
+ *  phone's, but a question names the tab. */
 export const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
-  sent: "mobile.markup.round.sent",
-  queued: "mobile.markup.round.queued",
-  working: "mobile.markup.round.working",
+  ...PHONE_ROUND_KEYS,
   question: "pdfMarkup.round.question",
-  unconfirmed: "mobile.markup.round.unconfirmed",
-};
-
-/** Why an asked-for `apply` round runs as `list` (the backend's `noUndo`). */
-export const NO_UNDO_KEYS: Record<string, TranslationKey> = {
-  not_git: "mobile.markup.noUndo.notGit",
-  no_git: "mobile.markup.noUndo.noGit",
-  too_big: "mobile.markup.noUndo.tooBig",
-  filtered: "mobile.markup.noUndo.filtered",
-  git_failed: "mobile.markup.noUndo.gitFailed",
-  remote: "mobile.markup.noUndo.remote",
-  not_pdf: "mobile.markup.noUndo.notPdf",
 };
 
 /** The tab bar's own status mark, where a phase has one. */

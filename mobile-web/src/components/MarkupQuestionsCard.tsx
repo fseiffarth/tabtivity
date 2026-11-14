@@ -2,20 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import {
-  answersOf, NO_PICK, toggleOption, toggleOther, type MarkupQuestion, type QuestionPick,
+  answersOf, ARRIVAL_GUARD_MS, MAX_OTHER, NO_PICK, toggleOption, toggleOther, type MarkupQuestion, type QuestionPick,
 } from "../../../src/lib/viewers/markupQuestionPicks";
 import { answerMarkupQuestions, ApiError, dismissMarkupQuestions, type PhoneMarkupAsk, type PhoneMarkupQuestion } from "../api";
 import { AGENT_STATUS_GLYPH } from "./AgentStatusPill";
 import { QuestionRows, type QuestionRow } from "./QuestionRows";
 
-/** The longest typed **Other…** answer (`markup_mcp::MAX_OTHER_CHARS`). */
-const MAX_OTHER = 500;
 /** The Other… row's key among a question's option indices. */
 const OTHER = "other";
-/** How long a card that just opened for a new ask takes no taps: the reader
- * may be mid-stroke where it lands, and a pen or finger already on its way
- * down must not pick or send for them. */
-export const ARRIVAL_GUARD_MS = 1_200;
 
 /** Why the desktop did not take an answer, in the reader's words. */
 const REASONS: Record<string, TranslationKey> = {

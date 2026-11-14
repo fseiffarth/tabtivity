@@ -12,7 +12,7 @@
  * here resolves rather than throws.
  */
 
-import { isLayer, LIMITS, markCount, SENT_LIMITS, type Layer, type PageLayer } from "./layer";
+import { hasSent, isEmpty, isLayer, LIMITS, SENT_LIMITS, within, type Layer } from "./layer";
 import { LEGACY_NAMES, NAMES } from "../../../src/lib/brand";
 import { adoptLegacyDatabase, databaseHost, databasePort } from "../../../src/lib/brandMigration";
 
@@ -115,12 +115,16 @@ export { SENT_LIMITS };
  * `SENT_LIMITS`, and its marks are mostly the sent side's own objects, which
  * IndexedDB's structured clone stores once — so it can never fail a save. */
 export function withinLimits(layer: Layer): boolean {
-  const bounded = (pages: Record<number, PageLayer>, limits: { marks: number; points: number }) => {
-    const { marks, points } = markCount({ pages });
-    return marks <= limits.marks && points <= limits.points;
-  };
-  return bounded(layer.pages, LIMITS) && bounded(layer.sent?.pages ?? {}, SENT_LIMITS);
+  // Layers are never changed in place: an undo step checked once, when it
+  // was the layer saved, is not counted again on every later save.
+  let verdict = checkedLimits.get(layer);
+  if (verdict === undefined) {
+    verdict = within(layer.pages, LIMITS) && within(layer.sent?.pages ?? {}, SENT_LIMITS);
+    checkedLimits.set(layer, verdict);
+  }
+  return verdict;
 }
+const checkedLimits = new WeakMap<Layer, boolean>();
 
 /** A stored value as a layer: whole; without its round log when only that
  * is unreadable (its ticks then show no badge); or — when its `sent` side is
@@ -174,11 +178,10 @@ export async function saveLayer(
 ): Promise<boolean> {
   if (!withinLimits(layer)) return false;
   try {
-    const empty = (pages: Record<number, PageLayer>) => Object.values(pages).every((page) => page.marks.length === 0);
     const steps = (past ?? []).slice(-MAX_STORED_UNDO).filter(withinLimits);
     const record: StoredLayer = { layer, fingerprint, saved: Date.now() };
     if (steps.length) record.past = steps;
-    if (empty(layer.pages) && empty(layer.sent?.pages ?? {})) await backend.delete(key);
+    if (isEmpty(layer) && !hasSent(layer)) await backend.delete(key);
     else await backend.put(key, record);
     return true;
   } catch {

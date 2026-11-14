@@ -39,7 +39,7 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 
 import { MarkupView } from "../../../mobile-web/src/components/MarkupView";
-import { ARRIVAL_GUARD_MS } from "../../../mobile-web/src/components/MarkupQuestionsCard";
+import { ARRIVAL_GUARD_MS } from "../../lib/viewers/markupQuestionPicks";
 import type { MarkupSend } from "../../../mobile-web/src/components/OutboxViewer";
 import { acceptFrameMessage, acceptToFrame, MAX_FIND_QUOTE, MAX_FOUND_RECTS } from "../../../mobile-web/src/markup/frameProtocol";
 import { findQuote, type TextRun } from "../../../mobile-web/src/markup/findText";

@@ -173,3 +173,24 @@ export function undoSummary(
   const pdf = changes.pdf === "restored" ? t("mobile.markup.undo.pdfRestored") : changes.pdf === "kept" ? t("mobile.markup.undo.pdfKept") : "";
   return [files, pdf, outside].filter(Boolean).join(" ");
 }
+
+/** The round pill's words, by phase; `finished` takes the PDF check's. The
+ * desktop names its tab in `question` (`pdfMarkup.round.question`). */
+export const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
+  sent: "mobile.markup.round.sent",
+  queued: "mobile.markup.round.queued",
+  working: "mobile.markup.round.working",
+  question: "mobile.markup.round.question",
+  unconfirmed: "mobile.markup.round.unconfirmed",
+};
+
+/** Why an asked-for `apply` round runs as `list` (the backend's `noUndo`). */
+export const NO_UNDO_KEYS: Record<string, TranslationKey> = {
+  not_git: "mobile.markup.noUndo.notGit",
+  no_git: "mobile.markup.noUndo.noGit",
+  too_big: "mobile.markup.noUndo.tooBig",
+  filtered: "mobile.markup.noUndo.filtered",
+  git_failed: "mobile.markup.noUndo.gitFailed",
+  remote: "mobile.markup.noUndo.remote",
+  not_pdf: "mobile.markup.noUndo.notPdf",
+};
