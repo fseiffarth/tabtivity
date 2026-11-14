@@ -1168,7 +1168,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       // Only the plain pen paints piece by piece; a styled stroke is one path
       // (see-through, dashed, headed), previewed whole as it grows.
       if (style === "pen") paintPiece(n, mark);
-      else setPreview({ n, marks: [shaped({ ...mark, points: mark.points.slice() })] });
+      else setPreview({ n, marks: [shaped(mark)] });
     } else if (tool === "box") {
       gesture.current = { kind: "box", n, pointerId: event.pointerId, start: at, end: at };
     } else if (tool === "textmark") {
@@ -1237,7 +1237,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
         g.snapped = null;
         armSnap(g);
       }
-      if (g.whole) setPreview({ n: g.n, marks: [g.snapped ?? shaped({ ...g.mark, points: g.mark.points.slice() })] });
+      if (g.whole) setPreview({ n: g.n, marks: [g.snapped ?? shaped(g.mark)] });
     } else if (g.kind === "area") {
       g.end = toPage(g.n, canvas, event.clientX, event.clientY);
       setArea({ n: g.n, rect: [Math.min(g.start[0], g.end[0]), Math.min(g.start[1], g.end[1]), Math.max(g.start[0], g.end[0]), Math.max(g.start[1], g.end[1])] });

@@ -297,7 +297,9 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
    *  strokes for the area mode. */
   const eraseHow = () => ({ sent: edit.showSent, whole: edit.pen.eraser !== "partial", highlights: edit.pen.eraseHighlights });
   /** A highlighter stroke with Straight lines on is shown — and kept — as its
-   *  straight line. */
+   *  straight line. The preview shows the stroke in progress itself, its
+   *  points still growing: it is painted by the effect right after the move
+   *  and never kept (`finishStroke` builds the mark that is). */
   const straight = edit.tool === "highlight" && edit.pen.straight;
   const shaped = (mark: InkMark): InkMark => (straight ? straightenStroke(mark) : mark);
   const areaOf = (a: [number, number], b: [number, number]): [number, number, number, number] =>
@@ -384,7 +386,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       gesture.current = g;
       if (!straight) holdFor(g);
       if (piecewise) paintPiece(mark);
-      else setPreview([shaped({ ...mark, points: mark.points.slice() })]);
+      else setPreview([shaped(mark)]);
     } else if (edit.tool === "box") {
       gesture.current = { kind: "box", pointerId: event.pointerId, start: at };
     } else if (edit.tool === "textmark") {
@@ -454,7 +456,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
         if (pieces && !g.snapped) paintPiece(g.mark);
         g.last = at;
       }
-      if (!pieces && !g.snapped) setPreview([shaped({ ...g.mark, points: g.mark.points.slice() })]);
+      if (!pieces && !g.snapped) setPreview([shaped(g.mark)]);
     } else if (g.kind === "area") {
       setArea(areaOf(g.start, toPage(event.clientX, event.clientY)));
     } else if (g.kind === "box") {

@@ -155,6 +155,27 @@ describe("PdfMarkupLayer", () => {
     expect(copies()[0].width).toBe(0);
   });
 
+  it("previews a dashed stroke whole as it grows and keeps only the finished stroke", () => {
+    const calls: string[] = [];
+    const ctx = new Proxy({}, {
+      get: (_target, name: string) => (...args: unknown[]) => { calls.push(name === "setLineDash" ? `dash(${args[0]})` : name); },
+      set: () => true,
+    }) as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx as never);
+    const edit = stubEdit({ tool: "ink", color: "red", pen: { ...DEFAULT_PEN_PREFS, style: "dashed", snap: false } });
+    const { layer, at } = mount(1, edit);
+    fireEvent.pointerDown(layer, { pointerId: 1, pointerType: "mouse", button: 0, ...at(50, 60) });
+    const dashesAfterDown = calls.filter((c) => c.startsWith("dash(")).length;
+    for (const x of [70, 90, 110]) fireEvent.pointerMove(layer, { pointerId: 1, pointerType: "mouse", ...at(x, 60) });
+    // Every move paints the stroke again as one dashed path (no piecewise pen).
+    expect(calls.filter((c) => c.startsWith("dash(")).length).toBe(dashesAfterDown + 3);
+    fireEvent.pointerUp(layer, { pointerId: 1, pointerType: "mouse", ...at(110, 60) });
+    const [, , mark] = (edit.add as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(mark.style).toBe("dashed");
+    expect(mark.points[0]).toEqual([50, 60, 0.5]);
+    expect(mark.points[mark.points.length - 1]).toEqual([110, 60, 0.5]);
+  });
+
   it("ignores a right or middle button", () => {
     const edit = stubEdit();
     const { layer, at } = mount(1, edit);
