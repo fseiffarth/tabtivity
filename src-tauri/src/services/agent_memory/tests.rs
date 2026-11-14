@@ -199,7 +199,7 @@ fn a_project_inside_a_git_repository_lists_the_memory_keyed_by_the_repository_ro
     put_claude_memory(&home, &repo);
     let sources = vec![Source { kind: HOME_SCOPE, home }];
 
-    let listed = list(&sources, &[project.clone()]);
+    let listed = list(&sources, std::slice::from_ref(&project));
     assert_eq!(names(&listed), [("claude", "scope", "MEMORY.md")]);
     assert_eq!(read(&sources, &[project], "claude", "scope", "MEMORY.md").unwrap(), "# repo index\n");
 
