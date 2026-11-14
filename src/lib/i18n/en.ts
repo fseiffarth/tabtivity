@@ -1173,6 +1173,8 @@ export const enSource = {
   "mobile.outbox.shareFile": "Share {name}",
   "mobile.outbox.shareReady": "Share now",
   "mobile.outbox.shareReadyFile": "Share {name} now",
+  "mobile.outbox.saveOrShare": "Save or share…",
+  "mobile.outbox.saveOrShareFile": "Save or share {name}",
   "mobile.outbox.shareUntested": "Share untested",
   "mobile.outbox.shareBig.one": "Share {name} ({size})?",
   "mobile.outbox.shareBig.many": "Share {count} files ({size})?",

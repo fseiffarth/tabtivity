@@ -410,12 +410,17 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
    * pages are the reader's to print (`MarkupView`). */
   const printable = canPrint() && !isPdf && (showsImage || (isText && text !== null && (file.size <= INLINE_LIMIT || whole)));
   const print = () => void printContent(isText ? { text: text ?? "" } : { pictures: [url] }, sentName(file));
+  // Save is a download, and in the installed app on an iPhone or iPad a
+  // download covers the app with the file and no way back (a PDF most of
+  // all). There Share's sheet is the one door, named Save or share…: its
+  // Save to Files keeps the file, and the reader stays where it was.
+  const shareButton = <button className="outbox-action" disabled={sharing.busy === file.name} onClick={() => void sharing.share(file)}>
+    {t(sharing.ready === file.name ? "mobile.outbox.shareReady" : strands ? "mobile.outbox.saveOrShare" : "mobile.outbox.share")}
+  </button>;
   const actions = <>
     {markable && <button className="outbox-action" onClick={() => setMarking(true)} aria-label={t("mobile.markup.openFile", { name: sentName(file) })}>{t("mobile.markup.open")}</button>}
-    {!tooLarge && <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>}
-    {shareable && <button className="outbox-action" disabled={sharing.busy === file.name} onClick={() => void sharing.share(file)}>
-      {t(sharing.ready === file.name ? "mobile.outbox.shareReady" : "mobile.outbox.share")}
-    </button>}
+    {!tooLarge && !strands && <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>}
+    {shareable && shareButton}
     {shareable && isUntested("mobile.outbox.share") && <span className="untested">{t("mobile.outbox.untested")}</span>}
     {printable && <button className="outbox-action" onClick={print} aria-label={t("mobile.outbox.printFile", { name: sentName(file) })}>{t("mobile.outbox.print")}</button>}
     {printable && isUntested("mobile.outbox.print") && <span className="untested">{t("mobile.outbox.untested")}</span>}
@@ -477,7 +482,8 @@ export function OutboxViewer({ scope, file, pictures, onStep, onClose, markup, n
       <p>{tooLarge ? t("mobile.outbox.tooLarge")
         : (isImage || file.kind === "application/pdf") && !limits.show ? t("mobile.outbox.tooLargeToShow")
         : t("mobile.outbox.noPreview")}</p>
-      {!tooLarge && <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>}
+      {!tooLarge && (strands ? shareable && shareButton
+        : <a className="outbox-action" href={viewerFileUrl(scope, file, true)} download={sentName(file)}>{t("mobile.outbox.save")}</a>)}
     </div>}
     {sizeAsk}
   </div>;

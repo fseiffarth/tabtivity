@@ -4,7 +4,7 @@ import { inboxFileUrl, outboxFileUrl, sentName, viewerFileUrl, type OutboxFile }
 import { fileKey } from "../terminal/chatFiles";
 import { ageLabel } from "../terminal/fileLabels";
 import { formatBytes } from "../../../src/lib/formatBytes";
-import { fileBadge, viewableFile } from "./InboxPreview";
+import { fileBadge, openableFile } from "./InboxPreview";
 
 /** How a file came into the conversation: the agent sent it (`tabtivity-send`
  * from this tab, the project outbox), the phone did (a prompt's inbox
@@ -125,7 +125,7 @@ export function SentFilesIndex({ tabId, project, files, more = false, open, onTo
               </>;
               const label = `${t("mobile.outbox.open", { name })} · ${t(FROM_LABEL[from])}`;
               return <li key={file.name}>
-                {viewableFile(file)
+                {openableFile(file)
                   ? <button type="button" onClick={() => onOpen(row)} aria-label={label} title={name}>{content}</button>
                   : <a href={urlOf(row, true)} download={name} aria-label={label} title={name}>{content}</a>}
               </li>;

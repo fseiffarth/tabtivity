@@ -1176,6 +1176,8 @@ export const dict: Dict = {
   "mobile.outbox.shareFile": "Partager {name}",
   "mobile.outbox.shareReady": "Partager maintenant",
   "mobile.outbox.shareReadyFile": "Partager {name} maintenant",
+  "mobile.outbox.saveOrShare": "Enregistrer ou partager…",
+  "mobile.outbox.saveOrShareFile": "Enregistrer ou partager {name}",
   "mobile.outbox.shareUntested": "Partage non testé",
   "mobile.outbox.shareBig.one": "Partager {name} ({size}) ?",
   "mobile.outbox.shareBig.many": "Partager {count} fichiers ({size}) ?",
