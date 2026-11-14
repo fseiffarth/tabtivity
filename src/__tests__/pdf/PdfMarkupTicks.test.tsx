@@ -62,7 +62,7 @@ function agentTab(key: string, scheduleTargetId: string, label: string): TabEntr
   return { key, label, cmd: "claude", cwd: "/home/u/paper", kind: "agent", scheduleTargetId } as TabEntry;
 }
 
-function Harness({ onReload = () => {} }: { onReload?: () => void }) {
+function Harness({ onReload = () => {}, expose }: { onReload?: () => void; expose?: (markup: ReturnType<typeof usePdfMarkup>) => void }) {
   const markup = usePdfMarkup({
     projectId: "p1",
     scope: "p1",
@@ -73,6 +73,7 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
     docSize: 9_000,
     docVersion: 0,
   });
+  expose?.(markup);
   const badges = tickBadgesByPage(markup.edit.base, markup.ticks.groups).get(1) ?? [];
   return (
     <>
@@ -86,6 +87,8 @@ function Harness({ onReload = () => {} }: { onReload?: () => void }) {
 
 let ticks: MarkupTick[] | "missing" = [];
 let submitMode: { mode: string; undo: string | null } = { mode: "list", undo: null };
+/** Holds the next `pdf_markup_undo` answer until released, when a test sets it. */
+let undoGate: Promise<void> | null = null;
 /** Per-tab ticks, when a test needs them to differ by tab. */
 let ticksFor: ((target: string) => MarkupTick[]) | null = null;
 
@@ -102,6 +105,7 @@ beforeEach(() => {
   ticks = [];
   ticksFor = null;
   submitMode = { mode: "list", undo: null };
+  undoGate = null;
   mocks.listeners.clear();
   mocks.invoke.mockReset();
   mocks.invoke.mockImplementation(async (command: string, args: { scheduleTargetId: string }) => {
@@ -112,6 +116,7 @@ beforeEach(() => {
       return ticksFor ? ticksFor(args.scheduleTargetId) : ticks;
     }
     if (command === "pdf_markup_submit") return { prompt: "Look at the marked copy.", marked: null, ...submitMode, noUndo: null };
+    if (command === "pdf_markup_undo") await undoGate;
     if (command === "pdf_markup_undo_preview" || command === "pdf_markup_undo") return { files: [{ path: "paper.tex", change: "modified" }], more: 0, pdf: "restored" };
     return null;
   });
@@ -282,5 +287,31 @@ describe("desktop markup ticks", () => {
     await waitFor(() => expect(badges()).toHaveLength(0));
     expect(lastSaved()?.sent?.pages[1].marks).toEqual([STROKE, BOX]);
     expect(lastSaved()?.sent).not.toHaveProperty("log");
+  }, SETTLE_MS + 8_000);
+
+  it("forgets the undone round even when a newer Submit lands while the Undo is in flight", async () => {
+    submitMode = { mode: "apply", undo: UNDO_ID };
+    let markup!: ReturnType<typeof usePdfMarkup>;
+    render(<Harness expose={(m) => { markup = m; }} />);
+    const first = await submitted();
+    act(() => useActivityStore.setState({ busyByTab: { "p1:t1": true }, attentionByTab: {} }));
+    await screen.findByText("Agent is working…");
+    act(() => useActivityStore.setState({ busyByTab: {}, attentionByTab: {} }));
+    await screen.findByText(/^Agent finished/, undefined, { timeout: SETTLE_MS + 2_000 });
+    let release!: () => void;
+    undoGate = new Promise<void>((resolve) => { release = resolve; });
+    fireEvent.click(screen.getByRole("button", { name: "Undo the agent's changes from this round" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(calls("pdf_markup_undo")).toHaveLength(1));
+    // A second round goes out before the first Undo is answered.
+    submitMode = { mode: "apply", undo: "f".repeat(32) };
+    act(() => { markup.edit.add(1, SIZE, { kind: "box", color: "yellow", rect: [10, 300, 20, 20] }); });
+    await waitFor(() => expect(submitButton().disabled).toBe(false));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(calls("pdf_markup_submit")).toHaveLength(2));
+    const second = calls("pdf_markup_submit")[1][1].round as string;
+    await waitFor(() => expect(lastSaved()?.sent?.log?.map((entry) => entry.id)).toEqual([first, second]));
+    release();
+    await waitFor(() => expect(lastSaved()?.sent?.log?.map((entry) => entry.id)).toEqual([second]));
   }, SETTLE_MS + 8_000);
 });

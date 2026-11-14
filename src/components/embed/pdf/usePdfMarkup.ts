@@ -408,9 +408,10 @@ export function usePdfMarkup({
   /** **Apply marks directly**: why an asked-for `apply` round runs as `list`,
    *  what an undo would put back (the confirm dialog), how the last undo went. */
   const [noUndo, setNoUndo] = useState<string | null>(null);
-  /** The preview carries the undo id it was read for: a new Submit meanwhile
-   *  replaces the round, never what the dialog's Undo runs. */
-  const [undoPreview, setUndoPreview] = useState<{ id: string; changes: PdfMarkupUndoChanges } | null>(null);
+  /** The preview carries the undo id it was read for, and the Submit's round
+   *  id in the log (`logId`): a new Submit meanwhile replaces the round, never
+   *  what the dialog's Undo runs or forgets. */
+  const [undoPreview, setUndoPreview] = useState<{ id: string; logId: string; changes: PdfMarkupUndoChanges } | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
   /** Set at once on a click, before the render that disables the button — a
    *  double click sends one request. */
@@ -418,9 +419,6 @@ export function usePdfMarkup({
   const [undoNote, setUndoNote] = useState<MarkupRoundUndo["note"]>(null);
   /** The agent's ticks for this file, with the tabs and file they were read for. */
   const [tickList, setTickList] = useState<{ key: string; ticks: MarkupTick[] } | null>(null);
-  /** Which Submit's round id an `apply` round's undo id belongs to: an undone
-   *  round is forgotten from the log. */
-  const undoRounds = useRef(new Map<string, string>());
 
   const skipSave = useRef(false);
   const pendingSave = useRef(false);
@@ -1152,14 +1150,11 @@ export function usePdfMarkup({
       const asSent = pages.every((n) => now.present.pages[n]?.marks === present.pages[n].marks);
       return startHistory(markSent(now.present, pages, asSent ? roundId : undefined, words));
     });
-    // Only the newest round's undo can run (`holdsUndo`): older ids are dead.
-    undoRounds.current.clear();
-    if (undo) undoRounds.current.set(undo, roundId);
     setShowSent(true);
     setNoUndo(fellBack);
     setUndoNote(null);
     setUndoPreview(null);
-    beginRound(target, startRound(queued, Date.now(), false, undo ? { id: undo, state: "ready" } : undefined));
+    beginRound(target, startRound(queued, Date.now(), false, undo ? { id: undo, state: "ready", logId: roundId } : undefined));
     setSending(false);
   }, [projectId, target, sending, note, history.present, pageCount, path, doc, picture, t, beginRound]);
 
@@ -1201,14 +1196,15 @@ export function usePdfMarkup({
   );
   const askUndo = useCallback(async () => {
     const id = roundRef.current?.undo?.id;
-    if (!projectId || !id || undoBusyRef.current) return;
+    const logId = roundRef.current?.undo?.logId;
+    if (!projectId || !id || !logId || undoBusyRef.current) return;
     undoBusyRef.current = true;
     setUndoNote(null);
     setUndoBusy(true);
     try {
       const changes = await previewPdfMarkupUndo(projectId, id);
       // Not when a new Submit replaced the round meanwhile.
-      if (holdsUndo(roundRef.current, id)) setUndoPreview({ id, changes });
+      if (holdsUndo(roundRef.current, id)) setUndoPreview({ id, logId, changes });
     } catch (error) {
       if (holdsUndo(roundRef.current, id)) undoFailed(error, "preview", id);
     } finally {
@@ -1221,8 +1217,9 @@ export function usePdfMarkup({
    *  sent marks stay: only the reader removes marks. */
   const confirmUndo = useCallback(async () => {
     const id = undoPreview?.id;
+    const logId = undoPreview?.logId;
     setUndoPreview(null);
-    if (!projectId || !id || undoBusyRef.current) return false;
+    if (!projectId || !id || !logId || undoBusyRef.current) return false;
     undoBusyRef.current = true;
     setUndoBusy(true);
     try {
@@ -1235,11 +1232,7 @@ export function usePdfMarkup({
       }
       setRound((was) => was && undoneRound(was, id));
       // Its ticks mean nothing now: the round leaves the log (the marks stay).
-      const undoneId = undoRounds.current.get(id);
-      if (undoneId) {
-        undoRounds.current.delete(id);
-        setHistory((now) => forgetRoundInHistory(now, undoneId));
-      }
+      setHistory((now) => forgetRoundInHistory(now, logId));
       // The files went back, whatever else happened since: the agent is told.
       let told = false;
       if (roundTarget) {

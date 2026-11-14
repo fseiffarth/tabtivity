@@ -33,9 +33,11 @@ import type { TranslationKey } from "../../../src/lib/i18n";
 /** The agent as the host sees it now. */
 export type AgentSignal = "working" | "question" | "idle";
 export type RoundPhase = "sent" | "queued" | "working" | "question" | "finished" | "unconfirmed";
-/** An `apply` round's undo snapshot on the desktop: its id, and whether the
- * Undo is still to be had (`ready`) or went through (`done`). */
-export type RoundUndo = { id: string; state: "ready" | "done" };
+/** An `apply` round's undo snapshot on the desktop: its id, whether the Undo
+ * is still to be had (`ready`) or went through (`done`), and the Submit's
+ * round id (`logId`) in the marks' log — the round whose ticks an Undo
+ * forgets. */
+export type RoundUndo = { id: string; state: "ready" | "done"; logId: string };
 /** `since`: when `phase` began. `sentAt`: the Submit. `idleSince`: when a
  * working or asking agent was last seen going idle, until it settles.
  * `applied`: this round is the **Make these changes** follow-up, not a

@@ -247,7 +247,7 @@ describe("markup rounds · Make these changes", () => {
 });
 
 describe("markup rounds · Undo (apply rounds)", () => {
-  const UNDO = { id: "0123456789abcdef0123456789abcdef", state: "ready" as const };
+  const UNDO = { id: "0123456789abcdef0123456789abcdef", state: "ready" as const, logId: "r".repeat(32) };
   const finish = (round: Round) => stepRound(stepRound(stepRound(round, "working", 1), "idle", 2), "idle", 2 + SETTLE_MS);
 
   it("offers Undo only on a round with an undo id, once it is done — and Make these changes never", () => {
@@ -273,7 +273,7 @@ describe("markup rounds · Undo (apply rounds)", () => {
     expect(canApply(undone)).toBe(false);
     expect(undoneRound(undone, UNDO.id)).toBe(undone);
     // A late answer for an earlier round's undo leaves a newer round's alone.
-    const newer = finish(startRound(false, 100, false, { id: "f".repeat(32), state: "ready" }));
+    const newer = finish(startRound(false, 100, false, { id: "f".repeat(32), state: "ready", logId: "s".repeat(32) }));
     expect(undoneRound(newer, UNDO.id)).toBe(newer);
     expect(holdsUndo(newer, UNDO.id)).toBe(false);
     expect(holdsUndo(finished, UNDO.id)).toBe(true);

@@ -558,10 +558,6 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
   const { asks, ticks, refresh: refreshAsks, drop: dropAsk } = useMarkupAsks(asksOn ? askTab : undefined, source, asksOn, agent, questionBusy);
   const ticksRef = useRef(ticks);
   ticksRef.current = ticks;
-  /** Which Submit's round id an `apply` round's undo id belongs to: an undone
-   * round leaves the log, so its ticks badge nothing. Only the newest
-   * round's undo can run (`holdsUndo`), so each Submit starts it afresh. */
-  const undoRounds = useRef(new Map<string, string>());
   /** When each shown ✓ badge first appeared (`ARRIVAL_GUARD_MS`), and the
    * newest of them; when the last approve was taken. */
   const tickSeen = useRef(new Map<Mark, number>());
@@ -590,9 +586,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * undo would put back, and how the last undo went. */
   const undoTab = useRef("");
   const [noUndo, setNoUndo] = useState<string | null>(null);
-  /** The sheet carries the undo id it was read for: a new Submit meanwhile
-   * replaces the round, never what the sheet's Undo runs. */
-  const [undoSheet, setUndoSheet] = useState<{ id: string; changes: MarkupUndoChanges } | null>(null);
+  /** The sheet carries the undo id it was read for, and the Submit's round id
+   * in the log (`logId`): a new Submit meanwhile replaces the round, never
+   * what the sheet's Undo runs or forgets. */
+  const [undoSheet, setUndoSheet] = useState<{ id: string; logId: string; changes: MarkupUndoChanges } | null>(null);
   const [undoBusy, setUndoBusy] = useState(false);
   /** Set at once on a tap, before the render that disables the button — a
    * double tap sends one request. */
@@ -1595,14 +1592,12 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
     // The mode the desktop gave the round decides its follow-up — Undo or
     // Make these changes — never this phone's switch.
     const undo = answer.mode === "apply" ? answer.undo || null : null;
-    undoRounds.current.clear();
-    if (undo) undoRounds.current.set(undo, roundId);
     undoTab.current = tabId;
     roundFile.current = fileRef.current;
     setNoUndo(direct && !undo ? answer.noUndo ?? null : null);
     setUndoNote(null);
     setUndoSheet(null);
-    setSubmitted(startRound(sent === "queued", Date.now(), false, undo ? { id: undo, state: "ready" } : undefined));
+    setSubmitted(startRound(sent === "queued", Date.now(), false, undo ? { id: undo, state: "ready", logId: roundId } : undefined));
     setSending(null);
     keepCard(tabId);
   };
@@ -1653,14 +1648,15 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * a new Submit replaced the round meanwhile. */
   const askUndo = async () => {
     const id = submitted?.undo?.id;
+    const logId = submitted?.undo?.logId;
     const tab = undoTab.current;
-    if (!id || undoBusyRef.current || !tab) return;
+    if (!id || !logId || undoBusyRef.current || !tab) return;
     undoBusyRef.current = true;
     setUndoNote(null);
     setUndoBusy(true);
     try {
       const changes = await previewMarkupUndo(tab, id);
-      if (holdsUndo(submittedRef.current, id)) setUndoSheet({ id, changes });
+      if (holdsUndo(submittedRef.current, id)) setUndoSheet({ id, logId, changes });
     } catch (error) {
       if (holdsUndo(submittedRef.current, id)) undoFailed(error, "preview", id);
     } finally {
@@ -1674,9 +1670,10 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * marks stay: only the reader removes marks. */
   const runUndo = async () => {
     const id = undoSheet?.id;
+    const logId = undoSheet?.logId;
     const tab = undoTab.current;
     setUndoSheet(null);
-    if (!id || undoBusyRef.current || !tab) return;
+    if (!id || !logId || undoBusyRef.current || !tab) return;
     undoBusyRef.current = true;
     setUndoBusy(true);
     try {
@@ -1689,11 +1686,7 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
       }
       setSubmitted((was) => was && undoneRound(was, id));
       // Its ticks mean nothing now: the round leaves the log (the marks stay).
-      const undoneId = undoRounds.current.get(id);
-      if (undoneId) {
-        undoRounds.current.delete(id);
-        setHistory((now) => forgetRoundInHistory(now, undoneId));
-      }
+      setHistory((now) => forgetRoundInHistory(now, logId));
       // The files went back, whatever else happened since: the agent is told.
       const told = await sendNote(markupUndoNote(done.files.map((file) => file.path), done.more));
       setUndoNote(told ? { text: t("mobile.markup.undo.done"), alert: false } : { text: t("mobile.markup.undo.noteFailed"), alert: true });
