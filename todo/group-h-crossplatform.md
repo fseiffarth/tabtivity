@@ -4896,6 +4896,40 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
   or not on its list), then filter both the desktop answer and the headless
   one per device (`Catalog::for_device` already knows the set).
 
+- [ ] **31cs — One phone app, several desktops** (2026-11-14; planned, nothing
+  built). Plan: `docs/phone_multi_desktop_plan.md`. One installed app switches
+  between linked desktops; every other desktop's own phone UI is framed from
+  its own origin (same tailnet, `linked_desktops` on both desktops). v1 push =
+  switcher badges + Android browser opt-in, relay later; a framed desktop keeps
+  its own lock. Order: 31ct → sidecar headers → Settings → minimal shell for
+  the plan's on-device checks (iOS pairing in the frame, terminal keyboard in
+  the frame) → rest of the phone shell.
+
+- [~] **31ct — Phone session cookie collides across ports on one machine**
+  (2026-11-14; ✅ code-complete, `two_hosts_on_one_machine_keep_their_sign_ins_apart`,
+  `a_host_on_an_explicit_port_names_its_session_cookie_after_it`; ⚠️ never live).
+  Cookies ignore ports, and the phone host and the server daemon behind the
+  gateway both set `__Host-<slug>_session`, so a desktop phone host on Serve
+  port 10000 and the gateway on 443 (`docs/context/server_gateway.md`) overwrote
+  each other's sign-in. A host on an explicit port now uses
+  `__Host-<slug>_session_<port>` (`host.rs` `cookie_port`), reads and expires
+  only that; the default port's name is unchanged. Sessions are memory-only,
+  so the switch costs one automatic re-sign-in. Phase 0 of
+  `docs/phone_multi_desktop_plan.md`.
+  - [ ] 🖐️ On a machine with the server gateway on 443 and the desktop's phone
+    host on Serve port 10000, sign the phone in to both (one browser), use one,
+    then the other, back and forth: switching back shows no sign-in step (the
+    phone re-signed in silently on every switch before); logging out of one
+    leaves the other signed in.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,
 rename, Dissolve), listing a box's members as project rows, a per-member

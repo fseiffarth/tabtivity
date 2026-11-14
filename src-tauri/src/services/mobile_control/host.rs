@@ -326,27 +326,63 @@ fn exact_origin(headers: &HeaderMap, state: &HostState) -> bool {
     headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == Some(state.config.origin.as_str())
 }
 
-fn cookie_token(headers: &HeaderMap) -> Option<&str> {
-    session_cookie_in(&crate::brand::PAIR, headers.get(header::COOKIE)?.to_str().ok()?)
+fn cookie_token<'a>(headers: &'a HeaderMap, state: &HostState) -> Option<&'a str> {
+    device_session_cookie(headers, &crate::services::server::host_of(&state.config.origin))
 }
 
-/// The phone store's session token in a request, for the browser transport
-/// behind the gateway (`web_client::ServerLink`).
-pub fn device_session_cookie(headers: &HeaderMap) -> Option<&str> {
-    cookie_token(headers)
+/// The phone store's session token in a request to the host whose origin's
+/// `host[:port]` is `authority` — the browser transport behind the gateway
+/// (`web_client::ServerLink`) asks with its public host.
+pub fn device_session_cookie<'a>(headers: &'a HeaderMap, authority: &str) -> Option<&'a str> {
+    session_cookie_in(&crate::brand::PAIR, cookie_port(authority), headers.get(header::COOKIE)?.to_str().ok()?)
+}
+
+/// The explicit port of `host[:port]`, `None` on the default one.
+///
+/// Cookies ignore ports: a phone host on `HOST:10000` and the server
+/// gateway on `HOST` (`docs/context/server_gateway.md`, one shared Tailscale
+/// Serve) share one cookie jar, so under one name each sign-in overwrote the
+/// other's. A host on an explicit port names its cookie after it
+/// (`session_cookie_name`). `validate_origin` drops a default port, so the
+/// plain name stays the one a host on 443 always used.
+fn cookie_port(authority: &str) -> Option<&str> {
+    let (_, port) = authority.rsplit_once(':')?;
+    (!port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())).then_some(port)
+}
+
+/// The session cookie's name under `base` (`brand::SESSION_COOKIE` or a
+/// pair's name) for a host on `port`.
+fn session_cookie_name(base: &str, port: Option<&str>) -> String {
+    match port {
+        Some(port) => format!("{base}_{port}"),
+        None => base.to_string(),
+    }
+}
+
+/// The name this host sets its session cookie under.
+fn own_session_cookie(state: &HostState) -> String {
+    session_cookie_name(
+        crate::brand::SESSION_COOKIE,
+        cookie_port(&crate::services::server::host_of(&state.config.origin)),
+    )
 }
 
 /// The session token in a `Cookie` header: the cookie under its current name,
 /// else under the name an older build's host set (counted as a legacy hit).
-fn session_cookie_in<'a>(pair: &crate::brand::Pair, cookies: &'a str) -> Option<&'a str> {
+/// A host on an explicit port reads only its own name: the old names never
+/// carried a port, so one could be the default port's host's cookie.
+fn session_cookie_in<'a>(pair: &crate::brand::Pair, port: Option<&str>, cookies: &'a str) -> Option<&'a str> {
     let named = |wanted: &str| {
         cookies.split(';').find_map(|part| {
             let (name, value) = part.trim().split_once('=')?;
             (name == wanted).then_some(value)
         })
     };
-    if let Some(token) = named(&pair.cur(crate::brand::Name::SESSION_COOKIE)) {
+    if let Some(token) = named(&session_cookie_name(&pair.cur(crate::brand::Name::SESSION_COOKIE), port)) {
         return Some(token);
+    }
+    if port.is_some() {
+        return None;
     }
     let token = named(&pair.legacy(crate::brand::Name::SESSION_COOKIE)?)?;
     crate::brand::legacy_hit("session-cookie");
@@ -389,7 +425,7 @@ fn authenticate(
     headers: &HeaderMap,
     state: &HostState,
 ) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
-    let token = cookie_token(headers)
+    let token = cookie_token(headers, state)
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     state
         .auth
@@ -501,7 +537,7 @@ async fn open_ticket(
     if let Err(error) = mutation_guard(&headers, &state) {
         return error;
     }
-    let Some(token) = cookie_token(&headers) else {
+    let Some(token) = cookie_token(&headers, &state) else {
         return api_error(StatusCode::UNAUTHORIZED, "authentication_required");
     };
     let uri = match body.url.parse::<Uri>() {
@@ -856,7 +892,7 @@ async fn login(
         Ok((token, expires_at)) => {
             let mut response =
                 Json(json!({ "ok": true, "expires_at": expires_at })).into_response();
-            let cookie = format!("{}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", crate::brand::SESSION_COOKIE);
+            let cookie = format!("{}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", own_session_cookie(&state));
             response
                 .headers_mut()
                 .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
@@ -870,19 +906,21 @@ async fn logout(State(state): State<HostState>, headers: HeaderMap) -> Response<
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
     }
-    if let Some(token) = cookie_token(&headers) {
+    if let Some(token) = cookie_token(&headers, &state) {
         state.auth.lock_ok().logout(token);
     }
     let mut response = Json(json!({ "ok": true })).into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_static(
-            concat!("__Host-", crate::app_slug!(), "_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"),
-        ),
-    );
+    if let Ok(expired) = HeaderValue::from_str(&format!(
+        "{}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0",
+        own_session_cookie(&state)
+    )) {
+        response.headers_mut().insert(header::SET_COOKIE, expired);
+    }
     // A cookie an older build's host set is expired as well; there is none
-    // to name while the name is unchanged.
-    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::SESSION_COOKIE) {
+    // to name while the name is unchanged. Not on an explicit port: the old
+    // name carried none, so it would expire the default port's host's cookie.
+    let ported = cookie_port(&crate::services::server::host_of(&state.config.origin)).is_some();
+    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::SESSION_COOKIE).filter(|_| !ported) {
         if let Ok(expired) =
             HeaderValue::from_str(&format!("{old}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"))
         {
@@ -6027,7 +6065,7 @@ async fn terminal(
     };
     let registry = state.terminal_registry.clone();
     let auth = state.auth.clone();
-    let token = cookie_token(&headers).unwrap_or_default().to_string();
+    let token = cookie_token(&headers, &state).unwrap_or_default().to_string();
     let state_dir = state.config.state_dir.clone();
     let catalog = state.catalog.clone();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");

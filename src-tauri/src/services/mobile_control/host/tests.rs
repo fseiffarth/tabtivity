@@ -19,18 +19,18 @@ fn old_protocol_names_are_accepted_and_counted() {
     assert!(hits::taken().is_empty());
 
     let old_cookie = format!("theme=dark; {}=tok-old", LEGACY.name(Name::SESSION_COOKIE));
-    assert_eq!(session_cookie_in(&RENAMED, &old_cookie), Some("tok-old"));
+    assert_eq!(session_cookie_in(&RENAMED, None, &old_cookie), Some("tok-old"));
     assert_eq!(hits::taken(), ["session-cookie"]);
     let both = format!("{old_cookie}; __Host-newname_session=tok-new");
-    assert_eq!(session_cookie_in(&RENAMED, &both), Some("tok-new"));
-    assert_eq!(session_cookie_in(&RENAMED, "theme=dark"), None);
+    assert_eq!(session_cookie_in(&RENAMED, None, &both), Some("tok-new"));
+    assert_eq!(session_cookie_in(&RENAMED, None, "theme=dark"), None);
     assert!(hits::taken().is_empty());
 
     // The production pair: one name each, as before.
     let current = super::super::protocol::TERMINAL_PROTOCOL;
     assert_eq!(terminal_protocol_in(&PAIR, current).as_deref(), Some(current));
     assert_eq!(
-        session_cookie_in(&PAIR, &format!("{}=tok", crate::brand::SESSION_COOKIE)),
+        session_cookie_in(&PAIR, None, &format!("{}=tok", crate::brand::SESSION_COOKIE)),
         Some("tok")
     );
 }
@@ -86,10 +86,15 @@ impl scheduler::Runner for RunnerRecorder {
 impl Fixture {
     /// A host with no project catalog at all.
     fn bare() -> Self {
+        Self::bare_at(ORIGIN)
+    }
+
+    /// `bare` for a host reached at `origin`.
+    fn bare_at(origin: &str) -> Self {
         let dir = tempfile::tempdir().expect("state dir");
         let state_dir = dir.path().to_path_buf();
         let control_dir = state_dir.join("mobile-control");
-        let auth = AuthStore::open(&control_dir, ORIGIN.to_string()).expect("auth store");
+        let auth = AuthStore::open(&control_dir, origin.to_string()).expect("auth store");
         let root = state_dir.join("work");
         std::fs::create_dir_all(&root).expect("project root");
         let runner = Arc::new(RunnerRecorder::default());
@@ -105,7 +110,7 @@ impl Fixture {
                         display_name: "Desk".into(),
                         ..MobileHostSettings::default()
                     },
-                    origin: ORIGIN.into(),
+                    origin: origin.into(),
                 },
                 auth: Arc::new(Mutex::new(auth)),
                 catalog: Arc::new(Mutex::new(CatalogCache::default())),
@@ -243,6 +248,7 @@ impl Fixture {
     /// The real pair → challenge → sign → session flow, returning the
     /// session cookie and the paired device id.
     async fn pair_device(&self, signing: &SigningKey) -> (String, String) {
+        let origin = self.state.config.origin.clone();
         let code = self
             .state
             .auth
@@ -261,7 +267,7 @@ impl Fixture {
         let (status, _, body) = self
             .send(post_json(
                 "/api/v1/pair",
-                ORIGIN,
+                &origin,
                 &serde_json::json!({
                     "code": code,
                     "device_name": "Phone",
@@ -275,7 +281,7 @@ impl Fixture {
         let (status, _, body) = self
             .send(post_json(
                 "/api/v1/auth/challenge",
-                ORIGIN,
+                &origin,
                 &serde_json::json!({ "device_id": device_id }),
             ))
             .await;
@@ -287,7 +293,7 @@ impl Fixture {
         let (status, headers, body) = self
             .send(post_json(
                 "/api/v1/auth/session",
-                ORIGIN,
+                &origin,
                 &serde_json::json!({
                     "device_id": device_id,
                     "nonce": nonce,
@@ -341,6 +347,16 @@ fn get_as(uri: &str, cookie: &str) -> Request<Body> {
     Request::builder()
         .uri(uri)
         .header(header::COOKIE, cookie_pair(cookie))
+        .body(Body::empty())
+        .expect("request")
+}
+
+/// A GET carrying a whole `Cookie` header, as a browser sends every cookie
+/// its jar holds for the host.
+fn get_with_jar(uri: &str, jar: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(header::COOKIE, jar)
         .body(Body::empty())
         .expect("request")
 }
@@ -3756,6 +3772,74 @@ async fn logging_out_clears_the_cookie_and_the_session() {
 
     let (status, ..) = host.send(get_as("/api/v1/status", &cookie)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Cookies ignore ports: a phone host on `HOST:10000` shares the browser's
+/// cookie jar with the server gateway on `HOST`. Each names its session
+/// cookie apart, reads only its own, and a logout expires only its own.
+#[test]
+fn a_host_on_an_explicit_port_names_its_session_cookie_after_it() {
+    use crate::brand::{PAIR, SESSION_COOKIE};
+    assert_eq!(cookie_port("desk.example.ts.net"), None);
+    assert_eq!(cookie_port("desk.example.ts.net:10000"), Some("10000"));
+    assert_eq!(cookie_port("[::1]"), None);
+    assert_eq!(cookie_port("[::1]:8443"), Some("8443"));
+    assert_eq!(cookie_port("desk.example.ts.net:"), None);
+
+    let ported = format!("{SESSION_COOKIE}_10000");
+    let both = format!("{SESSION_COOKIE}=tok-gateway; {ported}=tok-desk");
+    assert_eq!(session_cookie_in(&PAIR, Some("10000"), &both), Some("tok-desk"));
+    assert_eq!(session_cookie_in(&PAIR, None, &both), Some("tok-gateway"));
+    let plain_only = format!("{SESSION_COOKIE}=tok-gateway");
+    assert_eq!(session_cookie_in(&PAIR, Some("10000"), &plain_only), None);
+    assert_eq!(session_cookie_in(&PAIR, Some("8443"), &both), None);
+}
+
+#[tokio::test]
+async fn two_hosts_on_one_machine_keep_their_sign_ins_apart() {
+    let gateway = Fixture::bare();
+    let gateway_cookie = cookie_pair(&gateway.pair_device(&signing_key(31)).await.0);
+    assert!(
+        gateway_cookie.starts_with(&format!("{}=", crate::brand::SESSION_COOKIE)),
+        "the default port's name changed: {gateway_cookie}"
+    );
+
+    let desk_origin = format!("{ORIGIN}:10000");
+    let desk = Fixture::bare_at(&desk_origin);
+    let desk_cookie = cookie_pair(&desk.pair_device(&signing_key(32)).await.0);
+    assert!(
+        desk_cookie.starts_with(&format!("{}_10000=", crate::brand::SESSION_COOKIE)),
+        "the ported host kept the shared name: {desk_cookie}"
+    );
+
+    // The browser sends both cookies to both hosts; each finds its own.
+    let jar = format!("{gateway_cookie}; {desk_cookie}");
+    let (status, _, body) = gateway.send(get_with_jar("/api/v1/status", &jar)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = desk.send(get_with_jar("/api/v1/status", &jar)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The other host's cookie alone signs neither in.
+    let (status, ..) = desk.send(get_as("/api/v1/status", &gateway_cookie)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The ported host's logout expires its own cookie and nothing else.
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/auth/session")
+        .header(header::ORIGIN, desk_origin.as_str())
+        .header(header::COOKIE, jar.as_str())
+        .body(Body::empty())
+        .expect("request");
+    let (status, headers, _) = desk.send(request).await;
+    assert_eq!(status, StatusCode::OK);
+    let expired: Vec<_> = headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(cookie_pair))
+        .collect();
+    assert_eq!(expired, [format!("{}_10000=", crate::brand::SESSION_COOKIE)], "{expired:?}");
+    let (status, _, body) = gateway.send(get_with_jar("/api/v1/status", &jar)).await;
+    assert_eq!(status, StatusCode::OK, "the desk's logout signed the gateway out: {body}");
 }
 
 #[tokio::test]

@@ -642,6 +642,9 @@ desktop's user unit `<slug>-mobile-host` vs the system units
 `<slug>-serverd@`/`<slug>-tmux@`/`<slug>-gateway`. Tailscale Serve is the one
 shared resource: the gateway takes HTTPS 443 and 8443, so a desktop Mobile
 host on the same machine needs the third Serve port (`--https=10000`,
-origin `https://HOST:10000`). Shared Ollama: the admin's service owns
+origin `https://HOST:10000`). Cookies ignore ports, so a phone host on an
+explicit port names its session cookie after it (`__Host-<slug>_session_10000`,
+`host.rs` `cookie_port`), reads and expires only that name, and never the
+gateway daemon's port-less one. Shared Ollama: the admin's service owns
 11434; the desktop's own `ensure_ollama_running` only starts a user-level
 one when nothing answers. Not run live.
