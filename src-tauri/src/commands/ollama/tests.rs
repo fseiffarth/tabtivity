@@ -225,6 +225,22 @@ fn completion_sampling_has_no_penalties_and_a_greedy_first_candidate() {
     }
 }
 
+/// B6: an automatic request past its budget settles for its complete lines.
+#[test]
+fn the_time_budget_cuts_after_complete_lines_only() {
+    let ms = Duration::from_millis;
+    let text = "    let a = 1;\n    let b = 2;\n    let c";
+    assert_eq!(budget_cut(CompletionMode::Block, ms(2999), text), None, "within budget");
+    assert_eq!(budget_cut(CompletionMode::Block, ms(3000), text), Some("    let a = 1;\n    let b = 2;".len()));
+    assert_eq!(budget_cut(CompletionMode::Scope, ms(5999), text), None);
+    assert_eq!(budget_cut(CompletionMode::Scope, ms(6000), text), Some("    let a = 1;\n    let b = 2;".len()));
+    assert_eq!(budget_cut(CompletionMode::Sentence, ms(1500), "x = 1\r\ny"), Some(5), "the \\r goes with its break");
+    // No complete line yet: keep streaming, however long it takes.
+    assert_eq!(budget_cut(CompletionMode::Block, ms(60_000), "    let a = 1;"), None);
+    assert_eq!(budget_cut(CompletionMode::Block, ms(60_000), "\n   \n  let"), None, "blank lines are not complete lines");
+    assert_eq!(budget_cut(CompletionMode::Block, ms(60_000), "\nfoo();\nbar"), Some("\nfoo();".len()));
+}
+
 #[test]
 fn only_ollamas_exact_400_retries_on_chat() {
     assert!(fim_refused("ollama HTTP 400"));

@@ -3525,6 +3525,35 @@ fn completion_snapshot(
     (text, stop.is_some())
 }
 
+/// How long an automatic request may stream after its first token before it
+/// settles for the complete lines it has (plan B6). Sentence mode reaches it
+/// only for an intent comment, where its line stop is off.
+fn completion_budget(mode: CompletionMode) -> Duration {
+    match mode {
+        CompletionMode::Sentence => Duration::from_millis(1500),
+        CompletionMode::Block => Duration::from_secs(3),
+        CompletionMode::Scope => Duration::from_secs(6),
+    }
+}
+
+/// Where `text` ends after its complete lines: at its last line break (`\r`
+/// included), when non-blank text comes before it. Pure.
+fn complete_lines_end(text: &str) -> Option<usize> {
+    let nl = text.rfind('\n')?;
+    let end = if text[..nl].ends_with('\r') { nl - 1 } else { nl };
+    (!text[..end].trim().is_empty()).then_some(end)
+}
+
+/// The time budget's verdict for an automatic request: where to cut `text`
+/// once `since_first_token` passed the mode's budget and the text holds a
+/// complete line, else `None` (keep streaming). Pure + tested.
+fn budget_cut(mode: CompletionMode, since_first_token: Duration, text: &str) -> Option<usize> {
+    if since_first_token < completion_budget(mode) {
+        return None;
+    }
+    complete_lines_end(text)
+}
+
 /// The endpoint one completion request may use, or why it may not run: the
 /// policy block `complete_text` runs before any client exists. A local-models-
 /// only project (`services::agent_privacy`) is completed by this machine's
@@ -3726,6 +3755,7 @@ pub async fn complete_text(
     candidate: Option<u32>,
     project_id: Option<String>,
     file_name: Option<String>,
+    trigger: Option<String>,
 ) -> Result<String, String> {
     use crate::services::text_completion;
     crate::services::ai_switch::check()?;
@@ -3757,6 +3787,7 @@ pub async fn complete_text(
         let prose = is_completion_prose(&language);
         let sentence = mode == CompletionMode::Sentence && trailing_comment_intent(&prefix, &language).is_none();
         let fim = uses_fim(&language, insert == Some(true));
+        let automatic = trigger.as_deref() == Some("auto");
         for use_fim in if fim { vec![true, false] } else { vec![false] } {
             let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(
                 &prefix, &suffix, &model, &language, mode, &references, file_name.as_deref(), use_fim,
@@ -3764,7 +3795,8 @@ pub async fn complete_text(
             sample_candidate(&mut body, candidate.unwrap_or(0));
             let mut published = false;
             let started = Instant::now();
-            let mut first_token = None;
+            let mut first_token: Option<Duration> = None;
+            let mut over_budget = false;
             let result = text_completion::stream(
                 &client,
                 &format!("http://{addr}/api/{endpoint}"),
@@ -3773,8 +3805,15 @@ pub async fn complete_text(
                     if first_token.is_none() && !raw.is_empty() {
                         first_token = Some(started.elapsed());
                     }
-                    let (text, stopped) =
+                    let (mut text, mut stopped) =
                         completion_snapshot(raw, use_fim, done, &prefix, &suffix, sentence, prose);
+                    if automatic && !stopped && !done {
+                        let since_first = first_token.map_or(Duration::ZERO, |at| started.elapsed().saturating_sub(at));
+                        if let Some(end) = budget_cut(mode, since_first, &text) {
+                            text.truncate(end);
+                            (stopped, over_budget) = (true, true);
+                        }
+                    }
                     published |= !text.is_empty();
                     // Target only the requesting editor's client (the calling
                     // window). IPC Channels bypass the embedded browser's origin
@@ -3786,8 +3825,19 @@ pub async fn complete_text(
             .await;
             match result {
                 Ok(streamed) => {
-                    let text = completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0;
-                    let stop = if streamed.record.is_some() { "done" } else { "line" };
+                    let mut text = completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0;
+                    let stop = if streamed.record.is_some() {
+                        "done"
+                    } else if over_budget {
+                        // The budget cut its preview after a complete line; the
+                        // final text keeps the same complete lines.
+                        if let Some(end) = complete_lines_end(&text) {
+                            text.truncate(end);
+                        }
+                        "budget"
+                    } else {
+                        "line"
+                    };
                     let stats = CompletionStats::new(endpoint, &model, stop, first_token, started.elapsed(), reference_bytes, references_dropped, streamed.record.as_ref());
                     // Once, before the final text, on its own event: an older
                     // frontend ignores it, and the return value stays the text.
