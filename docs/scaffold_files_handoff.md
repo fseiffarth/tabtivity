@@ -461,6 +461,101 @@ by hand: `cargo test -p tabtivity -p app-serverd --lib` 5622 passed, 0 failed (n
 
 ## I4 Desktop
 
+Branch `worktree-agent-ade237d8594501e4d` (on `scaffold-files` fbd232a8b). Commits: `8edff0350` (step 5), `923ecb86e`
+(step 7), `89507a3d0` (step 8); the handoff commit follows. All of plan steps 5, 7 and 8 (frontend) are done.
+
+### What is where
+
+- `src/components/files/projectDocsGroup.ts`: pure `buildDocsGroup(standard, status)` -> `{ rows, files, summary }`.
+  File rows keep the listing's order, a pointer (`nestedUnder` set and that doc listed) moves under its parent;
+  ghost rows (`missing && creatable`, not in the listing) go last in catalog order; `summary` = present defaults
+  over `DEFAULT_DOCS` (`AGENTS.md`, `README.md`, hardcoded here: the status has no `default` flag) plus the count of
+  `template` rows (pointers never count). No status -> no ghosts, no states, `summary: null`.
+- `useProjectDocs.ts`: `useProjectDocsStatus` (fetch only while the tree is on screen via `active` and
+  `PaneVisibleContext`, at the root, a local listing, `separateScaffold` on; re-asked when `entries` changes, i.e.
+  after an fs-change refresh), `useDocsGroupOpen` (localStorage `fileTree.docsExpanded.<projectId>`, try/catch,
+  closed by default), `useAgentMemory`.
+- `FileTree.tsx`: group now renders FIRST (above the regular rows, as in the plan's sketch; it used to be below),
+  header "Project docs  2/2 · 1 template" (plain "Project docs (n)" when there is no status), `DocGhostRow`
+  (one `<button class="file-entry doc-ghost">`: no `data-entry-path`, not draggable, no context handler, never in
+  `rowWindow`/`orderedVisible`), template/pointer badges (`.file-doc-badge`), `.doc-template` dim and `.doc-nested`
+  indent classes (the `.scaffold` class is untouched and still used by the gitignored/hidden sections). Clicking a
+  ghost calls `createProjectDoc`, refreshes listing + status, opens the file as a double-click would; `false` is
+  silent, a rejection shows a message. The row cap clips only file rows (`rowWindow.standard` is
+  `docsGroup.files`).
+- `useFileTreeRows.ts` takes `docsStatus`, returns `docsGroup`; shift-range order is docs, regular, gitignored, hidden.
+- `ScaffoldTagPopover.tsx` + `projectTypeTags.ts` (optional `onScaffoldClick` -> `tag.onClick`; hover card and
+  switcher pass nothing, stay labels) + `ProjectFilesView.tsx` (tag becomes `role=button`, popover anchored under it,
+  `project_scaffold_missing` re-asked after Repair). Popover lists the missing `DEFAULT_DOCS` from
+  `project_docs_status`; every default present -> names `.gitignore` (the only other thing the tag fires for);
+  no status -> a generic sentence. Not offered for a remote-only project.
+- `FileBrowser.tsx`: its own `showStandardFiles`/`separateScaffold` toggles are gone; reads
+  `panel_separate_scaffold` from `get_project_panel_prefs` (default on); off = docs sort into the normal list. Keys
+  `fileBrowser.scaffold`/`separateScaffold` deleted from all five dictionaries.
+- Step 7: `buildScaffoldFillPrompt` has no pointer lines, PROJECT.md/REMARKS.md advice only when that file is in the
+  list; repair/migration/tour/`pill.repairScaffoldTitle` texts no longer name `CLAUDE.md`/`.claude/settings.json`
+  (all five languages); fixtures in `ScaffoldRepair`, `ProjectMigration`, `ScaffoldAgentFill` tests. `migration.ts`,
+  `ProjectMigrationDialog` and `summarizeScaffoldRepair` needed no code change (the dialog renders by `kind`; no
+  per-id label existed). `ProjectDialog` needed no logic change: the preview already lists only what
+  `scaffold_preview` returns; `AGENT_POINTER_DOCS` kept (plan) with a corrected comment, it is dead for new previews.
+- Step 8: `AgentMemoryDialog.tsx` (`DialogShell` `project-dialog` frame, `renderMarkdown` + `onMarkdownLinkClick`, read
+  through `projectAgentMemoryRead`), sub-header "Agent memory (n)" collapsed, rows show a CLI badge
+  (`Claude`/`Codex`, plus "local model" for the local home) and size; hidden when the list is empty; re-asked
+  each time the Project docs group is unfolded (the files live in the agent home, no fs-change announces them).
+- i18n: new keys in all five languages (`fileTree.docs*`, `fileTree.doc*`, `fileTree.agentMemory*`, `agentMemory.*`,
+  `projectType.scaffoldPopover*`); reworded `fileTree.scaffoldSection`/`collapse`/`expandScaffold`/`totalSizeScaffold`,
+  `projectSettings.separateScaffold*`, `treeGroupingHelp`, `fileBrowser.scaffoldDivider`,
+  `projectType.titleMissingScaffold`. Untested register: `fileTree.docsSection`, `projectType.scaffoldPopover`,
+  `fileTree.agentMemory`.
+
+### Gotchas for I5 / reviewers
+
+- The phone reads the SAME dictionaries: `fileTree.scaffoldSection` is now "Project docs ({count})" there too, and
+  `MobileProjectFiles.test.tsx` expects the button name "Project docs (2)" (I changed three strings). I5 reshapes it.
+- `STANDARD_PROJECT_FILES` still drives which listing entries enter the group; the status only adds states, nesting
+  and ghosts. `DEFAULT_DOCS` is a second hardcoded list (no Rust pin test; a catalog `default` flag in the status
+  would remove it, but R2 froze the shapes).
+- The group's position moved above the regular rows. `rowWindow` spends the row-cap budget docs first.
+- The status is fetched only for a local root listing; with the project in "Remote" source view or remote-only it is
+  `null` and the old plain count shows (no ghosts) - by plan.
+- Rendering a missing-but-listed doc: a listed row whose status says `missing` is shown as `edited` (listing wins).
+- `useProjectDocsStatus` clears on project change with an effect; the first frame after a switch may still show the
+  last project's states for one render (the FileTree is normally remounted per project anyway).
+- Gate flake seen once: `TerminalAiSwitch.test.tsx` failed in a full run, passes alone (twice).
+
+### Gates
+
+`scripts/gates-job.sh start --base fbd232a8b` on the final tree (27 files, frontend only; Rust gates skipped, no Rust
+change): brand PASS, whitespace PASS, lint-fe PASS (0 errors, 30 warnings, none in the files I added/changed:
+`eslint` on them reports only 3 pre-existing `exhaustive-deps` warnings in FileBrowser/ProjectFilesView), `npm run
+build` PASS, vitest PASS (the step-7 run before the last fixes: 867 files, 8820 tests, 2 failures fixed/flaky; the
+final run all passed). New tests: `ProjectDocsGroup.test.ts` (8), `ProjectDocsTree.test.tsx` (5),
+`ScaffoldTagPopover.test.tsx` (6), `AgentMemory.test.tsx` (4); `ScaffoldAgentFill.test.ts` gained one.
+
+### Click-through (never run live)
+
+1. Open a project with the Files panel; the root shows "▸ PROJECT DOCS 2/2" above the folders. Open it: AGENTS.md
+   (dim + "template" while untouched), README.md, .gitignore, then "+ PROJECT.md create" ... "+ DOCUMENTATION.md create".
+   Close and reopen the app panel: the fold is remembered for this project only.
+2. Click "+ TODO.md": the file appears, opens in the editor, the ghost row is gone. Edit AGENTS.md, save: the
+   template badge and dimming go, the header drops "· 1 template".
+3. An old project with CLAUDE.md/GEMINI.md: they sit indented under AGENTS.md with a "pointer" badge, not dimmed.
+4. Delete README.md on disk: the amber "no scaffold" tag appears; click it: popover "Not in the project folder:
+   README.md" + Repair; Repair adds it and the tag goes. Hover card tags stay plain labels.
+5. Project Settings -> turn "Separate project docs section" off: tree and Files (browser) tab both sort the docs
+   into the normal list, no ghost rows.
+6. If Claude has saved memories for the project: expand the group -> "▸ Agent memory (n)"; expand, click MEMORY.md:
+   read-only preview dialog with rendered markdown. No memories: no sub-group.
+
+### Flagged for user
+
+- The group now sits ABOVE the file list (plan sketch), collapsed by default; say if it should stay at the bottom or
+  start open.
+- Remote-only / "Remote" source views get no ghost rows or status (plan decision); only the plain count.
+- `DEFAULT_DOCS` hardcodes AGENTS.md + README.md on the frontend; a `.gitignore` is counted by the tag but not by the
+  header summary.
+- All of this is never live (UntestedTag on the group header, the tag popover, the memory sub-group).
+
 ## I5 Phone + docs
 
 ## Final review
