@@ -105,7 +105,8 @@ pub async fn after_sign_in(session: &Session, stay: bool, store: &Store) -> Resu
 /// On every server start with the setting on (after
 /// `workspace/didChangeConfiguration`): sign the server in with the
 /// remembered token. A token the server refuses is deleted and the server
-/// stays signed out; a server that could not be asked keeps the entry.
+/// stays signed out; a server that could not be asked, or could not ask
+/// GitHub (it answers with an error), keeps the entry.
 /// Returns whether the server is signed in from the keychain.
 pub async fn restore(session: &Session, store: &Store) -> Result<bool, String> {
     let Some(remembered) = read(store).await else { return Ok(false) };

@@ -57,8 +57,10 @@ default off): after a finished device sign-in the session asks the server's
 `auth/getGitHubToken` and keeps `{user, token}` in the OS keychain, one entry
 per app account (`remote_credentials`, locked-keyring handling included); every
 server start then sends `signInWithGithubToken {githubToken, user}` after
-`didChangeConfiguration`. A reply of `NotSignedIn` or a server error deletes the
-entry and leaves the server signed out; a timeout keeps it. Switching the
+`didChangeConfiguration`. A reply of `NotSignedIn` (GitHub refused the token)
+deletes the entry and leaves the server signed out; a server error or a timeout
+keeps it: the server answers with an error when its own token fetch threw (no
+network, HTTP 429), which judges nothing. Switching the
 setting on while a server is signed in stores its token then; switching it off,
 or signing out, deletes the entry. The token never reaches the webview, a log
 line or the diagnostics ring (`copilot_account` reports only `remembered`).

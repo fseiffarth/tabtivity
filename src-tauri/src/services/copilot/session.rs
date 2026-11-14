@@ -565,9 +565,14 @@ impl Session {
         Ok(reply.get("token").and_then(Value::as_str).filter(|token| !token.is_empty()).map(str::to_owned))
     }
 
-    /// `signInWithGithubToken`: whether the server took the token. A reply
-    /// of `NotSignedIn`, or an error the server sent, is a refusal; a server
-    /// that timed out or closed is an `Err` (nothing was judged).
+    /// `signInWithGithubToken`: whether the server took the token. Only a
+    /// reply of `NotSignedIn` (or one without a status) is a refusal: that is
+    /// what the pinned server answers when GitHub turned the token down (HTTP
+    /// 401). An error it sent, a timeout or a closed server is an `Err`:
+    /// nothing was judged. The server answers with an error when its own
+    /// token fetch threw (no network, DNS, a proxy, HTTP 429), and a refusal
+    /// there would delete the remembered sign-in of every user who starts a
+    /// server offline.
     pub async fn sign_in_with_token(&self, token: &str, user: &str) -> Result<bool, String> {
         let id = self.rpc.next_id();
         let params = json!({"githubToken": token, "user": user});
@@ -575,7 +580,6 @@ impl Session {
         self.account_changed();
         match reply {
             Ok(reply) => Ok(!matches!(reply.get("status").and_then(Value::as_str), None | Some("NotSignedIn"))),
-            Err(RpcError::Server(_)) => Ok(false),
             Err(error) => Err(error_code(error)),
         }
     }
@@ -1283,12 +1287,22 @@ mod tests {
         assert!(start.await.unwrap().is_ok(), "the server still serves, signed out");
         assert_eq!(*memory.0.lock().unwrap(), None);
 
-        // An error the server sent is a refusal too.
+    }
+
+    /// The pinned server answers `signInWithGithubToken` with an *error* when
+    /// it could not ask GitHub at all (its token fetch threw: offline, DNS, a
+    /// proxy, HTTP 429); a token GitHub refused comes back as a reply of
+    /// `NotSignedIn`. So an error judges nothing: the entry stays, or a server
+    /// started without a network would forget the user's sign-in.
+    #[tokio::test]
+    async fn a_server_that_could_not_reach_github_keeps_the_remembered_sign_in() {
         let (memory, store) = store_with(Some(octo()));
         let (start, mut server, call) = start_with_store(store).await;
-        write_frame(&mut server.write, &json!({"jsonrpc":"2.0", "id":call["id"], "error":{"code":1000, "message":"bad credentials"}})).await.unwrap();
-        assert!(start.await.unwrap().is_ok());
-        assert_eq!(*memory.0.lock().unwrap(), None);
+        write_frame(&mut server.write, &json!({"jsonrpc":"2.0", "id":call["id"],
+            "error":{"code":-32603, "message":"fetch failed"}})).await.unwrap();
+        let session = start.await.unwrap().expect("the server still serves, signed out for now");
+        assert!(session.alive());
+        assert_eq!(*memory.0.lock().unwrap(), Some(octo()), "nothing was judged, nothing is deleted");
     }
 
     #[tokio::test]
