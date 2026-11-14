@@ -65,6 +65,12 @@ line or the diagnostics ring (`copilot_account` reports only `remembered`).
 Both request shapes come from reading the 1.565.6 server bundle (its handler
 table and request schemas), not from a live account.
 
+**Idle shutdown:** while a sign-in is remembered, a project's server stops
+after 10 minutes without a completion request; the next request starts one
+that signs in by itself. Without a remembered sign-in servers live until quit,
+because a restart would sign the user out. The timer (one task, a round a
+minute) ends with `stop_all` at exit.
+
 ## Diagnostics and errors (2026-11-14)
 
 Each project keeps its server's last 200 `window/logMessage`, `$/logTrace` and

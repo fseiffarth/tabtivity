@@ -190,6 +190,8 @@ pub async fn copilot_complete(
         sessions().stop(&project_id).await;
         return Err("copilot_no_consent".into());
     }
+    // Keeps the server from its idle shutdown (`Sessions::reap_idle`).
+    sessions().note_use(&project_id);
     let file = match authorize_file(&settings, &project_id, &root, &path) {
         Ok(again) if again == file => file,
         Ok(_) => return Err("copilot_invalid_path".into()),

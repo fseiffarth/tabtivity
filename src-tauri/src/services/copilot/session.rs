@@ -24,6 +24,10 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_ITEMS: usize = 8;
 const MAX_STARTS: usize = 3;
 const START_WINDOW: Duration = Duration::from_secs(5 * 60);
+/// A server with no completion request for this long stops, while a
+/// remembered sign-in lets its successor sign in by itself (plan B12).
+const IDLE_SHUTDOWN: Duration = Duration::from_secs(10 * 60);
+const REAP_EVERY: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -614,6 +618,10 @@ pub struct Sessions {
     invalidated: tokio::sync::watch::Sender<Invalidations>,
     /// Per project, across its servers (see [`LogRing`]).
     logs: Mutex<HashMap<String, LogRing>>,
+    /// When each running project last asked for a completion (or started).
+    used: Mutex<HashMap<String, Instant>>,
+    /// The idle-shutdown timer; [`Sessions::stop_all`] ends it at exit.
+    reaper: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// One project's revocation must not cancel another project's launch.
@@ -629,6 +637,8 @@ impl Default for Sessions {
             launching: AsyncMutex::default(),
             invalidated,
             logs: Mutex::default(),
+            used: Mutex::default(),
+            reaper: Mutex::default(),
         }
     }
 }
@@ -703,11 +713,15 @@ impl Sessions {
         }
         let stay = app_core::rt::blocking("Copilot settings", credentials::enabled).await.unwrap_or(false);
         let restore = stay.then(credentials::keychain);
-        self.get_or_start_with(project_id, root, restore, |root, log| {
+        let session = self.get_or_start_with(project_id, root, restore, |root, log| {
             let (process, output, input) = ManagedProcess::launch(root, Some(log))?;
             Ok((Some(process), output, input))
         })
-        .await
+        .await?;
+        if std::ptr::eq(self, sessions()) {
+            sessions().start_reaper(credentials::keychain(), REAP_EVERY, Instant::now);
+        }
+        Ok(session)
     }
 
     /// [`get_or_start`](Self::get_or_start) with the launch passed in, so a
@@ -765,7 +779,66 @@ impl Sessions {
             return Err("copilot_cancelled".into());
         }
         entries.insert(project_id.to_owned(), session.clone());
+        self.used.lock_ok().insert(project_id.to_owned(), Instant::now());
         Ok(session)
+    }
+
+    /// A completion request reached the project's server.
+    pub fn note_use(&self, project_id: &str) {
+        self.note_use_at(project_id, Instant::now());
+    }
+
+    fn note_use_at(&self, project_id: &str, now: Instant) {
+        let entries = self.entries.lock_ok();
+        if entries.contains_key(project_id) {
+            self.used.lock_ok().insert(project_id.to_owned(), now);
+        }
+    }
+
+    /// Stop every server idle for [`IDLE_SHUTDOWN`] at `now`, but only while a
+    /// sign-in is `remembered`: then its successor signs in by itself.
+    /// Without one a server lives until quit, as a restart would sign it out.
+    /// Judged and removed under one lock, so a request that just noted its
+    /// use keeps its server. Returns the projects stopped.
+    fn reap_idle(&self, now: Instant, remembered: bool) -> Vec<String> {
+        if !remembered {
+            return Vec::new();
+        }
+        let mut entries = self.entries.lock_ok();
+        let mut used = self.used.lock_ok();
+        let idle: Vec<String> = entries
+            .keys()
+            .filter(|project| used.get(*project).is_none_or(|at| now.saturating_duration_since(*at) >= IDLE_SHUTDOWN))
+            .cloned()
+            .collect();
+        for project in &idle {
+            self.invalidated.send_modify(|seen| *seen.projects.entry(project.clone()).or_default() += 1);
+            if let Some(session) = entries.remove(project) {
+                session.stop();
+            }
+            used.remove(project);
+        }
+        idle
+    }
+
+    /// Start the idle-shutdown timer once: every `every` it asks whether a
+    /// sign-in is remembered and stops the idle servers. It holds no lock
+    /// between rounds and ends with [`Sessions::stop_all`] at exit.
+    fn start_reaper(&'static self, store: credentials::Store, every: Duration, clock: fn() -> Instant) {
+        let mut reaper = self.reaper.lock_ok();
+        if reaper.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        *reaper = Some(app_core::rt::spawn(async move {
+            loop {
+                tokio::time::sleep(every).await;
+                if self.entries.lock_ok().is_empty() {
+                    continue;
+                }
+                let remembered = credentials::remembered(&store).await;
+                self.reap_idle(clock(), remembered);
+            }
+        }));
     }
 
     /// Every live server, any project.
@@ -784,10 +857,15 @@ impl Sessions {
         if let Some(session) = entries.remove(project_id) {
             session.stop();
         }
+        self.used.lock_ok().remove(project_id);
         self.starts.lock_ok().remove(project_id);
     }
 
+    /// `RunEvent::Exit`: every server, and the idle-shutdown timer.
     pub async fn stop_all(&self) {
+        if let Some(reaper) = self.reaper.lock_ok().take() {
+            reaper.abort();
+        }
         self.stop_all_now();
     }
 
@@ -800,6 +878,7 @@ impl Sessions {
         for (_, session) in entries.drain() {
             session.stop();
         }
+        self.used.lock_ok().clear();
     }
 }
 
@@ -1233,6 +1312,56 @@ mod tests {
         server.result(&call["id"], json!({"token":"token-value-1"})).await;
         work.await.unwrap().unwrap();
         assert_eq!(*memory.0.lock().unwrap(), Some(octo()));
+    }
+
+    // ── B12: idle shutdown ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn idle_servers_stop_only_while_a_sign_in_is_remembered() {
+        let registry = Sessions::default();
+        let (one, _server_one) = connected().await;
+        let (two, _server_two) = connected().await;
+        registry.entries.lock().unwrap().insert("one".into(), one.clone());
+        registry.entries.lock().unwrap().insert("two".into(), two.clone());
+        let t0 = Instant::now();
+        registry.note_use_at("one", t0);
+        registry.note_use_at("two", t0 + Duration::from_secs(9 * 60));
+        registry.note_use_at("gone", t0);
+        assert!(registry.used.lock().unwrap().get("gone").is_none(), "only running projects are tracked");
+
+        let at_ten = t0 + IDLE_SHUTDOWN;
+        assert!(registry.reap_idle(at_ten, false).is_empty(), "without a remembered sign-in servers live until quit");
+        assert!(one.alive() && two.alive());
+        assert_eq!(registry.reap_idle(at_ten, true), vec!["one".to_string()]);
+        assert!(!one.alive() && two.alive());
+        assert!(registry.existing("one").await.is_none());
+        // A request in the meantime keeps a server up.
+        registry.note_use_at("two", at_ten + Duration::from_secs(60));
+        assert!(registry.reap_idle(at_ten + Duration::from_secs(9 * 60), true).is_empty());
+        assert_eq!(registry.reap_idle(at_ten + Duration::from_secs(11 * 60), true), vec!["two".to_string()]);
+        assert!(!two.alive());
+    }
+
+    #[tokio::test]
+    async fn the_idle_timer_ends_with_stop_all() {
+        let registry: &'static Sessions = Box::leak(Box::default());
+        let (session, _server) = connected().await;
+        registry.entries.lock().unwrap().insert("one".into(), session.clone());
+        registry.note_use_at("one", Instant::now());
+        let (_, store) = store_with(Some(octo()));
+        // A clock an hour ahead: the server is idle at the first round.
+        registry.start_reaper(store.clone(), Duration::from_millis(5), || Instant::now() + Duration::from_secs(3600));
+        registry.start_reaper(store, Duration::from_millis(5), Instant::now); // once only
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while session.alive() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the timer stopped the idle server");
+        assert!(registry.reaper.lock().unwrap().as_ref().is_some_and(|task| !task.is_finished()));
+        registry.stop_all().await;
+        assert!(registry.reaper.lock().unwrap().is_none(), "nothing outlives a clean quit");
     }
 
     #[test]
