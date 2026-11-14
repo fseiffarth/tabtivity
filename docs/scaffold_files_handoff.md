@@ -659,3 +659,76 @@ as part of `npm run build`.
 - Never live: neither the route nor the group has run against the real desktop.
 
 ## Final review
+
+Final reviewer of `a2a5ecb45..scaffold-files` (66 files). Branch
+`worktree-agent-a0ba493cd6f94952d`, on `scaffold-files` bb014a881. Fixed
+decisions untouched.
+
+### Fixed (each with a test that failed first)
+
+- `a1508df2f` (b) `upgrade_doc_at` left its `.AGENTS.md.*.tmp` in the project when
+  the write into it failed after create-new made the file (disk full): any error but
+  `AlreadyExists` (a planted name, not ours) now removes the temp. Seam
+  `upgrade_doc_via` takes the temp writer. Test
+  `a_failed_write_into_the_upgrade_temp_removes_the_temp` (also pins that a planted
+  temp is left alone).
+- `d9650fee2` (a) `ordered_names` now adds `MEMORY.md` by name when the capped
+  (`names_capped(256)`, directory order) listing missed it; `scan` skips it when it
+  is not a plain file. Test `the_index_is_listed_even_in_a_folder_past_the_cap`
+  (4000 notes; failed before).
+- `d9650fee2` (c) Rule **verified in the installed Claude 2.1.321 binary**: the
+  auto-memory folder is keyed by `defaultKey(cwd)` = the canonical working-copy root,
+  else `findCanonicalGitRoot(cwd)`, else the folder itself (the settings help text
+  says "sanitized-cwd", the code uses the root). `roots_of` now also tries the
+  nearest ancestor holding a `.git` directory, and for a linked worktree (`.git`
+  file -> `gitdir` -> `commondir`) the main working copy; a `.git` file without
+  `commondir` (submodule) is its own root. Only small plain files are read, through
+  `home_io::read_record_capped` (no link, no FIFO wait). Tests
+  `a_project_inside_a_git_repository_lists_the_memory_keyed_by_the_repository_root`,
+  `a_linked_worktree_lists_the_memory_keyed_by_the_main_working_copy` (failed before).
+  Filemap row updated (`4de975cca`); clippy nit in the new test `eb3cc3741`.
+
+### Rejected candidates
+
+None; all three were real.
+
+### Checked, sound
+
+- `isDefault` is the only default source: `buildDocsGroup` summary and the tag popover
+  both filter on it, phone and desktop share one builder (so counts agree); no
+  `DEFAULT_DOCS` left. `STANDARD_PROJECT_FILES` is the listing filter, pinned to the
+  catalog by a Rust test.
+- Ghost rows: a `<button>` with no `data-entry-path`, not draggable, no context handler,
+  outside `rowWindow`/`orderedVisible` (not selectable, no shift-range); on the phone
+  no token/select/share. Pointer nests only when its parent is itself listed.
+- Phone: docs/create route names only (no id/path), create-new + no-follow behind
+  `upload_scope`, refusal-matrix rows present. Status fetch gated by `active`,
+  `PaneVisibleContext`, local root listing, `separateScaffold`.
+- No bare `listen()`, no `.split("/").pop()`, no plugin-dialog confirm in the range; the
+  memory dialog uses `DialogShell`; no `any`; no new box-shadow animation; no TODO/FIXME
+  left; register rows exist for `fileTree.docsSection`, `fileTree.agentMemory`,
+  `projectType.scaffoldPopover`, `mobile.files.docs` (each rendered); i18n parity
+  enforced by `i18n.test.ts` (green); `scripts/privacy-check.sh` and `brand-check` pass.
+
+### Flagged for user (not changed)
+
+- All earlier "Flagged" lists stand (group position above the list and collapsed,
+  remote-only gets no ghost rows, Codex memory layout from docs, never live).
+- `upgrade_doc_at` replaces the inode: hardlinks, owner/ACL/xattrs of `AGENTS.md` are
+  lost on upgrade; a read-only folder with a writable file now errors (R2).
+- `agent_memory::scan` holds one dup'd descriptor per listed entry (<= 200) at once; a
+  low fd limit (macOS 256) could be crowded briefly (R2).
+- On Windows `canonicalize` yields a `\\?\` path, so the canonical variant encodes
+  differently from Claude's key; the plain stored path is tried too. Untested there.
+- The git-root lookup finds a stray `~/.git` (a dotfiles repo) like Claude does, so such a
+  project would list the memory Claude keyed by `~`.
+
+### Gates
+
+`scripts/gates-job.sh start --base a2a5ecb45` on tree `eb3cc3741`: brand, whitespace,
+lint-fe (0 errors), clippy x3 (zero warnings), `npm run build` PASS; vitest `--changed`
+903 files / 9410 tests passed; `cargo test -p tabtivity -p app-serverd` lib 5630 passed,
+144 + 39 + 1 integration passed, 0 failed. test-dlib: lib 5443 passed, 1 failed = the
+known `git_push_mcp` YAML alias-bomb 5 s bound (8.2 s under load; alone 1 passed, 0.11 s);
+`--test server_secrets` by hand 1 passed. (An earlier run of the job failed clippy on my own
+test; fixed in `eb3cc3741` and rerun.)
