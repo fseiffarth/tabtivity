@@ -83,6 +83,10 @@ pub const MARKUP_URL_ENV: &str = crate::app_env!("MARKUP_MCP_URL");
 /// project-agent tab the window spawns while the server is on.
 pub const PRINT_TOKEN_ENV: &str = crate::app_env!("PRINT_MCP_TOKEN");
 pub const PRINT_URL_ENV: &str = crate::app_env!("PRINT_MCP_URL");
+/// The tab messages identity's pair (`services::tabs_mcp`), set for a local
+/// project-agent tab the window spawns while the server is on.
+pub const TABS_TOKEN_ENV: &str = crate::app_env!("TABS_MCP_TOKEN");
+pub const TABS_URL_ENV: &str = crate::app_env!("TABS_MCP_URL");
 /// The web lane's pair (`services::web_lane`), set for a chat-assistant tab
 /// only (`PtyOptions.assistant`), and the only MCP token such a tab gets.
 /// `services::assistant::LaneGrant::from_env` reads them back.
@@ -100,6 +104,7 @@ pub const LANE_TOKEN_ENVS: &[&str] = &[
     MARKUP_TOKEN_ENV,
     PRINT_TOKEN_ENV,
     WEB_TOKEN_ENV,
+    TABS_TOKEN_ENV,
 ];
 /// The server name the agent CLIs list the tools under.
 pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
@@ -135,6 +140,11 @@ impl Runtime {
     /// Mobile host does too, but no root lane). Approval needs the window's
     /// print preview and this machine's printers.
     pub fn serves_print(&self) -> bool { self.serves_root && self.serves_web }
+    /// This process grants the tab messages lane (`services::tabs_mcp`): the
+    /// window alone, as print — the one process whose views show every
+    /// message, so a Mobile host or a server daemon grants nothing and no
+    /// traffic exists that the window cannot show.
+    pub fn serves_tabs(&self) -> bool { self.serves_root && self.serves_web }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,6 +207,7 @@ fn lane(caller: Caller) -> u8 {
         Caller::Web => 5,
         Caller::Cockpit => 6,
         Caller::Printer => 7,
+        Caller::Tabs => 8,
     }
 }
 /// One process's bearer tokens and the sessions they open, in memory only.
@@ -243,6 +254,7 @@ impl TokenStore {
         });
         let session = Session {
             cockpit: None,
+            tabs: None,
             cockpit_rate: Arc::default(),
             id: crate::digest::sha256_hex(token.as_bytes()),
             access: Access::initial(identity.caller), identity,
@@ -291,7 +303,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
-        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs) {
             *s.projects_grant.lock_ok() = grant.clone();
         }
     }
@@ -332,6 +344,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
         Caller::Marker => super::markup_mcp::SERVER_NAME,
         Caller::Web => super::web_lane::SERVER_NAME,
         Caller::Printer => super::print_mcp::SERVER_NAME,
+        Caller::Tabs => super::tabs_mcp::SERVER_NAME,
     }).collect();
     names.dedup();
     names
@@ -340,7 +353,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
 /// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().map().values()
-        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer))
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -443,6 +456,19 @@ pub(crate) fn test_session_bound(caller: Caller, tab: &str, project: &str, targe
     let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
     (token, session)
 }
+/// A [`Caller::Tabs`] session seated at `binding`, enrolled as a grant does.
+#[cfg(test)]
+pub(crate) fn test_session_tabs(tab: &str, binding: super::tabs_mcp::Binding) -> (String, Session) {
+    let token = mint_token().unwrap();
+    register_token(token.clone(), Identity {
+        tab: tab.to_string(), caller: Caller::Tabs, project: Some(binding.seat.scope.clone()),
+        schedule_target: None, push: None, endpoint: None, model: None,
+    }, false);
+    if let Some(session) = tokens().map().get_mut(&token) { session.tabs = Some(binding.clone()); }
+    let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
+    super::tabs_mcp::enrol(binding, tab, &session.id);
+    (token, session)
+}
 /// A root session that reads every project (`Session::projects_grant`, unfenced).
 #[cfg(test)]
 pub(crate) fn test_session_reading_projects(caller: Caller, tab: &str, state: &Path) -> (String, Session) {
@@ -488,6 +514,10 @@ pub enum Caller {
     /// bound at spawn to its project: served `print_request` /
     /// `print_status` / `print_cancel` on `/mcp/print` and nothing else.
     Printer,
+    /// A local project-agent tab's messaging identity (`services::tabs_mcp`),
+    /// bound at spawn to its saved tab and class (`Session::tabs`): served
+    /// `tabs_list` / `tabs_send` / `tabs_inbox` on `/mcp/tabs` and nothing else.
+    Tabs,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -521,6 +551,8 @@ pub struct Session {
     pub identity: Identity,
     pub access: Access,
     pub(crate) cockpit: Option<super::cockpit_mcp::Binding>,
+    /// A [`Caller::Tabs`] session's seat (`services::tabs_mcp`), set at grant.
+    pub(crate) tabs: Option<super::tabs_mcp::Binding>,
     cockpit_rate: Arc<std::sync::Mutex<RollingWindow>>,
     revoked: Arc<AtomicBool>,
     /// Latched by the first mail read tool this spawn calls
@@ -635,7 +667,7 @@ pub struct SessionInfo {
 /// Help, markup and web sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -644,7 +676,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -1094,7 +1126,31 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         && trusted.settings.as_ref().is_some_and(|s| s.cockpit_mcp()) {
         grant_cockpit(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }
+    // Last: the tab messages server (`services::tabs_mcp`), merged into the
+    // same Vibe env. Only the window grants it (`Runtime::serves_tabs`), only
+    // to a tab of a registered project (never a box), and never to a spawn
+    // with the network cut (`local_lane::MCP_ALLOWED` leaves `/mcp/tabs` out).
+    // The class comes from the gate's stamp and `local_model`, both final by
+    // now: `launch_prep::prepare` runs the gate before this, and nothing
+    // between here and the home it prepares changes either.
+    if project_lanes && runtime.serves_tabs() && trusted.settings.as_ref().is_some_and(|s| s.tabs_mcp())
+        && tabs_reaches(opts, &trusted) {
+        grant_tabs(opts, runtime, store, &trusted.state, &trusted.tool_models());
+    }
     root_agent
+}
+
+/// Whether a project-lane spawn may hold the tab messages lane beyond
+/// [`grant_lanes`]' own checks: its scope is a registered project (a box tab's
+/// view changes with its membership) and its network is not cut — by the
+/// record the gate verified it under, or by the project's setting now.
+fn tabs_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
+    let Some(entry) = trusted.entry.as_ref() else { return false };
+    if opts.project_id.as_deref().is_some_and(|p| super::box_store::box_id_of_scope(p).is_some()) { return false; }
+    let privacy = super::agent_privacy::privacy_of(entry);
+    let cut_now = privacy.local_models_only && privacy.cut_network;
+    let cut_verified = super::agent_privacy::verified_launch(&opts.id).is_some_and(|v| v.cut);
+    !cut_now && !cut_verified
 }
 
 /// The assistant scope's lanes: the web lane's token and URL in the spawn env
@@ -1453,6 +1509,60 @@ pub fn grant_print(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore,
     if opts.env.get(PRINT_TOKEN_ENV) == Some(&token) {
         store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Printer, project: opts.project_id.clone(), schedule_target: None, push: None, endpoint: None, model: None }, false);
     }
+}
+
+/// Hand a local project-agent tab the tab messages server
+/// (`services::tabs_mcp`). Pure over `runtime` so it is testable;
+/// [`grant_lanes`] decides who qualifies. Wired as print is: Claude, Codex,
+/// Copilot and OpenCode on their own launch, a tool-tagged local Vibe model
+/// merged into its MCP env, every other agent CLI the env pair (read by the
+/// `<slug>-mcp` command). A container tab and an untagged local model get
+/// nothing.
+pub fn apply_tabs_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
+    let local = is_local_model(opts);
+    if opts.project_id.is_none() || opts.sandbox || (local && !local_model_has_tools(opts, tool_models)) { return; }
+    let url = tabs_endpoint_url(runtime.port);
+    let name = super::tabs_mcp::SERVER_NAME;
+    opts.env.insert(TABS_TOKEN_ENV.into(), token.into());
+    opts.env.insert(TABS_URL_ENV.into(), url.clone());
+    if local {
+        let mut servers: Vec<Value> = opts.env.get("VIBE_MCP_SERVERS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        servers.retain(|s| s["name"] != name);
+        servers.push(json!({"name": name, "transport": "http", "url": url, "api_key_env": TABS_TOKEN_ENV}));
+        opts.env.insert("VIBE_MCP_SERVERS".into(), Value::Array(servers).to_string());
+        let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let pattern = json!(format!("{name}_*"));
+        if !enabled.contains(&pattern) { enabled.push(pattern); }
+        opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
+    } else {
+        wire_named_cli(opts, &url, name, TABS_TOKEN_ENV);
+    }
+}
+
+pub fn tabs_endpoint_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp/tabs")
+}
+
+/// The tab messages lane of [`grant_lanes`]: the token binds the tab's seat
+/// (the cockpit binding: exactly one saved agent tab for its tmux session),
+/// its class and its handle; no binding or no handle key, no grant. The seat
+/// is enrolled so its siblings can list it.
+pub(crate) fn grant_tabs(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, state: &Path, tool_models: &[String]) {
+    let Some(binding) = super::tabs_mcp::binding_for_spawn(state, opts) else { return };
+    let Some(token) = mint_token() else { return };
+    apply_tabs_to_spawn_with(opts, runtime, &token, tool_models);
+    if opts.env.get(TABS_TOKEN_ENV) != Some(&token) { return; }
+    store.register(token.clone(), Identity { tab: opts.id.clone(), caller: Caller::Tabs,
+        project: Some(binding.seat.scope.clone()), schedule_target: None, push: None, endpoint: None, model: None }, false);
+    let session = {
+        let mut map = store.map();
+        let Some(session) = map.get_mut(&token) else { return };
+        session.tabs = Some(binding.clone());
+        session.id.clone()
+    };
+    super::tabs_mcp::enrol(binding, &opts.id, &session);
 }
 
 /// The guest-side address of the root MCP port inside a `mail_reader` VM: a

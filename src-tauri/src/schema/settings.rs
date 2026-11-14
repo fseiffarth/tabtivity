@@ -305,6 +305,12 @@ pub struct Settings {
     /// getting it and makes `print_request` answer `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub print_mcp: Option<bool>,
+    /// The tab messages server (`services::tabs_mcp`) handed to every local
+    /// project-agent tab the window spawns. **Absent means on**; a stored
+    /// `false` stops new tabs getting it and makes every call answer `off`
+    /// (`initialize` and `tools/list` still answer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabs_mcp: Option<bool>,
     /// Root-agent write review: absent/unknown = all, or destructive / off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_mcp_review: Option<String>,
@@ -1374,6 +1380,12 @@ impl Settings {
     /// switched off.
     pub fn print_mcp(&self) -> bool {
         self.print_mcp.unwrap_or(true)
+    }
+
+    /// Whether the tab messages MCP is handed to agent tabs. On unless
+    /// switched off.
+    pub fn tabs_mcp(&self) -> bool {
+        self.tabs_mcp.unwrap_or(true)
     }
 
     /// The agent CLIs [`Self::root_mcp_agents`] names, with its `root_agents`

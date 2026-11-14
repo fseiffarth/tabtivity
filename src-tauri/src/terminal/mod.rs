@@ -2047,6 +2047,13 @@ fn lane_token_gone(ctx: &CoreCtx, var: &str, token: &str) {
             revoke_token(token);
             crate::services::print_mcp::sweep();
         }
+        root_mcp::TABS_TOKEN_ENV => {
+            // The tab stops being listed to its siblings; its inbox stays for
+            // a respawn of the same saved tab. The sweep rings
+            // `tabs-mcp-changed` through the change hook.
+            revoke_token(token);
+            crate::services::tabs_mcp::sweep();
+        }
         // Help, cockpit, and the assistant's web lane (a chat's token dies
         // with its CLI): nothing else to tell.
         _ => { revoke_token(token); }

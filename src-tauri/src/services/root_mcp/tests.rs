@@ -3588,3 +3588,136 @@ fn cockpit_switch_and_revocation_are_rechecked_inside_the_workspace_lock() {
     let again = meta::Change::Handoff(None);
     assert_eq!(meta::update_in(&f.path, "p", &id, 1, 6, &again, cockpit::guard(&f.session, &binding)).unwrap_err(), "unavailable");
 }
+
+/// The tab messages lane (`services::tabs_mcp`): who is granted it, with which
+/// class, and that every other row of the plan's grant table gets nothing.
+#[test]
+fn tabs_lane_grant_matrix() {
+    use crate::services::{tabs_mcp, workspace};
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path();
+    let settings = |v: Value| std::fs::write(state.join("settings.json"), v.to_string()).unwrap();
+    let projects = |extra: Value| {
+        let mut entry = json!({"id":"p","name":"P","status":"active","position":0,"local_file":"","directory":state.to_string_lossy()});
+        for (k, v) in extra.as_object().unwrap() { entry[k] = v.clone(); }
+        std::fs::write(state.join("projects.json"), json!([entry]).to_string()).unwrap();
+    };
+    settings(json!({}));
+    projects(json!({}));
+    let saved = |scope: &str, key: &str| {
+        let path = crate::services::mobile_control::headless::session_file(state, scope);
+        let tab = serde_json::from_value(json!({"key":key,"label":key,"cmd":"claude","cwd":state.to_string_lossy(),"kind":"agent"})).unwrap();
+        workspace::tmux_of(&workspace::create_tab_in(&path, scope, tab, None).unwrap().tab).map(str::to_string)
+    };
+    let tmux = saved("p", "mine");
+    let box_tmux = saved("box:b", "boxed");
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let spawn = |cli: &str| {
+        let mut o = opts(cli, &[], Some("p"));
+        o.id = "p:tabs-matrix".into();
+        o.tmux_session = tmux.clone();
+        o
+    };
+    let granted = |o: &mut PtyOptions, runtime: &Runtime| {
+        let store = TokenStore::default();
+        grant_lanes(o, true, Some(runtime), &store, state);
+        o.env.get(TABS_TOKEN_ENV).map(|t| store.authenticate(Some(&format!("Bearer {t}"))).expect("registered"))
+    };
+
+    // A local project agent tab: the lane, its seat and class, named to the CLI.
+    for cli in WIRED_CLIS {
+        let mut o = spawn(cli);
+        let session = granted(&mut o, &serving).unwrap_or_else(|| panic!("{cli}"));
+        assert_eq!(session.identity.caller, Caller::Tabs);
+        assert_eq!(session.identity.project.as_deref(), Some("p"));
+        let binding = session.tabs.as_ref().expect("bound");
+        assert_eq!((binding.seat.scope.as_str(), binding.class.clone(), binding.cli.as_str()), ("p", tabs_mcp::Class::Cloud, *cli));
+        assert_eq!(o.env[TABS_URL_ENV], "http://127.0.0.1:4321/mcp/tabs");
+        assert!(wired(&o).contains("/mcp/tabs"), "{cli}: {}", wired(&o));
+        assert!(!wired(&o).contains(&o.env[TABS_TOKEN_ENV]), "the token is named, never inlined");
+        assert_eq!(session.access, Access::initial(Caller::Tabs));
+    }
+    // A CLI with no launch form gets the env pair alone.
+    let mut gemini = spawn("gemini");
+    assert!(granted(&mut gemini, &serving).is_some());
+    assert!(!wired(&gemini).contains("/mcp/tabs"));
+    // The class: the home the spawn gets, the gate's stamp first.
+    let mut local = spawn("opencode");
+    local.local_model = true;
+    assert_eq!(granted(&mut local, &serving).unwrap().tabs.unwrap().class, tabs_mcp::Class::Local);
+    let mut stamped = spawn("opencode");
+    stamped.local_model = true;
+    stamped.env.insert(super::super::agent_privacy::STAMP_ENV.into(), "p".into());
+    assert_eq!(granted(&mut stamped, &serving).unwrap().tabs.unwrap().class, tabs_mcp::Class::Locked("p".into()));
+    // A tool-tagged local Vibe model: merged into its MCP env.
+    settings(json!({"ollama_mcp_models": ["llama3:latest"]}));
+    let mut vibe = spawn("vibe");
+    vibe.local_model = true;
+    vibe.env.insert(crate::app_env!("LOCAL_MODEL").into(), "llama3:latest".into());
+    assert!(granted(&mut vibe, &serving).is_some());
+    assert!(vibe.env["VIBE_MCP_SERVERS"].contains(tabs_mcp::SERVER_NAME));
+    settings(json!({}));
+
+    // Every row that gets nothing.
+    let none = |mut o: PtyOptions, runtime: &Runtime, why: &str| {
+        assert!(granted(&mut o, runtime).is_none(), "{why}");
+        assert!(!o.env.contains_key(TABS_URL_ENV), "{why}");
+    };
+    none(PtyOptions { project_id: None, ..spawn("claude") }, &serving, "root console");
+    none(PtyOptions { project_id: None, host_session: true, ..spawn("claude") }, &serving, "Host session");
+    none(PtyOptions { sandbox: true, ..spawn("claude") }, &serving, "container tab");
+    none(PtyOptions { tmux_session: None, ..spawn("claude") }, &serving, "no saved tab");
+    none(PtyOptions { tmux_session: None, tmux_attach: tmux.clone(), ..spawn("claude") }, &serving, "attach-only");
+    none(PtyOptions { project_id: Some("box:b".into()), tmux_session: box_tmux.clone(), ..spawn("claude") }, &serving, "box tab");
+    none(spawn("claude"), &Runtime { serves_root: false, ..serving.clone() }, "the Mobile host");
+    none(spawn("claude"), &Runtime { serves_web: false, ..serving.clone() }, "a server daemon");
+    let mut untagged = spawn("vibe");
+    untagged.local_model = true;
+    untagged.env.insert(crate::app_env!("LOCAL_MODEL").into(), "other:latest".into());
+    none(untagged, &serving, "an untagged local model");
+    settings(json!({"tabs_mcp": false}));
+    none(spawn("claude"), &serving, "switched off");
+    std::fs::write(state.join("settings.json"), "{ nope").unwrap();
+    none(spawn("claude"), &serving, "unreadable settings");
+    settings(json!({}));
+    projects(json!({"agent_privacy": {"local_models_only": true, "cut_network": true}}));
+    let mut cut = spawn("opencode");
+    cut.local_model = true;
+    cut.env.insert(super::super::agent_privacy::STAMP_ENV.into(), "p".into());
+    none(cut, &serving, "network cut");
+    projects(json!({"sandbox": {"enabled": true}}));
+    none(spawn("claude"), &serving, "container project");
+    projects(json!({"vm": {"enabled": true}}));
+    none(spawn("claude"), &serving, "VM project");
+    std::fs::write(state.join("projects.json"), "[]").unwrap();
+    none(spawn("claude"), &serving, "unregistered project");
+    projects(json!({}));
+    // The assistant scope returns before any project lane.
+    let mut chat = spawn("claude");
+    chat.project_id = Some(crate::storage::ASSISTANT_SCOPE.into());
+    chat.assistant = Some(super::super::assistant::AssistantLaunch { cli: super::super::assistant::AssistantCli::Claude, model: None });
+    none(chat, &serving, "Tabby");
+    // A respawn keeps the handle; a non-agent spawn gets nothing.
+    let mut first = spawn("claude");
+    let mut second = spawn("claude");
+    let (a, b) = (granted(&mut first, &serving).unwrap(), granted(&mut second, &serving).unwrap());
+    assert_eq!(a.tabs.unwrap().handle, b.tabs.unwrap().handle);
+    let mut shell = spawn("bash");
+    grant_lanes(&mut shell, false, Some(&serving), &TokenStore::default(), state);
+    assert!(!shell.env.contains_key(TABS_TOKEN_ENV));
+}
+
+#[test]
+fn tabs_tools_are_served_to_the_tabs_identity_alone() {
+    for tool in crate::services::tabs_mcp::TOOLS {
+        let policy = security::tool(tool).expect("a policy");
+        for caller in [Caller::Agent, Caller::LocalModel, Caller::Reader, Caller::Scheduler, Caller::Pusher, Caller::Helper,
+            Caller::Marker, Caller::Web, Caller::Cockpit, Caller::Printer] {
+            assert!(!policy.serves(caller), "{tool} {caller:?}");
+        }
+        assert!(policy.serves(Caller::Tabs), "{tool}");
+    }
+    for name in ["projects_list", "mail_read", "print_request", "tab_rename", "web_fetch"] {
+        assert!(!security::tool(name).unwrap().serves(Caller::Tabs), "{name}");
+    }
+}

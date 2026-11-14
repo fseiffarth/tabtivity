@@ -328,6 +328,27 @@ async fn handle(State(state): State<ServerState>, request: Request) -> Response 
         }
         return lane_reply(reply);
     }
+    if session.identity.caller == root_mcp::Caller::Tabs {
+        // The tab messages lane (`services::tabs_mcp`): as print — the switch
+        // is read per call and answered as a normal `off` result; tool calls
+        // and refusals are audited by session, tool and fixed category, never
+        // the text, a label or a handle.
+        if session.check().is_err() {
+            security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("revoked"));
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let outcome = app_core::rt::spawn_blocking(move || {
+            let (_global, _own) = (global, own);
+            let reply = crate::services::tabs_mcp::handle_message(&session, &message);
+            let reason = reply.as_ref().and_then(crate::services::tabs_mcp::refusal_reason);
+            (reply, reason, crate::services::tabs_mcp::audited(&message, reason))
+        }).await;
+        let Ok((reply, reason, audited)) = outcome else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+        if audited {
+            audit_lane(&audit_session, &tool, started, reason);
+        }
+        return lane_reply(reply);
+    }
     if session.identity.caller == root_mcp::Caller::Scheduler {
         if session.identity.project.as_deref().is_none_or(|p| crate::services::schedule_mcp::level(p).is_err()) || session.check().is_err() {
             security::audit_reason(&session, &tool, "denied", started.elapsed(), Some("policy_disabled"));
@@ -677,6 +698,9 @@ fn router(state: ServerState) -> Router {
     // The print lane: only the window grants its tokens
     // (`Runtime::serves_print`), so elsewhere the route authenticates nobody.
     router = router.route("/mcp/print", post(handle));
+    // The tab messages lane: only the window grants its tokens
+    // (`Runtime::serves_tabs`), so elsewhere the route authenticates nobody.
+    router = router.route("/mcp/tabs", post(handle));
     if state.ctx.is_some() {
         router = router.route("/mcp", post(handle));
     }
@@ -1010,6 +1034,7 @@ fn path_serves(path: &str, caller: root_mcp::Caller) -> bool {
         "/mcp/cockpit" => caller == root_mcp::Caller::Cockpit,
         "/mcp/markup" => caller == root_mcp::Caller::Marker,
         "/mcp/print" => caller == root_mcp::Caller::Printer,
+        "/mcp/tabs" => caller == root_mcp::Caller::Tabs,
         "/mcp/web" => caller == root_mcp::Caller::Web,
         _ => false,
     }
@@ -1030,6 +1055,27 @@ mod security_tests {
             let (other, _) = root_mcp::test_session(caller);
             assert_eq!(admission(root_mcp::tokens(), "/mcp/cockpit", &other).await, Err(StatusCode::UNAUTHORIZED));
         }
+    }
+
+    /// The tab messages identity reaches `/mcp/tabs` and nothing else; no
+    /// other class reaches `/mcp/tabs`.
+    #[tokio::test]
+    async fn tabs_route_is_an_exclusive_lane() {
+        use super::*;
+        let (token, tabs) = root_mcp::test_session(root_mcp::Caller::Tabs);
+        assert!(admission(root_mcp::tokens(), "/mcp/tabs", &token).await.is_ok());
+        for path in ["/mcp", "/mcp/help", "/mcp/markup", "/mcp/schedule", "/mcp/git", "/mcp/web", "/mcp/cockpit", "/mcp/print", "/mcp/tabs/x"] {
+            assert_eq!(admission(root_mcp::tokens(), path, &token).await, Err(StatusCode::UNAUTHORIZED), "{path}");
+        }
+        for caller in [root_mcp::Caller::Agent, root_mcp::Caller::LocalModel, root_mcp::Caller::Reader, root_mcp::Caller::Scheduler,
+            root_mcp::Caller::Pusher, root_mcp::Caller::Helper, root_mcp::Caller::Marker, root_mcp::Caller::Web,
+            root_mcp::Caller::Cockpit, root_mcp::Caller::Printer] {
+            let (other, session) = root_mcp::test_session(caller);
+            assert_eq!(admission(root_mcp::tokens(), "/mcp/tabs", &other).await, Err(StatusCode::UNAUTHORIZED), "{caller:?}");
+            root_mcp::revoke_tab(&session.identity.tab);
+        }
+        root_mcp::revoke_tab(&tabs.identity.tab);
+        assert_eq!(admission(root_mcp::tokens(), "/mcp/tabs", &token).await, Err(StatusCode::UNAUTHORIZED), "a closed tab's token");
     }
 
     #[tokio::test]
