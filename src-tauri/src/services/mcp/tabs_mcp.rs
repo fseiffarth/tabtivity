@@ -400,12 +400,13 @@ fn read_budgets() -> &'static Mutex<RollingWindows> {
 }
 
 /// Admit one call of `key` (the caller's handle: per saved tab, so a respawn
-/// does not reset it), or the whole seconds until one would be admitted.
+/// does not reset it), or the whole seconds until one would be admitted —
+/// rounded up, so a call made exactly that long after is admitted.
 fn admit(map: &Mutex<RollingWindows>, key: &str, limit: usize, now: Instant) -> Result<(), u64> {
     let mut map = map.lock_ok();
     if admit_keyed(&mut map, key, limit, HOUR, now) { return Ok(()); }
     let wait = map.get(key).map_or(HOUR, |w| w.retry_after(HOUR, now));
-    Err(wait.as_secs().max(1))
+    Err((wait.as_secs() + u64::from(wait.subsec_nanos() > 0)).max(1))
 }
 
 // ── MCP ─────────────────────────────────────────────────────────────────────

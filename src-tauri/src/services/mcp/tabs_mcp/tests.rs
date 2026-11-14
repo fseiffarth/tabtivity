@@ -515,3 +515,22 @@ fn wake_claims_cover_listed_tabs_only() {
     assert!(wake_claims_in(state.path(), "p", w.now).is_empty(), "the batch is covered");
     assert!(wake_claims_in(state.path(), "q", w.now).is_empty(), "another scope");
 }
+
+/// `retryAfterSecs` is rounded up: a call made exactly that long after the
+/// refusal is admitted, not refused once more for the leftover fraction.
+#[test]
+fn retry_after_is_rounded_up_so_the_call_then_is_admitted() {
+    let _serial = serial();
+    let state = tempfile::tempdir().unwrap();
+    let a = grant(state.path(), "p", "a", Class::Cloud);
+    let w = World2::new();
+    for i in 0..READS_PER_HOUR {
+        assert_eq!(w.call(&a, TOOL_LIST, json!({}))["status"], "ok", "{i}");
+    }
+    let at = w.now + Duration::from_millis(500);
+    let over = World2 { now: at, ..World2::new() }.call(&a, TOOL_LIST, json!({}));
+    assert_eq!(over["category"], BUDGET);
+    let secs = over["retryAfterSecs"].as_u64().unwrap();
+    let then = World2 { now: at + Duration::from_secs(secs), ..World2::new() };
+    assert_eq!(then.call(&a, TOOL_LIST, json!({}))["status"], "ok", "retry after {secs}s");
+}
