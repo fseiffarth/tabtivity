@@ -38,8 +38,9 @@ Tabtivity is a project-centric desktop layer that swaps your entire working cont
    one-click install if it is missing); beyond that, [optional tools](#optional-tools)
    unlock single features.
 2. **Add a project.** Click **+** in the project bar. **New project** creates
-   `~/tabtivity/projects/<name>/` with Git and agent docs (`AGENTS.md`,
-   `CLAUDE.md`, `GEMINI.md`) already in place; **Import project** registers an
+   `~/tabtivity/projects/<name>/` with Git, an agent doc (`AGENTS.md`) and a
+   `README.md` already in place (more docs are one click away in the file tree's
+   *Project docs* group); **Import project** registers an
    existing folder in place, or copies or moves it.
 3. **Start working.** Opening a project gives you a tab running your default
    agent. Set that command in **Settings**; any new tab can pick another

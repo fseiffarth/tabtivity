@@ -1137,33 +1137,43 @@ target has no `.git/`, Tabtivity initializes git and commits the registration.
 
 ### Scaffold Files
 
-New and imported projects receive these files when missing:
+A new or imported project receives a lean default set, each file only when it is
+missing (nothing is overwritten):
 
 | File | Purpose |
 |------|---------|
-| `AGENTS.md` | Canonical agent instructions — the single source of truth; links every sibling agent doc. |
-| `CLAUDE.md` | Claude Code pointer: `@AGENTS.md` import plus Claude-specific overrides. |
-| `GEMINI.md` | Gemini CLI pointer: `@AGENTS.md` import plus Gemini-specific overrides. |
-| `.claude/settings.json` | Claude permission allow/deny rules scoped to the project. |
-| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output. |
-| `TODO.md` | Concrete task backlog with grouped IDs. |
-| `ROADMAP.md` | High-level project direction and sequencing. |
-| `STATUS.md` | Current-state and validation snapshot. |
+| `AGENTS.md` | Canonical agent instructions — the single source of truth. Every agent CLI Tabtivity wraps reads it by itself (Gemini through the `context.fileName` Tabtivity sets in its own agent homes, never in the project), so no pointer files are written. |
 | `README.md` | Project overview. |
-| `DOCUMENTATION.md` | Architecture, behavior, and persistence notes. |
+| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output (git projects only). |
 
-`AGENTS.md` carries the actual template; `CLAUDE.md` and `GEMINI.md` are
-pointers that `@AGENTS.md`-import it (real import syntax in both CLIs, so the
-text is loaded rather than merely referenced) and link the sibling agent files.
-Writing guidance in one file is the point — three interchangeable stubs meant it
-got written three times, or into whichever file that day's agent happened to
-read.
+These are created **on demand** from the file tree's *Project docs* group (below),
+each from a short template: `PROJECT.md` (what the project is), `TODO.md`
+(task backlog), `ROADMAP.md` (direction and sequencing), `STATUS.md` (current
+state and validation) and `DOCUMENTATION.md` (architecture and behavior notes).
+`REMARKS.md` is made by the remarks feature on the first remark. Tabtivity no
+longer writes `CLAUDE.md`, `GEMINI.md` or `.claude/settings.json`; a project
+that already holds them keeps them, untouched.
 
-A **scaffold repair** (Settings → Scaffold repair) additionally upgrades an agent
-doc still byte-identical to its old pre-`AGENTS.md` stub, or empty — provably
-untouched text — and reports it as `updated_files`. Anything a user or agent
-wrote is left alone, and `project_scaffold_missing` counts a legacy stub as
-missing so the pill's tag agrees with what a repair would actually do.
+The **Project docs** group sits at the top of the file tree's root (and in the
+Files browser tab and the phone's file library), governed by the project setting
+*Separate project docs section*. Its header reads `present/total` for the default
+docs plus `· n template` while a doc is still the text Tabtivity wrote; such a
+doc shows a `template` pill and is dimmed, an edited doc looks like any file, and
+an old `CLAUDE.md`/`GEMINI.md` nests under `AGENTS.md` with a `pointer` pill. A doc
+that is not there but can be made shows as a ghost row (`+ TODO.md  create`);
+clicking it (on the phone: its menu → *Create*) writes that one file from its
+template, never over anything, and opens it. The fold is remembered per project.
+Under the docs, *Agent memory (n)* lists what the agent CLIs (Claude Code, Codex)
+remember about the project — read-only, opened in a preview dialog; the CLIs
+maintain those files themselves.
+
+A **scaffold repair** (Settings → Scaffold repair) adds the missing defaults and
+additionally upgrades `AGENTS.md` when it is still byte-identical to an earlier
+Tabtivity template, or empty — provably untouched text — and reports it as
+`updated_files`. Anything a user or agent wrote is left alone. The amber *no
+scaffold* tag counts only missing defaults (a legacy-template `AGENTS.md` is not
+missing); clicking it names them and offers Repair. Remote-only projects get the
+lean set on the host at creation but no status or ghost rows.
 
 The root terminal also gets context files in `~/tabtivity/root/`:
 `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`.
