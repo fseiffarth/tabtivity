@@ -5426,6 +5426,17 @@ async fn a_linked_desktop_may_frame_the_phone_pages_and_read_the_health_probe() 
         assert!(policy.contains(&format!("on-device-speech-recognition=(self \"{LAPTOP}\" \"{SECOND}\")")), "{policy}");
         assert!(policy.contains("camera=()"), "{policy}");
     }
+    // Nothing but the two `(self)` features is delegated, and the rest of
+    // each policy is the closed one's.
+    let linked = [LAPTOP.to_string(), SECOND.to_string()];
+    assert_eq!(
+        permissions_policy(&linked),
+        format!("camera=(), microphone=(self \"{LAPTOP}\" \"{SECOND}\"), on-device-speech-recognition=(self \"{LAPTOP}\" \"{SECOND}\"), geolocation=(), payment=(), usb=()")
+    );
+    assert_eq!(
+        phone_csp(&linked),
+        format!("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' {LAPTOP} {SECOND}; frame-src 'self' {LAPTOP} {SECOND}; object-src 'none'; base-uri 'none'; frame-ancestors {LAPTOP} {SECOND}; form-action 'self'")
+    );
     // The API, the scripts and the browser client stay closed.
     for uri in ["/api/v1/status", "/assets/app.js", "/desktop/"] {
         let (_, headers, _) = host.send(get_request(uri)).await;

@@ -1,9 +1,8 @@
 /**
  * Settings → Mobile → Linked desktops (`docs/phone_multi_desktop_plan.md`,
  * Phase 2): the add check mirrors the sidecar's `linked.rs`, the list is one
- * whole-block write that keeps the block's other fields, and the explicit
- * field-list writers of the block (host on/off, Serve detection, Lock down)
- * carry it.
+ * whole-block write that keeps the block's other fields, and the block's
+ * other writers (host on/off, Serve detection, Lock down) carry it.
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

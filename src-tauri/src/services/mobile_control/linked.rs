@@ -16,7 +16,7 @@
 //! reaches its page framed under another of them. A `*.c.ts.net` name is a
 //! suffix of its own (another site: the cookie would not be sent) and is
 //! refused, as is every name when this host is not on `ts.net` itself.
-//! Behind the server gateway the list is never read (`host::HeaderState`).
+//! Behind the server gateway the list is never read (`host::linked_for`).
 
 use std::path::Path;
 
@@ -25,7 +25,8 @@ use serde_json::Value;
 /// At most this many linked desktops; entries past it are ignored.
 pub const MAX_LINKED: usize = 8;
 
-/// Why an origin cannot be linked — a fixed code the desktop translates.
+/// Why an origin cannot be linked. The desktop's add check
+/// (`src/lib/linkedDesktops.ts`) mirrors these to say so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkRefusal {
     /// Not one exact `https://host[:port]` origin.
@@ -35,16 +36,6 @@ pub enum LinkRefusal {
     OtherTailnet,
     /// This host's own origin.
     OwnOrigin,
-}
-
-impl LinkRefusal {
-    pub fn code(self) -> &'static str {
-        match self {
-            Self::Invalid => "invalid_origin",
-            Self::OtherTailnet => "not_same_tailnet",
-            Self::OwnOrigin => "own_origin",
-        }
-    }
 }
 
 /// The `<tailnet>.ts.net` part of an origin's host, when the host is exactly

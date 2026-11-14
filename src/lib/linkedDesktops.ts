@@ -10,7 +10,8 @@
 /** At most this many linked desktops (`linked::MAX_LINKED`). */
 export const MAX_LINKED_DESKTOPS = 8;
 
-/** Why an address cannot be added — the sidecar's three codes plus the list's own. */
+/** Why an address cannot be added — the sidecar's three refusals
+ *  (`linked::LinkRefusal`) plus the list's own two. */
 export type LinkRefusal = "invalid_origin" | "not_same_tailnet" | "own_origin" | "already_linked" | "limit";
 
 /** `raw` as one exact `https://host[:port]` origin (`config::validate_origin`),

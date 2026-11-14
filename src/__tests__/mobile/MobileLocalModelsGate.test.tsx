@@ -1,8 +1,9 @@
 /**
  * The host-wide "Local models from the phone" switch (#31by). Unset is on, so
- * only its "off" is stored — and the three places Mobile settings rebuild the
- * host object from an explicit field list must each carry it, or turning the
- * host off (or on, or detecting Serve) would quietly switch it back on.
+ * only its "off" is stored — and the three places Mobile settings rewrite the
+ * host object's own fields (host on/off, Detect Serve, Lock down) must each
+ * carry it by spreading the stored block, or turning the host off (or on, or
+ * detecting Serve) would quietly switch it back on.
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

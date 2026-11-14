@@ -90,35 +90,38 @@ const PDF_FRAME_PATH: &str = "/pdf-frame.html";
 const MOBILE_PERMISSIONS_POLICY: &str =
     "camera=(), microphone=(self), on-device-speech-recognition=(self), geolocation=(), payment=(), usb=()";
 
-/// The phone page's policy with no linked desktop. `phone_csp` widens it
-/// for the linked ones and returns it unchanged without any.
+/// The phone page's policy with no linked desktop, and the one spelling of
+/// it: `phone_csp` widens this text for the linked ones.
 const PHONE_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
 /// The phone page's CSP for these linked desktops
 /// (`docs/phone_multi_desktop_plan.md`): each may frame this page
 /// (`frame-ancestors`), this page may frame each (`frame-src`) and probe its
-/// `/healthz` (`connect-src`). None linked: `PHONE_CSP`, byte for byte.
-fn phone_csp(linked: &[String]) -> String {
+/// `/healthz` (`connect-src`). None linked: `PHONE_CSP` itself. The widened
+/// policy is `PHONE_CSP` with those directives replaced; one the replace no
+/// longer finds, or a value that is no header, stays closed.
+fn phone_csp(linked: &[String]) -> HeaderValue {
     if linked.is_empty() {
-        return PHONE_CSP.to_string();
+        return HeaderValue::from_static(PHONE_CSP);
     }
     let list = linked.join(" ");
-    format!(
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' {list}; frame-src 'self' {list}; object-src 'none'; base-uri 'none'; frame-ancestors {list}; form-action 'self'"
-    )
+    let widened = PHONE_CSP
+        .replace("connect-src 'self';", &format!("connect-src 'self' {list}; frame-src 'self' {list};"))
+        .replace("frame-ancestors 'none';", &format!("frame-ancestors {list};"));
+    HeaderValue::from_str(&widened).unwrap_or_else(|_| HeaderValue::from_static(PHONE_CSP))
 }
 
-/// `MOBILE_PERMISSIONS_POLICY` with the microphone and speech recognition
-/// delegable to the linked desktops' frames: an `allow=` attribute on the
-/// frame cannot widen what this header grants. None linked: unchanged.
-fn permissions_policy(linked: &[String]) -> String {
+/// `MOBILE_PERMISSIONS_POLICY` with the features it grants this page
+/// (`(self)`: the microphone and speech recognition) delegable to the linked
+/// desktops' frames: an `allow=` attribute on the frame cannot widen what
+/// this header grants. None linked: the constant itself.
+fn permissions_policy(linked: &[String]) -> HeaderValue {
     if linked.is_empty() {
-        return MOBILE_PERMISSIONS_POLICY.to_string();
+        return HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY);
     }
     let quoted: String = linked.iter().map(|origin| format!(" \"{origin}\"")).collect();
-    format!(
-        "camera=(), microphone=(self{quoted}), on-device-speech-recognition=(self{quoted}), geolocation=(), payment=(), usb=()"
-    )
+    let widened = MOBILE_PERMISSIONS_POLICY.replace("(self)", &format!("(self{quoted})"));
+    HeaderValue::from_str(&widened).unwrap_or_else(|_| HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY))
 }
 
 /// The linked desktops of a host (`linked::linked_desktops`), none behind
@@ -137,8 +140,8 @@ fn linked(state: &HostState) -> Vec<String> {
 
 /// What the header middleware needs: whether the host is behind the gateway
 /// (its socket is `wss:`, and nothing is linked), and where to read the
-/// linked desktops from.
-#[derive(Clone)]
+/// linked desktops from. Shared behind an `Arc`: the middleware's state is
+/// cloned for every request.
 struct HeaderState {
     secure: bool,
     state_dir: PathBuf,
@@ -790,7 +793,7 @@ fn catalog_stale(state: &HostState) {
         .invalidate();
 }
 
-async fn security_headers(State(header_state): State<HeaderState>, request: Request<Body>, next: Next) -> Response<Body> {
+async fn security_headers(State(header_state): State<Arc<HeaderState>>, request: Request<Body>, next: Next) -> Response<Body> {
     let secure = header_state.secure;
     let sensitive = request.uri().path().starts_with("/api/") || request.uri().path() == "/healthz";
     let frame = request.uri().path() == PDF_FRAME_PATH;
@@ -832,9 +835,7 @@ async fn security_headers(State(header_state): State<HeaderState>, request: Requ
     if sensitive && !headers.contains_key(header::CACHE_CONTROL) {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
-    if let Ok(value) = HeaderValue::from_str(&permissions_policy(&linked)) {
-        headers.insert("permissions-policy", value);
-    }
+    headers.insert("permissions-policy", permissions_policy(&linked));
     if desktop {
         let hashes = headers
             .remove(web_client::INLINE_SCRIPT_HASHES)
@@ -847,9 +848,7 @@ async fn security_headers(State(header_state): State<HeaderState>, request: Requ
     } else if !framed {
         // `img-src blob:`: the files library's covers are drawn on the phone
         // and shown as object URLs (`mobile-web/src/thumbs.ts`).
-        if let Ok(value) = HeaderValue::from_str(&phone_csp(&linked)) {
-            headers.insert(header::CONTENT_SECURITY_POLICY, value);
-        }
+        headers.insert(header::CONTENT_SECURITY_POLICY, phone_csp(&linked));
     }
     response
 }
@@ -870,9 +869,9 @@ fn pdf_frame_policy(host: Option<&HeaderValue>, linked: &[String]) -> String {
         .unwrap_or_default();
     // `frame-ancestors` checks every ancestor: under a linked desktop's
     // frame the PWA's own pdf.js frame has that desktop above it too.
-    let linked: String = linked.iter().map(|origin| format!(" {origin}")).collect();
+    let ancestors: String = linked.iter().map(|origin| format!(" {origin}")).collect();
     format!(
-        "default-src 'none'; script-src 'self'{named}; style-src 'unsafe-inline'; img-src blob: data:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'{named}{linked}"
+        "default-src 'none'; script-src 'self'{named}; style-src 'unsafe-inline'; img-src blob: data:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'{named}{ancestors}"
     )
 }
 
@@ -908,7 +907,7 @@ fn pdf_frame_response(headers: &HeaderMap, linked: &[String]) -> Response<Body> 
 async fn health(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
     let mut response = Json(json!({ "ok": true })).into_response();
     let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
-    if let Some(origin) = origin.filter(|origin| linked(&state).iter().any(|linked| linked == origin)) {
+    if let Some(origin) = origin.filter(|origin| linked(&state).iter().any(|entry| entry == origin)) {
         if let Ok(value) = HeaderValue::from_str(origin) {
             let headers = response.headers_mut();
             headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
@@ -1045,10 +1044,18 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
         .filter(|scheme| scheme.len() <= 32 && scheme.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
         .unwrap_or("light_lavender")
         .to_string();
+    // From the settings read above, not a second read (`linked`).
+    let linked_desktops: Vec<_> = match &settings {
+        Some(settings) if !state.web.secure() => super::linked::linked_in(settings, &state.config.origin),
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(|origin| json!({ "origin": origin }))
+    .collect();
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked(&state).into_iter().map(|origin| json!({ "origin": origin })).collect::<Vec<_>>() }),
+            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops }),
         ),
     )
 }
@@ -8503,11 +8510,11 @@ where
 /// through the same middleware stack the sidecar serves.
 fn router(state: HostState) -> Router {
     // Behind the gateway the socket is `wss:`; the CSP names it so.
-    let header_state = HeaderState {
+    let header_state = Arc::new(HeaderState {
         secure: state.web.secure(),
         state_dir: state.config.state_dir.clone(),
         origin: state.config.origin.clone(),
-    };
+    });
     Router::new()
         .route("/healthz", get(health))
         .route("/api/v1/pair", post(pair))

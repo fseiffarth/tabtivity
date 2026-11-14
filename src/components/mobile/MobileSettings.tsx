@@ -352,26 +352,13 @@ export function MobileSettings() {
       }
       await updateSettings({
         [MOBILE_HOST_KEY]: {
+          // The block is written whole (a settings patch is shallow): the
+          // stored one rides along, so no gate or list is dropped.
+          ...stored,
           enabled,
           display_name: displayName.trim() || "Workstation",
           port: parsedPort || 8742,
           serve_origin: origin.trim() || undefined,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          browser_client: stored?.browser_client,
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
-          root_devices: stored?.root_devices,
-          linked_desktops: stored?.linked_desktops,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -465,26 +452,10 @@ export function MobileSettings() {
       setServeVerification({ verified: true });
       await updateSettings({
         [MOBILE_HOST_KEY]: {
-          enabled: stored?.enabled ?? false,
+          ...(stored ?? { enabled: false }),
           display_name: detected.display_name,
           port: detected.port,
           serve_origin: detected.origin,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          browser_client: stored?.browser_client,
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
-          root_devices: stored?.root_devices,
-          linked_desktops: stored?.linked_desktops,
         },
       });
     } catch (reason) {
@@ -510,27 +481,13 @@ export function MobileSettings() {
       if (response.status === "error") throw new Error(response.message);
       await updateSettings({
         [MOBILE_HOST_KEY]: {
+          ...stored,
           enabled: false,
           display_name: displayName.trim() || "Workstation",
           port: Number(port) || 8742,
           serve_origin: origin.trim() || undefined,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          // `browser_client` is left out on purpose: lockdown closes browser
-          // access too.
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
-          root_devices: stored?.root_devices,
-          linked_desktops: stored?.linked_desktops,
+          // Cleared on purpose: lockdown closes browser access too.
+          browser_client: undefined,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });

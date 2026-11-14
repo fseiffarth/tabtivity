@@ -4,7 +4,7 @@
  * framed by and may frame, so one installed phone app switches between them.
  * A link names an address only and grants no sign-in; each desktop lists the
  * other. The list is part of the phone-host block and written whole, like
- * `root_devices` (every other writer of the block carries it).
+ * `root_devices` (every writer of the block spreads the stored one).
  *
  * Desktop only: behind the server gateway the sidecar ignores the list.
  */
@@ -40,9 +40,12 @@ export function LinkedDesktops({ busy }: { busy: boolean }) {
   const own = stored?.serve_origin;
   const list = stored?.linked_desktops ?? [];
   const disabled = busy || saving;
+  const hasEntry = entry.trim() !== "";
 
-  /** One whole-block write, like `setRootReach`; an empty list is no list. */
+  /** One whole-block write, like `setRootReach`; an empty list is no list.
+   *  Resolves to whether it was saved. */
   const write = async (next: string[]) => {
+    setError(null);
     setSaving(true);
     try {
       await updateSettings({
@@ -51,22 +54,23 @@ export function LinkedDesktops({ busy }: { busy: boolean }) {
           linked_desktops: next.length > 0 ? next : undefined,
         },
       });
+      return true;
     } catch (reason) {
       setError(String(reason));
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
   const add = async () => {
-    setError(null);
     const verdict = validateLinkedOrigin(own, entry, list);
     if (!verdict.ok) {
       setError(translateNow(REFUSAL_KEY[verdict.reason]));
       return;
     }
-    await write([...list, verdict.origin]);
-    setEntry("");
+    // A failed save keeps the typed address.
+    if (await write([...list, verdict.origin])) setEntry("");
   };
 
   return (
@@ -102,10 +106,7 @@ export function LinkedDesktops({ busy }: { busy: boolean }) {
                 className="settings-btn sm"
                 disabled={disabled}
                 aria-label={t("mobile.linkedDesktopsRemoveOne", { origin })}
-                onClick={() => {
-                  setError(null);
-                  void write(list.filter((other) => other !== origin));
-                }}
+                onClick={() => void write(list.filter((other) => other !== origin))}
               >
                 {t("mobile.linkedDesktopsRemove")}
               </button>
@@ -125,13 +126,13 @@ export function LinkedDesktops({ busy }: { busy: boolean }) {
                 setError(null);
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && entry.trim()) {
+                if (event.key === "Enter" && hasEntry) {
                   event.preventDefault();
                   void add();
                 }
               }}
             />
-            <button type="button" className="settings-btn sm" disabled={disabled || !entry.trim()} onClick={() => void add()}>
+            <button type="button" className="settings-btn sm" disabled={disabled || !hasEntry} onClick={() => void add()}>
               {t("mobile.linkedDesktopsAdd")}
             </button>
           </div>
