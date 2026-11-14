@@ -248,3 +248,94 @@ run live.
   from one tab's fold behind a confirm naming the project.
 - **Popout windows** show the hover card's unread line too (they hear the
   event); the fold is the cockpit's only.
+
+## Review (independent, 2026-11-14)
+
+The range `fe629c117..87801a51e` was checked against the plan's fixed decisions,
+the user's decisions and the AGENTS.md invariants. Findings were formed before
+this handoff was read. Nothing was run live.
+
+### Fixed (each with a regression test that failed before)
+
+- `259b88596` **`retryAfterSecs` rounded down.** `admit` truncated the wait
+  to whole seconds, so a retry exactly `retryAfterSecs` later was refused
+  again for the leftover fraction. It now rounds up. Test:
+  `retry_after_is_rounded_up_so_the_call_then_is_admitted`.
+- `c38aac76a` **Unreadable messages filled a tab's inbox.** A tab that came
+  back under another class never sees the messages sent under its old one
+  (filtered at read), but `unread_for` still counted them toward the
+  20-unread cap. Every send from a new same-class sibling answered
+  `inbox_full` for up to 24 h. `unread_for` now applies the class filter, for
+  the cap, the read and `ack` alike. Test:
+  `messages_a_tab_can_no_longer_read_do_not_fill_its_inbox`.
+
+### Checked and found sound
+
+- Grant matrix: root, Host session, Tabby, box, container, remote, worker, VM,
+  `local_only`-of-remote, cut, attach-only, no saved tab, Mobile host and
+  daemon are all refused (`project_lanes`, `off_host`, `tabs_reaches`).
+- `STAMP_ENV` is a control variable, stripped from renderer input, so a
+  renderer cannot claim `locked:<p>`.
+- The token is admitted on `/mcp/tabs` only and no other caller is admitted
+  there. It is in `LANE_TOKEN_ENVS`, `SECRET_ENV` (slot 8643),
+  `is_secret_exec_env`, `CONTROL_ENV`, the spawn guard and the PTY-exit
+  revoke.
+- Unknown, other-project and other-class handles give a byte-identical
+  `not_found`. No reply carries a scope, tab id, PTY id, session id or path.
+- Message text appears only as plain React text. Deliver and the wake queue
+  only `NOTICE`, through `queuePromptForTab` (a `once` rule, no
+  `whileBusy`).
+- The hook marker is written no-follow through `HomeFile`, and `rm -f` /
+  `Remove-Item` remove only a link. The sh and PowerShell twins match.
+- Bidi and invisible characters are refused (`strip_invisible` covers Cf),
+  and lengths are counted in characters.
+- Seams line up: command classes and the generated TS, the event name,
+  camelCase payloads, `tabs_mcp` (absent = on), and `tab_messages_wake`
+  (registry only; not on the import allowlist). i18n keys (21 in each of the
+  5 dictionaries) and the 4 untested rows match the pills.
+- Lock order is world, then token map, everywhere; no inversion was found.
+
+### Flagged for user (not changed)
+
+- **Stacked wake notices** (agree with I2's flag; confidence high that it
+  happens, medium that it counts as a bug). A message that arrives while an
+  earlier notice is still queued is a new batch, so a busy tab can collect up
+  to six notices and run empty turns afterwards. Deliver plus wake can also
+  double up. The QA box "once for that batch" will fail if two separate sends
+  land while the tab is busy. Suggested host-side fix: a claimed wake covers
+  later messages until the recipient next calls `tabs_inbox`.
+- **The wake ignores class** (low): `wake_claim_in` counts messages the
+  recipient cannot read (after a class change), so it can wake a tab to an
+  empty inbox. Deliver's `nothing_unread` check has the same gap. It is the
+  window-side twin of the fix above.
+- **The wake skips the liveness check** (low): `wake_claims_in` trusts
+  `members` and does not ask `session_alive`. A member whose spawn failed
+  (token revoked by `SpawnTokenGuard`, no PTY exit, so no sweep) can still be
+  claimed and queued.
+- **Two tabs that both opt in can wake each other** (design, low). Each
+  reply is a new batch for the other side, so a loop is bounded only by 6
+  wakes and 30 sends per tab per hour.
+- **The `local` class comes from the renderer's `local_model` flag** in an
+  unlocked project, by plan decision 5 ("the spawn gets the `<scope>.local`
+  home"). It is not gate-verified, which the plan accepts. This is noted only
+  because `docs/context/local_models_only.md` says "never from the
+  renderer's `local_model` flag" (true only for `locked:`).
+- **Dead code** (low): `tabs_mcp::unread_count` and `tabs_mcp::wake_claim`
+  (the forms without `_in`) have no callers.
+- **Unrelated i18n edit** (low): `de.ts` changed
+  `assistant.notInstalled.body{,Local}` from „CLIs verwalten“ to „Agenten
+  verwalten“. It is probably a correct rename, but it falls outside this
+  feature.
+- **Stale markers** (low): `note_mail` writes `<uid>.mail` both at the root
+  and in the project slice, and the hook removes only the one it sees. The
+  other one stays (as `.from` does). It is harmless.
+
+### Gates (after the fixes)
+
+`scripts/gates-job.sh start --all`: all PASS: brand, whitespace, lint-fe,
+clippy, clippy-dlib, clippy-dmn, build, vitest, test (`cargo test
+--workspace`) and test-dlib. Per-gate counts were not kept, because the job
+deletes its logs on success. In a targeted run, `services::mcp::tabs_mcp`
+passed 25/25 (23 earlier tests plus the 2 new ones).
+`scripts/privacy-check.sh` clean, and `git diff --check` clean over the
+range.
