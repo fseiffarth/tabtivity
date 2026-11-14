@@ -164,3 +164,87 @@ was run live.
   plan asks), not just the locked check.
 - **Purge scope:** `purge_scope(scope)` empties that scope in every state dir
   the process holds (one in practice).
+
+## I2 window, wake, docs (plan steps 6–8)
+
+### Commits
+
+- `51b5d4907` feat(tabs-mcp): window surface and per-project idle wake —
+  steps 6 and 7 together (the wake's command, setter and host share the new
+  files): `commands/tabs_mcp.rs` (+ `wake_claims` in the service), command
+  classes, the Messages fold, hover card line, Manage CLIs switches,
+  `TabMessagesHost`, i18n ×5, untested rows, vitest.
+- `7b906fed9` docs(tabs-mcp): context doc, filemaps, help and manual QA —
+  step 8.
+- this commit: this section.
+
+### Deviations from the plan
+
+1. **Steps 6 and 7 are one commit.** The wake command, the setter and the
+   wake toggles live in the step-6 files; splitting them by hunk bought
+   nothing.
+2. **`tabs_mcp_wake_claim({scope})` claims per scope**, not per tab, and
+   returns `{notice, scheduleTargetIds}`: the window does not know which tabs
+   hold unread, the host does. It re-reads the opt-in (`tab_messages_wake`,
+   only a JSON `true` counts) and the lane switch, then claims through the
+   new `tabs_mcp::wake_claims{,_in}`, which covers **listed tabs only** (a
+   swept/closed tab is not woken; a notice for it would wait for a tab that
+   may never return).
+3. **`tabs_mcp_deliver` returns `{notice, scheduleTargetId}`** read from the
+   saved tab's `scheduleTargetId` extra (`workspace::read_tab_in`), and
+   refuses `off` (switch off), `nothing_unread`, `not_found` (tab or target
+   gone). The window still gates the button on unread > 0.
+4. **Setter name** `set_project_tab_messages_wake({projectId, on})`;
+   `projects.json` only (not mirrored into `project.json`, as
+   `schedule_mcp`); off removes the key.
+5. **Wake toggles live under the lane switch** in Manage CLIs → Tools (one
+   row per non-remote project, shown while the lane is on), modelled on
+   `AgentScheduleMcpSettings`; the plan named no place.
+6. **The hover card and the fold share one store** (`stores/tabMessages`,
+   per scope, ref-counted watchers, one `tabs-mcp-changed` listener while any
+   scope is watched). The fold shows only when the tab has messages and only
+   for `project` rows.
+
+### Gotchas
+
+- `TabMessagesHost` does not take the timer lease: the claim is in this
+  process's memory and only this window hears its event; the scheduler host
+  (which holds the lease) does the idle-gated typing. It stands down while
+  AI is off (claims are not spent then; the next change event retries).
+- `commands::tabs_mcp` is `#[cfg(feature = "desktop")]` like `print_mcp`;
+  its hook is installed in `serve_everything` under the same cfg.
+
+### Gate results
+
+`scripts/gates-job.sh start` on the full I2 diff: brand, whitespace,
+lint-fe, clippy, clippy-dlib, clippy-dmn, build PASS; vitest (`--changed`)
+PASS; `cargo test -p tabtivity -p app-serverd` failed 2 of 5,727 on the
+loaded first run (`services::voice::session::tests::a_phantom_partial_writes_nothing`,
+`…every_partial_is_the_whole_open_segment…` — unrelated to this lane); they
+pass alone (18/18). Rerun on the same tree: `cargo test -p tabtivity -p
+app-serverd` PASS (5,911 passed, 13 ignored); test-dlib (`--no-default-features
+--lib --test server_secrets`) PASS (5,539 passed, 12 ignored).
+New tests: `wake_claims_cover_listed_tabs_only` (service),
+3 in `commands::tabs_mcp::tests`, 11 in
+`src/__tests__/cockpit/CockpitMessages.test.tsx` (literal text, Deliver
+queues exactly the notice, hidden pane lists nothing and catches up on show,
+box row absent, change-event refetch, hover card count without text, wake
+host claims only opted-in projects, switch round-trip).
+
+Untested ids added: `tabs.mcp.lane`, `tabs.mcp.traffic`, `tabs.mcp.deliver`,
+`tabs.mcp.wake`.
+
+Not run: `npm run backend:stale` (main agent, after landing); nothing was
+run live.
+
+### Flagged for user
+
+- **Wake budget is the host's, not the scheduler's**: a wake queued for a
+  tab that then sits busy for a long time is typed whenever it next goes
+  idle, however late, and a new message meanwhile is a new batch, so a busy
+  tab can collect several queued notices (at most six an hour). Deduplicating
+  against a still-queued notice would need the scheduler's state; not done.
+- **Clear is project-wide** (the plan's `tabs_mcp_clear({scope})`), offered
+  from one tab's fold behind a confirm naming the project.
+- **Popout windows** show the hover card's unread line too (they hear the
+  event); the fold is the cockpit's only.
