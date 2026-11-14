@@ -3,7 +3,7 @@
  *  - Ctrl+Space requests a completion ONLY when the per-type setting is on, after
  *    ensure_ollama_running; the suggestion renders as ghost text and Tab accepts.
  *  - When the setting is OFF, Ctrl+Space never calls out (privacy gate).
- *  - Partial accept: → (Right) inserts only the next word and keeps the rest
+ *  - Partial accept: Ctrl+Right inserts only the next word and keeps the rest
  *    ghosted; a later plain Tab finishes it.
  *  - Completion-length modes: requests carry the active `mode`, and Shift+Tab
  *    toggles it (sentence → block → scope) then re-requests.
@@ -528,7 +528,7 @@ describe("local autocomplete (#45)", () => {
     );
   });
 
-  it("→ (Right) accepts only the next word, keeping the rest ghosted; Tab finishes it", async () => {
+  it("Ctrl+Right accepts only the next word, keeping the rest ghosted; Tab finishes it", async () => {
     autocompleteOn = true;
     await renderTextView();
     const textarea = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
@@ -541,9 +541,11 @@ describe("local autocomplete (#45)", () => {
     // Suggestion is the two-word "return 42".
     await waitFor(() => expect(screen.getByText("return 42")).toBeTruthy());
 
-    // Right inserts just "return", leaving " 42" ghosted.
+    // The hint names the chord.
+    expect(screen.getByText(/Ctrl\+→: word/)).toBeTruthy();
+    // Ctrl+Right inserts just "return", leaving " 42" ghosted.
     await act(async () => {
-      fireEvent.keyDown(textarea, { key: "ArrowRight" });
+      fireEvent.keyDown(textarea, { key: "ArrowRight", ctrlKey: true });
     });
     await waitFor(() =>
       expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(SOURCE + "return"),
@@ -557,6 +559,21 @@ describe("local autocomplete (#45)", () => {
     await waitFor(() =>
       expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(SOURCE + "return 42"),
     );
+  });
+
+  it("plain Right dismisses the ghost and inserts nothing", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    expect(screen.getByText("return 42")).toBeTruthy();
+    let prevented = false;
+    await act(async () => { prevented = !fireEvent.keyDown(el, { key: "ArrowRight" }); });
+    expect(prevented).toBe(false);
+    expect(el.value).toBe(SOURCE);
+    expect(screen.queryByText("return 42")).toBeNull();
   });
 
   it("keeps the ghost when Enter inserts its matching newline and indentation", async () => {

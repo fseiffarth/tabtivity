@@ -100,6 +100,7 @@ import { CloseIcon } from "../../common/icons/Icon";
 // `chordLabel` so they read ⌥ on macOS and Alt elsewhere; the handler itself is
 // unchanged (`e.altKey`).
 const AC_KEY_LABELS = {
+  ctrlRight: chordLabel({ key: "ArrowRight", ctrl: true }),
   altRight: chordLabel({ key: "ArrowRight", alt: true }),
   altBrackets: `${chordLabel({ key: "[", alt: true })}/]`,
 };
@@ -1949,7 +1950,7 @@ export function CodeEditor({
     });
   }, [suggestion, draft, edit, acOffers]);
 
-  // #45 partial accept (→ Right arrow): insert only the next "word" of the pending
+  // #45 partial accept (Ctrl+Right): insert only the next "word" of the pending
   // suggestion and keep the remainder ghosted, so the user can walk a long
   // suggestion in word-sized steps. A word = any leading whitespace (including a
   // newline + indentation) plus the following run of non-space characters.
@@ -2216,7 +2217,8 @@ export function CodeEditor({
     //  - Tab accepts the whole suggestion,
     //  - Shift+Tab toggles the completion-length mode (Sentence → Block → Scope)
     //    and re-requests in it,
-    //  - → (Right) accepts only the next word (repeat to walk word-by-word),
+    //  - Ctrl+Right accepts only the next word (repeat to walk word-by-word),
+    //    Alt+Right the next line; plain Right dismisses and moves the caret,
     //  - Esc dismisses.
     const overrides = shortcutOverrides;
     if (actionMatches("editorAutocomplete", overrides, e)) {
@@ -2262,9 +2264,9 @@ export function CodeEditor({
         }
         return;
       }
-      // Plain Right arrow accepts the next word; modified Right (select/word-move)
-      // falls through and dismisses so native navigation still works.
-      if (e.key === "ArrowRight" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      // Ctrl+Right accepts the next word. Plain Right (and every other Right)
+      // falls through and dismisses, so the caret moves as it always does.
+      if (e.key === "ArrowRight" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         acceptWord();
         return;
