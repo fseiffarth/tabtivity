@@ -16,6 +16,7 @@ import { SHOWN_MS } from "../../lib/viewers/completion/completionTimings";
 
 /** The ring the rendered editor writes: `renderTextView` resets modules. */
 const timingsRing = async () => (await import("../../lib/viewers/completion/completionTimings")).completionTimings();
+import { autocompleteModelAdvice, missingRoleModel } from "../../lib/viewers/completion/autocomplete";
 import { caretAtLineEnd, completionModelOrder, completionWindow, editKind, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
 
 const { mockInvoke, mockListen, mockBump } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockListen: vi.fn(), mockBump: vi.fn() }));
@@ -55,12 +56,14 @@ const SOURCE = "def foo():\n    ";
 let autocompleteOn = false;
 let copilotOn = false;
 let delays: { ollama?: number; copilot?: number } | undefined;
+let roles: Record<string, string> | undefined;
 const { mockUpdateSettings } = vi.hoisted(() => ({ mockUpdateSettings: vi.fn() }));
 vi.mock("../../stores/settings", () => {
   const state = () => ({
     updateSettings: mockUpdateSettings,
     settings: {
       autocomplete_delay_ms: delays,
+      ollama_roles: roles,
       autosave: false,
       copilot_completion: copilotOn,
       code_completion_provider: copilotOn ? "copilot" : "ollama",
@@ -933,6 +936,82 @@ describe("autocomplete window and type-through", () => {
     expect(typeThrough("ab!", "a!", ghost)).toBeNull();
     expect(typeThrough("ab!", "abhello?", ghost)).toBeNull();
     expect(typeThrough("ab!", "abhola!", ghost)).toBeNull();
+  });
+});
+
+describe("autocomplete role model (A5)", () => {
+  beforeEach(() => {
+    copilotOn = false;
+    vi.clearAllMocks();
+    setup();
+  });
+
+  it("an automatic request with the role model unloaded asks nothing and offers Load", async () => {
+    autocompleteOn = true;
+    roles = { autocomplete: "qwen2.5-coder:1.5b" };
+    try {
+      const original = mockInvoke.getMockImplementation()!;
+      let loaded = false;
+      mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+        if (cmd === "load_ollama_model") { loaded = true; return Promise.resolve(null); }
+        if (cmd === "list_ollama_models_detailed") return Promise.resolve([
+          { name: "llama3.2:3b", running: true },
+          ...(loaded ? [{ name: "qwen2.5-coder:1.5b", running: true, capabilities: ["completion", "insert"] }] : []),
+        ]);
+        return original(cmd, args);
+      });
+      await renderTextView();
+      const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+      await waitFor(() => expect(el.value).toBe(SOURCE));
+      el.focus();
+      await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "r" } }); });
+      el.selectionStart = el.selectionEnd = SOURCE.length + 1;
+      await act(async () => { await new Promise((r) => setTimeout(r, 900)); });
+      expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+      expect(screen.getByText(/qwen2\.5-coder:1\.5b not loaded/)).toBeTruthy();
+      expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.request.error.ollama/none");
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Load" })); });
+      expect(mockInvoke).toHaveBeenCalledWith("load_ollama_model", { model: "qwen2.5-coder:1.5b", device: "auto" });
+      await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("complete_text",
+        expect.objectContaining({ model: "qwen2.5-coder:1.5b", insert: true, trigger: "auto" })));
+      // The pill now names the model that answered.
+      await waitFor(() => expect(screen.getByText(/^qwen2\.5-coder:1\.5b · Tab: accept/)).toBeTruthy());
+    } finally { roles = undefined; }
+  });
+
+  it("Ctrl+Space still answers from another resident model, and names it", async () => {
+    autocompleteOn = true;
+    roles = { autocomplete: "qwen2.5-coder:1.5b" };
+    try {
+      await renderTextView();
+      const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+      await waitFor(() => expect(el.value).toBe(SOURCE));
+      el.selectionStart = el.selectionEnd = SOURCE.length;
+      await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+      expect(mockInvoke).toHaveBeenCalledWith("complete_text", expect.objectContaining({ model: "llama3.2:3b" }));
+      expect(screen.getByText(/^llama3\.2:3b · Tab: accept/)).toBeTruthy();
+    } finally { roles = undefined; }
+  });
+
+  it("names the role model that is missing for the language, roles only", () => {
+    const loaded = [{ name: "any" }, { name: "writer" }];
+    expect(missingRoleModel(loaded, "python", "coder")).toBe("coder");
+    expect(missingRoleModel(loaded, "python", undefined)).toBeUndefined();
+    expect(missingRoleModel(loaded, "markdown", "coder", "writer")).toBeUndefined();
+    expect(missingRoleModel(loaded, "markdown", "coder", "poet")).toBe("poet");
+    expect(missingRoleModel([{ name: "coder" }], "python", "coder")).toBeUndefined();
+  });
+
+  it("advises on the autocomplete role only from reported capabilities", () => {
+    const chat = { name: "chat", capabilities: ["completion", "tools"] };
+    const fim = { name: "fim", capabilities: ["completion", "insert"] };
+    const unknown = { name: "unknown", capabilities: [] };
+    expect(autocompleteModelAdvice([chat, fim], "chat")).toEqual({ kind: "noInsert", model: "chat" });
+    expect(autocompleteModelAdvice([chat, fim], "fim")).toBeNull();
+    expect(autocompleteModelAdvice([unknown], "unknown")).toBeNull();
+    expect(autocompleteModelAdvice([chat], undefined)).toEqual({ kind: "noFim" });
+    expect(autocompleteModelAdvice([chat, fim], undefined)).toBeNull();
+    expect(autocompleteModelAdvice([], undefined)).toBeNull();
   });
 });
 

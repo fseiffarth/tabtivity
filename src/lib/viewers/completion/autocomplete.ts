@@ -46,7 +46,7 @@ export type CompletionModel = {
  * never cached. The endpoint/policy key keeps settings changes isolated. */
 export function modelLookupCache() {
   let cached: { key: string; until: number; value: Promise<CompletionModel[]> } | undefined;
-  return (key: string, lookup: () => Promise<CompletionModel[]>) => {
+  const lookupOnce = (key: string, lookup: () => Promise<CompletionModel[]>) => {
     if (cached?.key === key && Date.now() < cached.until) return cached.value;
     const value = lookup().catch((error) => {
       if (cached?.value === value) cached = undefined;
@@ -55,6 +55,8 @@ export function modelLookupCache() {
     cached = { key, until: Date.now() + 5000, value };
     return value;
   };
+  /** Forget the last answer, e.g. after loading a model from the editor. */
+  return Object.assign(lookupOnce, { clear: () => { cached = undefined; } });
 }
 
 export const completionModels = modelLookupCache();
@@ -137,6 +139,34 @@ export function isProseLang(lang: string): boolean {
  * to the code role, so settings written before the split behave as they did. */
 export function completionModelOrder(lang: string, code?: string, prose?: string): string[] {
   return (isProseLang(lang) ? [prose, code] : [code]).filter((name): name is string => !!name);
+}
+
+/** For an automatic request: the role model to name when the `autocomplete`
+ * roles (not the default model folded into them) name models for `lang` and
+ * none of them is resident. An automatic request then asks nothing rather
+ * than silently using another resident model. Undefined when it may go on. */
+export function missingRoleModel(loaded: { name: string }[], lang: string, role?: string, proseRole?: string): string | undefined {
+  const roles = completionModelOrder(lang, role, proseRole);
+  return roles.length && !roles.some((name) => loaded.some((m) => m.name === name)) ? roles[0] : undefined;
+}
+
+/** The fill-in-the-middle model the Models hub offers for the autocomplete
+ * role: small (986 MB) and its template takes Ollama's `suffix`. */
+export const RECOMMENDED_AUTOCOMPLETE_MODEL = "qwen2.5-coder:1.5b";
+
+/** What the Models hub says about the autocomplete role. `noInsert`: the role
+ * holds a model Ollama positively reported without `insert` (an empty
+ * capability list is unknown, never "no"). `noFim`: no role is set and no
+ * installed model reports `insert`. Otherwise nothing to say. */
+export function autocompleteModelAdvice(
+  models: { name: string; capabilities?: string[] }[], role?: string,
+): { kind: "noInsert"; model: string } | { kind: "noFim" } | null {
+  if (role) {
+    const caps = models.find((m) => m.name === role)?.capabilities;
+    return caps?.length && !caps.includes("insert") ? { kind: "noInsert", model: role } : null;
+  }
+  if (!models.length || models.some((m) => m.capabilities?.includes("insert"))) return null;
+  return { kind: "noFim" };
 }
 
 /** The first preferred model that is actually resident, else any resident one. */

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { aiIsOff } from "../../aiSwitch";
 import { listen } from "@tauri-apps/api/event";
 import type { AutocompleteMode } from "../../../types";
-import { CompletionCache, completionModels, completionModelOrder, completionWindow, pickCompletionModel, type CompletionModel } from "./autocomplete";
+import { CompletionCache, completionModels, completionModelOrder, completionWindow, missingRoleModel, pickCompletionModel, type CompletionModel } from "./autocomplete";
 import type { CompletionTiming } from "./completionTimings";
 import { referenceBudget, referenceSetId, trimReferences, type CompletionReference } from "./completionContext";
 import {
@@ -22,6 +22,10 @@ export class OllamaCompletionProvider implements CompletionProvider {
     scope?: string;
     preferred?: string;
     preferredProse?: string;
+    /** The `autocomplete` role itself, without the default model folded in:
+     * an automatic request never falls back from it to another resident
+     * model (`missingRoleModel`). */
+    role?: string;
     mode: AutocompleteMode;
     candidate: number;
     /** Sent to `complete_text`: an automatic request may be cut at a time
@@ -71,6 +75,10 @@ export class OllamaCompletionProvider implements CompletionProvider {
       if (timing) timing.contextReady = performance.now();
       signal.throwIfAborted();
       const loaded = detailed.filter((m) => m.running && (!m.capabilities?.length || m.capabilities.includes("completion")));
+      if (!explicit) {
+        const missing = missingRoleModel(loaded, document.language, this.options.role, this.options.preferredProse);
+        if (missing) throw new Error(`role_not_loaded:${missing}`);
+      }
       const model = pickCompletionModel(loaded, completionModelOrder(document.language, this.options.preferred, this.options.preferredProse));
       if (!model) throw new Error("not_running");
       if (timing) timing.model = model.name;

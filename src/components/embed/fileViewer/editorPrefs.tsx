@@ -52,6 +52,8 @@ export function useViewerPref(type: InternalViewer) {
 export interface TabAiPrefs {
   ac: {
     enabled: boolean; preferred?: string; preferredProse?: string; mode: AutocompleteMode;
+    /** The `autocomplete` role itself (`preferred` folds the default model in). */
+    role?: string;
     /** Unset: the provider's default ({@link effectiveAcTrigger}). */
     trigger?: AutocompleteTrigger;
   };
@@ -180,8 +182,8 @@ export function useTabAiPrefs(tabKey: string | undefined, type: InternalViewer):
   // its idle timer depend on it, so a fresh object restarted the debounce on
   // every parent re-render.
   const ac = useMemo(
-    () => ({ enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, mode, trigger }),
-    [autocomplete, acPreferred, acProseRole, mode, trigger],
+    () => ({ enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, role: acRole, mode, trigger }),
+    [autocomplete, acPreferred, acProseRole, acRole, mode, trigger],
   );
 
   return {

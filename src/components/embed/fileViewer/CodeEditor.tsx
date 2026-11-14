@@ -2,7 +2,9 @@ import { isTabKey } from "../../../lib/shortcuts/keyNames";
 import { lineStarts, indexedLine } from "../lineIndex";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CompletionCache, caretAtLineEnd, completionLineLength, completionWindow, editKind, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
+import { loadOllamaModel } from "../../../lib/agents/localDrivers";
+import { UntestedTag } from "../../common/UntestedTag";
+import { CompletionCache, caretAtLineEnd, completionLineLength, completionModels, completionWindow, editKind, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
 import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
@@ -290,7 +292,11 @@ export function CodeEditor({
    *  `preferred` is the user's active local model (🧠 menu); the completion runs
    *  against whichever model is *currently loaded* in Ollama memory at trigger
    *  time, preferring `preferred` when it is among the loaded set. */
-  autocomplete?: { enabled: boolean; preferred?: string; preferredProse?: string; mode?: AutocompleteMode; trigger?: AutocompleteTrigger };
+  autocomplete?: {
+    enabled: boolean; preferred?: string; preferredProse?: string; mode?: AutocompleteMode; trigger?: AutocompleteTrigger;
+    /** The `autocomplete` role itself; see `missingRoleModel`. */
+    role?: string;
+  };
   /** Opt-in dictionary (Hunspell) spell check. When enabled the draft is
    *  checked by the backend's loaded dictionary after a short idle; `language`
    *  is the dictionary code (unset → the backend's default). Issues are
@@ -433,6 +439,9 @@ export function CodeEditor({
   // fails silently and reads as broken. A trailing "…" marks a transient
   // in-flight message; final messages auto-dismiss (see the effect below).
   const [acStatus, setAcStatus] = useState<string | null>(null);
+  // The role model an automatic request found unloaded: the status pill says
+  // so with a Load button instead of quietly using another resident model.
+  const [acRoleMissing, setAcRoleMissing] = useState<string | null>(null);
   const acAbort = useRef<AbortController | null>(null);
   const acDocumentVersion = useRef(0);
   useLayoutEffect(() => { acDocumentVersion.current++; }, [draft, path]);
@@ -1780,19 +1789,21 @@ export function CodeEditor({
     acAbort.current = null;
     setSuggestion(null);
     setAcStatus(null);
+    setAcRoleMissing(null);
   }, [acOffers]);
 
   // Cancel on hiding, disabling, switching document/context/default mode, and unmount.
   useEffect(() => {
     dismissSuggestion();
     return dismissSuggestion;
-  }, [acVisible, autocomplete?.enabled, path, scope, autocomplete?.preferred, autocomplete?.preferredProse, autocomplete?.mode, acEndpoint, contextFiles, acCopilot, dismissSuggestion]);
+  }, [acVisible, autocomplete?.enabled, path, scope, autocomplete?.preferred, autocomplete?.preferredProse, autocomplete?.role, autocomplete?.mode, acEndpoint, contextFiles, acCopilot, dismissSuggestion]);
 
   // External changes (reload / undo) bypass edit(). Invalidate their generation.
   useEffect(() => {
     acAbort.current?.abort();
     acAbort.current = null;
     setAcStatus(null);
+    setAcRoleMissing(null);
     acCandidates.current = [];
     if (draft !== lastEditRef.current) {
       acLastEdit.current = "external";
@@ -1825,6 +1836,7 @@ export function CodeEditor({
     const ctl = new AbortController();
     acAbort.current = ctl;
     setSuggestion(null);
+    setAcRoleMissing(null);
     setAcStatus(acCopilot ? t("fileViewer.copilotStatus") : t("fileViewer.autocompleteStatus", { mode: acModeLabel(mode, t) }));
     const publish = (candidates: CompletionCandidate[]) => {
       if (ctl.signal.aborted || acDocumentVersion.current !== version || draftRef.current !== snapshot ||
@@ -1867,7 +1879,7 @@ export function CodeEditor({
         tabSize: indentUnit.width || 4, insertSpaces: !indentUnit.text.startsWith("\t"),
       }) : new OllamaCompletionProvider({
         endpoint: acEndpoint, scope: scope ?? undefined, preferred: autocomplete.preferred,
-        preferredProse: autocomplete.preferredProse, mode, candidate, context,
+        preferredProse: autocomplete.preferredProse, role: autocomplete.role, mode, candidate, context,
         trigger: auto ? "auto" : "manual",
         fileName: (acProjectDir && relativePathWithin(acProjectDir, path)) || undefined,
         referencesDropped: (model) => acDropsReferences.current.has(model),
@@ -1894,6 +1906,12 @@ export function CodeEditor({
         return;
       }
       countRequest("error");
+      const missing = /role_not_loaded:(.+)$/.exec(reason)?.[1];
+      if (missing) {
+        setAcStatus(null);
+        setAcRoleMissing(missing);
+        return;
+      }
       // Sign-in and setup problems would otherwise be invisible with automatic
       // suggestions on, so those two are shown even for an automatic request.
       const setup = reason.includes("copilot_not_signed_in") ? "fileViewer.copilotNotSignedIn"
@@ -1906,6 +1924,20 @@ export function CodeEditor({
       if (acAbort.current === ctl) acAbort.current = null;
     }
   }, [autocomplete, lang, acMode, contextFiles, acVisible, acEndpoint, path, scope, acProjectDir, texCompletions, acOffers, t, acCopilot, acEditorId, indentUnit]);
+
+  // Load the role model the pill named, then ask again in its place.
+  const loadRoleModel = useCallback(async (model: string) => {
+    setAcRoleMissing(null);
+    setAcStatus(t("fileViewer.autocompleteLoadingModel", { model }));
+    try {
+      await loadOllamaModel(model);
+      completionModels.clear();
+      setAcStatus(null);
+      void requestCompletion({ auto: true });
+    } catch {
+      setAcStatus(t("fileViewer.autocompleteLoadFailed", { model }));
+    }
+  }, [t, requestCompletion]);
 
   // #45 automatic suggestions: when the per-type toggle is on, request a
   // completion a short while after the user stops typing. Re-runs on each draft
@@ -2747,7 +2779,29 @@ export function CodeEditor({
       )}
       {suggestion && !acStatus && (
         <div className="file-viewer-ac-status" role="status">
-          {acCopilot ? t("fileViewer.copilotControls", AC_KEY_LABELS) : t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 })}
+          {acCopilot ? t("fileViewer.copilotControls", AC_KEY_LABELS) : suggestion.candidate?.model
+            // The model that answered, first: with no role set it may be any
+            // resident model, and the user should see which one.
+            ? t("fileViewer.autocompleteFrom", {
+                model: suggestion.candidate.model,
+                controls: t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 }),
+              })
+            : t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 })}
+        </div>
+      )}
+      {acRoleMissing && !acStatus && !suggestion && (
+        <div className="file-viewer-ac-status has-action" role="status">
+          {t("fileViewer.autocompleteRoleNotLoaded", { model: acRoleMissing })}
+          <button
+            type="button"
+            className="settings-btn sm"
+            // Keep the caret in the editor: a blur would dismiss this pill.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void loadRoleModel(acRoleMissing)}
+          >
+            {t("fileViewer.autocompleteLoadModel")}
+          </button>
+          <UntestedTag id="fileViewer.autocompleteRoleNotLoaded" />
         </div>
       )}
       {acStatus && (

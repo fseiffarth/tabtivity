@@ -18,6 +18,7 @@ import {
   gpuTotals,
 } from "../../lib/gpu";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { RECOMMENDED_AUTOCOMPLETE_MODEL, autocompleteModelAdvice } from "../../lib/viewers/completion/autocomplete";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
 import { DEFAULT_COMPACT_AGENT_IDS } from "../../lib/tabs/newTabItems";
@@ -224,7 +225,50 @@ function CapabilityChips({
       {hasCapability(m, "thinking") && (
         <ModelChip label={t("localModel.thinkingChip")} title={t("localModel.thinkingTitle", { name: m.name })} />
       )}
+      {/* Fill-in-the-middle: the fast autocomplete path (the editor sends the
+          text after the caret as Ollama's `suffix`). */}
+      {hasCapability(m, "insert") && (
+        <>
+          <ModelChip label={t("localModel.insertChip")} title={t("localModel.insertTitle", { name: m.name })} />
+          <UntestedTag id="localModel.insertChip" />
+        </>
+      )}
     </>
+  );
+}
+
+/**
+ * What the autocomplete role is missing, as one banner beside the others: its
+ * model cannot fill in the middle, or no model can and none is chosen. Offers
+ * the recommended small FIM model in one click — a download into the
+ * autocomplete role, or just the role when it is already installed. Nothing is
+ * pulled without that click.
+ */
+function AutocompleteModelNotice({ hub, t }: { hub: ModelsHub; t: TFn }) {
+  const advice = autocompleteModelAdvice(hub.models, hub.roles.autocomplete);
+  if (!advice) return null;
+  const model = RECOMMENDED_AUTOCOMPLETE_MODEL;
+  const installed = hub.models.some((m) => m.name === model);
+  const downloading = hub.downloads[model] !== undefined;
+  return (
+    <div className="local-model-igpu-notice">
+      <div className="local-model-igpu-text">
+        {advice.kind === "noInsert"
+          ? t("localModel.autocompleteNoInsert", { model: advice.model })
+          : t("localModel.autocompleteNoFim")}{" "}
+        <UntestedTag id="localModel.autocompleteAdvice" />
+      </div>
+      <button
+        type="button"
+        className="settings-btn sm"
+        disabled={downloading}
+        onClick={() => (installed ? hub.assignRole("autocomplete", model) : hub.pullIntoRole(model, "autocomplete"))}
+      >
+        {downloading
+          ? t("localModel.autocompleteDownloading", { model })
+          : t(installed ? "localModel.autocompleteUse" : "localModel.autocompleteGet", { model })}
+      </button>
+    </div>
   );
 }
 
@@ -1131,6 +1175,7 @@ export function LocalModelsSection({
         <div className="lm-banners">
           {notices}
           {showIgpu && igpuNote}
+          {installed && <AutocompleteModelNotice hub={hub} t={t} />}
           {contextShort.length > 0 && (
             <div className="local-model-igpu-notice">
               <div className="local-model-igpu-text">

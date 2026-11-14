@@ -417,6 +417,22 @@ export function useModelsHub(active: boolean) {
     else next[role] = model;
     void updateSettings({ ollama_roles: next });
   };
+  // Set (never toggle) a role, against the settings as they are when it lands:
+  // a pull can take minutes, and other roles may have moved meanwhile.
+  const assignRole = (role: string, model: string) => {
+    const current = useSettingsStore.getState().settings?.ollama_roles ?? {};
+    if (current[role] === model) return;
+    void updateSettings({ ollama_roles: { ...current, [role]: model } });
+  };
+  // One click: download a model (the ordinary `pull_ollama_model`, so it
+  // shows in Downloads), then give it the role once the pull has finished.
+  const pullIntoRole = (model: string, role: string) => {
+    setError(null);
+    invoke("pull_ollama_model", { model })
+      .then(() => fetchModels())
+      .then(() => assignRole(role, model))
+      .catch(() => setError(t("localModel.autocompletePullFailed", { model })));
+  };
   // Local models are in the root console by default (the opposite of agents:
   // a local model reaches nothing beyond this machine), so what is stored is
   // the models switched OFF there.
@@ -501,6 +517,8 @@ export function useModelsHub(active: boolean) {
     deletePausedPull,
     toggleAutoload,
     toggleRole,
+    assignRole,
+    pullIntoRole,
     toggleRootModel,
     modelMcpOn,
     toggleMcpModel,

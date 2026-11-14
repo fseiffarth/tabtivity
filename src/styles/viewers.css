@@ -3927,6 +3927,11 @@ select.file-viewer-run-args-input {
   box-shadow: var(--shadow-2);
   pointer-events: none;
 }
+/* The pill with a button in it (the autocomplete role model is not loaded —
+   Load) has to take the click. */
+.file-viewer-ac-status.has-action {
+  pointer-events: auto;
+}
 
 /* Grammar-check status pill: same look as the autocomplete pill, stacked just
    above it (bottom offset) so the two never overlap when both are visible. */
