@@ -2340,7 +2340,7 @@ export const enSource = {
   "nav.archive.title": "Archived Projects",
   "nav.archive.blurb": "Restore or permanently delete archived projects.",
   "nav.scaffoldRepair.title": "Repair Project Scaffold",
-  "nav.scaffoldRepair.blurb": "Regenerate missing scaffold files.",
+  "nav.scaffoldRepair.blurb": "Regenerate missing default project files.",
   "nav.help.title": "Feature Guide",
   "nav.help.blurb": "Full glossary of {app}'s features.",
   // Settings → Updates: the GitHub-releases check and its install.
@@ -2874,8 +2874,7 @@ export const enSource = {
   "archive.clearArchiveEllipsis": "Clear archive…",
 
   // Settings — scaffold repair panel.
-  "scaffoldRepair.help":
-    "Adds any scaffold file (AGENTS.md, CLAUDE.md, .claude/settings.json, …) or default .gitignore line a project is missing. Existing files are never overwritten, except an agent doc still holding the untouched default stub. Runs on every managed project.",
+  "scaffoldRepair.help": "Adds any default project file (AGENTS.md, README.md) or default .gitignore line a project is missing. Existing files are never overwritten, except AGENTS.md while it still holds an untouched earlier default text. Runs on every managed project.",
   "scaffoldRepair.runNow": "Repair all projects now",
   "scaffoldRepair.running": "Repairing…",
   "scaffoldRepair.upToDate": "Every project's scaffold is already up to date.",
@@ -5166,7 +5165,7 @@ export const enSource = {
   "pill.moveProjectEllipsis": "Move project…",
   "pill.editDescription": "Edit description",
   "pill.categoriesMenuTitle": "Tag this project to color and group it in the cloud and the pill bar",
-  "pill.repairScaffoldTitle": "Fill in any missing scaffold file, default .gitignore pattern, or .claude/settings.json — never overwrites existing content",
+  "pill.repairScaffoldTitle": "Fill in any missing default project file (AGENTS.md, README.md) or default .gitignore pattern — never overwrites existing content",
   "pill.repairScaffold": "Repair scaffold files",
   "pill.extendToRemoteMenuTitle": "Attach a remote SSH host to this local project — files stay put; push them up manually",
   "pill.extendToRemoteEllipsis": "Extend to remote…",
@@ -7527,9 +7526,9 @@ export const enSource = {
   "migrate.step.entry": "Update the project entry",
   "migrate.step.entryHelp": "Normalize this project's registry entry to the current format; the pill's type tags derive from these fields:",
   "migrate.step.createFile": "Add {path}",
-  "migrate.step.createFileHelp": "Create this scaffold file from the current template.",
+  "migrate.step.createFileHelp": "Create this default project file from the current template.",
   "migrate.step.upgradeStub": "Upgrade {path}",
-  "migrate.step.upgradeStubHelp": "This agent doc still holds its untouched legacy stub; rewrite it to the current template (AGENTS.md canonical, the others importing it). Edited docs are never touched.",
+  "migrate.step.upgradeStubHelp": "This AGENTS.md still holds an untouched earlier default text; rewrite it to the current template. An edited AGENTS.md is never touched.",
   "migrate.step.gitignore": "Add default .gitignore patterns",
   "migrate.step.gitignoreHelp": "Append the missing default patterns; existing lines are never removed or reordered:",
   "migrate.step.gitInit": "Initialize a git repository",
@@ -10707,7 +10706,7 @@ export const enSource = {
   "lessons.addProject.newDialogTitle": "Fill in the details",
   "lessons.addProject.newDialogBody": "The New Project dialog asks for a name and an optional description, and lets you pick a Git hosting option (no git, a local-only repo, or push to GitHub/GitLab as private or public). \"Where this project runs\" picks the trust tier — on this machine, inside a Docker container, or inside a virtual machine. Flip the \"Remote (SSH) project\" toggle to host it on another machine instead.",
   "lessons.addProject.scaffoldCreateTitle": "What you get",
-  "lessons.addProject.scaffoldCreateBody": "Hit Create and {app} makes the project folder under your projects directory (~/{slug}/projects by default — the Location picker changes it), scaffolds AGENTS.md, CLAUDE.md, .gitignore, README and friends, and initializes the repo. Tick \"Skip scaffolding\" if you'd rather start empty.",
+  "lessons.addProject.scaffoldCreateBody": "Hit Create and {app} makes the project folder under your projects directory (~/{slug}/projects by default — the Location picker changes it), writes AGENTS.md, README.md and a .gitignore, and initializes the repo. More docs (PROJECT.md, TODO.md, …) are one click away in the file tree's Project docs group. Tick \"Skip scaffolding\" if you'd rather start empty.",
   "lessons.addProject.scaffoldCreateTask": "Create the project, and watch its pill appear in the strip.",
   "lessons.addProject.scaffoldCreateTaskHint": "A name is the only field you have to fill in — Create does the rest. Not in the mood to make one? Next reads on without it.",
   "lessons.addProject.publishRemoteTitle": "Advanced: connect a remote",

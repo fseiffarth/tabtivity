@@ -62,10 +62,11 @@ const GIT_INSTALL_CMD = IS_HOST_WINDOWS
  *  on the host so there is something to push to. */
 export type ImportSource = "folder" | "git" | "fork";
 
-/** The agent docs scaffolded as pointers to AGENTS.md rather than as
- *  instructions of their own. Named in the scaffold preview because the fill
- *  dropdown otherwise invites writing guidance into a file that should carry
- *  none — AGENTS.md is where it belongs. */
+/** The agent docs that are pointers to AGENTS.md rather than instructions of
+ *  their own. New projects no longer get them (the preview lists only the
+ *  default docs), but an imported folder may already hold some, and the fill
+ *  dropdown would otherwise invite writing guidance into a file that should
+ *  carry none — AGENTS.md is where it belongs. */
 const AGENT_POINTER_DOCS = new Set(["CLAUDE.md", "GEMINI.md"]);
 
 /** The already-registered project a new one would collide with, as the backend's
