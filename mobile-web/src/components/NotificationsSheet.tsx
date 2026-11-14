@@ -14,6 +14,7 @@ import {
   type PushPrefs,
 } from "../push";
 import { useBackLayer } from "../backStack";
+import { isUntested } from "../../../src/lib/untested";
 
 /** A summary line for the Home row: what this phone is told about. */
 export function pushSummary(host: HostPushState | null, t: ReturnType<typeof useT>): string {
@@ -85,6 +86,7 @@ export function NotificationsSheet({ onClose, onChange }: { onClose: () => void;
   };
 
   const note = error ? { text: error, error: true }
+    : support === "framed" ? { text: t("mobile.shell.pushFramed") }
     : support === "needs-install" ? { text: t("mobile.push.needsInstall") }
       : support === "unsupported" ? { text: t("mobile.push.unsupported") }
         : notificationPermission() === "denied" ? { text: t("mobile.push.blocked"), error: true }
@@ -100,6 +102,12 @@ export function NotificationsSheet({ onClose, onChange }: { onClose: () => void;
         <span className="sheet-close" aria-hidden="true" />
       </header>
       <p className={note.error ? "sheet-note error" : "sheet-note"} role={note.error ? "alert" : undefined}>{note.text}</p>
+      {/* Out of the app: a new top-level page of this desktop, where the
+          permission can be asked (a Custom Tab on Android). */}
+      {support === "framed" && <p className="sheet-note">
+        <a className="splash-link" href={`${window.location.origin}/`} target="_blank" rel="noopener noreferrer">{t("mobile.shell.pushOpen", { host: window.location.host })}</a>
+        {isUntested("mobile.shell.framedDesktop") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}
+      </p>}
       {ready ? <>
         <Group heading={t("mobile.push.calendar")} busy={busy} onPick={(key) => apply({ calendar: key === "on" })} choices={[
           { key: "on", label: t("mobile.push.on"), current: prefs.calendar },

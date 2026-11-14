@@ -1,6 +1,6 @@
 # One phone, several desktops — plan
 
-Status: planned 2026-11-14; Phases 0–2 built, never live. TODO: `todo/group-h-crossplatform.md`
+Status: planned 2026-11-14; Phases 0–2 and a minimal Phase 3 built, never live. TODO: `todo/group-h-crossplatform.md`
 31cs (this plan), 31ct (Phase 0's cookie bug). One installed phone app (the
 "home": the desktop it was installed from) switches between several running
 Tabtivity desktops, one on screen at a time. Access model this extends:
@@ -107,7 +107,24 @@ list. i18n `mobile.linkedDesktops*` (English holds every key), `UntestedTag`
 rows in `src/lib/untested.ts`. Type in `src/types/index.ts` beside
 `browser_client`.
 
-## Phase 3 — phone (`mobile-web/src`)
+## Phase 3 — phone (`mobile-web/src`) — minimal shell done 2026-11-14, never live
+
+As built (minimal): `shell/DesktopShell.tsx` (wraps `App`, owns the picker, an
+`OptionSheet`), `shell/DesktopFrame.tsx` (`DesktopStage`: one hand-made iframe,
+`allow` and `src` set before attach; the 8 s not-linked/not-answering panel,
+its `/healthz` probe `no-cors` so an unlinked desktop is told from a down one;
+the switch button), `shell/shellContext.ts`, `shell/linkedDesktops.ts` (cached
+list + selection + names, every origin re-checked with `lib/linkedDesktops.ts`
+and this page's own tailnet), `shell/frameBridge.ts` (`ready`, `openPicker`;
+frame trusts `ancestorOrigins[0]`, else the referrer's origin, failing closed).
+`App`'s gate sits after its lock, before its connect step; while a frame is on
+screen the home's idle clock counts visible time as use (touches in the frame
+never reach it), its Back layer and steering are off, and a failed connect does
+not reload the page. Pairing in a frame suggests "‹phone› via ‹home›";
+`pushSupport()` is `framed` there. UntestedTag ids `mobile.shell.switcher`,
+`mobile.shell.framedDesktop`. Not yet: lamps, needs-you badges, `?desktop=`,
+the steering key / `pickerKey`, colour and order, `open` shell → frame. Handoff:
+`docs/phone_multi_desktop_handoff.md`.
 
 - New `shell/`:
   - `DesktopShell.tsx` wraps `App`: home renders natively; another desktop is

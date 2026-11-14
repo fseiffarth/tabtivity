@@ -2531,3 +2531,15 @@ ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) 
      sheet, and the files library or viewer Favorites opens. */
   .tabbed.split:has(.sheet-backdrop,.files-library,.outbox-viewer) > .mobile-tabbar { visibility:hidden; }
 }
+/* The desktop switcher (`shell/`). A framed desktop fills the page; the shell
+   pads the safe areas, since `env()` reads 0 inside a frame. */
+.shell-stage { position:fixed; inset:0; display:flex; flex-direction:column; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background:#000; }
+.shell-frame-holder { flex:1 1 auto; min-height:0; display:flex; }
+.shell-frame { flex:1 1 auto; width:100%; height:100%; border:0; display:block; background:#000; }
+.shell-frame-panel { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-4); padding:max(24px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom)); background:#0b0d13; color:#e7e9f2; text-align:center; }
+.shell-frame-panel > p { max-width:34ch; margin:0; line-height:1.5; }
+.shell-frame-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:var(--sp-3); }
+.shell-stage-tag { position:absolute; left:8px; bottom:max(8px,env(safe-area-inset-bottom)); pointer-events:none; }
+/* Over a screen with no header (splash, pairing, the lock sheet): above the
+   lock sheet's backdrop (12). */
+.shell-switch-floating { position:fixed; z-index:13; top:max(10px,env(safe-area-inset-top)); right:max(10px,env(safe-area-inset-right)); border-radius:var(--r-md); }

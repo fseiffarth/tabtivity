@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import type { IconProps } from "../../src/components/common/icons/Icon";
 import { AppMark } from "./AppMark";
@@ -44,6 +44,10 @@ import { getSteering, requestFind, type Place } from "./steering/steeringState";
 import { focusRow, rowById } from "./steering/steeringDom";
 import { usePhoneSteering, type SteeringBase } from "./steering/usePhoneSteering";
 import { BRAND, LEGACY_NAMES, NAMES, storageDashKey } from "../../src/lib/brand";
+import { useDesktopShell } from "./shell/shellContext";
+import { DesktopStage, DesktopSwitchButton } from "./shell/DesktopFrame";
+import { isFramed, postToShell } from "./shell/frameBridge";
+import { linkedSnapshot, noteHomeStatus } from "./shell/linkedDesktops";
 
 /**
  * The four top-level sections. To-do, Calendar and Mail used to be pushed on
@@ -248,6 +252,31 @@ function TabBar({ active, open, hidden }: { active: Tab; open: (tab: Tab) => voi
 export function App() {
   const t = useT();
   const [auth, setAuth] = useState<"loading" | "paired" | "unpaired" | "setup" | "locked" | "unavailable">("loading");
+  /** Whether this page's own lock is passed (an unlock, a pairing that set
+   * the lock up, or a grace): from `resume()` until the next lock or open.
+   * The desktop shell's gate stands behind it, ahead of the connect step. */
+  const [pastLock, setPastLock] = useState(false);
+  const shell = useDesktopShell();
+  /** This page is another desktop's frame (`shell/frameBridge.ts`). */
+  const [framedPage] = useState(isFramed);
+  /** This desktop's name (`status.host`), for a frame's `ready`. */
+  const [hostName, setHostName] = useState<string | null>(() => linkedSnapshot().homeName ?? null);
+  const shellUnlocked = pastLock && (auth === "loading" || auth === "unavailable" || auth === "paired");
+  /** A linked desktop is on screen instead of this one (`DesktopStage`). */
+  const framedShown = shell.selected !== null && shellUnlocked;
+  const framedShownRef = useRef(framedShown);
+  useEffect(() => {
+    framedShownRef.current = framedShown;
+  }, [framedShown]);
+  // Before paint, so a lock never leaves the shell's picker up for a frame.
+  useLayoutEffect(() => {
+    shell.setUnlocked(shellUnlocked);
+  }, [shell, shellUnlocked]);
+  // Inside a frame: tell the shell this page is here, its name, and whether
+  // it reached its desktop; again whenever that changes.
+  useEffect(() => {
+    if (framedPage) postToShell({ type: "ready", name: hostName, desktopAvailable: auth === "paired" });
+  }, [framedPage, auth, hostName]);
   const [pairNeedsLock, setPairNeedsLock] = useState(false);
   const [, refreshTags] = useState(0);
   const [tab, setTab] = useState<Tab>("projects");
@@ -284,6 +313,13 @@ export function App() {
   /** When the reader last touched the glass — the idle lock's clock, and the
    * silent re-login's test of whether anyone is still here. */
   const lastActive = useRef(Date.now());
+  /** Touches inside a framed desktop never reach this document, so while one
+   * is on screen and the page is visible, someone counts as here: the framed
+   * desktop keeps its own idle lock, and this one still locks a page left
+   * hidden past the idle window. */
+  const noteFramedUse = useCallback(() => {
+    if (framedShownRef.current && document.visibilityState === "visible") lastActive.current = Date.now();
+  }, []);
   /** When the reader last passed the local lock; 0 once the app locks. */
   const unlockedAt = useRef(0);
   /** Whether this page's unlock still holds: passed, and someone here within
@@ -331,7 +367,8 @@ export function App() {
     if (reason !== "storage_blocked") keepUnlock();
     // A path the phone wedged gets one fresh page before the splash
     // (`takeConnectReload`), with this page's trace carried across.
-    if (suspectsTunnel(reason) && takeConnectReload()) {
+    // Not while another desktop is framed: a reload would drop it too.
+    if (suspectsTunnel(reason) && !framedShownRef.current && takeConnectReload()) {
       carryConnectTrace();
       location.reload();
       return;
@@ -341,6 +378,7 @@ export function App() {
   }, [keepUnlock]);
 
   const resume = useCallback(() => {
+    setPastLock(true);
     setAuth("loading");
     void resumeAuth().then(async (result) => {
       if (result.kind === "paired") {
@@ -371,6 +409,7 @@ export function App() {
   }, [reset, goTo, fail]);
 
   const begin = useCallback(() => {
+    setPastLock(false);
     setAuth("loading");
     // A cold open had no warm-up at all — only a return to the front sent
     // one — so the sign-in after the fingerprint was the first request on
@@ -430,8 +469,11 @@ export function App() {
   useEffect(() => {
     if (auth !== "paired") return;
     const refresh = () => {
-      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections }) => {
+      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops }) => {
         noteDesktopTheme(color_scheme);
+        // The switcher's list, kept for a home that is down (`linkedDesktops.ts`).
+        noteHomeStatus({ host, linked_desktops });
+        if (typeof host === "string" && host) setHostName(host);
         const hidden = hideableSections(hidden_sections);
         setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
         try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
@@ -479,9 +521,11 @@ export function App() {
     // lock, and a tunnel waking up cost the reader an unlock.
     setUnauthorizedHandler(() => {
       if (authRef.current !== "paired") return Promise.resolve(false);
+      noteFramedUse();
       if (Date.now() - lastActive.current >= LOCK_AFTER_IDLE_MS) {
         reset();
         unlockedAt.current = 0;
+        setPastLock(false);
         setAuth("locked");
         return Promise.resolve(false);
       }
@@ -503,7 +547,7 @@ export function App() {
       return renewing.current;
     });
     return () => setUnauthorizedHandler(undefined);
-  }, [reset, fail]);
+  }, [reset, fail, noteFramedUse]);
 
   useEffect(() => {
     // A project the host no longer knows to this phone is off its list for
@@ -525,6 +569,7 @@ export function App() {
       // the time the user unlocked.
       reset();
       unlockedAt.current = 0;
+      setPastLock(false);
       setAuth("locked");
       void logoutAuth().catch(() => undefined);
     };
@@ -545,6 +590,7 @@ export function App() {
         // Re-armed against the wall clock rather than trusted to have slept the
         // right amount: a backgrounded page is throttled and then frozen
         // outright, so a fired timer proves nothing about elapsed time.
+        noteFramedUse();
         if (Date.now() - lastActive.current >= LOCK_AFTER_IDLE_MS) lock();
         else arm();
       }, Math.max(1_000, LOCK_AFTER_IDLE_MS - (Date.now() - lastActive.current)));
@@ -566,6 +612,8 @@ export function App() {
     };
     const onVisibility = () => {
       if (document.visibilityState !== "visible") {
+        // Visible up to now: a framed desktop was in use until this moment.
+        if (framedShownRef.current) lastActive.current = Date.now();
         leaveConnecting();
         return;
       }
@@ -581,6 +629,7 @@ export function App() {
     for (const event of ACTIVITY_EVENTS) document.addEventListener(event, noteActivity, options);
     document.addEventListener("visibilitychange", onVisibility);
     const onPageHide = () => {
+      noteFramedUse();
       if (authRef.current === "paired" && Date.now() - lastActive.current < LOCK_AFTER_IDLE_MS) noteUnlockedLeave();
       leaveConnecting();
     };
@@ -596,7 +645,7 @@ export function App() {
     // never touches this document — so after it `lastActive` still dated from
     // before the lock, no timer was armed, and the next glance away and back
     // (`onVisibility`) locked the app again seconds after it was unlocked.
-  }, [reset, auth, keepUnlock]);
+  }, [reset, auth, keepUnlock, noteFramedUse]);
 
   /** The project to the list. Beside the list (split) the project's pane is
    * emptied and, while keyboard steering is on, the cursor goes to the row of
@@ -621,7 +670,7 @@ export function App() {
     else if (tabby) setTabby(null);
     else if (tab !== "projects") { setTodoCard(undefined); setTab("projects"); }
     else leaveProject();
-  }, auth === "paired" && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
+  }, auth === "paired" && !framedShown && (terminal !== null || tabby !== null || tab !== "projects" || projectView.kind === "project"));
   const openTerminal = (project: string, next: TabRow, pickModel = false, signIn = false, subagent?: SubagentStep, markupBack?: MarkupBack) => {
     // Only from a list on screen: a switch between tabs inside a terminal (or a
     // Tabby chat opening one) has the terminal's offset, not the list's.
@@ -655,7 +704,7 @@ export function App() {
     ? { kind: "terminal", project: terminal.project, tab: terminal.tab }
     : { kind: "list", section: tab, projectId: tab === "projects" && projectView.kind === "project" ? projectView.id : null };
   usePhoneSteering({
-    enabled: auth === "paired",
+    enabled: auth === "paired" && !framedShown,
     base: steeringBase,
     sectionLabel: steeringBase !== "section" ? null : tabby ? "assistant.title" : TABS.find((entry) => entry.id === tab)?.label ?? null,
     place: steeringPlace,
@@ -700,10 +749,16 @@ export function App() {
     if (unavailable.reason !== "storage_blocked" && unlockHolds()) resume();
     else begin();
   };
-  if (auth === "loading") return <Splash message={t("mobile.app.connecting")} progress><SlowConnectHint /></Splash>;
+  // The shell's gate: behind this page's own lock, ahead of its connect step,
+  // so another desktop opens with this one down or still connecting.
+  if (framedShown && shell.selected !== null) return <DesktopStage origin={shell.selected} />;
+  /** A way to another desktop from a screen with no header: past this page's
+   * lock in the shell, on every screen inside a frame. */
+  const floatingSwitch = framedPage || shellUnlocked ? <DesktopSwitchButton floating /> : null;
+  if (auth === "loading") return <><Splash message={t("mobile.app.connecting")} progress><SlowConnectHint /></Splash>{floatingSwitch}</>;
   if (auth === "unavailable") {
     const { title, hint } = describeUnavailable(unavailable.reason);
-    return (
+    return (<>
       <Splash message={title} tone="error">
         <p className="splash-hint">{hint}</p>
         {suspectsTunnel(unavailable.reason) && <TunnelSteps />}
@@ -716,14 +771,16 @@ export function App() {
         {isUntested("mobile.link.keepUnlock") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
         {suspectsTunnel(unavailable.reason) && isUntested("mobile.link.connectReload") && <p className="splash-hint muted"><span className="untested">{t("mobile.newTab.untested")}</span></p>}
       </Splash>
-    );
+      {floatingSwitch}
+    </>);
   }
   // Pairing that sets the lock up on the way is this page's unlock.
-  if (auth === "unpaired") return <Pair setupLock={pairNeedsLock} onDone={pairNeedsLock ? () => { unlockedAt.current = Date.now(); resume(); } : begin} />;
-  if (auth === "setup") return <LocalUnlock setup onUnlocked={() => setAuth("locked")} />;
+  if (auth === "unpaired") return <><Pair setupLock={pairNeedsLock} onDone={pairNeedsLock ? () => { unlockedAt.current = Date.now(); resume(); } : begin} />{floatingSwitch}</>;
+  if (auth === "setup") return <><LocalUnlock setup onUnlocked={() => setAuth("locked")} />{floatingSwitch}</>;
   if (auth === "locked") return <>
     <LockedHomeShell />
     <LocalUnlock setup={false} onUnlocked={() => { unlockedAt.current = Date.now(); traceConnect("unlocked"); resume(); }} />
+    {floatingSwitch}
   </>;
   // A terminal is the one full-bleed screen: it owns every pixel it can get,
   // and the tab bar would sit on the keyboard toolbar besides.

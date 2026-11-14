@@ -425,8 +425,10 @@ export interface MobileMailAttachment { filename: string; mime: string; size: nu
 /** The host reads these display preferences from desktop settings on each
  * probe: the untested pills, the desktop's theme for a phone that follows it,
  * the sections the desktop keeps this phone out of (absent from an older
- * host: none) and the desktop's AI switch (`ai_off`, absent: on). */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean }> {
+ * host: none) and the desktop's AI switch (`ai_off`, absent: on); the
+ * desktop's name and the desktops it is linked with, for the switcher
+ * (`shell/linkedDesktops.ts` checks every entry; absent from an older host). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean; host?: string; linked_desktops?: unknown }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */

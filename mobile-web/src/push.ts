@@ -1,5 +1,6 @@
 import { api } from "./api";
 import { appleTouchDevice } from "./platform";
+import { isFramed } from "./shell/frameBridge";
 
 /**
  * Push notifications on this phone: calendar reminders, and agent tabs that
@@ -39,10 +40,14 @@ export interface HostPushState extends PushPrefs {
 /**
  * Whether this browser can receive push at all. iOS offers it only to an app
  * added to the Home Screen, and a plain Safari tab has no `PushManager`.
+ * `framed`: this desktop's page runs inside another desktop's app
+ * (`shell/`), where a cross-origin frame may not ask for the permission —
+ * this desktop's own page, opened in the browser, can.
  */
-export type PushSupport = "supported" | "needs-install" | "unsupported";
+export type PushSupport = "supported" | "needs-install" | "unsupported" | "framed";
 
 export function pushSupport(): PushSupport {
+  if (isFramed()) return "framed";
   if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("Notification" in window)) {
     return appleTouchDevice() ? "needs-install" : "unsupported";
   }
