@@ -640,6 +640,10 @@ export interface Settings {
   autocomplete_delay_ms?: { ollama?: number; copilot?: number };
   /** Experimental entry point; this alone never authorizes cloud context. */
   copilot_completion?: boolean;
+  /** Keep the Copilot language server's GitHub token in the OS keychain (one
+   *  entry per app account) so a restart signs in by itself. Off by default;
+   *  sign-out or switching it off deletes the entry. */
+  copilot_stay_signed_in?: boolean;
   /** Tabtivity-owned consent, bound to both project id and canonical directory. */
   completion_project_policies?: Record<string, {
     directory: string;

@@ -18,6 +18,9 @@ interface CopilotAccount {
   status?: { kind: string; message: string | null };
   account?: { status?: string | null; user?: string | null } | null;
   messages?: { id: number; message: string; actions: string[] }[];
+  /** A token for this app account is in the keychain. Absent on a backend
+   *  without "stay signed in", which reads as false. */
+  remembered?: boolean;
 }
 
 /** The newest lines of the project's language-server log (`copilot_diagnostics`,
@@ -245,12 +248,26 @@ export function CopilotCompletionCard() {
         </div>
       ))}
       {error && <p className="settings-help">{t("settings.copilotError", { error })}</p>}
+      {setup?.installed && (
+        <>
+          <label className="settings-toggle-card-row">
+            <span>{t("settings.copilotStaySignedIn")} <UntestedTag id="settings.copilotStaySignedIn" /></span>
+            <Toggle
+              checked={settings?.copilot_stay_signed_in === true}
+              onChange={(e) => void updateSettings({ copilot_stay_signed_in: e.target.checked })}
+            />
+          </label>
+          <p className="settings-help">{t("settings.copilotStaySignedInHelp")}</p>
+        </>
+      )}
       {projectId && provider === "copilot" && consented && (
         <SettingsAdvanced title={<>{t("settings.copilotDetails")} <UntestedTag id="settings.copilotDetails" /></>}>
           <CopilotDiagnostics key={projectId} projectId={projectId} />
         </SettingsAdvanced>
       )}
-      <p className="settings-help">{t("settings.copilotSessionOnly")}</p>
+      {account?.remembered === true
+        ? <p className="settings-help">{t("settings.copilotRemembered")}</p>
+        : <p className="settings-help">{t("settings.copilotSessionOnly")}</p>}
     </SettingsCard>
   );
 }

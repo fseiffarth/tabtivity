@@ -26,7 +26,7 @@ vi.mock("../../stores/projects", () => {
   };
 });
 
-type Account = { running: boolean; status?: { kind: string; message: string | null }; account?: { status?: string; user?: string } };
+type Account = { running: boolean; remembered?: boolean; status?: { kind: string; message: string | null }; account?: { status?: string; user?: string } };
 
 function backend(account: Account, extra: (cmd: string, args: unknown) => unknown = () => undefined) {
   mockInvoke.mockImplementation((cmd: string, args: unknown) => {
@@ -96,6 +96,27 @@ describe("Copilot card account and details", () => {
     lines = ["[info] started", "[warn] retry"];
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh" })); });
     expect(screen.getByText(/\[warn\] retry/)).toBeTruthy();
+  });
+
+  it("stay signed in is off by default and writes the setting", async () => {
+    backend({ running: true, account: { status: "OK", user: "octo" } });
+    await renderCard();
+    const row = screen.getByText("Stay signed in (OS keychain)").closest("label")!;
+    const toggle = row.querySelector("input")!;
+    expect(toggle.checked).toBe(false);
+    await act(async () => { fireEvent.click(toggle); });
+    expect(mockUpdateSettings).toHaveBeenCalledWith({ copilot_stay_signed_in: true });
+    // An old backend sends no `remembered`: the session-only note stays.
+    expect(screen.getByText(/kept in memory only/)).toBeTruthy();
+  });
+
+  it("a remembered sign-in replaces the session-only note", async () => {
+    settings = { ...settings, copilot_stay_signed_in: true };
+    backend({ running: true, remembered: true, account: { status: "OK", user: "octo" } });
+    await renderCard();
+    await waitFor(() => expect(screen.getByText("This sign-in is remembered in the OS keychain.")).toBeTruthy());
+    expect(screen.queryByText(/kept in memory only/)).toBeNull();
+    expect((screen.getByText("Stay signed in (OS keychain)").closest("label")!.querySelector("input")!).checked).toBe(true);
   });
 
   it("Details tolerates a backend without the command", async () => {
