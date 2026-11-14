@@ -9814,6 +9814,8 @@ export const enSource = {
   "fileViewer.autocompleteTriggerTitle": "When to ask: after a typing pause at the end of a line, or only on request",
   "fileViewer.autocompleteTriggerAuto": "Auto",
   "fileViewer.autocompleteTriggerManual": "On request",
+  "fileViewer.autocompleteDelayTitle": "How long a typing pause lasts before it asks — for every tab this provider serves",
+  "fileViewer.autocompleteDelayOption": "{ms} ms",
   "fileViewer.autocompleteNoteNoModel": "No local model loaded — load one from the Models & agents menu.",
   "fileViewer.copilotNoteRemote": "Copilot doesn't serve remote projects.",
   "fileViewer.copilotNoteConsent": "Copilot isn't allowed for this project — Settings → Experimental.",

@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
+import { acDelayMs } from "../../components/embed/fileViewer/editorPrefs";
 import { caretAtLineEnd, completionModelOrder, completionWindow, editKind, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
 
 const { mockInvoke, mockListen, mockBump } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockListen: vi.fn(), mockBump: vi.fn() }));
@@ -49,9 +50,13 @@ const SOURCE = "def foo():\n    ";
 // The settings the mocked store returns — toggled per test via this ref.
 let autocompleteOn = false;
 let copilotOn = false;
+let delays: { ollama?: number; copilot?: number } | undefined;
+const { mockUpdateSettings } = vi.hoisted(() => ({ mockUpdateSettings: vi.fn() }));
 vi.mock("../../stores/settings", () => {
   const state = () => ({
+    updateSettings: mockUpdateSettings,
     settings: {
+      autocomplete_delay_ms: delays,
       autosave: false,
       copilot_completion: copilotOn,
       code_completion_provider: copilotOn ? "copilot" : "ollama",
@@ -555,6 +560,60 @@ describe("autocomplete trigger (spending)", () => {
     el.selectionStart = el.selectionEnd = el.value.length;
     await idle();
     expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(1);
+  });
+
+  it("the automatic timer waits the stored delay", async () => {
+    autocompleteOn = true;
+    delays = { ollama: 100 };
+    try {
+      await renderTextView();
+      const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+      await waitFor(() => expect(el.value).toBe(SOURCE));
+      el.focus();
+      await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "r" } }); });
+      el.selectionStart = el.selectionEnd = SOURCE.length + 1;
+      await act(async () => { await new Promise((r) => setTimeout(r, 350)); });
+      expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(true);
+    } finally { delays = undefined; }
+  });
+
+  it("a stored delay that is not a choice uses the default", async () => {
+    autocompleteOn = true;
+    delays = { ollama: 250 };
+    try {
+      await renderTextView();
+      const el = (await screen.findByRole("textbox")) as HTMLTextAreaElement;
+      await waitFor(() => expect(el.value).toBe(SOURCE));
+      el.focus();
+      await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "r" } }); });
+      el.selectionStart = el.selectionEnd = SOURCE.length + 1;
+      await act(async () => { await new Promise((r) => setTimeout(r, 350)); });
+      expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(false);
+      await idle();
+      expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "complete_text")).toBe(true);
+    } finally { delays = undefined; }
+    expect(acDelayMs({ ollama: 250, copilot: 400 }, false)).toBe(600);
+    expect(acDelayMs({ copilot: 400 }, true)).toBe(400);
+    expect(acDelayMs(undefined, true)).toBe(200);
+  });
+
+  it("the Delay choice shows beside Auto and writes the provider's delay", async () => {
+    autocompleteOn = true;
+    delays = { copilot: 400 };
+    try {
+      await renderTextView();
+      await act(async () => { fireEvent.click(screen.getByText("600 ms")); });
+      await act(async () => { fireEvent.click(screen.getByRole("option", { name: "100 ms" })); });
+      expect(mockUpdateSettings).toHaveBeenCalledWith({ autocomplete_delay_ms: { copilot: 400, ollama: 100 } });
+    } finally { delays = undefined; }
+  });
+
+  it("no Delay choice while the trigger is on request", async () => {
+    autocompleteOn = true;
+    copilotOn = true;
+    await renderTextView();
+    expect(screen.getByText("On request")).toBeTruthy();
+    expect(screen.queryByText("200 ms")).toBeNull();
   });
 
   it("no automatic request after undo", async () => {

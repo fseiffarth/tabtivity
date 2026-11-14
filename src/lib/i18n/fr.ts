@@ -9431,6 +9431,8 @@ export const dict: Dict = {
   "fileViewer.autocompleteTriggerTitle": "Quand demander : après une pause de frappe en fin de ligne, ou seulement sur demande",
   "fileViewer.autocompleteTriggerAuto": "Auto",
   "fileViewer.autocompleteTriggerManual": "Sur demande",
+  "fileViewer.autocompleteDelayTitle": "Durée d'une pause de frappe avant de demander — pour chaque onglet de ce fournisseur",
+  "fileViewer.autocompleteDelayOption": "{ms} ms",
   "fileViewer.autocompleteNoteNoModel": "Aucun modèle local chargé — chargez-en un depuis le menu « Modèles et agents ».",
   "fileViewer.copilotNoteRemote": "Copilot ne sert pas les projets distants.",
   "fileViewer.copilotNoteConsent": "Copilot n'est pas autorisé pour ce projet — Paramètres → Expérimental.",

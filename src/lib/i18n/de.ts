@@ -9435,6 +9435,8 @@ export const dict: Dict = {
   "fileViewer.autocompleteTriggerTitle": "Wann gefragt wird: nach einer Tipppause am Zeilenende oder nur auf Anfrage",
   "fileViewer.autocompleteTriggerAuto": "Auto",
   "fileViewer.autocompleteTriggerManual": "Auf Anfrage",
+  "fileViewer.autocompleteDelayTitle": "Wie lange eine Tipppause dauert, bevor gefragt wird — für jeden Tab dieses Anbieters",
+  "fileViewer.autocompleteDelayOption": "{ms} ms",
   "fileViewer.autocompleteNoteNoModel": "Kein lokales Modell geladen — lade eines über das Menü „Modelle & Agenten“.",
   "fileViewer.copilotNoteRemote": "Copilot bedient keine entfernten Projekte.",
   "fileViewer.copilotNoteConsent": "Copilot ist für dieses Projekt nicht erlaubt — Einstellungen → Experimentell.",

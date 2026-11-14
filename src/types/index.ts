@@ -634,6 +634,10 @@ export interface Settings {
   ollama_roles?: Record<string, string>;
   /** Missing provider retains Ollama; prose keeps its existing Ollama role. */
   code_completion_provider?: "ollama" | "copilot";
+  /** The automatic autocomplete trigger's idle delay per provider, in ms; one
+   *  of 100/200/400/600/1200. Missing or another value: the default (600 for a
+   *  local model, 200 for Copilot). Machine-wide, every tab of that provider. */
+  autocomplete_delay_ms?: { ollama?: number; copilot?: number };
   /** Experimental entry point; this alone never authorizes cloud context. */
   copilot_completion?: boolean;
   /** Tabtivity-owned consent, bound to both project id and canonical directory. */

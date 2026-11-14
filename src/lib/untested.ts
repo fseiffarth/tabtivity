@@ -174,6 +174,7 @@ export const UNTESTED = {
   "deckView.presentationTitle": { area: "embed", what: "DeckView · Presentation" },
   "fileViewer.autocompleteLabel": { area: "embed", what: "FileViewerPane · Autocomplete" },
   "fileViewer.autocompleteProvider": { area: "embed", what: "FileViewerPane · Autocomplete always shown: Local/Copilot picker, Auto/On request trigger, why-silent note" },
+  "fileViewer.autocompleteDelay": { area: "embed", what: "FileViewerPane · Autocomplete · Delay (100–1200 ms) beside Auto, per provider, machine-wide" },
   "fileViewer.spellingAddLanguage": { area: "embed", what: "FileViewerPane · ＋ Language (download a spelling dictionary)" },
   "fileViewer.beamerToggle": { area: "embed", what: "FileViewerPane · Beamer" },
   "fileViewer.compileUnchangedMsg": { area: "embed", what: "FileViewerPane · Nothing changed since the last build — every source on disk still matches the previous ru…" },

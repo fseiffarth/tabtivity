@@ -90,7 +90,7 @@ import {
   textareaMirrorToViewport,
   textareaCaretMirrorOffsets,
 } from "./caretMirror";
-import { nextAcMode, acModeLabel, effectiveAcTrigger } from "./editorPrefs";
+import { nextAcMode, acModeLabel, acDelayMs, effectiveAcTrigger } from "./editorPrefs";
 import { onCtrlWheelFont, useZoomModifierWheel } from "./fontZoom";
 import { type BlameLine, isUncommitted, blameRelDate, authorAbbrev } from "./codeTools";
 import { CloseIcon } from "../../common/icons/Icon";
@@ -122,14 +122,10 @@ export function LinkOpenHint({
   );
 }
 
-// #45 automatic autocomplete: idle time after the last keystroke before a
-// suggestion is requested for the focused editor. Long enough not to fire on
-// every keystroke, short enough to feel responsive.
-const AUTO_AC_DEBOUNCE_MS = 600;
-// Copilot's automatic delay. Its default trigger stays "on request" (each
-// automatic request spends the account's completions); a user who switched a
-// tab to automatic chose speed, and the server answers fast enough for 200 ms.
-const COPILOT_AUTO_AC_DEBOUNCE_MS = 200;
+// #45 automatic autocomplete: the idle time after the last keystroke before a
+// suggestion is requested is the user's choice per provider in the AI menu
+// (`autocomplete_delay_ms`); `acDelayMs` holds the defaults (600 ms local,
+// 200 ms Copilot, whose default trigger stays "on request").
 
 // Dictionary spell check (the Hunspell `spell_check` command): idle time after
 // the last keystroke before the draft is re-checked. A lookup, not a model call.
@@ -1882,14 +1878,15 @@ export function CodeEditor({
   // On request only ("manual", Copilot's default) skips all of this: one
   // Ctrl+Space, one request.
   const acAuto = effectiveAcTrigger(autocomplete?.trigger, acCopilot) === "auto";
+  const acDelay = useSettingsStore((s) => acDelayMs(s.settings?.autocomplete_delay_ms, acCopilot));
   useEffect(() => {
     if (!autocomplete?.enabled || !acAuto || !loaded || !acVisible) return;
     if (suggestion || compl || acLastEdit.current !== "insert") return;
     const id = window.setTimeout(() => {
       if (!acComposing.current) void requestCompletion({ auto: true });
-    }, acCopilot ? COPILOT_AUTO_AC_DEBOUNCE_MS : AUTO_AC_DEBOUNCE_MS);
+    }, acDelay);
     return () => window.clearTimeout(id);
-  }, [autocomplete?.enabled, acAuto, acCopilot, loaded, draft, suggestion, compl, requestCompletion, acVisible, acImeEnds]);
+  }, [autocomplete?.enabled, acAuto, acDelay, loaded, draft, suggestion, compl, requestCompletion, acVisible, acImeEnds]);
 
   // The ghost mounts fresh (scrollTop 0) each time a suggestion appears; align it
   // to the editor's current scroll so the inserted preview lands at the caret.
