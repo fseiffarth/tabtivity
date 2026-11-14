@@ -42,6 +42,10 @@ export async function markupPagePicture(doc: PDFDocumentProxy | null, n: number,
   let anchors: Anchor[] = [];
   let words: (string | null)[] | undefined;
   if (doc) {
+    // Read beside the drawing, not after it; a draw that throws first would
+    // leave a failed read nobody awaits, so it is marked handled here.
+    const text = pageTextItemBoxes(doc, n);
+    text.catch(() => {});
     let pixels: PagePixels | null = null;
     let scale = 0;
     try {
@@ -64,7 +68,7 @@ export async function markupPagePicture(doc: PDFDocumentProxy | null, n: number,
     }
     try {
       if (pixels) {
-        const runs = visibleRuns(await pageTextItemBoxes(doc, n), pixels, scale);
+        const runs = visibleRuns(await text, pixels, scale);
         anchors = anchorsFor(layer, runs);
         words = layer.marks.map((mark) => wordsIn(runs, markBox(mark)) || null);
       }
