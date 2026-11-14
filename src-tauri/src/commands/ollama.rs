@@ -3126,7 +3126,7 @@ fn build_context_block(files: &[ContextFile]) -> String {
 /// The references a request may carry, in order, each trimmed and truncated
 /// to [`MAX_CONTEXT_PER_FILE`] until [`MAX_CONTEXT_TOTAL`] is spent. Empty
 /// files and those `keep` refuses are skipped and cost nothing. Pure.
-fn capped_references<'a>(files: &'a [ContextFile], keep: impl Fn(&ContextFile) -> bool) -> Vec<(&'a str, String)> {
+fn capped_references(files: &[ContextFile], keep: impl Fn(&ContextFile) -> bool) -> Vec<(&str, String)> {
     let mut out = Vec::new();
     let mut total = 0usize;
     for f in files {
