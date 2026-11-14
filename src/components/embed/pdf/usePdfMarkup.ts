@@ -148,6 +148,7 @@ import {
   nextCheck,
   startRound,
   stepRound,
+  undoFailureNote,
   undoneRound,
   type Round,
 } from "../../../../mobile-web/src/markup/submitState";
@@ -1177,20 +1178,10 @@ export function usePdfMarkup({
   const undoFailed = useCallback(
     (error: unknown, step: "preview" | "undo", id: string) => {
       const failure = pdfMarkupUndoFailure(error);
-      if (failure.code === "undo_conflict") {
-        const named = failure.files.map((path) => `\`${path}\``).join(", ") || "…";
-        const files = failure.more > 0 ? t("mobile.markup.undo.andMore", { files: named, count: failure.more }) : named;
-        setUndoNote({ text: t("mobile.markup.undo.conflict", { files }), alert: true });
-      } else if (failure.code === "undo_gone" || failure.code === "round_not_found") {
-        setRound((was) => was && undoneRound(was, id));
-        setUndoNote({ text: t("mobile.markup.undo.gone"), alert: true });
-      } else {
-        const reason = t(markupReasonKey(failure.code), { code: failure.code });
-        setUndoNote({
-          text: t(step === "preview" ? "mobile.markup.undo.previewFailed" : "mobile.markup.undo.failed", { reason }),
-          alert: true,
-        });
-      }
+      const conflict = failure.code === "undo_conflict" ? { files: failure.files, more: failure.more } : null;
+      const note = undoFailureNote({ code: failure.code, conflict }, step, t(markupReasonKey(failure.code), { code: failure.code }), t);
+      if (note.gone) setRound((was) => was && undoneRound(was, id));
+      setUndoNote({ text: note.text, alert: note.alert });
     },
     [t],
   );

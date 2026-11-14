@@ -196,3 +196,28 @@ export const NO_UNDO_KEYS: Record<string, TranslationKey> = {
   remote: "mobile.markup.noUndo.remote",
   not_pdf: "mobile.markup.noUndo.notPdf",
 };
+
+/** What an undo call's refusal reads as — each host reads its own error shape
+ * into this (the desktop `pdfMarkupUndoFailure`, the phone `markupUndoConflict`
+ * and the `ApiError` code): `conflict` is set when the files changed since. */
+export type UndoFailure = { code: string; conflict: { files: readonly string[]; more: number } | null };
+
+/** The pill's line for a failed undo call, the same on both hosts: the files
+ * changed since (nothing was changed; checked before the code), an undo the
+ * backend no longer holds (`gone`: the caller offers it no more), or a plain
+ * failure — which may have put some files back. `reason` is the failure
+ * already worded by the host (it keeps its own error-code table). */
+export function undoFailureNote(
+  failure: UndoFailure,
+  step: "preview" | "undo",
+  reason: string,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+): { text: string; alert: true; gone: boolean } {
+  if (failure.conflict) {
+    const named = failure.conflict.files.map((path) => `\`${path}\``).join(", ") || "…";
+    const files = failure.conflict.more > 0 ? t("mobile.markup.undo.andMore", { files: named, count: failure.conflict.more }) : named;
+    return { text: t("mobile.markup.undo.conflict", { files }), alert: true, gone: false };
+  }
+  if (failure.code === "undo_gone" || failure.code === "round_not_found") return { text: t("mobile.markup.undo.gone"), alert: true, gone: true };
+  return { text: t(step === "preview" ? "mobile.markup.undo.previewFailed" : "mobile.markup.undo.failed", { reason }), alert: true, gone: false };
+}

@@ -22,7 +22,7 @@ import {
 } from "../markup/pen";
 import { openMarkupTab, useOpenedTabAgent } from "../markup/newTab";
 import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
-import { canApply, canUndo, followRound, holdsUndo, nextCheck, NO_UNDO_KEYS, ROUND_KEYS, startRound, stepRound, undoneRound, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
+import { canApply, canUndo, followRound, holdsUndo, nextCheck, NO_UNDO_KEYS, ROUND_KEYS, startRound, stepRound, undoneRound, undoFailureNote, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
 import { DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, markupForSubagent, markupUndoNote, readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction } from "../markupInstruction";
 import { readMarkupOpen } from "../markupOpen";
 import { keepMarkupTab, type FileTabFile } from "../filesPlace";
@@ -1628,20 +1628,9 @@ export function MarkupView({ tabId: givenTabId = "", projectId = "", scope, file
    * (nothing was changed), an undo the desktop no longer holds (offered no
    * more), or a plain failure — which may have put some files back. */
   const undoFailed = (error: unknown, step: "preview" | "undo", id: string) => {
-    const conflict = markupUndoConflict(error);
-    if (conflict) {
-      const named = conflict.files.map((path) => `\`${path}\``).join(", ");
-      const files = conflict.more > 0 ? t("mobile.markup.undo.andMore", { files: named || "…", count: conflict.more }) : named || "…";
-      setUndoNote({ text: t("mobile.markup.undo.conflict", { files }), alert: true });
-      return;
-    }
-    const code = error instanceof ApiError ? error.code : "";
-    if (code === "undo_gone" || code === "round_not_found") {
-      setSubmitted((was) => was && undoneRound(was, id));
-      setUndoNote({ text: t("mobile.markup.undo.gone"), alert: true });
-      return;
-    }
-    setUndoNote({ text: t(step === "preview" ? "mobile.markup.undo.previewFailed" : "mobile.markup.undo.failed", { reason: reason(error) }), alert: true });
+    const note = undoFailureNote({ code: error instanceof ApiError ? error.code : "", conflict: markupUndoConflict(error) }, step, reason(error), t);
+    if (note.gone) setSubmitted((was) => was && undoneRound(was, id));
+    setUndoNote({ text: note.text, alert: note.alert });
   };
 
   /** **Undo**: first what it would put back, in the confirm sheet — not when
