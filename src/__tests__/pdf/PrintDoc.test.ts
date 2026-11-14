@@ -17,6 +17,7 @@ import {
   printSequence,
   formatPageRange,
   spliceSelection,
+  paperSheets,
   withCopies,
   clampCopies,
   thumbSizePx,
@@ -528,5 +529,24 @@ describe("custom-range strip edits (spliceSelection)", () => {
     const shown = printSequence(ten, opts);
     const out = spliceSelection(ten, opts, duplicatePages(shown, [shown[1].id]));
     expect(pagesOf(printSequence(out.pages, { ...opts, range: out.range }))).toEqual([2, 5, 5]);
+  });
+});
+
+describe("paperSheets", () => {
+  it("counts sheets, not pages, at several pages to a sheet", () => {
+    expect(paperSheets(10, withOpts({ nup: 2 }), false)).toBe(5);
+    expect(paperSheets(10, withOpts({ nup: 4 }), false)).toBe(3);
+    expect(paperSheets(10, withOpts({ nup: 1 }), false)).toBe(10);
+  });
+
+  it("halves the sides when the printer prints both", () => {
+    expect(paperSheets(10, withOpts({ nup: 2, duplex: "long" }), true)).toBe(3);
+    expect(paperSheets(10, withOpts({ nup: 1, duplex: "long" }), true)).toBe(5);
+    // No native path: the duplex request goes nowhere, so the paper is not halved.
+    expect(paperSheets(10, withOpts({ nup: 1, duplex: "long" }), false)).toBe(10);
+  });
+
+  it("counts a booklet's padded sides", () => {
+    expect(paperSheets(10, withOpts({ booklet: true, duplex: "short" }), true)).toBe(3);
   });
 });

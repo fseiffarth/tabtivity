@@ -253,6 +253,15 @@ export function spliceSelection(
 }
 
 /**
+ * The paper one copy of the print takes: its sides (one per imposed sheet, or
+ * per page), halved when the printer prints both sides of each sheet.
+ */
+export function paperSheets(count: number, opts: PrintOptions, twoSided: boolean): number {
+  const sides = isImposed(opts) ? sheetCount(count, opts) : count;
+  return twoSided && opts.duplex !== "none" ? Math.ceil(sides / 2) : sides;
+}
+
+/**
  * The print order with every copy spelled out, collated: each copy is the whole
  * sequence, so a stack comes off the printer ready to hand out rather than as
  * piles of page 1, page 2… to sort by hand.
@@ -995,14 +1004,30 @@ export function printDocument(
       if (empty) {
         printBtn.textContent = translateNow("print.noneSelected");
       } else {
+        // Several pages to a sheet, or both sides of it, put fewer sheets in the
+        // tray than there are pages: then the label counts the paper too.
+        const subset = paged && sequence.length < pageEls.length;
+        const sheets = paged ? paperSheets(sequence.length, opts, twoSided) : sequence.length;
+        const count = sequence.length;
+        const what = !paged
+          ? translateNow("print.print")
+          : sheets !== count
+            ? subset
+              ? sheets === 1
+                ? translateNow("print.printPagesOneSheet", { count })
+                : translateNow("print.printPagesSheets", { count, sheets })
+              : sheets === 1
+                ? translateNow("print.printOneSheet")
+                : translateNow("print.printSheets", { sheets })
+            : subset
+              ? count === 1
+                ? translateNow("print.printOnePage")
+                : translateNow("print.printPages", { count })
+              : translateNow("print.print");
         const label = approval && !decided
           ? translateNow("printRequest.approve") +
             (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "")
-          : (paged && sequence.length < pageEls.length
-            ? sequence.length === 1
-              ? translateNow("print.printOnePage")
-              : translateNow("print.printPages", { count: sequence.length })
-            : translateNow("print.print")) +
+          : what +
           (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "");
         printBtn.innerHTML = `${PRINTER_SVG} ${escapeHtml(label)}`;
       }
