@@ -187,6 +187,27 @@ describe("desktop markup storage", () => {
     expect(mocks.saveLayer).toHaveBeenCalledTimes(1);
   });
 
+  it("a Reload whose fingerprint read fails is not left waiting: a later read is an ordinary change, flagged and not stamped", async () => {
+    const view = mount();
+    await ready(view);
+    act(() => view.result.current.beforeReload());
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "file_mtime") throw new Error("gone");
+      return command === "markup_mcp_list" || command === "markup_mcp_ticks" ? [] : null;
+    });
+    view.rerender({ docVersion: 1 });
+    await flush();
+    // The file really changed by the next successful read.
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "file_mtime") return MTIME + 50;
+      return command === "markup_mcp_list" || command === "markup_mcp_ticks" ? [] : null;
+    });
+    view.rerender({ docVersion: 2 });
+    await waitFor(() => expect(view.result.current.changed).toBe(true));
+    // The record keeps its old stamp.
+    expect(mocks.saveLayer).not.toHaveBeenCalled();
+  });
+
   it("shows 'unsaved' for a failed save and does not retry it until the next change", async () => {
     mocks.saveLayer.mockResolvedValueOnce(false);
     const view = mount();

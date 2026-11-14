@@ -441,12 +441,17 @@ export function usePdfMarkup({
   useEffect(() => {
     if (!projectId || docVersion < 0) return;
     let live = true;
+    // The Reload this read answers: if the read fails, nothing will restamp
+    // the record, and waiting for it would mute the stale check for good.
+    const armed = restamp.current;
     void fileMtime(path, scope).then(
       (modified) => {
         const size = docSizeRef.current;
         if (live && size !== null) setFingerprint({ size, modified });
       },
-      () => {},
+      () => {
+        if (live && armed && restamp.current === armed) restamp.current = null;
+      },
     );
     return () => {
       live = false;
