@@ -52,7 +52,18 @@ pub async fn set_project_agent_privacy(
 ) -> Result<AgentPrivacyChange, String> {
     let want = Privacy { local_models_only, cut_network };
     let id = project_id.clone();
-    let stored = app_core::rt::try_blocking("agent privacy", move || agent_privacy::set(&id, want)).await?;
+    let (before, stored) = app_core::rt::try_blocking("agent privacy", move || {
+        let before = crate::services::remote::projects().ok()
+            .and_then(|list| list.iter().find(|p| p.id == id).map(agent_privacy::privacy_of));
+        Ok((before, agent_privacy::set(&id, want)?))
+    }).await?;
+    // Either flag moved (or the old setting could not be read): the project's
+    // tab messages go (`services::tabs_mcp`), so nothing a tab of the old
+    // setting wrote reaches a tab of the new one. Running tabs keep their
+    // class; every call re-reads the setting.
+    if before != Some(stored) {
+        crate::services::tabs_mcp::purge_scope(&project_id);
+    }
     let mut change = AgentPrivacyChange {
         local_models_only: stored.local_models_only,
         cut_network: stored.cut_network,
