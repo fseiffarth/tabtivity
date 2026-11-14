@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import { invoke } from "@tauri-apps/api/core";
 import { loadOllamaModel } from "../../../lib/agents/localDrivers";
 import { UntestedTag } from "../../common/UntestedTag";
-import { CompletionCache, caretAtLineEnd, completionLineLength, completionModels, completionWindow, editKind, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
+import { CompletionCache, caretAtLineEnd, completionLineLength, completionModels, completionWindow, editKind, inlineGhostTail, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
 import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
@@ -2559,6 +2559,12 @@ export function CodeEditor({
   // text after the caret aside (horizontally and, for multi-line suggestions,
   // downward) instead of painting the proposal on top of it.
   const hasGhost = suggestion != null;
+  // The inline variant keeps the syntax colour beneath: only the ghost and the
+  // caret line's tail (closers) are painted, on a cover over the originals.
+  // Every case it cannot draw exactly stays on the opaque projection.
+  const ghostTail = suggestion
+    ? inlineGhostTail(draft, suggestion.at, suggestion.text, { highlighted: highlighted != null, wrapped: wrap })
+    : null;
 
   // In wrap mode, pin every overlay <pre> to the textarea's content width so
   // they wrap line-for-line with it (see wrapWidth). A no-op otherwise.
@@ -2747,7 +2753,25 @@ export function CodeEditor({
             dangerouslySetInnerHTML={{ __html: linkHtml + "\n" }}
           />
         )}
-        {hasGhost && (
+        {hasGhost && ghostTail != null && (
+          // Three parts still: the layer scrolls through `scrollTop` and needs
+          // the document's full height. Its text and background are
+          // transparent; only the cover paints.
+          <pre
+            ref={ghostRef}
+            className="file-viewer-ghost is-inline"
+            aria-hidden="true"
+            style={overlayWidthStyle}
+          >
+            {draft.slice(0, suggestion!.at)}
+            <span className="file-viewer-ghost-cover">
+              <span className="file-viewer-ghost-text">{suggestion!.text}</span>
+              {draft.slice(suggestion!.at, suggestion!.at + ghostTail)}
+            </span>
+            {draft.slice(suggestion!.at + ghostTail)}
+          </pre>
+        )}
+        {hasGhost && ghostTail == null && (
           <pre
             ref={ghostRef}
             className="file-viewer-ghost"

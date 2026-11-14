@@ -16,7 +16,7 @@ import { SHOWN_MS } from "../../lib/viewers/completion/completionTimings";
 
 /** The ring the rendered editor writes: `renderTextView` resets modules. */
 const timingsRing = async () => (await import("../../lib/viewers/completion/completionTimings")).completionTimings();
-import { autocompleteModelAdvice, missingRoleModel } from "../../lib/viewers/completion/autocomplete";
+import { autocompleteModelAdvice, inlineGhostTail, missingRoleModel } from "../../lib/viewers/completion/autocomplete";
 import { caretAtLineEnd, completionModelOrder, completionWindow, editKind, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
 
 const { mockInvoke, mockListen, mockBump } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockListen: vi.fn(), mockBump: vi.fn() }));
@@ -965,6 +965,95 @@ describe("autocomplete window and type-through", () => {
     expect(typeThrough("ab!", "a!", ghost)).toBeNull();
     expect(typeThrough("ab!", "abhello?", ghost)).toBeNull();
     expect(typeThrough("ab!", "abhola!", ghost)).toBeNull();
+  });
+});
+
+describe("ghost rendering (A6)", () => {
+  beforeEach(() => {
+    copilotOn = false;
+    vi.clearAllMocks();
+    setup();
+  });
+
+  const ghost = (container: HTMLElement) => container.querySelector(".file-viewer-ghost") as HTMLElement;
+
+  /** The editor alone, unwrapped: every viewer host passes `wrap` today. */
+  async function renderBareEditor(text: string) {
+    vi.resetModules();
+    const { useState } = await import("react");
+    const { CodeEditor } = await import("../../components/embed/fileViewer/CodeEditor");
+    function Harness() {
+      const [draft, setDraft] = useState(text);
+      return (
+        <CodeEditor
+          error={null} draft={draft} setDraft={setDraft} loaded save={() => {}} path="/p/foo.py"
+          autocomplete={{ enabled: true, mode: "sentence" }}
+          incFont={() => {}} decFont={() => {}} resetFont={() => {}}
+        />
+      );
+    }
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<Harness />); });
+    return view;
+  }
+
+  it("a one-line ghost at a line end paints inline over the highlight, carrying the closers", async () => {
+    autocompleteOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => cmd === "complete_text" ? Promise.resolve("42") : original(cmd, args));
+    const view = await renderBareEditor("print()\n");
+    const el = view.container.querySelector("textarea")!;
+    el.focus();
+    el.selectionStart = el.selectionEnd = 6;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    const layer = ghost(view.container);
+    expect(view.container.querySelector(".file-viewer-highlight")).not.toBeNull();
+    expect(layer.classList.contains("is-inline")).toBe(true);
+    const cover = layer.querySelector(".file-viewer-ghost-cover")!;
+    expect(cover.textContent).toBe("42)");
+    expect(cover.querySelector(".file-viewer-ghost-text")!.textContent).toBe("42");
+    // The full document stays in the layer, so it scrolls like the others.
+    expect(layer.textContent).toBe("print(42)\n");
+  });
+
+  it("the soft-wrapped viewer keeps the opaque projection, even for a one-line ghost", async () => {
+    autocompleteOn = true;
+    const view = await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    expect(view.container.querySelector(".file-viewer-code-area.is-wrapped")).not.toBeNull();
+    const layer = ghost(view.container);
+    expect(layer.classList.contains("is-inline")).toBe(false);
+    expect(layer.textContent).toBe(SOURCE + "return 42");
+  });
+
+  it("a multi-line ghost keeps the opaque projection", async () => {
+    autocompleteOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => cmd === "complete_text"
+      ? Promise.resolve("first\nsecond") : original(cmd, args));
+    const view = await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    const layer = ghost(view.container);
+    expect(layer.classList.contains("is-inline")).toBe(false);
+    expect(layer.querySelector(".file-viewer-ghost-cover")).toBeNull();
+  });
+
+  it("inline only with a highlight layer, no wrap, no line break and closers after the caret", () => {
+    const on = { highlighted: true, wrapped: false };
+    expect(inlineGhostTail("foo(bar\nnext", 7, "baz", on)).toBe(0);
+    expect(inlineGhostTail("foo()  \nnext", 4, "x", on)).toBe(3);
+    expect(inlineGhostTail("foo()\r\nnext", 4, "x", on)).toBe(1);
+    expect(inlineGhostTail("x = f(y)", 6, "z", on)).toBeNull();
+    expect(inlineGhostTail("foo(", 4, "a\nb", on)).toBeNull();
+    expect(inlineGhostTail("foo(", 4, "a\r", on)).toBeNull();
+    expect(inlineGhostTail("foo(", 4, "a", { highlighted: false, wrapped: false })).toBeNull();
+    expect(inlineGhostTail("foo(", 4, "a", { highlighted: true, wrapped: true })).toBeNull();
   });
 });
 

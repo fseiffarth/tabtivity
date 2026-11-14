@@ -128,6 +128,22 @@ export function caretAtLineEnd(text: string, caret: number): boolean {
   return /^[\s)\]}>"'`$]*$/.test(text.slice(caret, end < 0 ? undefined : end));
 }
 
+/** How the ghost may paint inline — over the syntax-coloured layers instead of
+ * an opaque copy of the document — and how many characters of the caret's
+ * line tail it carries (shifted right, on an opaque cover that hides the
+ * originals). Null keeps the opaque projection: no highlight layer (the
+ * transparent ghost would leave nothing drawing the text), soft wrap (a ghost
+ * could reflow the caret line while the layers beneath do not), a ghost with a
+ * line break (it shifts every line below), or a tail with more than closers
+ * and whitespace. A CRLF line's `\r` stays outside the tail. */
+export function inlineGhostTail(draft: string, at: number, ghost: string,
+  layers: { highlighted: boolean; wrapped: boolean }): number | null {
+  if (!layers.highlighted || layers.wrapped || /[\r\n]/.test(ghost)) return null;
+  const newline = draft.indexOf("\n", at);
+  const tail = draft.slice(at, newline < 0 ? undefined : newline).replace(/\r$/, "");
+  return /^[ \t)\]}>"'`$]*$/.test(tail) ? tail.length : null;
+}
+
 /** Languages where the text around the caret is natural language. They prefer
  * the `autocomplete_prose` role (an instruct model on the chat path) over the
  * code role (typically a fill-in-the-middle coder model). */

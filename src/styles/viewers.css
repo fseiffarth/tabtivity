@@ -3891,6 +3891,20 @@ select.file-viewer-run-args-input {
   opacity: 0.85;
   font-style: italic;
 }
+/* The inline ghost (a one-line suggestion at a line end, over a highlight
+   layer, no soft wrap): the layer itself is see-through, so the syntax colours
+   beneath stay; only the cover paints — the suggestion plus the caret line's
+   shifted tail on the panel colour, hiding the original closers under it. The
+   cover carries the background rather than the suggestion span, whose opacity
+   would let the originals show through. Static; nothing animates. */
+.file-viewer-ghost.is-inline {
+  color: transparent;
+  background: transparent;
+}
+.file-viewer-ghost-cover {
+  color: var(--text-primary);
+  background: var(--bg-panel);
+}
 
 /* While a suggestion is on screen the opaque ghost shows the projected text, so
    hide the textarea's own glyphs (keeping the caret) — even in plain-text mode
