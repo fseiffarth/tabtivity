@@ -638,6 +638,24 @@ describe("MarkupView · apply rounds and Undo", () => {
     expect(await screen.findByText("The undo did not go through (error undo_failed). Check the files before you try again.")).toBeTruthy();
   });
 
+  it("saves the record when only the undo steps change: an Undo forgets the round in the steps behind the present", async () => {
+    const calls = undoDesktop();
+    await finishedRound(calls, () => "sent");
+    const saved = () => store.saveLayer.mock.calls as unknown as [string, Layer, { size: number; modified: number }, undefined, Layer[]][];
+    const logged = (past: Layer[]) => past.some((step) => (step.sent?.log?.length ?? 0) > 0);
+    // Clearing the sent marks leaves the logged round only in the steps behind.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear sent marks" }));
+    await waitFor(() => expect(logged(saved()[saved().length - 1][4])).toBe(true));
+    expect(saved()[saved().length - 1][1].sent).toBeUndefined();
+    const before = saved().length;
+    fireEvent.click(undoButton()!);
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Undo the agent's changes from these marks?" })).getByRole("button", { name: "Undo" }));
+    expect(await screen.findByText("Undone — the files are back as they were before the round.")).toBeTruthy();
+    await waitFor(() => expect(saved().length).toBeGreaterThan(before));
+    expect(logged(saved()[saved().length - 1][4])).toBe(false);
+  });
+
   it("runs a list round with Make these changes and says why there is no undo", async () => {
     const calls = undoDesktop({ submit: { prompt: "Round 1", marked: null, mode: "list", undo: null, noUndo: "not_git" } });
     await finishedRound(calls, () => "sent");
@@ -809,5 +827,59 @@ describe("Terminal · sendMarkup", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reload PDF/ }));
     await waitFor(() => expect(store.moveLayer).toHaveBeenCalledWith("tab:tab-7:outbox:paper.pdf", `tab:tab-7:outbox:${newer.name}`, { size: newer.size, modified: newer.modified }));
     expect(screen.getByRole("dialog", { name: "Mark up paper.pdf" })).toBeTruthy();
+  });
+});
+
+describe("MarkupView · when the layer is saved", () => {
+  const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
+  const saves = () => store.saveLayer.mock.calls as unknown as [string, Layer, { size: number; modified: number }, undefined, Layer[]][];
+
+  it("writes the empty layer once for a file with no record (a delete), and nothing more", async () => {
+    desktop();
+    store.loadLayer.mockResolvedValue(null);
+    store.saveLayer.mockClear();
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    await waitFor(() => expect(store.saveLayer).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(store.saveLayer).toHaveBeenCalledTimes(1);
+    expect(saves()[0][0]).toBe(`p1:outbox:${PICTURE.name}`);
+    expect(saves()[0][1]).toEqual(EMPTY_LAYER);
+    expect(saves()[0][2]).toEqual({ size: PICTURE.size, modified: PICTURE.modified });
+    expect(saves()[0][4]).toEqual([]);
+  });
+
+  it("writes nothing for a record it just read", async () => {
+    desktop();
+    store.loadLayer.mockResolvedValue({ layer: LAYER, fingerprint: { size: PICTURE.size, modified: PICTURE.modified }, saved: 1 });
+    store.saveLayer.mockClear();
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PICTURE} onSend={() => "sent"} onClose={() => {}} />);
+    showPicture();
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalled());
+    await flush();
+    expect(store.saveLayer).not.toHaveBeenCalled();
+  });
+
+  it("a Reload that gives the same name a new fingerprint saves the marks stamped with it, and reads nothing back", async () => {
+    desktop();
+    const sent = markSent(LAYER);
+    store.loadLayer.mockResolvedValue({ layer: sent, fingerprint: { size: PDF.size, modified: PDF.modified }, saved: 1 });
+    store.saveLayer.mockClear();
+    store.moveLayer.mockClear();
+    const refresh = vi.fn(async () => ({ ...PDF, size: 9_600, modified: 1_790_050_000 }));
+    render(<MarkupView tabId="t1" projectId="p1" scope={{ tab: "t1" }} file={PDF} onSend={() => "sent"} refresh={refresh} onClose={() => {}} />);
+    openAgent();
+    await waitFor(() => expect(store.loadLayer).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(store.saveLayer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("button", { name: /Reload PDF/ }));
+    await waitFor(() => expect(store.saveLayer).toHaveBeenCalled());
+    const last = saves()[saves().length - 1];
+    expect(last[0]).toBe(`p1:outbox:${PDF.name}`);
+    expect(last[2]).toEqual({ size: 9_600, modified: 1_790_050_000 });
+    expect(last[1]).toBe(sent);
+    expect(store.moveLayer).not.toHaveBeenCalled();
+    expect(store.loadLayer).toHaveBeenCalledTimes(1);
   });
 });
