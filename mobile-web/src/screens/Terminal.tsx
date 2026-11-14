@@ -88,7 +88,7 @@ import {
   type SelectStep,
 } from "../terminal/selectPrompt";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../terminal/openCodeMini";
-import { groupOpenCodeModels, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
 import { isAntigravityTab } from "../terminal/antigravity";
 import { isCursorTab } from "../terminal/cursorAgent";
 import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../terminal/agentModes";
@@ -2359,7 +2359,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     description: option.description,
     current: option.number === shownAt,
   }));
-  const pickerOptions = openCode && shownStep?.title === "Select model"
+  const pickerOptions = tab.kind === "agent" && isOpenCodeModelList(agentLabel, shownStep?.title)
     ? groupOpenCodeModels(pickerOptionsRaw).flatMap((group) => group.options.map((option) => ({
       ...option, group: openCodeModelGroupTitle(group, t),
     })))

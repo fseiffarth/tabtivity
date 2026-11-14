@@ -36,7 +36,7 @@ import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen"
 import { selectMoveKeys } from "../../../mobile-web/src/terminal/selectPrompt";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
-import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import { useActivityStore } from "../../stores/activity";
 import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
@@ -234,7 +234,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
   const [rowAt, setRowAt] = useState<string | null>(null);
   const shownStep = session.shownStep;
   const shownGroups = shownStep
-    ? ownCursor && shownStep.title === "Select model"
+    ? isOpenCodeModelList(agent, shownStep.title)
       ? groupOpenCodeModels(shownStep.options)
       : [{ key: "all", provider: undefined, options: shownStep.options }]
     : [];
