@@ -6409,6 +6409,7 @@ export const dict: Dict = {
   "tabBar.subwindowNameLabel": "Nombre de la subventana",
   "tabBar.nameRemoveHint": "Déjalo vacío para quitar el nombre.",
   "tabBar.duplicate": "Duplicar pestaña",
+  "tabBar.markUnread": "Marcar como no leído",
   "tabBar.closeOthers": "Cerrar las demás",
   "tabBar.closeToLeft": "Cerrar las de la izquierda",
   "tabBar.closeToRight": "Cerrar las de la derecha",

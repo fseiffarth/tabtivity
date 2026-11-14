@@ -6409,6 +6409,7 @@ export const dict: Dict = {
   "tabBar.subwindowNameLabel": "Nome della sottofinestra",
   "tabBar.nameRemoveHint": "Lascia vuoto per rimuovere il nome.",
   "tabBar.duplicate": "Duplica scheda",
+  "tabBar.markUnread": "Segna come non letto",
   "tabBar.closeOthers": "Chiudi le altre",
   "tabBar.closeToLeft": "Chiudi a sinistra",
   "tabBar.closeToRight": "Chiudi a destra",

@@ -1108,6 +1108,7 @@ export const UNTESTED = {
   // --- tabs — Tabs and the new-tab menus ----------------------------
   "tabBar.1": { area: "tabs", what: "TabBar · Duplicate tab" },
   "tabBar.2": { area: "tabs", what: "TabBar · Schedule prompt…" },
+  "tabBar.markUnread": { area: "tabs", what: "Tab right-click menu (project bar, root console, popout) · Mark as unread on a read agent tab: lights it as finished once it is not the visible tab (bar, project pill, phone Agents list, cockpit) until it is opened again or typed into" },
   "tabBar.reopenClosed": { area: "tabs", what: "TabBar · tab right-click Reopen closed agent tab, and the + menu's Recently closed group: a closed resumable agent tab comes back in its old place on its resume args (Claude --resume, Codex/Vibe by hook id, others continue-last); a remote tab reattaches its still-running session" },
   "tabBar.continue": { area: "tabs", what: "TabBar/popout/root-console strip · ▶ Continue pill on an agent tab marked ■ interrupted sends \"continue\" into it without switching tabs; the pill goes once the new turn starts" },
   "tabBar.modeMarks": { area: "tabs", what: "TabBar/popout strip · PLAN and GOAL pills on an agent tab while its own status line reads plan mode or a running /goal", tested: "2026-09-28" },

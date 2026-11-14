@@ -6411,6 +6411,7 @@ export const dict: Dict = {
   "tabBar.subwindowNameLabel": "Nom de la sous-fenêtre",
   "tabBar.nameRemoveHint": "Laissez vide pour retirer le nom.",
   "tabBar.duplicate": "Dupliquer l’onglet",
+  "tabBar.markUnread": "Marquer comme non lu",
   "tabBar.closeOthers": "Fermer les autres",
   "tabBar.closeToLeft": "Fermer à gauche",
   "tabBar.closeToRight": "Fermer à droite",

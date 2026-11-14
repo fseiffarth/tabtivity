@@ -6626,6 +6626,7 @@ export const enSource = {
   "tabBar.subwindowNameLabel": "Subwindow name",
   "tabBar.nameRemoveHint": "Leave it empty to remove the name.",
   "tabBar.duplicate": "Duplicate tab",
+  "tabBar.markUnread": "Mark as unread",
   "tabBar.closeOthers": "Close others",
   "tabBar.closeToLeft": "Close to the left",
   "tabBar.closeToRight": "Close to the right",

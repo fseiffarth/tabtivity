@@ -52,7 +52,7 @@ import {
   type HostConnState,
 } from "./remote/remoteStatus";
 import { BOX_SCOPE_PREFIX, boxFolderOfScope, newTabTarget, useBoxesStore, type NewTabTarget } from "./boxes";
-import { useActivityStore, noteAgentResting, noteLiveTurn, notePtyResize, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
+import { useActivityStore, noteAgentResting, noteLiveTurn, notePtyResize, markTabUnread, noteTurnCutOff, noteUserInput, type AttentionKind, type BusyKind } from "./activity";
 import { bumpUsage } from "./usage";
 import { useRemoteMachinesStore } from "./remote/remoteMachines";
 import { useBigFoldersStore } from "./bigFolders";
@@ -228,8 +228,9 @@ export interface DetachedActivityEnvelope {
    *  previous process died mid-turn (`activity.noteTurnCutOff`), `resting`
    *  one whose previous process finished its turn (`activity.noteAgentResting`),
    *  `resize` a pane resize (`activity.notePtyResize`), `live-working` /
-   *  `live-decision` a reattach to an agent mid-turn (`activity.noteLiveTurn`). */
-  kind: "input" | "interrupt" | "seen" | "bell" | "cutoff" | "resting" | "resize" | "live-working" | "live-decision";
+   *  `live-decision` a reattach to an agent mid-turn (`activity.noteLiveTurn`),
+   *  `unread` the tab menu's "Mark as unread" (`activity.markTabUnread`). */
+  kind: "input" | "interrupt" | "seen" | "unread" | "bell" | "cutoff" | "resting" | "resize" | "live-working" | "live-decision";
 }
 
 /**
@@ -1323,6 +1324,7 @@ export async function listenDetachedHost(): Promise<() => void> {
     if (kind === "input") noteUserInput(ptyId);
     else if (kind === "interrupt") noteUserInput(ptyId, true);
     else if (kind === "seen") useActivityStore.getState().clearAttention(ptyId);
+    else if (kind === "unread") markTabUnread(ptyId);
     else if (kind === "bell") useActivityStore.getState().noteBell(ptyId);
     else if (kind === "cutoff") noteTurnCutOff(ptyId);
     else if (kind === "resting") noteAgentResting(ptyId);
