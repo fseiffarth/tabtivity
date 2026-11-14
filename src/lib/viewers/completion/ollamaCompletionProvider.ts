@@ -3,6 +3,7 @@ import { aiIsOff } from "../../aiSwitch";
 import { listen } from "@tauri-apps/api/event";
 import type { AutocompleteMode } from "../../../types";
 import { CompletionCache, completionModels, completionModelOrder, completionWindow, pickCompletionModel, type CompletionModel } from "./autocomplete";
+import type { CompletionTiming } from "./completionTimings";
 import { referenceBudget, referenceSetId, trimReferences, type CompletionReference } from "./completionContext";
 import {
   offsetToPosition, type CompletionCandidate, type CompletionDocument, type CompletionProvider, type CompletionStats,
@@ -36,6 +37,8 @@ export class OllamaCompletionProvider implements CompletionProvider {
     referencesDropped?: (model: string) => boolean;
     /** The request's `text-completion-stats-<id>` payload, when one arrives. */
     onStats?: (stats: CompletionStats, model: string) => void;
+    /** The request's record in the timings ring, filled in as it goes. */
+    timing?: CompletionTiming;
   }, cache?: CompletionCache) {
     if (cache) this.cache = cache;
   }
@@ -64,10 +67,13 @@ export class OllamaCompletionProvider implements CompletionProvider {
         else requestId = id;
       });
       const [detailed, gathered] = await Promise.all([lookup, gathering, reserving]);
+      const timing = this.options.timing;
+      if (timing) timing.contextReady = performance.now();
       signal.throwIfAborted();
       const loaded = detailed.filter((m) => m.running && (!m.capabilities?.length || m.capabilities.includes("completion")));
       const model = pickCompletionModel(loaded, completionModelOrder(document.language, this.options.preferred, this.options.preferredProse));
       if (!model) throw new Error("not_running");
+      if (timing) timing.model = model.name;
       const insert = model.capabilities?.includes("insert") === true;
       const context = this.options.referencesDropped?.(model.name)
         ? [] : trimReferences(gathered, referenceBudget(explicit, model.context_length));
@@ -83,12 +89,15 @@ export class OllamaCompletionProvider implements CompletionProvider {
       }] : [];
       const cached = this.cache.get(key);
       if (cached !== undefined) {
+        if (timing) { timing.cached = true; timing.firstEvent = performance.now(); }
         const result = candidates(cached);
         publish(result);
         return result;
       }
       unlisteners.push(await listen<string>(`text-completion-${requestId}`, (event) => {
-        if (!signal.aborted) publish(candidates(event.payload));
+        if (signal.aborted) return;
+        if (timing && timing.firstEvent === undefined) timing.firstEvent = performance.now();
+        publish(candidates(event.payload));
       }));
       signal.throwIfAborted();
       const onStats = this.options.onStats;
@@ -107,6 +116,7 @@ export class OllamaCompletionProvider implements CompletionProvider {
         projectId: document.projectId ?? this.options.scope,
       });
       signal.throwIfAborted();
+      if (timing && timing.firstEvent === undefined) timing.firstEvent = performance.now();
       this.cache.set(key, text);
       const result = candidates(text);
       publish(result);

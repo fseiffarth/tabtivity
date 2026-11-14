@@ -12,6 +12,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { warmFileViewer } from "../helpers/warmViewer";
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react";
 import { acDelayMs } from "../../components/embed/fileViewer/editorPrefs";
+import { SHOWN_MS } from "../../lib/viewers/completion/completionTimings";
+
+/** The ring the rendered editor writes: `renderTextView` resets modules. */
+const timingsRing = async () => (await import("../../lib/viewers/completion/completionTimings")).completionTimings();
 import { caretAtLineEnd, completionModelOrder, completionWindow, editKind, pickCompletionModel, typeThrough } from "../../lib/viewers/completion/autocomplete";
 
 const { mockInvoke, mockListen, mockBump } = vi.hoisted(() => ({ mockInvoke: vi.fn(), mockListen: vi.fn(), mockBump: vi.fn() }));
@@ -85,6 +89,19 @@ function setup() {
     if (cmd === "complete_text") return Promise.resolve("return 42");
     return Promise.resolve(null);
   });
+}
+
+/** Move `performance.now()` forward without waiting (the offer clock). */
+function skewClock() {
+  const real = performance.now.bind(performance);
+  let skew = 0;
+  const spy = vi.spyOn(performance, "now").mockImplementation(() => real() + skew);
+  return { advance: (ms: number) => { skew += ms; }, restore: () => spy.mockRestore() };
+}
+
+/** What became of the offers, without the request counts. */
+function outcomeBumps(): string[] {
+  return mockBump.mock.calls.map(([, key]) => key as string).filter((key) => !key.startsWith("autocomplete.request."));
 }
 
 /** The edited file and one import exist; every other path is missing. */
@@ -164,11 +181,20 @@ describe("local autocomplete (#45)", () => {
     }
     expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(3);
     expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "list_ollama_models_detailed")).toHaveLength(1);
-    await act(async () => { fireEvent.keyDown(el, { key: "Escape" }); });
+    // Shown long enough, then dismissed with nothing taken: rejected.
+    const clock = skewClock();
+    try {
+      clock.advance(SHOWN_MS);
+      await act(async () => { fireEvent.keyDown(el, { key: "Escape" }); });
+    } finally { clock.restore(); }
     await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
     expect(screen.getByText("choice0")).toBeTruthy();
     expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "complete_text")).toHaveLength(3);
-    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.dismiss.sentence.ollama/llama3.2:3b");
+    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.rejected.sentence.ollama/llama3.2:3b");
+    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.shown.sentence.ollama/llama3.2:3b");
+    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.request.ok.ollama/llama3.2:3b");
+    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.request.cache.ollama/llama3.2:3b");
+    expect(mockBump.mock.calls.some(([, key]) => key.startsWith("autocomplete.dismiss."))).toBe(false);
   });
 
   it("accepts a line with Alt+Right and counts partial acceptance only once", async () => {
@@ -185,8 +211,84 @@ describe("local autocomplete (#45)", () => {
     expect(el.value).toBe(SOURCE + "first\n");
     await act(async () => { fireEvent.keyDown(el, { key: "Tab" }); });
     expect(el.value).toBe(SOURCE + "first\nsecond\nthird");
-    expect(mockBump).toHaveBeenCalledTimes(1);
-    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.accept.sentence.ollama/llama3.2:3b");
+    // One offer: shown once, each way of taking it once, never rejected.
+    expect(outcomeBumps()).toEqual([
+      "autocomplete.shown.sentence.ollama/llama3.2:3b",
+      "autocomplete.line.sentence.ollama/llama3.2:3b",
+      "autocomplete.tab.sentence.ollama/llama3.2:3b",
+    ]);
+  });
+
+  it("a typed first character is no accept; three typed characters are", async () => {
+    autocompleteOn = true;
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "r" } }); });
+    expect(outcomeBumps()).toEqual([]);
+    await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "re" } }); });
+    await act(async () => { fireEvent.change(el, { target: { value: SOURCE + "ret" } }); });
+    expect(outcomeBumps()).toEqual([
+      "autocomplete.shown.sentence.ollama/llama3.2:3b",
+      "autocomplete.typed.sentence.ollama/llama3.2:3b",
+    ]);
+  });
+
+  it("counts requests by outcome, with none when no model was chosen", async () => {
+    autocompleteOn = true;
+    const original = mockInvoke.getMockImplementation()!;
+    let models: unknown[] = [];
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => cmd === "list_ollama_models_detailed"
+      ? Promise.resolve(models) : cmd === "complete_text" ? Promise.resolve("") : original(cmd, args));
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.request.error.ollama/none");
+    expect((await timingsRing()).at(-1)).toEqual(expect.objectContaining({ outcome: "error", provider: "ollama", trigger: "manual" }));
+    models = [{ name: "coder", running: true }];
+    // The model lookup is cached for 5 s; a new endpoint key would bypass it,
+    // so wait it out through the clock instead.
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10_000);
+    try {
+      await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    } finally { now.mockRestore(); }
+    expect(mockBump).toHaveBeenCalledWith("proj", "autocomplete.request.empty.ollama/coder");
+  });
+
+  it("records each request's milestones and its stats in the timings ring", async () => {
+    autocompleteOn = true;
+    const listeners = new Map<string, (event: { payload: unknown }) => void>();
+    mockListen.mockImplementation((name: string, handler: (event: { payload: unknown }) => void) => {
+      listeners.set(name, handler);
+      return Promise.resolve(() => {});
+    });
+    const stats = {
+      endpoint: "generate", model: "llama3.2:3b", stop: "done", firstTokenMs: 40, totalMs: 90,
+      referenceBytes: 0, referencesDropped: false, promptEvalCount: 120,
+    };
+    const original = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation((cmd: string, args: unknown) => {
+      if (cmd === "complete_text") {
+        listeners.get("text-completion-test-request")?.({ payload: "ret" });
+        listeners.get("text-completion-stats-test-request")?.({ payload: stats });
+        return Promise.resolve("return 42");
+      }
+      return original(cmd, args);
+    });
+    await renderTextView();
+    const el = await screen.findByRole("textbox") as HTMLTextAreaElement;
+    await waitFor(() => expect(el.value).toBe(SOURCE));
+    el.selectionStart = el.selectionEnd = SOURCE.length;
+    await act(async () => { fireEvent.keyDown(el, { key: " ", ctrlKey: true }); });
+    const timing = (await timingsRing()).at(-1)!;
+    expect(timing).toEqual(expect.objectContaining({ model: "llama3.2:3b", outcome: "ok", stats }));
+    expect(timing.request).toBeLessThanOrEqual(timing.contextReady!);
+    expect(timing.contextReady).toBeLessThanOrEqual(timing.firstEvent!);
+    expect(timing.firstEvent).toBeLessThanOrEqual(timing.done!);
   });
 
   it("automatically includes imports and refreshes context before reusing a completion", async () => {

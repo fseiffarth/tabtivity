@@ -9362,6 +9362,7 @@ export const dict: Dict = {
   "fileViewer.autocompleteControls": "Tab: aceptar · →: palabra · {altRight}: línea · {altBrackets}: candidato {candidate}/3 · Mayús+Tab: modo · Esc: descartar",
   "stats.autocomplete": "Autocompletado · {mode} · {model}",
   "stats.autocompleteOutcomes": "{accepted} aceptados · {dismissed} descartados",
+  "stats.autocompleteOffers": "{shown} mostrados · Tab {tab} · palabra {word} · línea {line} · escritos {typed} · {rejected} descartados",
   "fileViewer.noSuggestion": "Sin sugerencia",
   "fileViewer.autocompleteStatus": "Autocompletado · {mode}…",
   "fileViewer.copilotStatus": "Copilot…",

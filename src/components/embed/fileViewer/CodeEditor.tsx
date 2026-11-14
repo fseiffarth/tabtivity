@@ -7,6 +7,7 @@ import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollama
 import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
 import { completionContext, ReferenceReads } from "../../../lib/viewers/completion/completionContext";
+import { CompletionOffers, startCompletionTiming } from "../../../lib/viewers/completion/completionTimings";
 import { bumpUsage } from "../../../stores/usage";
 import { METRIC } from "../../../lib/usageMetrics";
 import { ROOT_SCOPE, useTabsStore } from "../../../stores/tabs";
@@ -449,7 +450,6 @@ export function CodeEditor({
   const acReads = useRef(new ReferenceReads());
   const acDropsReferences = useRef(new Set<string>());
   const [acImeEnds, bumpAcImeEnds] = useReducer((n: number) => n + 1, 0);
-  const acOutcome = useRef<{ model: string; mode: AutocompleteMode | "copilot" } | null>(null);
   const acEndpoint = useSettingsStore((s) => JSON.stringify([
     s.settings?.ollama_host, s.settings?.ollama_allow_remote_host,
   ]));
@@ -479,13 +479,16 @@ export function CodeEditor({
   const [acPicker, setAcPicker] = useState(false);
   const scope = useFileScope();
 
-  // Count one outcome per offered candidate, including partial acceptance.
-  const recordAcOutcome = useCallback((accepted: boolean) => {
-    const offered = acOutcome.current;
-    if (!offered) return;
-    acOutcome.current = null;
-    bumpUsage(scope ?? ROOT_SCOPE, `${accepted ? METRIC.AUTOCOMPLETE_ACCEPT : METRIC.AUTOCOMPLETE_DISMISS}.${offered.mode}.${offered.model}`);
-  }, [scope]);
+  // What became of each candidate on screen: shown, taken (Tab, word, line,
+  // typed through) or rejected (`completionTimings.ts`). One tracker per
+  // editor; it reads the current scope when it counts.
+  const acScopeRef = useRef(scope);
+  acScopeRef.current = scope;
+  const [acOffers] = useState(() => new CompletionOffers((key) => bumpUsage(acScopeRef.current ?? ROOT_SCOPE, key)));
+  // True while an accept key commits ghost text, so `edit` does not book it
+  // as typed through; and when the last change happened, for the timings.
+  const acAccepting = useRef(false);
+  const acLastEditAt = useRef<number | null>(null);
 
   // Resolve the project the edited file belongs to (the longest project directory
   // that is a prefix of `path`), falling back to the active project — so the
@@ -1064,12 +1067,18 @@ export function CodeEditor({
         setAcStatus(null);
         const before = draftRef.current;
         acLastEdit.current = editKind(before, next);
+        acLastEditAt.current = performance.now();
         if (suggestion) {
           const inserted = next.slice(suggestion.at, suggestion.at + next.length - before.length);
           const matches = next.length > before.length && suggestion.text.startsWith(inserted) &&
             next === before.slice(0, suggestion.at) + inserted + before.slice(suggestion.at);
-          recordAcOutcome(matches);
-          if (matches) acFeedback?.accept(inserted);
+          if (matches) {
+            // An accept key books its own kind; anything else that put the
+            // ghost's next characters in was typed through.
+            if (!acAccepting.current) acOffers.typed(inserted.length);
+            acFeedback?.accept(inserted);
+            if (inserted.length >= suggestion.text.length) acOffers.end();
+          } else acOffers.end();
         }
         setSuggestion((ghost) => typeThrough(before, next, ghost));
         if (changeTintRef.current) {
@@ -1085,7 +1094,7 @@ export function CodeEditor({
       }
       setDraft(next);
     },
-    [setDraft, noteChangeTrail, suggestion, recordAcOutcome, acFeedback],
+    [setDraft, noteChangeTrail, suggestion, acOffers, acFeedback],
   );
 
   // Where the caret and the view belong once React has re-rendered the textarea
@@ -1765,12 +1774,12 @@ export function CodeEditor({
     acCandidates.current = [];
     const el = textareaRef.current;
     if (el) acDismissed.current = { draft: draftRef.current, caret: el.selectionStart };
-    recordAcOutcome(false);
+    acOffers.end();
     acAbort.current?.abort();
     acAbort.current = null;
     setSuggestion(null);
     setAcStatus(null);
-  }, [recordAcOutcome]);
+  }, [acOffers]);
 
   // Cancel on hiding, disabling, switching document/context/default mode, and unmount.
   useEffect(() => {
@@ -1786,10 +1795,10 @@ export function CodeEditor({
     acCandidates.current = [];
     if (draft !== lastEditRef.current) {
       acLastEdit.current = "external";
-      recordAcOutcome(false);
+      acOffers.end();
       setSuggestion(null);
     }
-  }, [draft, recordAcOutcome]);
+  }, [draft, acOffers]);
 
   const requestCompletion = useCallback(async (opts?: { auto?: boolean; mode?: AutocompleteMode; candidate?: number }) => {
     const auto = opts?.auto === true;
@@ -1807,7 +1816,7 @@ export function CodeEditor({
     // An automatic request only where a suggestion can land: at the end of the
     // line (closers and whitespace aside). Editing mid-line asks on Ctrl+Space.
     if (auto && !caretAtLineEnd(snapshot, caret)) return;
-    recordAcOutcome(false);
+    acOffers.end();
     acCandidates.current = [];
     acCandidate.current = opts?.candidate ?? 0;
     const candidate = acCandidate.current;
@@ -1822,9 +1831,18 @@ export function CodeEditor({
       // Copilot returns its alternatives at once; Alt+[/] walks that list.
       if (acCopilot) acCandidates.current = candidates;
       const item = candidates[0];
-      acOutcome.current = item ? { model: `${item.provider}/${item.model ?? item.provider}`, mode: acCopilot ? "copilot" : item.mode ?? mode } : null;
+      if (item) acOffers.start(item.id, acCopilot ? "copilot" : item.mode ?? mode, `${item.provider}/${item.model ?? item.provider}`);
+      else acOffers.end();
       setSuggestion(item ? { text: item.text, at: item.at, candidate: item } : null);
       if (item) setAcStatus(null);
+    };
+    const providerId = acCopilot && scope ? "copilot" : "ollama";
+    const timing = startCompletionTiming(providerId, auto ? "auto" : "manual", acLastEditAt.current ?? undefined);
+    const countRequest = (outcome: "ok" | "empty" | "error" | "cache") => {
+      timing.outcome = outcome;
+      timing.done = performance.now();
+      const model = timing.model ?? (providerId === "copilot" ? "copilot" : "none");
+      bumpUsage(scope ?? ROOT_SCOPE, `${METRIC.AUTOCOMPLETE_REQUEST}.${outcome}.${providerId}/${model}`);
     };
     try {
       const tabs = useTabsStore.getState();
@@ -1853,20 +1871,28 @@ export function CodeEditor({
         fileName: (acProjectDir && relativePathWithin(acProjectDir, path)) || undefined,
         referencesDropped: (model) => acDropsReferences.current.has(model),
         onStats: (stats, model) => {
+          timing.stats = stats;
           if (stats.referencesDropped) acDropsReferences.current.add(model);
         },
+        timing,
       }, acCache.current);
       const result = await provider.complete({
         path, text: snapshot, caret, language: lang, version,
       }, ctl.signal, publish);
-      if (ctl.signal.aborted) return;
+      if (ctl.signal.aborted) { timing.outcome = "cancelled"; return; }
+      countRequest(timing.cached ? "cache" : result.length ? "ok" : "empty");
       setAcStatus(result.length || auto ? null : t("fileViewer.noSuggestion"));
     } catch (e) {
-      if (ctl.signal.aborted) return;
-      acOutcome.current = null;
+      if (ctl.signal.aborted) { timing.outcome = "cancelled"; return; }
+      acOffers.end();
       setSuggestion(null);
       const reason = String(e);
-      if (reason.includes("copilot_cancelled") || reason.includes("copilot_stale_document")) { setAcStatus(null); return; }
+      if (reason.includes("copilot_cancelled") || reason.includes("copilot_stale_document")) {
+        timing.outcome = "cancelled";
+        setAcStatus(null);
+        return;
+      }
+      countRequest("error");
       // Sign-in and setup problems would otherwise be invisible with automatic
       // suggestions on, so those two are shown even for an automatic request.
       const setup = reason.includes("copilot_not_signed_in") ? "fileViewer.copilotNotSignedIn"
@@ -1878,7 +1904,7 @@ export function CodeEditor({
       ctl.abort();
       if (acAbort.current === ctl) acAbort.current = null;
     }
-  }, [autocomplete, lang, acMode, contextFiles, acVisible, acEndpoint, path, scope, acProjectDir, texCompletions, recordAcOutcome, t, acCopilot, acEditorId, indentUnit]);
+  }, [autocomplete, lang, acMode, contextFiles, acVisible, acEndpoint, path, scope, acProjectDir, texCompletions, acOffers, t, acCopilot, acEditorId, indentUnit]);
 
   // #45 automatic suggestions: when the per-type toggle is on, request a
   // completion a short while after the user stops typing. Re-runs on each draft
@@ -1911,14 +1937,17 @@ export function CodeEditor({
     if (!el || !suggestion) return;
     const at = suggestion.at;
     const next = draft.slice(0, at) + suggestion.text + draft.slice(at);
+    acOffers.take("tab");
+    acAccepting.current = true;
     edit(next);
+    acAccepting.current = false;
     acLastEdit.current = "accept";
     const caret = at + suggestion.text.length;
     setSuggestion(null);
     requestAnimationFrame(() => {
       el.selectionStart = el.selectionEnd = caret;
     });
-  }, [suggestion, draft, edit]);
+  }, [suggestion, draft, edit, acOffers]);
 
   // #45 partial accept (→ Right arrow): insert only the next "word" of the pending
   // suggestion and keep the remainder ghosted, so the user can walk a long
@@ -1933,7 +1962,10 @@ export function CodeEditor({
     const chunk = text.slice(0, take);
     const rest = text.slice(take);
     const next = draft.slice(0, at) + chunk + draft.slice(at);
+    acOffers.take(line ? "line" : "word");
+    acAccepting.current = true;
     edit(next);
+    acAccepting.current = false;
     acLastEdit.current = "accept";
     const caret = at + chunk.length;
     // Keep the rest ghosted at the new caret; clear once it's fully consumed.
@@ -1941,7 +1973,7 @@ export function CodeEditor({
     requestAnimationFrame(() => {
       el.selectionStart = el.selectionEnd = caret;
     });
-  }, [suggestion, draft, edit]);
+  }, [suggestion, draft, edit, acOffers]);
 
   // \ref/\cite completion: cap the dropdown so a huge .bib can't render
   // thousands of rows; the prefix filter usually narrows it well below this.
@@ -2201,10 +2233,10 @@ export function CodeEditor({
         if (acCopilot) {
           const items = acCandidates.current;
           if (items.length > 1 && items[0].version === acDocumentVersion.current) {
-            recordAcOutcome(false);
+            acOffers.end();
             acCandidate.current = (acCandidate.current + (bracket === "]" ? 1 : items.length - 1)) % items.length;
             const item = items[acCandidate.current];
-            acOutcome.current = { model: `${item.provider}/${item.model ?? item.provider}`, mode: "copilot" };
+            acOffers.start(item.id, "copilot", `${item.provider}/${item.model ?? item.provider}`);
             setSuggestion({ text: item.text, at: item.at, candidate: item });
           }
         } else void requestCompletion({ candidate: (acCandidate.current + (bracket === "]" ? 1 : 2)) % 3 });

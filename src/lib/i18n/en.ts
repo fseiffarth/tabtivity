@@ -9747,6 +9747,7 @@ export const enSource = {
   "fileViewer.autocompleteControls": "Tab: accept · →: word · {altRight}: line · {altBrackets}: candidate {candidate}/3 · Shift+Tab: mode · Esc: dismiss",
   "stats.autocomplete": "Autocomplete · {mode} · {model}",
   "stats.autocompleteOutcomes": "{accepted} accepted · {dismissed} dismissed",
+  "stats.autocompleteOffers": "{shown} shown · Tab {tab} · word {word} · line {line} · typed {typed} · {rejected} rejected",
   "fileViewer.noSuggestion": "No suggestion",
   "fileViewer.autocompleteStatus": "Autocomplete · {mode}…",
   "fileViewer.copilotStatus": "Copilot…",

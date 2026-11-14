@@ -14,9 +14,27 @@ import { AGENT_CLI_ROWS } from "./agents/agentClis";
 import { envName } from "./brand";
 
 export const METRIC = {
-  /** `autocomplete.accept/dismiss.<mode>.<model>` — one outcome per suggestion. */
+  /** `autocomplete.accept/dismiss.<mode>.<model>` — the old outcome per
+   * suggestion. Read for history, no longer written. */
   AUTOCOMPLETE_ACCEPT: "autocomplete.accept",
   AUTOCOMPLETE_DISMISS: "autocomplete.dismiss",
+  // `autocomplete.<event>.<mode>.<provider>/<model>`, at most once per offer
+  // (`lib/viewers/completion/completionTimings.ts`):
+  /** Visible 750 ms, or taken. */
+  AUTOCOMPLETE_SHOWN: "autocomplete.shown",
+  /** Taken whole with Tab. */
+  AUTOCOMPLETE_TAB: "autocomplete.tab",
+  /** A word taken with Ctrl+Right. */
+  AUTOCOMPLETE_WORD: "autocomplete.word",
+  /** A line taken with Alt+Right. */
+  AUTOCOMPLETE_LINE: "autocomplete.line",
+  /** At least three of its characters typed through. */
+  AUTOCOMPLETE_TYPED: "autocomplete.typed",
+  /** Gone after 750 ms with nothing taken. */
+  AUTOCOMPLETE_REJECTED: "autocomplete.rejected",
+  /** `autocomplete.request.<ok|empty|error|cache>.<provider>/<model>`, with
+   * `<provider>/none` when no model was chosen. */
+  AUTOCOMPLETE_REQUEST: "autocomplete.request",
   /** `agent.tab.<cmd>` — an agent tab was opened. */
   AGENT_TAB: "agent.tab",
   /** `agent.tab.local.<model>` — a local (Ollama-backed) agent tab was opened. */
