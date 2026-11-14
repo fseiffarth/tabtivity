@@ -1,3 +1,4 @@
+import type { DocStatus } from "../../src/lib/projects/docStatus";
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 import { storageKey } from "../../src/lib/brand";
@@ -1546,7 +1547,11 @@ export interface ProjectFileEntry {
  * the way down starts with a dot. An older desktop omits it (no uploads).
  * `remarks`: whether the PDF reader's **Annotate** may write into a PDF of the
  * project ("Phone may write remarks into PDFs"); omitted by an older desktop. */
-export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean }
+export interface ProjectFileListing {
+  entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean
+  /** The project root's catalog docs and the state each is in (the desktop tree's "Project docs" group; names only, in the catalog's order). Root of this computer's side only; missing in any folder, on the remote side, from an older desktop, or when the read timed out — the plain group then. A ghost row is `state === "missing" && creatable`. */
+  docs?: DocStatus[]
+}
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of
  * the project; no `dir` is the project's root. Answers only while the
@@ -1637,6 +1642,20 @@ export async function makeProjectFolder(projectId: string, dir: string | undefin
   const folder = dir ? `&dir=${encodeURIComponent(dir)}` : "";
   const body = await api<{ entry?: ProjectFileEntry }>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/files/folder?name=${encodeURIComponent(name)}${folder}`,
+    { method: "POST" },
+  );
+  if (!body?.entry?.token) throw new ApiError(200, "malformed_response");
+  return body.entry;
+}
+
+/** `POST /api/v1/projects/{id}/files/docs?name=<leaf>` — a ghost row's
+ * **Create**: the catalog doc `name` written into the project root from its
+ * template, behind the upload switch; answers the new file's row. A taken name
+ * is `already_exists`, one outside the catalog's creatable docs
+ * `invalid_request`. Nothing is overwritten and there is no Undo. */
+export async function createProjectDoc(projectId: string, name: string): Promise<ProjectFileEntry> {
+  const body = await api<{ entry?: ProjectFileEntry }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/files/docs?name=${encodeURIComponent(name)}`,
     { method: "POST" },
   );
   if (!body?.entry?.token) throw new ApiError(200, "malformed_response");

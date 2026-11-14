@@ -263,7 +263,7 @@ describe("Mobile project — read-only file browser", () => {
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     const library = await openLibrary();
     await within(library).findByRole("button", { name: "Open the folder src" });
-    // Name, ascending, folders on top; the scaffold and the gitignored stay folded at the end.
+    // Name, ascending, folders on top; the scaffold and the gitignored stay folded.
     expect(shownNames(library)).toEqual(["src", "notes.md", "paper.pdf", "plot.png"]);
 
     viewPick(library, "Descending");
@@ -282,9 +282,9 @@ describe("Mobile project — read-only file browser", () => {
     expect(JSON.parse(localStorage.getItem(storageKey("mobile.filesLibraryView")) ?? "{}"))
       .toEqual({ layout: "grid", sort: "kind", desc: true, foldersFirst: false, thumbs: true });
 
-    // The sections follow the rest, sorted on their own.
+    // The docs group leads, sorted on its own.
     fireEvent.click(within(library).getByRole("button", { name: "Project docs (2)" }));
-    expect(shownNames(library)).toEqual(["notes.md", "plot.png", "paper.pdf", "src", "AGENTS.md", "README.md"]);
+    expect(shownNames(library)).toEqual(["AGENTS.md", "README.md", "notes.md", "plot.png", "paper.pdf", "src"]);
   });
 
   it("counts a folder's items only where the desktop counted them", async () => {
