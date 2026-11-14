@@ -715,15 +715,14 @@ impl Sessions {
         if let Some(session) = self.running(project_id, root) {
             return Ok(session);
         }
-        let stay = app_core::rt::blocking("Copilot settings", credentials::enabled).await.unwrap_or(false);
-        let restore = stay.then(credentials::keychain);
+        let restore = credentials::stay_signed_in().await.then(credentials::keychain);
         let session = self.get_or_start_with(project_id, root, restore, |root, log| {
             let (process, output, input) = ManagedProcess::launch(root, Some(log))?;
             Ok((Some(process), output, input))
         })
         .await?;
         if std::ptr::eq(self, sessions()) {
-            sessions().start_reaper(credentials::keychain(), REAP_EVERY, Instant::now);
+            sessions().start_reaper(credentials::keychain(), credentials::enabled, REAP_EVERY, Instant::now);
         }
         Ok(session)
     }
@@ -825,10 +824,12 @@ impl Sessions {
         idle
     }
 
-    /// Start the idle-shutdown timer once: every `every` it asks whether a
-    /// sign-in is remembered and stops the idle servers. It holds no lock
-    /// between rounds and ends with [`Sessions::stop_all`] at exit.
-    fn start_reaper(&'static self, store: credentials::Store, every: Duration, clock: fn() -> Instant) {
+    /// Start the idle-shutdown timer once: every `every` it asks whether the
+    /// next server would sign in by itself (`stay` on and a sign-in
+    /// remembered) and stops the idle servers. With `stay` off it never reads
+    /// the keychain. It holds no lock between rounds and ends with
+    /// [`Sessions::stop_all`] at exit.
+    fn start_reaper(&'static self, store: credentials::Store, stay: fn() -> bool, every: Duration, clock: fn() -> Instant) {
         let mut reaper = self.reaper.lock_ok();
         if reaper.as_ref().is_some_and(|task| !task.is_finished()) {
             return;
@@ -839,7 +840,8 @@ impl Sessions {
                 if self.entries.lock_ok().is_empty() {
                     continue;
                 }
-                let remembered = credentials::remembered(&store).await;
+                let stay = app_core::rt::blocking("Copilot settings", stay).await.unwrap_or(false);
+                let remembered = credentials::restorable(stay, &store).await;
                 self.reap_idle(clock(), remembered);
             }
         }));
@@ -1214,7 +1216,7 @@ mod tests {
     use super::super::credentials::{self, tests::Memory, Remembered, Store};
 
     fn store_with(remembered: Option<Remembered>) -> (Arc<Memory>, Store) {
-        let memory = Arc::new(Memory(Mutex::new(remembered)));
+        let memory = Arc::new(Memory(Mutex::new(remembered), Default::default()));
         let store: Store = memory.clone();
         (memory, store)
     }
@@ -1364,8 +1366,8 @@ mod tests {
         registry.note_use_at("one", Instant::now());
         let (_, store) = store_with(Some(octo()));
         // A clock an hour ahead: the server is idle at the first round.
-        registry.start_reaper(store.clone(), Duration::from_millis(5), || Instant::now() + Duration::from_secs(3600));
-        registry.start_reaper(store, Duration::from_millis(5), Instant::now); // once only
+        registry.start_reaper(store.clone(), || true, Duration::from_millis(5), || Instant::now() + Duration::from_secs(3600));
+        registry.start_reaper(store, || true, Duration::from_millis(5), Instant::now); // once only
         tokio::time::timeout(Duration::from_secs(5), async {
             while session.alive() {
                 tokio::time::sleep(Duration::from_millis(5)).await;

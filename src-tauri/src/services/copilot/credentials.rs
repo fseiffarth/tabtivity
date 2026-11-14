@@ -75,10 +75,23 @@ async fn write(store: &Store, value: Option<Remembered>) -> Result<(), String> {
     app_core::rt::try_blocking("Copilot keychain", move || store.set(value.as_ref())).await
 }
 
-/// Whether a token for this app account is remembered (`copilot_account`'s
-/// `remembered`). Never the token itself.
+/// Whether a token for this app account is in the keychain. Never the token
+/// itself.
 pub async fn remembered(store: &Store) -> bool {
     read(store).await.is_some()
+}
+
+/// [`enabled`], off the async threads.
+pub async fn stay_signed_in() -> bool {
+    app_core::rt::blocking("Copilot settings", enabled).await.unwrap_or(false)
+}
+
+/// Whether the next server signs in by itself (`copilot_account`'s
+/// `remembered`, the idle timer's question): the setting is on and a token is
+/// kept. With the setting off the keychain is not read at all: a status poll
+/// must never touch a keychain the user did not opt into.
+pub async fn restorable(stay: bool, store: &Store) -> bool {
+    stay && remembered(store).await
 }
 
 /// After a finished device sign-in, with the setting on: ask the server for
@@ -144,18 +157,30 @@ pub mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// A keychain in memory.
+    /// A keychain in memory; `reads` counts how often it was asked.
     #[derive(Default)]
-    pub struct Memory(pub Mutex<Option<Remembered>>);
+    pub struct Memory(pub Mutex<Option<Remembered>>, pub std::sync::atomic::AtomicUsize);
 
     impl TokenStore for Memory {
         fn get(&self) -> Option<Remembered> {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.0.lock().unwrap().clone()
         }
         fn set(&self, value: Option<&Remembered>) -> Result<(), String> {
             *self.0.lock().unwrap() = value.cloned();
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn the_keychain_is_not_read_while_stay_signed_in_is_off() {
+        let memory = Arc::new(Memory::default());
+        *memory.0.lock().unwrap() = Some(Remembered { user: "octo".into(), token: "token-value-1".into() });
+        let store: Store = memory.clone();
+        assert!(!restorable(false, &store).await, "an entry left behind restores nothing with the setting off");
+        assert_eq!(memory.1.load(std::sync::atomic::Ordering::SeqCst), 0, "the status poll read the keychain");
+        assert!(restorable(true, &store).await);
+        assert_eq!(memory.1.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
