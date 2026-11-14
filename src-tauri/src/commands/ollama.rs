@@ -3333,6 +3333,38 @@ fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &s
     trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned)
 }
 
+/// The endpoint one completion request may use, or why it may not run: the
+/// policy block `complete_text` runs before any client exists. A local-models-
+/// only project (`services::agent_privacy`) is completed by this machine's
+/// models only: loopback host, a model the endpoint lists without a remote (an
+/// Ollama cloud model answers on ollama.com). Every request then asks `gate`
+/// (`owner_gate`) whose listener the address is, as every other Ollama call
+/// does before it writes a byte, so source text never reaches a process
+/// squatting on the loopback port. `refusal` and `gate` are parameters
+/// because a unit test can make neither real one refuse on demand.
+fn completion_endpoint(
+    settings: &crate::schema::Settings,
+    locked: bool,
+    project_id: Option<&str>,
+    model: &str,
+    refusal: &dyn Fn(&str, &str) -> Option<String>,
+    gate: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<String, String> {
+    let local_only = locked
+        || project_id
+            .and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
+            .is_some_and(|policy| policy.local_only);
+    let (host, allow_remote) = host_setting(settings);
+    let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
+    if locked {
+        if let Some(refusal) = refusal(&addr, model) {
+            return Err(refusal);
+        }
+    }
+    gate(&addr)?;
+    Ok(addr)
+}
+
 fn completion_body(
     prefix: &str,
     suffix: &str,
@@ -3390,25 +3422,22 @@ pub async fn complete_text(
     crate::services::ai_switch::check()?;
     let event = format!("text-completion-{request_id}");
     text_completion::run(request_id, async move {
-        let settings = crate::storage::load_settings().unwrap_or_default();
-        // A local-models-only project (`services::agent_privacy`) is completed
-        // by this machine's models only: loopback host, a model the endpoint
-        // lists without a remote (an Ollama cloud model answers on ollama.com).
-        let locked = crate::services::agent_privacy::completion_locked(project_id.as_deref());
-        let local_only = locked || project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
-            .is_some_and(|policy| policy.local_only);
-        let (host, allow_remote) = host_setting(&settings);
-        let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
-        if locked {
-            let (checked_addr, checked_model) = (addr.clone(), model.clone());
-            let refusal = app_core::rt::blocking("Local models only", move || {
-                crate::services::agent_privacy::completion_refusal(true, &checked_addr, &checked_model)
-            })
-            .await?;
-            if let Some(refusal) = refusal {
-                return Err(refusal);
-            }
-        }
+        // Judged afresh for every request, off the async worker: a cached lock
+        // verdict would let a project that was just locked reach a remote host.
+        let (checked_project, checked_model) = (project_id.clone(), model.clone());
+        let addr = app_core::rt::try_blocking("Completion endpoint", move || {
+            let settings = crate::storage::load_settings().unwrap_or_default();
+            let locked = crate::services::agent_privacy::completion_locked(checked_project.as_deref());
+            completion_endpoint(
+                &settings,
+                locked,
+                checked_project.as_deref(),
+                &checked_model,
+                &|addr, model| crate::services::agent_privacy::completion_refusal(true, addr, model),
+                &owner_gate,
+            )
+        })
+        .await?;
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
         let context = context
@@ -4148,6 +4177,42 @@ mod phone_control_tests {
         // This test process's own listener, in its own namespace, passes.
         let own = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         assert_eq!(owner_gate(&format!("127.0.0.1:{}", own.local_addr().unwrap().port())), Ok(()));
+    }
+
+    /// B1: a completion asks the owner gate before its client exists, so a
+    /// refused listener never sees a connection, let alone the source text.
+    #[test]
+    fn a_completion_asks_the_owner_gate_before_it_connects() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let settings = crate::schema::Settings { ollama_host: Some(addr.clone()), ..Default::default() };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let refusing = |a: &str| -> Result<(), String> {
+            asked.borrow_mut().push(a.to_string());
+            Err(format!("{LISTENER_REFUSED}: another account (uid 1002) is listening"))
+        };
+        let never = |_: &str, _: &str| -> Option<String> { panic!("an unlocked project asks no locality") };
+        for project in [None, Some("p1")] {
+            let err = completion_endpoint(&settings, false, project, "coder", &never, &refusing).unwrap_err();
+            assert!(err.starts_with(LISTENER_REFUSED), "{err}");
+        }
+        assert_eq!(*asked.borrow(), vec![addr.clone(), addr.clone()]);
+        assert_eq!(
+            listener.accept().map(|_| ()).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the refused listener was never connected to"
+        );
+
+        // A passing gate hands the address on; a locked project's refusal
+        // comes first and the gate is not asked at all.
+        assert_eq!(completion_endpoint(&settings, false, None, "coder", &never, &|_| Ok(())), Ok(addr.clone()));
+        let refuse_locked = |_: &str, m: &str| Some(format!("refused {m}"));
+        let gate_unasked = |_: &str| -> Result<(), String> { panic!("refused before the gate") };
+        assert_eq!(
+            completion_endpoint(&settings, true, Some("p1"), "big:cloud", &refuse_locked, &gate_unasked),
+            Err("refused big:cloud".into())
+        );
     }
 
     #[test]
