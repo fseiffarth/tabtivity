@@ -1444,6 +1444,43 @@
   text-align: center;
 }
 
+/* "Agent memory (n)" at the end of the Project docs group: a quiet sub-header
+   (no divider rule) over read-only rows. Static. */
+.file-tree-memory-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px var(--space-2);
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.file-tree-memory-toggle:hover {
+  color: var(--text-primary);
+}
+
+.file-entry.doc-memory {
+  width: 100%;
+  box-sizing: border-box;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  padding-left: calc(var(--space-2) + 16px);
+}
+
+.agent-memory-body {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
 .file-docs-summary {
   font-weight: 400;
   letter-spacing: 0;

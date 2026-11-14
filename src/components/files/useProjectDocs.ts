@@ -1,7 +1,9 @@
 // The "Project docs" group's state in the file tree: the backend's per-doc
 // status, and the group's persisted open/closed fold.
 import { useCallback, useEffect, useState } from "react";
-import { projectDocsStatus, type DocStatus } from "../../lib/projects/projectDocs";
+import {
+  projectAgentMemory, projectDocsStatus, type AgentMemoryEntry, type DocStatus,
+} from "../../lib/projects/projectDocs";
 import { storageKey } from "../../lib/brand";
 
 const DOCS_EXPANDED_PREFIX = "fileTree.docsExpanded.";
@@ -68,4 +70,31 @@ export function useProjectDocsStatus({
   // Another project (or no project) must not wear the last one's states.
   useEffect(() => { setStatus(null); }, [projectId]);
   return { status: enabled ? status : null, refresh };
+}
+
+/**
+ * The agent CLIs' memory files for the project (read-only, empty when there are
+ * none — the sub-group then stays hidden). They live in the agent home, not the
+ * project folder, so no fs-change announces them: the list is asked when the
+ * group is on screen and again each time `refreshKey` changes (the group being
+ * unfolded).
+ */
+export function useAgentMemory({
+  projectId, enabled, refreshKey,
+}: {
+  projectId: string | null;
+  enabled: boolean;
+  refreshKey: unknown;
+}): AgentMemoryEntry[] {
+  const [entries, setEntries] = useState<AgentMemoryEntry[]>([]);
+  useEffect(() => {
+    if (!projectId || !enabled) return;
+    let cancelled = false;
+    projectAgentMemory(projectId)
+      .then((e) => { if (!cancelled) setEntries(Array.isArray(e) ? e : []); })
+      .catch(() => { if (!cancelled) setEntries([]); });
+    return () => { cancelled = true; };
+  }, [projectId, enabled, refreshKey]);
+  useEffect(() => { setEntries([]); }, [projectId]);
+  return enabled ? entries : [];
 }

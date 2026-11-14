@@ -72,8 +72,9 @@ import { useFileTreeEmbedCaps, useFileTreeMountProbes, useFileTreeSearch, useFil
 import { useFileTreePythonMain, useFileTreeRunState } from "./useFileTreeRun";
 import { useFileTreeRemote, useFileTreeSyncStatus } from "./useFileTreeRemote";
 import { ROW_CAP_STEP, useFileTreeRowActions, useFileTreeRows } from "./useFileTreeRows";
-import { useDocsGroupOpen, useProjectDocsStatus } from "./useProjectDocs";
-import { createProjectDoc, type DocState } from "../../lib/projects/projectDocs";
+import { useAgentMemory, useDocsGroupOpen, useProjectDocsStatus } from "./useProjectDocs";
+import { AGENT_MEMORY_CLI_NAME, AgentMemoryDialog } from "./AgentMemoryDialog";
+import { createProjectDoc, type AgentMemoryEntry, type DocState } from "../../lib/projects/projectDocs";
 import { usePaneVisible } from "../../lib/files/fileAccess";
 import { useFileTreeDirSizes } from "./useFileTreeSizes";
 
@@ -846,6 +847,15 @@ export function FileTree({
     enabled: !!projectId && separateScaffold && !relPath && !remoteListing && active && paneVisible,
     listingKey: entries,
   });
+  // The agent CLIs' memory for this project: a read-only sub-group at the end
+  // of the Project docs group, hidden while there is none.
+  const agentMemory = useAgentMemory({
+    projectId,
+    enabled: !!projectId && separateScaffold && !relPath && !remoteListing && active && paneVisible,
+    refreshKey: scaffoldExpanded,
+  });
+  const [memoryExpanded, setMemoryExpanded] = useState(false);
+  const [memoryPreview, setMemoryPreview] = useState<AgentMemoryEntry | null>(null);
   const { displayStatuses, sections, docsGroup, setRowCap, rowWindow, orderedVisible } = useFileTreeRows({
     gitStatuses, entries, hiddenEndings, relPath, shownPaths, separateScaffold, separateGitignored,
     dirIgnoredBytes, dirSizes, sortKey, descending, projectId, scaffoldExpanded, gitignoredExpanded,
@@ -3189,6 +3199,37 @@ export function FileTree({
                     return renderEntry(r.entry, false, false, false, { state: r.state, nested: r.nested });
                   });
                 })()}
+                {scaffoldExpanded && projectId && agentMemory.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className="file-tree-memory-toggle"
+                      aria-expanded={memoryExpanded}
+                      onClick={() => setMemoryExpanded((v) => !v)}
+                      title={t("fileTree.agentMemoryTitle")}
+                    >
+                      <span className="file-tree-hidden-caret">{memoryExpanded ? "▾" : "▸"}</span>
+                      {t("fileTree.agentMemory", { count: agentMemory.length })}
+                      <UntestedTag id="fileTree.agentMemory" />
+                    </button>
+                    {memoryExpanded && agentMemory.map((m) => (
+                      <button
+                        type="button"
+                        key={`${m.home}:${m.cli}:${m.name}`}
+                        className="file-entry doc-memory"
+                        title={t("fileTree.memoryOpenTitle", { name: m.name })}
+                        onClick={() => setMemoryPreview(m)}
+                      >
+                        <span className="file-icon"><FileIcon ext=".md" isDir={false} /></span>
+                        <span className="file-name">{m.name}</span>
+                        <span className="file-doc-badge">
+                          {AGENT_MEMORY_CLI_NAME[m.cli]}{m.home === "local" ? ` · ${t("fileTree.memoryLocal")}` : ""}
+                        </span>
+                        <span className="file-size size-small">{fmtSize(m.bytes)}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
               </>
             )}
             {rows.regular.map((e) => renderEntry(e, false))}
@@ -3263,6 +3304,9 @@ export function FileTree({
           </>
         );
       })()}
+      {memoryPreview && projectId && (
+        <AgentMemoryDialog projectId={projectId} entry={memoryPreview} onClose={() => setMemoryPreview(null)} />
+      )}
       {contextMenu?.rowRect && createPortal(
         <div
           key={contextMenu.entry?.path ?? "root"}
