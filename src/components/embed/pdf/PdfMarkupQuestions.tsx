@@ -20,6 +20,7 @@
  * chip scrolls the page to its pin.
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useStableList } from "../../../hooks/useStableList";
 import { CheckboxIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, SquareIcon } from "../../common/icons/Icon";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { useT } from "../../../lib/i18n";
@@ -272,18 +273,17 @@ function AskCard({ ask, questions, pinned }: { ask: MarkupAsk; questions: Markup
  */
 export function useQuestionPins(doc: PDFDocumentProxy | null, asks: readonly MarkupAsk[]): Map<number, QuestionPin[]> {
   const [texts, setTexts] = useState<{ doc: PDFDocumentProxy; pages: Map<number, TextItemBox[]> } | null>(null);
-  const pageList = useMemo(
+  const pageList = useStableList(useMemo(
     () => [...new Set(asks.flatMap((ask) => ask.questions.flatMap((q) => (q.page ? [q.page] : []))))]
       .filter((page) => doc !== null && page <= doc.numPages)
       .sort((a, b) => a - b),
     [asks, doc],
-  );
-  const wanted = pageList.join(",");
+  ));
   useEffect(() => {
-    if (!doc || !wanted) return;
+    if (!doc || !pageList.length) return;
     let live = true;
     const have = texts?.doc === doc ? texts.pages : null;
-    const missing = wanted.split(",").map(Number).filter((page) => !have?.has(page));
+    const missing = pageList.filter((page) => !have?.has(page));
     if (!missing.length) return;
     void Promise.all(missing.map((page) => pageTextItemBoxes(doc, page).then((items): [number, TextItemBox[]] => [page, items], (): [number, TextItemBox[]] => [page, []])))
       .then((read) => {
@@ -298,7 +298,7 @@ export function useQuestionPins(doc: PDFDocumentProxy | null, asks: readonly Mar
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, wanted]);
+  }, [doc, pageList]);
   // Matching the quotes walks every named page's text runs: only again when
   // the asks or the read text change, not on every render of the viewer.
   return useMemo(() => {

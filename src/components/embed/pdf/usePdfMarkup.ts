@@ -31,6 +31,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { useStableList } from "../../../hooks/useStableList";
 import { subscribeTauri } from "../../../hooks/useTauriListener";
 import { fileMtime } from "../../../lib/files/fileAccess";
 import { useT, type TranslationKey } from "../../../lib/i18n";
@@ -159,6 +160,8 @@ const DIALOG_REREAD_MS = 1_000;
 
 /** A picture's words: none, so the text marks say so. */
 const NO_RUNS: readonly TextRun[] = [];
+/** No ids: one shared array, so a render without a project copies nothing. */
+const NO_IDS: readonly string[] = [];
 
 export type MarkupTool = PenTool;
 /** How long `E` must be held before it is the quick eraser rather than a tap
@@ -578,10 +581,9 @@ export function usePdfMarkup({
   // but the chosen — the strip names the asking tab and switches to it.
   // Keyed by the ids, not the `targets` object: a relabel or any other tab's
   // change hands the hook a new list, and must not re-read every tab.
-  const idleIdList = projectId
-    ? targets.flatMap((entry) => (active && entry.scheduleTargetId === targetId ? [] : [entry.scheduleTargetId])).join("\n")
-    : "";
-  const idleIds = useMemo(() => (idleIdList ? idleIdList.split("\n") : []), [idleIdList]);
+  const idleIds = useStableList(projectId
+    ? targets.flatMap((entry) => (active && entry.scheduleTargetId === targetId ? [] : [entry.scheduleTargetId]))
+    : NO_IDS);
   const idleKey = projectId && idleIds.length ? `${projectId}\n${idleIds.join("\n")}\n${path}` : null;
   const [waiting, setWaiting] = useState<{ key: string; target: string | null } | null>(null);
   const listening = asksKey !== null || idleKey !== null || (active && projectId !== null && targets.length > 0);
@@ -625,21 +627,21 @@ export function usePdfMarkup({
   // Submit, so a tick finds only that Submit's marks, whichever tab it went to.
   // A backend without the command (a hot-reloaded window over an older one)
   // has no ticks.
-  const tickIdList = active && projectId ? targets.map((entry) => entry.scheduleTargetId).join("\n") : "";
-  const ticksKey = tickIdList ? `${projectId}\n${tickIdList}\n${path}` : null;
+  const tickIds = useStableList(active && projectId ? targets.map((entry) => entry.scheduleTargetId) : NO_IDS);
+  const ticksKey = tickIds.length ? `${projectId}\n${tickIds.join("\n")}\n${path}` : null;
   useEffect(() => {
     if (!ticksKey || !projectId || !visible) return;
     let live = true;
     const key = ticksKey;
     void Promise.all(
-      tickIdList.split("\n").map((id) => listMarkupTicks(projectId, id, path).catch((): MarkupTick[] => [])),
+      tickIds.map((id) => listMarkupTicks(projectId, id, path).catch((): MarkupTick[] => [])),
     ).then((found) => {
       if (live) setTickList({ key, ticks: found.flat() });
     });
     return () => {
       live = false;
     };
-  }, [ticksKey, tickIdList, projectId, path, visible, asksChanged]);
+  }, [ticksKey, tickIds, projectId, path, visible, asksChanged]);
   const ticks = useMemo(() => (tickList && tickList.key === ticksKey ? tickList.ticks : []), [tickList, ticksKey]);
   const ticksRef = useRef(ticks);
   ticksRef.current = ticks;
