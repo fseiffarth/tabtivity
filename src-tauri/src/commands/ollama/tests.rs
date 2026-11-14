@@ -241,6 +241,28 @@ fn the_time_budget_cuts_after_complete_lines_only() {
     assert_eq!(budget_cut(CompletionMode::Block, ms(60_000), "\nfoo();\nbar"), Some("\nfoo();".len()));
 }
 
+/// The final text of a budget stop is what its last preview showed. The final
+/// seam against AFTER used to run first and the line cut second, so a model
+/// that had begun to echo AFTER lost its last complete line as well: the
+/// ghost shrank by a line the moment the request settled.
+#[test]
+fn a_budget_stop_keeps_the_lines_its_preview_showed() {
+    let prefix = "fn total(items: &[i64]) -> i64 {\n";
+    let suffix = "\n    return format(value);\n}";
+    let raw = "    let a = 1;\n    let b = 2;\n    return fo";
+    let (mut preview, stopped) = completion_snapshot(raw, false, false, prefix, suffix, false, false);
+    assert!(!stopped);
+    let end = budget_cut(CompletionMode::Block, Duration::from_secs(3), &preview).expect("two complete lines");
+    preview.truncate(end);
+    assert_eq!(preview, "    let a = 1;\n    let b = 2;");
+    assert_eq!(budget_text(raw, false, prefix, suffix, false, false), preview);
+    // A complete line that only repeats AFTER still goes, as in a finished answer.
+    let echoed = "    let a = 1;\n    return format(value);\n}";
+    assert_eq!(budget_text(echoed, false, prefix, suffix, false, false), "    let a = 1;");
+    // FIM text is the model's own: the complete lines, nothing trimmed.
+    assert_eq!(budget_text("a();\nb();\nret", true, prefix, "\nreturn 1;", false, false), "a();\nb();");
+}
+
 #[test]
 fn only_ollamas_exact_400_retries_on_chat() {
     assert!(fim_refused("ollama HTTP 400"));

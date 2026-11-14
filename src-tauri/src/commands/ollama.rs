@@ -3554,6 +3554,23 @@ fn budget_cut(mode: CompletionMode, since_first_token: Duration, text: &str) -> 
     complete_lines_end(text)
 }
 
+/// The final text of a request the time budget stopped: the complete lines
+/// its last preview showed (the same snapshot of the same answer, cut at the
+/// same place), and only then the seam against AFTER that a final chat text
+/// gets. The other order trims a half-written echo of AFTER first and then
+/// cuts one complete line more than the preview did. Pure + tested.
+fn budget_text(raw: &str, fim: bool, prefix: &str, suffix: &str, sentence: bool, prose: bool) -> String {
+    let mut text = completion_snapshot(raw, fim, false, prefix, suffix, sentence, prose).0;
+    if let Some(end) = complete_lines_end(&text) {
+        text.truncate(end);
+    }
+    if fim {
+        return text;
+    }
+    // The leading seam is already trimmed; an empty BEFORE leaves it alone.
+    trim_context_overlap("", suffix, &text, false)
+}
+
 /// The endpoint one completion request may use, or why it may not run: the
 /// policy block `complete_text` runs before any client exists. A local-models-
 /// only project (`services::agent_privacy`) is completed by this machine's
@@ -3825,18 +3842,17 @@ pub async fn complete_text(
             .await;
             match result {
                 Ok(streamed) => {
-                    let mut text = completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0;
                     let stop = if streamed.record.is_some() {
                         "done"
                     } else if over_budget {
-                        // The budget cut its preview after a complete line; the
-                        // final text keeps the same complete lines.
-                        if let Some(end) = complete_lines_end(&text) {
-                            text.truncate(end);
-                        }
                         "budget"
                     } else {
                         "line"
+                    };
+                    let text = if stop == "budget" {
+                        budget_text(&streamed.text, use_fim, &prefix, &suffix, sentence, prose)
+                    } else {
+                        completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0
                     };
                     let stats = CompletionStats::new(endpoint, &model, stop, first_token, started.elapsed(), reference_bytes, references_dropped, streamed.record.as_ref());
                     // Once, before the final text, on its own event: an older
