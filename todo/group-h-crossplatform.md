@@ -4374,6 +4374,21 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Phone Focus chat, Claude 2.1.322 or later, a long Bash command
+    running: send a prompt, then **Send now** — the host presses Claude's own
+    Ctrl+X Ctrl+S (`pty_bridge::QueueHint.keys`, one `send-keys` call; was Esc),
+    so the queue joins the turn, the command moves to the background instead of
+    being killed, and the prompt is not handed back into Claude's box. Also with
+    the tab on a remote host (`ssh_exec::host_tmux_send_now_command`). Code
+    complete (2026-11-12, `77e180afe`); never seen live.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bq — Edit a phone prompt until the agent takes it in** (2026-09-29;
   ✅ code-complete, automated tests passing — `MobileHeldPromptEdit.test.tsx`,
@@ -4909,6 +4924,28 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
   its own lock. Order: 31ct → sidecar headers → Settings → minimal shell for
   the plan's on-device checks (iOS pairing in the frame, terminal keyboard in
   the frame) → rest of the phone shell.
+  - [x] Phase 0 (cookie per port, 31ct), Phase 1 (`mobile_control/linked.rs`,
+    headers, `/healthz` CORS, status `linked_desktops`) and Phase 2 (Settings →
+    Mobile → Linked desktops) are code-complete, with docs (plan Phase 5 for
+    them). A minimal Phase 3 (switcher shell, one framed desktop) followed in
+    `bb964b68b`; open: the rest of Phase 3 (lamps, badges, deep links, the
+    steering key) and Phase 4 (push relay, after the user confirms its trust
+    cost).
+  - [ ] 🖐️ Two desktops on one tailnet, Serve on each: in Settings → Mobile →
+    Linked desktops copy each computer's address into the other's list (a
+    `*.c.ts.net` name, an address with a path, its own address, a duplicate and a
+    ninth are each refused with a reason); open each computer's phone page in a
+    browser and check the response headers (`curl -I` on `/`) list the other
+    origin in `frame-ancestors`, with no `X-Frame-Options`; remove the link and
+    they are byte-identical to before.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31ct — Phone session cookie collides across ports on one machine**
   (2026-11-14; ✅ code-complete, `two_hosts_on_one_machine_keep_their_sign_ins_apart`,

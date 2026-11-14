@@ -6,7 +6,8 @@ Never run live: the feature wears the `diff-notes` `UntestedTag`.
 ## Commits
 
 - `1288b3b1e` feat(reader): notes on diff lines, added to the Chat draft (the whole feature, tests, docs)
-- the commit after it: this file with that sha filled in
+- `5ad50fdde` docs: this handoff names its commit
+- `aceb58445` fix(reader): diff note box takes the keyboard under steering and keeps its text on Shift+click (review fix)
 
 ## What was built
 

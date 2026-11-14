@@ -1,5 +1,26 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] **Notes on diff lines, added to the Chat draft** (implemented 2026-11-13, never
+  live; frontend only). Plan `docs/diff_notes_plan.md`, handoff
+  `docs/diff_notes_handoff.md`; pill `diff-notes`, steering key `C` (`viewNote`).
+  Open: the phone's `ChatChanges` and the git-panel `DiffView` (plan "Later").
+  - [x] 🤖 Automated test (`DiffNotes.test.ts`, `ReaderDiffNotes.test.tsx`)
+  - [ ] 🖐️ Manual QA: in a Claude tab with a few edits open Diffs; click the **+**
+    on an added range (Shift+click extends) and on a deleted line in two files,
+    in split, then unified; **Add to draft**: the Chat composer holds the prompt
+    (file:lines, the quoted diff, your note) and the notes are gone; nothing was
+    sent. Check the **+** button over the first line-number gutter and the note
+    box on a horizontally scrolled diff on the real paint path; **C** inside
+    Diffs starts a note on the cursor card's first changed line. Repeat on a
+    subagent's Diffs.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [ ] **Per-turn checkpoints** (implemented 2026-11-13, never live; experimental
   `turn_checkpoints`). Plan `docs/turn_checkpoints_plan.md`, handoff
   `docs/turn_checkpoints_handoff.md`, design `docs/context/checkpoints.md`,
@@ -15,6 +36,86 @@
     Checkpoint chip beside Commit saves a manual one. Restore refuses while the
     agent works. Check the Settings card's sizes after a day of normal use and
     that Clear empties a folder's store.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **Agent-tab and CLI polish, 2026-11-13/14** (implemented, never live; one
+  pill each: `tabBar.markUnread`, `desktop.intro.agents`, `agents.updateAll`,
+  `agents.dailyReleaseCheck`, `agents.autoTabName`,
+  `terminal.reader.sendNowHint`). Help: `tabs-and-panels`, `agent-clis`,
+  `gemini-cli`, `keyboard`. Open: the Chat's `terminal.reader.sendNowHint` line
+  still tells a Claude tab that Esc sends the queue (now Ctrl+X Ctrl+S).
+  - [x] 🤖 Automated tests (`AgentMarkUnread.test.ts`, `IntroAgentsDefault.test.tsx`,
+    `MobileQueuePull.test.ts`, `agent_hint` and `agent_latest` unit tests,
+    `agent_transcript` unknown-command test)
+  - [ ] 🖐️ Mark as unread: right-click a read Claude tab → **Mark as unread**; once
+    another tab is in front it lights as finished (bar, project pill, cockpit,
+    phone Agents list); opening it or typing into it clears it; the entry is
+    absent while the tab already shows unread, and on a shell tab. Also from a
+    popout.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Claude's **Send now** (Chat bubble, desktop K key and the phone's button):
+    while Claude runs a long Bash command, queue a prompt and press Send now:
+    the prompt goes into the turn, the command moves to the background instead
+    of being killed, and nothing is handed back into Claude's box.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manage CLIs: **Check all for updates**, then **Update all (N)** runs the
+    installers one after another with each card's log, a failure staying on its
+    card; Cursor shows `current → latest` and updates through its installer; a
+    fenced Cursor tab starts with `--disable-auto-update` first in its argv.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ How to start → Agent CLIs: the page opens on the current default CLI;
+    clicking an installed chip, Install, or a Recheck that finds the CLI saves
+    it as the default (Manage CLIs' Default chip follows); clicking an
+    uninstalled chip saves nothing.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Gemini and Aider read `AGENTS.md`: in a project with only `AGENTS.md`, a
+    fresh Gemini tab lists it among its loaded context files; Aider's start shows
+    it as a read-only file. Your own `context.fileName` / `read:` entries stay.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Type a misspelled slash command in a Claude tab (`/simplity foo`): the Chat
+    shows the command with its words and Claude's "Unknown command" answer
+    instead of waiting for a turn.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)
@@ -3123,6 +3224,27 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+- [x] Live dictation (built 2026-11-13/14, not run live): partials are written
+  into the Chat draft as provisional text and the final replaces them in place
+  (`lib/voice/provisionalDraft.ts`, `terminal/useLiveDictation.ts`); partials
+  transcribe the whole open segment (`services/voice/session.rs`, `vad.rs`); the
+  phone composer does the same (`mobile-web/src/voiceInput.ts`). Pill
+  `terminal.reader.voice.liveDraft`.
+- [ ] 🖐️ Live dictation — desktop Chat, mic on, speak a long sentence with a
+  pause in it: the words appear in the text box while you talk and are rewritten
+  as the sentence grows, with no doubled text when the final lands. Say "Tabby
+  scratch that" / "go on": those words never show in the box. Type inside the
+  provisional words: they become yours and are not typed again. Ctrl+Z only
+  undoes settled sentences. Then the same on the phone's Focus composer. Judge
+  the latency of the first words on CPU and on the GPU.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 - [ ] Phone: probe whether a headset's media button reaches the page through
   the Media Session API (plan step 5); if it does, it toggles talk/stop.
 - [ ] `voice_voices` and a system-voice picker in Settings → Voice (needs a
@@ -3250,8 +3372,8 @@ unchanged; the new agents are additive.
 - [ ] 🖐️ `tabtivity-mcp` from a CLI that is not wired (e.g. Gemini or Droid)
   — a fresh tab in a local project: the start hint mentions `tabtivity-mcp`; ask the
   agent to print a PDF; it runs `tabtivity-mcp call print print_request …`
-  and the print popup appears. `tabtivity-mcp` alone lists print, git, markup,
-  help, cockpit.
+  and the print popup appears. `tabtivity-mcp` alone lists the lanes the tab
+  holds (print, git, markup, help, cockpit, tabs, schedule).
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
     - [ ] ✅ Works on Linux (Wayland)

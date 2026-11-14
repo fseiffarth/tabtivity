@@ -60,6 +60,12 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
   again to clear. The mark shows on the tab, and the project's pill shows the
   most pressing one with a count — click it to jump to that tab. Marks are
   saved with the layout.
+- Mark an agent tab as unread: right-click a tab whose output you have read →
+  **Mark as unread**. It lights up as a finished turn again, in the tab bar, on
+  the project's pill, in the cockpit and in the phone's agent list, until you
+  open the tab again or type into it. While it is the tab in front of you it
+  stays dark and lights the moment you look away. The entry is not offered
+  while the tab already shows something unread.
 - To-do card from a tab (to-do board switched on): right-click → **Create to-do
   card** files a card titled after the tab under its project and opens it. The
   tab then shows ☑ (click to open the card) and the card shows the tab (click

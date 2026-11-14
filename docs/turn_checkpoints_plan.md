@@ -1,6 +1,9 @@
 # Per-turn checkpoints — plan
 
-Status: plan only (2026-11-13). Nothing built.
+Status: steps 1–7 built, reviewed and review fixes landed on `develop`
+(2026-11-13/14); see `docs/turn_checkpoints_handoff.md` for deviations and
+what was resolved. Never run live: the click-through in
+`todo/group-s-agents.md` is open.
 
 ## Why
 

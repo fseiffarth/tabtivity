@@ -18,6 +18,25 @@ current project. Types it has no viewer for open in your system's default app.
 - A hit in the file panel's **Search** view jumps straight to that line in the
   viewer.
 
+## Project docs
+
+The project root's standard files (`AGENTS.md`, `README.md`, `.gitignore`, …)
+sit in a **Project docs** group; the header shows how many of the default docs
+exist and how many are still untouched templates. Turn the grouping off with
+**Separate project docs section** in the project's settings.
+
+- A doc still holding the text Tabtivity wrote shows a **template** pill and is
+  dimmed; an edited one looks like any file.
+- A doc that is missing but can be made shows as a ghost row such as
+  `+ TODO.md`. Click it to create that one file from its template and open it
+  (on the phone: its menu → **Create**). Nothing is ever overwritten.
+- An old `CLAUDE.md` or `GEMINI.md` nests under `AGENTS.md` with a **pointer**
+  pill; new projects do not get them.
+- **Agent memory (n)** lists what Claude Code and Codex remember about the
+  project. It opens read-only in a preview; the CLIs maintain those files.
+- The amber **no scaffold** tag on a project means a default doc is missing;
+  click it to see which and to **Repair**.
+
 ## Share a file with another app
 
 To send a project file to Teams, mail, a browser upload or a file manager:

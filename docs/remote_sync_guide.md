@@ -162,7 +162,7 @@ Per pass:
 | no | no | nothing |
 | yes | no | pull host → mirror |
 | no | yes | push mirror → host, but only if the host still matches its base (`push_decision == Safe`) |
-| yes | yes | skip; the row stays orange for you |
+| yes | yes | skip; the row stays orange for you (the *take the newer copy* switch, 2.6, decides it by mtime instead) |
 
 A file that exists on **both** sides but was never synced counts as "both
 moved" (no base to compare against) and is skipped every pass. Pull or push it
@@ -229,6 +229,18 @@ From the *± diverged* list or the row's context menu:
 - **Keep local** for one or all: a confirmed force push.
 - **Apply delete** when one side is gone: propagates the deletion, after
   re-verifying live that the side is positively absent.
+
+**Take the newer copy automatically** (checkbox at the top of the diverged
+list; `sync_take_newer_get` / `sync_set_take_newer`, stored per project in
+`<state_dir>/remote-projects/<id>/sync_settings.json`, off by default). With it
+on, the auto pass (2.4) no longer skips a both-sides-changed file on an auto
+path: the copy with the newer mtime wins, after the loser is saved under
+`conflict-backups/<unix secs>/<rel>` (pruned after 30 days) and logged in
+`local_loss` (*overwritten locally* / *overwritten on the host*). A deletion on
+either side, a tie, a missing mtime or a copy over the 64 MiB cap is left
+orange; a failed backup leaves the file untouched, and the same failed state is
+not retried until a side moves. It is the one place byte-sync compares the two
+machines' clocks.
 
 ## 3. Git lockstep, step by step
 
@@ -392,6 +404,7 @@ into the mirror.
 |---|---|
 | `<state_dir>/remote-projects/<id>/sync.json` | byte-sync manifest |
 | `<state_dir>/remote-projects/<id>/git_peer.json` | lockstep state (enabled, status, last observed heads, early-out signatures) |
+| `<state_dir>/remote-projects/<id>/sync_settings.json`, `conflict-backups/<secs>/` | the *take the newer copy* switch; the copies it replaced (30 days) |
 | `<state_dir>/remote-projects/<id>/local_loss.json` | what lockstep/sync destroyed on the mirror, until acknowledged |
 | `<state_dir>/remote-projects/<id>/workers/<host>.json` | each worker's last pushed head |
 | `<mirror>/.git/tabtivity-lockstep.bundle`, `<host>/.git/tabtivity-lockstep.bundle` | transient bundle files, removed after each pass |

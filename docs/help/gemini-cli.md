@@ -31,8 +31,10 @@ npm, so it needs Node.js first.
 
 ## First use
 
-- The tab starts in the project folder. Gemini reads `GEMINI.md`, which
-  imports the project's shared `AGENTS.md`.
+- The tab starts in the project folder. Gemini reads the project's `AGENTS.md`
+  and, if there is one, `GEMINI.md`: Tabtivity adds `AGENTS.md` to Gemini's
+  `context.fileName` in the agent's own home (your entries there stay). Aider
+  is pointed at `AGENTS.md` the same way, through its `read:` list.
 - In a box scope, Gemini gets `--include-directories` for every member folder.
 - After a restart a Gemini tab continues the project's most recent
   conversation (not necessarily the one that tab had).

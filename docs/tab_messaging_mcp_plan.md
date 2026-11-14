@@ -1,6 +1,10 @@
 # Tab messaging MCP — agent tabs of one project message each other
 
-Status: plan only, 2026-11-14. Nothing is implemented, nothing was run.
+Status: steps 1–8 are implemented and reviewed on `develop` (2026-11-14); build
+notes, deviations and the reviewer's flags are in
+`docs/tab_messaging_mcp_handoff.md`. Nothing was run live: the manual
+verification below is still open. Open design flags (stacked wake notices, wake
+ignoring class, no liveness check) are listed in `todo/group-s-agents.md`.
 Builds on the per-tab lanes (`docs/context/agent_mcp_wiring.md`,
 `cockpit_mcp.md`, `markup_mcp.md`, `print_mcp.md`, `git_push_mcp.md`) and the
 trust rules in `docs/context/local_models_only.md` and `agent_authority.md`.

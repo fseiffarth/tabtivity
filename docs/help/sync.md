@@ -17,7 +17,7 @@ split the files by git.
 | Moves | commits and branches | raw file bytes |
 | Scope | the whole repo, once enabled | only paths you mark |
 | Reads `.gitignore` | yes | no |
-| Conflicts | fast-forward only; a divergence is reported, never auto-resolved | a file changed on both sides is skipped and shown orange |
+| Conflicts | fast-forward only; a divergence is reported, never auto-resolved | a file changed on both sides is skipped and shown orange (unless *Take the newer copy automatically* is on) |
 
 Both run only while the project is connected. Hosts tagged HPC get no
 background sync; manual actions still work.
@@ -60,6 +60,17 @@ The view header has **Auto-sync all** and **Large folders…** (a census that
 lets you exclude big trees). Auto-syncing a folder that would pull more than
 200 files or 100 MB asks first. Every manual transfer shows a confirmation with
 direction, file count, size and which files would be overwritten.
+Transfers run a few files at a time, so a big folder moves faster than one file
+after another; progress and results still list the files in order.
+
+**Take the newer copy automatically** is a switch at the top of the **± diverged**
+list, off by default and per project. With it on, auto-sync resolves a file that
+both sides changed by keeping the copy with the newer modification time. It
+saves the other copy first (kept 30 days) and lists it in the "Files changed on
+your local copy" report as *overwritten locally* or *overwritten on the host*.
+It only touches files auto-sync covers; a file deleted on one side or two equal
+times stay in the diverged list. It trusts both machines' clocks, so check
+them before relying on it.
 
 ## Colours in the file tree
 

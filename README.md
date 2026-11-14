@@ -128,13 +128,17 @@ every agent — and runs alongside an orchestrator rather than replacing it.
   drops, and SLURM jobs from the UI.
 - **[Every agent from your phone or iPad](docs/guide/features.md#every-agent-from-your-phone-the-third-differentiator)**:
   an Agents list of who is working, waiting or done, a chat view and touch
-  terminal, files the agent sends you, read-only project files, and PDF markup
+  terminal, files the agent sends you, read-only project files (with the
+  desktop's Project docs group), and PDF markup
   with a finger or the Apple Pencil that goes straight back to the agent.
 - **[Agents and terminals](docs/guide/features.md#agents-and-terminals)**:
   30 built-in agent CLIs plus your own and local Ollama models, per-tab
-  session resume, a Chat view over the running terminal (with diffs, earlier
-  chats and subagents), on-device dictation and read-aloud, scheduled prompts
-  and chains, and a tiling, pop-out tab layout. Local agents always run inside
+  session resume, a Chat view over the running terminal (with diffs you can
+  annotate line by line, earlier chats and subagents), on-device dictation
+  (shown live in the draft) and read-aloud, scheduled prompts
+  and chains, a tiling, pop-out tab layout, agent tabs of one project that can
+  message each other, and experimental per-turn checkpoints that put an
+  agent's files back. Local agents always run inside
   a sandbox (the agent fence). **Tabby**, a chat assistant that can search the
   web but cannot reach your files, sits in the side panel.
 - **[Projects, boxes and isolation tiers](docs/guide/features.md#projects-and-boxes)**:

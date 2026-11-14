@@ -1,6 +1,11 @@
 # Diff notes to the agent — plan
 
-Status: plan only (2026-11-13). Nothing built.
+Status (2026-11-14): built in `1288b3b1e` (steps 1–6, frontend only); never run live,
+it wears the `diff-notes` `UntestedTag`. Differences from the text below: the
+steering key is `C` (`viewNote`), not `n` (`n` is Next new); notes are per card,
+not per file; the 8 000-character cap inserts the notes that fit and keeps the
+rest. See `docs/diff_notes_handoff.md`. "Later" (phone `ChatChanges`, git-panel
+`DiffView`) is open.
 
 ## Why
 
@@ -49,7 +54,7 @@ Decided here:
   🗑 delete. Its card head gets a count chip.
 - The Diffs header gets **N notes · Add to draft · Clear**, shown only when
   N > 0. Clear asks through `useDialogs()` when N > 1.
-- Steering: inside the Diffs target (`changesSteerKey`), `n` starts a note on
+- Steering: inside the Diffs target (`changesSteerKey`), `C` starts a note on
   the cursor card's first changed line; the box then takes focus.
 
 ### The note record
@@ -101,14 +106,14 @@ src/lib/bar.ts (removed lines 12-13)
 ## Steps
 
 1. `src/lib/agents/diffNotes.ts`: `DiffNote`, `buildDiffNotesPrompt`, range
-   and side helpers; tests in `src/lib/agents/diffNotes.test.ts` (ranges,
+   and side helpers; tests in `src/__tests__/agents/DiffNotes.test.ts` (ranges,
    deletions, grouping, caps, a fenced-code line inside a quote).
 2. `src/stores/agents/diffNotes.ts`: a per-PTY note list with add, edit,
    remove and clear; dropped when the tab goes away.
 3. `TerminalReaderChanges.tsx`: gutter button and range selection in
    `DiffLineRow`/`SplitRows`, the inline `DiffNoteBox` (new
    `terminal/DiffNoteBox.tsx`), the card count chip, the header actions, the
-   `n` steering key.
+   `C` steering key.
 4. CSS beside the existing `.terminal-changes-*` rules. The note box uses the
    shared field/button classes ("copy the working sibling": the Reader
    composer's).

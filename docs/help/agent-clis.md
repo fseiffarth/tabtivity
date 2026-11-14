@@ -115,6 +115,21 @@ permission error (EACCES).
 On a remote project, the same panel can install an agent onto a chosen remote
 machine instead of this one.
 
+## Keep agent CLIs up to date
+
+Each installed CLI's card has **Check for update**: one request to the registry
+its vendor publishes to (npm, PyPI or GitHub; for Cursor, the build named in its
+installer), only when you click. A newer release turns the card's version chip
+into `current → latest`; click it to run the installer again. The head of the
+Installed list has **Check all for updates**, which asks for every installed CLI
+at once, and then **Update all (N)**, which runs the installer of each CLI with a
+newer release one after another, each with its own log; a failure stays on its
+card. The settings card at the top of Manage CLIs has **Check for new releases
+daily** (on by default), which asks the same feeds (and Ollama's) once a day on
+its own and installs nothing. Inside an agent tab's
+sandbox a CLI cannot update itself, so Cursor's own updater is switched off
+there: update it from Manage CLIs.
+
 ## Prerequisite: Node.js for npm-based agents
 
 Claude, Codex, Antigravity, Mistral, Kiro, Cursor, OpenCode (Linux/macOS),
@@ -261,7 +276,10 @@ API keys section says so.
   install joins it by itself; change it with the "+ tab" chips in the Models &
   agents menu. **More agents & CLIs…** lists every installed agent.
 - The **Default** chip picks the agent Tabtivity uses when it must choose one
-  itself (e.g. filling scaffold files).
+  itself (e.g. filling scaffold files). The first-run **How to start** wizard's
+  Agent CLIs page sets it too: choosing an installed CLI there, installing one
+  or re-checking one that is now installed saves it as the default; only
+  looking at an uninstalled one changes nothing.
 - Root console: agents are off there until you turn on their **Root** chip.
 - In a project with linked git worktrees, a new agent starts in the worktree
   selected in the Git view (none selected: the project folder), and its tab
@@ -301,7 +319,8 @@ Claude, Codex and OpenCode tabs can be used as a chat instead of the
 terminal — the same chat view the phone's Focus uses. Click **Chat** at the
 right end of the prompt row above the terminal:
 your prompts show on the right, the agent's answers on the left as
-formatted text, and slash commands as thin rules. Type into the box at the
+formatted text, and slash commands as thin rules (a picture from the inbox
+named in a command, such as `/design`, shows under its rule). Type into the box at the
 bottom and press Enter to send (Shift+Enter for a new line); a prompt sent
 while the agent works waits in its queue as a typed one would. When the
 agent asks something — a permission prompt ("Do you want to make this
@@ -320,11 +339,14 @@ terminal.
 in the gutter of a diff line (Shift+click another line of the same hunk for a
 range) to write the agent a note; **Add to draft** in the header puts all your
 notes, each with the lines it is about, into the Chat's text box for you to
-read, edit and send. Nothing is sent for you.
+read, edit and send. Nothing is sent for you. With the experimental per-turn
+checkpoints on, you can also put the files back to before one of your prompts
+(see `checkpoints`).
 
 Beside Chat and Terminal, **Files** lists the files the conversation names
 (files its answers mention, pictures and PDFs it shows, files your phone
-sent), newest first, and shows the one you pick in its viewer. Clicking a
+sent), newest first within three groups (**Sent by the agent**, **Mentioned in
+its answers**, **Sent by you**), and shows the one you pick in its viewer. Clicking a
 file in the chat opens it there instead of in a new tab. To open it as a tab
 anyway, click ↗ above the viewer, or Ctrl+click the file.
 

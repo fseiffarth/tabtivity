@@ -555,6 +555,9 @@ skip-scaffold checkbox), `ProjectPill.tsx` (Publish window + menu),
     alone; `project_scaffold_missing` counts a legacy stub as missing so the
     pill's tag agrees with what a repair would do. The agent-fill prompt now
     tells the filling agent to keep the pointers pointing.
+    *Superseded 2026-11-13 (`docs/scaffold_files_plan.md`): new projects get only
+    `AGENTS.md`, `README.md` and `.gitignore`; no pointer files are written, and
+    existing ones are kept.*
     - *Test (e.g.):* create a project → `AGENTS.md` links `./CLAUDE.md` +
       `./GEMINI.md` and `CLAUDE.md` contains a bare `@AGENTS.md` line; repair a
       project whose `CLAUDE.md` is still `# Claude Context` → it becomes the

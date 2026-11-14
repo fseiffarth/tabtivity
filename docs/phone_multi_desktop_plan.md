@@ -86,9 +86,9 @@ with every phone forgotten a link grants nothing.
 - `/healthz`: `Access-Control-Allow-Origin: <Origin>` + `Vary: Origin` only
   for a listed origin; body unchanged.
 - `/api/v1/status`: `linked_desktops: [{origin}]` for the shell.
-- Tauri command `mobile_linked_desktops_set` (cfg_attr desktop, `tauri_host::Ctx`),
-  `admin` row in `services::command_class`, regenerate
-  `src/lib/transport/commandClasses.ts`.
+- ~~Tauri command `mobile_linked_desktops_set`~~ — not built, by decision: the
+  list rides the desktop's whole-block settings write (see "As built" above), so
+  there is no command, `command_class` row or `commandClasses.ts` change.
 - After edits: `npm run backend:stale`.
 
 ## Phase 2 — desktop Settings → Mobile — done 2026-11-14, never live
@@ -176,6 +176,13 @@ notice text; revoke of the A device or removal of the link kills the token.
 The only option that reaches iOS.
 
 ## Phase 5 — docs
+
+Done for Phases 0–2 (2026-11-14): `mobile_access.md` § Linked desktops,
+`mobile_sidecar.md` (`linked.rs`), file-map rows for `linked.rs` and
+`mobile/LinkedDesktops.tsx`, `server_gateway.md` (the per-port cookie),
+DOCUMENTATION.md § Tabtivity Mobile, `docs/help/mobile.md` § Linking several
+computers. With the minimal Phase 3 (2026-11-15): the `mobile-web/src/shell/`
+file-map rows and the help section's switcher paragraph are done too.
 
 `docs/context/mobile_access.md`: a "Linked desktops" layer (the new trust
 edge: a listed origin may frame this desktop's phone UI; known gap:

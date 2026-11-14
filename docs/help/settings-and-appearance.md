@@ -74,7 +74,11 @@ settings.
 **Settings → General → Updates → Check now** looks for a newer release on
 GitHub — only when you ask; Tabtivity never checks in the background.
 **Download**, then **Install**; your tabs stay open and you restart when it
-suits you. A copy installed from the `.deb` (or another package manager)
+suits you. A finished download survives a restart: Tabtivity checks it again
+against the release's signed checksum and offers **Install** without
+downloading twice (a newer release, or running the new build, retires it). On
+Windows the installer asks for administrator consent. A copy installed from the
+`.deb` (or another package manager)
 downloads the new build but leaves installing it to you. The page also lists
 anything still found under Tabtivity's old name (Eldrun).
 

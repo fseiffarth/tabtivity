@@ -446,3 +446,10 @@ is touched by the 18 commits.
   (the split's Phase 2 was uncommitted when the review ended); the main agent does it
   after that, since all five agents are used. `queueHeldPrompt` is skipped (five
   `phoneHolds` test mocks would need the new export).
+
+## Docs sync (2026-11-14)
+
+- The blocker above is gone: the PdfViewer split's phases 2–3 are committed (`59bd44b79`,
+  after `716413ff1` for phase 1). H (`useMarkupHost`) is still not done; run it from
+  `develop`'s tip, reading `docs/pdf_viewer_split_plan.md`'s status first (`usePdfPrint`,
+  `usePdfNotes`, `usePageTransfer` etc. now hold code that used to sit in `PdfCanvas`).

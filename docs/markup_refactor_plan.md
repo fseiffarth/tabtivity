@@ -17,6 +17,12 @@ Plan reviewed against the code on 2026-11-14 (see the handoff's "Plan
 review"); symbol names below were checked with `rg`. Line numbers are not
 given: grep the symbol.
 
+**Status (2026-11-14):** A–G are committed (`5c86b09c0` .. `60a10413d`, `57fafb5d3`,
+`6ec0b9cda`), never run live; `queueHeldPrompt` (G) was skipped. **H is open**: the
+PdfViewer split's phases 2–3 landed in `59bd44b79`, so `PdfViewer.tsx` is no
+longer held by uncommitted edits; start H from `develop`'s tip. Details:
+the handoff's "Flagged for user".
+
 ## Fixed decisions
 
 Reviewers may not undo these.

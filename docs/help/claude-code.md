@@ -33,8 +33,10 @@ No Node.js needed; Claude uses its own native installer.
 
 ## First use
 
-- The tab starts in the project folder. Claude reads the project's
-  `CLAUDE.md`, which imports the shared `AGENTS.md` that Tabtivity scaffolds.
+- The tab starts in the project folder. Claude reads the shared `AGENTS.md`
+  that Tabtivity scaffolds, as long as the project (or a parent folder) has no
+  `CLAUDE.md`; once one exists, Claude reads that instead, so keep an
+  `@AGENTS.md` line in it. New projects get no `CLAUDE.md`.
 - The first time Claude opens in a folder it asks whether you trust it.
   Answer it yourself; Tabtivity never answers that question for you.
 - Permission modes (plan, accept edits, …) are Claude's own: switch them with
@@ -50,10 +52,14 @@ one place Tabtivity writes into another app's configuration.
 
 ## Updating
 
-Run `claude update` in any terminal, or let Claude's background auto-update
-run; both work from a sandboxed tab too. Manage CLIs shows a notice when the
+Claude never updates itself inside a Tabtivity tab: its install is read-only
+there and its background auto-update is switched off. Update it from Manage
+CLIs; a tab already open keeps its version until you restart it. A `claude`
+installed outside Tabtivity keeps its own updater. Manage CLIs shows a notice when the
 installed version differs from the one Tabtivity was verified against. Nothing is
-blocked; it is the first thing to check if a tab misreads a prompt.
+blocked; it is the first thing to check if a tab misreads a prompt. Manage CLIs
+also has **Check for update** on the Claude card and **Check all for updates** /
+**Update all** for every installed CLI (see `agent-clis`).
 
 ## Troubleshooting
 

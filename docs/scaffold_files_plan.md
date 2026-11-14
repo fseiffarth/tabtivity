@@ -1,7 +1,8 @@
 # Scaffold files: a lean default set and a "Project docs" group
 
-Status: in implementation (2026-11-13, plan + implement + review routine;
-handoff in `docs/scaffold_files_handoff.md`). Three research subagents
+Status: all nine steps implemented and reviewed on `develop` (2026-11-14,
+last commit f342aa178; handoff in `docs/scaffold_files_handoff.md`). Never run
+live: the click-through in §8 is open. Three research subagents
 (agent-instruction files, doc files, display) read the code and searched the
 web; their findings are condensed below. The user answered the five open
 decisions on 2026-11-13; they are recorded under **Fixed decisions** —
