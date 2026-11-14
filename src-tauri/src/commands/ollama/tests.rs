@@ -1810,3 +1810,96 @@ fn a_registry_body_is_capped_by_its_declared_length_and_while_streaming() {
     assert_eq!(body.len(), 10);
     assert!(push_capped(&mut Vec::new(), &[0; 11], 10).is_err());
 }
+
+// ── B8: live completion bench (ignored) ────────────────────────────────────
+
+/// Synthetic TypeScript: the caret sits in `total`, and the trace types
+/// [`BENCH_TYPED`] one character per request.
+const BENCH_BEFORE: &str = "import { sum } from \"./math\";\nimport { format } from \"./format\";\n\n\
+export function total(items: number[]): string {\n  const value = ";
+const BENCH_TYPED: &str = "sum(items.map((x) =>";
+const BENCH_AFTER: &str = "\n  return format(value);\n}\n";
+const BENCH_REFERENCES: [(&str, &str); 2] = [
+    ("src/math.ts", "/** Sum of all numbers. */\nexport function sum(values: number[]): number {\n  let total = 0;\n  for (const v of values) total += v;\n  return total;\n}\n\n/** Arithmetic mean; 0 for an empty list. */\nexport function mean(values: number[]): number {\n  return values.length ? sum(values) / values.length : 0;\n}\n"),
+    ("src/format.ts", "/** Two decimals, thousands separated by a thin space. */\nexport function format(value: number): string {\n  const [whole, part] = value.toFixed(2).split(\".\");\n  return `${whole.replace(/\\B(?=(\\d{3})+(?!\\d))/g, \"\\u2009\")}.${part}`;\n}\n"),
+];
+
+/// The endpoint and body `complete_text` would send for one keystroke.
+fn bench_request(prefix: &str, model: &str, insert: bool, references: &[ContextFile]) -> (&'static str, serde_json::Value) {
+    let context = build_context_block(references);
+    let fim = insert && context.is_empty() && !BENCH_AFTER.is_empty();
+    let body = completion_body(prefix, BENCH_AFTER, model, "typescript", CompletionMode::Sentence, &context, fim);
+    (if fim { "generate" } else { "chat" }, body)
+}
+
+/// `TABTIVITY_COMPLETION_BENCH_MODEL=<model> cargo test -p tabtivity --lib
+/// completion_bench -- --ignored --nocapture` (the variable's prefix is the
+/// app's, see `crate::app_env!`): replays a 20-character typing trace against
+/// the local Ollama, with 0 and with 2 reference files, and prints per request
+/// the endpoint, Ollama's `prompt_eval_count`, prompt time and first-token
+/// time. Loads nothing: the model must already be resident (`/api/ps`).
+/// Answers run to Ollama's final record (no sentence stop) so its counts
+/// arrive; `num_predict` is capped to keep a run short.
+#[tokio::test]
+#[ignore]
+async fn completion_bench() {
+    use crate::services::text_completion;
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let var = crate::app_env!("COMPLETION_BENCH_MODEL");
+    let model = std::env::var(var).unwrap_or_else(|_| panic!("set {var}=<model> to a resident Ollama model"));
+    let addr = resolve_ollama_addr(None, false).unwrap();
+    let client = text_completion::client().unwrap();
+    let get = |path: &str, body: Option<serde_json::Value>| {
+        let request = match body {
+            Some(body) => client.post(format!("http://{addr}{path}")).body(body.to_string()),
+            None => client.get(format!("http://{addr}{path}")),
+        };
+        async move {
+            let text = request.send().await.expect("Ollama answers").text().await.unwrap();
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()
+        }
+    };
+    let ps = get("/api/ps", None).await;
+    let full = if model.contains(':') { model.clone() } else { format!("{model}:latest") };
+    let resident = ps["models"].as_array().into_iter().flatten()
+        .any(|m| m["name"].as_str() == Some(&full) || m["model"].as_str() == Some(&full));
+    assert!(resident, "{model} is not loaded; load it first (this bench loads nothing): {ps}");
+    let show = get("/api/show", Some(serde_json::json!({ "model": model }))).await;
+    let insert = show["capabilities"].as_array().into_iter().flatten().any(|c| c == "insert");
+    println!("model {model}, insert {insert}");
+    for references in [0, 2] {
+        let files: Vec<ContextFile> = BENCH_REFERENCES[..references]
+            .iter()
+            .map(|(name, content)| ContextFile { name: name.to_string(), content: content.to_string() })
+            .collect();
+        println!("\n{references} reference files");
+        println!("{:>3} | {:<8} | {:>11} | {:>9} | {:>10} | answer", "#", "endpoint", "prompt_eval", "prompt_ms", "first_ms");
+        for (i, _) in BENCH_TYPED.char_indices() {
+            let typed = &BENCH_TYPED[..BENCH_TYPED.ceil_char_boundary(i + 1)];
+            let prefix = format!("{BENCH_BEFORE}{typed}");
+            let (endpoint, mut body) = bench_request(&prefix, &model, insert, &files);
+            body["options"]["num_predict"] = 24.into();
+            body["options"]["seed"] = 1.into();
+            let started = Instant::now();
+            let mut first = None;
+            let streamed = text_completion::stream(&client, &format!("http://{addr}/api/{endpoint}"), &body, |raw, _| {
+                if first.is_none() && !raw.is_empty() {
+                    first = Some(started.elapsed());
+                }
+                Ok(false)
+            })
+            .await
+            .unwrap_or_else(|e| panic!("request {i}: {e}"));
+            let record = streamed.record.unwrap_or_default();
+            let answer: String = streamed.text.chars().take(48).collect::<String>().replace('\n', "⏎");
+            println!(
+                "{:>3} | {:<8} | {:>11} | {:>9} | {:>10} | {answer}",
+                i + 1,
+                endpoint,
+                record.prompt_eval_count.map_or("-".into(), |n| n.to_string()),
+                record.prompt_eval_duration.map_or("-".into(), |ns| (ns / 1_000_000).to_string()),
+                first.map_or("-".into(), |d| d.as_millis().to_string()),
+            );
+        }
+    }
+}
