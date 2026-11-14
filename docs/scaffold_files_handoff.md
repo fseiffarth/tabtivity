@@ -403,6 +403,62 @@ JSON shapes:
 
 ## R2
 
+Reviewer R2 of `3feb70193..scaffold-files` (I3). Branch `worktree-agent-a43cf1f1ad17276de`. **No code change:
+no confirmed bug.** Nothing in the range needed a fix; the items below are checked or flagged.
+
+### Checked and found sound
+
+- Names: `create_project_doc` resolves the renderer's `name` only through `scaffold::doc` (exact leaf match) and
+  `creatable`, before any project lookup; `..`, `/`, `\`, NUL, absolute, case variants (`todo.md`), trailing space,
+  pointers, `REMARKS.md`, `.gitignore` are not catalog names. The write is create-new + `O_NOFOLLOW`
+  (`write_no_follow`): a catalog name that is a folder, a link or a FIFO yields `false`, never a write. On a
+  case-insensitive FS an `agents.md` makes `AGENTS.md` `AlreadyExists` -> `false`.
+- Memory: `cli`/`home`/`name` are only compared with a fresh listing (`scan`), never joined. Folder names come from the
+  root with every non-ASCII-alphanumeric turned into `-` (no `..`/separator possible); folders open through
+  `HomeDir::open_existing` (`O_NOFOLLOW` walk), files through `HomeFile::open_read` (`O_NOFOLLOW|O_NONBLOCK`, regular
+  file checked on the opened inode), read capped at 1 MiB + 1. Linked `.codex`/memory folder/file, FIFO, dir named
+  `x.md`, over-cap, non-UTF-8 all refused. A listing returns only `cli`/`home` enums, a leaf name and sizes: no
+  path, id or tmux target (mobile_control invariant); `Core` commands are not routed to the phone, and `projectId`
+  is looked up in the account's own registry like `project_scaffold_missing`.
+- Encoded-cwd collision: each project has its own scope home (`project_key(id)`), so two roots that encode alike cannot
+  see each other's folder; `seed_claude_transcripts` already disambiguates by the recorded `cwd`. Two roots of one
+  project (stored + canonical) are de-duplicated per `(cli, home, name)`.
+- `upgrade_doc_at`: the temp is create-new + no-follow (a planted name, even a link or FIFO, is `AlreadyExists`/error,
+  never a target); a save in place, a rename-over (same bytes, other inode), a link swap and a vanished file all back
+  off and remove the temp; a swapped-in folder makes the `rename` fail and the temp is removed. `rename` onto a link
+  replaces the link itself, never writes through it. Rust's `rename` replaces an existing file on Windows.
+- `project_docs_status`: remote-only -> `None` via `scaffold_target_for_entry`; a mirror project reads the mirror;
+  unknown/gone folder -> `None`; all four commands are `async` over `*_blocking` (source-scan test); argument keys
+  (`projectId`, `name`, `cli`, `home`) hold no `PATH_NAMED` word; TS wrappers match serde (camelCase,
+  `string | null` for `Option`); `commandClasses.ts` is current (`the_generated_command_classes_ts_is_current` passes).
+
+### Flagged for user (minor, not fixed: no deterministic regression test, or a design call)
+
+- `upgrade_doc_at` leaves a `.AGENTS.md.<slug>-<pid>-<n>.tmp` behind if the write into the temp fails midway
+  (disk full): `write_no_follow(..)?` returns before the cleanup. Rare; the fix is to remove the temp on any error but
+  `AlreadyExists`. Not testable without a full disk.
+- `upgrade_doc_at` now replaces the inode: a hardlinked `AGENTS.md`, or one with another owner/ACL/xattrs, loses that
+  on upgrade (the old in-place write kept it), and a project folder that is read-only while `AGENTS.md` is writable
+  now errors (the temp cannot be made) where it used to rewrite. All rare; accepted trade for not truncating a
+  concurrent save.
+- `HomeDir::names_capped(256)` takes the first 256 names in directory order, then `agent_memory` sorts: in a memory
+  folder with more than 256 entries `MEMORY.md` can fall outside the cap and the index is not listed. Agents do not
+  write that many notes; fix if wanted: look `MEMORY.md` up by name besides the capped listing.
+- `agent_memory::scan` keeps a `HomeFile` (a duplicated directory descriptor) per listed entry, up to 200 at once;
+  where the descriptor limit is 256 (macOS default) a very full memory folder would briefly crowd other opens. Fix if
+  wanted: `list` needs no handle, `read` only the one it returns.
+- Claude keys its auto memory by the git root, so a Tabtivity project that is a subfolder of a repository lists nothing
+  (its folder is the repo root's). Not looked up; documented behaviour is "empty list".
+
+### Gates
+
+`scripts/gates-job.sh start --base 3feb70193` (tree = `scaffold-files` `fbd232a8b` + this note): brand, whitespace,
+lint-fe, clippy x3, `npm run build` PASS (zero warnings). vitest `--changed`: 2 timing failures under load 10+
+(`PdfZoomRaster` "re-arms the commit", `BibCards` 20 s timeout); both pass alone (17 tests). Because the job stops there,
+by hand: `cargo test -p tabtivity -p app-serverd --lib` 5622 passed, 0 failed (no load flake this run);
+`--test it --test projects_commands` 144 + 39 passed; test-dlib `--no-default-features --lib --test server_secrets`
+5436 + 1 passed.
+
 ## I4 Desktop
 
 ## I5 Phone + docs
