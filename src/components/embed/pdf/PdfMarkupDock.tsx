@@ -91,13 +91,11 @@ export function FavouriteDot({ preset }: { preset: PenPreset }) {
 export function PdfMarkupDock({
   markup,
   page,
-  picture = false,
   area,
 }: {
   markup: PdfMarkup;
   /** The page on screen, for Clear page. */
   page: number;
-  picture?: boolean;
   /** The pages' own box within the dock's container: the dock sits over it,
    *  clear of a page rail or the agent panel beside it. The whole container
    *  when left out. */
@@ -258,7 +256,7 @@ export function PdfMarkupDock({
           >
             ↷
           </button>
-          <PdfMarkupMore markup={markup} page={page} busy={markup.sending} picture={picture} />
+          <PdfMarkupMore markup={markup} page={page} busy={markup.sending} />
           <UntestedTag id="desktop.markup.dock" />
           {markup.options && <PdfMarkupToolOptions markup={markup} slot={slot} noText={noText} />}
         </>

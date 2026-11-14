@@ -93,7 +93,7 @@ function useDismiss(open: boolean, close: () => void, ref: RefObject<HTMLElement
  *  settings (shape snapping, the pressure curve) and the presets, out of the
  *  strip's way — the shared dropdown (`.context-menu.dropdown-menu`), closed
  *  by a click outside or Escape. */
-export function PdfMarkupMore({ markup, page, busy, picture }: { markup: PdfMarkup; page: number; busy: boolean; picture: boolean }) {
+export function PdfMarkupMore({ markup, page, busy }: { markup: PdfMarkup; page: number; busy: boolean }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
@@ -120,7 +120,7 @@ export function PdfMarkupMore({ markup, page, busy, picture }: { markup: PdfMark
       {open && (
         <div className="context-menu dropdown-menu" role="menu">
           {/* A picture is its one page: Clear all marks says it. */}
-          {!picture && (
+          {!markup.picture && (
             <button type="button" role="menuitem" onClick={pick(() => markup.clearPage(page))} disabled={!pageMarked || busy}>
               {t("mobile.markup.clearPage", { n: page })}
             </button>

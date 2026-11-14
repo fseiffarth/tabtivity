@@ -341,6 +341,7 @@ export function usePdfMarkup({
   docVersion,
   doc = null,
   picture = null,
+  isPicture = false,
 }: {
   /** The project the viewer is scoped to, when markup is offered at all. */
   projectId: string | null;
@@ -364,6 +365,9 @@ export function usePdfMarkup({
   /** Marking a picture, not a PDF: the image as shown, which Submit draws the
    *  marks onto. Page 1 is the picture, in its natural pixels. */
   picture?: HTMLImageElement | null;
+  /** The viewer marks a picture (from the first render, before it loads): the
+   *  panel and the dock say picture, not PDF — returned as `picture`. */
+  isPicture?: boolean;
 }) {
   const t = useT();
   const key = useMemo(() => (projectId ? layerKey(projectId, { files: path }) : null), [projectId, path]);
@@ -1362,6 +1366,7 @@ export function usePdfMarkup({
   const hasMarks = !isEmpty(history.present) || sentShown;
   return {
     key,
+    picture: isPicture,
     storage,
     changed,
     edit,

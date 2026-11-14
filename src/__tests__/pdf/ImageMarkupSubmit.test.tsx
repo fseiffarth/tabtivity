@@ -57,8 +57,9 @@ function Harness() {
     docSize: 9_000,
     docVersion: 0,
     picture: IMAGE,
+    isPicture: true,
   });
-  return <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={() => {}} picture /><PdfMarkupDock markup={markup} page={1} picture /><PdfMarkupUndoConfirm markup={markup} onReload={() => {}} /></>;
+  return <><PdfMarkupBar markup={markup} onDone={() => {}} /><PdfMarkupAgentPanel markup={markup} pinned={PINNED} onReload={() => {}} /><PdfMarkupDock markup={markup} page={1} /><PdfMarkupUndoConfirm markup={markup} onReload={() => {}} /></>;
 }
 
 const submitButton = () => screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;

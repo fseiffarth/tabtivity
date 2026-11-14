@@ -261,6 +261,7 @@ export function ImageView({
     docSize: size,
     docVersion: loads,
     picture: shown,
+    isPicture: true,
   });
   markupRef.current = markup;
   const holder = markup.key ? markupHolder(markup.key) : undefined;
@@ -652,8 +653,8 @@ export function ImageView({
             )}
           </div>
         )}
-        {marking && markup.panel && <PdfMarkupAgentPanel markup={markup} pinned={noPins} onReload={reloadUnderMarks} picture />}
-        {marking && natural && <PdfMarkupDock markup={markup} page={1} picture area={viewportRef} />}
+        {marking && markup.panel && <PdfMarkupAgentPanel markup={markup} pinned={noPins} onReload={reloadUnderMarks} />}
+        {marking && natural && <PdfMarkupDock markup={markup} page={1} area={viewportRef} />}
       </div>
     </div>
   );
