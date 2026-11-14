@@ -153,6 +153,29 @@ describe("UpdatesPanel", () => {
     expect(await screen.findByRole("button", { name: /where it was saved/i })).toBeTruthy();
   });
 
+  it("offers a newer release instead of the installer saved before restart", async () => {
+    backend({
+      check_app_update: check(),
+      app_update_staged: { ...staged("appimage"), version: "0.1.51" },
+    });
+    render(<UpdatesPanel onBack={() => {}} />);
+    expect(await screen.findByRole("button", { name: /^Download/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Install$/ })).toBeNull();
+  });
+
+  it("can install a recovered download even when the release check fails", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "check_app_update") return Promise.reject("offline");
+      if (cmd === "app_update_staged") return Promise.resolve(staged("nsis"));
+      return Promise.resolve(null);
+    });
+    render(<UpdatesPanel onBack={() => {}} />);
+    await screen.findByText(/offline/);
+    await userEvent.click(await screen.findByRole("button", { name: /^Install$/ }));
+    expect(calls("install_app_update")).toHaveLength(1);
+    expect(calls("download_app_update")).toHaveLength(0);
+  });
+
   it("reports a failed check, and still offers the way to the releases page", async () => {
     const RELEASES = `https://github.com/fseiffarth/Project${BRAND.display}/releases/latest`;
     invokeMock.mockImplementation((cmd: string) => {

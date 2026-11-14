@@ -42,7 +42,13 @@ export function UpdatesPanel({
   const [check, setCheck] = useState<UpdateCheck | null>(null);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [staged, setStaged] = useState<StagedUpdate | null>(null);
+  const [savedDownload, setStaged] = useState<StagedUpdate | null>(null);
+  // Keep an offline download usable, but let a successful release check
+  // supersede an older installer rather than hiding the new Download button.
+  const staged = savedDownload && (!check || (
+    check.updateAvailable && check.latest === savedDownload.version
+    && check.asset?.name === savedDownload.name
+  )) ? savedDownload : null;
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [busy, setBusy] = useState<"download" | "install" | null>(null);
   const [outcome, setOutcome] = useState<InstallOutcome | null>(null);
@@ -77,7 +83,7 @@ export function UpdatesPanel({
 
   useEffect(() => {
     void runCheck();
-    // A download from earlier in this session survives reopening the panel.
+    // The backend also recovers signed downloads from an earlier launch.
     void invoke<StagedUpdate | null>("app_update_staged")
       .then((info) => {
         if (alive.current && info) setStaged(info);
