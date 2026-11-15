@@ -435,6 +435,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     // (`open_confined` / `confine_project_path` /
     // `sqlite::confine`; a remote project's path is held to its remote root).
     ("copilot_complete", "path", BodyConfined), // `policy::authorize_document` under the project root
+    ("complete_text", "fileName", BodyConfined), // a label in the prompt sent to Ollama; never opened
     ("file_mtime", "path", BodyConfined),
     ("file_size", "path", BodyConfined),
     ("file_source", "path", BodyConfined), // only says which side holds it

@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from "react";
-import { ClockIcon, CloseIcon, GripIcon, MoreIcon } from "../glyphs";
+import { ArchiveIcon, ClockIcon, CloseIcon, GripIcon, HexagonIcon, MoreIcon, PageIcon, PencilIcon } from "../glyphs";
 import { capPrompts, promptClock, promptLines, promptsFromTranscript, scheduleClock } from "../agentPrompts";
 import { useTier } from "../useTier";
 import type { TabRow, TabSchedules } from "../api";
@@ -11,6 +11,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { AgentStatusMark } from "./AgentStatusPill";
 import { AgentModeMarks, SubagentCount, SubagentWorktreeMarks, TurnDuration, WorktreeMark, agentModeClass } from "./AgentModeMarks";
 import { FileGlyph } from "./ProjectFiles";
+import type { SheetOption } from "./OptionSheet";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -223,7 +224,7 @@ export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOf
 /** The ⋯ sheet's rows for one tab. Their names differ from the card's own
  * buttons ("Rename", not "Rename claude 2"), so each control on the screen
  * keeps one accessible name. */
-export type TabAction = "rename" | "color" | "schedule" | "subagents" | "close";
+export type TabAction = "rename" | "color" | "schedule" | "subagents" | "files" | "archive" | "close";
 
 /** Whether a tab's schedules are offered: the host has tmux (`terminals`),
  * and a tab on the remote host only while a desktop window is open — with
@@ -233,13 +234,19 @@ export function schedulesOffered(tab: TabRow, terminalsOffered: boolean, desktop
   return terminalsOffered && !(tab.on_host && desktopAvailable === false);
 }
 
-export function tabActions(tab: TabRow, schedules: boolean): TabAction[] {
+/** `archivable`: Archive is offered (the desktop window is open — it holds
+ * the tab the archive is written from). */
+export function tabActions(tab: TabRow, schedules: boolean, archivable = false): TabAction[] {
   const agent = tab.kind === "agent";
   return [
     ...(agent ? ["rename" as const] : []),
     "color" as const,
     ...(agent && schedules ? ["schedule" as const] : []),
     ...(agent && tab.available && (tab.agent_subagents ?? 0) > 0 ? ["subagents" as const] : []),
+    // The files its chat produced and got: a cloud session records none, and
+    // files cannot reach a tab on the remote host.
+    ...(agent && !tab.cloud && !tab.on_host ? ["files" as const] : []),
+    ...(archivable ? ["archive" as const] : []),
     "close" as const,
   ];
 }
@@ -249,8 +256,47 @@ export const TAB_ACTION_LABEL: Record<TabAction, TranslationKey> = {
   color: "mobile.project.colorRow",
   schedule: "agentPrompts.scheduledHeading",
   subagents: "mobile.project.subagentsRow",
+  files: "mobile.project.filesRow",
+  archive: "mobile.project.archiveRow",
   close: "mobile.project.closeRow",
 };
+
+/** The ⋯ sheet's runs: the tab itself, what its agent holds, and the acts that
+ * end it — the last run kept apart so Close is never next to Rename. */
+const TAB_ACTION_SECTION: Record<TabAction, string> = {
+  rename: "tab", color: "tab", schedule: "agent", subagents: "agent", files: "agent", archive: "end", close: "end",
+};
+
+/** One row of the ⋯ sheet: its glyph, what it stands at (the tab's colour,
+ * how many prompts are scheduled, how many subagents are at work), a › where
+ * it opens another sheet, Close in the danger colour. */
+export function tabActionOption(tab: TabRow, action: TabAction, label: string): SheetOption {
+  const swatch = tabColorCss(tab.color);
+  const icon = action === "rename" ? <PencilIcon size="1em" />
+    : action === "color" ? <span className={swatch ? "option-swatch filled" : "option-swatch"} style={swatch ? { "--swatch": swatch } as CSSProperties : undefined} />
+    : action === "schedule" ? <ClockIcon size="1em" />
+    : action === "subagents" ? <HexagonIcon size="1em" />
+    : action === "files" ? <PageIcon size="1em" />
+    : action === "archive" ? <ArchiveIcon size="1em" />
+    : <CloseIcon size="1em" />;
+  const count = action === "schedule" ? tab.schedules?.total : action === "subagents" ? tab.agent_subagents : undefined;
+  return {
+    key: action,
+    label,
+    current: false,
+    section: TAB_ACTION_SECTION[action],
+    icon,
+    trailing: count ? String(count) : undefined,
+    more: action === "color" || action === "schedule" || action === "subagents" || action === "files",
+    danger: action === "close",
+  };
+}
+
+/** The ⋯ sheet's line under the tab's name: the model and the agent. */
+export function tabMenuSubtitle(tab: TabRow): string | undefined {
+  const parts = [tab.agent_model, tab.agent_label].filter((part): part is string => !!part);
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
 
 /** A phone-side file card: a PDF opened from the drawer or a file being
  * marked up. The desktop opens nothing for it, and ✕ only forgets it here. */

@@ -16,7 +16,7 @@ import {
   restoredPdfZoom,
   rescaleScrollTarget,
   shouldArmPdfRestoreDeadline,
-} from "../../components/embed/pdf/PdfViewer";
+} from "../../components/embed/pdf/zoomAnchor";
 
 describe("restoredPdfZoom", () => {
   it("starts at the fit baseline when there is no saved state", () => {

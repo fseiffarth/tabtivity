@@ -259,14 +259,20 @@ describe(`${BRAND.display} Mobile spoken navigation`, () => {
     await start();
     fireEvent.change(box(), { target: { value: "a typed line" } });
     act(() => mic().onresult?.(reading(["half a wor", false])));
-    expect(screen.getByText(/half a wor/)).toBeTruthy();
+    expect(screen.getByText(/Heard: half a wor/)).toBeTruthy();
+    // The guess shows in the field too, as provisional text.
+    expect(box().value).toBe("a typed line half a wor");
     // The send ends the dictation (an abort: no onend) before the quiet does.
     fireEvent.keyDown(box(), { key: "Enter" });
     await settle();
     expect(micOpen()).toBe(false);
-    expect(screen.queryByText(/half a wor/)).toBeNull();
+    // The field was sent as it stood (guess included) and is empty again; the
+    // late quiet puts nothing back, in the field or on the "Heard:" line.
+    expect(box().value).toBe("");
+    expect(screen.queryByText(/Heard:/)).toBeNull();
     await advance(2_000);
-    expect(screen.queryByText(/half a wor/)).toBeNull();
+    expect(box().value).toBe("");
+    expect(screen.queryByText(/Heard:/)).toBeNull();
   });
 
   describe("words still in flight when the mic is tapped off", () => {

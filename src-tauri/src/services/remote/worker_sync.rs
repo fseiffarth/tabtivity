@@ -127,6 +127,10 @@ fn local_bundle_path(project_id: &str, host_id: &str) -> PathBuf {
         .join(format!("{}.bundle", storage::plain_component(host_id)))
 }
 
+/// The record is a hint, never state to protect: an unreadable one reads as "no
+/// commit known", which costs one full bundle (always correct), and the push
+/// then rewrites it whole. Refusing to write over a damaged record instead
+/// (`patch_json`) would send a full bundle on every push from then on.
 fn read_record(project_id: &str, host_id: &str) -> WorkerRecord {
     let path = worker_state_path(project_id, host_id);
     if path.exists() {
@@ -147,18 +151,7 @@ fn write_record(project_id: &str, host_id: &str, rec: &WorkerRecord) {
 /// The mirror's current HEAD commit sha, or `None` when the mirror has no commit
 /// yet (unborn HEAD) or is unreadable.
 fn mirror_head(mirror: &Path) -> Option<String> {
-    let out = Peer::Local(mirror.to_path_buf())
-        .run(&["rev-parse", "--verify", "--quiet", "HEAD"])
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if sha.is_empty() {
-        None
-    } else {
-        Some(sha)
-    }
+    Peer::Local(mirror.to_path_buf()).answer(&["rev-parse", "--verify", "--quiet", "HEAD"])
 }
 
 /// Build the outbound bundle on the mirror. `exclude` (the worker's `last_head`)
@@ -191,8 +184,14 @@ fn build_bundle(mirror: &Path, bundle_path: &Path, exclude: Option<&str>) -> Res
 /// untracked outputs (including ignored files) before the reset. The bundle is
 /// removed after applying. Constant text (no interpolation), so it is safe to
 /// hand to `run_remote_script`. The preflight does not lock out concurrent writers.
+///
+/// Every `git` in it is hardened like lockstep's host calls
+/// (`git_peer::hardened_remote_script`): this is background git in a tree
+/// whatever runs on the worker can write, so its repo's hooks
+/// (`reference-transaction`, `post-index-change`) and `core.fsmonitor` program
+/// do not run on a code sync.
 fn worker_apply_script() -> String {
-    format!(
+    crate::services::git_peer::hardened_remote_script(&format!(
         "git init -q && \
          git fetch -q --no-tags {bundle} && \
          {guard} && \
@@ -205,7 +204,7 @@ fn worker_apply_script() -> String {
             .legacy(crate::brand::Name::WORKER_BUNDLE)
             .map(|old| format!(" {old}"))
             .unwrap_or_default(),
-    )
+    ))
 }
 
 /// Compare Git's quoted paths so whitespace/newlines remain one record. Both
@@ -252,15 +251,18 @@ pub async fn sync_worker(
     host_id: &str,
     force: bool,
 ) -> WorkerSyncReport {
-    let report_err = |msg: String| WorkerSyncReport {
+    // One worker's finished sync: `Ok(skipped)` or the refusal. `head` is the
+    // mirror commit the worker is known to hold.
+    let report = |head: Option<&str>, outcome: Result<bool, String>| WorkerSyncReport {
         project_id: project_id.to_string(),
         host_id: host_id.to_string(),
-        head: None,
-        ok: false,
-        skipped: false,
+        head: head.map(short_sha),
+        ok: outcome.is_ok(),
+        skipped: outcome == Ok(true),
         queued: false,
-        error: Some(msg),
+        error: outcome.err(),
     };
+    let report_err = |msg: String| report(None, Err(msg));
 
     if host_id == PRIMARY_HOST {
         return report_err("primary is not a worker".to_string());
@@ -274,15 +276,7 @@ pub async fn sync_worker(
         .into_iter()
         .any(|h| h.id == host_id && h.shared_fs)
     {
-        return WorkerSyncReport {
-            project_id: project_id.to_string(),
-            host_id: host_id.to_string(),
-            head: None,
-            ok: true,
-            skipped: true,
-            queued: false,
-            error: None,
-        };
+        return report(None, Ok(true));
     }
     // A synced-copy worker is fed from the mirror, and a remote-only project has
     // none: an explicit sync refuses by name (background callers never get here).
@@ -299,28 +293,12 @@ pub async fn sync_worker(
     let mirror = mirror_dir(project_id);
     let Some(head) = mirror_head(&mirror) else {
         // Nothing committed yet — a worker legitimately has no code to receive.
-        return WorkerSyncReport {
-            project_id: project_id.to_string(),
-            host_id: host_id.to_string(),
-            head: None,
-            ok: true,
-            skipped: true,
-            queued: false,
-            error: None,
-        };
+        return report(None, Ok(true));
     };
 
     let last_head = read_record(project_id, host_id).last_head;
     if !force && last_head.as_deref() == Some(head.as_str()) {
-        return WorkerSyncReport {
-            project_id: project_id.to_string(),
-            host_id: host_id.to_string(),
-            head: Some(short_sha(&head)),
-            ok: true,
-            skipped: true,
-            queued: false,
-            error: None,
-        };
+        return report(Some(&head), Ok(true));
     }
 
     let spec = &spec;
@@ -338,15 +316,7 @@ pub async fn sync_worker(
                     last_head: Some(head.clone()),
                 },
             );
-            WorkerSyncReport {
-                project_id: project_id.to_string(),
-                host_id: host_id.to_string(),
-                head: Some(short_sha(&head)),
-                ok: true,
-                skipped,
-                queued: false,
-                error: None,
-            }
+            report(Some(&head), Ok(skipped))
         }
         Err(error) => report_err(error),
     }
@@ -422,40 +392,32 @@ async fn push_once(
     let mirror_owned = mirror.to_path_buf();
     let bundle_owned = bundle_path.clone();
     let exclude_owned = exclude.map(str::to_string);
-    let empty = app_core::rt::spawn_blocking(move || {
+    let empty = app_core::rt::try_blocking("worker bundle", move || {
         build_bundle(&mirror_owned, &bundle_owned, exclude_owned.as_deref())
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     if empty {
         return Ok(true);
     }
 
-    // 2. Ensure the worker root exists and ship the bundle over its pooled SFTP.
-    let spec_for_mkdir = spec.clone();
-    app_core::rt::spawn_blocking(move || ssh_exec::remote_mkdir_p(&spec_for_mkdir))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("could not create worker dir: {e}"))?;
-
-    let remote_bundle = format!(
-        "{}/{}",
-        spec.remote_path.trim_end_matches('/'),
-        WORKER_BUNDLE
-    );
+    // 2. Ensure the worker root exists and ship the bundle, both over the worker's
+    //    pooled SFTP (one stat when the root is there, as on every push but the first).
+    let remote_bundle = crate::services::remote_sync::join_remote(&spec.remote_path, WORKER_BUNDLE);
     let sftp = remote::pooled_sftp_host(pool, project_id, host_id)
         .await
         .ok_or_else(|| "worker not connected".to_string())?;
+    sftp::mkdir_on(&sftp, &spec.remote_path)
+        .await
+        .map_err(|e| format!("could not create worker dir: {e}"))?;
     sftp::upload_file_streaming_on(&sftp, &bundle_path, &remote_bundle).await?;
     let _ = std::fs::remove_file(&bundle_path);
 
     // 3. Apply on the worker (blocking ssh). Tracked files only — never git clean.
     let spec_for_apply = spec.clone();
-    let out = app_core::rt::spawn_blocking(move || {
+    let out = app_core::rt::try_blocking("worker apply", move || {
         ssh_exec::run_remote_script(&spec_for_apply, &worker_apply_script())
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await?;
     if !out.status.success() {
         return Err(format!(
             "worker apply failed: {}",
@@ -500,15 +462,17 @@ pub async fn fan_out(
     force: bool,
 ) {
     let remote_only = primary_is_remote_only(project_id);
+    let mut workers = Vec::new();
     for host in remote::compute_hosts_for(project_id) {
-        if !wants_code_fanout(&host, remote_only) {
-            continue;
+        if wants_code_fanout(&host, remote_only) && remote::is_connected_host(pool, project_id, &host.id).await {
+            workers.push(host.id);
         }
-        if !remote::is_connected_host(pool, project_id, &host.id).await {
-            continue;
-        }
-        sync_worker_guarded(ctx, pool, state, project_id, &host.id, force).await;
     }
+    // Each worker is its own host, session, bundle file and record: together.
+    futures_util::future::join_all(
+        (0..workers.len()).map(|i| sync_worker_guarded(ctx, pool, state, project_id, &workers[i], force)),
+    )
+    .await;
 }
 
 /// One worker's fan-out with the in-flight lock + event emit. If a sync to the
@@ -640,11 +604,9 @@ async fn list_outputs(
     spec: &crate::schema::project::RemoteSpec,
 ) -> Result<Vec<WorkerOutput>, String> {
     let spec = spec.clone();
-    let out = app_core::rt::spawn_blocking(move || {
-        ssh_exec::run_remote_script(&spec, outputs_list_script())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let out =
+        app_core::rt::try_blocking("worker outputs", move || ssh_exec::run_remote_script(&spec, outputs_list_script()))
+            .await?;
     if !out.status.success() {
         return Err(format!(
             "listing worker outputs failed: {}",
@@ -770,6 +732,10 @@ mod tests {
         assert!(s.contains("reset -q --hard FETCH_HEAD"));
         assert!(s.contains("git fetch"));
         assert!(s.contains("git init"));
+        // Its git runs hardened: the worker repo's hooks and fsmonitor stay off.
+        for pair in crate::services::git_hardened::hardened_git_args::<&str>(&[]) {
+            assert!(s.contains(&ssh_exec::shell_quote(&pair)), "worker git lacks {pair}: {s}");
+        }
         // The bundle is a relative name (the script runs `cd <remote_path> && …`).
         assert!(s.contains(WORKER_BUNDLE));
         assert!(!WORKER_BUNDLE.starts_with('/'));

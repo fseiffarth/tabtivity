@@ -2,11 +2,14 @@ import { isTabKey } from "../../../lib/shortcuts/keyNames";
 import { lineStarts, indexedLine } from "../lineIndex";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CompletionCache, caretAtLineEnd, completionLineLength, completionWindow, typeThrough, type CompletionGhost } from "../../../lib/viewers/completion/autocomplete";
+import { loadOllamaModel } from "../../../lib/agents/localDrivers";
+import { UntestedTag } from "../../common/UntestedTag";
+import { CompletionCache, caretAtLineEnd, completionLineLength, completionModels, completionWindow, editKind, inlineGhostTail, typeThrough, type CompletionGhost, type EditKind } from "../../../lib/viewers/completion/autocomplete";
 import { OllamaCompletionProvider } from "../../../lib/viewers/completion/ollamaCompletionProvider";
 import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import type { CompletionCandidate, CompletionProvider } from "../../../lib/viewers/completion/completionProvider";
-import { completionContext } from "../../../lib/viewers/completion/completionContext";
+import { completionContext, ReferenceReads } from "../../../lib/viewers/completion/completionContext";
+import { CompletionOffers, startCompletionTiming } from "../../../lib/viewers/completion/completionTimings";
 import { bumpUsage } from "../../../stores/usage";
 import { METRIC } from "../../../lib/usageMetrics";
 import { ROOT_SCOPE, useTabsStore } from "../../../stores/tabs";
@@ -15,7 +18,7 @@ import { useExperimental } from "../../../lib/experimental";
 import { useProjectsStore } from "../../../stores/projects";
 import { useScrollSync } from "../../../stores/viewers/scrollSync";
 import { highlight, languageForPath, lineCommentMarker } from "../../../lib/viewers/highlight";
-import { basename, isPathWithin } from "../../../lib/paths";
+import { basename, isPathWithin, relativePathWithin } from "../../../lib/paths";
 import { resolveProjectDirectory, type AutocompleteMode, type AutocompleteTrigger, type GrammarIssue } from "../../../types";
 import { ContextFilePicker } from "../ContextFilePicker";
 import { useFileScope, usePaneVisible, readFileText } from "../../../lib/files/fileAccess";
@@ -90,7 +93,7 @@ import {
   textareaMirrorToViewport,
   textareaCaretMirrorOffsets,
 } from "./caretMirror";
-import { nextAcMode, acModeLabel, effectiveAcTrigger } from "./editorPrefs";
+import { nextAcMode, acModeLabel, acDelayMs, effectiveAcTrigger } from "./editorPrefs";
 import { onCtrlWheelFont, useZoomModifierWheel } from "./fontZoom";
 import { type BlameLine, isUncommitted, blameRelDate, authorAbbrev } from "./codeTools";
 import { CloseIcon } from "../../common/icons/Icon";
@@ -99,6 +102,7 @@ import { CloseIcon } from "../../common/icons/Icon";
 // `chordLabel` so they read ⌥ on macOS and Alt elsewhere; the handler itself is
 // unchanged (`e.altKey`).
 const AC_KEY_LABELS = {
+  ctrlRight: chordLabel({ key: "ArrowRight", ctrl: true }),
   altRight: chordLabel({ key: "ArrowRight", alt: true }),
   altBrackets: `${chordLabel({ key: "[", alt: true })}/]`,
 };
@@ -122,13 +126,10 @@ export function LinkOpenHint({
   );
 }
 
-// #45 automatic autocomplete: idle time after the last keystroke before a
-// suggestion is requested for the focused editor. Long enough not to fire on
-// every keystroke, short enough to feel responsive.
-const AUTO_AC_DEBOUNCE_MS = 600;
-// Copilot's automatic requests spend the account's completions, so it waits
-// for a real pause rather than a breath between words.
-const COPILOT_AUTO_AC_DEBOUNCE_MS = 1200;
+// #45 automatic autocomplete: the idle time after the last keystroke before a
+// suggestion is requested is the user's choice per provider in the AI menu
+// (`autocomplete_delay_ms`); `acDelayMs` holds the defaults (600 ms local,
+// 200 ms Copilot, whose default trigger stays "on request").
 
 // Dictionary spell check (the Hunspell `spell_check` command): idle time after
 // the last keystroke before the draft is re-checked. A lookup, not a model call.
@@ -291,7 +292,11 @@ export function CodeEditor({
    *  `preferred` is the user's active local model (🧠 menu); the completion runs
    *  against whichever model is *currently loaded* in Ollama memory at trigger
    *  time, preferring `preferred` when it is among the loaded set. */
-  autocomplete?: { enabled: boolean; preferred?: string; preferredProse?: string; mode?: AutocompleteMode; trigger?: AutocompleteTrigger };
+  autocomplete?: {
+    enabled: boolean; preferred?: string; preferredProse?: string; mode?: AutocompleteMode; trigger?: AutocompleteTrigger;
+    /** The `autocomplete` role itself; see `missingRoleModel`. */
+    role?: string;
+  };
   /** Opt-in dictionary (Hunspell) spell check. When enabled the draft is
    *  checked by the backend's loaded dictionary after a short idle; `language`
    *  is the dictionary code (unset → the backend's default). Issues are
@@ -434,6 +439,9 @@ export function CodeEditor({
   // fails silently and reads as broken. A trailing "…" marks a transient
   // in-flight message; final messages auto-dismiss (see the effect below).
   const [acStatus, setAcStatus] = useState<string | null>(null);
+  // The role model an automatic request found unloaded: the status pill says
+  // so with a Load button instead of quietly using another resident model.
+  const [acRoleMissing, setAcRoleMissing] = useState<string | null>(null);
   const acAbort = useRef<AbortController | null>(null);
   const acDocumentVersion = useRef(0);
   useLayoutEffect(() => { acDocumentVersion.current++; }, [draft, path]);
@@ -442,7 +450,16 @@ export function CodeEditor({
   const acCandidate = useRef(0);
   const acCandidates = useRef<CompletionCandidate[]>([]);
   const acDismissed = useRef<{ draft: string; caret: number } | null>(null);
-  const acOutcome = useRef<{ model: string; mode: AutocompleteMode | "copilot" } | null>(null);
+  // What the last change was: the idle timer asks only after typing, never
+  // straight after a deletion, an accept, undo, redo or a reload. An IME
+  // composition holds it until it ends; its end restarts the timer.
+  const acLastEdit = useRef<EditKind>("external");
+  const acComposing = useRef(false);
+  // The frozen reference reads (fixed decision 4) and the models a stats event
+  // said drop references on the FIM path: this editor sends those none.
+  const acReads = useRef(new ReferenceReads());
+  const acDropsReferences = useRef(new Set<string>());
+  const [acImeEnds, bumpAcImeEnds] = useReducer((n: number) => n + 1, 0);
   const acEndpoint = useSettingsStore((s) => JSON.stringify([
     s.settings?.ollama_host, s.settings?.ollama_allow_remote_host,
   ]));
@@ -472,13 +489,16 @@ export function CodeEditor({
   const [acPicker, setAcPicker] = useState(false);
   const scope = useFileScope();
 
-  // Count one outcome per offered candidate, including partial acceptance.
-  const recordAcOutcome = useCallback((accepted: boolean) => {
-    const offered = acOutcome.current;
-    if (!offered) return;
-    acOutcome.current = null;
-    bumpUsage(scope ?? ROOT_SCOPE, `${accepted ? METRIC.AUTOCOMPLETE_ACCEPT : METRIC.AUTOCOMPLETE_DISMISS}.${offered.mode}.${offered.model}`);
-  }, [scope]);
+  // What became of each candidate on screen: shown, taken (Tab, word, line,
+  // typed through) or rejected (`completionTimings.ts`). One tracker per
+  // editor; it reads the current scope when it counts.
+  const acScopeRef = useRef(scope);
+  acScopeRef.current = scope;
+  const [acOffers] = useState(() => new CompletionOffers((key) => bumpUsage(acScopeRef.current ?? ROOT_SCOPE, key)));
+  // True while an accept key commits ghost text, so `edit` does not book it
+  // as typed through; and when the last change happened, for the timings.
+  const acAccepting = useRef(false);
+  const acLastEditAt = useRef<number | null>(null);
 
   // Resolve the project the edited file belongs to (the longest project directory
   // that is a prefix of `path`), falling back to the active project — so the
@@ -1056,12 +1076,19 @@ export function CodeEditor({
         acAbort.current = null;
         setAcStatus(null);
         const before = draftRef.current;
+        acLastEdit.current = editKind(before, next);
+        acLastEditAt.current = performance.now();
         if (suggestion) {
           const inserted = next.slice(suggestion.at, suggestion.at + next.length - before.length);
           const matches = next.length > before.length && suggestion.text.startsWith(inserted) &&
             next === before.slice(0, suggestion.at) + inserted + before.slice(suggestion.at);
-          recordAcOutcome(matches);
-          if (matches) acFeedback?.accept(inserted);
+          if (matches) {
+            // An accept key books its own kind; anything else that put the
+            // ghost's next characters in was typed through.
+            if (!acAccepting.current) acOffers.typed(inserted.length);
+            acFeedback?.accept(inserted);
+            if (inserted.length >= suggestion.text.length) acOffers.end();
+          } else acOffers.end();
         }
         setSuggestion((ghost) => typeThrough(before, next, ghost));
         if (changeTintRef.current) {
@@ -1077,7 +1104,7 @@ export function CodeEditor({
       }
       setDraft(next);
     },
-    [setDraft, noteChangeTrail, suggestion, recordAcOutcome, acFeedback],
+    [setDraft, noteChangeTrail, suggestion, acOffers, acFeedback],
   );
 
   // Where the caret and the view belong once React has re-rendered the textarea
@@ -1757,30 +1784,33 @@ export function CodeEditor({
     acCandidates.current = [];
     const el = textareaRef.current;
     if (el) acDismissed.current = { draft: draftRef.current, caret: el.selectionStart };
-    recordAcOutcome(false);
+    acOffers.end();
     acAbort.current?.abort();
     acAbort.current = null;
     setSuggestion(null);
     setAcStatus(null);
-  }, [recordAcOutcome]);
+    setAcRoleMissing(null);
+  }, [acOffers]);
 
   // Cancel on hiding, disabling, switching document/context/default mode, and unmount.
   useEffect(() => {
     dismissSuggestion();
     return dismissSuggestion;
-  }, [acVisible, autocomplete?.enabled, path, scope, autocomplete?.preferred, autocomplete?.preferredProse, autocomplete?.mode, acEndpoint, contextFiles, acCopilot, dismissSuggestion]);
+  }, [acVisible, autocomplete?.enabled, path, scope, autocomplete?.preferred, autocomplete?.preferredProse, autocomplete?.role, autocomplete?.mode, acEndpoint, contextFiles, acCopilot, dismissSuggestion]);
 
   // External changes (reload / undo) bypass edit(). Invalidate their generation.
   useEffect(() => {
     acAbort.current?.abort();
     acAbort.current = null;
     setAcStatus(null);
+    setAcRoleMissing(null);
     acCandidates.current = [];
     if (draft !== lastEditRef.current) {
-      recordAcOutcome(false);
+      acLastEdit.current = "external";
+      acOffers.end();
       setSuggestion(null);
     }
-  }, [draft, recordAcOutcome]);
+  }, [draft, acOffers]);
 
   const requestCompletion = useCallback(async (opts?: { auto?: boolean; mode?: AutocompleteMode; candidate?: number }) => {
     const auto = opts?.auto === true;
@@ -1798,7 +1828,7 @@ export function CodeEditor({
     // An automatic request only where a suggestion can land: at the end of the
     // line (closers and whitespace aside). Editing mid-line asks on Ctrl+Space.
     if (auto && !caretAtLineEnd(snapshot, caret)) return;
-    recordAcOutcome(false);
+    acOffers.end();
     acCandidates.current = [];
     acCandidate.current = opts?.candidate ?? 0;
     const candidate = acCandidate.current;
@@ -1806,16 +1836,47 @@ export function CodeEditor({
     const ctl = new AbortController();
     acAbort.current = ctl;
     setSuggestion(null);
+    setAcRoleMissing(null);
     setAcStatus(acCopilot ? t("fileViewer.copilotStatus") : t("fileViewer.autocompleteStatus", { mode: acModeLabel(mode, t) }));
-    const publish = (candidates: CompletionCandidate[]) => {
+    const publishNow = (candidates: CompletionCandidate[]) => {
       if (ctl.signal.aborted || acDocumentVersion.current !== version || draftRef.current !== snapshot ||
           el.selectionStart !== caret || el.selectionEnd !== caret) return;
       // Copilot returns its alternatives at once; Alt+[/] walks that list.
       if (acCopilot) acCandidates.current = candidates;
       const item = candidates[0];
-      acOutcome.current = item ? { model: `${item.provider}/${item.model ?? item.provider}`, mode: acCopilot ? "copilot" : item.mode ?? mode } : null;
+      if (item) acOffers.start(item.id, acCopilot ? "copilot" : item.mode ?? mode, `${item.provider}/${item.model ?? item.provider}`);
+      else acOffers.end();
       setSuggestion(item ? { text: item.text, at: item.at, candidate: item } : null);
       if (item) setAcStatus(null);
+    };
+    // A stream publishes per token; the editor re-renders once per frame with
+    // the newest text. The final answer cancels a pending frame and lands at
+    // once (`settle`).
+    let frame = 0;
+    let pending: CompletionCandidate[] | null = null;
+    const publish = (candidates: CompletionCandidate[]) => {
+      pending = candidates;
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const next = pending;
+        pending = null;
+        if (next) publishNow(next);
+      });
+    };
+    const settle = (final?: CompletionCandidate[]) => {
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      pending = null;
+      if (final) publishNow(final);
+    };
+    const providerId = acCopilot && scope ? "copilot" : "ollama";
+    const timing = startCompletionTiming(providerId, auto ? "auto" : "manual", acLastEditAt.current ?? undefined);
+    const countRequest = (outcome: "ok" | "empty" | "error" | "cache") => {
+      timing.outcome = outcome;
+      timing.done = performance.now();
+      const model = timing.model ?? (providerId === "copilot" ? "copilot" : "none");
+      bumpUsage(scope ?? ROOT_SCOPE, `${METRIC.AUTOCOMPLETE_REQUEST}.${outcome}.${providerId}/${model}`);
     };
     try {
       const tabs = useTabsStore.getState();
@@ -1832,25 +1893,60 @@ export function CodeEditor({
           ...(texCompletions?.cites.map((c) => c.key) ?? []),
         ].join("\n") : undefined,
         read: (file) => readFileText(file, scope), signal,
+        explicit: !auto, reads: acReads.current,
       });
       const provider: CompletionProvider = acCopilot && scope ? new CopilotCompletionProvider({
         projectId: scope, editor: acEditorId, automatic: auto,
         tabSize: indentUnit.width || 4, insertSpaces: !indentUnit.text.startsWith("\t"),
       }) : new OllamaCompletionProvider({
         endpoint: acEndpoint, scope: scope ?? undefined, preferred: autocomplete.preferred,
-        preferredProse: autocomplete.preferredProse, mode, candidate, context,
+        preferredProse: autocomplete.preferredProse, role: autocomplete.role, mode, candidate, context,
+        trigger: auto ? "auto" : "manual",
+        fileName: (acProjectDir && relativePathWithin(acProjectDir, path)) || undefined,
+        referencesDropped: (model) => acDropsReferences.current.has(model),
+        onStats: (stats, model) => {
+          timing.stats = stats;
+          if (stats.referencesDropped) acDropsReferences.current.add(model);
+        },
+        timing,
       }, acCache.current);
       const result = await provider.complete({
         path, text: snapshot, caret, language: lang, version,
       }, ctl.signal, publish);
-      if (ctl.signal.aborted) return;
+      if (ctl.signal.aborted) { timing.outcome = "cancelled"; return; }
+      settle(result);
+      countRequest(timing.cached ? "cache" : result.length ? "ok" : "empty");
       setAcStatus(result.length || auto ? null : t("fileViewer.noSuggestion"));
+      // Copilot answered nothing: an inactive account or plan is one reason the
+      // server only states in its status, never in the answer. Ask once; show
+      // it unless something newer has the pill (the backend sends no event).
+      if (providerId === "copilot" && !result.length && scope) {
+        void invoke<{ status?: { kind?: string; message?: string | null } }>("copilot_account", { projectId: scope })
+          .then((account) => {
+            const message = account?.status?.kind === "Inactive" ? account.status.message : null;
+            if (message && !acAbort.current && draftRef.current === snapshot) {
+              setAcStatus(t("fileViewer.copilotInactive", { message }));
+            }
+          })
+          .catch(() => {});
+      }
     } catch (e) {
-      if (ctl.signal.aborted) return;
-      acOutcome.current = null;
+      if (ctl.signal.aborted) { timing.outcome = "cancelled"; return; }
+      acOffers.end();
       setSuggestion(null);
       const reason = String(e);
-      if (reason.includes("copilot_cancelled") || reason.includes("copilot_stale_document")) { setAcStatus(null); return; }
+      if (reason.includes("copilot_cancelled") || reason.includes("copilot_stale_document")) {
+        timing.outcome = "cancelled";
+        setAcStatus(null);
+        return;
+      }
+      countRequest("error");
+      const missing = /role_not_loaded:(.+)$/.exec(reason)?.[1];
+      if (missing) {
+        setAcStatus(null);
+        setAcRoleMissing(missing);
+        return;
+      }
       // Sign-in and setup problems would otherwise be invisible with automatic
       // suggestions on, so those two are shown even for an automatic request.
       const setup = reason.includes("copilot_not_signed_in") ? "fileViewer.copilotNotSignedIn"
@@ -1859,10 +1955,25 @@ export function CodeEditor({
         ? "fileViewer.autocompleteUnavailable"
         : acCopilot ? "fileViewer.copilotFailed" : "fileViewer.autocompleteFailed"));
     } finally {
+      settle();
       ctl.abort();
       if (acAbort.current === ctl) acAbort.current = null;
     }
-  }, [autocomplete, lang, acMode, contextFiles, acVisible, acEndpoint, path, scope, acProjectDir, texCompletions, recordAcOutcome, t, acCopilot, acEditorId, indentUnit]);
+  }, [autocomplete, lang, acMode, contextFiles, acVisible, acEndpoint, path, scope, acProjectDir, texCompletions, acOffers, t, acCopilot, acEditorId, indentUnit]);
+
+  // Load the role model the pill named, then ask again in its place.
+  const loadRoleModel = useCallback(async (model: string) => {
+    setAcRoleMissing(null);
+    setAcStatus(t("fileViewer.autocompleteLoadingModel", { model }));
+    try {
+      await loadOllamaModel(model);
+      completionModels.clear();
+      setAcStatus(null);
+      void requestCompletion({ auto: true });
+    } catch {
+      setAcStatus(t("fileViewer.autocompleteLoadFailed", { model }));
+    }
+  }, [t, requestCompletion]);
 
   // #45 automatic suggestions: when the per-type toggle is on, request a
   // completion a short while after the user stops typing. Re-runs on each draft
@@ -1872,17 +1983,20 @@ export function CodeEditor({
   // On request only ("manual", Copilot's default) skips all of this: one
   // Ctrl+Space, one request.
   const acAuto = effectiveAcTrigger(autocomplete?.trigger, acCopilot) === "auto";
+  const acDelay = useSettingsStore((s) => acDelayMs(s.settings?.autocomplete_delay_ms, acCopilot));
   useEffect(() => {
     if (!autocomplete?.enabled || !acAuto || !loaded || !acVisible) return;
-    if (suggestion || compl) return;
-    const id = window.setTimeout(() => void requestCompletion({ auto: true }),
-      acCopilot ? COPILOT_AUTO_AC_DEBOUNCE_MS : AUTO_AC_DEBOUNCE_MS);
+    if (suggestion || compl || acLastEdit.current !== "insert") return;
+    const id = window.setTimeout(() => {
+      if (!acComposing.current) void requestCompletion({ auto: true });
+    }, acDelay);
     return () => window.clearTimeout(id);
-  }, [autocomplete?.enabled, acAuto, acCopilot, loaded, draft, suggestion, compl, requestCompletion, acVisible]);
+  }, [autocomplete?.enabled, acAuto, acDelay, loaded, draft, suggestion, compl, requestCompletion, acVisible, acImeEnds]);
 
   // The ghost mounts fresh (scrollTop 0) each time a suggestion appears; align it
   // to the editor's current scroll so the inserted preview lands at the caret.
-  useEffect(() => {
+  // Before paint, so a ghost never shows one frame at the top of the file.
+  useLayoutEffect(() => {
     if (suggestion) syncScroll();
   }, [suggestion, syncScroll]);
 
@@ -1893,15 +2007,19 @@ export function CodeEditor({
     if (!el || !suggestion) return;
     const at = suggestion.at;
     const next = draft.slice(0, at) + suggestion.text + draft.slice(at);
+    acOffers.take("tab");
+    acAccepting.current = true;
     edit(next);
+    acAccepting.current = false;
+    acLastEdit.current = "accept";
     const caret = at + suggestion.text.length;
     setSuggestion(null);
     requestAnimationFrame(() => {
       el.selectionStart = el.selectionEnd = caret;
     });
-  }, [suggestion, draft, edit]);
+  }, [suggestion, draft, edit, acOffers]);
 
-  // #45 partial accept (→ Right arrow): insert only the next "word" of the pending
+  // #45 partial accept (Ctrl+Right): insert only the next "word" of the pending
   // suggestion and keep the remainder ghosted, so the user can walk a long
   // suggestion in word-sized steps. A word = any leading whitespace (including a
   // newline + indentation) plus the following run of non-space characters.
@@ -1914,14 +2032,18 @@ export function CodeEditor({
     const chunk = text.slice(0, take);
     const rest = text.slice(take);
     const next = draft.slice(0, at) + chunk + draft.slice(at);
+    acOffers.take(line ? "line" : "word");
+    acAccepting.current = true;
     edit(next);
+    acAccepting.current = false;
+    acLastEdit.current = "accept";
     const caret = at + chunk.length;
     // Keep the rest ghosted at the new caret; clear once it's fully consumed.
     setSuggestion(rest ? { ...suggestion, text: rest, at: caret } : null);
     requestAnimationFrame(() => {
       el.selectionStart = el.selectionEnd = caret;
     });
-  }, [suggestion, draft, edit]);
+  }, [suggestion, draft, edit, acOffers]);
 
   // \ref/\cite completion: cap the dropdown so a huge .bib can't render
   // thousands of rows; the prefix filter usually narrows it well below this.
@@ -2164,7 +2286,8 @@ export function CodeEditor({
     //  - Tab accepts the whole suggestion,
     //  - Shift+Tab toggles the completion-length mode (Sentence → Block → Scope)
     //    and re-requests in it,
-    //  - → (Right) accepts only the next word (repeat to walk word-by-word),
+    //  - Ctrl+Right accepts only the next word (repeat to walk word-by-word),
+    //    Alt+Right the next line; plain Right dismisses and moves the caret,
     //  - Esc dismisses.
     const overrides = shortcutOverrides;
     if (actionMatches("editorAutocomplete", overrides, e)) {
@@ -2181,10 +2304,10 @@ export function CodeEditor({
         if (acCopilot) {
           const items = acCandidates.current;
           if (items.length > 1 && items[0].version === acDocumentVersion.current) {
-            recordAcOutcome(false);
+            acOffers.end();
             acCandidate.current = (acCandidate.current + (bracket === "]" ? 1 : items.length - 1)) % items.length;
             const item = items[acCandidate.current];
-            acOutcome.current = { model: `${item.provider}/${item.model ?? item.provider}`, mode: "copilot" };
+            acOffers.start(item.id, "copilot", `${item.provider}/${item.model ?? item.provider}`);
             setSuggestion({ text: item.text, at: item.at, candidate: item });
           }
         } else void requestCompletion({ candidate: (acCandidate.current + (bracket === "]" ? 1 : 2)) % 3 });
@@ -2210,9 +2333,9 @@ export function CodeEditor({
         }
         return;
       }
-      // Plain Right arrow accepts the next word; modified Right (select/word-move)
-      // falls through and dismisses so native navigation still works.
-      if (e.key === "ArrowRight" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      // Ctrl+Right accepts the next word. Plain Right (and every other Right)
+      // falls through and dismisses, so the caret moves as it always does.
+      if (e.key === "ArrowRight" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         acceptWord();
         return;
@@ -2388,6 +2511,58 @@ export function CodeEditor({
     }
   };
 
+  // The line-number cells, rebuilt only when what they show changes: a streamed
+  // ghost token (a render per frame) or a keystroke within a line leaves them be.
+  const gutterLines = useMemo(() => Array.from({ length: lineCount }, (_, i) => {
+    const n = i + 1;
+    const h = wrap ? lineHeights[i] : undefined;
+    const broken = breakpoints?.has(n) ?? false;
+    const cls =
+      (n === currentMatchLine
+        ? "file-viewer-gutter-line current-match"
+        : matchLineSet.has(n)
+          ? "file-viewer-gutter-line has-match"
+          : "file-viewer-gutter-line") +
+      (n === caretLine ? " caret" : "") +
+      (unclosedLineSet.has(n) ? " has-unclosed-bracket" : "") +
+      (onToggleBreakpoint ? " is-breakable" : "") +
+      (broken ? " has-breakpoint" : "");
+    const style = h != null ? { height: h } : undefined;
+
+    if (!onToggleBreakpoint) {
+      return (
+        <div key={i} className={cls} style={style}>
+          {n}
+        </div>
+      );
+    }
+    return (
+      <button
+        key={i}
+        type="button"
+        className={cls}
+        style={style}
+        // Keep the caret where it is: clicking the gutter sets a
+        // breakpoint, it does not move the cursor or steal focus.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onToggleBreakpoint(n)}
+        title={
+          broken
+            ? t("fileViewer.removeBreakpoint", { line: n })
+            : t("fileViewer.addBreakpoint", { line: n })
+        }
+        aria-pressed={broken}
+        aria-label={
+          broken
+            ? t("fileViewer.removeBreakpoint", { line: n })
+            : t("fileViewer.addBreakpoint", { line: n })
+        }
+      >
+        {n}
+      </button>
+    );
+  }), [lineCount, wrap, lineHeights, breakpoints, currentMatchLine, matchLineSet, caretLine, unclosedLineSet, onToggleBreakpoint, t]);
+
   if (error != null) return <div className="file-viewer-error">{error}</div>;
   if (!loaded) return <div className="file-viewer-loading">{t("common.loading")}</div>;
 
@@ -2397,6 +2572,12 @@ export function CodeEditor({
   // text after the caret aside (horizontally and, for multi-line suggestions,
   // downward) instead of painting the proposal on top of it.
   const hasGhost = suggestion != null;
+  // The inline variant keeps the syntax colour beneath: only the ghost and the
+  // caret line's tail (closers) are painted, on a cover over the originals.
+  // Every case it cannot draw exactly stays on the opaque projection.
+  const ghostTail = suggestion
+    ? inlineGhostTail(draft, suggestion.at, suggestion.text, { highlighted: highlighted != null, wrapped: wrap === true })
+    : null;
 
   // In wrap mode, pin every overlay <pre> to the textarea's content width so
   // they wrap line-for-line with it (see wrapWidth). A no-op otherwise.
@@ -2475,55 +2656,7 @@ export function CodeEditor({
           unreachable without a mouse. */}
       <div className="file-viewer-gutter" aria-hidden={onToggleBreakpoint ? undefined : "true"}>
         <div className="file-viewer-gutter-inner" ref={gutterInnerRef}>
-          {Array.from({ length: lineCount }, (_, i) => {
-            const n = i + 1;
-            const h = wrap ? lineHeights[i] : undefined;
-            const broken = breakpoints?.has(n) ?? false;
-            const cls =
-              (n === currentMatchLine
-                ? "file-viewer-gutter-line current-match"
-                : matchLineSet.has(n)
-                  ? "file-viewer-gutter-line has-match"
-                  : "file-viewer-gutter-line") +
-              (n === caretLine ? " caret" : "") +
-              (unclosedLineSet.has(n) ? " has-unclosed-bracket" : "") +
-              (onToggleBreakpoint ? " is-breakable" : "") +
-              (broken ? " has-breakpoint" : "");
-            const style = h != null ? { height: h } : undefined;
-
-            if (!onToggleBreakpoint) {
-              return (
-                <div key={i} className={cls} style={style}>
-                  {n}
-                </div>
-              );
-            }
-            return (
-              <button
-                key={i}
-                type="button"
-                className={cls}
-                style={style}
-                // Keep the caret where it is: clicking the gutter sets a
-                // breakpoint, it does not move the cursor or steal focus.
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onToggleBreakpoint(n)}
-                title={
-                  broken
-                    ? t("fileViewer.removeBreakpoint", { line: n })
-                    : t("fileViewer.addBreakpoint", { line: n })
-                }
-                aria-pressed={broken}
-                aria-label={
-                  broken
-                    ? t("fileViewer.removeBreakpoint", { line: n })
-                    : t("fileViewer.addBreakpoint", { line: n })
-                }
-              >
-                {n}
-              </button>
-            );
-          })}
+          {gutterLines}
         </div>
       </div>
       <div
@@ -2633,7 +2766,25 @@ export function CodeEditor({
             dangerouslySetInnerHTML={{ __html: linkHtml + "\n" }}
           />
         )}
-        {hasGhost && (
+        {hasGhost && ghostTail != null && (
+          // Three parts still: the layer scrolls through `scrollTop` and needs
+          // the document's full height. Its text and background are
+          // transparent; only the cover paints.
+          <pre
+            ref={ghostRef}
+            className="file-viewer-ghost is-inline"
+            aria-hidden="true"
+            style={overlayWidthStyle}
+          >
+            {draft.slice(0, suggestion!.at)}
+            <span className="file-viewer-ghost-cover">
+              <span className="file-viewer-ghost-text">{suggestion!.text}</span>
+              {draft.slice(suggestion!.at, suggestion!.at + ghostTail)}
+            </span>
+            {draft.slice(suggestion!.at + ghostTail)}
+          </pre>
+        )}
+        {hasGhost && ghostTail == null && (
           <pre
             ref={ghostRef}
             className="file-viewer-ghost"
@@ -2652,6 +2803,8 @@ export function CodeEditor({
           spellCheck={false}
           wrap={wrap ? "soft" : "off"}
           onChange={onTextChange}
+          onCompositionStart={() => { acComposing.current = true; }}
+          onCompositionEnd={() => { acComposing.current = false; bumpAcImeEnds(); }}
           onKeyDown={onKeyDown}
           onKeyUp={(e) => { if (!(e.ctrlKey || e.metaKey)) setLinkHover(false); emitCaret(); }}
           // Fires before the double-click that re-arms them, so a plain click
@@ -2691,7 +2844,31 @@ export function CodeEditor({
       )}
       {suggestion && !acStatus && (
         <div className="file-viewer-ac-status" role="status">
-          {acCopilot ? t("fileViewer.copilotControls", AC_KEY_LABELS) : t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 })}
+          {/* Alt+[/] is offered only when Copilot returned more than one. */}
+          {acCopilot ? t(acCandidates.current.length > 1 ? "fileViewer.copilotControls" : "fileViewer.copilotControlsSingle", AC_KEY_LABELS)
+            : suggestion.candidate?.model
+            // The model that answered, first: with no role set it may be any
+            // resident model, and the user should see which one.
+            ? t("fileViewer.autocompleteFrom", {
+                model: suggestion.candidate.model,
+                controls: t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 }),
+              })
+            : t("fileViewer.autocompleteControls", { ...AC_KEY_LABELS, candidate: acCandidate.current + 1 })}
+        </div>
+      )}
+      {acRoleMissing && !acStatus && !suggestion && (
+        <div className="file-viewer-ac-status has-action" role="status">
+          {t("fileViewer.autocompleteRoleNotLoaded", { model: acRoleMissing })}
+          <button
+            type="button"
+            className="settings-btn sm"
+            // Keep the caret in the editor: a blur would dismiss this pill.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void loadRoleModel(acRoleMissing)}
+          >
+            {t("fileViewer.autocompleteLoadModel")}
+          </button>
+          <UntestedTag id="fileViewer.autocompleteRoleNotLoaded" />
         </div>
       )}
       {acStatus && (

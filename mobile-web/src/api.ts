@@ -1,3 +1,4 @@
+import type { DocStatus } from "../../src/lib/projects/docStatus";
 import type { Mark, MarkTick } from "./markup/layer";
 import { appleTouchDevice } from "./platform";
 import { storageKey } from "../../src/lib/brand";
@@ -222,10 +223,15 @@ export interface ProjectPromptList { prompts: ProjectPrompt[]; desktop_available
 /** An agent tab closed in the project this desktop session, newest first — an
  * opaque id and its label, reopened by `reopenTab`. */
 export interface ClosedTabRow { id: string; label: string; agent: string; closed_at: number }
+/** One of the project's archived tabs (the desktop's tab archive): its opaque
+ * id, label, kind (`agent`, `shell` or `other` — a viewer, a Files tab), the
+ * agent CLI for an agent tab, and when it was archived. Restored by
+ * `restoreArchivedTab`. */
+export interface ArchivedTabRow { id: string; label: string; kind: "agent" | "shell" | "other"; agent: string; archived_at: number }
 /** `files`: whether the read-only file browser answers for this project
  * (the desktop's switch is on, and it is a project, not a box or root). */
 export interface ProjectDetail {
-  project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
+  project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; archived?: ArchivedTabRow[]; files?: boolean;
   /** Whether the file browser also has a remote side: a remote project's tree
    * on its host, read over the desktop's connection (`?on=host`). Absent (an
    * older desktop) is none. */
@@ -426,8 +432,10 @@ export interface MobileMailAttachment { filename: string; mime: string; size: nu
 /** The host reads these display preferences from desktop settings on each
  * probe: the untested pills, the desktop's theme for a phone that follows it,
  * the sections the desktop keeps this phone out of (absent from an older
- * host: none) and the desktop's AI switch (`ai_off`, absent: on). */
-export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean }> {
+ * host: none) and the desktop's AI switch (`ai_off`, absent: on); the
+ * desktop's name and the desktops it is linked with, for the switcher
+ * (`shell/linkedDesktops.ts` checks every entry; absent from an older host). */
+export function getMobileStatus(): Promise<{ show_untested_tags?: boolean; color_scheme?: string; hidden_sections?: string[]; ai_off?: boolean; host?: string; linked_desktops?: unknown }> {
   return api("/api/v1/status");
 }
 /** The only flag writes the phone may ask for. Delete and move do not exist here. */
@@ -962,6 +970,24 @@ export function reopenTab(projectId: string, closedId?: string): Promise<{ tab: 
   }, TAB_CREATE_TIMEOUT);
 }
 
+/** `POST /api/v1/tabs/{id}/archive` — put one tab into its project's archive,
+ * as the desktop's tab menu Archive does: it is kept there and ends. Needs
+ * desktop Tabtivity open (`503 desktop_unavailable`). */
+export function archiveTab(tabId: string): Promise<{ archived: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/archive`, { method: "POST" });
+}
+
+/** `POST /api/v1/projects/{id}/tabs/archived/{archiveId}/restore` — bring an
+ * archived tab back in the desktop window. Answers with the tab's row when it
+ * came back as a terminal this phone can open, `{ on_desktop: true }` when it
+ * opened on the desktop only; `409 nothing_to_restore` once it is gone, `503
+ * desktop_unavailable` with no window. */
+export function restoreArchivedTab(projectId: string, archiveId: string): Promise<{ tab?: TabRow; on_desktop?: boolean }> {
+  return api(`/api/v1/projects/${encodeURIComponent(projectId)}/tabs/archived/${encodeURIComponent(archiveId)}/restore`, {
+    method: "POST",
+  }, TAB_CREATE_TIMEOUT);
+}
+
 const schedulePath = (tabId: string) => `/api/v1/tabs/${encodeURIComponent(tabId)}/schedules`;
 
 export function getSchedules(tabId: string): Promise<ScheduledPromptList> {
@@ -1115,7 +1141,7 @@ export interface SessionTranscript {
   tokens?: number;
   /** The shells the agent is running now — Claude's `Bash` calls still
    * without a result, and background ones still running. The phone's API
-   * empties each `command` (command lines never cross it). */
+   * masks each `command` and `description` (`services::mobile_control::shell_mask`). */
   shells?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
@@ -1126,13 +1152,13 @@ export interface SessionTranscript {
 }
 
 /** A shell command the agent started and is waiting on. The phone's API
- * empties `command` and drops `cut` (command lines never cross it); only the
- * desktop's Reader sees them. */
+ * sends a masked `command` (the tab's folders project-relative, other host
+ * paths cut to their leaf, secrets hidden); the desktop's Reader sees it whole. */
 export interface RunningShell {
   command: string;
   description?: string;
   at?: string;
-  /** The command was cut at the desktop's bound (desktop Reader only). */
+  /** The command was cut at the desktop's bound. */
   cut?: boolean;
   /** Sent to the background: it can run on past the turn. */
   background?: boolean;
@@ -1548,7 +1574,11 @@ export interface ProjectFileEntry {
  * the way down starts with a dot. An older desktop omits it (no uploads).
  * `remarks`: whether the PDF reader's **Annotate** may write into a PDF of the
  * project ("Phone may write remarks into PDFs"); omitted by an older desktop. */
-export interface ProjectFileListing { entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean }
+export interface ProjectFileListing {
+  entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean
+  /** The project root's catalog docs and the state each is in (the desktop tree's "Project docs" group; names only, in the catalog's order). Root of this computer's side only; missing in any folder, on the remote side, from an older desktop, or when the read timed out — the plain group then. A ghost row is `state === "missing" && creatable`. */
+  docs?: DocStatus[]
+}
 
 /** `GET /api/v1/projects/{id}/files[?dir=<token>][&on=host]` — one folder of
  * the project; no `dir` is the project's root. Answers only while the
@@ -1639,6 +1669,20 @@ export async function makeProjectFolder(projectId: string, dir: string | undefin
   const folder = dir ? `&dir=${encodeURIComponent(dir)}` : "";
   const body = await api<{ entry?: ProjectFileEntry }>(
     `/api/v1/projects/${encodeURIComponent(projectId)}/files/folder?name=${encodeURIComponent(name)}${folder}`,
+    { method: "POST" },
+  );
+  if (!body?.entry?.token) throw new ApiError(200, "malformed_response");
+  return body.entry;
+}
+
+/** `POST /api/v1/projects/{id}/files/docs?name=<leaf>` — a ghost row's
+ * **Create**: the catalog doc `name` written into the project root from its
+ * template, behind the upload switch; answers the new file's row. A taken name
+ * is `already_exists`, one outside the catalog's creatable docs
+ * `invalid_request`. Nothing is overwritten and there is no Undo. */
+export async function createProjectDoc(projectId: string, name: string): Promise<ProjectFileEntry> {
+  const body = await api<{ entry?: ProjectFileEntry }>(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/files/docs?name=${encodeURIComponent(name)}`,
     { method: "POST" },
   );
   if (!body?.entry?.token) throw new ApiError(200, "malformed_response");

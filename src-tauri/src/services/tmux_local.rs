@@ -462,6 +462,8 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     crate::services::root_mcp::PRINT_TOKEN_ENV,
     // Claude's long-lived token under its carrier (`claude_token`), slot 8642.
     crate::services::claude_token::CARRIER,
+    // The tab messages lane's token (`Caller::Tabs`), slot 8643 — appended.
+    crate::services::root_mcp::TABS_TOKEN_ENV,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -1239,12 +1241,14 @@ mod tests {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 13);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8642);
+        assert_eq!(SECRET_ENV.len(), 14);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8643);
         let print = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::PRINT_TOKEN_ENV).unwrap();
         assert_eq!(SECRET_UPDATE_ENV_SLOT + print, 8641, "the print token is appended, slot 8641");
         let claude = SECRET_ENV.iter().position(|k| *k == crate::services::claude_token::CARRIER).unwrap();
         assert_eq!(SECRET_UPDATE_ENV_SLOT + claude, 8642);
+        let tabs = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::TABS_TOKEN_ENV).unwrap();
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + tabs, 8643, "the tab messages token is appended, slot 8643");
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }

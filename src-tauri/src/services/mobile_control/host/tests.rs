@@ -19,18 +19,18 @@ fn old_protocol_names_are_accepted_and_counted() {
     assert!(hits::taken().is_empty());
 
     let old_cookie = format!("theme=dark; {}=tok-old", LEGACY.name(Name::SESSION_COOKIE));
-    assert_eq!(session_cookie_in(&RENAMED, &old_cookie), Some("tok-old"));
+    assert_eq!(session_cookie_in(&RENAMED, None, &old_cookie), Some("tok-old"));
     assert_eq!(hits::taken(), ["session-cookie"]);
     let both = format!("{old_cookie}; __Host-newname_session=tok-new");
-    assert_eq!(session_cookie_in(&RENAMED, &both), Some("tok-new"));
-    assert_eq!(session_cookie_in(&RENAMED, "theme=dark"), None);
+    assert_eq!(session_cookie_in(&RENAMED, None, &both), Some("tok-new"));
+    assert_eq!(session_cookie_in(&RENAMED, None, "theme=dark"), None);
     assert!(hits::taken().is_empty());
 
     // The production pair: one name each, as before.
     let current = super::super::protocol::TERMINAL_PROTOCOL;
     assert_eq!(terminal_protocol_in(&PAIR, current).as_deref(), Some(current));
     assert_eq!(
-        session_cookie_in(&PAIR, &format!("{}=tok", crate::brand::SESSION_COOKIE)),
+        session_cookie_in(&PAIR, None, &format!("{}=tok", crate::brand::SESSION_COOKIE)),
         Some("tok")
     );
 }
@@ -86,10 +86,15 @@ impl scheduler::Runner for RunnerRecorder {
 impl Fixture {
     /// A host with no project catalog at all.
     fn bare() -> Self {
+        Self::bare_at(ORIGIN)
+    }
+
+    /// `bare` for a host reached at `origin`.
+    fn bare_at(origin: &str) -> Self {
         let dir = tempfile::tempdir().expect("state dir");
         let state_dir = dir.path().to_path_buf();
         let control_dir = state_dir.join("mobile-control");
-        let auth = AuthStore::open(&control_dir, ORIGIN.to_string()).expect("auth store");
+        let auth = AuthStore::open(&control_dir, origin.to_string()).expect("auth store");
         let root = state_dir.join("work");
         std::fs::create_dir_all(&root).expect("project root");
         let runner = Arc::new(RunnerRecorder::default());
@@ -105,7 +110,7 @@ impl Fixture {
                         display_name: "Desk".into(),
                         ..MobileHostSettings::default()
                     },
-                    origin: ORIGIN.into(),
+                    origin: origin.into(),
                 },
                 auth: Arc::new(Mutex::new(auth)),
                 catalog: Arc::new(Mutex::new(CatalogCache::default())),
@@ -243,6 +248,7 @@ impl Fixture {
     /// The real pair → challenge → sign → session flow, returning the
     /// session cookie and the paired device id.
     async fn pair_device(&self, signing: &SigningKey) -> (String, String) {
+        let origin = self.state.config.origin.clone();
         let code = self
             .state
             .auth
@@ -261,7 +267,7 @@ impl Fixture {
         let (status, _, body) = self
             .send(post_json(
                 "/api/v1/pair",
-                ORIGIN,
+                &origin,
                 &serde_json::json!({
                     "code": code,
                     "device_name": "Phone",
@@ -275,7 +281,7 @@ impl Fixture {
         let (status, _, body) = self
             .send(post_json(
                 "/api/v1/auth/challenge",
-                ORIGIN,
+                &origin,
                 &serde_json::json!({ "device_id": device_id }),
             ))
             .await;
@@ -287,7 +293,7 @@ impl Fixture {
         let (status, headers, body) = self
             .send(post_json(
                 "/api/v1/auth/session",
-                ORIGIN,
+                &origin,
                 &serde_json::json!({
                     "device_id": device_id,
                     "nonce": nonce,
@@ -341,6 +347,16 @@ fn get_as(uri: &str, cookie: &str) -> Request<Body> {
     Request::builder()
         .uri(uri)
         .header(header::COOKIE, cookie_pair(cookie))
+        .body(Body::empty())
+        .expect("request")
+}
+
+/// A GET carrying a whole `Cookie` header, as a browser sends every cookie
+/// its jar holds for the host.
+fn get_with_jar(uri: &str, jar: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(header::COOKIE, jar)
         .body(Body::empty())
         .expect("request")
 }
@@ -877,26 +893,40 @@ async fn the_phone_has_no_route_to_the_saved_launch_defaults() {
     }
 }
 
-/// The phone's chat shows the running shells like the desktop's, but the
-/// command line never crosses the browser API (threat model gap 79): what the
-/// agent said the shell does and whether it runs in the background do.
+/// The phone's chat shows the running shells like the desktop's, their
+/// command lines masked (threat model gap 79): the tab's own folder made
+/// relative, other host paths cut to their leaf, secrets hidden — in the
+/// agent's description too. Whether a shell runs in the background, and that
+/// the desktop cut it, cross as they are.
 #[tokio::test]
-async fn a_phone_transcript_keeps_the_running_shells_without_their_command_lines() {
+async fn a_phone_transcript_masks_the_running_shells_command_lines() {
     use crate::services::agent_transcript::{AgentTranscript, RunningShell};
     let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(52)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let root = host.root.to_string_lossy().into_owned();
     let transcript = AgentTranscript {
         shells: vec![
-            RunningShell { command: "cat ~/.ssh/config".into(), description: Some("Check the config".into()), cut: true, ..Default::default() },
-            RunningShell { command: "npm run dev".into(), background: true, ..Default::default() },
+            RunningShell {
+                command: format!("cd {root} && curl -H 'Authorization: Bearer sk-live-0123456789abcdef' -o /var/tmp/deep/out.json x"),
+                description: Some(format!("Fetch into {root}/data")),
+                cut: true,
+                ..Default::default()
+            },
+            RunningShell { command: "cat ~/.ssh/config".into(), background: true, ..Default::default() },
         ],
         ..Default::default()
     };
-    let wire = phone_transcript(&host.state, &Phone("d1".into()), "t1", transcript).await;
-    assert_eq!(wire["shells"][0]["description"], "Check the config");
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
+    assert_eq!(wire["shells"][0]["command"], "cd . && curl -H 'Authorization: •••' -o …/out.json x", "{wire}");
+    assert_eq!(wire["shells"][0]["description"], "Fetch into data");
+    assert_eq!(wire["shells"][0]["cut"], true);
+    assert_eq!(wire["shells"][1]["command"], "cat ~/…/config");
     assert_eq!(wire["shells"][1]["background"], true);
-    assert!(!wire.to_string().contains("ssh"), "{wire}");
-    assert!(!wire.to_string().contains("npm run dev"), "{wire}");
-    assert!(wire["shells"][0].get("cut").is_none());
+    let text = wire.to_string();
+    for leaked in [root.as_str(), "sk-live", "/var/tmp", ".ssh"] {
+        assert!(!text.contains(leaked), "{leaked}: {wire}");
+    }
 }
 
 /// H3 (headless owner plan §3): with no window open, the phone's tab
@@ -987,6 +1017,51 @@ async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "answered: {body}");
     assert_eq!(json(&body)["error"], "nothing_to_reopen");
+}
+
+/// The project's archived tabs (`services::tab_archive`) reach the phone as
+/// labels, kinds and the agent's CLI only — read off the state dir, so with
+/// no window too — while archiving and restoring need the window and say so.
+#[tokio::test]
+async fn archived_tabs_list_without_a_window_and_their_verbs_need_one() {
+    let host = headless_host(Arc::new(|_opts: PtyOptions| Box::pin(async { Ok(()) })));
+    let cookie = host.pair_device(&signing_key(52)).await.0;
+    let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+    let archive = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join(crate::services::tab_archive::ARCHIVE_FILE);
+    let secret_dir = host.root.join("deep").to_string_lossy().to_string();
+    std::fs::write(
+        &archive,
+        json!({ "entries": [
+            { "id": "a1b2", "archivedAt": 7, "tab": { "key": "k", "label": "Review\u{7}", "cmd": "claude", "cwd": secret_dir, "kind": "agent", "sessionId": "9d0f-archived" } },
+            { "id": "c3d4", "archivedAt": 6, "tab": { "key": "k2", "label": "notes.pdf", "cmd": "", "cwd": secret_dir, "kind": "embed", "embedPath": secret_dir } },
+            { "id": "../bad", "archivedAt": 5, "tab": { "key": "k3", "label": "x", "cmd": "", "cwd": "/" } }
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    let detail = json(&body);
+    assert_eq!(detail["archived"].as_array().map(Vec::len), Some(2), "{body}");
+    assert_eq!(detail["archived"][0], json!({ "id": "a1b2", "label": "Review", "kind": "agent", "agent": "claude", "archived_at": 7 }));
+    assert_eq!(detail["archived"][1]["kind"], "other");
+    assert_eq!(detail["archived"][1]["agent"], "");
+    assert!(!body.contains(&secret_dir), "path leaked: {body}");
+    assert!(!body.contains("9d0f-archived"), "session id leaked: {body}");
+
+    let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/archive"), &cookie, None)).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+    assert_eq!(json(&body)["error"], "desktop_unavailable");
+    let (status, _, body) = host
+        .send(request_as("POST", &format!("/api/v1/projects/{project_id}/tabs/archived/a1b2/restore"), &cookie, None))
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+    let (status, _, _) = host
+        .send(request_as("POST", &format!("/api/v1/projects/{project_id}/tabs/archived/a.b/restore"), &cookie, None))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Nothing was taken out by a refused restore.
+    assert_eq!(crate::services::tab_archive::list_at(&archive).len(), 3);
 }
 
 /// Bind the `with_project` host's agent tab to schedule target `tgt-1`.
@@ -1827,6 +1902,7 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
         ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
         ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable", "files_off"]),
+        ("POST", format!("/api/v1/projects/{p}/files/docs?name=TODO.md"), any.clone(), &["files_unavailable", "uploads_unavailable", "files_off"]),
         // Outbox and inbox, by project and by tab.
         ("GET", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
         ("DELETE", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
@@ -2259,6 +2335,7 @@ async fn a_folder_less_project_is_no_project_to_any_folder_route() {
             ("GET", format!("/api/v1/projects/{p}/files/raw?token=x"), Value::Null, &["files_unavailable"]),
             ("POST", format!("/api/v1/projects/{p}/files/upload?name=a.txt"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
             ("DELETE", format!("/api/v1/projects/{p}/files/upload"), Value::Null, &["files_unavailable", "uploads_unavailable"]),
+            ("POST", format!("/api/v1/projects/{p}/files/docs?name=TODO.md"), any.clone(), &["files_unavailable", "uploads_unavailable"]),
             ("GET", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
             ("DELETE", format!("/api/v1/projects/{p}/outbox"), Value::Null, &["not_a_project"]),
             ("GET", format!("/api/v1/projects/{p}/outbox/a.txt"), Value::Null, &["not_a_project"]),
@@ -3756,6 +3833,74 @@ async fn logging_out_clears_the_cookie_and_the_session() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// Cookies ignore ports: a phone host on `HOST:10000` shares the browser's
+/// cookie jar with the server gateway on `HOST`. Each names its session
+/// cookie apart, reads only its own, and a logout expires only its own.
+#[test]
+fn a_host_on_an_explicit_port_names_its_session_cookie_after_it() {
+    use crate::brand::{PAIR, SESSION_COOKIE};
+    assert_eq!(cookie_port("desk.example.ts.net"), None);
+    assert_eq!(cookie_port("desk.example.ts.net:10000"), Some("10000"));
+    assert_eq!(cookie_port("[::1]"), None);
+    assert_eq!(cookie_port("[::1]:8443"), Some("8443"));
+    assert_eq!(cookie_port("desk.example.ts.net:"), None);
+
+    let ported = format!("{SESSION_COOKIE}_10000");
+    let both = format!("{SESSION_COOKIE}=tok-gateway; {ported}=tok-desk");
+    assert_eq!(session_cookie_in(&PAIR, Some("10000"), &both), Some("tok-desk"));
+    assert_eq!(session_cookie_in(&PAIR, None, &both), Some("tok-gateway"));
+    let plain_only = format!("{SESSION_COOKIE}=tok-gateway");
+    assert_eq!(session_cookie_in(&PAIR, Some("10000"), &plain_only), None);
+    assert_eq!(session_cookie_in(&PAIR, Some("8443"), &both), None);
+}
+
+#[tokio::test]
+async fn two_hosts_on_one_machine_keep_their_sign_ins_apart() {
+    let gateway = Fixture::bare();
+    let gateway_cookie = cookie_pair(&gateway.pair_device(&signing_key(31)).await.0);
+    assert!(
+        gateway_cookie.starts_with(&format!("{}=", crate::brand::SESSION_COOKIE)),
+        "the default port's name changed: {gateway_cookie}"
+    );
+
+    let desk_origin = format!("{ORIGIN}:10000");
+    let desk = Fixture::bare_at(&desk_origin);
+    let desk_cookie = cookie_pair(&desk.pair_device(&signing_key(32)).await.0);
+    assert!(
+        desk_cookie.starts_with(&format!("{}_10000=", crate::brand::SESSION_COOKIE)),
+        "the ported host kept the shared name: {desk_cookie}"
+    );
+
+    // The browser sends both cookies to both hosts; each finds its own.
+    let jar = format!("{gateway_cookie}; {desk_cookie}");
+    let (status, _, body) = gateway.send(get_with_jar("/api/v1/status", &jar)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = desk.send(get_with_jar("/api/v1/status", &jar)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The other host's cookie alone signs neither in.
+    let (status, ..) = desk.send(get_as("/api/v1/status", &gateway_cookie)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The ported host's logout expires its own cookie and nothing else.
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/api/v1/auth/session")
+        .header(header::ORIGIN, desk_origin.as_str())
+        .header(header::COOKIE, jar.as_str())
+        .body(Body::empty())
+        .expect("request");
+    let (status, headers, _) = desk.send(request).await;
+    assert_eq!(status, StatusCode::OK);
+    let expired: Vec<_> = headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok().map(cookie_pair))
+        .collect();
+    assert_eq!(expired, [format!("{}_10000=", crate::brand::SESSION_COOKIE)], "{expired:?}");
+    let (status, _, body) = gateway.send(get_with_jar("/api/v1/status", &jar)).await;
+    assert_eq!(status, StatusCode::OK, "the desk's logout signed the gateway out: {body}");
+}
+
 #[tokio::test]
 async fn a_pairing_flood_is_rate_limited_at_the_http_edge() {
     let host = Fixture::bare();
@@ -4995,6 +5140,78 @@ async fn upload_here_adds_a_new_file_to_a_plain_folder_and_undoes_only_it() {
     assert_eq!(refused(host.send(undo(token)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
 }
 
+/// The "Project docs" group on the phone: the root listing carries the catalog
+/// docs' states (names only), a ghost row's Create writes one template file
+/// behind the upload guards, and nothing but a creatable catalog leaf is taken.
+#[tokio::test]
+async fn the_root_lists_its_catalog_docs_and_a_ghost_row_creates_one() {
+    let host = Fixture::with_project();
+    let cookie = host.pair_device(&signing_key(61)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/projects?view=search&q=aurora", &cookie)).await;
+    let project_id = json(&body)["projects"][0]["id"].as_str().expect("opaque project id").to_string();
+    let base = format!("/api/v1/projects/{project_id}/files");
+    std::fs::create_dir_all(host.root.join("sub")).unwrap();
+    std::fs::write(host.root.join("README.md"), "# mine\n").unwrap();
+    let switches = |files: bool, uploads: bool| {
+        std::fs::write(
+            host.state.config.state_dir.join("settings.json"),
+            json!({ "assistant": false, crate::brand::MOBILE_HOST_KEY: { "enabled": true, "project_files": files, "project_uploads": uploads } }).to_string(),
+        )
+        .unwrap();
+    };
+    let create = |name: &str, origin: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("{base}/docs?name={name}"))
+            .header(header::ORIGIN, origin)
+            .header(header::COOKIE, cookie_pair(&cookie))
+            .body(Body::empty())
+            .expect("request")
+    };
+    let refused = |answer: (StatusCode, HeaderMap, String)| (answer.0, json(&answer.2)["error"].clone());
+
+    // Closed with the switches, and by the origin check, before anything is written.
+    switches(false, true);
+    assert_eq!(refused(host.send(create("TODO.md", ORIGIN)).await), (StatusCode::NOT_FOUND, json!("files_off")));
+    switches(true, false);
+    assert_eq!(refused(host.send(create("TODO.md", ORIGIN)).await), (StatusCode::NOT_FOUND, json!("uploads_off")));
+    switches(true, true);
+    assert_eq!(refused(host.send(create("TODO.md", "https://elsewhere.example")).await), (StatusCode::FORBIDDEN, json!("invalid_origin")));
+    assert!(!host.root.join("TODO.md").exists());
+
+    // The root says where the docs stand; a folder does not.
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let docs = json(&body)["docs"].clone();
+    let row = |name: &str| docs.as_array().expect("docs").iter().find(|row| row["name"] == name).cloned().unwrap_or(Value::Null);
+    assert_eq!(row("README.md")["state"], "edited", "{body}");
+    assert_eq!((row("README.md")["isDefault"].clone(), row("AGENTS.md")["state"].clone()), (json!(true), json!("missing")), "{body}");
+    assert_eq!((row("TODO.md")["state"].clone(), row("TODO.md")["creatable"].clone(), row("TODO.md")["isDefault"].clone()), (json!("missing"), json!(true), json!(false)));
+    assert!(!body.contains(host.root.to_str().unwrap()), "{body}");
+    let sub = json(&body)["entries"].as_array().unwrap().iter().find(|e| e["name"] == "sub").unwrap()["token"].as_str().unwrap().to_string();
+    let (_, _, body) = host.send(get_as(&format!("{base}?dir={sub}"), &cookie)).await;
+    assert!(json(&body).get("docs").is_none(), "only the root: {body}");
+
+    // Created from the template, answered as the new row; never over anything.
+    let (status, _, body) = host.send(create("TODO.md", ORIGIN)).await;
+    assert_eq!(status, StatusCode::CREATED, "answered: {body}");
+    assert_eq!(json(&body)["entry"]["name"], "TODO.md");
+    assert!(!body.contains(RAW_PROJECT) && !body.contains(host.root.to_str().unwrap()), "{body}");
+    let written = std::fs::read_to_string(host.root.join("TODO.md")).unwrap();
+    assert!(!written.is_empty());
+    assert_eq!(refused(host.send(create("TODO.md", ORIGIN)).await), (StatusCode::CONFLICT, json!("already_exists")));
+    assert_eq!(std::fs::read_to_string(host.root.join("TODO.md")).unwrap(), written);
+    let (_, _, body) = host.send(get_as(&base, &cookie)).await;
+    let docs = json(&body)["docs"].clone();
+    let todo = docs.as_array().unwrap().iter().find(|row| row["name"] == "TODO.md").unwrap();
+    assert_eq!(todo["state"], "template", "{body}");
+
+    // Only a creatable catalog leaf is taken: no path, no pointer file, no other name.
+    for name in ["..%2Fx.md", "sub%2Fx.md", "x.md", "CLAUDE.md", "REMARKS.md", ".gitignore", "todo.md", ""] {
+        assert_eq!(refused(host.send(create(name, ORIGIN)).await), (StatusCode::BAD_REQUEST, json!("invalid_request")), "{name:?}");
+    }
+    assert!(!host.root.join("x.md").exists() && !host.root.join("CLAUDE.md").exists() && !host.root.join("sub").join("x.md").exists());
+}
+
 #[tokio::test]
 async fn annotate_appends_remarks_to_a_project_pdf_behind_its_own_switch() {
     let host = Fixture::with_project();
@@ -5210,6 +5427,123 @@ async fn new_folder_is_add_only_and_a_folder_downloads_as_a_zip() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// `[MOBILE_HOST_KEY].linked_desktops` written into the fixture's settings.
+fn link_desktops(host: &Fixture, origins: &[&str]) {
+    let key = crate::brand::MOBILE_HOST_KEY;
+    std::fs::write(
+        host.state.config.state_dir.join("settings.json"),
+        serde_json::to_vec(&json!({ key: { "enabled": true, "linked_desktops": origins } })).unwrap(),
+    )
+    .unwrap();
+}
+
+/// A GET as a linked desktop's page would send it: with its `Origin`.
+fn get_from(uri: &str, origin: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(header::ORIGIN, origin)
+        .body(Body::empty())
+        .expect("request")
+}
+
+#[tokio::test]
+async fn with_no_linked_desktop_the_headers_are_exactly_the_closed_ones() {
+    let host = Fixture::bare();
+    // An entry that does not validate links nothing.
+    link_desktops(&host, &["https://laptop.other.ts.net", "https://evil.example.com"]);
+    for uri in ["/", "/index.html", "/healthz", "/api/v1/status"] {
+        let (_, headers, _) = host.send(get_from(uri, "https://laptop.other.ts.net")).await;
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY", "{uri}");
+        assert_eq!(headers["permissions-policy"], MOBILE_PERMISSIONS_POLICY, "{uri}");
+        assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "{uri}");
+        if uri != "/healthz" && uri != "/api/v1/status" {
+            assert_eq!(headers[header::CONTENT_SECURITY_POLICY], PHONE_CSP, "{uri}");
+        }
+    }
+    assert_eq!(phone_csp(&[]), PHONE_CSP);
+    assert_eq!(permissions_policy(&[]), MOBILE_PERMISSIONS_POLICY);
+    assert!(!pdf_frame_policy(None, &[]).contains(".ts.net"));
+}
+
+#[tokio::test]
+async fn a_linked_desktop_may_frame_the_phone_pages_and_read_the_health_probe() {
+    const LAPTOP: &str = "https://laptop.example.ts.net";
+    const SECOND: &str = "https://desk.example.ts.net:10000";
+    let host = Fixture::bare();
+    link_desktops(&host, &[LAPTOP, SECOND]);
+
+    for uri in ["/", "/index.html"] {
+        let (_, headers, _) = host.send(get_request(uri)).await;
+        assert!(headers.get(header::X_FRAME_OPTIONS).is_none(), "{uri}");
+        let csp = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+        assert!(csp.contains(&format!("frame-ancestors {LAPTOP} {SECOND};")), "{csp}");
+        assert!(csp.contains(&format!("frame-src 'self' {LAPTOP} {SECOND};")), "{csp}");
+        assert!(csp.contains(&format!("connect-src 'self' {LAPTOP} {SECOND};")), "{csp}");
+        assert!(csp.contains("script-src 'self';") && csp.contains("default-src 'self';"), "{csp}");
+        let policy = headers["permissions-policy"].to_str().unwrap();
+        assert!(policy.contains(&format!("microphone=(self \"{LAPTOP}\" \"{SECOND}\")")), "{policy}");
+        assert!(policy.contains(&format!("on-device-speech-recognition=(self \"{LAPTOP}\" \"{SECOND}\")")), "{policy}");
+        assert!(policy.contains("camera=()"), "{policy}");
+    }
+    // Nothing but the two `(self)` features is delegated, and the rest of
+    // each policy is the closed one's.
+    let linked = [LAPTOP.to_string(), SECOND.to_string()];
+    assert_eq!(
+        permissions_policy(&linked),
+        format!("camera=(), microphone=(self \"{LAPTOP}\" \"{SECOND}\"), on-device-speech-recognition=(self \"{LAPTOP}\" \"{SECOND}\"), geolocation=(), payment=(), usb=()")
+    );
+    assert_eq!(
+        phone_csp(&linked),
+        format!("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' {LAPTOP} {SECOND}; frame-src 'self' {LAPTOP} {SECOND}; object-src 'none'; base-uri 'none'; frame-ancestors {LAPTOP} {SECOND}; form-action 'self'")
+    );
+    // The API, the scripts and the browser client stay closed.
+    for uri in ["/api/v1/status", "/assets/app.js", "/desktop/"] {
+        let (_, headers, _) = host.send(get_request(uri)).await;
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY", "{uri}");
+        assert_eq!(headers["permissions-policy"], MOBILE_PERMISSIONS_POLICY, "{uri}");
+        if let Some(csp) = headers.get(header::CONTENT_SECURITY_POLICY) {
+            assert!(!csp.to_str().unwrap().contains("laptop"), "{uri}");
+        }
+    }
+    // The pdf.js frame names the linked desktops among its ancestors.
+    let policy = pdf_frame_policy(None, &[LAPTOP.to_string()]);
+    assert!(policy.ends_with(&format!("frame-ancestors 'self' {LAPTOP}")), "{policy}");
+
+    // The health probe answers a linked origin with CORS, nobody else.
+    let (_, headers, body) = host.send(get_from("/healthz", LAPTOP)).await;
+    assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], LAPTOP);
+    assert_eq!(headers[header::VARY], "Origin");
+    assert_eq!(json(&body), json!({ "ok": true }));
+    for stranger in ["https://evil.example.com", "https://laptop.other.ts.net", "null"] {
+        let (_, headers, _) = host.send(get_from("/healthz", stranger)).await;
+        assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "{stranger}");
+    }
+    // A linked origin is still not this host's origin to the API.
+    let (status, _, body) = host
+        .send(post_json("/api/v1/auth/challenge", LAPTOP, &json!({ "device_id": "x" })))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(json(&body)["error"], "invalid_origin");
+
+    // A signed-in phone reads the list from its status.
+    let cookie = host.pair_device(&signing_key(33)).await.0;
+    let (_, _, body) = host.send(get_as("/api/v1/status", &cookie)).await;
+    assert_eq!(json(&body)["linked_desktops"], json!([{ "origin": LAPTOP }, { "origin": SECOND }]));
+}
+
+#[test]
+fn behind_the_gateway_nothing_is_linked() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = crate::brand::MOBILE_HOST_KEY;
+    std::fs::write(
+        dir.path().join("settings.json"),
+        serde_json::to_vec(&json!({ key: { "linked_desktops": ["https://laptop.example.ts.net"] } })).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(linked_for(false, dir.path(), ORIGIN), ["https://laptop.example.ts.net"]);
+    assert!(linked_for(true, dir.path(), ORIGIN).is_empty());
+}
+
 #[tokio::test]
 async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
     let host = Fixture::bare();
@@ -5239,8 +5573,8 @@ async fn only_the_pdf_frame_may_be_framed_and_only_by_the_pwa() {
     }
     // A host header that is not a host name is left out of the policy.
     let forged = HeaderValue::from_static("evil.example; script-src *");
-    assert!(!pdf_frame_policy(Some(&forged)).contains("evil"));
-    assert!(pdf_frame_policy(None).contains("script-src 'self';"));
+    assert!(!pdf_frame_policy(Some(&forged), &[]).contains("evil"));
+    assert!(pdf_frame_policy(None, &[]).contains("script-src 'self';"));
 }
 
 #[tokio::test]
@@ -6494,6 +6828,7 @@ async fn a_project_open_to_one_phone_is_an_unknown_id_to_the_other() {
             ("GET", format!("/api/v1/projects/{project}/files/entry?name=paper.pdf"), None),
             ("POST", format!("/api/v1/projects/{project}/files/upload?name=paper.pdf"), None),
             ("DELETE", format!("/api/v1/projects/{project}/files/upload?f={token}"), None),
+            ("POST", format!("/api/v1/projects/{project}/files/docs?name=TODO.md"), None),
             ("GET", format!("/api/v1/tabs/{tab}/markup/questions"), None),
             ("POST", format!("/api/v1/tabs/{tab}/schedules"), Some(schedule.clone())),
             ("POST", format!("/api/v1/projects/{project}/prompts/p-1/send"), Some(json!({ "tab_id": tab }))),

@@ -170,6 +170,42 @@ fn a_slash_command_recorded_as_a_local_command_is_a_prompt() {
 }
 
 #[test]
+fn a_command_claude_refused_as_unknown_is_its_prompt_and_claude_s_warning() {
+    // Claude 2.1.323 records a mistyped command only as two warnings: the
+    // Chat view's bubble for `/simplity …` stayed "Sending…" (2026-11-14).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let warning = |text: &str, at: &str| format!(
+        "{{\"type\":\"system\",\"subtype\":\"informational\",\"content\":\"{text}\",\"isMeta\":false,\"timestamp\":\"{at}\",\"level\":\"warning\"}}\n"
+    );
+    std::fs::write(
+        &path,
+        [
+            // Words with no refused command before them join nothing, and
+            // another informational record is nothing.
+            warning("Args from unknown skill: stray", "2026-11-14T06:22:00.000Z"),
+            warning("Something else happened", "2026-11-14T06:22:01.000Z"),
+            warning("Unknown command: /simplity. Did you mean /simplify?", "2026-11-14T06:22:25.021Z"),
+            warning("Args from unknown skill: and optimize the whole local remote sync", "2026-11-14T06:22:25.022Z"),
+            warning("Unknown command: /nope", "2026-11-14T06:23:00.000Z"),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(
+        kinds(&read),
+        vec![
+            ("prompt", "/simplity and optimize the whole local remote sync"),
+            ("answer", "Unknown command: /simplity. Did you mean /simplify?"),
+            ("prompt", "/nope"),
+            ("answer", "Unknown command: /nope"),
+        ]
+    );
+    assert_eq!(read.entries[0].at.as_deref(), Some("2026-11-14T06:22:25.021Z"));
+}
+
+#[test]
 fn a_claude_transcript_reads_as_prompts_and_one_bubble_per_message() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("s.jsonl");

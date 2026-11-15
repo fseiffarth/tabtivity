@@ -10,10 +10,25 @@ WebKitGTK has no `SpeechRecognition`, macOS WKWebView's is unreliable inside
 an app, and only Windows WebView2 has one (online). So `services::voice`
 captures the mic natively (`cpal`), segments it (`vad.rs`) and transcribes
 with whisper.cpp (`stt.rs`), on the machine. The backend owns the audio; the
-renderer owns the words: `voice:final` text goes into the composer's draft,
-and the composer's own `send()` is the only way out — slash commands,
+renderer owns the words: what is heard goes into the composer's draft, and
+the composer's own `send()` is the only way out — slash commands,
 subagent routing, the AI switch and the "sending" state behave as for a
 typed prompt. The backend never sends a prompt.
+
+A `voice:partial` is written into the draft at once as the segment's
+*provisional* text (`lib/voice/provisionalDraft.ts`, glued to the composer by
+`useLiveDictation`): one span per segment, at the end of the draft, replaced by
+each newer partial (so a whole-segment or a tail transcript never doubles
+text) and removed when the segment's final arrives, which is inserted where the
+span stood. Partials bypass the composer's undo history, so Ctrl+Z and
+"Tabby scratch that" only see settled finals, and `hasDraft` (the send guard)
+counts only settled text. The renderer holds a partial back (it shows on the
+"Heard:" line instead) while it may be a spoken edit (`mayEditDraft`), a spoken
+send's words, or, in hands-free, a stop word or the answer to an open dialog.
+A span tracks by offset and its own text: typing before it shifts it, after it
+leaves it, inside it makes the words the user's own (the final is then not
+typed again). A pause (the backend drops the open segment, no final comes), a
+send and the session's end remove the spans still open.
 
 ## Why there is no `claude -p`
 
@@ -53,6 +68,20 @@ guard would be gone by the launch after the crash. The first crash still
 happens, and the switch cannot stop ggml creating its Vulkan instance, which it
 does on any use of whisper. That is also why Windows ships `vulkan-1.dll`
 rather than delay-loading it: staying on the CPU would not avoid the call.
+
+## Live preview (`voice:partial`)
+
+Each partial is the transcript of the **whole** open segment, never a tail:
+the renderer writes it straight into the input field and the final replaces it.
+A short segment is re-run in full; past `Pacing::commit_tail` (6 s) the text
+before the latest seam (a 400 ms pause the detector heard inside the segment,
+`Vad::pause_marks`) is transcribed once, kept, and later partials run only on
+what follows (`committed + tail`). The first partial is due as soon as the
+segment opens; the next one a gap after the previous finished (half its run
+time, 300–700 ms), so a GPU is asked about every 0.4 s and a slow CPU is not
+swamped. The final stays one run over the whole segment (a seam is not a
+sentence end). Plain dictate keeps its 700 ms closing pause: shorter would
+split sentences at thinking pauses, and the field already shows the words.
 
 ## One listener per machine
 

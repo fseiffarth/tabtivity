@@ -49,12 +49,61 @@ document when hidden, on file/provider change and on unmount; the next request
 re-opens it with current content.
 
 **Consequence of RAM-only credentials:** sign-in is per project server and is
-lost when that server stops (quit, revocation, crash). Persisting it needs a
-verified token-injection interface, which 1.547.0 has not been shown to have.
+lost when that server stops (quit, revocation, crash), unless "Stay signed in"
+is on.
+
+**Stay signed in** (`credentials.rs`, opt-in `copilot_stay_signed_in`,
+default off): after a finished device sign-in the session asks the server's
+`auth/getGitHubToken` and keeps `{user, token}` in the OS keychain, one entry
+per app account (`remote_credentials`, locked-keyring handling included); every
+server start then sends `signInWithGithubToken {githubToken, user}` after
+`didChangeConfiguration`. A reply of `NotSignedIn` (GitHub refused the token)
+deletes the entry and leaves the server signed out; a server error or a timeout
+keeps it: the server answers with an error when its own token fetch threw (no
+network, HTTP 429), which judges nothing. Switching the
+setting on while a server is signed in stores its token then; switching it off,
+or signing out, deletes the entry. The token never reaches the webview, a log
+line or the diagnostics ring (`copilot_account` reports only `remembered`).
+With the setting off the keychain is never read: neither the card's status
+poll nor the idle timer asks it (`credentials::restorable`), and `remembered`
+is false.
+Both request shapes come from reading the 1.565.6 server bundle (its handler
+table and request schemas), not from a live account.
+
+**Idle shutdown:** while a sign-in is remembered, a project's server stops
+after 10 minutes without a completion request; the next request starts one
+that signs in by itself. Without a remembered sign-in servers live until quit,
+because a restart would sign the user out. The timer (one task, a round a
+minute) ends with `stop_all` at exit.
+
+## Diagnostics and errors (2026-11-14)
+
+Each project keeps its server's last 200 `window/logMessage`, `$/logTrace` and
+stderr lines in `Sessions` (not the session, so they outlive a server that
+died or never finished starting), redacted (`gh?_…`, `github_pat_…`,
+`Bearer …`) and cut to 500 characters; `copilot_diagnostics` serves them from
+memory. A failed launch spends no restart budget, so "not installed" stays
+visible. The document is authorized before a server starts. Proxy and CA
+variables reach the server through bwrap's own environment, not its argument
+list. The AI switch turning off stops every server, and none starts while it
+is off: `session()` in `commands/copilot.rs`, the one caller of `get_or_start`,
+asks the switch first (a click on Sign in included).
 
 ## Standalone protocol evidence
 
-On 2026-09-18, npm reported `@github/copilot-language-server` 1.547.0. Installed
+**1.565.6 (2026-11-14, pinned).** Installed as the native package alone
+(`@github/copilot-language-server-linux-x64`) under an ignored scratch prefix.
+`scripts/copilot-probe.py --sign-in`, unfenced with an isolated HOME/XDG:
+initialize 1.565.6, incremental sync, error 1000, cancellation -32800, and an
+anonymous `signIn` answered `PromptUserDeviceFlow` with a 9-character user
+code, `https://github.com/login/device` and `github.copilot.finishDeviceFlow`
+(never finished). The same against the umbrella package. The fenced ignored
+test could not run where it was tried: that shell was itself inside an agent
+fence, where bwrap cannot create a nested user namespace (its stderr now shows
+in the test failure). The fenced run of 1.565.6, and with it the fence's
+network binds for `signIn`, is still to be done from a normal shell.
+
+**1.547.0 (2026-09-18).** On 2026-09-18, npm reported `@github/copilot-language-server` 1.547.0. Installed
 without lifecycle scripts under `/tmp/tabtivity-copilot-probe`, outside the app's
 dependencies. The npm package offers native Linux/macOS/Windows builds on x64
 and arm64; upstream also documents Node >=20.8. Only Linux x64 was exercised.

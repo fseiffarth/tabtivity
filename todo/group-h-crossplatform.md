@@ -4432,6 +4432,21 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Phone Focus chat, Claude 2.1.322 or later, a long Bash command
+    running: send a prompt, then **Send now** — the host presses Claude's own
+    Ctrl+X Ctrl+S (`pty_bridge::QueueHint.keys`, one `send-keys` call; was Esc),
+    so the queue joins the turn, the command moves to the background instead of
+    being killed, and the prompt is not handed back into Claude's box. Also with
+    the tab on a remote host (`ssh_exec::host_tmux_send_now_command`). Code
+    complete (2026-11-12, `77e180afe`); never seen live.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [~] **31bq — Edit a phone prompt until the agent takes it in** (2026-09-29;
   ✅ code-complete, automated tests passing — `MobileHeldPromptEdit.test.tsx`,
@@ -4953,6 +4968,67 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
   whether the board should hide projects the phone cannot reach (switch off
   or not on its list), then filter both the desktop answer and the headless
   one per device (`Catalog::for_device` already knows the set).
+
+- [ ] **31cs — One phone app, several desktops** (2026-11-14; Phases 0–2 and a
+  minimal Phase 3 code-complete — the sidecar's linked-desktop headers,
+  `mobile_control/linked.rs`, Settings → Mobile → Linked desktops
+  (`mobile/LinkedDesktops.tsx`), and the phone's switcher shell with one framed
+  desktop (`mobile-web/src/shell/`); never live — next: the plan's "Must verify
+  on a real phone" checks, then lamps, badges, deep links and the steering key;
+  handoff `docs/phone_multi_desktop_handoff.md`). Plan: `docs/phone_multi_desktop_plan.md`. One installed app switches
+  between linked desktops; every other desktop's own phone UI is framed from
+  its own origin (same tailnet, `linked_desktops` on both desktops). v1 push =
+  switcher badges + Android browser opt-in, relay later; a framed desktop keeps
+  its own lock. Order: 31ct → sidecar headers → Settings → minimal shell for
+  the plan's on-device checks (iOS pairing in the frame, terminal keyboard in
+  the frame) → rest of the phone shell.
+  - [x] Phase 0 (cookie per port, 31ct), Phase 1 (`mobile_control/linked.rs`,
+    headers, `/healthz` CORS, status `linked_desktops`) and Phase 2 (Settings →
+    Mobile → Linked desktops) are code-complete, with docs (plan Phase 5 for
+    them). A minimal Phase 3 (switcher shell, one framed desktop) followed in
+    `bb964b68b`; open: the rest of Phase 3 (lamps, badges, deep links, the
+    steering key) and Phase 4 (push relay, after the user confirms its trust
+    cost).
+  - [ ] 🖐️ Two desktops on one tailnet, Serve on each: in Settings → Mobile →
+    Linked desktops copy each computer's address into the other's list (a
+    `*.c.ts.net` name, an address with a path, its own address, a duplicate and a
+    ninth are each refused with a reason); open each computer's phone page in a
+    browser and check the response headers (`curl -I` on `/`) list the other
+    origin in `frame-ancestors`, with no `X-Frame-Options`; remove the link and
+    they are byte-identical to before.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+- [~] **31ct — Phone session cookie collides across ports on one machine**
+  (2026-11-14; ✅ code-complete, `two_hosts_on_one_machine_keep_their_sign_ins_apart`,
+  `a_host_on_an_explicit_port_names_its_session_cookie_after_it`; ⚠️ never live).
+  Cookies ignore ports, and the phone host and the server daemon behind the
+  gateway both set `__Host-<slug>_session`, so a desktop phone host on Serve
+  port 10000 and the gateway on 443 (`docs/context/server_gateway.md`) overwrote
+  each other's sign-in. A host on an explicit port now uses
+  `__Host-<slug>_session_<port>` (`host.rs` `cookie_port`), reads and expires
+  only that; the default port's name is unchanged. Sessions are memory-only,
+  so the switch costs one automatic re-sign-in. Phase 0 of
+  `docs/phone_multi_desktop_plan.md`.
+  - [ ] 🖐️ On a machine with the server gateway on 443 and the desktop's phone
+    host on Serve port 10000, sign the phone in to both (one browser), use one,
+    then the other, back and forth: switching back shows no sign-in step (the
+    phone re-signed in silently on every switch before); logging out of one
+    leaves the other signed in.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 *Not coming to the phone (decided, not forgotten — see
 `docs/mobile_box_parity_plan.md`): editing a box from the phone (membership,

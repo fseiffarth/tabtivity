@@ -162,9 +162,38 @@ describe("steering Inside a Reader view", () => {
     stepInside();
     key.mockClear();
     const tabs = useTabsStore.getState().tabs.length;
-    press({ key: "c" });
-    expect(key.mock.calls[0][0]).toBe("calendar");
+    press({ key: "m" });
+    expect(key.mock.calls[0][0]).toBe("mail");
     expect(useTabsStore.getState().tabs.length).toBe(tabs);
+  });
+
+  it("hands the keyboard to a marked text field an Inside key opened in the pane (the Diffs note box)", async () => {
+    const field = document.createElement("textarea");
+    field.setAttribute("data-steering-field", "");
+    inside((action) => {
+      if (action === "viewNote") {
+        const paneBox = document.createElement("div");
+        paneBox.className = "center-pane";
+        paneBox.appendChild(field);
+        document.body.appendChild(paneBox);
+        field.focus();
+      }
+      return "handled";
+    });
+    stepInside();
+    press({ key: "c" });
+    expect(document.activeElement).toBe(field);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
+    });
+    expect(steering().active).toBe(false);
+    expect(steering().handedTo).toBe("field");
+    // Typed into the box, not swallowed by steering.
+    const typed = new KeyboardEvent("keydown", { key: "x", bubbles: true, cancelable: true });
+    act(() => {
+      field.dispatchEvent(typed);
+    });
+    expect(typed.defaultPrevented).toBe(false);
   });
 
   it("serves a terminal with no target as before: N and O are swallowed, S scrolls", () => {

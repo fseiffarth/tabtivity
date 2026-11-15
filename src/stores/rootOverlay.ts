@@ -107,6 +107,15 @@ export function rootViewShown(s: Pick<RootOverlayState, "open" | "view">): boole
   return viewShown(s, "root");
 }
 
+/** The tabs on screen in this window: the active scope's, then the root
+ *  console's while its Root view floats over a project. A PDF in the console
+ *  anchors its source into the console, not into the project underneath. */
+export function tabsOnScreen(): TabEntry[] {
+  const store = useTabsStore.getState();
+  if (!rootViewShown(useRootOverlayStore.getState())) return store.tabs;
+  return [...store.tabs, ...(store.tabsByScope[ROOT_SCOPE] ?? [])];
+}
+
 /** `viewShown` outside React. */
 export function isViewShown(view: RootOverlayView): boolean {
   return viewShown(useRootOverlayStore.getState(), view);

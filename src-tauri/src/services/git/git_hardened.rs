@@ -662,6 +662,130 @@ pub(crate) fn hookless_git_command_in<S: AsRef<str>, P: AsRef<Path>>(
     hardened_git_command_in(project_dir, args)
 }
 
+/// The store a checkpoint git call runs against (`services::checkpoints`): its
+/// own git dir and index under the state dir, the project folder as the work
+/// tree.
+pub(crate) struct CheckpointRepo<'a> {
+    pub git_dir: &'a Path,
+    pub work_tree: &'a Path,
+    pub index: &'a Path,
+    /// The ignore file the store reads (`core.excludesFile`): the project's
+    /// own `info/exclude`, copied in through the guarded helper, and ours.
+    pub exclude: &'a Path,
+}
+
+/// The device git reads as an empty global config.
+pub(crate) const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
+/// Git variables a caller's environment could carry into a checkpoint call to
+/// point it at another repo, config, index or attribute source, or to inject
+/// config (`GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` is how a parent git
+/// hands its `-c` pairs to a hook).
+const CHECKPOINT_FOREIGN_ENV: &[&str] = &[
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_PREFIX",
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_EXTERNAL_DIFF",
+    "GIT_DIFF_OPTS",
+    "GIT_DEFAULT_HASH",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_GRAFT_FILE",
+    "GIT_TEMPLATE_DIR",
+    "GIT_EXEC_PATH",
+    "GIT_PAGER",
+    "GIT_EDITOR",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_ASKPASS",
+    "GIT_PROXY_COMMAND",
+    "GIT_TRACE",
+    "GIT_TRACE2",
+];
+
+/// The empty tree of a SHA-1 repository, as `GIT_ATTR_SOURCE`: no attribute
+/// is read from the work tree (the store is created SHA-1, whatever the
+/// caller's `GIT_DEFAULT_HASH`).
+const CHECKPOINT_EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// `git <args>` against a checkpoint store: the project folder is the work
+/// tree but **none of its repo's config, attributes or hooks** (nor the
+/// user's or the system's) is read, because the folder is attacker-controlled
+/// and a global config may name filter drivers (Git LFS) or an fsmonitor.
+///
+/// - `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` name the store, so the folder's
+///   own `.git` (and its `config`, `commondir`, hooks) is never discovered;
+///   `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` = the null device leave
+///   only the store's own config, which holds nothing executable.
+/// - Hooks and `core.fsmonitor` are pinned off like every other call
+///   ([`HARDENED_CONFIG`], [`NO_HOOKS_CONFIG`]); a `.gitattributes` `filter=`
+///   names a driver no config defines, and `GIT_ATTR_SOURCE` = the empty tree
+///   plus `GIT_ATTR_NOSYSTEM` switch the work tree's attributes off, so the
+///   bytes stored are the bytes on disk (no end-of-line conversion, `ident`).
+/// - Nothing here is the project's `.git`: `GIT_COMMON_DIR` and friends are
+///   dropped from the inherited environment.
+///
+/// The caller bounds the run (`git_bounded`). It builds on [`git_command`], the
+/// one spawn the scan `every_local_git_spawn_goes_through_the_hardened_builder`
+/// allows, so it needs no `BARE_GIT_ALLOWED` row of its own.
+pub(crate) fn checkpoint_git_command<S: AsRef<str>>(repo: &CheckpointRepo<'_>, args: &[S]) -> std::process::Command {
+    // Leading `-c` pairs are git's pre-subcommand options and pass through
+    // `git_args` untouched, ahead of the subcommand.
+    let pins = [
+        "core.symlinks=true",
+        "core.autocrlf=false",
+        "core.safecrlf=false",
+        "core.splitIndex=false",
+        "core.untrackedCache=false",
+        "core.quotePath=false",
+        "gc.auto=0",
+        "commit.gpgSign=false",
+        "tag.gpgSign=false",
+        "maintenance.auto=false",
+    ];
+    let mut all: Vec<String> = Vec::new();
+    for kv in pins {
+        all.extend(["-c".to_string(), kv.to_string()]);
+    }
+    all.extend(["-c".to_string(), format!("core.excludesFile={}", crate::paths::display_path(repo.exclude))]);
+    all.extend(["-c".to_string(), format!("core.attributesFile={NULL_DEVICE}")]);
+    all.extend(args.iter().map(|a| a.as_ref().to_string()));
+    let mut cmd = git_command(&all, Hooks::Off);
+    for name in CHECKPOINT_FOREIGN_ENV {
+        cmd.env_remove(name);
+    }
+    cmd.current_dir(repo.work_tree);
+    cmd.env("GIT_DIR", crate::paths::display_path(repo.git_dir))
+        .env("GIT_WORK_TREE", crate::paths::display_path(repo.work_tree))
+        .env("GIT_INDEX_FILE", crate::paths::display_path(repo.index))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_ATTR_SOURCE", CHECKPOINT_EMPTY_TREE)
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Its messages are matched (`snapshot::stage_with`): never translated.
+        .env("LC_ALL", "C")
+        .env_remove("LANGUAGE")
+        .env("GIT_AUTHOR_NAME", crate::brand::DISPLAY)
+        .env("GIT_AUTHOR_EMAIL", "checkpoints@localhost")
+        .env("GIT_COMMITTER_NAME", crate::brand::DISPLAY)
+        .env("GIT_COMMITTER_EMAIL", "checkpoints@localhost")
+        // The store's index is ours: a refresh may be written back.
+        .env_remove("GIT_OPTIONAL_LOCKS");
+    cmd
+}
+
 /// The subcommand of a git argument list: the first argument after any
 /// leading `-c key=value` pairs.
 fn subcommand_of<S: AsRef<str>>(args: &[S]) -> Option<&str> {
@@ -814,6 +938,16 @@ pub fn git_available_blocking() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// The local git's `(major, minor)`, or `None` when there is no git or its
+/// banner doesn't parse. Bare on purpose, as [`git_available_blocking`].
+pub fn local_git_version_blocking() -> Option<(u32, u32)> {
+    let out = crate::paths::command_no_window("git").arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_git_version(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// `-c` pairs for an ephemeral inline credential helper that answers an https

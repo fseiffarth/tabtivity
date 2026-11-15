@@ -259,6 +259,7 @@ repeats the refusal. The other local agents are unaffected.
 | Mail AI, voice | Do not read project files (mail text and microphone audio). |
 | Warm-up cron (`agent_warmup`) | Runs a CLI in the probe home with a fixed word, not in a project. |
 | `git_push` / CI lanes of a local tab | The user's machines, not models (D3). |
+| Tab messaging (`tabs_send` / `tabs_inbox`, `docs/context/tab_messaging_mcp.md`) | **Closed by class.** A tab's class is fixed at grant: `locked:<project>` comes from the gate's stamp only, never from the renderer's `local_model` flag or the saved tab's `kind`. (In an unlocked project, `local` vs `cloud` follows the home the spawn gets, which the renderer's `local_model` decides; that split keeps local and cloud tabs apart, it is not a privacy boundary.) Only same-scope, same-class tabs reach each other, so a locked project's verified local tabs talk only among themselves. Every call re-reads the scope's registry entry (locked now and the caller is not stamped for it → `unavailable`; an unreadable registry, or an unparsable entry of that scope, answers `unavailable` too), the sender's class is stored on each message and filtered again at read, and flipping either switch purges the scope's mailbox (`tabs_mcp::purge_scope`, beside the tab sweep in `commands/agent_privacy.rs`). Cut-network tabs get no lane: the relay refuses `/mcp/tabs`. Local-model and cloud tabs of an unlocked project never mix either. |
 | A server share | Warns on the hosted server (D3), unchanged in phase 1. |
 
 ## Tests

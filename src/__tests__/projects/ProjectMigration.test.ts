@@ -21,7 +21,7 @@ describe("migration step copy", () => {
       helpKey: "migrate.step.createFileHelp",
       params: { path: "AGENTS.md", id: "createFile:AGENTS.md" },
     });
-    expect(migrationStepCopy(step("upgradeStub", "CLAUDE.md")).titleKey).toBe(
+    expect(migrationStepCopy(step("upgradeStub", "AGENTS.md")).titleKey).toBe(
       "migrate.step.upgradeStub",
     );
     expect(migrationStepCopy(step("gitignore", ".gitignore")).titleKey).toBe(
@@ -48,7 +48,7 @@ describe("migration apply report", () => {
     expect(
       migrationApplyIsEmpty({
         entryNormalized: false,
-        report: { createdFiles: ["TODO.md"], gitignoreLinesAdded: [], gitInitialized: false },
+        report: { createdFiles: ["README.md"], gitignoreLinesAdded: [], gitInitialized: false },
       }),
     ).toBe(false);
   });

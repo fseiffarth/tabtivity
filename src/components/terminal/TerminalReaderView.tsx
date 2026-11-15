@@ -34,7 +34,7 @@ import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
-import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
+import { agentTabLabel, useAgentTabModelTag } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
@@ -52,6 +52,7 @@ import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
+import { useCheckpointNow, useReaderCheckpoints } from "./ReaderCheckpoints";
 import { TerminalReaderFiles, type ReaderFile } from "./TerminalReaderFiles";
 import { inboxLeaves } from "../../../mobile-web/src/terminal/inboxRefs";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
@@ -63,7 +64,8 @@ import { inboxEntry, ReaderInboxContext, ReaderPromptBody, useDrawsInbox, useRea
 import { PathLinkHint, type PathLinkHover } from "./PathLinkHint";
 import { PATH_LINK_ATTR, findPathCandidates, isLinkable, linkPathsInHtml, openPathLink, resolvePathCandidates, unknownPaths } from "../../lib/terminal/pathLinks";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
-import { relativePathWithin } from "../../lib/paths";
+import { isPathWithin, relativePathWithin, resolvePath } from "../../lib/paths";
+import { NAMES } from "../../lib/brand";
 import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
@@ -74,6 +76,7 @@ import { completedSlashCommand, draftPrefix, draftPrefixes, forgetSlashCommand, 
 import { COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
 import { ReaderSlashMenu, slashMenuKey } from "./ReaderSlashMenu";
 import { ReaderComposerChips } from "./ReaderComposerChips";
+import { useLiveDictation } from "./useLiveDictation";
 import { useReaderVoice } from "./ReaderVoice";
 import { matchDraftEdit } from "../../lib/voice/voiceCommands";
 import { DraftVoiceHistory, type DraftEditNote } from "../../lib/voice/draftEdit";
@@ -508,7 +511,11 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
 /** What a subagent's card or list row opens: its handle and what it says. */
 type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
-function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action }: {
+/** Memoised: the Reader re-renders on every live-screen tick while an agent
+ * streams, and a turn already drawn has nothing new to say then. */
+const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore }: {
+  /** A prompt bubble's "Restore files to before this" (`ReaderCheckpoints`). */
+  restore?: ReactNode;
   action?: ReactNode;
   turn: TranscriptTurn;
   cutLabel: string;
@@ -555,14 +562,18 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
       <div className="terminal-reader-command" role="separator" data-prompt={turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}>
         <span>{inline && turn.command.args ? `${turn.command.name} ${turn.command.args}` : turn.command.name}</span>
       </div>
-      {!inline && <div className="terminal-reader-turn user"><p>{turn.command.args}</p>{time}</div>}
+      {/* A `/design @inbox-picture` prompt's picture shows as in any prompt. */}
+      {!inline && <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"}>
+        <ReaderPromptBody text={turn.command.args}>{(words) => <p>{words}</p>}</ReaderPromptBody>
+        {time}
+      </div>}
     </>;
   }
   if (turn.kind === "prompt") {
     return (
       <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"} data-prompt={turn.text}>
         <ReaderPromptBody text={turn.text}>{(words) => <PromptText text={words} />}</ReaderPromptBody>
-        {cut}{time}
+        {cut}{time}{restore}
       </div>
     );
   }
@@ -576,7 +587,7 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
       {time}
     </div>
   );
-}
+});
 
 /**
  * The Reader's composer, holding its own draft: a keystroke re-renders this
@@ -702,10 +713,22 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const undo = useRef(new DraftUndo());
   const draftRef = useRef(draft);
   const caretAt = useRef<number | null>(null);
+  /** Spoken edits are matched in the language listened in; with the
+   * recognizer left to detect it, in the app's. */
+  const uiLanguage = useI18nStore((s) => s.lang);
+  const voiceLangChoice = useSettingsStore((s) => s.settings?.voice_lang);
+  const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
+  /** Dictation writes the words of a segment still being said into the draft
+   * (`useLiveDictation`); it keeps the caret where the user had it. */
+  const dictation = useLiveDictation({ draftRef, setDraft, boxRef: composerRef, language: editLanguage });
+  const renderedRef = useRef(dictation.rendered);
+  renderedRef.current = dictation.rendered;
   useLayoutEffect(() => {
     draftRef.current = draft;
+    const moved = caretAt.current !== null;
     if (caretAt.current !== null) composerRef.current?.setSelectionRange(caretAt.current, caretAt.current);
     caretAt.current = null;
+    renderedRef.current(draft, moved);
   }, [draft]);
   // Three lines until the text needs more: the box grows with it (upward, the
   // composer stays on the pane's last row) up to its CSS max-height.
@@ -903,16 +926,15 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     const timer = window.setTimeout(() => setEditNote(null), EDIT_NOTE_MS);
     return () => window.clearTimeout(timer);
   }, [editNote]);
-  /** Spoken edits are matched in the language listened in; with the
-   * recognizer left to detect it, in the app's. */
-  const uiLanguage = useI18nStore((s) => s.lang);
-  const voiceLangChoice = useSettingsStore((s) => s.settings?.voice_lang);
-  const editLanguage: Language = voiceLangChoice && voiceLangChoice !== "auto" && voiceLangChoice !== "detect" ? voiceLangChoice as Language : uiLanguage;
-  /** A dictated segment (`useReaderVoice`) joins the draft as typed text
-   * would, undoable; one that ends in the spoken send ("go on" / "los")
-   * sends the draft without those words. "Tabby scratch that", "Tabby
-   * replace X by Y", "Tabby plan" … edit the draft instead. */
-  const dictated = (heard: string) => {
+  /** A dictated segment's final (`useReaderVoice`) joins the draft as typed
+   * text would, undoable, in the place its provisional text held (else at the
+   * end); one that ends in the spoken send ("go on" / "los") sends the draft
+   * without those words. "Tabby scratch that", "Tabby replace X by Y",
+   * "Tabby plan" … edit the draft instead. The provisional text of the segment
+   * leaves the draft first, so none of that is ever left behind in it and the
+   * undo history only sees the settled step. An empty `heard` only settles. */
+  const dictated = (heard: string, segment: number) => {
+    const { at, taken } = dictation.settle(segment);
     const clean = sanitizeVoiceTranscript(heard);
     if (!clean) return;
     const edit = matchDraftEdit(clean, editLanguage);
@@ -923,12 +945,26 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       if (edit.send) void send();
       return;
     }
+    // The user edited the provisional words into their own: not typed twice.
+    if (taken) {
+      if (spokenSend(clean) !== null) void send();
+      return;
+    }
     const current = draftRef.current;
-    const next = spliceSpaced(current, current.length, clean);
-    const spoken = spokenSend(next);
-    if (spoken === null) voiceEdits.piece(current, next, clean);
-    editDraft(spoken ?? next);
-    if (spoken !== null) void send();
+    const where = at === null ? current.length : Math.min(at, current.length);
+    // Mid-draft the spoken send is judged on the dictated words alone.
+    const appended = where === current.length;
+    const sendless = appended ? spokenSend(spliceSpaced(current, where, clean)) : spokenSend(clean);
+    const spoken = sendless !== null;
+    const next = appended ? sendless ?? spliceSpaced(current, where, clean)
+      : sendless === null ? spliceSpaced(current, where, clean)
+      : sendless ? spliceSpaced(current, where, sendless) : current;
+    if (!spoken) {
+      voiceEdits.piece(current, next, clean);
+      dictation.inserted(current, next, where);
+    }
+    if (next !== current) editDraft(next);
+    if (spoken) void send();
   };
   const voice = useReaderVoice({
     tabKey,
@@ -940,8 +976,10 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     questionOpen,
     lastAnswer: voiceLoop.lastAnswer,
     onText: dictated,
+    live: dictation.live,
     onSend: () => void send(),
-    hasDraft: () => draftRef.current.trim() !== "",
+    // Words still being said are not a draft a send could go out with.
+    hasDraft: () => dictation.settledDraft().trim() !== "",
     pick: voiceLoop.pick,
     commitPick: voiceLoop.commitPick,
     readProblem: voiceLoop.readProblem,
@@ -1096,6 +1134,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const clearChat = () => void runChip(startNewConversation);
   // Shown as sending by the Reader's `onSentPrompt` listener, like any prompt.
   const commit = (choice: CommitChoice) => void runChip((current) => sendSteeringPrompt(current, COMMIT_PROMPTS[choice]));
+  /** Per-turn checkpoints (experimental): the chip takes one now. */
+  const checkpointNow = useCheckpointNow(tabRef.current?.sessionId, visible);
 
   /** ↑ on the composer's first line recalls the previous prompt, ↓ on its
    * last line the next one and, past the newest, the draft set aside — the
@@ -1229,6 +1269,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onPrefix={togglePrefix}
     onClear={clearChat}
     onCommit={assistantChat ? undefined : commit}
+    onCheckpoint={assistantChat ? undefined : checkpointNow.run}
+    checkpointNote={checkpointNow.done ? "done" : checkpointNow.failed ? "failed" : undefined}
+    checkpointError={checkpointNow.error}
     extra={voice.button ? voiceLoop.chips : null}
   />;
   return <>
@@ -1360,6 +1403,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // sending marks and the model/effort chips all go through it.
   const paneTab = usePaneTab(scope, tabKey);
   const tab = useMemo(() => withAssistantPromptTarget(scope, paneTab), [scope, paneTab]);
+  /** Per-turn checkpoints (experimental): a prompt bubble's restore action. */
+  const checkpoints = useReaderCheckpoints({ uid: tab?.sessionId, ptyId, visible });
   const [transcript, setTranscript] = useState<SessionTranscript | null>(null);
   const [limit, setLimit] = useState(READER_STEP);
   // Every prompt sent to this tab — this composer's or steering's prompt box —
@@ -1451,9 +1496,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
   const agentLabel = tab ? agentTabLabel(tab) : "";
   const use24h = useUse24h();
-  const modelsByTab = useAgentModelsStore((state) => state.byTab);
-  const screenModels = useAgentModelsStore((state) => state.screenByTab);
-  const modelTag = tab ? agentTabModelTag(scope, tab, modelsByTab, screenModels) : undefined;
+  const modelTag = useAgentTabModelTag(scope, tab);
   /** The working row's name for the agent, as the phone's says it: the model
    * the session prints, its first word (`Opus is working…`). */
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
@@ -2439,25 +2482,38 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const filesOffered = !!onShowFiles;
   const readerFiles = useMemo(() => {
     if (!filesOffered) return [];
-    const found = new Map<string, ReaderFile>();
-    const add = (entry: FileEntry) => {
-      if (!found.has(entry.path)) found.set(entry.path, { entry, label: relativePathWithin(tabDir, entry.path) || entry.path });
-    };
+    const found = new Map<string, FileEntry>();
+    // Where each file came from (`ReaderFileFrom`): an outbox file is the
+    // agent's send, an inbox one your attachment; any other path is the
+    // answers' when one names it, else your prompt's.
+    const attached = new Set<string>();
+    const answered = new Set<string>();
+    const outbox = pathContext.projectDir ? resolvePath(pathContext.projectDir, NAMES.outboxDir) : null;
     for (let index = levelEntries.length - 1; index >= 0; index -= 1) {
-      const text = levelEntries[index].text;
+      const { text, kind } = levelEntries[index];
       const named: FileEntry[] = [];
       for (const candidate of findPathCandidates(text)) {
         const file = pathLinks.get(candidate.path);
         if (file && !file.is_dir) named.push(file);
       }
+      if (kind !== "prompt") for (const entry of named) answered.add(entry.path);
       if (readerInbox) for (const leaf of inboxLeaves(text)) {
         const file = readerInbox.files.get(leaf);
-        if (file) named.push(inboxEntry(pathContext.projectDir, file));
+        if (!file) continue;
+        const entry = inboxEntry(pathContext.projectDir, file);
+        attached.add(entry.path);
+        named.push(entry);
       }
       // Within one message, first mention first.
-      for (const entry of named) add(entry);
+      for (const entry of named) if (!found.has(entry.path)) found.set(entry.path, entry);
     }
-    return [...found.values()];
+    return [...found.values()].map((entry): ReaderFile => ({
+      entry,
+      label: relativePathWithin(tabDir, entry.path) || entry.path,
+      from: outbox && isPathWithin(entry.path, outbox) ? "agent"
+        : attached.has(entry.path) ? "you"
+          : answered.has(entry.path) ? "named" : "you",
+    }));
   }, [filesOffered, levelEntries, pathLinks, tabDir, readerInbox, pathContext.projectDir]);
   const onFilesKnownRef = useRef(onFilesKnown);
   onFilesKnownRef.current = onFilesKnown;
@@ -2569,7 +2625,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} action={
+                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
                   !browsed && !openStep && canLogIn
                   && index === turns.length - 1 && turn.kind === "answer"
                   && readSignedOut(turn.text.split(/\r?\n/u).map((text) => ({ text }))) ? (
@@ -2764,9 +2820,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       {subagentsMenu}
       {workspacesMenu}
     </>, navigationSlot)}
+    {checkpoints.dialog}
     {changesOpen && shown && tab && (
       <TerminalReaderChanges
         scope={scope}
+        ptyId={ptyId}
         tab={tab}
         cwd={cwd}
         visible={visible}

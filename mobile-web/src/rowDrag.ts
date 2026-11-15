@@ -81,7 +81,13 @@ export function useRowDrag(
     let pointerX = event.clientX;
     let slot = dropSlot(rowBoxes(), key, pointerY, pointerX);
     let frame = 0;
-    const track = () => { slot = dropSlot(rowBoxes(), key, pointerY, pointerX); setDrag({ key, slot }); };
+    // Every pointer move asks; only a new slot is news to the list's screen.
+    const track = () => {
+      const next = dropSlot(rowBoxes(), key, pointerY, pointerX);
+      if (next?.anchor === slot?.anchor && next?.place === slot?.place) return;
+      slot = next;
+      setDrag({ key, slot });
+    };
     const edgeScroll = () => {
       frame = 0;
       const dy = pointerY < EDGE_MARGIN ? -EDGE_STEP : pointerY > window.innerHeight - EDGE_MARGIN ? EDGE_STEP : 0;

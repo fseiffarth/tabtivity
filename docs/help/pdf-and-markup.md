@@ -41,6 +41,14 @@ undone until you confirm **Black out and save**.
 own settings, then follows the job through the printer queue. The printers and
 their queues are in the print manager (`workspace-apps`).
 
+In the preview, **Pages** picks all, odd, even or a custom range ("1-3, 5"),
+and a strip of page thumbnails lets you reorder, turn or delete pages for this
+job only. With a custom range the strip shows just the pages that print, and
+editing it rewrites the range. Right-click a page in the viewer and choose
+**Print from here** to open the preview on that page to the end. When several
+pages go on one sheet, or the printer prints both sides, the Print button
+counts sheets as well as pages ("Print (12 pages on 3 sheets)").
+
 ## Marking up a PDF for an agent
 
 **✎ Mark up** in the PDF toolbar (also on the PDF of a TeX workspace) opens the

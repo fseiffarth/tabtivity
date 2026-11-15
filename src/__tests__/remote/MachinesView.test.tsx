@@ -3,9 +3,9 @@
  * `header/MachinesIndicator` with `surface="view"`): the room a click on the
  * header's Machines button opens. Locked in here:
  *
- *  - its machines are tiles in one grid, each with its target, its state in
- *    words, its actions and its details (no ▸ fold, but the drag grip: tiles
- *    reorder across the grid), under this machine's meters;
+ *  - its machines are one list sorted by state then name, each row with its
+ *    target, its state in words, its actions and a ⋯ menu; off machines no
+ *    project uses fold into an idle strip whose names open the same menu;
  *  - the header button's click opens the view and puts the hover dropdown away;
  *    the dropdown's ⤢ door does the same; a click while it is shown closes the
  *    window;
@@ -76,35 +76,65 @@ afterEach(() => {
 const dialog = () => document.querySelector<HTMLElement>(".app-view-machines")!;
 
 describe("Machines view", () => {
-  it("lays every machine out as a tile with its target, state and actions", async () => {
+  it("lists every machine with its target, state and actions; an unused off one folds into the idle strip", async () => {
     const { container } = render(<MachinesView />);
     await act(async () => {});
-    const grid = container.querySelector(".machines-grid");
-    expect(grid).not.toBeNull();
-    const tiles = grid!.querySelectorAll(".machines-tile.models-tile");
-    expect(tiles).toHaveLength(2);
-
-    const first = within(tiles[0] as HTMLElement);
+    const rows = container.querySelectorAll<HTMLElement>(".machines-table-item");
+    expect(rows).toHaveLength(1);
+    const first = within(rows[0]);
     expect(first.getByText("GPU box")).toBeTruthy();
     expect(first.getByText("ada@gpu1.example.org")).toBeTruthy();
-    // A connected machine offers disconnect; details are open without a fold.
-    expect(first.getByRole("button", { name: /disconnect/i })).toBeTruthy();
-    expect(first.getByRole("button", { name: /system monitor/i })).toBeTruthy();
-    expect(tiles[0].querySelector(".machines-row-expand-btn")).toBeNull();
-    expect(tiles[0].querySelector(".machines-row-grip")).not.toBeNull();
-    // The actions sit at the tile's foot, after the details — not in the head.
-    expect(tiles[0].querySelector(".vpn-indicator-head .machines-row-actions")).toBeNull();
-    expect(tiles[0].lastElementChild?.classList.contains("machines-row-actions")).toBe(true);
+    expect(first.getByText("Connected")).toBeTruthy();
+    // A connected machine with nothing else to connect offers Disconnect.
+    expect(first.getByRole("button", { name: "Disconnect" })).toBeTruthy();
+    expect(first.getByRole("button", { name: "System monitor for GPU box" })).toBeTruthy();
+    expect(rows[0].querySelector(".machines-row-grip")).toBeNull();
 
-    expect(within(tiles[1] as HTMLElement).getByText("build.example.org:2222")).toBeTruthy();
+    const idle = container.querySelector<HTMLElement>(".machines-idle-strip")!;
+    const tag = within(idle).getByRole("button", { name: "build.example.org" });
+    expect(tag.getAttribute("title")).toBe("build.example.org:2222");
+    fireEvent.click(tag);
+    expect(screen.getByRole("menuitem", { name: "Check now" })).toBeTruthy();
+    expect(screen.getByRole("menuitemcheckbox", { name: /HPC cluster/ })).toBeTruthy();
+  });
+
+  it("sorts by state, then by name", async () => {
+    useGlobalMachinesStore.setState({
+      machines: [
+        { id: "a", host: "zeta.example.org" },
+        { id: "b", host: "alpha.example.org" },
+        { id: "c", host: "mid.example.org" },
+        { id: "d", host: "beta.example.org" },
+      ],
+      status: { a: "connected", b: "error", c: "connected" },
+      reachable: { d: true },
+    });
+    const { container } = render(<MachinesView />);
+    await act(async () => {});
+    const names = [...container.querySelectorAll(".machines-table-item")].map((el) => el.getAttribute("aria-label"));
+    expect(names).toEqual(["mid.example.org", "zeta.example.org", "alpha.example.org", "beta.example.org"]);
+    const heads = [...container.querySelectorAll(".machines-table-group-head > span:first-child")].map((el) => el.textContent);
+    expect(heads).toEqual(["Connected", "Needs attention", "Up, not connected"]);
+  });
+
+  it("narrows the list with the filter box", async () => {
+    const { container } = render(<MachinesView />);
+    await act(async () => {});
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter machines" }), { target: { value: "build" } });
+    expect(container.querySelectorAll(".machines-table-item")).toHaveLength(0);
+    expect(within(container.querySelector<HTMLElement>(".machines-idle-strip")!).getByText("build.example.org")).toBeTruthy();
   });
 
   it.each(["menu", "view"] as const)("puts creation controls and the add form before machines in the %s", (surface) => {
     useHeaderHoverMenuStore.setState({ openId: surface === "menu" ? "machines" : null });
     const { container } = render(surface === "view" ? <MachinesView /> : <MachinesIndicator />);
-    const firstMachine = container.querySelector(".machines-indicator-row")!;
+    const firstMachine = container.querySelector(surface === "view" ? ".machines-table-item" : ".machines-indicator-row")!;
     const add = screen.getByRole("button", { name: "Add machine…" });
-    for (const control of [add, screen.getByRole("button", { name: "Import…" }), screen.getByRole("button", { name: "Export…" })]) {
+    const controls =
+      surface === "view"
+        ? [add, screen.getByRole("button", { name: "Import, export and all machines" })]
+        : [add, screen.getByRole("button", { name: "Import…" }), screen.getByRole("button", { name: "Export…" })];
+    for (const control of controls) {
       expect(control.compareDocumentPosition(firstMachine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
 
@@ -113,7 +143,15 @@ describe("Machines view", () => {
     expect(address.compareDocumentPosition(firstMachine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(document.activeElement).toBe(address);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.getByRole("button", { name: "Add machine…" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "SSH address" })).toBeNull();
+  });
+
+  it("keeps import and export in the view's ⋯", () => {
+    render(<MachinesView />);
+    fireEvent.click(screen.getByRole("button", { name: "Import, export and all machines" }));
+    expect(screen.getByRole("menuitem", { name: "Import…" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export…" }));
+    expect(document.querySelector(".machines-view-form .machines-io-panel")).not.toBeNull();
   });
 
   it.each([1, 4])("summarizes %i running sessions without filling the card with session names", (count) => {
@@ -122,7 +160,7 @@ describe("Machines view", () => {
       readings: { [targetKey(MACHINES[0])]: { sessions: count, names, at: Date.now() } },
     });
     render(<MachinesView />);
-    const summary = dialog().querySelector(".machines-tile-busy")!;
+    const summary = dialog().querySelector(".machines-table-sessions")!;
     expect(summary.textContent).toBe(`${count} session${count === 1 ? "" : "s"} running`);
     expect(summary.getAttribute("title")).toContain(names.join(", "));
   });
@@ -176,9 +214,9 @@ describe("Machines view", () => {
         <MachinesView />
       </>,
     );
-    const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[1]);
+    fireEvent.click(within(dialog()).getByRole("button", { name: "build.example.org" }));
     await act(async () => {
-      fireEvent.click(tile.getByRole("button", { name: /check/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Check now" }));
     });
     // The second machine now reads "up" (reachable, no session) in the header
     // too: its grey lamp's tooltip names the state the hand check found.
@@ -212,9 +250,9 @@ describe("Machines view", () => {
     );
     // The sweep is out when the Check is pressed, and lands after its answer.
     await waitFor(() => expect(probeAll).toHaveBeenCalled());
-    const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[1]);
+    fireEvent.click(within(dialog()).getByRole("button", { name: "login.example.org" }));
     await act(async () => {
-      fireEvent.click(tile.getByRole("button", { name: /check/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Check now" }));
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -242,50 +280,11 @@ describe("Machines view", () => {
     });
     useRemoteMachinesStore.setState({ projectId: null, pendingDrop: null, extendTarget: null });
     render(<MachinesView />);
-    const tile = within(dialog().querySelectorAll<HTMLElement>(".machines-tile")[0]);
-    fireEvent.click(tile.getByRole("button", { name: "Add this machine to a project" }));
-    fireEvent.click(tile.getByRole("button", { name: /Proj/ }));
+    fireEvent.click(screen.getByRole("button", { name: "More actions for GPU box" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add to a project…" }));
+    const row = within(dialog().querySelector<HTMLElement>(".machines-table-item")!);
+    fireEvent.click(row.getByRole("button", { name: /Proj/ }));
     expect(useRemoteMachinesStore.getState().projectId).toBe("p1");
     expect(useRemoteMachinesStore.getState().pendingDrop?.id).toBe("m1");
-  });
-});
-
-describe("reordering tiles in the view", () => {
-  const rect = (left: number, top: number) =>
-    ({ left, top, right: left + 100, bottom: top + 100, width: 100, height: 100, x: left, y: top }) as DOMRect;
-  const ptr = (el: Element, type: string, x: number, y: number) =>
-    act(() => {
-      el.dispatchEvent(new MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true }));
-    });
-
-  it("drags a tile across the grid into another slot and persists the new order", async () => {
-    const reorder = vi.fn(async () => {});
-    useGlobalMachinesStore.setState({ reorder });
-    const { container } = render(<MachinesView />);
-    await act(async () => {});
-    const tiles = [...container.querySelectorAll(".machines-tile")] as HTMLElement[];
-    // Two tiles side by side: m1 at x 0–100, m2 at x 200–300.
-    tiles[0].getBoundingClientRect = () => rect(0, 0);
-    tiles[1].getBoundingClientRect = () => rect(200, 0);
-    const grip = tiles[0].querySelector(".machines-row-grip") as HTMLElement;
-    grip.setPointerCapture = () => {};
-
-    ptr(grip, "pointerdown", 50, 50);
-    ptr(grip, "pointermove", 250, 50);
-    // The dragged tile follows the pointer; the other steps into the freed slot.
-    expect(tiles[0].style.transform).toBe("translate(200px, 0px)");
-    expect(tiles[1].style.transform).toBe("translate(-200px, 0px)");
-    ptr(grip, "pointerup", 250, 50);
-    expect(reorder).toHaveBeenCalledWith(["m2", "m1"]);
-  });
-
-  it("nudges a tile with the arrow keys from its grip", async () => {
-    const reorder = vi.fn(async () => {});
-    useGlobalMachinesStore.setState({ reorder });
-    const { container } = render(<MachinesView />);
-    await act(async () => {});
-    const grip = container.querySelector(".machines-tile .machines-row-grip") as HTMLElement;
-    fireEvent.keyDown(grip, { key: "ArrowRight" });
-    expect(reorder).toHaveBeenCalledWith(["m2", "m1"]);
   });
 });

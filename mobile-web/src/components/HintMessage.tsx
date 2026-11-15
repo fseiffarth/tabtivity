@@ -69,6 +69,7 @@ const TARGETS: Partial<Record<HintKey, string>> = {
 const TAP_KEEPS_TIP: ReadonlySet<HintKey> = new Set(["chatSwipe"]);
 
 type Pointer = { x: number; y: number; width: number; height: number; fromX: number; fromY: number; toX: number; toY: number };
+const POINTER_KEYS = ["x", "y", "width", "height", "fromX", "fromY", "toX", "toY"] as const;
 
 /** Track layout changes without a painting loop. Decorations never intercept taps. */
 function HintPointer({ card, hint }: { card: RefObject<HTMLElement | null>; hint: HintKey }) {
@@ -90,26 +91,36 @@ function HintPointer({ card, hint }: { card: RefObject<HTMLElement | null>; hint
       const above = b.bottom <= a.top;
       if (!below && !above) { setPointer(null); return; }
       const x = Math.max(a.left + 12, Math.min(b.left + b.width / 2, a.right - 12));
-      setPointer({ x: b.left - 3, y: b.top - 3, width: b.width + 6, height: b.height + 6,
+      const next: Pointer = { x: b.left - 3, y: b.top - 3, width: b.width + 6, height: b.height + 6,
         fromX: x, fromY: below ? a.bottom : a.top,
-        toX: b.left + b.width / 2, toY: below ? b.top - 3 : b.bottom + 3 });
+        toX: b.left + b.width / 2, toY: below ? b.top - 3 : b.bottom + 3 };
+      // Most of what wakes this moved nothing: keep the pointer, skip the render.
+      setPointer((current) => current && POINTER_KEYS.every((key) => current[key] === next[key]) ? current : next);
     };
     update();
-    const observer = new MutationObserver(update);
+    // A streamed token, a scroll: each fires many times a frame, and one
+    // measure per frame is all a pointer can show.
+    let frame = 0;
+    const changed = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; update(); });
+    };
+    const observer = new MutationObserver(changed);
     observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden", "style"] });
-    const resize = new ResizeObserver(update);
+    const resize = new ResizeObserver(changed);
     resize.observe(root);
     if (card.current) resize.observe(card.current);
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    window.visualViewport?.addEventListener("resize", update);
-    document.addEventListener("visibilitychange", update);
+    window.addEventListener("scroll", changed, true);
+    window.addEventListener("resize", changed);
+    window.visualViewport?.addEventListener("resize", changed);
+    document.addEventListener("visibilitychange", changed);
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       observer.disconnect(); resize.disconnect();
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-      window.visualViewport?.removeEventListener("resize", update);
-      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("scroll", changed, true);
+      window.removeEventListener("resize", changed);
+      window.visualViewport?.removeEventListener("resize", changed);
+      document.removeEventListener("visibilitychange", changed);
     };
   }, [card, hint]);
   if (!pointer) return null;

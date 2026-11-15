@@ -12,7 +12,9 @@ import {
   texRefCreation,
   addTexChildFile,
   gatherTexStructure,
+  gatherTexCompletions,
   texStructureParent,
+  type TexCompletions,
   type TexStructure,
   type TexFileNode,
 } from "../../../lib/viewers/tex/tex";
@@ -118,6 +120,34 @@ export function TexWorkspaceView({
     return () => { cancelled = true; };
   }, [mainPath, projectId, structureVersion]);
 
+  // The document's ref/cite/command candidates, walked ONCE here for every mounted
+  // pane (they all read the same files, and over SFTP each read is a round trip).
+  // Same generations as the structure: mount, a main-file/project change, and each
+  // successful compile. Keyed by what it was gathered for, so a value for another
+  // document is never handed out; the previous generation stays in place until the
+  // next one lands, so a recompile never blanks the dropdowns. `null` = still
+  // gathering (the panes wait rather than walk on their own). A failure becomes an
+  // empty answer that covers no file, so each pane falls back to its own walk.
+  const completionsKey = `${projectId ?? ""}\0${mainPath}`;
+  const [gatheredCompletions, setGatheredCompletions] = useState<{
+    key: string;
+    value: TexCompletions;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    gatherTexCompletions(mainPath, projectId)
+      .then((value) => { if (!cancelled) setGatheredCompletions({ key: completionsKey, value }); })
+      .catch(() => {
+        if (cancelled) return;
+        setGatheredCompletions({
+          key: completionsKey,
+          value: { labels: [], cites: [], commands: [], envs: [], files: new Set() },
+        });
+      });
+    return () => { cancelled = true; };
+  }, [mainPath, projectId, completionsKey, structureVersion]);
+  const completions = gatheredCompletions?.key === completionsKey ? gatheredCompletions.value : null;
+
   // Where this tab's ViewerState (the centered file, the sidebar width) actually
   // lives. In the MAIN window the layout store owns it, and the reads below are
   // reactive so a sidebar/link switch re-renders. In a DETACHED popout the store
@@ -141,9 +171,13 @@ export function TexWorkspaceView({
     [tabKey],
   );
 
+  // What every read below goes through: the store's fields where it holds the
+  // tab, the local mirror's otherwise.
+  const vs = useMemo<ViewerState>(() => ({ ...localVs, ...storeVs }), [localVs, storeVs]);
+
   // The centered file: the persisted `texActivePath` when it still resolves in the
   // structure, else the main document (a stale id is inert).
-  const storedActive = storeVs?.texActivePath ?? localVs.texActivePath;
+  const storedActive = vs.texActivePath;
   const activePath = useMemo(() => {
     if (!storedActive || storedActive === mainPath) return mainPath;
     if (structure && !texWorkspaceContains(structure, storedActive)) return mainPath;
@@ -388,12 +422,7 @@ export function TexWorkspaceView({
   // document that only builds under `lualatex` builds under it in every sitting,
   // instead of reverting to the backend's default on the next launch and failing
   // the first compile of the day for a reason the toolbar no longer shows.
-  // Read like `texActivePath` above: the store when it holds this tab, the local
-  // mirror in a popout where it never will.
-  const compileOpts = useMemo<TexCompileOpts>(
-    () => texCompileOptsFrom({ ...localVs, ...storeVs }),
-    [storeVs, localVs],
-  );
+  const compileOpts = useMemo<TexCompileOpts>(() => texCompileOptsFrom(vs), [vs]);
   const patchCompileOpts = useCallback(
     (patch: Partial<TexCompileOpts>) => patchViewerState(texCompileViewerState(patch)),
     [patchViewerState],
@@ -425,8 +454,8 @@ export function TexWorkspaceView({
 
   // Sidebar width and fold, persisted per tab (store-or-local, see
   // `patchViewerState`). Absent `texSidebarHidden` means shown.
-  const sidebarWidth = (storeVs?.texSidebarWidth ?? localVs.texSidebarWidth) ?? TEX_WS_SIDEBAR_DEFAULT;
-  const sidebarHidden = (storeVs?.texSidebarHidden ?? localVs.texSidebarHidden) ?? false;
+  const sidebarWidth = vs.texSidebarWidth ?? TEX_WS_SIDEBAR_DEFAULT;
+  const sidebarHidden = vs.texSidebarHidden ?? false;
   const onResizeSidebar = useCallback(
     (w: number) => patchViewerState({ texSidebarWidth: w }),
     [patchViewerState],
@@ -490,6 +519,7 @@ export function TexWorkspaceView({
           onDiagnostics={setDiagnostics}
           compileOpts={compileOpts}
           onCompileOptsChange={patchCompileOpts}
+          completions={completions}
         />
       );
     }
@@ -521,7 +551,7 @@ export function TexWorkspaceView({
           structure={structure}
           activePath={activePath}
           width={sidebarWidth}
-          onSelect={(p, _v, line) => {
+          onSelect={(p, line) => {
             goTo(p);
             // A badge click carries the line; a plain row click does not, and
             // leaves the caret where that file was last left.

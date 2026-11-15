@@ -19,7 +19,7 @@ pub(crate) fn pty_id_for(ctx: &Ctx, registry: &RegistryState, id: String) -> Str
 }
 
 /// What `pty_spawn` tells the tab it launched.
-#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PtySpawned {
     /// The session name rode in on the launch argv (Claude's `--name`), so the
     /// tab must not also type its `/rename` line.
@@ -42,6 +42,11 @@ pub struct PtySpawned {
     /// starts out in. Left out of the answer when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<&'static str>,
+    /// The key the window names this tab's checkpoints by
+    /// (`services::checkpoints`); only the window gets it. Left out when the
+    /// tab has none.
+    #[serde(rename = "checkpointKey", skip_serializing_if = "Option::is_none")]
+    pub checkpoint_key: Option<String>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -104,6 +109,7 @@ pub async fn pty_spawn(
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
     let turn = prepared.live_turn.map(crate::services::agent_turn::TurnState::as_str);
+    let checkpoint_key = prepared.checkpoint_key.clone();
     let drop_dir = prepared.drop_dir.clone();
     let privacy_check = prepared.privacy_check();
     let (spawned_id, spawned_seq) = (prepared.opts.id.clone(), prepared.spawn_seq());
@@ -154,7 +160,7 @@ pub async fn pty_spawn(
             });
         }
     }
-    result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn })
+    result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn, checkpoint_key })
 }
 
 /// Whether a server client's spawn of `id` would join the tab another client

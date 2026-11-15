@@ -97,11 +97,38 @@ fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> R
 }
 
 fn invalidate_copilot(previous: &Settings, next: &Settings) {
-    if previous.code_completion_provider != next.code_completion_provider
-        || previous.completion_project_policies != next.completion_project_policies
-        || previous.copilot_completion() != next.copilot_completion() {
-        crate::services::copilot::session::sessions().stop_all_now();
+    use crate::services::copilot::{credentials, session::sessions};
+    if copilot_invalidated(previous, next) {
+        sessions().stop_all_now();
     }
+    // "Stay signed in" switched: on keeps a live sign-in's token now, off
+    // deletes the entry. Off the settings write: the keychain may block.
+    if let Some(on) = stay_signed_in_switched(previous, next) {
+        app_core::rt::spawn(async move {
+            let running = sessions().all_running();
+            if let Err(error) = credentials::setting_changed(on, &running, &credentials::keychain()).await {
+                eprintln!("copilot: stay signed in: {error}");
+            }
+        });
+    }
+}
+
+/// The new value of `copilot_stay_signed_in` when a write switched it. Pure.
+fn stay_signed_in_switched(previous: &Settings, next: &Settings) -> Option<bool> {
+    let (was, is) = (previous.copilot_stay_signed_in.unwrap_or(false), next.copilot_stay_signed_in.unwrap_or(false));
+    (was != is).then_some(is)
+}
+
+/// Whether a settings write must stop every Copilot server: the provider,
+/// consent or flag changed, or the AI switch just turned off (a server is a
+/// network-capable process holding a signed-in session). Editor tuning such
+/// as `autocomplete_delay_ms` is not among them. Pure + tested.
+fn copilot_invalidated(previous: &Settings, next: &Settings) -> bool {
+    use crate::services::ai_switch::off_now;
+    previous.code_completion_provider != next.code_completion_provider
+        || previous.completion_project_policies != next.completion_project_policies
+        || previous.copilot_completion() != next.copilot_completion()
+        || (!off_now(previous.ai_off, previous.ai_off_until) && off_now(next.ai_off, next.ai_off_until))
 }
 
 fn merge_settings_patch(settings: &mut Settings, patch: Map<String, Value>) -> Result<(), String> {
@@ -370,6 +397,43 @@ fn detect_macos_global_apps(
 mod tests {
     use super::*;
 
+    /// B9: switching AI off stops every Copilot server; switching it back on,
+    /// or tuning the editor's delay, stops none.
+    #[test]
+    fn the_ai_switch_turning_off_stops_copilot_and_editor_tuning_does_not() {
+        let on = Settings::default();
+        let off = Settings { ai_off: Some(true), ..Settings::default() };
+        assert!(copilot_invalidated(&on, &off));
+        assert!(!copilot_invalidated(&off, &on));
+        assert!(!copilot_invalidated(&off, &off.clone()));
+        // A switch whose "off for a while" already passed is on: no change.
+        let lapsed = Settings { ai_off: Some(true), ai_off_until: Some(1), ..Settings::default() };
+        assert!(!copilot_invalidated(&on, &lapsed));
+        let tuned = Settings {
+            autocomplete_delay_ms: Some(crate::schema::settings::AutocompleteDelays { ollama: Some(400), copilot: Some(100), ..Default::default() }),
+            ..Settings::default()
+        };
+        assert!(!copilot_invalidated(&on, &tuned));
+        assert!(!copilot_invalidated(&tuned, &on));
+        let provider = Settings { code_completion_provider: Some("copilot".into()), ..Settings::default() };
+        assert!(copilot_invalidated(&on, &provider));
+    }
+
+    /// B11: only a switch of "Stay signed in" acts on the keychain, and it
+    /// stops no server.
+    #[test]
+    fn stay_signed_in_acts_only_when_it_switches() {
+        let unset = Settings::default();
+        let on = Settings { copilot_stay_signed_in: Some(true), ..Settings::default() };
+        let off = Settings { copilot_stay_signed_in: Some(false), ..Settings::default() };
+        assert_eq!(stay_signed_in_switched(&unset, &on), Some(true));
+        assert_eq!(stay_signed_in_switched(&on, &off), Some(false));
+        assert_eq!(stay_signed_in_switched(&on, &unset), Some(false));
+        assert_eq!(stay_signed_in_switched(&unset, &off), None, "unset is off");
+        assert_eq!(stay_signed_in_switched(&on, &on.clone()), None);
+        assert!(!copilot_invalidated(&unset, &on));
+    }
+
     #[test]
     fn settings_patch_is_shallow_and_preserves_unrelated_fields() {
         let mut settings = Settings {
@@ -458,6 +522,7 @@ mod tests {
             "project_files": true,
             "project_uploads": true,
             "browser_client": true,
+            "linked_desktops": ["https://laptop.example.ts.net"],
             "some_future_switch": {"a": [1, 2]}
         });
         let mut settings = Settings::default();
@@ -466,6 +531,7 @@ mod tests {
         let typed = settings.app_mobile_host.as_ref().unwrap();
         assert_eq!(typed.project_uploads, Some(true));
         assert_eq!(typed.browser_client, Some(true));
+        assert_eq!(typed.linked_desktops.as_deref(), Some(&["https://laptop.example.ts.net".to_string()][..]));
 
         // An unrelated patch, then a write → read through the file shape.
         merge_settings_patch(&mut settings, patch(serde_json::json!({"language": "de"}))).unwrap();

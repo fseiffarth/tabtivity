@@ -1733,6 +1733,8 @@ pub fn run() {
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
+            // Per-turn checkpoints announce a finished snapshot as `checkpoint-added`.
+            services::checkpoints::start(tauri_host::system_ctx(_app.handle()));
             {
                 // The Reader's transcript watches (`services::transcript_watch`)
                 // announce a change as `transcript-changed` with the watch id.
@@ -2025,6 +2027,10 @@ pub fn run() {
             commands::projects::preview_project_scaffold,
             commands::projects::project_agents_empty,
             commands::projects::project_scaffold_missing,
+            commands::project_docs::project_docs_status,
+            commands::project_docs::create_project_doc,
+            commands::project_docs::project_agent_memory,
+            commands::project_docs::project_agent_memory_read,
             commands::projects::repair_project_scaffold,
             commands::projects::repair_all_project_scaffolds,
             commands::projects::project_migration_plan,
@@ -2287,10 +2293,11 @@ pub fn run() {
             commands::power::get_power_state,
             // SSH-sync (Phase 1): selective local↔remote mirror sync.
             commands::sync::sync_pull,
-            commands::sync::sync_whole_project,
             commands::sync::sync_push,
             commands::sync::sync_mark_selected,
             commands::sync::sync_set_auto,
+            commands::sync::sync_take_newer_get,
+            commands::sync::sync_set_take_newer,
             commands::sync::sync_auto_preview,
             commands::sync::sync_transfer_preview,
             commands::sync::sync_big_folders,
@@ -2416,6 +2423,12 @@ pub fn run() {
             commands::print_mcp::print_mcp_requests,
             commands::print_mcp::print_mcp_pdf,
             commands::print_mcp::print_mcp_decide,
+            commands::tabs_mcp::tabs_mcp_traffic,
+            commands::tabs_mcp::tabs_mcp_deliver,
+            commands::tabs_mcp::tabs_mcp_clear,
+            commands::tabs_mcp::tabs_mcp_wake_claim,
+            commands::tabs_mcp::tabs_mcp_human_input,
+            commands::tabs_mcp::set_project_tab_messages_wake,
             // Disk usage analyzer (commands::disk_usage)
             commands::disk_usage::disk_usage_scan,
             commands::disk_usage::disk_usage_cancel,
@@ -2563,6 +2576,17 @@ pub fn run() {
             // Local-loss warnings (#28q): what lockstep/sync destroyed in the mirror.
             commands::local_loss::local_loss_list,
             commands::local_loss::local_loss_ack,
+            commands::checkpoints::checkpoint_list,
+            commands::checkpoints::checkpoint_diff,
+            commands::checkpoints::checkpoint_restore,
+            commands::checkpoints::checkpoint_now,
+            commands::checkpoints::checkpoint_settings_get,
+            commands::checkpoints::checkpoint_settings_set,
+            commands::checkpoints::checkpoint_clear,
+            commands::tab_archive::tab_archive_list,
+            commands::tab_archive::tab_archive_add,
+            commands::tab_archive::tab_archive_take,
+            commands::tab_archive::tab_archive_delete,
             commands::git::git_diff_file,
             commands::git::git_blame,
             commands::git::git_file_log,
@@ -2729,6 +2753,7 @@ pub fn run() {
             commands::copilot::copilot_shown,
             commands::copilot::copilot_accepted,
             commands::copilot::copilot_account,
+            commands::copilot::copilot_diagnostics,
             commands::copilot::copilot_message_action,
             commands::copilot::copilot_sign_in,
             commands::copilot::copilot_finish_sign_in,
@@ -2931,6 +2956,8 @@ pub fn run() {
                 // bounded by its own wall clock, ended here so none outlives
                 // the quit.
                 services::sheet_reader::kill_all_for_exit();
+                // A checkpoint snapshot in flight finishes (bounded); no new one starts.
+                services::checkpoints::stop_for_exit();
                 // The fenced Copilot language servers (one per consented project).
                 tauri::async_runtime::block_on(commands::copilot::stop_all_for_exit());
                 // Let the machine sleep again if a talk was on: the presenter's

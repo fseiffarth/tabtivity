@@ -409,6 +409,37 @@ fn cargo_masks_include_symlink_targets() {
     assert!(paths.contains(&target.canonicalize().unwrap().to_string_lossy().into_owned()));
 }
 
+// The per-turn checkpoint stores (`services::checkpoints`) hold copies of the
+// folders they snapshot, outside the folder's own `.git` so an agent cannot
+// reach its own undo history: the state mask must hide them and nothing may
+// bind them back.
+#[test]
+fn the_checkpoint_stores_stay_under_the_state_mask() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let store = state.join(crate::services::checkpoints::store::DIR).join("0123456789abcdef");
+    std::fs::create_dir_all(store.join("store.git")).unwrap();
+    std::fs::write(state.join("checkpoints.json"), "{}").unwrap();
+    // What a tab is handed: its project, the hooks, an install — never the state tree.
+    let project = dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut args = vec!["--bind".into(), project.display().to_string(), project.display().to_string(), "--".into(), "agent".into()];
+    mask_private_state(&mut args, &state, &[]);
+    let mask = args.windows(2).rposition(|w| w[0] == "--tmpfs" && w[1] == state.to_string_lossy()).unwrap();
+    let checkpoints = state.join(crate::services::checkpoints::store::DIR);
+    assert!(
+        args.windows(2).rposition(|w| w[0] == "--tmpfs" && w[1] == checkpoints.to_string_lossy()).is_some(),
+        "the checkpoints folder is masked by name too (a link there is masked at its target)"
+    );
+    // Nothing binds anything below the checkpoints folder.
+    assert!(!args.windows(2).any(|w| {
+        matches!(w[0].as_str(), "--bind" | "--ro-bind" | "--bind-try" | "--ro-bind-try") && Path::new(&w[1]).starts_with(&checkpoints)
+    }));
+    assert!(private_state_paths(&state).contains(&checkpoints));
+    assert!(private_state_paths(&state).contains(&state.join("checkpoints.json")));
+    assert!(args.iter().position(|a| a == "--").unwrap() > mask);
+}
+
 #[test]
 fn state_is_masked_after_overlapping_project_grants() {
     let dir = tempfile::tempdir().unwrap();

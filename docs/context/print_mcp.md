@@ -30,10 +30,10 @@ eight pending in the process.
   level.
 - **PDF only.** One render path (pdf.js preview + `layoutPrintPdf` vector
   job), the smallest surface.
-- **Every CLI on a local project** gets the token; only Claude, Codex and
-  tool-tagged local Vibe can use it today, because only they get an MCP
-  server written into their launch (`root_mcp::wire_named_cli_args`). Wiring
-  the other CLIs is a follow-up for all lanes (`todo/agents.md`).
+- **Every CLI on a local project** gets the token. Claude, Codex, Copilot,
+  OpenCode and tool-tagged local Vibe see the tools as their own (the server
+  is named at launch, `root_mcp::wire_named_cli`); every other CLI calls them
+  through the `tabtivity-mcp` command (`docs/context/agent_mcp_wiring.md`).
 
 ## Invariants
 

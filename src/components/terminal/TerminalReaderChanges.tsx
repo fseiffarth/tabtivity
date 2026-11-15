@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useUse24h } from "../../lib/timeFormat";
@@ -17,10 +17,25 @@ import { openTabInScope } from "../../lib/tabs/tabScopeContext";
 import { UntestedTag } from "../common/UntestedTag";
 import { ArrowUpRightIcon, CloseIcon } from "../common/icons/Icon";
 import { Dropdown } from "../common/Dropdown";
+import { useCheckpointScope } from "./CheckpointDiffScope";
 import { chatMoment, chatTime } from "../../../mobile-web/src/terminal/chatTimes";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
 import { registerReaderInside, useSteeringInside, type ReaderInsideResult } from "../../lib/agents/readerSteering";
 import type { SteeringAction } from "../../lib/shortcuts/steeringBindings";
+import {
+  buildDiffNotesPrompt,
+  describeSelection,
+  PROMPT_CHAR_CAP,
+  firstNoteLine,
+  noteRows,
+  rangeLines,
+  slotLine,
+  type DiffNote,
+} from "../../lib/agents/diffNotes";
+import { useDiffNotes, useDiffNotesStore } from "../../stores/agents/diffNotes";
+import { insertIntoReader } from "../../lib/terminal/terminalDrop";
+import { useDialogs } from "../common/PromptDialogs";
+import { DiffNoteBox, SavedDiffNote } from "./DiffNoteBox";
 
 /**
  * The Reader's Changes panel: the files the conversation on screen changed,
@@ -94,9 +109,42 @@ function changeKeys(list: FileChange[]): string[] {
   });
 }
 
+/** The note being written or edited (one at a time, over all cards): the lines
+ * it is on as indices into one card's hunk, and the row a Shift+click extends
+ * from. `serial` is its box's key, so a fresh start empties the text. */
+interface NoteDraft {
+  card: string;
+  hunk: number;
+  anchor: number;
+  lines: number[];
+  text: string;
+  /** The saved note being edited, else a new one. */
+  editing?: string;
+  serial: number;
+}
+
+/** What a card hands over to save a note: its fields without id and time. */
+type NoteFields = Omit<DiffNote, "id" | "at">;
+
+const NO_NOTES: DiffNote[] = [];
+const NO_OP = () => {};
+const NO_SAVE: NoteActions["onSaveNote"] = () => {};
+
+/** The note handlers a card gets, stable across renders. */
+interface NoteActions {
+  onStartNote: (card: string, hunk: number, rows: number[][], index: number, extend: boolean) => void;
+  onSaveNote: (fields: NoteFields, editing: string | undefined) => void;
+  onCancelNote: () => void;
+  /** The box's text as it is typed, kept so a Shift+click that moves the box
+   * to another row carries it along. */
+  onNoteText: (text: string) => void;
+  onEditNote: (id: string) => void;
+  onDeleteNote: (id: string) => void;
+}
+
 /** One change, with its time and diff. The first existing edit opens on entry;
  * newly arriving edits stay folded and marked new until opened. */
-const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold }: {
+export const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, base, use24h, split, initialOpen, onOpenFile, onOpenDiff, onUnfold, notes = NO_NOTES, draft = null, onStartNote, onSaveNote = NO_SAVE, onCancelNote = NO_OP, onNoteText = NO_OP, onEditNote = NO_OP, onDeleteNote = NO_OP }: {
   change: FileChange;
   cardKey: string;
   fresh: boolean;
@@ -106,10 +154,15 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
   use24h: boolean;
   split: boolean;
   initialOpen: boolean;
-  onOpenFile: (path: string, newSubwindow: boolean) => void;
-  onOpenDiff: (path: string) => void;
+  /** Absent: the card draws no open buttons (the checkpoint scope's). */
+  onOpenFile?: (path: string, newSubwindow: boolean) => void;
+  onOpenDiff?: (path: string) => void;
   onUnfold: (cardKey: string) => void;
-}) {
+  /** This card's saved notes, and the note being written when it is here.
+   * Without `onStartNote` the card takes no notes (the checkpoint scope's). */
+  notes?: DiffNote[];
+  draft?: NoteDraft | null;
+} & Partial<NoteActions>) {
   const t = useT();
   const [open, setOpen] = useState(initialOpen);
   // Without its final newline, which would parse as one more (empty) row.
@@ -125,6 +178,51 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
   const folder = shown.slice(0, shown.length - name.length);
   const moment = chatMoment(change.at);
   const openable = change.kind !== "delete" && !change.movedTo;
+
+  // Notes: a note started here (the gutter button, or the `viewNote` key on a
+  // folded card) opens the card.
+  const hunks = useMemo(() => files.flatMap((file) => file.hunks), [files]);
+  const rows = useMemo(() => hunks.map((hunk) => noteRows(hunk.lines, split)), [hunks, split]);
+  const noteLabel = t("diffNotes.add");
+  useEffect(() => {
+    if (!draft || open) return;
+    onUnfold(cardKey);
+    setOpen(true);
+  }, [draft, open, onUnfold, cardKey]);
+  const save = (text: string) => {
+    const span = draft && describeSelection(hunks[draft.hunk]?.lines ?? [], draft.lines);
+    if (!draft || !span) {
+      onCancelNote();
+      return;
+    }
+    onSaveNote({ ...span, path: shown, text: text.trim(), card: cardKey, hunk: draft.hunk, lines: draft.lines }, draft.editing);
+  };
+  /** One hunk's note rows: the lines under a note, and the saved notes and
+   * the box that hang under each. */
+  const noteView = (hunkIndex: number) => {
+    const noted = new Set<number>();
+    const under = new Map<number, ReactNode[]>();
+    const hang = (lines: readonly number[], node: ReactNode) => {
+      const slot = slotLine(rows[hunkIndex] ?? [], lines);
+      if (slot !== null) under.set(slot, [...(under.get(slot) ?? []), node]);
+    };
+    for (const note of notes) {
+      if (note.hunk !== hunkIndex) continue;
+      note.lines.forEach((index) => noted.add(index));
+      if (draft?.editing !== note.id) {
+        hang(note.lines, <SavedDiffNote key={note.id} id={note.id} text={note.text} onEdit={onEditNote} onDelete={onDeleteNote} />);
+      }
+    }
+    if (draft && draft.hunk === hunkIndex) {
+      draft.lines.forEach((index) => noted.add(index));
+      hang(draft.lines, <DiffNoteBox key={`box-${draft.serial}`} initial={draft.text} onChange={onNoteText} onSave={save} onCancel={onCancelNote} />);
+    }
+    const start = onStartNote
+      ? (index: number, event: MouseEvent<HTMLButtonElement>) =>
+        onStartNote(cardKey, hunkIndex, rows[hunkIndex] ?? [], index, event.shiftKey)
+      : undefined;
+    return { noted, under, start };
+  };
   return (
     <section className={`terminal-changes-card ${change.kind}${fresh ? " fresh" : ""}`} data-card-key={cardKey}>
       <div className={cursor ? "terminal-changes-card-head steer-cursor" : "terminal-changes-card-head"}>
@@ -147,8 +245,11 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
           </span>
         </button>
         <Counts added={change.added} removed={change.removed} />
+        {notes.length > 0 && (
+          <span className="terminal-changes-notechip">{t(notes.length === 1 ? "diffNotes.countOne" : "diffNotes.count", { n: notes.length })}</span>
+        )}
         {moment && <small className="terminal-changes-time">{chatTime(moment, use24h)}</small>}
-        {openable && (
+        {openable && onOpenDiff && (
           <button
             type="button"
             className="terminal-changes-open"
@@ -159,7 +260,7 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
             ±
           </button>
         )}
-        {openable && (
+        {openable && onOpenFile && (
           <button
             type="button"
             className="terminal-changes-open"
@@ -177,14 +278,22 @@ const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cursor, ba
       {open && change.kind === "write" && <small className="terminal-changes-note">{t("terminal.changes.writeHint")}</small>}
       {open && (
         <div className="terminal-changes-diff">
-          {files.flatMap((file) => file.hunks).map((hunk, hunkIndex) => (
-            <div className="diff-hunk" key={hunkIndex}>
-              {split ? <div className="terminal-changes-split">
-                <div className="terminal-changes-split-heading"><span>{t("terminal.changes.before")}</span><span>{t("terminal.changes.after")}</span></div>
-                <SplitRows lines={hunk.lines} marks={marks} />
-              </div> : hunk.lines.map((line, lineIndex) => <DiffLineRow line={line} marks={marks.get(line)} key={lineIndex} />)}
-            </div>
-          ))}
+          {hunks.map((hunk, hunkIndex) => {
+            const view = noteView(hunkIndex);
+            return (
+              <div className="diff-hunk" key={hunkIndex}>
+                {split ? <div className="terminal-changes-split">
+                  <div className="terminal-changes-split-heading"><span>{t("terminal.changes.before")}</span><span>{t("terminal.changes.after")}</span></div>
+                  <SplitRows lines={hunk.lines} marks={marks} notes={view.start && { label: noteLabel, noted: view.noted, onStart: view.start, under: view.under }} />
+                </div> : hunk.lines.map((line, lineIndex) => (
+                  <Fragment key={lineIndex}>
+                    <DiffLineRow line={line} marks={marks.get(line)} noteAt={lineIndex} onNote={view.start} noted={view.noted.has(lineIndex)} noteLabel={noteLabel} />
+                    {view.under.get(lineIndex)}
+                  </Fragment>
+                ))}
+              </div>
+            );
+          })}
           {change.cut && <small className="terminal-changes-note">{t("terminal.changes.cut")}</small>}
         </div>
       )}
@@ -204,6 +313,8 @@ interface ChangesSteerState {
   fresh: ReadonlySet<string> | null;
   openFile: (path: string, newSubwindow: boolean) => void;
   openDiff: (path: string) => void;
+  /** Start a note on a card's first changed line. */
+  beginNote: (cardKey: string, change: FileChange) => void;
   root: HTMLElement | null;
 }
 
@@ -211,8 +322,9 @@ interface ChangesSteerState {
  * One Inside key of the Diffs view: up/down move the card cursor (up on the
  * first card steps out, not on a held key), Shift+up/down step All, then each
  * file, `viewToggle` folds, `viewNew` jumps to the next new card, `viewMode`
- * flips split/unified, `viewOpen` opens the file (Shift: new subwindow),
- * `viewOpenAlt` the diff viewer. left/right, Enter and Space are the scroll
+ * flips split/unified, `viewNote` starts a note on the card's first changed
+ * line (the box takes the keyboard), `viewOpen` opens the file (Shift: new
+ * subwindow), `viewOpenAlt` the diff viewer. left/right, Enter and Space are the scroll
  * level's own (`pass`); anything else is swallowed.
  */
 function changesSteerKey(
@@ -276,6 +388,11 @@ function changesSteerKey(
     case "viewMode":
       if (!e.repeat) set.setSplit((split) => !split);
       return "handled";
+    case "viewNote": {
+      const card = cards[at];
+      if (!e.repeat && card) state.beginNote(card.key, card.change);
+      return "handled";
+    }
     case "viewOpen":
     case "viewOpenAlt": {
       const change = cards[at]?.change;
@@ -289,8 +406,10 @@ function changesSteerKey(
   }
 }
 
-export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, subagentTitle, chat, chatTitle, steerId, onClose }: {
+export function TerminalReaderChanges({ scope, ptyId, tab, cwd, visible, subagent, subagentTitle, chat, chatTitle, steerId, onClose }: {
   scope: string;
+  /** The pane's PTY id: the notes' owner and the Chat box they go into. */
+  ptyId: string;
   tab: TabEntry;
   cwd: string | undefined;
   visible: boolean;
@@ -315,6 +434,8 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const base = tab.cwd || cwd;
+  /** The second scope, Since checkpoint (`CheckpointDiffScope`). */
+  const checkpoints = useCheckpointScope({ uid: tab.sessionId, ptyId: steerId, visible, base, split, card: ChangeCard });
   /** Whose changes a read belongs to — a read of another conversation is
    * never drawn under this one. */
   const readKey = `${tab.sessionId ?? ""}|${chat ?? ""}|${subagent ?? ""}`;
@@ -393,6 +514,96 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
     });
   }, []);
 
+  // Notes (`lib/agents/diffNotes`): the saved ones live per tab in the store;
+  // the one being written is here, a card at a time.
+  const { confirmAction, dialogs } = useDialogs();
+  const allNotes = useDiffNotes(ptyId);
+  const [draft, setDraft] = useState<NoteDraft | null>(null);
+  const [noteNotice, setNoteNotice] = useState<string | null>(null);
+  const serial = useRef(0);
+  const noteText = useRef("");
+  const cardNotes = useRef(new Map<string, DiffNote[]>());
+  /** Each card's notes, an unchanged list keeping its identity so the other
+   * cards' memo holds when one note changes. */
+  const notesByCard = useMemo(() => {
+    const grouped = new Map<string, DiffNote[]>();
+    for (const note of allNotes) grouped.set(note.card, [...(grouped.get(note.card) ?? []), note]);
+    const next = new Map<string, DiffNote[]>();
+    for (const [card, list] of grouped) {
+      const before = cardNotes.current.get(card);
+      next.set(card, before && before.length === list.length && before.every((note, i) => note === list[i]) ? before : list);
+    }
+    cardNotes.current = next;
+    return next;
+  }, [allNotes]);
+  const startNote = useCallback((card: string, hunk: number, rows: number[][], index: number, extend: boolean) => {
+    setNoteNotice(null);
+    setDraft((previous) => {
+      if (extend && previous && previous.card === card && previous.hunk === hunk) {
+        return { ...previous, lines: rangeLines(rows, previous.anchor, index), text: noteText.current };
+      }
+      serial.current += 1;
+      noteText.current = "";
+      return { card, hunk, anchor: index, lines: rangeLines(rows, index, index), text: "", serial: serial.current };
+    });
+  }, []);
+  const saveNote = useCallback((fields: NoteFields, editing: string | undefined) => {
+    const store = useDiffNotesStore.getState();
+    if (editing) store.update(ptyId, editing, fields);
+    else store.add(ptyId, { ...fields, id: `${Date.now().toString(36)}-${++serial.current}`, at: Date.now() });
+    setDraft(null);
+  }, [ptyId]);
+  const cancelNote = useCallback(() => setDraft(null), []);
+  const typeNote = useCallback((text: string) => {
+    noteText.current = text;
+  }, []);
+  const editNote = useCallback((id: string) => {
+    const note = useDiffNotesStore.getState().byTab[ptyId]?.find((n) => n.id === id);
+    if (!note) return;
+    serial.current += 1;
+    noteText.current = note.text;
+    setDraft({ card: note.card, hunk: note.hunk, anchor: note.lines[0] ?? 0, lines: note.lines, text: note.text, editing: id, serial: serial.current });
+  }, [ptyId]);
+  const deleteNote = useCallback((id: string) => {
+    useDiffNotesStore.getState().remove(ptyId, id);
+    setDraft((previous) => (previous?.editing === id ? null : previous));
+  }, [ptyId]);
+  const beginNote = (cardKey: string, change: FileChange) => {
+    const hunks = parseUnifiedDiff(change.diff.replace(/\n$/u, "")).flatMap((file) => file.hunks);
+    for (let hunk = 0; hunk < hunks.length; hunk++) {
+      const index = firstNoteLine(hunks[hunk].lines);
+      if (index >= 0) {
+        startNote(cardKey, hunk, noteRows(hunks[hunk].lines, split), index, false);
+        return;
+      }
+    }
+  };
+  const prompt = useMemo(() => buildDiffNotesPrompt(allNotes, t), [allNotes, t]);
+  /** Into the Chat's text box (which takes the Reader to Chat itself), never
+   * typed into the terminal or sent. Only the notes that fit go; the rest stay. */
+  const addToDraft = () => {
+    if (!insertIntoReader(ptyId, prompt.text)) {
+      setNoteNotice(t("diffNotes.noComposer"));
+      return;
+    }
+    setNoteNotice(null);
+    useDiffNotesStore.getState().removeMany(ptyId, prompt.included.map((note) => note.id));
+  };
+  const clearNotes = async () => {
+    if (allNotes.length > 1) {
+      const ok = await confirmAction({
+        title: t("diffNotes.clearTitle"),
+        body: t("diffNotes.clearBody", { n: allNotes.length }),
+        confirmLabel: t("diffNotes.clear"),
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    useDiffNotesStore.getState().clear(ptyId);
+    setDraft(null);
+    setNoteNotice(null);
+  };
+
   // Ctrl (⌘) + click opens the file in a new subwindow.
   const openFile = (path: string, newSubwindow: boolean) => {
     const name = basename(path);
@@ -440,7 +651,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
   const cursorKey = inside ? effCursor : null;
   const rootRef = useRef<HTMLElement>(null);
   const live = useRef<ChangesSteerState | null>(null);
-  live.current = { cards, keyed, files, filter, cursor: effCursor, fresh: freshCards, openFile, openDiff, root: rootRef.current };
+  live.current = { cards, keyed, files, filter, cursor: effCursor, fresh: freshCards, openFile, openDiff, beginNote, root: rootRef.current };
   useEffect(() => {
     if (!steerId || !visible) return;
     return registerReaderInside(steerId, {
@@ -462,12 +673,29 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
       <header className="terminal-changes-head">
         <strong>{t("terminal.changes.title")}</strong>
         <UntestedTag id="terminal.reader.changes" />
+        <UntestedTag id="diff-notes" />
         {list.length > 0 && (
           <small>{t("terminal.changes.summary", { files: files.length, edits: list.length })}</small>
+        )}
+        {allNotes.length > 0 && (
+          <span className="terminal-changes-notes">
+            <small>{t(allNotes.length === 1 ? "diffNotes.countOne" : "diffNotes.count", { n: allNotes.length })}</small>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={addToDraft}
+              title={prompt.omitted > 0 ? t("diffNotes.partialTitle", { max: PROMPT_CHAR_CAP, n: prompt.included.length, total: allNotes.length }) : t("diffNotes.addToDraftTitle")}
+            >
+              {prompt.omitted > 0 ? t("diffNotes.addPartial", { n: prompt.included.length, total: allNotes.length }) : t("diffNotes.addToDraft")}
+            </button>
+            <button type="button" className="btn-quiet" onClick={() => void clearNotes()}>{t("diffNotes.clear")}</button>
+            {noteNotice && <small className="terminal-changes-notice" role="alert">{noteNotice}</small>}
+          </span>
         )}
         <Dropdown className="terminal-changes-view" value={split ? "split" : "unified"}
           options={[{ value: "split", label: t("terminal.changes.split") }, { value: "unified", label: t("terminal.changes.unified") }]}
           onChange={(value) => setSplit(value === "split")} />
+        {checkpoints.switchEl}
         <button type="button" className="terminal-changes-close" onClick={onClose} title={t("terminal.changes.close")} aria-label={t("terminal.changes.close")}>
           <CloseIcon />
         </button>
@@ -478,6 +706,7 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
         <small className="terminal-changes-scope" title={chatTitle}>{t("terminal.changes.chat", { name: chatTitle ?? "" })}</small>
       )}
       <div className="terminal-changes-body">
+      {checkpoints.bodyEl ?? <>
       {files.length > 0 && (
         <div className="terminal-changes-files" role="listbox" aria-label={t("terminal.changes.files")}>
           <button type="button" role="option" aria-selected={!filter} className={!filter ? "active" : undefined} onClick={() => setPicked(null)}>
@@ -523,6 +752,14 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
               onOpenFile={openFile}
               onOpenDiff={openDiff}
               onUnfold={unfold}
+              notes={notesByCard.get(key) ?? NO_NOTES}
+              draft={draft?.card === key ? draft : null}
+              onStartNote={startNote}
+              onSaveNote={saveNote}
+              onCancelNote={cancelNote}
+              onNoteText={typeNote}
+              onEditNote={editNote}
+              onDeleteNote={deleteNote}
             />
           ))
         )}
@@ -530,7 +767,9 @@ export function TerminalReaderChanges({ scope, tab, cwd, visible, subagent, suba
           <small className="terminal-changes-note">{t("terminal.changes.truncated")}</small>
         )}
       </div>
+      </>}
       </div>
+      {dialogs}
     </aside>
   );
 }

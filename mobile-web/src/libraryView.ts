@@ -58,6 +58,21 @@ export function writeLibraryView(view: LibraryView, storage?: ViewStorage): void
   writeJson(KEY, { layout, sort, desc, foldersFirst, thumbs }, storage);
 }
 
+const DOCS_OPEN_KEY = storageKey("mobile.filesDocsOpen");
+
+/** Whether the root's "Project docs" group was left unfolded for this project
+ * (shut until first opened, as on the desktop tree): the phone keeps the ids
+ * of the projects whose group is open. A refusing store reads as shut. */
+export function readDocsOpen(projectId: string, storage?: ViewStorage): boolean {
+  return readJson(DOCS_OPEN_KEY, (parsed) => Array.isArray(parsed) && parsed.includes(projectId), false, storage);
+}
+
+export function writeDocsOpen(projectId: string, open: boolean, storage?: ViewStorage): void {
+  const ids = readJson<string[]>(DOCS_OPEN_KEY, (parsed) => Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [], [], storage);
+  const rest = ids.filter((id) => id !== projectId);
+  writeJson(DOCS_OPEN_KEY, open ? [...rest, projectId].slice(-200) : rest.length ? rest : undefined, storage);
+}
+
 /** What a tile draws: a folder, a picture, a PDF, a film or sound, a text,
  * or a file. */
 export type Glyph = "dir" | "image" | "pdf" | "media" | "text" | "file";

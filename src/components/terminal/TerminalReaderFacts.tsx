@@ -23,7 +23,7 @@ import { storageKey } from "../../lib/brand";
 import { formatTokens } from "../../lib/tokenStats";
 import { formatCacheWriteUsd, formatIdleTime, useAgentResumeCostStore } from "../../stores/agents/agentResumeCost";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
-import { groupOpenCodeModels, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
@@ -163,7 +163,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
   const modelPicking = picking && !permissionPicking;
   const codex = isCodexCommand(tab.cmd);
   const modelPickable = modelPickOffered(tab);
-  const groupModels = modelPicking && isOpenCodeTab(agentLabel) && shownStep?.title === "Select model";
+  const groupModels = modelPicking && isOpenCodeModelList(agentLabel, shownStep?.title);
   const modelGroups = shownStep
     ? groupModels ? groupOpenCodeModels(shownStep.options) : [{ key: "all", options: shownStep.options }]
     : [];

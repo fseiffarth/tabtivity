@@ -244,12 +244,6 @@
    used to be a second, near-identical card with its own --bg-elevated surface
    and --border-subtle edge, which is exactly the drift the shared card class
    exists to prevent. Only its own head/toggle/result bits live here. */
-.agent-list-entry-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
 .agent-remote-install-row {
   display: flex;
   align-items: center;
@@ -286,12 +280,6 @@
 }
 /* An installed agent's head, right side: its Ctrl+N chord, ↑/↓ (the + menu's
    order, hence the chords') and the Enabled toggle. */
-.agent-list-entry-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
 .agent-chord-chip {
   font-size: var(--text-sm);
   color: var(--text-secondary);
@@ -405,16 +393,6 @@
 /* Installed-CLI version chip and the drift notice under it. Same 11px
    secondary scale as the other per-agent rows, and the warning colour is
    `.agent-cron-warn` reused rather than a second amber picked here. */
-.agent-version-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-}
-.agent-version-chip,
 .agent-chord-chip {
   padding: 1px 6px;
   border: 1px solid var(--border-subtle);
@@ -422,23 +400,12 @@
   background: var(--bg-elevated);
   font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
 }
-.agent-version-drift {
-  margin-top: 6px;
-  font-size: var(--text-sm);
-}
 .agent-version-stale {
   margin: 4px 0;
   padding-left: var(--space-4);
   color: var(--text-secondary);
 }
 
-/* Codex's session-hook-trust notice, nested inside its own agent-list-entry
-   card rather than floating as a separate top-of-panel section. */
-.agent-codex-hook {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-subtle);
-}
 .ollama-vibe-section .ollama-status-dot {
   display: inline-block;
   vertical-align: middle;
@@ -455,13 +422,6 @@
   font-size: var(--text-md);
   color: var(--text-muted);
   padding: var(--space-1) 0;
-}
-
-.ollama-section-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
 /* ── Local-model header button: live server-status dot ───────────────────── */
@@ -1483,12 +1443,6 @@
   flex-shrink: 0;
 }
 
-.ollama-model-details {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
 .ollama-download-bar,
 .app-update-bar {
   height: 5px;
@@ -1511,9 +1465,12 @@
   animation: ollama-download-indeterminate 1.1s ease-in-out infinite;
 }
 
+/* The fill is 35% of the track: its own width out on the left, the track's
+   (100 / 35 of its own) out on the right. Moved, not re-margined: no layout
+   per frame for as long as a model loads. */
 @keyframes ollama-download-indeterminate {
-  0% { margin-left: -35%; }
-  100% { margin-left: 100%; }
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(285.72%); }
 }
 
 /* Settings → Updates. The progress bar itself is the Ollama pull bar's rules,
@@ -2281,6 +2238,18 @@ html[data-header-drag] * {
 .mobile-indicator-device-access,
 .mobile-indicator-device-disconnect {
   font-size: var(--text-sm);
+}
+/* "Keep running when closed": one switch row, ruled off like the device list. */
+.mobile-indicator-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: 10px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--control-border);
+  font-size: var(--text-sm);
+  cursor: var(--cur-pointer, pointer);
 }
 .mobile-indicator-actions {
   display: flex;

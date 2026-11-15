@@ -35,6 +35,8 @@ pub mod hpc_ws;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod ide;
+pub mod checkpoints;
+pub mod tab_archive;
 pub mod local_loss;
 pub mod mail;
 pub mod markdown;
@@ -65,6 +67,7 @@ pub mod print_native;
 // Window/OS-only (`client`): not in the server daemon's build.
 #[cfg(feature = "desktop")]
 pub mod printing;
+pub mod project_docs;
 pub mod project_runtime;
 // Full project export/import — move a project to another computer
 // (docs/context/project_transfer.md).
@@ -94,6 +97,10 @@ pub mod connect;
 pub mod sync;
 pub mod sync_handoff;
 pub mod synctex;
+// Window-only (`client`): tab messaging's window surface; the lane is served
+// by the window alone (`Runtime::serves_tabs`).
+#[cfg(feature = "desktop")]
+pub mod tabs_mcp;
 pub mod tfevents;
 pub mod terminal;
 pub mod tex;

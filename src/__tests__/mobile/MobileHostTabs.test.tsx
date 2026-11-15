@@ -117,7 +117,7 @@ describe("Mobile project screen — tabs on the remote host", () => {
     fireEvent.click(screen.getByRole("button", { name: "More for Host Claude" }));
     const sheet = await screen.findByRole("dialog");
     expect(within(sheet).queryByRole("button", { name: "Scheduled prompts" })).toBeNull();
-    expect(within(sheet).getByRole("button", { name: "Colour…" })).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Colour" })).toBeTruthy();
   });
 });
 

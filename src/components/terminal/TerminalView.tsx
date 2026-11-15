@@ -97,7 +97,9 @@ import { noteTypedLine, screenAtCursor } from "../../lib/agents/typedClear";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { notePromptTrailInput } from "../../stores/agents/promptTrail";
 import "@xterm/xterm/css/xterm.css";
-import { storageKey } from "../../lib/brand";
+import { envName, storageKey } from "../../lib/brand";
+import { noteCheckpointKey } from "../../lib/agents/checkpoints";
+import { useCheckpointsStore } from "../../stores/agents/checkpoints";
 import type { AssistantLaunch } from "../../lib/assistant";
 
 // Hoisted to module scope: keystroke input fires this on every key, so we reuse
@@ -1850,7 +1852,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           if (owner) await useTabsStore.getState().persistScope(owner, "").catch(() => {});
           if (cancelled) return;
         }
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision" } | null>("pty_spawn", {
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision"; checkpointKey?: string } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
           opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
@@ -1887,6 +1889,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // headless owner kept it running while no window was open): the turn
         // its hooks last reported, which the watcher will not repeat.
         if (spawned?.turn === "working" || spawned?.turn === "decision") noteLiveTurn(id, spawned.turn);
+        // Per-turn checkpoints: the key this window names the tab's by
+        // (`lib/agents/checkpoints`); a joined client's PTY gets none.
+        const launchUid = env?.[envName("TAB_UID")];
+        if (launchUid && !launchAttached) {
+          noteCheckpointKey(launchUid, spawned?.checkpointKey);
+          if (spawned?.checkpointKey) void useCheckpointsStore.getState().refresh(launchUid);
+        }
       };
       try {
         await spawn();

@@ -1181,4 +1181,36 @@ mod tests {
         part(2, json!({"type":"text","text":"third"}));
         assert!(!session_transcript(&db, "v2", None, Some("ses_v2"), None, transcript.version.as_deref(), 100).unwrap().unchanged);
     }
+
+    /// A real OpenCode store, read the way the phone Chat and the Reader read
+    /// it: `VERIFY_OPENCODE_DB=<home>/.local/share/opencode/opencode.db
+    /// VERIFY_OPENCODE_DIR=<work folder> VERIFY_OPENCODE_SESSION=<the plugin's
+    /// record>` from a `scripts/verify-cli/opencode/turns.py` run. Prints each
+    /// entry's kind and text, the subagent read through its handle and the
+    /// completed changes, for comparing two versions' stores.
+    #[test]
+    #[ignore = "needs a captured OpenCode store (scripts/verify-cli/opencode)"]
+    fn verify_cli_reads_a_captured_store() {
+        let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        let (db, dir, own) = (PathBuf::from(var("VERIFY_OPENCODE_DB")), var("VERIFY_OPENCODE_DIR"), var("VERIFY_OPENCODE_SESSION"));
+        let transcript = session_transcript(&db, &dir, None, Some(&own), None, None, 500).expect("store readable");
+        assert!(transcript.available, "{:?}", transcript.reason);
+        for entry in &transcript.entries {
+            let text: String = entry.text.chars().take(70).collect();
+            println!("entry {} {:?} running={} finished={}", entry.kind, text, entry.running, entry.finished);
+        }
+        let handles: Vec<_> = transcript.entries.iter().filter_map(|entry| entry.subagent.clone()).collect();
+        for handle in &handles {
+            let child = session_transcript(&db, &dir, None, Some(&own), Some(handle), None, 500).expect("subagent readable");
+            println!("subagent {} entries {:?}", child.entries.len(), child.entries.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>());
+        }
+        let changes = session_changes(&db, &dir, None, Some(&own), None, None, 500).expect("changes readable");
+        println!(
+            "{} transcript entries; {} subagent(s); running_agents {}; {} completed file changes",
+            transcript.entries.len(),
+            handles.len(),
+            transcript.running_agents,
+            changes.changes.len()
+        );
+    }
 }

@@ -20,7 +20,9 @@
 //! the recorded bases:
 //!   - host moved, local unchanged  → PULL host→local
 //!   - local moved, host unchanged  → PUSH local→host (guarded by `push_decision`)
-//!   - both moved (AMBER/orange)    → SKIP, left for manual resolution
+//!   - both moved (AMBER/orange)    → SKIP, left for manual resolution — unless the
+//!     project's "take the newer copy" switch is on (`services::sync_take_newer`):
+//!     then the copy with the newer mtime wins, after the other is backed up
 //!   - neither moved (green)        → no-op
 //!
 //! Deletions are intentionally NOT propagated in v1 (a gone host side reads as
@@ -35,15 +37,16 @@ use std::time::Duration;
 use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
 use app_core::CoreCtx;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{mpsc, Notify};
 use tokio::time::MissedTickBehavior;
 
-use crate::schema::net_usage;
-use crate::services::remote::{pooled_sftp, remote_target_for, RemotePoolState, RemoteTarget};
+use crate::services::remote::{pooled_sftp, remote_target_for, sync_pool, RemotePoolState, RemoteTarget};
 use crate::services::remote_sync::{
-    self, ensure_loaded, mirror_dir, Manifest, PushDecision, SyncManifestState,
+    self, ensure_loaded, mirror_dir, Manifest, PushDecision, Stat, SyncManifestState, Transfer,
 };
 use crate::services::sftp;
+use crate::services::sync_take_newer;
+use crate::services::sync_task;
 
 /// Host re-stat cadence: how often a connected project's auto paths are checked
 /// for incoming host changes (the local side is also caught near-instantly by the
@@ -87,33 +90,36 @@ async fn unless_manual<T>(project_id: &str, fut: impl std::future::Future<Output
     }
 }
 
-/// One running auto-sync task: its cancel signal, its join handle, and the mirror
-/// watcher whose lifetime is tied to the task (dropping it unwatches).
-pub struct AutoSyncTask {
-    cancel: Arc<Notify>,
-    join: tokio::task::JoinHandle<()>,
-    /// Held [`PauseGuard`]s: while non-zero, the loop skips its passes so a git
-    /// checkout (`services::git_peer`) can rewrite the mirror without those writes
-    /// being pulled/pushed. `git_peer` re-stamps the file-sync bases before its
-    /// guard drops, so the next pass reads the rewritten tracked files as green
-    /// rather than as local edits. (A pass already running is not interrupted by a
-    /// pause: the checkout waits for it on the project's mutation lock instead.)
-    paused: Arc<AtomicUsize>,
-    /// Set by [`stop`]: the running pass ends after its current file, and the task
-    /// is on its way out even if it outlasts the stop's wait.
-    stopping: Arc<AtomicBool>,
-    /// How many stops this task has been asked for: a restart deferred behind it
-    /// is dropped when a newer stop (a second disconnect) came after it.
-    stops: Arc<AtomicUsize>,
-    /// Flips when the task has really ended (and released its lease).
-    exited: crate::services::process_lease::RunnerExited,
-}
-
-impl AutoSyncTask {
-    fn ended(&self) -> bool {
-        self.join.is_finished() || *self.exited.borrow()
+/// Absorb the rest of a watcher burst on `rx`: true once `quiet` passed with no
+/// further event, or `max` after the call when the events never pause — a log
+/// appended every second would otherwise hold the pass off for as long as it
+/// is written, and the loop's interval tick with it (not polled meanwhile).
+/// False when the task is cancelled or the watcher is gone.
+pub(crate) async fn absorb_burst(
+    rx: &mut mpsc::UnboundedReceiver<()>,
+    cancel: &Notify,
+    quiet: Duration,
+    max: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + max;
+    loop {
+        tokio::select! {
+            _ = cancel.notified() => return false,
+            _ = tokio::time::sleep(quiet) => return true,
+            _ = tokio::time::sleep_until(deadline) => return true,
+            res = rx.recv() => { if res.is_none() { return false; } }
+        }
     }
 }
+
+/// One running auto-sync task ([`sync_task::Task`]) and its pause count: the
+/// held [`PauseGuard`]s. While non-zero, the loop skips its passes so a git
+/// checkout (`services::git_peer`) can rewrite the mirror without those writes
+/// being pulled/pushed. `git_peer` re-stamps the file-sync bases before its
+/// guard drops, so the next pass reads the rewritten tracked files as green
+/// rather than as local edits. (A pass already running is not interrupted by a
+/// pause: the checkout waits for it on the project's mutation lock instead.)
+pub type AutoSyncTask = sync_task::Task<Arc<AtomicUsize>>;
 
 /// A pause of one project's auto-sync ([`pause`]), lifted when dropped — on every
 /// return path of the checkout that took it, an early error or a cancelled caller
@@ -129,11 +135,11 @@ impl Drop for PauseGuard {
 }
 
 /// Tauri-managed registry of per-project auto-sync tasks, keyed by project id.
-pub type AutoSyncState = Arc<Mutex<HashMap<String, AutoSyncTask>>>;
+pub type AutoSyncState = sync_task::Tasks<Arc<AtomicUsize>>;
 
 /// Build a fresh, empty registry for `tauri::Builder::manage`.
 pub fn new_state() -> AutoSyncState {
-    Arc::new(Mutex::new(HashMap::new()))
+    sync_task::new_tasks()
 }
 
 /// Payload of the `auto-sync` event, emitted after a pass that transferred
@@ -162,24 +168,15 @@ pub async fn start(
 ) {
     // A stopped loop still finishing its last transfer keeps the project: start
     // this one once it has ended, never beside it (and only if still connected).
-    {
-        let guard = state.lock().await;
-        if let Some(t) = guard.get(project_id) {
-            if t.stopping.load(Ordering::SeqCst) && !t.ended() {
-                let mut exited = t.exited.clone();
-                let stops = Arc::clone(&t.stops);
-                let seen = stops.load(Ordering::SeqCst);
-                let state = state.clone();
-                let project_id = project_id.to_string();
-                tokio::spawn(async move {
-                    let _ = exited.wait_for(|done| *done).await;
-                    if restart_still_wanted(&stops, seen) && pooled_sftp(&pool, &project_id).await.is_some() {
-                        start_now(ctx, pool, manifest, &state, &project_id).await;
-                    }
-                });
-                return;
+    if let Some(ended) = sync_task::behind_stopping(state, project_id).await {
+        let state = state.clone();
+        let project_id = project_id.to_string();
+        tokio::spawn(async move {
+            if ended.await && pooled_sftp(&pool, &project_id).await.is_some() {
+                start_now(ctx, pool, manifest, &state, &project_id).await;
             }
-        }
+        });
+        return;
     }
     start_now(ctx, pool, manifest, state, project_id).await;
 }
@@ -189,13 +186,6 @@ pub async fn start(
 /// VM projects included), which is never mirrored.
 fn has_mirror_to_sync(spec: &crate::schema::project::RemoteSpec) -> bool {
     !spec.is_remote_only()
-}
-
-/// Whether a restart deferred behind a stopping task (that had seen `seen` stops)
-/// is still wanted: not when the project was stopped again since — that stop is
-/// the newer intent, and the pool it saw may only be about to close.
-pub(crate) fn restart_still_wanted(stops: &AtomicUsize, seen: usize) -> bool {
-    stops.load(Ordering::SeqCst) == seen
 }
 
 async fn start_now(
@@ -223,68 +213,37 @@ async fn start_now(
     if crate::services::hpc_mode::is_hpc_spec(&target.spec) {
         return;
     }
-    let mut guard = state.lock().await;
-    // A loop that ended on its own (the host was tagged HPC mid-session) leaves a
-    // finished task behind; treating that as "already running" would refuse every
-    // restart until the next disconnect, so untagging the host would change nothing.
-    if guard.get(project_id).is_some_and(AutoSyncTask::ended) {
-        guard.remove(project_id);
-    }
-    if guard.contains_key(project_id) {
-        return; // already running
-    }
-    // One loop per mirror: the other process sharing this state dir (the
-    // window or its desktop sidecar) may already run it (`process_lease`,
-    // final review B4); it keeps doing so, and this one's manual syncs still
-    // work (the manifest is compare-and-swap across processes).
+    // One loop per mirror across this app's processes; the one that does not run
+    // it still syncs by hand (the manifest is compare-and-swap across processes).
     let key = crate::services::process_lease::remote_sync_key(project_id);
-    if !crate::services::process_lease::claim_sync(&key) {
-        eprintln!("sync_auto: {project_id}: another process of this app runs its auto-sync");
-        return;
-    }
-
-    // Mirror watcher → mpsc into the loop (debounced there). The mirror must
-    // exist for the recursive watch to attach (connect() already creates it, but
-    // be defensive for a first-ever run).
-    //
-    // The watcher itself is attached by the loop, not here, and only once the
-    // manifest actually marks something for auto-sync — see `attach_watcher`.
-    let mirror = mirror_dir(project_id);
-    let _ = std::fs::create_dir_all(&mirror);
-    let (tx, rx) = mpsc::unbounded_channel::<()>();
-
-    let cancel = Arc::new(Notify::new());
-    let paused = Arc::new(AtomicUsize::new(0));
-    let stopping = Arc::new(AtomicBool::new(false));
-    let (exit, exited) = crate::services::process_lease::runner_exit(&key);
-    let loop_fut = run_loop(
-        ctx,
-        pool,
-        manifest,
-        target,
-        project_id.to_string(),
-        mirror,
-        tx,
-        rx,
-        cancel.clone(),
-        paused.clone(),
-        stopping.clone(),
-    );
-    let join = tokio::spawn(async move {
-        let _exit = exit; // the lease ends with this task, however it ends
-        loop_fut.await;
-    });
-    guard.insert(
-        project_id.to_string(),
-        AutoSyncTask {
-            cancel,
-            join,
-            paused,
-            stopping,
-            stops: Arc::new(AtomicUsize::new(0)),
-            exited,
-        },
-    );
+    let busy = format!("sync_auto: {project_id}: another process of this app runs its auto-sync");
+    sync_task::spawn(state, project_id, &key, &busy, |stop| {
+        // Mirror watcher → mpsc into the loop (debounced there). The mirror must
+        // exist for the recursive watch to attach (connect() already creates it, but
+        // be defensive for a first-ever run).
+        //
+        // The watcher itself is attached by the loop, not here, and only once the
+        // manifest actually marks something for auto-sync — see `attach_watcher`.
+        let mirror = mirror_dir(project_id);
+        let _ = std::fs::create_dir_all(&mirror);
+        let (tx, rx) = mpsc::unbounded_channel::<()>();
+        let paused = Arc::new(AtomicUsize::new(0));
+        let run = run_loop(
+            ctx,
+            pool,
+            manifest,
+            target,
+            project_id.to_string(),
+            mirror,
+            tx,
+            rx,
+            stop.cancel,
+            paused.clone(),
+            stop.stopping,
+        );
+        (run, paused)
+    })
+    .await;
 }
 
 /// Pause the project's auto-sync reconcile passes until the returned guard drops
@@ -293,7 +252,7 @@ async fn start_now(
 /// guard only after re-stamping any checkout-rewritten tracked-file bases, else the
 /// next pass will treat them as local edits. Pauses nest.
 pub async fn pause(state: &AutoSyncState, project_id: &str) -> PauseGuard {
-    let paused = state.lock().await.get(project_id).map(|t| Arc::clone(&t.paused));
+    let paused = state.lock().await.get(project_id).map(|t| Arc::clone(&t.extra));
     if let Some(p) = &paused {
         p.fetch_add(1, Ordering::SeqCst);
     }
@@ -307,38 +266,14 @@ pub async fn pause(state: &AutoSyncState, project_id: &str) -> PauseGuard {
 /// transfer is never detached while the project reads as free. The watcher goes
 /// with the task.
 pub async fn stop(state: &AutoSyncState, project_id: &str) {
-    stop_within(state, project_id, Duration::from_secs(5)).await;
-}
-
-async fn stop_within(state: &AutoSyncState, project_id: &str, wait: Duration) {
-    let mut exited = {
-        let guard = state.lock().await;
-        let Some(t) = guard.get(project_id) else {
-            return;
-        };
-        t.stopping.store(true, Ordering::SeqCst);
-        t.stops.fetch_add(1, Ordering::SeqCst);
-        t.cancel.notify_one();
-        t.exited.clone()
-    };
-    if crate::services::process_lease::wait_runner_exit(&mut exited, wait).await {
-        let mut guard = state.lock().await;
-        if guard.get(project_id).is_some_and(AutoSyncTask::ended) {
-            guard.remove(project_id);
-        }
-    } else {
+    if !sync_task::stop(state, project_id, sync_task::STOP_WAIT).await {
         eprintln!("sync_auto: {project_id}: a transfer is still finishing; auto-sync keeps the project until it ends");
     }
 }
 
 /// Stop every auto-sync task. Used at app exit before tearing down the pool.
 pub async fn stop_all(state: &AutoSyncState) {
-    let tasks: Vec<AutoSyncTask> = state.lock().await.drain().map(|(_, t)| t).collect();
-    for t in tasks {
-        t.stopping.store(true, Ordering::SeqCst); // a running pass ends after its file
-        t.cancel.notify_one();
-        let _ = tokio::time::timeout(Duration::from_secs(5), t.join).await;
-    }
+    sync_task::stop_all(state).await;
 }
 
 /// Attach the mirror watcher, but only once the manifest marks *something* for
@@ -404,7 +339,7 @@ async fn ensure_watcher(
 /// Tabtivity's own runtime dir). An event with no paths at all (some backends emit
 /// rescan/overflow notices that way) counts as "could be anything" and wakes the
 /// loop. Pure.
-pub fn event_touches_synced_bytes(mirror: &std::path::Path, paths: &[std::path::PathBuf]) -> bool {
+fn event_touches_synced_bytes(mirror: &std::path::Path, paths: &[std::path::PathBuf]) -> bool {
     if paths.is_empty() {
         return true;
     }
@@ -430,9 +365,6 @@ fn event_touches_synced_bytes_under(mirrors: &[std::path::PathBuf], paths: &[std
             .any(|p| mirrors.iter().all(|m| event_touches_synced_bytes(m, std::slice::from_ref(p))))
 }
 
-/// The per-project loop: reconcile on a fixed interval (host changes) and shortly
-/// after any mirror write (local changes), until cancelled. A single task ⇒ passes
-/// are serialized and never overlap.
 /// Whether this loop's host is tagged HPC **right now** — the same gate `start()`
 /// applies, asked again on every tick so tagging a machine mid-session actually
 /// stops the traffic rather than only preventing the next start.
@@ -440,6 +372,9 @@ fn hpc_now(target: &RemoteTarget) -> bool {
     crate::services::hpc_mode::is_hpc_spec(&target.spec)
 }
 
+/// The per-project loop: reconcile on a fixed interval (host changes) and shortly
+/// after any mirror write (local changes), until cancelled. A single task ⇒ passes
+/// are serialized and never overlap.
 async fn run_loop(
     ctx: CoreCtx,
     pool: RemotePoolState,
@@ -481,14 +416,9 @@ async fn run_loop(
             }
             res = rx.recv() => {
                 if res.is_none() { break; } // watcher gone → stop
-                // Debounce: absorb the rest of the burst before reconciling.
-                loop {
-                    tokio::select! {
-                        _ = cancel.notified() => return,
-                        _ = tokio::time::sleep(DEBOUNCE) => break,
-                        res = rx.recv() => { if res.is_none() { return; } }
-                    }
-                }
+                // Debounce: absorb the rest of the burst before reconciling, for
+                // no longer than a tick would have waited.
+                if !absorb_burst(&mut rx, &cancel, DEBOUNCE, AUTO_INTERVAL).await { return; }
                 // The watcher fires on local edits, which are exactly as much
                 // host traffic as a tick — same re-check as the interval arm.
                 if hpc_now(&target) { break; }
@@ -553,9 +483,11 @@ pub fn lockstep_unknown(why: &str) -> String {
 /// transfer — runs under the project's mutation lock (`services::sync_op`), so
 /// nothing it decided on can be rewritten by another writer of this app before
 /// it acts. `paused`/`stopping` are re-read once the lock is held (a checkout
-/// that paused the loop held it first) and `stopping` again between files. A
-/// manual command waiting for the lock (`sync_op::acquire_manual`) ends the pass
-/// early: between files, or at once during a host walk or stat.
+/// that paused the loop held it first) and `stopping` again before each file
+/// starts. A manual command waiting for the lock (`sync_op::acquire_manual`)
+/// ends the pass early: no further file starts, or at once during a host walk
+/// or stat. Files are decided and moved a few at a time (`sync_pool`); the ones
+/// in flight always finish and are recorded, in candidate order.
 async fn reconcile_pass(
     ctx: Option<&CoreCtx>,
     pool: &RemotePoolState,
@@ -623,32 +555,45 @@ async fn reconcile_pass(
     // SFTP. Explicit single-file markers and mirror-only candidates still stat.
     // The walk's permission bits ride along for the pull (the mirror copy keeps
     // the host's mode).
-    let mut walked_host_meta: HashMap<String, (u64, Option<u64>)> = HashMap::new();
-    let mut walked_host_mode: HashMap<String, Option<u32>> = HashMap::new();
+    let mut walked_host: HashMap<String, (Stat, Option<u32>)> = HashMap::new();
+    // Neither walk enters a folder no auto file can be under (an excluded
+    // `data/`, a carved-out `.venv`): its files would only be dropped below.
+    let snapshot = Arc::new(snapshot);
+    let skip = remote_sync::auto_walk_skip(&snapshot);
     for d in &auto_dirs {
-        let Some(walk) = unless_manual(project_id, remote_sync::walk_host_files(&sftp, &target.spec.remote_path, d)).await
-        else {
+        let walk = remote_sync::walk_host_files_bounded(&sftp, &target.spec.remote_path, d, &skip, usize::MAX);
+        let Some(walk) = unless_manual(project_id, walk).await else {
             return; // a manual sync is waiting → hand it the lock
         };
         match walk {
-            Ok(files) => {
+            Ok((files, _)) => {
                 for file in files {
-                    walked_host_meta.insert(file.rel.clone(), (file.size, file.mtime));
-                    walked_host_mode.insert(file.rel.clone(), file.mode);
-                    candidates.insert(file.rel);
+                    candidates.insert(file.rel.clone());
+                    walked_host.insert(file.rel, ((file.size, file.mtime), file.mode));
                 }
             }
             Err(_) => return, // connection dropped mid-walk → abandon this pass
         }
-        if let Ok(local) = remote_sync::walk_mirror_files(project_id, d) {
-            candidates.extend(local);
-        }
     }
+    // The mirror side of the same folders, off the runtime thread.
+    let local = {
+        let (snapshot, pid, dirs) = (snapshot.clone(), project_id.to_string(), auto_dirs);
+        app_core::rt::spawn_blocking(move || {
+            let skip = remote_sync::auto_walk_skip(&snapshot);
+            dirs.iter()
+                .filter_map(|d| remote_sync::walk_mirror_files_skipping(&pid, d, &skip).ok())
+                .flatten()
+                .collect::<Vec<String>>()
+        })
+        .await
+        .unwrap_or_default()
+    };
+    candidates.extend(local);
     // Drop paths carved out by a local OFF override (an `auto_off` on the file or a
     // nearer directory marker): the reconcile only touches paths whose *effective*
     // auto-sync is on, so a project-wide auto can still exclude individual subtrees.
     candidates.retain(|rel| remote_sync::is_auto(&snapshot, rel));
-    walked_host_meta.retain(|rel, _| candidates.contains(rel));
+    walked_host.retain(|rel, _| candidates.contains(rel));
 
     // #28p D1: with git lockstep on, the tracked tree belongs to lockstep — it delivers
     // those files as *commits*. Shipping them here as loose bytes first lands them on
@@ -657,11 +602,11 @@ async fn reconcile_pass(
     // is byte-identical). Which of those two happened used to be decided by a debounce
     // race between the two engines — nondeterministically wedging the project.
     // Only asked when lockstep is on; a listing git could not give defers the pass.
-    let lockstep = crate::services::git_peer::load_state(project_id).enabled;
-    let tracked = if lockstep {
-        crate::services::git_peer::tracked_paths(project_id)
-    } else {
-        Ok(HashSet::new())
+    let (lockstep, tracked) = {
+        let pid = project_id.to_string();
+        app_core::rt::spawn_blocking(move || crate::services::git_peer::lockstep_tracked(&pid))
+            .await
+            .unwrap_or_else(|e| (true, Err(e.to_string())))
     };
     if let Err(e) = drop_tracked(&mut candidates, &tracked, lockstep) {
         eprintln!("auto-sync: {project_id}: {e}");
@@ -669,160 +614,155 @@ async fn reconcile_pass(
     }
 
     let mirror_root = mirror_dir(project_id);
+    let records = remote_sync::RecordBatch::new(manifest, project_id);
+    let pass = Pass { sftp: &sftp, records: &records, project_id, mirror_root: &mirror_root };
     let mut pulled = 0usize;
     let mut pushed = 0usize;
     let mut skipped = 0usize;
     let mut notice_changed = false;
-    for rel in candidates {
-        if stopping.load(Ordering::SeqCst) {
-            break; // stopped: end after the file in flight, not after the whole tree
-        }
-        // A manual pull/push/delete is waiting for the lock: hand it over after the
-        // file in flight. The rest of the tree is picked up by the next pass.
-        if crate::services::sync_op::manual_waiting(project_id) {
+    // "Take the newer copy" (read once a pass): the backup folder is made on the
+    // first conflict it resolves, and the losers are logged after the loop.
+    let take_newer = sync_take_newer::enabled(project_id);
+    let mut backup: Option<std::path::PathBuf> = None;
+    let mut replaced_local: Vec<String> = Vec::new();
+    let mut replaced_host: Vec<String> = Vec::new();
+    // Both-sides-changed files the newer copy resolves, taken one at a time after
+    // the other files (each backs a copy up first; they are rare).
+    let mut resolvable: Vec<Resolvable> = Vec::new();
+    // Set when a manual sync arrived during a candidate's host stat.
+    let handed_over = AtomicBool::new(false);
+    let candidates: Vec<String> = candidates.into_iter().collect();
+    {
+        let (candidates, walked_host, snapshot, handed_over) = (&candidates, &walked_host, &*snapshot, &handed_over);
+        let (pass, mirror_root, root) = (&pass, mirror_root.as_path(), target.spec.remote_path.as_str());
+        // Stopped, or a manual pull/push/delete is waiting for the lock: no further
+        // file starts; the files in flight finish and are recorded. The rest of the
+        // tree is picked up by the next pass.
+        let halt = || {
+            stopping.load(Ordering::SeqCst)
+                || handed_over.load(Ordering::SeqCst)
+                || crate::services::sync_op::manual_waiting(project_id)
+        };
+        // What the file may hold in memory while it moves: the larger of the two
+        // copies as last seen (a pull reads the host copy whole, a push the mirror's).
+        let weight = |i: usize| {
+            let rel = &candidates[i];
+            let host = walked_host
+                .get(rel)
+                .map(|((size, _), _)| *size)
+                .or_else(|| snapshot.get(rel).map(|e| e.host_size))
+                .unwrap_or(0);
+            let local = match remote_sync::mirror_lstat(mirror_root, rel) {
+                Ok(remote_sync::MirrorStat::File(m)) => m.len(),
+                _ => 0,
+            };
+            host.max(local)
+        };
+        let (decisions, mut decided) = sync_pool::run_ordered(
+            candidates.len(),
+            sync_pool::Limits::TRANSFERS,
+            weight,
+            halt,
+            move |i| {
+                let rel = candidates[i].as_str();
+                let walked = walked_host.get(rel).copied();
+                let file = Candidate { pass, manifest, project_id, root, rel, walked, take_newer, handed_over };
+                async move { file.decide().await }
+            },
+        );
+        let settle = async {
+            while let Some((_, step)) = decided.recv().await {
+                notice_changed |= step.notice_changed;
+                match step.action {
+                    Action::None => {}
+                    Action::Pulled { rel, host, local } => {
+                        pass.note_unrecorded(pass.records.record(&rel, Transfer::Pull, host, local).await);
+                        pulled += 1;
+                    }
+                    Action::Pushed { rel, done } => {
+                        pass.note_unrecorded(pass.records.record(&rel, Transfer::Push, done.host, done.local).await);
+                        pushed += 1;
+                    }
+                    Action::Skipped => skipped += 1,
+                    Action::Resolve(file) => resolvable.push(*file),
+                }
+            }
+        };
+        tokio::join!(decisions, settle);
+    }
+
+    for Resolvable { rel, host_abs, host, host_mode, local, winner } in resolvable {
+        // Checked before each file, as the transfers above are.
+        if stopping.load(Ordering::SeqCst)
+            || handed_over.load(Ordering::SeqCst)
+            || crate::services::sync_op::manual_waiting(project_id)
+        {
             break;
         }
-        let host_abs = remote_sync::join_remote(&target.spec.remote_path, &rel);
-        // `Option`, distinguishing a gone host path (None) from an empty file —
-        // the same input `push_decision`/`divergence` expect (matches sync_push).
-        // Only a positive NoSuchFile is `None`: a stat that could not answer
-        // (permissions, a dropped session, no size) skips the file, where it used
-        // to read as "gone" and let a never-synced file be pushed over a real one.
-        let walked = walked_host_meta.get(&rel).copied();
-        let (host, host_mode) = match walked {
-            Some(meta) => (Some(meta), walked_host_mode.get(&rel).copied().flatten()),
-            None => match unless_manual(project_id, sftp::metadata_opt_with_mode_on(&sftp, &host_abs)).await {
-                None => break,
-                Some(Ok(Some((size, mtime, mode)))) => (Some((size, mtime)), mode),
-                Some(Ok(None)) => (None, None),
-                Some(Err(e)) => {
-                    eprintln!("auto-sync: skip '{rel}': {e}");
-                    continue;
+        // The rest of the pass ran since this file was judged: a marker the user
+        // changed meanwhile (auto off, an exclusion) wins here as it does there.
+        // (The copy that loses is re-checked against what the pass saw by
+        // `take_newer_copy` itself.)
+        let still_auto = {
+            let mut g = manifest.lock().await;
+            remote_sync::is_auto(ensure_loaded(&mut g, project_id), &rel)
+        };
+        if !still_auto {
+            continue;
+        }
+        let root = backup
+            .get_or_insert_with(|| sync_take_newer::backup_root(project_id, crate::clock::now_secs()))
+            .clone();
+        let conflict = Conflict { pass: &pass, backup_root: &root, rel: &rel, host_abs: &host_abs, host, host_mode, local };
+        let outcome = take_newer_copy(&conflict, winner).await;
+        // A try cut short for a waiting manual sync is not a failure to
+        // remember: the next pass tries again.
+        if outcome.is_ok() || !crate::services::sync_op::manual_waiting(project_id) {
+            sync_take_newer::note_outcome(project_id, &rel, host, local, outcome.is_ok());
+        }
+        match outcome {
+            Ok(()) => match winner {
+                sync_take_newer::Winner::Host => {
+                    pulled += 1;
+                    replaced_local.push(rel);
+                }
+                sync_take_newer::Winner::Local => {
+                    pushed += 1;
+                    replaced_host.push(rel);
                 }
             },
-        };
-        // Same for the mirror, by lstat: only NotFound is gone, and a link (the
-        // file, or a folder above it) or a special file is never read as the
-        // regular file it replaced — it is left alone and reported.
-        let local = match remote_sync::mirror_lstat(&mirror_root, &rel) {
-            Ok(remote_sync::MirrorStat::File(m)) => {
-                if m.len() <= remote_sync::MAX_SYNC_FILE_BYTES {
-                    notice_changed |= remote_sync::clear_mirror_skip(project_id, &rel);
-                }
-                Some(remote_sync::local_meta(&m))
-            }
-            Ok(remote_sync::MirrorStat::Missing) => {
-                notice_changed |= remote_sync::clear_mirror_skip(project_id, &rel);
-                None
-            }
-            Ok(remote_sync::MirrorStat::Skip(kind)) => {
-                eprintln!("auto-sync: skip '{rel}': not a regular mirror file ({kind:?})");
-                notice_changed |= remote_sync::note_mirror_skip(
-                    project_id,
-                    remote_sync::MirrorSkip { rel: rel.clone(), kind, size: None },
-                );
-                continue;
+            Err(remote_sync::PushError::Skipped(skip)) => {
+                eprintln!("auto-sync: take-newer skip {skip}");
+                notice_changed |= remote_sync::note_mirror_skip(project_id, skip);
+                skipped += 1;
             }
             Err(e) => {
-                eprintln!("auto-sync: skip '{rel}': {e}");
-                continue;
+                eprintln!("auto-sync: take-newer skip '{rel}': {e}");
+                skipped += 1;
             }
-        };
-        // The entry as it stands now, not as the pass's snapshot had it: a marker the
-        // user changed mid-pass (auto off, an exclusion — those setters do not wait
-        // for the pass) wins, and so does a base another record wrote.
-        let entry = {
-            let mut g = manifest.lock().await;
-            let m = ensure_loaded(&mut g, project_id);
-            if !remote_sync::is_auto(m, &rel) {
-                continue;
-            }
-            m.get(&rel).cloned().unwrap_or_default()
-        };
-
-        match remote_sync::divergence(&entry, host, local) {
-            (false, false) => {} // green
-            (true, false) => {
-                // Host changed only → pull. `host` is Some here (divergence only
-                // flags the host side from a real stat).
-                if let Some((hsize, _)) = host {
-                    // Bounded like the manual push: a stall on the pooled session
-                    // must not hang this background task forever (which, sharing the
-                    // session, would wedge every manual push too). A timeout abandons
-                    // the pass; the pool keepalive then evicts a dead master.
-                    match run_bounded(remote_sync::pull_file(&sftp, &host_abs, hsize, host_mode, &mirror_root, &rel))
-                        .await
-                    {
-                        Ok((ls, lm)) => {
-                            let (hs, hm) = host.unwrap_or((hsize, None));
-                            let mut g = manifest.lock().await;
-                            let m = ensure_loaded(&mut g, project_id);
-                            remote_sync::record_pull(m, &rel, hs, hm, ls, lm);
-                            // Background: logged; the unsaved record is forgotten
-                            // (both sides read as moved, so later passes skip it).
-                            if let Err(e) = remote_sync::save_manifest_or_mark_stale(
-                                project_id,
-                                m,
-                                std::slice::from_ref(&rel),
-                            ) {
-                                eprintln!("auto-sync: pulled '{rel}' but could not record it: {e}");
-                            }
-                            net_usage::record_files(project_id, 1, 0);
-                            pulled += 1;
-                        }
-                        Err(e) => eprintln!("auto-sync: pull skip '{rel}': {e}"),
-                    }
-                }
-            }
-            (false, true) => {
-                // Local changed only → push, but only if the host still matches the
-                // recorded base (never clobber a racing host change). The walk's
-                // size+mtime found the candidate; it is seconds old by now, so the
-                // host is stat'd again for the decision itself.
-                let host_now = if walked.is_some() {
-                    match unless_manual(project_id, sftp::metadata_opt_on(&sftp, &host_abs)).await {
-                        None => break,
-                        Some(Ok(now)) => now,
-                        Some(Err(e)) => {
-                            eprintln!("auto-sync: push skip '{rel}': {e}");
-                            continue;
-                        }
-                    }
-                } else {
-                    host
-                };
-                if remote_sync::push_decision(&entry, host_now) == PushDecision::Safe {
-                    match run_bounded(remote_sync::push_file_atomic(&sftp, &mirror_root, &rel, &host_abs))
-                        .await
-                    {
-                        Ok(done) => {
-                            let (hs, hm) = done.host;
-                            let (ls, lm) = done.local;
-                            let mut g = manifest.lock().await;
-                            let m = ensure_loaded(&mut g, project_id);
-                            remote_sync::record_push(m, &rel, hs, hm, ls, lm);
-                            if let Err(e) = remote_sync::save_manifest_or_mark_stale(
-                                project_id,
-                                m,
-                                std::slice::from_ref(&rel),
-                            ) {
-                                eprintln!("auto-sync: pushed '{rel}' but could not record it: {e}");
-                            }
-                            net_usage::record_files(project_id, 0, 1);
-                            pushed += 1;
-                        }
-                        Err(remote_sync::PushError::Skipped(skip)) => {
-                            eprintln!("auto-sync: push skip {skip}");
-                            notice_changed |= remote_sync::note_mirror_skip(project_id, skip);
-                        }
-                        Err(e) => eprintln!("auto-sync: push skip '{rel}': {e}"),
-                    }
-                } else {
-                    skipped += 1; // host raced → treat as a conflict, leave for manual
-                }
-            }
-            (true, true) => skipped += 1, // AMBER/orange → never auto-synced
         }
+    }
+
+    pass.note_unrecorded(records.flush().await);
+
+    if let Some(root) = &backup {
+        let recovery = Some(sync_take_newer::recovery_note(root));
+        crate::services::local_loss::record_paths(
+            project_id,
+            crate::services::local_loss::LossSource::Sync,
+            crate::services::local_loss::LossKind::Overwritten,
+            "Auto-sync took the newer host copy of a file both sides had changed",
+            replaced_local,
+            recovery.clone(),
+        );
+        crate::services::local_loss::record_paths(
+            project_id,
+            crate::services::local_loss::LossSource::Sync,
+            crate::services::local_loss::LossKind::OverwrittenOnHost,
+            "Auto-sync took the newer local copy of a file both sides had changed",
+            replaced_host,
+            recovery,
+        );
     }
 
     if pulled + pushed > 0 || notice_changed {
@@ -839,6 +779,304 @@ async fn reconcile_pass(
             );
         }
     }
+}
+
+/// What every transfer of one pass shares.
+struct Pass<'a> {
+    sftp: &'a openssh_sftp_client::Sftp,
+    records: &'a remote_sync::RecordBatch<'a>,
+    project_id: &'a str,
+    mirror_root: &'a std::path::Path,
+}
+
+impl Pass<'_> {
+    /// Pull `rel` into the mirror, returning its new local base. Bounded like
+    /// the manual push: a stall on the pooled session must not hang this
+    /// background task forever (which, sharing the session, would wedge every
+    /// manual push too). A timeout skips the file; the pool keepalive then
+    /// evicts a dead master. The caller records the base.
+    async fn fetch(&self, rel: &str, host_abs: &str, host: Stat, mode: Option<u32>) -> Result<Stat, String> {
+        run_bounded(remote_sync::pull_file(self.sftp, host_abs, host.0, mode, self.mirror_root, rel)).await
+    }
+
+    /// Push `rel` from the mirror, returning the new bases; the caller has
+    /// decided the push is safe, and records them. Bounded as [`Self::fetch`] is.
+    async fn send(&self, rel: &str, host_abs: &str) -> Result<remote_sync::PushedFile, remote_sync::PushError> {
+        run_bounded(remote_sync::push_file_atomic(self.sftp, self.mirror_root, rel, host_abs)).await
+    }
+
+    /// [`Self::fetch`] and record the new base.
+    async fn pull(&self, rel: &str, host_abs: &str, host: Stat, mode: Option<u32>) -> Result<(), String> {
+        let local = self.fetch(rel, host_abs, host, mode).await?;
+        self.note_unrecorded(self.records.record(rel, Transfer::Pull, host, local).await);
+        Ok(())
+    }
+
+    /// [`Self::send`] and record the new bases.
+    async fn push(&self, rel: &str, host_abs: &str) -> Result<(), remote_sync::PushError> {
+        let done = self.send(rel, host_abs).await?;
+        self.note_unrecorded(self.records.record(rel, Transfer::Push, done.host, done.local).await);
+        Ok(())
+    }
+
+    /// Background: records that could not be saved are logged, and forgotten
+    /// (both sides read as moved, so later passes skip those files).
+    fn note_unrecorded(&self, saved: Result<(), remote_sync::Unrecorded>) {
+        if let Err(lost) = saved {
+            eprintln!(
+                "auto-sync: {}: moved {} file(s) but could not record them: {}",
+                self.project_id,
+                lost.paths.len(),
+                lost.error
+            );
+        }
+    }
+}
+
+/// One candidate of a pass and what its decision needs. Its decision and transfer
+/// run beside a few others' (`sync_pool::run_ordered`); what it moved is recorded
+/// by the pass's sequential half, in candidate order.
+#[derive(Clone, Copy)]
+struct Candidate<'a> {
+    pass: &'a Pass<'a>,
+    manifest: &'a SyncManifestState,
+    project_id: &'a str,
+    /// The host project root.
+    root: &'a str,
+    rel: &'a str,
+    /// The host walk's stat and mode, when the walk listed the file.
+    walked: Option<(Stat, Option<u32>)>,
+    take_newer: bool,
+    /// Raised when a manual sync arrived during this file's host stat: no
+    /// further file starts.
+    handed_over: &'a AtomicBool,
+}
+
+/// What one candidate came to.
+struct Step {
+    action: Action,
+    /// Whether the mirror-skip notice changed.
+    notice_changed: bool,
+}
+
+enum Action {
+    /// Green, not auto any more, or skipped for a reason already logged.
+    None,
+    /// Moved host → mirror; the new bases are for the manifest.
+    Pulled { rel: String, host: Stat, local: Stat },
+    /// Moved mirror → host.
+    Pushed { rel: String, done: remote_sync::PushedFile },
+    /// Left orange: changed on both sides, or the host raced a push.
+    Skipped,
+    /// Changed on both sides, and the newer copy will be taken.
+    Resolve(Box<Resolvable>),
+}
+
+/// A both-sides-changed file the "take the newer copy" switch will resolve, with
+/// the facts the pass saw. Resolved after the pass's other files, one at a time.
+struct Resolvable {
+    rel: String,
+    host_abs: String,
+    host: Option<Stat>,
+    host_mode: Option<u32>,
+    local: Option<Stat>,
+    winner: sync_take_newer::Winner,
+}
+
+impl Candidate<'_> {
+    async fn decide(self) -> Step {
+        let mut notice_changed = false;
+        let action = self.act(&mut notice_changed).await;
+        Step { action, notice_changed }
+    }
+
+    /// The safe-direction policy for one file (the module docs): stat both sides,
+    /// judge each against its base, move the side that alone changed.
+    async fn act(self, notice_changed: &mut bool) -> Action {
+        let Candidate { pass, manifest, project_id, root, rel, walked, take_newer, handed_over } = self;
+        let host_abs = remote_sync::join_remote(root, rel);
+        // `Option`, distinguishing a gone host path (None) from an empty file —
+        // the same input `push_decision`/`divergence` expect (matches sync_push).
+        // Only a positive NoSuchFile is `None`: a stat that could not answer
+        // (permissions, a dropped session, no size) skips the file, where it used
+        // to read as "gone" and let a never-synced file be pushed over a real one.
+        let (host, host_mode) = match walked {
+            Some((meta, mode)) => (Some(meta), mode),
+            None => match unless_manual(project_id, sftp::metadata_opt_with_mode_on(pass.sftp, &host_abs)).await {
+                None => {
+                    handed_over.store(true, Ordering::SeqCst);
+                    return Action::None;
+                }
+                Some(Ok(Some((size, mtime, mode)))) => (Some((size, mtime)), mode),
+                Some(Ok(None)) => (None, None),
+                Some(Err(e)) => {
+                    eprintln!("auto-sync: skip '{rel}': {e}");
+                    return Action::None;
+                }
+            },
+        };
+        // Same for the mirror, by lstat: only NotFound is gone, and a link (the
+        // file, or a folder above it) or a special file is never read as the
+        // regular file it replaced — it is left alone and reported.
+        let local = match remote_sync::mirror_lstat(pass.mirror_root, rel) {
+            Ok(remote_sync::MirrorStat::File(m)) => {
+                if m.len() <= remote_sync::MAX_SYNC_FILE_BYTES {
+                    *notice_changed |= remote_sync::clear_mirror_skip(project_id, rel);
+                }
+                Some(remote_sync::local_meta(&m))
+            }
+            Ok(remote_sync::MirrorStat::Missing) => {
+                *notice_changed |= remote_sync::clear_mirror_skip(project_id, rel);
+                None
+            }
+            Ok(remote_sync::MirrorStat::Skip(kind)) => {
+                eprintln!("auto-sync: skip '{rel}': not a regular mirror file ({kind:?})");
+                *notice_changed |= remote_sync::note_mirror_skip(
+                    project_id,
+                    remote_sync::MirrorSkip { rel: rel.to_string(), kind, size: None },
+                );
+                return Action::None;
+            }
+            Err(e) => {
+                eprintln!("auto-sync: skip '{rel}': {e}");
+                return Action::None;
+            }
+        };
+        // The entry as it stands now, not as the pass's snapshot had it: a marker the
+        // user changed mid-pass (auto off, an exclusion — those setters do not wait
+        // for the pass) wins, and so does a base another record wrote.
+        let entry = {
+            let mut g = manifest.lock().await;
+            let m = ensure_loaded(&mut g, project_id);
+            if !remote_sync::is_auto(m, rel) {
+                return Action::None;
+            }
+            m.get(rel).cloned().unwrap_or_default()
+        };
+
+        match remote_sync::divergence(&entry, host, local) {
+            (false, false) => Action::None, // green
+            (true, false) => {
+                // Host changed only → pull (`divergence` flags the host side
+                // only from a real stat).
+                let Some(host) = host else { return Action::None };
+                match pass.fetch(rel, &host_abs, host, host_mode).await {
+                    Ok(local) => Action::Pulled { rel: rel.to_string(), host, local },
+                    Err(e) => {
+                        eprintln!("auto-sync: pull skip '{rel}': {e}");
+                        Action::None
+                    }
+                }
+            }
+            (false, true) => {
+                // Local changed only → push, but only if the host still matches the
+                // recorded base (never clobber a racing host change). The walk's
+                // size+mtime found the candidate; it is seconds old by now, so the
+                // host is stat'd again for the decision itself.
+                let host_now = if walked.is_some() {
+                    match unless_manual(project_id, sftp::metadata_opt_on(pass.sftp, &host_abs)).await {
+                        None => {
+                            handed_over.store(true, Ordering::SeqCst);
+                            return Action::None;
+                        }
+                        Some(Ok(now)) => now,
+                        Some(Err(e)) => {
+                            eprintln!("auto-sync: push skip '{rel}': {e}");
+                            return Action::None;
+                        }
+                    }
+                } else {
+                    host
+                };
+                if remote_sync::push_decision(&entry, host_now) != PushDecision::Safe {
+                    return Action::Skipped; // host raced → treat as a conflict, leave for manual
+                }
+                match pass.send(rel, &host_abs).await {
+                    Ok(done) => Action::Pushed { rel: rel.to_string(), done },
+                    Err(remote_sync::PushError::Skipped(skip)) => {
+                        eprintln!("auto-sync: push skip {skip}");
+                        *notice_changed |= remote_sync::note_mirror_skip(project_id, skip);
+                        Action::None
+                    }
+                    Err(e) => {
+                        eprintln!("auto-sync: push skip '{rel}': {e}");
+                        Action::None
+                    }
+                }
+            }
+            (true, true) => {
+                // AMBER/orange: left for manual resolution, unless the project
+                // takes the newer copy and the two copies say which one that is.
+                let winner = take_newer
+                    .then(|| sync_take_newer::winner(host, local))
+                    .flatten()
+                    .filter(|_| sync_take_newer::within_cap(host, local))
+                    .filter(|_| sync_take_newer::worth_trying(project_id, rel, host, local));
+                match winner {
+                    None => Action::Skipped,
+                    Some(winner) => Action::Resolve(Box::new(Resolvable {
+                        rel: rel.to_string(),
+                        host_abs,
+                        host,
+                        host_mode,
+                        local,
+                        winner,
+                    })),
+                }
+            }
+        }
+    }
+}
+
+/// One both-sides-changed file the "take the newer copy" switch resolves, with the
+/// facts the pass already holds about it.
+struct Conflict<'a> {
+    pass: &'a Pass<'a>,
+    backup_root: &'a std::path::Path,
+    rel: &'a str,
+    host_abs: &'a str,
+    host: Option<Stat>,
+    host_mode: Option<u32>,
+    local: Option<Stat>,
+}
+
+/// Resolve a conflict to `winner`: back up the losing copy, check it has not moved
+/// since the pass looked, then transfer and record the new base. Any failure before
+/// the transfer leaves both sides untouched; the file then stays in the orange list.
+async fn take_newer_copy(c: &Conflict<'_>, winner: sync_take_newer::Winner) -> Result<(), remote_sync::PushError> {
+    let Some(host) = c.host else {
+        return Err("no host copy".to_string().into());
+    };
+    let Pass { sftp, project_id, mirror_root, .. } = *c.pass;
+    match winner {
+        sync_take_newer::Winner::Host => {
+            sync_take_newer::back_up_mirror_copy(mirror_root, c.backup_root, c.rel)?;
+            // The local copy saved must be the one the pull replaces.
+            let now = match remote_sync::mirror_lstat(mirror_root, c.rel)? {
+                remote_sync::MirrorStat::File(m) => Some(remote_sync::local_meta(&m)),
+                _ => None,
+            };
+            if now != c.local {
+                return Err("the local copy changed during the pass".to_string().into());
+            }
+            c.pass.pull(c.rel, c.host_abs, host, c.host_mode).await?;
+        }
+        sync_take_newer::Winner::Local => {
+            // The host copy goes into the backup folder first, by the same
+            // confined, size-capped download a pull uses.
+            run_bounded(remote_sync::pull_file(sftp, c.host_abs, host.0, c.host_mode, c.backup_root, c.rel)).await?;
+            // …and must still be the host's copy when the push replaces it.
+            let now = match unless_manual(project_id, sftp::metadata_opt_on(sftp, c.host_abs)).await {
+                None => return Err("a manual sync is waiting".to_string().into()),
+                Some(r) => r?,
+            };
+            if now != c.host {
+                return Err("the host copy changed during the pass".to_string().into());
+            }
+            c.pass.push(c.rel, c.host_abs).await?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -863,15 +1101,7 @@ mod tests {
             let _exit = exit;
             let _ = wait.await;
         });
-        let task = AutoSyncTask {
-            cancel: Arc::new(Notify::new()),
-            join,
-            paused: Arc::new(AtomicUsize::new(0)),
-            stopping: Arc::new(AtomicBool::new(false)),
-            stops: Arc::new(AtomicUsize::new(0)),
-            exited,
-        };
-        (task, release, lease)
+        (AutoSyncTask::for_test(join, exited, Arc::new(AtomicUsize::new(0))), release, lease)
     }
 
     /// Auto-sync starts only for a project that keeps a local copy: a
@@ -904,7 +1134,7 @@ mod tests {
     async fn a_pause_lifts_with_its_guard_and_pauses_nest() {
         let dir = tempfile::tempdir().unwrap();
         let (task, release, _) = fake_task(dir.path());
-        let paused = Arc::clone(&task.paused);
+        let paused = Arc::clone(&task.extra);
         let state = new_state();
         state.lock().await.insert("p".into(), task);
         let outer = pause(&state, "p").await;
@@ -927,27 +1157,54 @@ mod tests {
         let (task, release, lease) = fake_task(dir.path());
         let state = new_state();
         state.lock().await.insert("p".into(), task);
-        stop_within(&state, "p", Duration::from_millis(50)).await;
+        assert!(!sync_task::stop(&state, "p", Duration::from_millis(50)).await);
         {
             let guard = state.lock().await;
             let t = guard.get("p").expect("still registered");
-            assert!(t.stopping.load(Ordering::SeqCst) && !t.ended());
+            assert!(t.stopping() && !t.ended());
         }
+        assert!(sync_task::behind_stopping(&state, "p").await.is_some(), "a start waits behind it");
         assert!(FileLock::try_exclusive(&lease).unwrap().is_none(), "the lease is still the task's");
         // A restart deferred behind it now (a reconnect) …
-        let (stops, seen) = {
-            let guard = state.lock().await;
-            let t = &guard["p"];
-            (Arc::clone(&t.stops), t.stops.load(Ordering::SeqCst))
-        };
-        assert!(restart_still_wanted(&stops, seen));
+        let (stops, seen) = sync_task::stops_of(&state, "p").await;
+        assert!(sync_task::restart_still_wanted(&stops, seen));
         // … is dropped by a newer stop (a second disconnect) before the task ends.
-        stop_within(&state, "p", Duration::from_millis(10)).await;
-        assert!(!restart_still_wanted(&stops, seen), "the later stop wins");
+        let deferred = sync_task::behind_stopping(&state, "p").await.expect("still stopping");
+        assert!(!sync_task::stop(&state, "p", Duration::from_millis(10)).await);
+        assert!(!sync_task::restart_still_wanted(&stops, seen), "the later stop wins");
         let _ = release.send(());
-        stop_within(&state, "p", Duration::from_secs(5)).await;
+        assert!(!deferred.await, "the deferred start sees the later stop once the task ended");
+        assert!(sync_task::stop(&state, "p", Duration::from_secs(5)).await);
         assert!(!state.lock().await.contains_key("p"), "gone once it ended");
+        assert!(sync_task::behind_stopping(&state, "p").await.is_none(), "nothing left to wait behind");
         assert!(FileLock::try_exclusive(&lease).unwrap().is_some(), "released with the task");
+    }
+
+    /// A burst settles once it pauses, and one that never pauses is absorbed
+    /// for `max` only: the pass behind it is no longer held off for as long as
+    /// a log is appended.
+    #[tokio::test(start_paused = true)]
+    async fn a_burst_is_absorbed_until_it_pauses_or_for_max() {
+        let (quiet, max) = (Duration::from_secs(1), Duration::from_secs(5));
+        let cancel = Notify::new();
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        let started = tokio::time::Instant::now();
+        assert!(absorb_burst(&mut rx, &cancel, quiet, max).await);
+        assert_eq!(started.elapsed(), quiet, "a single event settles after the quiet time");
+
+        let feeder = tokio::spawn(async move {
+            while tx.send(()).is_ok() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+        let started = tokio::time::Instant::now();
+        assert!(absorb_burst(&mut rx, &cancel, quiet, max).await);
+        assert_eq!(started.elapsed(), max, "steady events end at the bound");
+
+        feeder.abort();
+        let _ = feeder.await;
+        assert!(!absorb_burst(&mut rx, &cancel, quiet, max).await, "the watcher is gone");
     }
 
     #[test]

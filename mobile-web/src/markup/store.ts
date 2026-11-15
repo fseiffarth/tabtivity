@@ -12,7 +12,7 @@
  * here resolves rather than throws.
  */
 
-import { isLayer, LIMITS, markCount, SENT_LIMITS, type Layer, type PageLayer } from "./layer";
+import { hasSent, isEmpty, isLayer, LIMITS, SENT_LIMITS, within, type Layer } from "./layer";
 import { LEGACY_NAMES, NAMES } from "../../../src/lib/brand";
 import { adoptLegacyDatabase, databaseHost, databasePort } from "../../../src/lib/brandMigration";
 
@@ -37,6 +37,9 @@ export interface LayerBackend {
   delete(key: string): Promise<void>;
   /** Every record. Optional: only the app's own store is ever emptied whole. */
   clear?(): Promise<void>;
+  /** The keys from `from` up to, not including, `to`. Optional: only the
+   * app's own store is ever searched (`layerKeys`). */
+  keys?(from: string, to: string): Promise<IDBValidKey[]>;
 }
 
 const DB = NAMES.mobileMarkupDb;
@@ -95,7 +98,14 @@ export const indexedDbBackend: LayerBackend = {
   async clear() {
     await promised((await open()).transaction(STORE, "readwrite").objectStore(STORE).clear());
   },
+  async keys(from, to) {
+    return promised((await open()).transaction(STORE).objectStore(STORE).getAllKeys(IDBKeyRange.bound(from, to, false, true)));
+  },
 };
+
+/** What **Annotate**'s layer key adds to the file's own: its remarks are
+ * kept apart from the agent's marks, and never make a card. */
+export const REMARKS_KEY = "#remarks";
 
 /** The record key: the project and the file, as the phone names them. A file
  * browser token is sealed afresh with every listing, so a project file is
@@ -107,6 +117,19 @@ export function layerKey(projectId: string, source: { files: string } | { outbox
 
 export { SENT_LIMITS };
 
+/** Every layer key of `projectId` — each a file with marks, unsent or sent,
+ * since a layer with neither is never stored (`saveLayer`); empty when the
+ * storage could not be read. */
+export async function layerKeys(projectId: string, backend: LayerBackend = indexedDbBackend): Promise<string[]> {
+  try {
+    // `;` follows `:` in code-unit order, so this range is the `<id>:` keys.
+    const keys = await backend.keys?.(`${projectId}:`, `${projectId};`);
+    return (keys ?? []).filter((key): key is string => typeof key === "string");
+  } catch {
+    return [];
+  }
+}
+
 /** Whether a layer is one the desktop would accept — never store one it
  * would refuse at Submit. The sent marks never go out again and are never
  * trimmed (only the reader erases them), so they get a looser bound of their
@@ -115,12 +138,16 @@ export { SENT_LIMITS };
  * `SENT_LIMITS`, and its marks are mostly the sent side's own objects, which
  * IndexedDB's structured clone stores once — so it can never fail a save. */
 export function withinLimits(layer: Layer): boolean {
-  const bounded = (pages: Record<number, PageLayer>, limits: { marks: number; points: number }) => {
-    const { marks, points } = markCount({ pages });
-    return marks <= limits.marks && points <= limits.points;
-  };
-  return bounded(layer.pages, LIMITS) && bounded(layer.sent?.pages ?? {}, SENT_LIMITS);
+  // Layers are never changed in place: an undo step checked once, when it
+  // was the layer saved, is not counted again on every later save.
+  let verdict = checkedLimits.get(layer);
+  if (verdict === undefined) {
+    verdict = within(layer.pages, LIMITS) && within(layer.sent?.pages ?? {}, SENT_LIMITS);
+    checkedLimits.set(layer, verdict);
+  }
+  return verdict;
 }
+const checkedLimits = new WeakMap<Layer, boolean>();
 
 /** A stored value as a layer: whole; without its round log when only that
  * is unreadable (its ticks then show no badge); or — when its `sent` side is
@@ -174,11 +201,10 @@ export async function saveLayer(
 ): Promise<boolean> {
   if (!withinLimits(layer)) return false;
   try {
-    const empty = (pages: Record<number, PageLayer>) => Object.values(pages).every((page) => page.marks.length === 0);
     const steps = (past ?? []).slice(-MAX_STORED_UNDO).filter(withinLimits);
     const record: StoredLayer = { layer, fingerprint, saved: Date.now() };
     if (steps.length) record.past = steps;
-    if (empty(layer.pages) && empty(layer.sent?.pages ?? {})) await backend.delete(key);
+    if (isEmpty(layer) && !hasSent(layer)) await backend.delete(key);
     else await backend.put(key, record);
     return true;
   } catch {
@@ -219,7 +245,12 @@ export async function moveLayer(from: string, to: string, fingerprint: Fingerpri
   return clearLayer(from, backend);
 }
 
+/** Whether two fingerprints name different versions of a file. */
+export function fingerprintChanged(a: Fingerprint, b: Fingerprint): boolean {
+  return a.size !== b.size || a.modified !== b.modified;
+}
+
 /** Whether the file changed since its layer was drawn. */
 export function stale(stored: StoredLayer, current: Fingerprint): boolean {
-  return stored.fingerprint.size !== current.size || stored.fingerprint.modified !== current.modified;
+  return fingerprintChanged(stored.fingerprint, current);
 }

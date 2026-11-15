@@ -122,6 +122,39 @@ describe("hands-free and read-aloud in the Chat", () => {
     expect(screen.getByText(/Waiting for the agent/)).toBeTruthy();
   }, 15_000);
 
+  it("writes the words into the draft as they are heard, but keeps a stop word out of it", async () => {
+    const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
+    await startHandsFree();
+    emit("voice:vad", { session: 11, segment: 1, state: "start" });
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the" });
+    expect(box.value).toBe("fix the");
+    emit("voice:final", { session: 11, segment: 1, text: "fix the login" });
+    expect(box.value).toBe("fix the login");
+    await wait(20);
+    expect(screen.getByRole("button", { name: /Sending/ })).toBeTruthy();
+    // "stop" in the window: never in the draft, not even while it is heard.
+    emit("voice:vad", { session: 11, segment: 2, state: "start" });
+    emit("voice:partial", { session: 11, segment: 2, text: "stop" });
+    expect(box.value).toBe("fix the login");
+    emit("voice:final", { session: 11, segment: 2, text: "Stop." });
+    expect(box.value).toBe("fix the login");
+    await wait(1700);
+    expect(sendSteeringPrompt).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it("does not open the send window on words that are still being said", async () => {
+    const box = await open({ voice_hands_free: true, voice_hands_free_on: true });
+    await startHandsFree();
+    emit("voice:vad", { session: 11, segment: 1, state: "start" });
+    emit("voice:partial", { session: 11, segment: 1, text: "fix the login" });
+    emit("voice:vad", { session: 11, segment: 1, state: "end" });
+    // The segment dropped as noise: it settled with nothing, on a draft that holds only live words.
+    emit("voice:final", { session: 11, segment: 1, text: "" });
+    expect(box.value).toBe("");
+    await wait(20);
+    expect(chime).not.toHaveBeenCalled();
+  });
+
   it("switches the speech model in place without parking the mic for a turn", async () => {
     invoke.mockImplementation((command: string) => {
       if (command === "agent_tab_transcript") return Promise.resolve({ available: true, version: `v${entries.length}`, entries });

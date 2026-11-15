@@ -13,19 +13,19 @@
 //! shared ControlMaster.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures_util::{stream, StreamExt};
 use openssh_sftp_client::Sftp;
 use serde::Serialize;
 
-use crate::schema::net_usage;
 use crate::services::big_folders;
 use crate::services::local_loss;
-use crate::services::remote::{pooled_sftp, remote_target_for, RemotePoolState, RemoteTarget};
+use crate::services::remote::{pooled_sftp, remote_target_for, sync_pool, RemotePoolState, RemoteTarget};
 use crate::services::remote_sync::{
-    self, ensure_loaded, join_remote, local_meta, local_size_mtime, mirror_local_path, Manifest,
-    PushDecision, SyncManifestState, SyncState,
+    self, ensure_loaded, join_remote, local_meta, mirror_local_path, Manifest, PushDecision, Stat, SyncEntry,
+    SyncManifestState, SyncState, Transfer,
 };
 use crate::services::sftp;
 use crate::tauri_host::Ctx;
@@ -34,8 +34,8 @@ use app_core::CoreCtx;
 /// The mirror copy's metadata when it is a regular file, by lstat: a link (at
 /// the file or a folder above it), a special file, a missing file and an error
 /// are all `None`, so a planted link never reads as the file it replaced.
-fn mirror_file_meta(project_id: &str, rel: &str) -> Option<std::fs::Metadata> {
-    match remote_sync::mirror_lstat(&remote_sync::mirror_dir(project_id), rel) {
+fn mirror_file_meta(mirror: &std::path::Path, rel: &str) -> Option<std::fs::Metadata> {
+    match remote_sync::mirror_lstat(mirror, rel) {
         Ok(remote_sync::MirrorStat::File(m)) => Some(m),
         _ => None,
     }
@@ -43,8 +43,8 @@ fn mirror_file_meta(project_id: &str, rel: &str) -> Option<std::fs::Metadata> {
 
 /// [`mirror_file_meta`] keeping "gone" apart from "could not look": only a
 /// positive `Ok(None)` is gone, and a link or special file is an `Err`.
-fn mirror_file_tristate(project_id: &str, rel: &str) -> Result<Option<std::fs::Metadata>, String> {
-    match remote_sync::mirror_lstat(&remote_sync::mirror_dir(project_id), rel)? {
+fn mirror_file_tristate(mirror: &std::path::Path, rel: &str) -> Result<Option<std::fs::Metadata>, String> {
+    match remote_sync::mirror_lstat(mirror, rel)? {
         remote_sync::MirrorStat::File(m) => Ok(Some(m)),
         remote_sync::MirrorStat::Missing => Ok(None),
         remote_sync::MirrorStat::Skip(kind) => Err(format!("'{rel}' is not a regular file in the mirror ({kind:?})")),
@@ -104,11 +104,9 @@ struct ContentRebase {
     rel: String,
     /// The manifest entry the stat and the byte compare were judged against: the
     /// rebase lands only while the manifest still holds exactly this entry.
-    entry: crate::services::remote_sync::SyncEntry,
-    host_size: u64,
-    host_mtime: Option<u64>,
-    local_size: u64,
-    local_mtime: Option<u64>,
+    entry: SyncEntry,
+    host: Stat,
+    local: Stat,
 }
 
 /// Apply a status pass's content rebases and both-gone prunes to `m` (under the
@@ -119,14 +117,14 @@ struct ContentRebase {
 fn apply_status_heal(
     m: &mut Manifest,
     rebases: &[ContentRebase],
-    prunes: &[(String, crate::services::remote_sync::SyncEntry)],
+    prunes: &[(String, SyncEntry)],
 ) -> Vec<String> {
     let mut healed = Vec::new();
     for rb in rebases {
         if m.get(&rb.rel) != Some(&rb.entry) {
             continue;
         }
-        remote_sync::record_pull(m, &rb.rel, rb.host_size, rb.host_mtime, rb.local_size, rb.local_mtime);
+        remote_sync::record_pull(m, &rb.rel, rb.host, rb.local);
         healed.push(rb.rel.clone());
     }
     for (rel, snapshot) in prunes {
@@ -147,28 +145,29 @@ async fn verify_amber_identical(
     host_abs: &str,
     project_id: &str,
     rel: &str,
-    entry: &crate::services::remote_sync::SyncEntry,
-    host: (u64, Option<u64>),
-    local: (u64, Option<u64>),
+    entry: &SyncEntry,
+    host: Stat,
+    local: Stat,
 ) -> Option<ContentRebase> {
-    let (host_size, host_mtime) = host;
-    let (local_size, local_mtime) = local;
     // Gate the read on the pure heuristic-vs-content policy (both sides present,
     // same size, within the cutoff — large files keep the metadata heuristic).
     if !remote_sync::content_verify_worth_it(host, local, CONTENT_VERIFY_MAX_BYTES) {
         return None;
     }
+    // A pair already read with these very stats and found different is not read
+    // again on every refresh.
+    let known = remote_sync::KnownDifferent::shared();
+    if known.holds(project_id, rel, host, local) {
+        return None;
+    }
     // Bounded by the cutoff, not by the listing: the host's word for the size is stale by now.
     let host_bytes = sftp::read_file_up_to(sftp, host_abs, CONTENT_VERIFY_MAX_BYTES).await.ok()??;
     let local_bytes = read_mirror_bytes(project_id, rel).await?;
-    (host_bytes == local_bytes).then(|| ContentRebase {
-        rel: rel.to_string(),
-        entry: entry.clone(),
-        host_size,
-        host_mtime,
-        local_size,
-        local_mtime,
-    })
+    if host_bytes != local_bytes {
+        known.note(project_id, rel, host, local);
+        return None;
+    }
+    Some(ContentRebase { rel: rel.to_string(), entry: entry.clone(), host, local })
 }
 
 /// One row of sync status for the file-tree overlay.
@@ -205,6 +204,38 @@ pub struct SyncStatusEntry {
     /// not present them as checked (the orange list words its "gone on both
     /// sides" row differently when the host was never consulted).
     pub host_checked: bool,
+}
+
+impl SyncStatusEntry {
+    /// A row with no stat behind it: no mtimes, nothing diverged, the host not
+    /// consulted, and no marker.
+    fn bare(rel_path: String, is_dir: bool, selected: bool, state: SyncState) -> Self {
+        Self {
+            rel_path,
+            is_dir,
+            selected,
+            state,
+            auto_sync: false,
+            excluded: false,
+            host_mtime: None,
+            local_mtime: None,
+            host_diverged: false,
+            local_diverged: false,
+            host_checked: false,
+        }
+    }
+}
+
+/// A selected file's state and its `(host, local)` divergence. The divergence
+/// fields are documented "false for green/none": a row that computes `None`
+/// (excluded) reports both clean.
+fn judge(entry: &SyncEntry, host: Option<Stat>, local: Option<Stat>, excluded: bool) -> (SyncState, bool, bool) {
+    let state = remote_sync::compute_state(entry, host, local, excluded);
+    if state == SyncState::None {
+        return (state, false, false);
+    }
+    let (host_diverged, local_diverged) = remote_sync::divergence(entry, host, local);
+    (state, host_diverged, local_diverged)
 }
 
 /// Progress payload for the `sync-progress` event (one per transferred file plus
@@ -265,6 +296,36 @@ async fn resolve(
     Ok((target, sftp))
 }
 
+/// [`resolve`] for a command that writes: it first becomes the project's one
+/// writer (`services::sync_op`) for as long as the returned guard lives. The
+/// auto pass, lockstep and the app's other process wait, and so does this —
+/// taken first, so the target and session are resolved as they are once it is
+/// this command's turn.
+async fn manual_session(
+    project_id: &str,
+    pool: &RemotePoolState,
+) -> Result<(crate::services::sync_op::SyncOp, RemoteTarget, Arc<Sftp>), String> {
+    let op = crate::services::sync_op::acquire_manual(project_id).await?;
+    let (target, sftp) = resolve(project_id, pool).await?;
+    Ok((op, target, sftp))
+}
+
+/// Apply `edit` to the manifest entry of each of `rel_paths` (created when
+/// absent) and save: the marker writers, which move no bytes.
+async fn edit_markers(
+    manifest: &SyncManifestState,
+    project_id: &str,
+    rel_paths: &[String],
+    edit: impl Fn(&mut SyncEntry),
+) -> Result<(), String> {
+    let mut guard = manifest.lock().await;
+    let m = ensure_loaded(&mut guard, project_id);
+    for rel in rel_paths {
+        edit(m.entry(rel.clone()).or_default());
+    }
+    remote_sync::save_manifest(project_id, m)
+}
+
 /// Pull a single file or a whole folder subtree from the host into the local
 /// mirror, marking each pulled file selected and recording its base. `rel_path`
 /// is project-relative (`""` = the whole project root). Returns how many files
@@ -278,39 +339,8 @@ pub async fn sync_pull(
 ) -> Result<remote_sync::PullOutcome, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
-    // The project's one writer for this whole command (`services::sync_op`):
-    // the auto pass, lockstep and the other process wait, and so does this —
-    // taken first, so the target and session below are resolved as they are
-    // once it is this command's turn.
-    let _op = crate::services::sync_op::acquire_manual(&project_id).await?;
-    let (target, sftp) = resolve(&project_id, pool).await?;
-    pull_subtree(
-        &ctx,
-        &project_id,
-        &target,
-        &sftp,
-        &rel_path,
-        manifest,
-    )
-    .await
-}
-
-/// Pull the entire project tree into the mirror (the one-click "sync whole
-/// project"). Equivalent to `sync_pull` with an empty `rel_path`.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn sync_whole_project(
-    ctx: Ctx,
-    project_id: String,
-) -> Result<remote_sync::PullOutcome, String> {
-    let pool = ctx.get::<RemotePoolState>();
-    let manifest = ctx.get::<SyncManifestState>();
-    // The project's one writer for this whole command (`services::sync_op`):
-    // the auto pass, lockstep and the other process wait, and so does this —
-    // taken first, so the target and session below are resolved as they are
-    // once it is this command's turn.
-    let _op = crate::services::sync_op::acquire_manual(&project_id).await?;
-    let (target, sftp) = resolve(&project_id, pool).await?;
-    pull_subtree(&ctx, &project_id, &target, &sftp, "", manifest).await
+    let (_op, target, sftp) = manual_session(&project_id, pool).await?;
+    pull_subtree(&ctx, &project_id, &target, &sftp, &rel_path, manifest).await
 }
 
 /// Toggle the `selected` flag for one or more project-relative paths WITHOUT
@@ -326,17 +356,13 @@ pub async fn sync_mark_selected(
     is_dir: bool,
 ) -> Result<(), String> {
     refuse_remote_only(&project_id)?;
-    let manifest = ctx.get::<SyncManifestState>();
-    let mut guard = manifest.lock().await;
-    let m = ensure_loaded(&mut guard, &project_id);
-    for rel in &rel_paths {
-        let entry = m.entry(rel.clone()).or_default();
+    edit_markers(ctx.get::<SyncManifestState>(), &project_id, &rel_paths, |entry| {
         entry.selected = selected;
         if is_dir {
             entry.is_dir = true;
         }
-    }
-    remote_sync::save_manifest(&project_id, m)
+    })
+    .await
 }
 
 /// Toggle auto-sync for one or more project-relative paths. Turning it ON sets
@@ -357,13 +383,26 @@ pub async fn sync_set_auto(
     is_dir: bool,
 ) -> Result<(), String> {
     refuse_remote_only(&project_id)?;
-    let manifest = ctx.get::<SyncManifestState>();
-    let mut guard = manifest.lock().await;
-    let m = ensure_loaded(&mut guard, &project_id);
-    for rel in &rel_paths {
-        apply_auto_marker(m.entry(rel.clone()).or_default(), auto, is_dir);
-    }
-    remote_sync::save_manifest(&project_id, m)
+    edit_markers(ctx.get::<SyncManifestState>(), &project_id, &rel_paths, |entry| {
+        apply_auto_marker(entry, auto, is_dir)
+    })
+    .await
+}
+
+/// Whether the project's auto-sync resolves a file both sides changed by taking
+/// the newer copy (`services::sync_take_newer`). Off for a project never set.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sync_take_newer_get(project_id: String) -> Result<bool, String> {
+    refuse_remote_only(&project_id)?;
+    Ok(crate::services::sync_take_newer::enabled(&project_id))
+}
+
+/// Turn "take the newer copy" on or off for a project. Nothing transfers here: the
+/// auto-sync engine acts on its next pass, on the paths auto-sync covers.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn sync_set_take_newer(project_id: String, on: bool) -> Result<(), String> {
+    refuse_remote_only(&project_id)?;
+    crate::services::sync_take_newer::set(&project_id, on)
 }
 
 /// The marker write behind [`sync_set_auto`], on one entry. OFF records an explicit
@@ -485,8 +524,8 @@ pub async fn sync_scan_host_new(
     let pid = project_id.clone();
     let files = app_core::rt::spawn_blocking(move || {
         // Display only, as in the local-new pass: an unlisted set hides nothing.
-        let tracked = crate::services::git_peer::tracked_paths(&pid).unwrap_or_default();
-        let lockstep = crate::services::git_peer::load_state(&pid).enabled;
+        let (lockstep, tracked) = crate::services::git_peer::lockstep_tracked(&pid);
+        let tracked = tracked.unwrap_or_default();
         let mirror = remote_sync::mirror_dir(&pid);
         // Anything but a positive "missing" counts as present: a row offers to
         // delete the host copy, so an unreadable mirror path must not get one.
@@ -513,7 +552,7 @@ pub async fn sync_scan_host_new(
 /// One folder big enough to be worth a question before the first sync pass, with
 /// what each side holds. A folder that exists on only one side reports zeros for
 /// the other — which is itself the answer to "is this the host's data or mine?".
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BigFolderRow {
     pub rel: String,
@@ -633,8 +672,7 @@ pub async fn sync_big_folders(
     // Host walk, only when asked for AND with a live pool behind it. The pool
     // check is skipped entirely when the caller doesn't want the host half, so a
     // careful host is never even dialled for it.
-    let scan_host = wants_host;
-    let connected = scan_host && pooled_sftp(pool, &project_id).await.is_some();
+    let connected = wants_host && pooled_sftp(pool, &project_id).await.is_some();
     let mut host_error = None;
     let host = if connected {
         let spec = target.spec.clone();
@@ -657,26 +695,16 @@ pub async fn sync_big_folders(
     // Merge by path: one row per folder, whichever side(s) reported it.
     let mut rows: std::collections::BTreeMap<String, BigFolderRow> = Default::default();
     for f in local {
-        let row = rows.entry(f.rel.clone()).or_insert(BigFolderRow {
-            rel: f.rel.clone(),
-            local_files: 0,
-            local_bytes: 0,
-            host_files: 0,
-            host_bytes: 0,
-            excluded: false,
-        });
+        let row = rows
+            .entry(f.rel.clone())
+            .or_insert_with(|| BigFolderRow { rel: f.rel.clone(), ..Default::default() });
         row.local_files = f.files;
         row.local_bytes = f.bytes;
     }
     for f in host {
-        let row = rows.entry(f.rel.clone()).or_insert(BigFolderRow {
-            rel: f.rel.clone(),
-            local_files: 0,
-            local_bytes: 0,
-            host_files: 0,
-            host_bytes: 0,
-            excluded: false,
-        });
+        let row = rows
+            .entry(f.rel.clone())
+            .or_insert_with(|| BigFolderRow { rel: f.rel.clone(), ..Default::default() });
         row.host_files = f.files;
         row.host_bytes = f.bytes;
     }
@@ -716,11 +744,7 @@ pub async fn sync_set_excluded(
     excluded: bool,
 ) -> Result<(), String> {
     refuse_remote_only(&project_id)?;
-    let manifest = ctx.get::<SyncManifestState>();
-    let mut guard = manifest.lock().await;
-    let m = ensure_loaded(&mut guard, &project_id);
-    for rel in &rel_paths {
-        let entry = m.entry(rel.clone()).or_default();
+    edit_markers(ctx.get::<SyncManifestState>(), &project_id, &rel_paths, |entry| {
         entry.excluded = excluded;
         entry.is_dir = true;
         if excluded {
@@ -730,8 +754,8 @@ pub async fn sync_set_excluded(
             entry.auto_sync = false;
             entry.auto_off = true;
         }
-    }
-    remote_sync::save_manifest(&project_id, m)
+    })
+    .await
 }
 
 /// Return the sync status of every tracked path, re-stat'ing each selected FILE
@@ -760,10 +784,6 @@ pub async fn sync_status(
         let mut guard = manifest.lock().await;
         ensure_loaded(&mut guard, &project_id).clone()
     };
-    let entries: Vec<(String, crate::services::remote_sync::SyncEntry)> = snapshot
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
     // Re-stat selected files when the pool is live; if cold, fall back to the
     // stored base (green for selected) rather than erroring out the whole panel.
     let sftp = pooled_sftp(pool, &project_id).await;
@@ -775,26 +795,25 @@ pub async fn sync_status(
     // heal it — and never healed one over the content-verify cutoff, leaving
     // orange rows whose pull/push buttons could not act (`drop_lockstep_tracked`
     // withholds them). Resolve the set once, off the async thread (git spawns).
-    let lockstep_tracked: HashSet<String> = {
+    let (lockstep, lockstep_tracked): (bool, HashSet<String>) = {
         let pid = project_id.clone();
         app_core::rt::spawn_blocking(move || {
-            if crate::services::git_peer::load_state(&pid).enabled {
-                // Display only: an unlisted set stats those files like any other.
-                crate::services::git_peer::tracked_paths(&pid).unwrap_or_default()
-            } else {
-                HashSet::new()
-            }
+            let (enabled, tracked) = crate::services::git_peer::lockstep_tracked(&pid);
+            // Display only: an unlisted set stats those files like any other.
+            (enabled, tracked.unwrap_or_default())
         })
         .await
         .unwrap_or_default()
     };
-    let mut out = Vec::with_capacity(entries.len());
+    // Resolved once: every row below lstats under it.
+    let mirror = Arc::new(remote_sync::mirror_dir(&project_id));
+    let mut out = Vec::with_capacity(snapshot.len());
     // Partition without any network first: only selected FILES against a live
     // pool need a host re-stat. Everything else (unselected → none, directories →
     // green, cold pool → last-known-good green) resolves immediately.
-    let mut to_stat: Vec<(String, crate::services::remote_sync::SyncEntry, bool, bool)> =
-        Vec::new();
-    for (rel, entry) in entries {
+    let mut to_stat: Vec<(String, SyncEntry, bool, bool)> = Vec::new();
+    for (rel, entry) in &snapshot {
+        let rel = rel.clone();
         // Effective auto-sync and exclusion both resolve against the whole manifest
         // (ancestor folder markers), so compute them before `rel` is moved into the
         // row. A file excluded only via an ancestor folder marker (no marker of its
@@ -804,74 +823,38 @@ pub async fn sync_status(
         let auto = remote_sync::is_auto(&snapshot, &rel);
         let excluded_eff = remote_sync::is_excluded(&snapshot, &rel, "");
         if !entry.selected {
+            // Auto implies selected, so an unselected row is never auto.
             out.push(SyncStatusEntry {
-                rel_path: rel,
-                is_dir: entry.is_dir,
-                selected: false,
-                state: SyncState::None,
-                auto_sync: false, // auto implies selected, so unselected is never auto
                 excluded: entry.excluded,
-                host_mtime: None,
-                local_mtime: None,
-                host_diverged: false,
-                local_diverged: false,
-                host_checked: false,
+                ..SyncStatusEntry::bare(rel, entry.is_dir, false, SyncState::None)
             });
-        } else if entry.is_dir {
+        } else if entry.is_dir || lockstep_tracked.contains(&rel) {
+            // A folder marker, or a lockstep-owned file: in step as of the last
+            // commit on either side, kept so by `git_peer`, and reported green
+            // exactly as the pairing seed meant it to read. Not stat'd — the host
+            // was not consulted for this row, and an uncommitted local edit is
+            // git's `M` marker, not a byte-sync divergence.
             out.push(SyncStatusEntry {
-                rel_path: rel,
-                is_dir: true,
-                selected: true,
-                state: SyncState::Green,
                 auto_sync: auto,
                 excluded: entry.excluded,
-                host_mtime: None,
-                local_mtime: None,
-                host_diverged: false,
-                local_diverged: false,
-                host_checked: false,
-            });
-        } else if lockstep_tracked.contains(&rel) {
-            // Lockstep-owned: in step as of the last commit on either side, kept so
-            // by `git_peer`, and reported green exactly as the pairing seed meant it
-            // to read. Not stat'd — the host was not consulted for this row, and an
-            // uncommitted local edit is git's `M` marker, not a byte-sync divergence.
-            out.push(SyncStatusEntry {
-                rel_path: rel,
-                is_dir: false,
-                selected: true,
-                state: SyncState::Green,
-                auto_sync: auto,
-                excluded: entry.excluded,
-                host_mtime: None,
-                local_mtime: None,
-                host_diverged: false,
-                local_diverged: false,
-                host_checked: false,
+                ..SyncStatusEntry::bare(rel, entry.is_dir, true, SyncState::Green)
             });
         } else if sftp.is_some() {
-            to_stat.push((rel, entry, auto, excluded_eff));
+            to_stat.push((rel, entry.clone(), auto, excluded_eff));
         } else {
             // Cold pool: the host can't be re-stat'd, but the local mirror still
             // can (no network) — so a local-only edit made while disconnected
-            // still surfaces as amber instead of a stale green.
-            let local = mirror_file_meta(&project_id, &rel).map(|m| local_meta(&m));
-            let state = remote_sync::compute_state(&entry, None, local, excluded_eff);
-            // Host side is never flagged on a cold pool (nothing was checked).
-            let (hd, ld) = remote_sync::divergence(&entry, None, local);
-            let excluded_row = state == SyncState::None;
+            // still surfaces as amber instead of a stale green. The host side is
+            // never flagged (nothing was checked).
+            let local = mirror_file_meta(&mirror, &rel).map(|m| local_meta(&m));
+            let (state, host_diverged, local_diverged) = judge(entry, None, local, excluded_eff);
             out.push(SyncStatusEntry {
-                rel_path: rel,
-                is_dir: false,
-                selected: true,
-                state,
                 auto_sync: auto,
                 excluded: entry.excluded,
-                host_mtime: None,
                 local_mtime: local.and_then(|(_, mtime)| mtime),
-                host_diverged: if excluded_row { false } else { hd },
-                local_diverged: if excluded_row { false } else { ld },
-                host_checked: false,
+                host_diverged,
+                local_diverged,
+                ..SyncStatusEntry::bare(rel, false, true, state)
             });
         }
     }
@@ -882,16 +865,7 @@ pub async fn sync_status(
     for rel in remote_sync::lockstep_unrecorded(&snapshot, &lockstep_tracked, LOCKSTEP_ROWS_CAP) {
         out.push(SyncStatusEntry {
             auto_sync: remote_sync::is_auto(&snapshot, &rel),
-            rel_path: rel,
-            is_dir: false,
-            selected: false,
-            state: SyncState::Green,
-            excluded: false,
-            host_mtime: None,
-            local_mtime: None,
-            host_diverged: false,
-            local_diverged: false,
-            host_checked: false,
+            ..SyncStatusEntry::bare(rel, false, false, SyncState::Green)
         });
     }
     // Re-stat the selected files concurrently over the pooled SFTP session. The
@@ -905,6 +879,7 @@ pub async fn sync_status(
             let sftp = Arc::clone(sftp);
             let root = target.spec.remote_path.clone();
             let project_id = project_id.clone();
+            let mirror = Arc::clone(&mirror);
             async move {
                 let host_abs = join_remote(&root, &rel);
                 // Tri-state host stat: Ok(Some) = present, Ok(None) = the server's
@@ -929,8 +904,8 @@ pub async fn sync_status(
                 // Same tri-state for the local mirror, by lstat: only a positive
                 // NotFound is "gone"; any other error (permissions, an I/O fault)
                 // or a link / special file must not license a prune.
-                let local_stat: Result<Option<(u64, Option<u64>)>, String> =
-                    mirror_file_tristate(&project_id, &rel).map(|m| m.map(|m| local_meta(&m)));
+                let local_stat: Result<Option<Stat>, String> =
+                    mirror_file_tristate(&mirror, &rel).map(|m| m.map(|m| local_meta(&m)));
                 // For state/divergence, keep today's semantics exactly: any
                 // unreadable mirror file (gone OR erroring) reads as absent.
                 let local = local_stat.as_ref().ok().copied().flatten();
@@ -941,16 +916,7 @@ pub async fn sync_status(
                     // so the removal can be guarded against a concurrent rewrite.
                     return (None, None, Some((rel, entry)));
                 }
-                let mut state =
-                    remote_sync::compute_state(&entry, host_for_compute, local, excluded_eff);
-                let (mut hd, mut ld) = remote_sync::divergence(&entry, host_for_compute, local);
-                // The divergence fields are documented "false for green/none": an
-                // excluded row computes state None here, so force them clean like
-                // the cold-pool branch does.
-                if state == SyncState::None {
-                    hd = false;
-                    ld = false;
-                }
+                let (mut state, mut hd, mut ld) = judge(&entry, host_for_compute, local, excluded_eff);
                 // A metadata-only amber (same bytes, drifted mtime/size-vs-base) is a
                 // false positive: for a small file, confirm against the actual bytes
                 // and downgrade an identical pair to green, capturing the rebase so it
@@ -978,10 +944,6 @@ pub async fn sync_status(
                 }
                 (
                     Some(SyncStatusEntry {
-                        rel_path: rel,
-                        is_dir: false,
-                        selected: true,
-                        state,
                         auto_sync: auto,
                         excluded: entry.excluded,
                         host_mtime: mtime,
@@ -991,6 +953,7 @@ pub async fn sync_status(
                         // An errored stat is not a check: only a host answer
                         // (present or NoSuchFile) counts as "checked".
                         host_checked: host_stat.is_ok(),
+                        ..SyncStatusEntry::bare(rel, false, true, state)
                     }),
                     rebase,
                     None,
@@ -1005,7 +968,7 @@ pub async fn sync_status(
         // applied to the manifest under the single-writer lock and persisted once
         // (only when at least one file self-healed or vanished on both sides).
         let mut rebases: Vec<ContentRebase> = Vec::new();
-        let mut prunes: Vec<(String, crate::services::remote_sync::SyncEntry)> = Vec::new();
+        let mut prunes: Vec<(String, SyncEntry)> = Vec::new();
         for (row, rb, prune) in statted {
             if let Some(rb) = rb {
                 rebases.push(rb);
@@ -1043,44 +1006,29 @@ pub async fn sync_status(
     // (tracked, when lockstep is on) and excluded paths, and caps the rest.
     {
         let pid = project_id.clone();
-        let snapshot_for_new = snapshot.clone();
         let new_rows = app_core::rt::spawn_blocking(move || {
             let all: Vec<String> = match crate::services::git_peer::non_ignored_paths(&pid) {
                 Some(set) => set.into_iter().collect(),
                 None => remote_sync::walk_mirror_files(&pid, "").unwrap_or_default(),
             };
-            // Display only (rows, never a transfer): an unlisted set hides nothing.
-            let tracked = crate::services::git_peer::tracked_paths(&pid).unwrap_or_default();
-            let lockstep = crate::services::git_peer::load_state(&pid).enabled;
-            let candidates = remote_sync::local_new_candidates(
-                &snapshot_for_new,
-                all,
-                &tracked,
-                lockstep,
-                LOCAL_NEW_ROWS_CAP,
-            );
+            // The tracked set resolved above (display only: an unlisted set hides
+            // nothing).
+            let candidates =
+                remote_sync::local_new_candidates(&snapshot, all, &lockstep_tracked, lockstep, LOCAL_NEW_ROWS_CAP);
             candidates
                 .into_iter()
                 .filter_map(|rel| {
                     // Stat for the row's mtime; a file that vanished between the
                     // listing and here is simply not new any more.
-                    let meta = mirror_file_meta(&pid, &rel)?;
+                    let meta = mirror_file_meta(&mirror, &rel)?;
                     let (_, mtime) = local_meta(&meta);
-                    let auto = remote_sync::is_auto(&snapshot_for_new, &rel);
                     Some(SyncStatusEntry {
-                        rel_path: rel,
-                        is_dir: false,
-                        selected: false,
-                        state: SyncState::LocalNew,
-                        auto_sync: auto,
-                        excluded: false,
-                        host_mtime: None,
+                        auto_sync: remote_sync::is_auto(&snapshot, &rel),
                         local_mtime: mtime,
                         // The mirror side is what makes the row exist; the host
                         // was never asked (there is nothing to ask about).
-                        host_diverged: false,
                         local_diverged: true,
-                        host_checked: false,
+                        ..SyncStatusEntry::bare(rel, false, false, SyncState::LocalNew)
                     })
                 })
                 .collect::<Vec<_>>()
@@ -1101,6 +1049,15 @@ pub struct SideMeta {
     pub size: u64,
     /// Unix seconds, when the side reports one.
     pub mtime: Option<u64>,
+}
+
+impl SideMeta {
+    fn of(stat: Option<Stat>) -> Self {
+        match stat {
+            Some((size, mtime)) => Self { exists: true, size, mtime },
+            None => Self { exists: false, size: 0, mtime: None },
+        }
+    }
 }
 
 /// Local + host metadata for one tracked file, plus the recorded base — backs
@@ -1131,33 +1088,9 @@ pub async fn sync_file_meta(
     let manifest = ctx.get::<SyncManifestState>();
     let (target, sftp) = resolve(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
-    let host = match sftp::metadata_on(&sftp, &host_abs).await {
-        Ok((size, mtime)) => SideMeta {
-            exists: true,
-            size,
-            mtime,
-        },
-        Err(_) => SideMeta {
-            exists: false,
-            size: 0,
-            mtime: None,
-        },
-    };
-    let local = match mirror_file_meta(&project_id, &rel_path) {
-        Some(m) => {
-            let (size, mtime) = local_size_mtime(Some(m));
-            SideMeta {
-                exists: true,
-                size,
-                mtime,
-            }
-        }
-        None => SideMeta {
-            exists: false,
-            size: 0,
-            mtime: None,
-        },
-    };
+    let host = SideMeta::of(sftp::metadata_on(&sftp, &host_abs).await.ok());
+    let mirror = remote_sync::mirror_dir(&project_id);
+    let local = SideMeta::of(mirror_file_meta(&mirror, &rel_path).map(|m| local_meta(&m)));
     let (base_size, base_mtime) = {
         let mut guard = manifest.lock().await;
         let m = ensure_loaded(&mut guard, &project_id);
@@ -1197,12 +1130,7 @@ pub async fn sync_resolve_if_identical(
 ) -> Result<bool, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
-    // The project's one writer for this whole command (`services::sync_op`):
-    // the auto pass, lockstep and the other process wait, and so does this —
-    // taken first, so the target and session below are resolved as they are
-    // once it is this command's turn.
-    let _op = crate::services::sync_op::acquire_manual(&project_id).await?;
-    let (target, sftp) = resolve(&project_id, pool).await?;
+    let (_op, target, sftp) = manual_session(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     // Read both sides fully. A side that can't be read (deleted on the host, never
     // pulled locally) is not "identical" — leave it amber for the merge viewer.
@@ -1218,13 +1146,13 @@ pub async fn sync_resolve_if_identical(
     }
     // Identical: stamp a fresh base from each side's current metadata so the file
     // goes (and stays) green without any byte transfer.
-    let (host_size, host_mtime) = sftp::metadata_on(&sftp, &host_abs)
+    let host = sftp::metadata_on(&sftp, &host_abs)
         .await
         .unwrap_or((host_bytes.len() as u64, None));
-    let (ls, lm) = local_size_mtime(mirror_file_meta(&project_id, &rel_path));
+    let local = remote_sync::local_size_mtime(mirror_file_meta(&remote_sync::mirror_dir(&project_id), &rel_path));
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, &project_id);
-    remote_sync::record_pull(m, &rel_path, host_size, host_mtime, ls, lm);
+    remote_sync::record_pull(m, &rel_path, host, local);
     remote_sync::save_manifest(&project_id, m)?;
     Ok(true)
 }
@@ -1269,12 +1197,7 @@ pub async fn sync_apply_delete(
     if side != "host" && side != "local" {
         return Err(format!("unknown delete side: {side}"));
     }
-    // The project's one writer for this whole command (`services::sync_op`):
-    // the auto pass, lockstep and the other process wait, and so does this —
-    // taken first, so the target and session below are resolved as they are
-    // once it is this command's turn.
-    let _op = crate::services::sync_op::acquire_manual(&project_id).await?;
-    let (target, sftp) = resolve(&project_id, pool).await?;
+    let (_op, target, sftp) = manual_session(&project_id, pool).await?;
     let host_abs = join_remote(&target.spec.remote_path, &rel_path);
     let mirror_path = mirror_local_path(&project_id, &rel_path);
     // Snapshot the entry now: the removal below is guarded on it being unchanged,
@@ -1416,21 +1339,88 @@ pub struct SyncTransferPreview {
     pub exact: bool,
 }
 
-/// Apply the same tracked-tree ownership split as the background byte-sync
-/// engine. Returns the byte-sync candidates plus the number left to lockstep;
-/// `Err` when lockstep is on and git could not list what it owns.
-fn drop_lockstep_tracked<T>(
+/// What a manual transfer of `under` leaves to byte-sync out of the files found
+/// there, and how many it withheld.
+struct Withheld<T> {
+    kept: Vec<T>,
+    /// Files found before anything was withheld.
+    walked: usize,
+    /// Dropped by an exclusion marker below `under` ([`remote_sync::is_excluded`]).
+    excluded: usize,
+    /// Left to lockstep, which moves the git-tracked files as commits.
+    tracked: usize,
+}
+
+impl<T> Withheld<T> {
+    /// Why a transfer that names a file or folder has nothing to move: such a
+    /// click used to do nothing and say so nowhere. `None` when something is
+    /// left, and for a whole-project transfer (`""`), where an empty tree is a
+    /// legitimate steady state. `moved` is "pulled" or "pushed", `absent` the
+    /// sentence for a path that held no candidate at all.
+    fn refusal(&self, under: &str, moved: &str, absent: &str) -> Option<String> {
+        if !self.kept.is_empty() || under.is_empty() {
+            return None;
+        }
+        Some(if self.tracked > 0 && self.excluded == 0 {
+            format!(
+                "'{under}' is git-tracked and travels as a commit through Git Lockstep — nothing was byte-{moved}"
+            )
+        } else if self.walked > 0 {
+            format!("'{under}' is excluded from sync — nothing was {moved}")
+        } else {
+            format!("'{under}' {absent}")
+        })
+    }
+}
+
+/// The candidates of a manual transfer of `under`, as the preview and the
+/// transfer both see them: without what an exclusion below `under` covers, and
+/// with the same tracked-tree ownership split as the background engine. `Err`
+/// when lockstep is on and git could not list what it owns.
+async fn withhold<T>(
+    manifest: &SyncManifestState,
     project_id: &str,
+    under: &str,
     files: Vec<T>,
     rel: impl Fn(&T) -> &str,
-) -> Result<(Vec<T>, usize), String> {
-    let enabled = crate::services::git_peer::load_state(project_id).enabled;
-    let tracked = if enabled {
-        crate::services::git_peer::tracked_paths(project_id)
-    } else {
-        Ok(HashSet::new())
+) -> Result<Withheld<T>, String> {
+    let walked = files.len();
+    let files: Vec<T> = {
+        let mut guard = manifest.lock().await;
+        let m = ensure_loaded(&mut guard, project_id);
+        files.into_iter().filter(|file| !remote_sync::is_excluded(m, rel(file), under)).collect()
     };
-    drop_tracked_files(files, &tracked, enabled, rel)
+    let excluded = walked - files.len();
+    let (enabled, tracked) = {
+        let pid = project_id.to_string();
+        app_core::rt::spawn_blocking(move || crate::services::git_peer::lockstep_tracked(&pid))
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    let (kept, tracked) = drop_tracked_files(files, &tracked, enabled, rel)?;
+    Ok(Withheld { kept, walked, excluded, tracked })
+}
+
+/// The host files a pull of `rel` moves: its subtree when `rel` is a folder
+/// (true), the one file otherwise.
+///
+/// Which of the two is asked of the host, never read off a failed walk: a
+/// folder whose walk broke (a subfolder it may not list, a dropped session) is
+/// that error, not "one file" the size of a directory entry.
+async fn host_files_for(
+    sftp: &Sftp,
+    remote_root: &str,
+    rel: &str,
+) -> Result<(Vec<remote_sync::HostFile>, bool), String> {
+    let abs = join_remote(remote_root, rel);
+    let absent = || format!("'{rel}' is not on the host");
+    // The project root is a folder by definition (and is walked even while missing,
+    // as before: that walk's own error names it).
+    if rel.is_empty() || sftp::is_dir_opt_on(sftp, &abs).await?.ok_or_else(absent)? {
+        return Ok((remote_sync::walk_host_files(sftp, remote_root, rel).await?, true));
+    }
+    let (size, mtime, mode) = sftp::metadata_opt_with_mode_on(sftp, &abs).await?.ok_or_else(absent)?;
+    Ok((vec![remote_sync::HostFile { rel: rel.to_string(), size, mtime, mode }], false))
 }
 
 fn drop_tracked_files<T>(
@@ -1515,45 +1505,20 @@ async fn preview_pull(
     manifest: &SyncManifestState,
 ) -> Result<SyncTransferPreview, String> {
     // Source side: the same host files `pull_subtree` would transfer.
+    let root = target.spec.remote_path.as_str();
     let files: Vec<remote_sync::HostFile> = match rel_paths {
         Some(paths) => {
-            let mut out = Vec::with_capacity(paths.len());
-            for p in paths {
-                let host_abs = join_remote(&target.spec.remote_path, &p);
-                let (size, mtime) = remote_sync::stat_or_zero(sftp, &host_abs).await;
-                out.push(remote_sync::HostFile {
-                    rel: p,
-                    size,
-                    mtime,
-                    mode: None,
-                });
-            }
-            out
-        }
-        None => match remote_sync::walk_host_files(sftp, &target.spec.remote_path, rel).await {
-            Ok(f) => f,
-            Err(_) => {
-                // Not a directory — a single file, exactly as `pull_subtree` falls back.
-                let host_abs = join_remote(&target.spec.remote_path, rel);
-                let (size, mtime) = sftp::metadata_on(sftp, &host_abs).await?;
-                vec![remote_sync::HostFile {
-                    rel: rel.to_string(),
-                    size,
-                    mtime,
-                    mode: None,
-                }]
-            }
-        },
-    };
-    let files: Vec<remote_sync::HostFile> = {
-        let mut guard = manifest.lock().await;
-        let m = ensure_loaded(&mut guard, project_id);
-        files
-            .into_iter()
-            .filter(|f| !remote_sync::is_excluded(m, &f.rel, rel))
+            stream::iter(paths.into_iter().map(|rel| async move {
+                let (size, mtime) = remote_sync::stat_or_zero(sftp, &join_remote(root, &rel)).await;
+                remote_sync::HostFile { rel, size, mtime, mode: None }
+            }))
+            .buffered(STAT_CONCURRENCY)
             .collect()
+            .await
+        }
+        None => host_files_for(sftp, root, rel).await?.0,
     };
-    let (files, tracked) = drop_lockstep_tracked(project_id, files, |f| &f.rel)?;
+    let Withheld { kept: files, tracked, .. } = withhold(manifest, project_id, rel, files, |f| &f.rel).await?;
 
     let bytes = files.iter().map(|f| f.size).sum();
     let overwrites = files
@@ -1591,18 +1556,11 @@ async fn preview_push(
         Some(paths) => paths,
         None => remote_sync::walk_mirror_files(project_id, rel)?,
     };
-    let files: Vec<String> = {
-        let mut guard = manifest.lock().await;
-        let m = ensure_loaded(&mut guard, project_id);
-        files
-            .into_iter()
-            .filter(|f| !remote_sync::is_excluded(m, f, rel))
-            .collect()
-    };
-    let (files, tracked) = drop_lockstep_tracked(project_id, files, String::as_str)?;
+    let Withheld { kept: files, tracked, .. } = withhold(manifest, project_id, rel, files, String::as_str).await?;
+    let mirror = remote_sync::mirror_dir(project_id);
     let bytes = files
         .iter()
-        .filter_map(|r| mirror_file_meta(project_id, r))
+        .filter_map(|r| mirror_file_meta(&mirror, r))
         .map(|m| m.len())
         .sum();
 
@@ -1620,8 +1578,20 @@ async fn preview_push(
     let mut conflicts = 0usize;
     let mut unchecked = 0usize;
     let mut doomed: Vec<String> = Vec::new();
-    for r in &files {
-        let host_abs = join_remote(&target.spec.remote_path, r);
+    let bases: Vec<SyncEntry> = {
+        let mut guard = manifest.lock().await;
+        let m = ensure_loaded(&mut guard, project_id);
+        files.iter().map(|r| m.get(r).cloned().unwrap_or_default()).collect()
+    };
+    // The host stats ride the pooled channel together, as the status refresh's do.
+    let root = target.spec.remote_path.as_str();
+    let host_paths: Vec<String> = files.iter().map(|r| join_remote(root, r)).collect();
+    let stats: Vec<Result<Option<Stat>, String>> = stream::iter(host_paths)
+        .map(|host_abs| async move { sftp::metadata_opt_on(sftp, &host_abs).await })
+        .buffered(STAT_CONCURRENCY)
+        .collect()
+        .await;
+    for ((r, base), stat) in files.iter().zip(bases).zip(stats) {
         // Tri-state, for the same reason the manifest prune is tri-state: a stat
         // that FAILED (permission, dropped session) is not a host file that is
         // absent. Collapsing the two used to only *undercount* an overwrite, which
@@ -1630,21 +1600,13 @@ async fn preview_push(
         // would be a false reassurance in exactly the case that deserves the
         // warning. So an unchecked file drops `exact`, which puts the dialog back
         // on "the receiving side could not be checked".
-        let host = match sftp::metadata_opt_on(sftp, &host_abs).await {
-            Ok(v) => v,
-            Err(_) => {
-                unchecked += 1;
-                None
-            }
-        };
+        let host = stat.unwrap_or_else(|_| {
+            unchecked += 1;
+            None
+        });
         if host.is_some() {
             overwrites += 1;
         }
-        let base = {
-            let mut guard = manifest.lock().await;
-            let m = ensure_loaded(&mut guard, project_id);
-            m.get(r).cloned().unwrap_or_default()
-        };
         if remote_sync::push_decision(&base, host) == PushDecision::Stale {
             // Stale means the host moved past our base. Without `force` the push
             // blocks and asks; with it, that host copy is what gets destroyed.
@@ -1699,6 +1661,25 @@ pub struct SyncPushResult {
     pub skipped_unsafe: remote_sync::MirrorSkips,
 }
 
+/// The files a push failed on: the count, a capped sample of the names and the
+/// first reason ([`SyncPushResult`]'s failure half).
+#[derive(Default)]
+struct PushFailures {
+    total: usize,
+    sample: Vec<String>,
+    first: Option<String>,
+}
+
+impl PushFailures {
+    fn note(&mut self, rel: &str, why: String) {
+        self.total += 1;
+        if self.sample.len() < PREVIEW_NAME_CAP {
+            self.sample.push(rel.to_string());
+        }
+        self.first.get_or_insert(why);
+    }
+}
+
 /// Push a local mirror file or folder subtree to the host (the bidirectional
 /// other half of `sync_pull`). For each file: re-stat the host and compare to the
 /// manifest base. A file whose host base is unchanged (or that the host doesn't
@@ -1714,53 +1695,38 @@ pub async fn sync_push(
 ) -> Result<SyncPushResult, String> {
     let pool = ctx.get::<RemotePoolState>();
     let manifest = ctx.get::<SyncManifestState>();
-    // The project's one writer for this whole command (`services::sync_op`):
-    // the auto pass, lockstep and the other process wait, and so does this —
-    // taken first, so the target and session below are resolved as they are
-    // once it is this command's turn.
-    let _op = crate::services::sync_op::acquire_manual(&project_id).await?;
-    let (target, sftp) = resolve(&project_id, pool).await?;
+    let (_op, target, sftp) = manual_session(&project_id, pool).await?;
     let files = remote_sync::walk_mirror_files(&project_id, &rel_path)?;
-    let walked = files.len();
     // Excluded folders are excluded in BOTH directions: a mirror-side copy of an
     // excluded tree (an earlier pull, a local build) must not be pushed up either —
     // unless the push names that folder (or one inside it), as a pull may.
-    let files: Vec<String> = {
-        let mut guard = manifest.lock().await;
-        let m = ensure_loaded(&mut guard, &project_id);
-        files
-            .into_iter()
-            .filter(|rel| !remote_sync::is_excluded(m, rel, &rel_path))
-            .collect()
-    };
-    let skipped_excluded = walked - files.len();
-    let (files, skipped_tracked) = drop_lockstep_tracked(&project_id, files, String::as_str)?;
-    // A targeted push (a named file/folder) with zero candidates is a click that
-    // would silently do nothing — say why instead. Whole-mirror pushes ("") keep
-    // returning Ok: an empty mirror is a legitimate steady state there.
-    if files.is_empty() && !rel_path.is_empty() {
-        return Err(if skipped_tracked > 0 && skipped_excluded == 0 {
-            format!(
-                "'{rel_path}' is git-tracked and travels as a commit through Git Lockstep — \
-                 nothing was byte-pushed"
-            )
-        } else if walked > 0 {
-            format!("'{rel_path}' is excluded from sync — nothing was pushed")
-        } else {
-            format!(
-                "'{rel_path}' has nothing to push — not present in the local mirror \
-                 (or a symlink/nested-repo subtree, which byte-sync never pushes)"
-            )
-        });
+    let withheld = withhold(manifest, &project_id, &rel_path, files, String::as_str).await?;
+    if let Some(refusal) = withheld.refusal(
+        &rel_path,
+        "pushed",
+        "has nothing to push — not present in the local mirror \
+         (or a symlink/nested-repo subtree, which byte-sync never pushes)",
+    ) {
+        return Err(refusal);
     }
+    let Withheld { kept: files, excluded: skipped_excluded, tracked: skipped_tracked, .. } = withheld;
     let total = files.len();
     emit(&ctx, &project_id, "start", &rel_path, 0, total);
     let mut pushed = 0usize;
     let mut conflicts = Vec::new();
-    let mut failed: Vec<String> = Vec::new();
-    let mut failed_total = 0usize;
-    let mut first_error: Option<String> = None;
+    let mut failures = PushFailures::default();
     let mut done = 0usize;
+    let records = remote_sync::RecordBatch::new(manifest, &project_id);
+    // The bytes are on the host but the record is not: reported as a failure
+    // (the file now reads as changed on both sides, and its next push asks
+    // first) so the result never claims a clean push.
+    let unrecorded = |saved: Result<(), remote_sync::Unrecorded>, pushed: &mut usize, failures: &mut PushFailures| {
+        let Err(lost) = saved else { return };
+        *pushed -= lost.paths.len();
+        for rel in &lost.paths {
+            failures.note(rel, format!("pushed '{rel}', but its sync record could not be saved: {}", lost.error));
+        }
+    };
     // What one file's bounded remote work resolved to (a conflict costs no transfer;
     // a push carries the new host base back for the manifest).
     enum PushStep {
@@ -1768,119 +1734,111 @@ pub async fn sync_push(
         Pushed(remote_sync::PushedFile),
     }
     let mirror_root = remote_sync::mirror_dir(&project_id);
-    for rel in files {
-        let host_abs = join_remote(&target.spec.remote_path, &rel);
-        // Snapshot the base under the lock (released before the transfer).
-        let base = {
-            let mut guard = manifest.lock().await;
-            let m = ensure_loaded(&mut guard, &project_id);
-            m.get(&rel).cloned().unwrap_or_default()
-        };
-        // Bound every SFTP round-trip for this file: the host re-stat AND the write
-        // both ride the pooled session, and either can hang forever on a session
-        // that has silently dropped (see `PUSH_FILE_TIMEOUT`). `timeout` turns that
-        // into a per-file outcome the loop can act on instead of a wedged command.
-        let outcome = tokio::time::timeout(PUSH_FILE_TIMEOUT, async {
-            // Only a positive NoSuchFile is "not on the host": a stat that could not
-            // answer used to read as gone, so a never-synced file was pushed over
-            // a real one. It fails this file instead — `force` included, which
-            // overrides a known conflict, not an unknown host.
-            let host = sftp::metadata_opt_on(&sftp, &host_abs)
-                .await
-                .map_err(|e| format!("could not check the host copy of '{rel}': {e}"))?;
-            if remote_sync::push_decision(&base, host) == PushDecision::Stale && !force {
-                return Ok::<PushStep, String>(PushStep::Conflict);
-            }
-            match remote_sync::push_file_atomic(&sftp, &mirror_root, &rel, &host_abs).await {
-                Ok(done) => Ok(PushStep::Pushed(done)),
-                Err(remote_sync::PushError::Skipped(skip)) => {
-                    let msg = skip.to_string();
-                    remote_sync::note_mirror_skip(&project_id, skip);
-                    Err(msg)
-                }
-                Err(e) => Err(e.to_string()),
-            }
-        })
-        .await;
-        let mut stalled = false;
-        match outcome {
-            Ok(Ok(PushStep::Conflict)) => conflicts.push(rel.clone()),
-            Ok(Ok(PushStep::Pushed(done))) => {
-                let (hs, hm) = done.host;
-                let (ls, lm) = done.local;
-                remote_sync::clear_mirror_skip(&project_id, &rel);
-                let mut guard = manifest.lock().await;
-                let m = ensure_loaded(&mut guard, &project_id);
-                remote_sync::record_push(m, &rel, hs, hm, ls, lm);
-                let saved = remote_sync::save_manifest_or_mark_stale(&project_id, m, std::slice::from_ref(&rel));
-                drop(guard);
-                net_usage::record_files(&project_id, 0, 1);
-                match saved {
-                    Ok(()) => pushed += 1,
-                    // The bytes are on the host but the record is not: reported as a
-                    // failure (the file now reads as changed on both sides, and its
-                    // next push asks first) so the result never claims a clean push.
-                    Err(e) => {
-                        failed_total += 1;
-                        if failed.len() < PREVIEW_NAME_CAP {
-                            failed.push(rel.clone());
-                        }
-                        if first_error.is_none() {
-                            first_error = Some(format!(
-                                "pushed '{rel}', but its sync record could not be saved: {e}"
-                            ));
-                        }
+    // A stall is a fault of the *connection*, not of its file: every remaining
+    // file would time out the same way (each still blocking the UI for a full
+    // `PUSH_FILE_TIMEOUT`), so the first stall stops any further file from
+    // starting rather than plodding through 47 identical timeouts. Files already
+    // in flight finish under their own timeouts and are reported as usual; the
+    // `done` emit below still fires, clearing the frozen progress and freeing
+    // the session for other pushes.
+    let stalled = AtomicBool::new(false);
+    let (files, root, pid, sftp) = (&files, target.spec.remote_path.as_str(), project_id.as_str(), &*sftp);
+    let (mirror, manifest_ref, stalled_ref) = (&mirror_root, manifest, &stalled);
+    // The remote half of each file runs a few at a time (`sync_pool`); the
+    // recording below takes the outcomes one by one, in file order.
+    let (transfers, mut finished) = sync_pool::run_ordered(
+        files.len(),
+        sync_pool::Limits::TRANSFERS,
+        // The push reads the mirror copy whole: its size is what it holds.
+        |i| mirror_file_meta(mirror, &files[i]).map_or(0, |m| m.len()),
+        || stalled_ref.load(Ordering::SeqCst),
+        move |i| {
+            let rel = files[i].as_str();
+            async move {
+                let host_abs = join_remote(root, rel);
+                // Snapshot the base under the lock (released before the transfer).
+                let base = {
+                    let mut guard = manifest_ref.lock().await;
+                    let m = ensure_loaded(&mut guard, pid);
+                    m.get(rel).cloned().unwrap_or_default()
+                };
+                // Bound every SFTP round-trip for this file: the host re-stat AND the
+                // write both ride the pooled session, and either can hang forever on a
+                // session that has silently dropped (see `PUSH_FILE_TIMEOUT`). `timeout`
+                // turns that into a per-file outcome the loop can act on instead of a
+                // wedged command.
+                let outcome = tokio::time::timeout(PUSH_FILE_TIMEOUT, async {
+                    // Only a positive NoSuchFile is "not on the host": a stat that could
+                    // not answer used to read as gone, so a never-synced file was pushed
+                    // over a real one. It fails this file instead — `force` included,
+                    // which overrides a known conflict, not an unknown host.
+                    let host = sftp::metadata_opt_on(sftp, &host_abs)
+                        .await
+                        .map_err(|e| format!("could not check the host copy of '{rel}': {e}"))?;
+                    if remote_sync::push_decision(&base, host) == PushDecision::Stale && !force {
+                        return Ok::<PushStep, String>(PushStep::Conflict);
                     }
+                    match remote_sync::push_file_atomic(sftp, mirror, rel, &host_abs).await {
+                        Ok(done) => Ok(PushStep::Pushed(done)),
+                        Err(remote_sync::PushError::Skipped(skip)) => {
+                            let msg = skip.to_string();
+                            remote_sync::note_mirror_skip(pid, skip);
+                            Err(msg)
+                        }
+                        Err(e) => Err(e.to_string()),
+                    }
+                })
+                .await;
+                if outcome.is_err() {
+                    stalled_ref.store(true, Ordering::SeqCst);
                 }
+                outcome
             }
-            Ok(Err(e)) => {
-                eprintln!("sync_push: skip '{rel}': {e}");
-                failed_total += 1;
-                if failed.len() < PREVIEW_NAME_CAP {
-                    failed.push(rel.clone());
+        },
+    );
+    let settle = async {
+        while let Some((i, outcome)) = finished.recv().await {
+            let rel = &files[i];
+            match outcome {
+                Ok(Ok(PushStep::Conflict)) => conflicts.push(rel.clone()),
+                Ok(Ok(PushStep::Pushed(done))) => {
+                    remote_sync::clear_mirror_skip(pid, rel);
+                    pushed += 1;
+                    let saved = records.record(rel, Transfer::Push, done.host, done.local).await;
+                    unrecorded(saved, &mut pushed, &mut failures);
                 }
-                if first_error.is_none() {
-                    first_error = Some(e);
+                Ok(Err(e)) => {
+                    eprintln!("sync_push: skip '{rel}': {e}");
+                    failures.note(rel, e);
                 }
-            }
-            Err(_elapsed) => {
-                // A stall is a fault of the *connection*, not of this file: every
-                // remaining file would time out the same way (each still blocking
-                // the UI for a full `PUSH_FILE_TIMEOUT`), so abandon the walk here
-                // rather than plod through 47 identical timeouts. The `done` emit
-                // below still fires, clearing the frozen progress and freeing the
-                // session for other pushes.
-                eprintln!(
-                    "sync_push: '{rel}' stalled after {}s — abandoning the rest",
-                    PUSH_FILE_TIMEOUT.as_secs()
-                );
-                failed_total += 1;
-                if failed.len() < PREVIEW_NAME_CAP {
-                    failed.push(rel.clone());
-                }
-                if first_error.is_none() {
-                    first_error = Some(format!(
-                        "transfer of '{rel}' stalled after {}s — the remote connection \
-                         may have dropped; reconnect and push again",
+                Err(_elapsed) => {
+                    eprintln!(
+                        "sync_push: '{rel}' stalled after {}s — no further file starts",
                         PUSH_FILE_TIMEOUT.as_secs()
-                    ));
+                    );
+                    failures.note(
+                        rel,
+                        format!(
+                            "transfer of '{rel}' stalled after {}s — the remote connection \
+                             may have dropped; reconnect and push again",
+                            PUSH_FILE_TIMEOUT.as_secs()
+                        ),
+                    );
                 }
-                stalled = true;
             }
+            done += 1;
+            emit(&ctx, pid, "file", rel, done, total);
         }
-        done += 1;
-        emit(&ctx, &project_id, "file", &rel, done, total);
-        if stalled {
-            break;
-        }
-    }
+    };
+    tokio::join!(transfers, settle);
+    unrecorded(records.flush().await, &mut pushed, &mut failures);
     emit(&ctx, &project_id, "done", &rel_path, done, total);
     Ok(SyncPushResult {
         pushed,
         conflicts,
-        failed_total,
-        failed,
-        first_error,
+        failed_total: failures.total,
+        failed: failures.sample,
+        first_error: failures.first,
         skipped_excluded,
         skipped_tracked,
         skipped_unsafe: remote_sync::mirror_skips(&project_id),
@@ -1946,6 +1904,7 @@ async fn unsynced_local_edits(
     manifest: &SyncManifestState,
     rels: &[String],
 ) -> Vec<String> {
+    let mirror = remote_sync::mirror_dir(project_id);
     let mut guard = manifest.lock().await;
     let m = ensure_loaded(&mut guard, project_id);
     rels.iter()
@@ -1953,10 +1912,10 @@ async fn unsynced_local_edits(
             let Some(entry) = m.get(rel.as_str()) else {
                 return false; // never synced → no base to have diverged from
             };
-            if entry.last_pull_ts.is_none() && entry.last_push_ts.is_none() {
+            if !entry.ever_synced() {
                 return false;
             }
-            let Some(meta) = mirror_file_meta(project_id, rel) else {
+            let Some(meta) = mirror_file_meta(&mirror, rel) else {
                 return false; // no mirror file → the pull only creates
             };
             let (_, local_changed) = remote_sync::divergence(entry, None, Some(local_meta(&meta)));
@@ -1980,8 +1939,7 @@ fn warn_overwritten(project_id: &str, op: &str, paths: Vec<String>) {
 }
 
 /// Pull `rel` (a single file OR a whole folder subtree) from the host into the
-/// mirror, recording each file's base in the manifest. Shared by `sync_pull` and
-/// `sync_whole_project`.
+/// mirror, recording each file's base in the manifest (`sync_pull`'s body).
 ///
 /// For a directory, the bulk transfer prefers the rsync fast-path (delta +
 /// single connection, riding the ControlMaster) when rsync is present on BOTH
@@ -1996,62 +1954,24 @@ async fn pull_subtree(
     rel: &str,
     manifest: &SyncManifestState,
 ) -> Result<remote_sync::PullOutcome, String> {
-    // Determine whether `rel` is a directory (walkable) or a single file.
-    let (files, is_dir) =
-        match remote_sync::walk_host_files(sftp, &target.spec.remote_path, rel).await {
-            Ok(f) => (f, true),
-            Err(_) => {
-                // Not a directory — treat `rel` as a single file (stat it).
-                let host_abs = join_remote(&target.spec.remote_path, rel);
-                let (size, mtime, mode) = crate::services::sftp::metadata_opt_with_mode_on(sftp, &host_abs)
-                    .await?
-                    .ok_or_else(|| format!("'{rel}' is not on the host"))?;
-                (
-                    vec![remote_sync::HostFile {
-                        rel: rel.to_string(),
-                        size,
-                        mtime,
-                        mode,
-                    }],
-                    false,
-                )
-            }
-        };
+    // Whether `rel` is a directory (walked) or a single file.
+    let (files, is_dir) = host_files_for(sftp, &target.spec.remote_path, rel).await?;
     // Drop everything the user excluded from byte-sync (the giant-folder prompt,
     // `services::big_folders`). A whole-project pull is exactly the click that
     // answer exists to make safe; an explicit pull *of* the excluded folder, or of
     // one inside it (a one-off download, e.g. for an agent), still goes through,
     // which is why the markers on and above `rel` are ignored (`is_excluded`'s `under`).
-    let (files, skipped_excluded) = {
-        let mut guard = manifest.lock().await;
-        let m = ensure_loaded(&mut guard, project_id);
-        let before = files.len();
-        let kept: Vec<_> = files
-            .into_iter()
-            .filter(|f| !remote_sync::is_excluded(m, &f.rel, rel))
-            .collect();
-        let skipped = before - kept.len();
-        (kept, skipped)
-    };
-    let walked = files.len() + skipped_excluded;
-    let (files, skipped_tracked) = drop_lockstep_tracked(project_id, files, |file| &file.rel)?;
-    // The pull twin of `sync_push`'s refusal: a targeted pull (a named file or folder)
-    // whose every candidate was withheld used to return `Ok(0)`, which the tree then
-    // reported as "pulled" — the exact silent no-op a tracked file's orange row
-    // produced when its "take host" was clicked. A whole-project pull ("") keeps
-    // returning Ok: an empty host tree is a legitimate steady state there.
-    if files.is_empty() && !rel.is_empty() {
-        return Err(if skipped_tracked > 0 && skipped_excluded == 0 {
-            format!(
-                "'{rel}' is git-tracked and travels as a commit through Git Lockstep — \
-                 nothing was byte-pulled"
-            )
-        } else if walked > 0 {
-            format!("'{rel}' is excluded from sync — nothing was pulled")
-        } else {
-            format!("'{rel}' has nothing to pull — the host holds no regular file there")
-        });
+    let withheld = withhold(manifest, project_id, rel, files, |file| &file.rel).await?;
+    // The pull twin of `sync_push`'s refusal: a targeted pull whose every candidate
+    // was withheld used to return `Ok(0)`, which the tree then reported as
+    // "pulled" — the exact silent no-op a tracked file's orange row produced when
+    // its "take host" was clicked.
+    if let Some(refusal) =
+        withheld.refusal(rel, "pulled", "has nothing to pull — the host holds no regular file there")
+    {
+        return Err(refusal);
     }
+    let Withheld { kept: files, excluded: skipped_excluded, .. } = withheld;
 
     // Room for it, before anything is written (gap 86): the listing's sizes are the
     // host's word and the preview the user confirmed is the only other bound, so a
@@ -2092,59 +2012,76 @@ async fn pull_subtree(
 
     let mirror_root = remote_sync::mirror_dir(project_id);
     let mut done = 0usize;
-    let mut outcome = remote_sync::PullOutcome::default();
+    let mut pulled = 0usize;
     // Files whose bytes landed but whose record did not (fixed decision #7): the
     // pull goes on, then fails visibly with the count and the first reason.
-    let mut unrecorded = 0usize;
+    let mut unrecorded_files = 0usize;
     let mut record_error: Option<String> = None;
     // Why the one file of a single-file pull did not land, when it did not: that
     // pull has nothing else to show, so it fails with this instead of reading as
     // done (the orange view's take-host used to answer a refused write with nothing).
     let mut pull_error: Option<String> = None;
-    for file in files {
-        let host_abs = join_remote(&target.spec.remote_path, &file.rel);
-        let local = mirror_local_path(project_id, &file.rel);
-        // rsync already wrote the bytes; only lstat locally to capture the base,
-        // and record only a regular file no larger than listed (gap 35):
-        // whatever else a changing host tree slipped past the walk is skipped
-        // like the floor would. Otherwise pull the file over SFTP (which
-        // confines the write, #863), streaming one over the RAM cap.
-        let local_base = if rsynced {
-            remote_sync::rsync_pulled_base(&local, file.size)
-        } else {
-            match remote_sync::pull_file_any_size(sftp, &host_abs, file.size, file.mode, &mirror_root, &file.rel)
-                .await
-            {
-                Ok(base) => Some(base),
-                Err(e) => {
-                    pull_error.get_or_insert(e);
-                    None
-                }
-            }
-        };
-        match local_base {
-            Some((ls, lm)) => {
-                outcome.pulled += 1;
-                let mut guard = manifest.lock().await;
-                let m = ensure_loaded(&mut guard, project_id);
-                remote_sync::record_pull(m, &file.rel, file.size, file.mtime, ls, lm);
-                if let Err(e) =
-                    remote_sync::save_manifest_or_mark_stale(project_id, m, std::slice::from_ref(&file.rel))
-                {
-                    unrecorded += 1;
-                    record_error.get_or_insert(e);
-                }
-                net_usage::record_files(project_id, 1, 0);
-            }
-            None => {
-                // A single unreadable file shouldn't abort the whole folder
-                // sync; carry on.
-                eprintln!("sync_pull: skip '{}'", file.rel);
-            }
+    let records = remote_sync::RecordBatch::new(manifest, project_id);
+    let mut unrecorded = |saved: Result<(), remote_sync::Unrecorded>| {
+        if let Err(lost) = saved {
+            unrecorded_files += lost.paths.len();
+            record_error.get_or_insert(lost.error);
         }
-        done += 1;
-        emit(ctx, project_id, "file", &file.rel, done, total);
-    }
+    };
+    // The remote half of each file runs a few at a time (`sync_pool`); the
+    // recording below takes the outcomes one by one, in file order.
+    let (files, root, mirror) = (&files, target.spec.remote_path.as_str(), &mirror_root);
+    let (transfers, mut landed) = sync_pool::run_ordered(
+        files.len(),
+        sync_pool::Limits::TRANSFERS,
+        // What the SFTP floor holds while the file moves: a file within the cap is
+        // read whole; a larger one streams, but weighs the whole budget and so runs
+        // alone. The rsync path only stats.
+        |i| if rsynced { 0 } else { files[i].size },
+        || false,
+        move |i| {
+            let file = &files[i];
+            async move {
+                // rsync already wrote the bytes; only lstat locally to capture the base,
+                // and record only a regular file no larger than listed (gap 35):
+                // whatever else a changing host tree slipped past the walk is skipped
+                // like the floor would. Otherwise pull the file over SFTP (which
+                // confines the write, #863), streaming one over the RAM cap.
+                if rsynced {
+                    remote_sync::rsync_pulled_base(&mirror_local_path(project_id, &file.rel), file.size).ok_or(None)
+                } else {
+                    let host_abs = join_remote(root, &file.rel);
+                    remote_sync::pull_file_any_size(sftp, &host_abs, file.size, file.mode, mirror, &file.rel)
+                        .await
+                        .map_err(Some)
+                }
+            }
+        },
+    );
+    let settle = async {
+        while let Some((i, local_base)) = landed.recv().await {
+            let file = &files[i];
+            match local_base {
+                Ok(local) => {
+                    pulled += 1;
+                    unrecorded(records.record(&file.rel, Transfer::Pull, (file.size, file.mtime), local).await);
+                }
+                // A single unreadable file shouldn't abort the whole folder sync;
+                // carry on.
+                Err(why) => {
+                    if let Some(e) = why {
+                        pull_error.get_or_insert(e);
+                    }
+                    eprintln!("sync_pull: skip '{}'", file.rel);
+                }
+            }
+            done += 1;
+            emit(ctx, project_id, "file", &file.rel, done, total);
+        }
+    };
+    tokio::join!(transfers, settle);
+    unrecorded(records.flush().await);
+    let outcome = remote_sync::PullOutcome { pulled };
     emit(ctx, project_id, "done", rel, done, total);
     if !is_dir && outcome.pulled == 0 {
         return Err(match pull_error {
@@ -2154,7 +2091,7 @@ async fn pull_subtree(
     }
     if let Some(e) = record_error {
         return Err(format!(
-            "Pulled {} file(s), but the sync record of {unrecorded} could not be saved ({e}); \
+            "Pulled {} file(s), but the sync record of {unrecorded_files} could not be saved ({e}); \
              they show as changed until they are synced again",
             outcome.pulled
         ));
@@ -2349,14 +2286,19 @@ mod tests {
     fn every_sync_command_checks_the_posture() {
         let source = include_str!("sync.rs");
         let production = &source[..source.find("#[cfg(test)]\nmod tests").expect("tests module")];
-        let gates = ["resolve(&project_id", "refuse_remote_only(&project_id", "byte_sync_refusal(&target.spec"];
+        let gates = [
+            "resolve(&project_id",
+            "manual_session(&project_id",
+            "refuse_remote_only(&project_id",
+            "byte_sync_refusal(&target.spec",
+        ];
         let mut commands = 0;
         for chunk in production.split("\npub async fn ").skip(1) {
             let name = chunk.split('(').next().unwrap_or_default();
             commands += 1;
             assert!(gates.iter().any(|g| chunk.contains(g)), "{name} does not check the remote-only posture");
         }
-        assert!(commands >= 15, "the scan found only {commands} commands");
+        assert!(commands >= 14, "the scan found only {commands} commands");
     }
 
     /// The phone's Diverged resolve drives these commands through the window
@@ -2398,10 +2340,9 @@ mod tests {
         let overwritten = body("fn warn_overwritten(");
         assert!(overwritten.contains("LossKind::Overwritten") && overwritten.contains("LossSource::Sync"), "{overwritten}");
 
-        // And both entry points the window can reach go through `pull_subtree`.
-        for command in ["pub async fn sync_pull(", "pub async fn sync_whole_project("] {
-            assert!(body(command).contains("pull_subtree("), "{command} no longer pulls through the recorded path");
-        }
+        // And the entry point the window can reach goes through `pull_subtree`.
+        let command = "pub async fn sync_pull(";
+        assert!(body(command).contains("pull_subtree("), "{command} no longer pulls through the recorded path");
     }
 
     /// A status pass judged `f` against its old base; a push recorded a new base
@@ -2412,15 +2353,13 @@ mod tests {
         use crate::services::remote_sync::{record_push, Manifest, SyncEntry};
         let old = SyncEntry { selected: true, host_size: 3, local_size: 3, last_pull_ts: Some(1), ..Default::default() };
         let mut m: Manifest = [("f".to_string(), old.clone()), ("g".to_string(), old.clone())].into_iter().collect();
-        record_push(&mut m, "f", 9, Some(90), 9, Some(91));
+        record_push(&mut m, "f", (9, Some(90)), (9, Some(91)));
         let newer = m["f"].clone();
         let rebase = |rel: &str| ContentRebase {
             rel: rel.to_string(),
             entry: old.clone(),
-            host_size: 4,
-            host_mtime: Some(40),
-            local_size: 4,
-            local_mtime: Some(41),
+            host: (4, Some(40)),
+            local: (4, Some(41)),
         };
         let healed = apply_status_heal(&mut m, &[rebase("f"), rebase("g")], &[("f".to_string(), old.clone())]);
         assert_eq!(healed, vec!["g"]);

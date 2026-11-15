@@ -23,10 +23,15 @@ pills swaps all of that at once.
    picker changes it), writes starter files, initializes git and makes a
    first commit. Tick "Skip scaffolding" to start empty.
 
-Starter files include `AGENTS.md` (the canonical agent instructions),
-`CLAUDE.md` and `GEMINI.md` (pointers that import `AGENTS.md`), a `.gitignore`,
-`README.md`, `TODO.md` and a few status documents. Existing files are never
-overwritten.
+Starter files are `AGENTS.md` (the canonical agent instructions, with
+Boundaries and Verify sections to fill in), `README.md` and, for a git project,
+a `.gitignore` (a folder that holds `.tex` files also gets the LaTeX build
+files). No `CLAUDE.md`, `GEMINI.md` or `.claude/settings.json` is written: the
+agent CLIs in Tabtivity read `AGENTS.md` directly. `PROJECT.md`, `TODO.md`,
+`ROADMAP.md`, `STATUS.md` and `DOCUMENTATION.md` are made one at a time from
+the file tree's **Project docs** group (see `files-and-viewers`). Existing files
+are never overwritten, and a project that already has the older stubs keeps
+them.
 
 ## Import an existing folder or repository
 

@@ -33,9 +33,11 @@ import type { TranslationKey } from "../../../src/lib/i18n";
 /** The agent as the host sees it now. */
 export type AgentSignal = "working" | "question" | "idle";
 export type RoundPhase = "sent" | "queued" | "working" | "question" | "finished" | "unconfirmed";
-/** An `apply` round's undo snapshot on the desktop: its id, and whether the
- * Undo is still to be had (`ready`) or went through (`done`). */
-export type RoundUndo = { id: string; state: "ready" | "done" };
+/** An `apply` round's undo snapshot on the desktop: its id, whether the Undo
+ * is still to be had (`ready`) or went through (`done`), and the Submit's
+ * round id (`logId`) in the marks' log — the round whose ticks an Undo
+ * forgets. */
+export type RoundUndo = { id: string; state: "ready" | "done"; logId: string };
 /** `since`: when `phase` began. `sentAt`: the Submit. `idleSince`: when a
  * working or asking agent was last seen going idle, until it settles.
  * `applied`: this round is the **Make these changes** follow-up, not a
@@ -172,4 +174,50 @@ export function undoSummary(
     : t("mobile.markup.undo.files", { files: changes.more > 0 ? t("mobile.markup.undo.andMore", { files: named || "…", count: changes.more }) : named });
   const pdf = changes.pdf === "restored" ? t("mobile.markup.undo.pdfRestored") : changes.pdf === "kept" ? t("mobile.markup.undo.pdfKept") : "";
   return [files, pdf, outside].filter(Boolean).join(" ");
+}
+
+/** The round pill's words, by phase; `finished` takes the PDF check's. The
+ * desktop names its tab in `question` (`pdfMarkup.round.question`). */
+export const ROUND_KEYS: Record<Exclude<RoundPhase, "finished">, TranslationKey> = {
+  sent: "mobile.markup.round.sent",
+  queued: "mobile.markup.round.queued",
+  working: "mobile.markup.round.working",
+  question: "mobile.markup.round.question",
+  unconfirmed: "mobile.markup.round.unconfirmed",
+};
+
+/** Why an asked-for `apply` round runs as `list` (the backend's `noUndo`). */
+export const NO_UNDO_KEYS: Record<string, TranslationKey> = {
+  not_git: "mobile.markup.noUndo.notGit",
+  no_git: "mobile.markup.noUndo.noGit",
+  too_big: "mobile.markup.noUndo.tooBig",
+  filtered: "mobile.markup.noUndo.filtered",
+  git_failed: "mobile.markup.noUndo.gitFailed",
+  remote: "mobile.markup.noUndo.remote",
+  not_pdf: "mobile.markup.noUndo.notPdf",
+};
+
+/** What an undo call's refusal reads as — each host reads its own error shape
+ * into this (the desktop `pdfMarkupUndoFailure`, the phone `markupUndoConflict`
+ * and the `ApiError` code): `conflict` is set when the files changed since. */
+export type UndoFailure = { code: string; conflict: { files: readonly string[]; more: number } | null };
+
+/** The pill's line for a failed undo call, the same on both hosts: the files
+ * changed since (nothing was changed; checked before the code), an undo the
+ * backend no longer holds (`gone`: the caller offers it no more), or a plain
+ * failure — which may have put some files back. `reason` is the failure
+ * already worded by the host (it keeps its own error-code table). */
+export function undoFailureNote(
+  failure: UndoFailure,
+  step: "preview" | "undo",
+  reason: string,
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string,
+): { text: string; alert: true; gone: boolean } {
+  if (failure.conflict) {
+    const named = failure.conflict.files.map((path) => `\`${path}\``).join(", ") || "…";
+    const files = failure.conflict.more > 0 ? t("mobile.markup.undo.andMore", { files: named, count: failure.conflict.more }) : named;
+    return { text: t("mobile.markup.undo.conflict", { files }), alert: true, gone: false };
+  }
+  if (failure.code === "undo_gone" || failure.code === "round_not_found") return { text: t("mobile.markup.undo.gone"), alert: true, gone: true };
+  return { text: t(step === "preview" ? "mobile.markup.undo.previewFailed" : "mobile.markup.undo.failed", { reason }), alert: true, gone: false };
 }

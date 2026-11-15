@@ -75,6 +75,7 @@ import { RemoteHostsSettings } from "../settings/RemoteHostsSettings";
 import { Dropdown } from "../common/Dropdown";
 import { AssistantSettings } from "../assistant/AssistantSettings";
 import { VoiceSettings } from "./VoiceSettings";
+import { CheckpointsSettings } from "./CheckpointsSettings";
 import { voiceInputOffered } from "../../lib/voice/desktopVoice";
 import { PasswordInput } from "../common/PasswordInput";
 import { useT, LANGUAGES, type Language, type TranslationKey } from "../../lib/i18n";
@@ -2182,6 +2183,9 @@ export function SettingsDialog({
               onChange={(e) => void updateSettings({ voice_hands_free: e.target.checked })}
               help={t("settings.voiceHandsFreeHelp")}
             />
+
+            {/* Per-turn checkpoints: one switch for the controls and the backend's capture. */}
+            <CheckpointsSettings />
 
             <ToggleCard
               label={t("settings.webBrowser")}

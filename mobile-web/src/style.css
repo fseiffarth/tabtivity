@@ -230,6 +230,7 @@ button.agent-subagent-count:active { background:color-mix(in srgb, currentColor 
 .subagent-index-list .agent-worktree span { font-size:inherit; line-height:inherit; }
 .subagents-sheet .subagent-index-list { max-height:none; padding-top:0; }
 .subagents-sheet .subagent-index-list small em { color:#a99cff; font-style:normal; }
+.tab-files-sheet .sent-index-groups { max-height:none; padding-top:0; }
 .card.in-plan { border-color:#7b6ee0; }
 .card.in-goal { border-color:#4fb3c0; }
 .card.in-plan.has-tab-color,.card.in-goal.has-tab-color { border-left-color:var(--tab-color); }
@@ -333,21 +334,22 @@ small { color:#9498aa; }
 .new-tab-agents .agent-create > button:first-child { padding-right:44px; }
 .new-tab-default { position:absolute; top:6px; right:6px; display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; background:none; color:#9da3b6; font-size:1.15rem; }
 .new-tab-default[aria-pressed="true"] { color:#f5c451; }
-.new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
-.new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
-.new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
-/* "Runs on": the label beside a field drawn as the compact select, which
-   unfolds the sheets' `.option-list` under it (no native picker); the note
-   under both. Only the chevron's turn moves. */
-.new-tab-machine { display:grid; gap:6px; }
-.new-tab-machine-field { display:flex; align-items:center; gap:8px; min-width:0; }
-.new-tab-machine-field > small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
-.new-tab-machine-toggle { display:flex; flex:1 1 auto; align-items:center; gap:8px; min-width:0; padding:7px 10px 7px 12px; border-color:var(--edge); background-color:#0b0d13; color:#fff; font-size:.85rem; text-align:left; }
-.new-tab-machine-toggle.open { --rim:#7c6cff; }
-.new-tab-machine-toggle > span { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.new-tab-machine-toggle > svg { width:16px; height:16px; flex:0 0 auto; fill:none; stroke:#9aa0b4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease; }
-.new-tab-machine-toggle.open > svg { transform:rotate(180deg); }
-.new-tab-machine-list button { font-size:.9rem; }
+/* A sheet's pick fields ("Runs on", "Agents start in"): one inset group, a
+   row per field — its name left, the pick right, a ⌄. The rows unfold as the
+   sheets' `.option-list` floating under the field, a few rows tall and then
+   scrolling, so no count of rows moves what is under it. Only the chevron's
+   turn moves; the list's shadow is static. */
+.sheet-fields { display:grid; border-radius:var(--r-md); background:var(--surface-raised); }
+.sheet-fields > .sheet-select + .sheet-select { border-top:1px solid var(--hairline); }
+.sheet-select { position:relative; min-width:0; }
+.sheet-select-field { display:flex; align-items:center; gap:10px; width:100%; min-width:0; min-height:52px; padding:0 12px 0 14px; border:0; border-radius:var(--r-md); background:transparent; text-align:left; }
+.sheet-select-field.open { background:#2a2f42; }
+.sheet-select-field > small { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-sub); }
+.sheet-select-field > span { flex:1; min-width:0; text-align:right; font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.sheet-select-field > svg { width:16px; height:16px; flex:0 0 auto; color:var(--ink-muted); transition:transform .15s ease; }
+.sheet-select-field.open > svg { transform:rotate(180deg); color:#8fb8ff; }
+.sheet-select-list { position:absolute; z-index:3; top:calc(100% + 4px); left:0; right:0; max-height:min(300px, 46dvh); overflow-y:auto; overscroll-behavior:contain; border:1px solid var(--edge); border-radius:var(--r-md); background:var(--surface-raised); box-shadow:0 14px 32px rgba(0,0,0,.45); }
+.sheet-select-list button { font-size:.95rem; }
 /* The local-model group: the agents grid under a label worded like "Agents start in". */
 .new-tab-local { display:flex; flex-direction:column; gap:6px; }
 .new-tab-local > small { padding:0 6px; color:#9da3b6; font-size:.8rem; overflow-wrap:anywhere; }
@@ -456,7 +458,7 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
    out of the viewport; without it the last card sits under the bar. */
-.mobile-tabbar { position:fixed; inset:auto 0 0 0; z-index:8; margin:0; gap:2px; padding:6px max(8px,calc((100vw - var(--screen-measure)) / 2)) max(6px,env(safe-area-inset-bottom)); border-top:1px solid #2b2f3f; background:rgba(13,15,21,.96); backdrop-filter:blur(10px); }
+.mobile-tabbar { position:fixed; inset:auto 0 0 0; z-index:8; margin:0; gap:2px; padding:6px max(8px,calc((100vw - var(--screen-measure)) / 2)) max(6px,env(safe-area-inset-bottom)); border-top:1px solid #2b2f3f; background:rgba(13,15,21,.96); }
 .mobile-tab { flex:1; display:grid; justify-items:center; gap:3px; padding:7px 4px; border:0; border-radius:10px; background:transparent; color:#9498aa; font-size:.72rem; line-height:1.1; }
 .mobile-tab span { display:grid; place-items:center; width:35px; height:31px; font-size:1.2rem; line-height:1.15; }
 .mobile-tab.active { background:rgba(108,92,231,.18); color:#d7cffd; }
@@ -503,7 +505,6 @@ button.mobile-alert-row { cursor:pointer; }
 .home-screen .cards > button.card.in-plan { --rim:#7b6ee0; }
 .home-screen .cards > button.card.in-goal { --rim:#4fb3c0; }
 .home-screen .cards > button.card.has-tab-color { border-left:3px solid var(--tab-color); }
-.todo-create { display:grid; grid-template-columns:1fr 120px auto; gap:8px; margin:14px 0; }
 /* Adding a column is a rare, structural act, and it now sits at the foot of the
    column list where a new column would land — drawn as a ghost so it reads as
    the end of the board rather than as a second main action beside the FAB. */
@@ -640,7 +641,6 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-step-row button { padding:6px 8px; }
 .todo-editor-actions { align-items:center; }
 .todo-editor-actions > span { flex:1; }
-@media (max-width: 480px) { .todo-create { grid-template-columns:1fr auto; } .todo-create select { grid-column:span 2; } }
 @media (max-width: 420px) { .todo-editor { padding:14px; } .todo-editor-grid,.todo-due-fields { grid-template-columns:1fr; } .todo-step-row { grid-template-columns:auto minmax(0,1fr) auto auto auto; gap:4px; } .todo-step-row button { padding-inline:6px; } }
 .mail-mobile-screen header h1 { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
 .mail-mobile-accounts,.mail-mobile-list,.mail-mobile-folders,.mail-mobile-account { display:grid; gap:10px; }
@@ -1139,9 +1139,19 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .sent-index-group .sent-index-list :is(button,a) { border-color:color-mix(in srgb,var(--group) 35%,#2c3a55); }
 .sent-index-thumb { display:grid; place-items:center; width:100%; aspect-ratio:1; overflow:hidden; border-radius:6px; background:#2b2f45; color:#b9c4e0; font-size:1.15rem; font-weight:700; }
 .sent-index-thumb img { width:100%; height:100%; object-fit:cover; }
-.sent-index-name, .sent-index-list small { overflow:hidden; padding:0 2px; text-overflow:ellipsis; white-space:nowrap; }
-.sent-index-name { font-size:.74rem; font-weight:600; }
+.sent-index-list small { overflow:hidden; padding:0 2px; text-overflow:ellipsis; white-space:nowrap; }
+.sent-index-name { padding:0 2px; font-size:.74rem; font-weight:600; }
 .sent-index-list small { color:#95a6c8; font-size:.64rem; }
+.sent-index-thumb.file-name-cover { display:flex; place-items:normal; color:#dbe4f6; font-size:inherit; font-weight:inherit; }
+/* A file's name on a tile (`FileName`): wrapped where a reader breaks it,
+   the extension dimmed, two lines under a picture. With no picture to show
+   (`FileNameCover`) the name is the cover — up to five lines, the type in a
+   chip under it — instead of one glyph over a name cut to a line. */
+.file-name { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; overflow-wrap:anywhere; line-height:1.25; font-weight:600; }
+.file-name-ext { color:#95a6c8; font-weight:500; }
+.file-name-cover { display:flex; flex-direction:column; justify-content:space-between; gap:4px; box-sizing:border-box; min-width:0; padding:7px 6px 6px; text-align:left; }
+.file-name-cover .file-name { -webkit-line-clamp:5; padding:0; font-size:.78rem; }
+.file-name-chip { align-self:flex-start; padding:1px 5px; border-radius:4px; background:#2c3a55; color:#b9c4e0; font-size:.6rem; font-weight:700; letter-spacing:.06em; }
 .sent-index-more { padding:0 2px; color:#95a6c8; font-size:.68rem; }
 .git-sheet { max-height:92dvh; }
 .git-body { display:grid; gap:6px; overflow:auto; }
@@ -1203,6 +1213,8 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-shell-item { min-width:0; }
 .transcript-shell-toggle { flex:none; padding:2px 8px; border:0; background:transparent; color:#8fb8ff; font-size:.8rem; }
 .transcript-shell-terminal { margin-left:auto; text-decoration:underline; }
+.transcript-shell-toggle:not(.transcript-shell-terminal) + .transcript-shell-terminal { margin-left:0; }
+.transcript-shell-command { margin:0 10px 6px 33px; padding:6px 8px; max-height:40vh; overflow:auto; border-radius:8px; background:#14161e; color:#c8cde0; font:400 .72rem/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 @media (prefers-reduced-motion: reduce) { .transcript-working-dots i { animation:none; opacity:.7; } }
 .readable-notice { margin-bottom:10px; padding:8px 10px; border-left:3px solid #747b90; border-radius:8px; background:#14161e; color:#9298aa; font:400 .78rem/1.45 Inter,ui-sans-serif,system-ui,sans-serif; }
 .readable-earlier { display:block; width:100%; margin-bottom:10px; padding:9px 10px; border:1px solid #34384a; border-radius:9px; background:#151823; color:#9da3b6; font:500 .78rem/1.4 Inter,ui-sans-serif,system-ui,sans-serif; text-align:center; }
@@ -1632,6 +1644,15 @@ span.files-close { background:transparent; }
 .option-list .files-section svg, .files-grid .files-section svg { width:15px; height:15px; transition:transform .12s ease-out; }
 .option-list .files-section button[aria-expanded="true"] svg, .files-grid .files-section button[aria-expanded="true"] svg { transform:rotate(90deg); }
 .files-list li.files-folded > button:first-child strong { color:#aeb4c4; font-weight:500; }
+/* The root's "Project docs" group (`FilesLibrary` docsSection): the header's
+   summary, the template / pointer / create pills, a nested pointer file and a
+   ghost row. Static; only a template row is dimmed (files-folded above). */
+.files-docs-summary { margin-left:2px; color:#7d869c; font-size:.72rem; }
+.files-doc-badge { display:inline-block; margin-left:7px; padding:1px 7px; border-radius:999px; background:#252a3a; color:#98a0b4; font-size:.66rem; font-weight:500; line-height:1.3; vertical-align:middle; }
+.files-doc-ghost strong, .files-doc-ghost small { color:#98a0b4; font-weight:500; }
+.files-doc-plus { font-size:1.35rem; font-weight:400; line-height:1; }
+.files-list li.files-doc-nested > button:first-child { padding-left:35px; }
+.files-grid > li.files-doc-nested { margin-left:12px; }
 /* Local models sheet: the files-list row with its trailing button (Load /
    Unload as the files' Share), the model's facts in the option-row surface. */
 .local-models-list .local-model-info { display:grid; flex:1; gap:3px; min-width:0; padding:12px; background:var(--surface-raised); }
@@ -1877,8 +1898,8 @@ span.files-close { background:transparent; }
    rows, with the name and age under it — no button chrome around it. */
 .outbox-thumb { display:grid; gap:3px; min-width:0; padding:0; border:0; background:transparent; color:#95a6c8; font-size:.68rem; text-align:left; }
 .outbox-thumb img { display:block; width:100%; aspect-ratio:4 / 3; object-fit:cover; border:1px solid #34384a; border-radius:7px; background:#0f131c; }
-.outbox-thumb span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.outbox-gallery-grid .outbox-thumb strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#d8e2f5; font-size:.72rem; font-weight:600; }
+.outbox-thumb > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.outbox-gallery-grid .outbox-thumb strong { color:#d8e2f5; font-size:.72rem; }
 /* One column pinned to the screen's width: an auto column grew to the head's
    widest line and letterboxed the picture into a box wider than the phone. */
 /* A markup view tucked away behind its tab's chat (Terminal's markupAway):
@@ -1941,8 +1962,8 @@ span.files-close { background:transparent; }
 
 .outbox-entry { display:grid; gap:2px; min-width:0; }
 .outbox-file { display:grid; gap:5px; width:160px; padding:9px; border:1px solid #34384a; border-radius:7px; background:#0f131c; color:#d8e2f5; text-align:left; text-decoration:none; font-size:.75rem; }
-.outbox-file strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.outbox-file span { color:#95a6c8; }
+.outbox-file > span:not(.file-name-cover) { color:#95a6c8; }
+.outbox-file > .file-name-cover { width:100%; aspect-ratio:3 / 4; border-radius:5px; background:#2b2f45; }
 /* The agent's files in the Focus chat (`OutboxPost`), drawn as WhatsApp draws
    a picture: the picture is the bubble, inside a 3px rim of the agent's
    bubble colour, with the time laid over its bottom corner on a shade. An
@@ -2073,11 +2094,8 @@ span.files-close { background:transparent; }
 .markup-pen { display:flex; flex-direction:column; align-items:center; gap:8px; padding:8px 10px; }
 .markup-pen-row { display:flex; align-items:center; justify-content:center; gap:8px; }
 .markup-pen .markup-colors { padding:2px 4px; }
-.markup-pen-style, .markup-pen-size { display:grid; place-items:center; width:38px; height:38px; padding:0; border:0; border-radius:50%; background:transparent; color:#e6e9f2; font-size:1.1rem; }
-.markup-pen-style.selected, .markup-pen-size.selected { background:#2f6fec; color:#fff; }
-.markup-pen-dot { display:block; border-radius:50%; box-shadow:0 0 0 1px rgba(255,255,255,.4); }
-.markup-pen-ring { display:block; border-radius:50%; border:1.5px solid currentColor; }
-.markup-pen-area { display:block; width:16px; height:11px; border:1.5px dashed currentColor; }
+.markup-pen-style { display:grid; place-items:center; width:38px; height:38px; padding:0; border:0; border-radius:50%; background:transparent; color:#e6e9f2; font-size:1.1rem; }
+.markup-pen-style.selected { background:#2f6fec; color:#fff; }
 .markup-pen-meaning { margin:0; color:#c9cddb; font-size:.74rem; text-align:center; }
 /* What the area eraser will take while it is dragged. */
 .markup-area { position:absolute; border:1.5px dashed #333; outline:1.5px solid rgba(255,255,255,.85); pointer-events:none; z-index:3; }
@@ -2111,7 +2129,6 @@ span.files-close { background:transparent; }
 .markup-presets { flex-wrap:wrap; gap:6px; }
 .markup-preset { display:inline-flex; align-items:center; gap:5px; height:32px; padding:0 9px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#e6e9f2; font-size:.95rem; }
 .markup-preset.selected { border-color:#2f6fec; box-shadow:0 0 0 1px #2f6fec; }
-.markup-preset-dot { display:block; width:12px; height:12px; border-radius:50%; box-shadow:0 0 0 1.5px rgba(255,255,255,.55); }
 .markup-pen-actions { flex-wrap:wrap; gap:6px; }
 .markup-pen-actions button { min-height:32px; padding:0 12px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font:500 .76rem/1 Inter,ui-sans-serif,system-ui,sans-serif; }
 .markup-pen-actions button:disabled { opacity:.45; }
@@ -2229,10 +2246,10 @@ span.files-close { background:transparent; }
 :where(:is(.terminal-screen,.sheet-backdrop,.brand-screen) .primary) { --rim:#8c7df4; }
 :where(.prompt-composer,.focus-menu,.transcript-screen) { --r:var(--r-lg); }
 :where(.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent) { --r:var(--r-md); --rim:var(--edge); }
-:where(.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin) { --r:var(--r-sm); --rim:var(--edge); }
+:where(.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.local-unlock-use-pin) { --r:var(--r-sm); --rim:var(--edge); }
 :is(.terminal-screen,.sheet-backdrop,.brand-screen) :is(button:not([class]),button.primary,button.danger,button.mode,button.new-tab-file,select,textarea,input:not([type="checkbox"],[type="radio"],[type="range"],[type="color"],[type="file"])),
 .prompt-composer,.focus-menu,.transcript-screen,.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent,
-.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin {
+.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.local-unlock-use-pin {
   border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
 }
 /* Focus retints the rim; the field draws no outline of its own. */
@@ -2253,6 +2270,28 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { --ct:0px; --cb:0p
 ul.option-list:not(.files-list) > li:not(.option-list-group) + li:not(.option-list-group) { border-top:1px solid var(--hairline); }
 ul.option-list:not(.files-list) > li:first-child,ul.option-list:not(.files-list) > .option-list-group + li { --ct:var(--r-md); }
 ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) > li:has(+ .option-list-group) { --cb:var(--r-md); }
+/* The row's button fills its run's rounded corners rather than painting
+   square ones over them. A gap (`section`) is an unlabelled group label: it
+   splits the runs without a heading. */
+ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; }
+.option-list-group.option-list-gap { height:0; margin:6px 0; }
+.option-list button.current { color:#bcb0ff; background:var(--surface-raised); }
+.option-list button.current small { color:var(--ink-muted); }
+/* A row's parts: a leading glyph in the accent, a value at its end, a › when
+   it opens another sheet; a destructive row in the danger colour. */
+.option-list .option-icon { display:grid; place-items:center; flex:0 0 auto; width:24px; height:24px; color:#8fb8ff; font-style:normal; }
+.option-list .option-icon svg { width:21px; height:21px; stroke-width:1.9; }
+.option-list button > span.option-trail { display:flex; flex:0 0 auto; align-items:center; gap:6px; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
+.option-list .option-chevron { width:16px; height:16px; color:#6f7790; stroke-width:2.2; }
+.option-list button.danger-row { color:#ff7a8c; }
+.option-list button.danger-row .option-icon { color:inherit; }
+.option-swatch { display:block; width:18px; height:18px; border:2px solid var(--ink-muted); border-radius:50%; box-sizing:border-box; }
+.option-swatch.filled { border-color:transparent; background:var(--swatch); }
+/* The head: the title over a line of context, the ✕ a round button. */
+.option-sheet .sheet-heading { flex:1; min-width:0; display:grid; gap:2px; margin-left:4px; }
+.option-sheet .sheet-heading h2 { margin:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.option-sheet .sheet-sub { display:flex; align-items:center; gap:6px; min-width:0; margin:0; color:var(--ink-muted); font-size:var(--fs-foot); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.option-sheet header > button.sheet-close { border-radius:50%; background:radial-gradient(circle 18px, var(--surface-raised) 96%, transparent 100%); font-size:18px; }
 /* A list on its way in (`ListSkeleton`): still rows, an opacity pulse. */
 .list-skeleton { display:grid; gap:var(--sp-3); margin:var(--sp-2) 0; }
 .list-skeleton > i { display:block; height:68px; background:var(--surface-group); animation:list-skeleton-pulse 1.4s ease-in-out infinite; }
@@ -2522,3 +2561,43 @@ ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) 
      sheet, and the files library or viewer Favorites opens. */
   .tabbed.split:has(.sheet-backdrop,.files-library,.outbox-viewer) > .mobile-tabbar { visibility:hidden; }
 }
+
+/* A phone held sideways (844×390 and the like): too short for the tablet
+   tiers, so it would otherwise keep the portrait layout stretched across the
+   width. `PHONE_LANDSCAPE_QUERY` in `useTier.ts` spells the same query (a test
+   keeps the copies equal). The agent tab's head drops to 44px and keeps clear
+   of the notch. The Chat view reads at the whole width and docks the composer
+   (with the notes, the facts row, the tips and the key row over it) as a
+   column on the right, so the transcript keeps the full height under the head:
+   height is what a phone on its side is short of. It stays docked while the
+   keyboard is up, so the field being typed in never jumps. The Terminal view
+   keeps its composer underneath. */
+@media (orientation:landscape) and (min-width:560px) and (max-height:599px) {
+  .terminal-screen > header { min-height:44px; padding-left:max(2px,env(safe-area-inset-left)); padding-right:max(8px,env(safe-area-inset-right)); }
+  .terminal-screen.agent-tab[data-view="focus"] { grid-template-columns:minmax(0,1fr) 272px; grid-template-rows:auto minmax(0,1fr); }
+  .terminal-screen.agent-tab[data-view="focus"] > header { grid-column:1 / -1; }
+  .terminal-screen.agent-tab[data-view="focus"] > .terminal-body { grid-column:1; grid-row:2; }
+  .terminal-screen.agent-tab[data-view="focus"] > .terminal-controls { grid-column:2; grid-row:2; display:flex; flex-direction:column; gap:4px; padding:6px max(8px,env(safe-area-inset-right)) 6px 0; border-left:1px solid var(--hairline); }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-output { padding-inline:max(20px,env(safe-area-inset-left)) 18px; }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-pinned-prompt { right:18px; }
+  .terminal-screen.agent-tab[data-view="focus"] .readable-lines .readable-turn.user { max-width:70%; }
+  .terminal-screen.agent-tab[data-view="focus"] .session-facts { flex:0 0 auto; margin-inline:8px 0; }
+  /* The field takes the column's height; `!important` outranks the inline
+     height the composer's auto-grow writes, which would pin it to its lines. */
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer { flex:1 1 auto; min-height:120px; margin:0 0 0 8px; }
+  .terminal-screen.agent-tab[data-view="focus"] .composer-field { flex:1 1 auto; min-height:0; }
+  .terminal-screen.agent-tab[data-view="focus"] .prompt-composer textarea { align-self:stretch; height:auto !important; max-height:none; }
+  .terminal-screen.agent-tab[data-view="focus"] .composer-bar { flex-wrap:wrap; }
+}
+/* The desktop switcher (`shell/`). A framed desktop fills the page; the shell
+   pads the safe areas, since `env()` reads 0 inside a frame. */
+.shell-stage { position:fixed; inset:0; display:flex; flex-direction:column; padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background:#000; }
+.shell-frame-holder { flex:1 1 auto; min-height:0; display:flex; }
+.shell-frame { flex:1 1 auto; width:100%; height:100%; border:0; display:block; background:#000; }
+.shell-frame-panel { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-4); padding:max(24px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom)); background:#0b0d13; color:#e7e9f2; text-align:center; }
+.shell-frame-panel > p { max-width:34ch; margin:0; line-height:1.5; }
+.shell-frame-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:var(--sp-3); }
+.shell-stage-tag { position:absolute; left:8px; bottom:max(8px,env(safe-area-inset-bottom)); pointer-events:none; }
+/* Over a screen with no header (splash, pairing, the lock sheet): above the
+   lock sheet's backdrop (12). */
+.shell-switch-floating { position:fixed; z-index:13; top:max(10px,env(safe-area-inset-top)); right:max(10px,env(safe-area-inset-right)); border-radius:var(--r-md); }

@@ -91,7 +91,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
 
-import { PdfView, PDF_PAGE_RELEASE_MS } from "../../components/embed/pdf/PdfViewer";
+import { PdfView } from "../../components/embed/pdf/PdfViewer";
+import { PDF_PAGE_RELEASE_MS } from "../../components/embed/pdf/PdfPageCanvas";
 import { FileScopeContext, PaneVisibleContext } from "../../lib/files/fileAccess";
 import { usePdfSyncStore } from "../../stores/viewers/pdfSync";
 

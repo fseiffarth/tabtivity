@@ -611,6 +611,22 @@ Claude's `/fast` — different thing.
   The `… +N models` note counts it among the rows below. Hook payloads (19
   events, `cmp.py`, `sedcheck.py` 0 mismatches), `/usage` envelope and panel
   lines, `--help` and the permission prompt's rows read the same as 2.1.319.
+- **2.1.323 (2026-11-13), outside Tabtivity, beside 2.1.322** (both from the
+  agent install's `versions/`, tab variables unset): `hooks.sh` 19 events with
+  the same keys (`cmp.py`), `sedcheck.py` 0 mismatches over 23 payloads,
+  transcript record types unchanged (`meta.py`), `-p --resume` of a `plan`
+  session still the default mode; `/usage` three meters, every reset placed;
+  `--help` differs only in `claude rm`'s wording (the conversation is kept).
+  `send_now.py` with the chord: tool, typed, stream and early read as on
+  2.1.322. The changelog's "last key of a chord acting on a dialog's text
+  field" fix does not touch the Chat's Ctrl+X Ctrl+S. `prompt.py` and `model.py`
+  (both widths, `expand`): rows and highlight the same. The dialog's `▔` edge
+  carries a notice more often now (`▔▔▔ ● high · /effort ▔`, tmux hints);
+  2.1.322 drew it too. `readableScreen` kept such an edge as text, glued the
+  heading under it onto it, and the `/model` sheet went untitled. It now reads
+  as the bare edge (`LABELLED_DIALOG_EDGE`, `MobileReadableScreen.test.ts`),
+  and all 77 picker frames are titled. Not exercised: a live tab, the phone, a
+  real sign-in.
 
 **Verify**
 
@@ -674,6 +690,20 @@ tab and resume/fork remain tagged for live verification.
 
 **Assumes**
 
+- **0.169.0 (2026-11-13), outside Tabtivity, beside 0.167.2** — same setup as
+  0.167.1 below; release notes of 0.168.0 and 0.169.0 read. `--help` of the top
+  level, `resume`, `fork`, `mcp`, `login` and `queue` is identical; `exec` adds
+  `--trust`. 0.169.0's `exec` keeps project config and MCP off in an untrusted
+  folder; the warm-up's `exec --skip-git-repo-check` passes no `--trust` and
+  still answers there (`codex_cli_talks_to_the_proxy`, a temp folder). Both
+  real-binary probes pass. `screens.sh`: options, current row and titles read
+  the same. The footer moved Shift+Tab's `Plan mode (shift+tab to cycle)` from
+  its own row onto the `← for agents · ? for shortcuts` row, before `⚠ N
+  warning`; `sessionStatus` still reads `plan` at 100 and 60 columns.
+  `writer_lock.py`: the same lock screen and release (upstream reworked the lock
+  coordination, #59969). The rollout's first line is still `session_meta`, with
+  one new key, `account_scoped` (unread). Hooks, a real model turn, an approval
+  and the window were not exercised.
 - **0.167.2 (2026-11-12), outside Tabtivity, beside 0.167.1** — same setup as
   0.167.1 below. Upstream's three commits are core only: incremental tool
   declarations on by default for GCP Vertex (new `[features]` key
@@ -1141,6 +1171,20 @@ Antigravity's newest release comes from the manifest its installer reads
 `install.ps1` exit 0 at "already installed". Inside a fence the binary's folder
 is read-only, so neither `agy update` nor its background self-update can work.
 
+Cursor is on no public registry and `cursor-agent update` asks Cursor's
+signed-in API, so its newest build is read out of the download URL in
+`cursor.com/install` (`agent_latest::Source::InstallScript`, marker
+`downloads.cursor.com/lab/`), and the installed build from the
+`~/.local/share/cursor-agent/versions/<build>/` folder its launcher links into.
+Running the installer again always fetches the newest build and relinks, so
+Update is the installer. Its only auto-update switch is the hidden top-level
+`--disable-auto-update` flag (read in 2026.09.28 and 2026.11.11; no environment
+variable), so every fenced Cursor session gets it first in its argv
+(`agent_install::AUTOUPDATE_OFF_ARGS`, `apply_fence_args`) — only on a build at
+least that old, read from its `versions/` folder, and never before a
+subcommand. Without it a fenced Cursor downloaded every new build into the
+agent home and could never link it in. Re-check the flag with each new build.
+
 Vibe's `install.sh` (Manage CLIs' Install and Update) picks upgrade over
 install when it finds *any* `vibe` on its PATH, then runs `uv tool upgrade
 mistral-vibe` against the install home's `UV_TOOL_DIR`, where a host-only
@@ -1315,6 +1359,19 @@ now only on a session's first report (not read), and a `sessionStart`
 `additionalContext: null` treated as absent (the hint hook prints text).
 Real sign-in, model pickers and a model's own output were not exercised.
 
+Re-checked **1.0.110** (2026-11-13, `npm pack @github/copilot-linux-x64`, beside
+1.0.109): all 13 `copilot-events-probe.py` checks pass on both. `--help` only
+drops `--plain-diff`, which Tabtivity never passes; `login --help` is
+identical. The unpacked runtimes hold `authTokens`, `lastLoggedInUser` and
+`storeTokenPlaintext` in as many files. `scripts/verify-cli/copilot/screens.sh`
+(new: trust, idle, the stub's `create` approval at 110 and 60 columns, the Esc
+after it) reads the same on both, the hangless wrap included. Changelog items
+near what Tabtivity reads: a session reopened with `--resume` is marked in use
+at once, so a second writer is kept out; Tabtivity spawns by `--session-id`
+and runs no `-p --resume` beside a tab. Enter pressed twice on a permission
+prompt no longer warns. Real sign-in, model pickers and a model's own output
+were not exercised.
+
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
 Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
@@ -1330,6 +1387,24 @@ the experimental plugin API) get instructions instead: a marker block in
 in `~/.config/opencode/opencode.json` `instructions` (its global `AGENTS.md`
 would shadow the `~/.claude/CLAUDE.md` fallback). All but Copilot are from the vendors'
 docs, not live.
+
+"Reads the project's `AGENTS.md`" (new projects scaffold no `CLAUDE.md` /
+`GEMINI.md` pointer; re-check yes/no per CLI on update, table in
+`docs/scaffold_files_plan.md` §3a). Two CLIs do not by default, so
+`agent_hint::register_in_home` sets it in Tabtivity's own agent homes, after
+the global layer: **Gemini** `~/.gemini/settings.json` `context.fileName`
+(string or array; `["GEMINI.md","AGENTS.md"]` union, the user's entries kept,
+the first name is where `save_memory` writes), **Aider** `~/.aider.conf.yml`
+`read:` (string or list, resolved against the cwd; a project without
+`AGENTS.md` only prints "Read-only file … does not exist. Skipping." per
+`aider/coders/base_coder.py`, read 2026-11-13, not live: no real Aider is
+installed here to run `verify-cli` on). Re-check the key names and that the
+default file lists did not change. Native readers (nothing to set): Codex,
+Antigravity, Vibe, Kiro, Cline, OpenCode, Cursor, Copilot, Droid, Grok, Qwen
+(since 0.11.1), Auggie, Kilo, Junie, Goose, Pi, Crush, Amp, Kimi, Qoder; Claude
+only when no `CLAUDE.md` sits in or above the project; CodeBuddy only without a
+`CODEBUDDY.md`. No way found: Plandex, SWE-agent, mini-SWE-agent, Continue,
+OpenClaw (own workspace file by design); Muse unverified.
 
 The `tabtivity-send` skill (`agent_hint::SKILL_DIRS`, 2026-11-08) leans on
 each CLI's user-skill folder, found by searching the installed builds, not
@@ -1625,6 +1700,25 @@ not break the exercised session plugin or remote MCP pin. This does not
 verify Console/provider sign-in, real provider calls, fencing, the running
 desktop window or a phone; their existing untested tags remain.
 
+Run again on **2.3.0** (2026-11-13, official npm binary, beside a 2.2.7 rerun of
+the same turns): `turns.py` full, mini and `ask`, `tabby.py` and `resume.py`
+print the same lines, except the subagent. **Subagents now always run in the
+background.** The spawn call's result comes back at once (`The subagent is
+working in the background (sessionID: …)`). The finished report arrives later
+in the parent session as a `session_message` row of type `synthetic`
+(`metadata.source: "subagent"`, text `<subagent … state="completed">`), and the
+model answers it in a turn of its own. The store reader skips `synthetic`, so
+no report shows up as a prompt. `opencode_store`'s new opt-in probe
+(`verify_cli_reads_a_captured_store`) reads 2.3.0's store as 2.2.7's: 18
+entries against 17 (the one extra is the answer to the report), the subagent
+read through its handle, two completed `w.txt` changes. The plugin still
+records the parent, not the child. OpenCode's agent entries never claim
+`running`/`finished`, so a background child is not called done early. The
+TUI's new default verbosity (`low`, tool runs folded into one activity row)
+only moves rows: of 55 frames, the question form, permission chips and lamp
+read the same, mini's palette differs in raw text only, and the free-model
+catalog changed its order upstream. Help is unchanged.
+
 Since 2026-10-22 (the user's call) install, Update and the remote bootstrap
 run `opencode.ai/v2/install` (Windows: `npm uninstall -g opencode-ai && npm
 install -g @opencode/cli`, as both link `opencode`), and the update check
@@ -1829,6 +1923,22 @@ moves the footer the model reader takes. The conversation store gained a
 `conversation_parents` table (the search index's companion, joined to
 `conversations_fts` in the binary); `conversation_summaries` and its
 `parent_conversation_id` are unchanged.
+1.5.8 on 2026-11-13 (the updater manifest's tarball, sha512 checked, in a
+read-only directory, beside 1.5.6): `main.py` prints the same lines at 80 and 42
+columns, apart from the model a fresh home starts on (Gemini 4 Hydrogen, was
+Gemini 3.8 Flash). `second.py` shows the notice with the history, and
+`store.py` reads the same three turns with identical schemas. `--help` and
+`models --help` are identical. The sign-in frames differ only in the PKCE state
+and challenge. `/model` now lists seven models: Gemini 4 Hydrogen (Low to
+XHigh) and Gemini 4 Carbon (Low to High) are new to API-key sign-ins (1.5.8).
+At 80×24 the dialog windows them with `[1-6 of 7 items]` / `[2-7 of 7 items]`,
+and the reader numbers the rows and counts the hidden one from that note.
+Carbon's effort slider adds an `xhigh` stop, read as such. 1.5.7 made **Auto**
+the default `Agent Mode` (headless `-p` too) wherever Auto is available.
+Tabtivity neither reads nor sets Antigravity's mode, so a tab now asks less
+by Antigravity's own choice. 1.5.8 also adds click-to-expand in the altscreen
+rendering mode (not the default) and `agy acp` context updates. Not reached:
+swarms and a real sign-in.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row
@@ -2005,8 +2115,14 @@ agent CLI. Behind the `copilot_completion` experimental flag; the pinned version
 is `services/copilot/process.rs` `SERVER_VERSION` (install dir and npm spec follow it).
 
 **Protocol reference** [GitHub's official server](https://github.com/github/copilot-language-server-release).
-Inspected/probed **1.547.0**, Linux x64, 2026-09-18. Native npm packages list
-Linux/macOS/Windows x64/arm64; upstream also documents Node >=20.8.
+Inspected/probed **1.565.6**, Linux x64, 2026-11-14 (before: 1.547.0,
+2026-09-18). Pick a release at least a week old (1.567.5 was one day old then).
+The installer takes the native package alone,
+`@github/copilot-language-server-linux-<x64|arm64>@<version>` (159 MB): the
+umbrella package's optional dependencies pull every platform's build plus, since
+1.56x, the Copilot CLI and SDK (about 600 MB on Linux x64). The probe passes
+against the native package alone. Native npm packages list Linux/macOS/Windows
+x64/arm64; upstream also documents Node >=20.8.
 
 **Assumes** stdio Content-Length framing; initialize/initialized; incremental
 didOpen/didChange/didClose plus didFocus; inlineCompletion includes document
@@ -2020,20 +2136,37 @@ plaintext writer. Do not infer keychain protection from its keytar dependency.
 The synthetic probe blocks that file and exercises the in-memory fallback;
 authenticated behavior and production credential policy are still unverified.
 
-**Unverified calls** `signIn` (→ `userCode`, `verificationUri`, `command`),
-finishing it via `workspace/executeCommand`, `signOut` and `checkStatus`
-(→ `status`, `user`) are written from upstream's README and tested only
-against a fake server. `didChangeStatus` `kind`/`message` likewise.
+**Unverified calls** finishing `signIn` via `workspace/executeCommand`,
+`signOut` and `checkStatus` (→ `status`, `user`) are written from upstream's
+README and tested only against a fake server. `didChangeStatus`
+`kind`/`message` likewise. `signIn` itself is probed anonymously (1.565.6:
+`status: PromptUserDeviceFlow`, `userCode`, `verificationUri`
+`https://github.com/login/device`, `command.command`
+`github.copilot.finishDeviceFlow`). Stay signed in (`credentials.rs`) uses
+`auth/getGitHubToken` (`{}` → `{credentialType, resource, token, scopes?}` or
+null) and `signInWithGithubToken` (`{githubToken, user, githubAppId?}` →
+the `checkStatus`-like `{status, user}`), read from 1.565.6's `dist/main.js`
+handler table and schemas (the umbrella package's `dist/`; the native binary
+carries the bundle compressed); neither ran against a live account. Error codes
+from the same bundle: 1000 NoCopilotToken, 1001 DeviceFlowFailed, 1002
+CopilotNotAvailable, 1004 CodeFlowFailed, 1005 NoBrowserAvailable, 1006
+AuthEnvVarConflict; LSP -32800/-32801/-32802.
 
 **Verify** after bumping `SERVER_VERSION`, the real server inside the real fence:
-`TABTIVITY_COPILOT_INSTALL=<npm prefix> cargo test --manifest-path src-tauri/Cargo.toml --lib copilot -- --ignored`
-(initialize + unauthenticated error 1000 through `session.rs`). Also
-`python3 scripts/copilot-probe.py /absolute/path/to/copilot-language-server`
-without launching Tabtivity. It currently verifies initialization, unsaved document
-sync, unauthenticated error 1000 and cancellation -32800 only. Before release,
-also verify device sign-in/sign-out, credential persistence policy, exclusions,
-workspace filesystem reads, quota messages and accepted-item offsets against a
-real signed-in session. Never capture tokens or raw protocol logs.
+`TABTIVITY_COPILOT_INSTALL=<npm prefix> cargo test --manifest-path src-tauri/Cargo.toml --lib copilot -- --ignored --nocapture`
+(initialize, unauthenticated error 1000, then an anonymous `signIn` that stops
+at the user code — it proves DNS, TLS, the CA bundle and the fence's `/etc`
+binds; a failure prints the server's stderr, e.g. bwrap's). It needs
+unprivileged user namespaces: inside an agent fence bwrap cannot nest, so run it
+from a normal shell. Also
+`python3 scripts/copilot-probe.py [--sign-in] /absolute/path/to/copilot-language-server`
+without launching Tabtivity (unfenced; HOME, XDG and the Copilot home in a
+temporary directory). It verifies initialization, unsaved document sync,
+unauthenticated error 1000, cancellation -32800 and, with `--sign-in`, the
+device-code reply. Before release, also verify device sign-in/sign-out, stay
+signed in, exclusions, workspace filesystem reads, quota messages and
+accepted-item offsets against a real signed-in session. Never capture tokens or
+raw protocol logs.
 
 ---
 

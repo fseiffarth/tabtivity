@@ -2223,6 +2223,7 @@ const BARE_GIT_ALLOWED: &[(&str, &str, &str)] = &[
     ("services/git/git_hardened.rs", "sanitize_git_config_file", "`config --file` on one file, no repo"),
     ("services/git/git_bounded.rs", "list_path_values", "`config --file` on one file, no repo"),
     ("services/git/git_hardened.rs", "git_available_blocking", "`--version`, no repo"),
+    ("services/git/git_hardened.rs", "local_git_version_blocking", "`--version`, no repo"),
     ("services/git/git_hardened.rs", "git_clone_blocking", "network clone into a new empty dir"),
     ("commands/git.rs", "git_remote_visibility_blocking", "anonymous `ls-remote` of a URL"),
     ("services/dev_build.rs", "commits_behind", "the app's own checkout"),

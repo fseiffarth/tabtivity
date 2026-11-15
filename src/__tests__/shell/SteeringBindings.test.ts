@@ -170,8 +170,8 @@ describe("steering bindings Inside a view", () => {
     expect(steeringActionFor(ev("Tab"), "region", null)).toBeNull();
   });
 
-  it("answers z u o v n with the view actions Inside only", () => {
-    const keys = { z: "viewToggle", u: "viewMode", o: "viewOpen", v: "viewOpenAlt", n: "viewNew" } as const;
+  it("answers z u o v n c with the view actions Inside only", () => {
+    const keys = { z: "viewToggle", u: "viewMode", o: "viewOpen", v: "viewOpenAlt", n: "viewNew", c: "viewNote" } as const;
     for (const [key, action] of Object.entries(keys)) {
       expect(steeringActionFor(ev(key), "inside", null)).toBe(action);
       expect(steeringActionFor(ev(key.toUpperCase()), "inside", null)).toBe(action);
@@ -193,7 +193,7 @@ describe("steering bindings Inside a view", () => {
     expect(steeringActionFor(ev("Escape"), "inside", null)).toBe("exit");
     expect(steeringActionFor(ev("3"), "inside", null)).toBe("slot3");
     // Dead Inside (the handler swallows them), but still resolved to their action.
-    expect(steeringActionFor(ev("c"), "inside", null)).toBe("calendar");
+    expect(steeringActionFor(ev("m"), "inside", null)).toBe("mail");
     expect(steeringActionFor(ev("w"), "inside", null)).toBe("closeTab");
     expect(steeringActionFor(ev("i"), "inside", null)).toBeNull();
   });
@@ -202,7 +202,7 @@ describe("steering bindings Inside a view", () => {
     const scopes = STEERING_BINDING_SECTIONS.map((s) => s.scope);
     expect(scopes.indexOf("inside")).toBe(scopes.indexOf("panes") + 1);
     const insideDefs = STEERING_BINDINGS.filter((d) => d.scopes[0] === "inside").map((d) => d.action);
-    expect(insideDefs).toEqual(["viewToggle", "viewMode", "viewOpen", "viewOpenAlt", "viewNew"]);
+    expect(insideDefs).toEqual(["viewToggle", "viewMode", "viewOpen", "viewOpenAlt", "viewNew", "viewNote"]);
   });
 
   it("flags an Inside key only against what is live Inside", () => {

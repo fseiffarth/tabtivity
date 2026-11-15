@@ -12,6 +12,7 @@ import { formatAgo, formatClock } from "./cockpitFormat";
 import { jumpToRow, ScopeChip } from "./CockpitRoster";
 import { UntestedTag } from "../common/UntestedTag";
 import { CockpitResults } from "./CockpitResults";
+import { CockpitMessages } from "./CockpitMessages";
 import { CockpitAttention, CockpitBlocker, CockpitMilestones, CockpitProgress, CockpitVerification } from "./CockpitReports";
 
 const NO_PROMPTS: readonly { text: string }[] = [];
@@ -19,7 +20,8 @@ const NO_PROMPTS: readonly { text: string }[] = [];
 /**
  * The Now view's right column: the shown tab's header (scope · tab, ↗ Jump,
  * the facts the roster has for it), its live Chat through `CockpitDetailPane`,
- * and, folded below, its schedules and last prompts. Nothing to show: the top
+ * and, folded below, its messages to and from sibling tabs, schedules and last
+ * prompts. Nothing to show: the top
  * Asking row, else the latest working agent (a one-line strip says it is
  * following; picking a row pins), else one line.
  */
@@ -105,6 +107,7 @@ export function CockpitDetail({
       <CockpitBlocker row={row} now={now} />
       <CockpitVerification row={row} now={now} />
       <CockpitMilestones row={row} now={now} />
+      <CockpitMessages row={row} />
       <details className="cockpit-detail-fold">
         <summary>{t("cockpit.detail.schedules", { count: upcoming.length })}</summary>
         {upcoming.length === 0 ? (

@@ -141,8 +141,8 @@ pub struct UpdateCheck {
 }
 
 /// What [`stage_download`] left on disk, and the only thing [`install`] will
-/// act on. Process-local: a staged file does not survive a relaunch as an
-/// install candidate, which is the conservative reading.
+/// act on. After a relaunch, recover only from a signed receipt, never from
+/// a locally stored digest or a renderer-supplied path.
 static STAGED: Mutex<Option<Staged>> = Mutex::new(None);
 
 #[derive(Clone, Debug)]
@@ -440,7 +440,7 @@ async fn verified_digest(
     client: &reqwest::Client,
     asset: &UpdateAsset,
     version: &str,
-) -> Result<String, String> {
+) -> Result<(String, DownloadReceipt), String> {
     let signature = asset.signature.as_ref().ok_or(
         "this release is not signed, so it can't be installed from here; download it from the releases page",
     )?;
@@ -449,7 +449,15 @@ async fn verified_digest(
     verify_sums(&release_verifying_key()?, &sums, &sig)?;
     let sums = std::str::from_utf8(&sums)
         .map_err(|_| "the release checksum list is not text; refusing the update")?;
-    expected_digest(sums, &asset.name, version)
+    let digest = expected_digest(sums, &asset.name, version)?;
+    Ok((digest, DownloadReceipt {
+        name: asset.name.clone(),
+        version: version.to_string(),
+        source_version: current_version().to_string(),
+        source_commit: build_commit().map(str::to_string),
+        sums: sums.to_string(),
+        signature: sig,
+    }))
 }
 
 /// Whether a URL is a release download from one of *our* repositories:
@@ -675,7 +683,19 @@ pub async fn stage_download(
     let client = client()?;
     // Before the artifact: a release that can't vouch for it is refused without
     // spending the download.
-    let expected = verified_digest(&client, asset, version).await?;
+    let (expected, receipt) = verified_digest(&client, asset, version).await?;
+    // Even if the process restarted, a verified existing artifact costs no
+    // second download. The current release's signature remains authoritative.
+    if final_path.is_file() && file_sha256(&final_path)? == expected {
+        save_receipt(&dir, &receipt)?;
+        let staged = Staged {
+            path: final_path, name: asset.name.clone(), version: version.to_string(),
+            kind, sha256: expected,
+        };
+        *STAGED.lock().map_err(|_| "update state poisoned")? = Some(staged.clone());
+        on_progress(asset.size, Some(asset.size));
+        return Ok(staged);
+    }
 
     let mut response = client
         .get(&asset.url)
@@ -726,6 +746,7 @@ pub async fn stage_download(
 
     std::fs::rename(&part_path, &final_path).map_err(|e| format!("update staging: {e}"))?;
     make_runnable(&final_path);
+    save_receipt(&dir, &receipt)?;
 
     let staged = Staged {
         path: final_path,
@@ -750,9 +771,62 @@ fn make_runnable(path: &Path) {
     let _ = path;
 }
 
-/// The currently staged download, if any.
+/// Persist the signed evidence, not a trusted executable path or digest.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DownloadReceipt {
+    name: String,
+    version: String,
+    source_version: String,
+    source_commit: Option<String>,
+    sums: String,
+    signature: Vec<u8>,
+}
+
+fn save_receipt(dir: &Path, receipt: &DownloadReceipt) -> Result<(), String> {
+    let bytes = serde_json::to_vec(receipt).map_err(|e| format!("update receipt: {e}"))?;
+    // An interrupted receipt write is simply ignored on the next launch; it
+    // cannot turn an incomplete download into an executable candidate.
+    std::fs::write(dir.join("staged.json"), bytes)
+        .map_err(|e| format!("update receipt: {e}"))
+}
+
+fn restore_staged(
+    dir: &Path,
+    kind: InstallKind,
+    key: &p256::ecdsa::VerifyingKey,
+) -> Result<Staged, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(dir.join("staged.json")).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_SUMS_BYTES * 8).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    let receipt: DownloadReceipt = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    // Once a different build is running, this receipt has served its purpose.
+    if receipt.source_version != current_version()
+        || receipt.source_commit.as_deref() != build_commit()
+        || is_newer(current_version(), &receipt.version)
+        || receipt.name != safe_file_name(&receipt.name)
+        || !wanted_extensions(kind).iter().any(|ext| {
+            receipt.name.rsplit('.').next().is_some_and(|got| got.eq_ignore_ascii_case(ext))
+        })
+    {
+        return Err("stale or invalid update receipt".to_string());
+    }
+    verify_sums(key, receipt.sums.as_bytes(), &receipt.signature)?;
+    let sha256 = expected_digest(&receipt.sums, &receipt.name, &receipt.version)?;
+    let path = dir.join(&receipt.name);
+    if file_sha256(&path)? != sha256 {
+        return Err("cached update does not match the signed checksum".to_string());
+    }
+    Ok(Staged { path, name: receipt.name, version: receipt.version, kind, sha256 })
+}
+
+/// The current download, recovered from signed evidence after a relaunch.
 pub fn staged() -> Option<Staged> {
-    STAGED.lock().ok().and_then(|guard| guard.clone())
+    let mut guard = STAGED.lock().ok()?;
+    if guard.is_none() {
+        *guard = restore_staged(&staging_dir(), install_kind_for_running_build(), &release_verifying_key().ok()?).ok();
+    }
+    guard.clone()
 }
 
 /// What `install` did, so the UI can say the right next step.
@@ -826,7 +900,7 @@ pub fn install() -> Result<InstallOutcome, String> {
 /// The bundle is built `perMachine`, so the setup's manifest asks for
 /// `requireAdministrator`. `CreateProcess` (what `std::process::Command` uses)
 /// never raises a UAC prompt for that — it fails with `ERROR_ELEVATION_REQUIRED`
-/// (os error 740). `ShellExecuteW` honours the manifest and shows the prompt,
+/// (os error 740). `ShellExecuteW` with `runas` explicitly requests elevation and shows the prompt,
 /// and also opens an `.msi` through `msiexec`. It returns once the process
 /// exists (after consent), which is fine: the command runs off the UI thread.
 #[cfg(target_os = "windows")]
@@ -837,7 +911,7 @@ fn launch_installer(path: &Path) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(Some(0)).collect() };
-    let verb = wide("open".as_ref());
+    let verb = wide("runas".as_ref());
     let file = wide(path.as_os_str());
     // Run it from the directory it landed in, so nothing resolves against
     // whatever Tabtivity's cwd happens to be.
@@ -1126,6 +1200,65 @@ zWKrqHHacn3R/vU4reeTtE+MP1CZrcNAOYOmswDjH92r/YoK3ZxNK3NjBg==
         assert!(signature.sums_url.ends_with("/SHA256SUMS"));
         assert!(signature.sig_url.ends_with("/SHA256SUMS.sig"));
         assert!(is_repo_download_url(&signature.sig_url));
+    }
+
+    fn cached_fixture(dir: &Path) -> (DownloadReceipt, p256::ecdsa::VerifyingKey) {
+        use p256::ecdsa::signature::Signer;
+        let key = p256::ecdsa::SigningKey::from_slice(&[7; 32]).unwrap();
+        let name = "Update_999.0.0_x64-setup.exe";
+        let path = dir.join(name);
+        std::fs::write(&path, b"installer").unwrap();
+        let sums = format!("{}  {name}\n", file_sha256(&path).unwrap());
+        let signature: p256::ecdsa::Signature = key.sign(sums.as_bytes());
+        let receipt = DownloadReceipt {
+            name: name.to_string(), version: "999.0.0".to_string(),
+            source_version: current_version().to_string(),
+            source_commit: build_commit().map(str::to_string),
+            sums, signature: signature.to_der().as_bytes().to_vec(),
+        };
+        (receipt, *key.verifying_key())
+    }
+
+    #[test]
+    fn a_download_survives_restart_with_its_signed_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let (receipt, key) = cached_fixture(dir.path());
+        save_receipt(dir.path(), &receipt).unwrap();
+        let recovered = restore_staged(dir.path(), InstallKind::Nsis, &key).unwrap();
+        assert_eq!(recovered.path, dir.path().join(&receipt.name));
+        assert_eq!(recovered.version, "999.0.0");
+        // A newly installed build must not keep offering the outgoing download.
+        let mut installed = receipt;
+        installed.source_version = "0.0.0".to_string();
+        save_receipt(dir.path(), &installed).unwrap();
+        assert!(restore_staged(dir.path(), InstallKind::Nsis, &key).is_err());
+    }
+
+    #[test]
+    fn recovery_refuses_tampered_missing_or_wrong_platform_installers() {
+        let dir = tempfile::tempdir().unwrap();
+        let (receipt, key) = cached_fixture(dir.path());
+        save_receipt(dir.path(), &receipt).unwrap();
+        assert!(restore_staged(dir.path(), InstallKind::Dmg, &key).is_err());
+        let path = dir.path().join(&receipt.name);
+        std::fs::write(&path, b"changed").unwrap();
+        assert!(restore_staged(dir.path(), InstallKind::Nsis, &key).is_err());
+        std::fs::remove_file(path).unwrap();
+        assert!(restore_staged(dir.path(), InstallKind::Nsis, &key).is_err());
+    }
+
+    #[test]
+    fn local_receipt_edits_cannot_authorize_an_installer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut receipt, key) = cached_fixture(dir.path());
+        receipt.sums.push_str("tampered");
+        save_receipt(dir.path(), &receipt).unwrap();
+        assert!(restore_staged(dir.path(), InstallKind::Nsis, &key).is_err());
+        receipt.name = "../Update_999.0.0_x64-setup.exe".to_string();
+        save_receipt(dir.path(), &receipt).unwrap();
+        assert!(restore_staged(dir.path(), InstallKind::Nsis, &key).is_err());
+        std::fs::write(dir.path().join("staged.json"), b"incomplete JSON").unwrap();
+        assert!(restore_staged(dir.path(), InstallKind::Nsis, &key).is_err());
     }
 
     #[test]

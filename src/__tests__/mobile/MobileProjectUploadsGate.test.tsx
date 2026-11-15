@@ -1,10 +1,10 @@
 /**
  * The host-wide "Phone may add files to projects" switch (phone upload plan,
  * step 3). Unset is off, so only its "on" is stored; it is greyed out while
- * Project files is off; and the three places Mobile settings rebuild the host
- * object from an explicit field list (host on/off, Detect Serve, Lock down)
- * must each carry it — the first two carry Browser access too, which lockdown
- * leaves out on purpose. Turning Project files on asks whether uploads go on
+ * Project files is off; and the three places Mobile settings rewrite the host
+ * object's own fields (host on/off, Detect Serve, Lock down) must each carry
+ * it by spreading the stored block — the first two carry Browser access too,
+ * which lockdown clears on purpose. Turning Project files on asks whether uploads go on
  * too, and turning it off takes uploads with it.
  */
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";

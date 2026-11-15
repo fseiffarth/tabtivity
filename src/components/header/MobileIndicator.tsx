@@ -19,6 +19,7 @@ import {
 } from "../../stores/mobileHostStatus";
 import { usePoll } from "../../lib/usePoll";
 import { CloseIcon } from "../common/icons/Icon";
+import { Toggle } from "../common/Toggle";
 
 const MENU_ID = "mobile";
 /** How often the open menu re-reads the device list: a phone signing in or
@@ -212,6 +213,19 @@ export function MobileIndicator() {
     }
   };
 
+  /** "Keep running when Tabtivity is closed" — the Settings → Mobile switch,
+   *  here too because this menu is on screen exactly while it does anything.
+   *  Read by the quit path from disk, so no host restart. */
+  const setStayAfterQuit = async (on: boolean) => {
+    if (!mobileHost) return;
+    setError(null);
+    try {
+      await updateSettings({ [MOBILE_HOST_KEY]: { ...mobileHost, stay_after_quit: on || undefined } });
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
+
   const lockDownNow = async () => {
     if (!mobileHost) return;
     const ok = await confirmAction({
@@ -226,7 +240,9 @@ export function MobileIndicator() {
     try {
       const response = await invoke<{ status: string; message?: string }>("mobile_admin", { request: { type: "forget_all" } });
       if (response.status === "error") throw new Error(response.message ?? translateNow("mobile.indRevokeError"));
-      await updateSettings({ [MOBILE_HOST_KEY]: { ...mobileHost, enabled: false } });
+      // `browser_client` cleared on purpose, as Settings → Mobile's Lock down
+      // does: lockdown closes browser access too.
+      await updateSettings({ [MOBILE_HOST_KEY]: { ...mobileHost, enabled: false, browser_client: undefined } });
       await invoke("mobile_host_apply", { enabled: false });
       addDevice.clear();
       closeMenu(MENU_ID);
@@ -391,6 +407,17 @@ export function MobileIndicator() {
                     ))}
                 </div>
               )}
+              <label className="mobile-indicator-toggle" title={t("mobile.stayAfterQuitHelp")}>
+                <span>
+                  {t("mobile.stayAfterQuit")} <UntestedTag id="mobile.indStayAfterQuit" />
+                </span>
+                <Toggle
+                  size="sm"
+                  checked={mobileHost?.stay_after_quit ?? false}
+                  disabled={lockingDown}
+                  onChange={(event) => void setStayAfterQuit(event.target.checked)}
+                />
+              </label>
               <div className="mobile-indicator-actions">
                 <button type="button" className="vpn-indicator-connect" disabled={busy} onClick={() => void restartHost("reconnect")}>
                   {restarting === "reconnect" ? t("mobile.indReconnecting") : t("mobile.indReconnect")}

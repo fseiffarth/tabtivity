@@ -55,6 +55,7 @@ import {
 import { basename, dirname } from "../../lib/paths";
 import { readDownloadsShown, writeDownloadsShown, type DownloadsHost } from "../../lib/projects/downloadsShown";
 import { projectTypeTags } from "../projects/projectTypeTags";
+import { ScaffoldTagPopover } from "./ScaffoldTagPopover";
 import { ProjectHoverCard, useProjectHoverCard } from "../projects/ProjectHoverCard";
 import { IdeHeaderButton } from "../projects/IdeMenuItems";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -117,6 +118,8 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
+import { useTabArchive } from "../../stores/tabArchive";
+import { TabArchiveList } from "../tabs/TabArchiveList";
 
 /** How long the pointer must rest on a session row before its stats card opens
  *  (TODO #85) — same value and rationale as `FileTree`'s `TOOLTIP_DWELL_MS`:
@@ -539,6 +542,9 @@ export function ProjectFilesView({
   // Whether the project is missing scaffold files — drives the "no scaffold"
   // type tag shown beside its name, mirroring ProjectPill's hover tags.
   const [scaffoldMissing, setScaffoldMissing] = useState(false);
+  // The "no scaffold" tag's popover (missing defaults + Repair), anchored under the tag.
+  const [scaffoldTagMenu, setScaffoldTagMenu] = useState<{ x: number; y: number } | null>(null);
+  const [scaffoldProbe, setScaffoldProbe] = useState(0);
   // Nested-repo detection: when the browsed folder lives in a git repo distinct
   // from the project's own repo, `nestedRoot` holds that repo's root and the git
   // section re-roots at it. `preferProjectRepo` is the manual toggle override
@@ -701,6 +707,18 @@ export function ProjectFilesView({
     [excludeBothChanged, syncMap, orangeFiles],
   );
   const newerSplit = useMemo(() => splitByNewerSide(syncMap, bulkFiles), [syncMap, bulkFiles]);
+  // "Take the newer copy automatically" (`services::sync_take_newer`): the auto-sync
+  // engine resolves a file both sides changed by the newer mtime, backing up the
+  // other. Read whenever the orange view shows, so two surfaces agree.
+  const takeNewer = useSyncStore((s) => (projectId ? s.takeNewerByProject[projectId] : undefined));
+  const anyAutoSync = useMemo(() => Object.values(syncMap ?? {}).some((e) => e.auto), [syncMap]);
+  useEffect(() => {
+    if (!projectId || !active || view !== "orange") return;
+    useSyncStore
+      .getState()
+      .loadTakeNewer(projectId)
+      .catch(() => {});
+  }, [projectId, active, view]);
   const deleteSplit = useMemo(() => splitByDeleteSide(syncMap, orangeFiles), [syncMap, orangeFiles]);
   // The true conflicts (both sides changed since the last sync), for "Hand to an agent".
   const conflictFiles = useMemo(() => bothChangedPaths(syncMap, orangeFiles), [syncMap, orangeFiles]);
@@ -729,6 +747,8 @@ export function ProjectFilesView({
   // every viewer reads the same rows and a kill/rename lands in all of them.
   const sessionHosts = useMemo(() => sessionHostsOf(project), [project]);
   const sessionRows = useHostSessions(projectId, active && !!project?.remote);
+  // The scope's archived tabs (`stores/tabArchive`): the Archive view's count.
+  const archivedTabs = useTabArchive(scope, active);
   // The Sessions list is scoped to THIS project by default (the backend filters
   // by session name, falling back to the session's working directory for the
   // pre-scoping and hand-started ones a name cannot attribute). This is the
@@ -1258,9 +1278,20 @@ export function ProjectFilesView({
       .then((v) => { if (!cancelled) setScaffoldMissing(v); })
       .catch(() => { if (!cancelled) setScaffoldMissing(false); });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, scaffoldProbe]);
 
-  const typeTags = project ? projectTypeTags(project, scaffoldMissing, t) : [];
+  const typeTags = project
+    ? projectTypeTags(project, scaffoldMissing, t, {
+        // Only a local scaffold can be repaired from here (a host-pinned
+        // project's lives on the host; the backend answers it has no target).
+        onScaffoldClick: projectId && !project.remote?.remote_only
+          ? (ev) => {
+              const r = ev.currentTarget.getBoundingClientRect();
+              setScaffoldTagMenu({ x: r.left, y: r.bottom + 4 });
+            }
+          : undefined,
+      })
+    : [];
 
   // Right-click menu on the SSH (remote) tag: open the one unified "Remote machines"
   // hub, which connects/manages every host and adds workers
@@ -1590,6 +1621,7 @@ export function ProjectFilesView({
               // The SSH tag carries a right-click menu (connect / manage · remote
               // machines); the rest stay pure labels.
               const isSsh = tag.key === "ssh" && !!project?.remote && !!projectId;
+              const onTagClick = tag.onClick;
               return (
                 <span
                   key={tag.key}
@@ -1601,8 +1633,17 @@ export function ProjectFilesView({
                   }
                   style={{
                     "--tag-color": tag.color,
-                    cursor: isSsh ? "context-menu" : undefined,
+                    cursor: isSsh ? "context-menu" : onTagClick ? "pointer" : undefined,
                   } as React.CSSProperties}
+                  role={onTagClick ? "button" : undefined}
+                  tabIndex={onTagClick ? 0 : undefined}
+                  onClick={onTagClick}
+                  onKeyDown={onTagClick ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onTagClick(e);
+                    }
+                  } : undefined}
                   onContextMenu={
                     isSsh
                       ? (e) => {
@@ -1668,6 +1709,15 @@ export function ProjectFilesView({
           />
         )}
         {mobileAccessError && <ErrorNote className="side-panel-mobile-access-error" role="alert" error={mobileAccessError} />}
+        {scaffoldTagMenu && projectId && (
+          <ScaffoldTagPopover
+            projectId={projectId}
+            x={scaffoldTagMenu.x}
+            y={scaffoldTagMenu.y}
+            onClose={() => setScaffoldTagMenu(null)}
+            onRepaired={() => setScaffoldProbe((n) => n + 1)}
+          />
+        )}
         {sshTagMenu && projectId && (
           <ContextMenuPortal
             x={sshTagMenu.x}
@@ -1791,17 +1841,21 @@ export function ProjectFilesView({
               ? orangeFiles.length + newLocalFiles.length
               : v === "sessions"
                 ? sessionRows.length
-                : v === "jobs"
-                  ? jobRows.length
-                  : 0;
+                : v === "archive"
+                  ? archivedTabs.length
+                  : v === "jobs"
+                    ? jobRows.length
+                    : 0;
           const title =
             v === "orange"
               ? t("projectFilesView.divergedFilesTitle", { count })
               : v === "sessions"
                 ? t("projectFilesView.persistentSessionsTitle", { count })
-                : v === "jobs"
-                  ? t("projectFilesView.slurmJobsTitle", { count })
-                  : undefined;
+                : v === "archive"
+                  ? t("tabArchive.viewTitle", { count })
+                  : v === "jobs"
+                    ? t("projectFilesView.slurmJobsTitle", { count })
+                    : undefined;
           return (
             <button
               key={v}
@@ -2105,6 +2159,30 @@ export function ProjectFilesView({
               </button>
             </div>
           )}
+          <div className="orange-take-newer">
+            <label className="tmux-scope-toggle" title={t("projectFilesView.takeNewerAutoTitle")}>
+              <input
+                type="checkbox"
+                checked={takeNewer ?? false}
+                disabled={!projectId || takeNewer === undefined}
+                onChange={(e) => {
+                  if (!projectId) return;
+                  const on = e.target.checked;
+                  useSyncStore
+                    .getState()
+                    .setTakeNewer(projectId, on)
+                    .catch((err: unknown) =>
+                      setOrangeError(t("projectFilesView.takeNewerAutoFailed", { error: String(err) })),
+                    );
+                }}
+              />
+              {t("projectFilesView.takeNewerAuto")}
+              <UntestedTag id="projectFilesView.takeNewerAuto" />
+            </label>
+            {takeNewer && !anyAutoSync && (
+              <span className="orange-take-newer-note">{t("projectFilesView.takeNewerAutoNoAuto")}</span>
+            )}
+          </div>
           {orangeFiles.length === 0 && newLocalFiles.length === 0 ? (
             <div className="side-panel-orange-empty">{t("projectFilesView.noDivergedFiles")}</div>
           ) : (
@@ -2942,6 +3020,12 @@ export function ProjectFilesView({
       )}
 
       {view === "agents" && <AgentSchedulesView scope={scope} active={active} />}
+
+      {view === "archive" && (
+        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
+          <TabArchiveList scope={scope} />
+        </div>
+      )}
 
       {view === "clis" && <CliOverviewView active={active} />}
 

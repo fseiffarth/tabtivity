@@ -12,7 +12,8 @@ import { useT, type TranslationKey } from "../../../lib/i18n";
 import { UntestedTag } from "../../common/UntestedTag";
 import { CloseIcon } from "../../common/icons/Icon";
 import { TabStatusMark } from "../../tabs/TabLocalityBadges";
-import { NO_UNDO_KEYS, ROUND_KEYS, ROUND_MARK } from "./PdfMarkupBar";
+import { ROUND_KEYS, ROUND_MARK } from "./PdfMarkupBar";
+import { NO_UNDO_KEYS } from "../../../../mobile-web/src/markup/submitState";
 import { PdfMarkupQuestions } from "./PdfMarkupQuestions";
 import { PdfTicksStatus } from "./PdfMarkupTicks";
 import type { PdfMarkup } from "./usePdfMarkup";
@@ -24,19 +25,16 @@ export function PdfMarkupAgentPanel({
   markup,
   pinned,
   onReload,
-  picture = false,
 }: {
   markup: PdfMarkup;
   /** The questions with a pin on a page (`pinKey`). */
   pinned: ReadonlySet<string>;
   /** Load the file as it is now under the layer. */
   onReload: () => void;
-  /** The image viewer's panel: the words say picture, not PDF. */
-  picture?: boolean;
 }) {
   const t = useT();
   const said = (pdf: TranslationKey, image: TranslationKey) => (picture ? image : pdf);
-  const { round, roundUndo } = markup;
+  const { round, roundUndo, picture } = markup;
   const busy = markup.sending;
   const roundWords = round
     ? round.phase === "finished"

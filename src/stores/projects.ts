@@ -1153,6 +1153,7 @@ interface ProjectsStore {
    *  `agent_remote_control` setting. */
   setProjectRemoteControl: (id: string, remoteControl: boolean | null) => Promise<void>;
   setProjectScheduleMcp: (id: string, level: "off" | "propose" | "apply") => Promise<void>;
+  setProjectTabMessagesWake: (id: string, on: boolean) => Promise<void>;
   /** Local models only / Cut network (`services::agent_privacy`). The backend
    *  refuses (rejects with a message naming the project) when the project
    *  cannot be covered, and ends the running agent tabs that are not a verified
@@ -1995,6 +1996,11 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   setProjectScheduleMcp: async (id, level) => {
     await invoke("set_project_schedule_mcp", { projectId: id, level });
     patchProject(id, (project) => ({ ...project, schedule_mcp: level }));
+  },
+
+  setProjectTabMessagesWake: async (id, on) => {
+    await invoke("set_project_tab_messages_wake", { projectId: id, on });
+    patchProject(id, (project) => ({ ...project, tab_messages_wake: on || undefined }));
   },
 
   setProjectAgentPrivacy: async (id, localModelsOnly, cutNetwork) => {

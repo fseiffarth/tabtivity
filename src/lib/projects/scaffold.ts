@@ -24,8 +24,8 @@ export interface ScaffoldPreviewItem {
 
 export interface ScaffoldRepairReport {
   createdFiles: string[];
-  /** Agent docs that were still an untouched legacy stub and got rewritten to
-   *  the current template (AGENTS.md canonical, CLAUDE/GEMINI pointing at it).
+  /** AGENTS.md when it still held an untouched earlier default text and got
+   *  rewritten to the current template.
    *  Optional because the backend restarts on the user's schedule: a window
    *  still running a pre-`updatedFiles` binary must summarize, not crash. */
   updatedFiles?: string[];
@@ -134,6 +134,10 @@ export function collectScaffoldAgentFills(
 
 export function buildScaffoldFillPrompt(files: string[]) {
   const fileList = files.map((file) => `- ${file}`).join("\n");
+  // PROJECT.md and REMARKS.md are not in a new project's default set any more
+  // (PROJECT.md is create-on-demand, REMARKS.md the remarks feature's): their
+  // advice rides along only when the file is one of those being filled.
+  const listed = (name: string) => files.some((f) => f === name || f.endsWith(`/${name}`));
   return [
     `Fill the ${BRAND.display} project scaffold files listed below.`,
     "",
@@ -141,16 +145,22 @@ export function buildScaffoldFillPrompt(files: string[]) {
     "- Inspect the project first so the files reflect the actual codebase and purpose.",
     "- Replace placeholder scaffold content with useful, project-specific guidance.",
     "- Preserve unrelated existing content and do not rewrite files outside this list.",
-    "- All agent guidance belongs in the canonical AGENTS.md. Agents load it every",
-    "  session, so keep it short: build/test commands, constraints, and conventions",
-    "  an agent would otherwise get wrong. Overviews and architecture go in README.md",
-    "  or DOCUMENTATION.md, linked from PROJECT.md.",
-    "- The CLAUDE.md and GEMINI.md files are pointers to it: keep their `@AGENTS.md`",
-    "  import and their links to the other agent files, and never copy guidance into them.",
-    "- PROJECT.md is the navigation map: keep its relative links to the other scaffold",
-    "  files working, and extend it with links to the project's own key files/folders.",
-    "- REMARKS.md keeps its format note and uses `- [ ] [path:line](./path:line) — text`",
-    "  bullets; the line suffix is optional.",
+    "- All agent guidance belongs in AGENTS.md. Agents load it every session, so keep",
+    "  it short: build/test commands, constraints, and conventions an agent would",
+    "  otherwise get wrong. Overviews and architecture go in README.md or",
+    "  DOCUMENTATION.md.",
+    ...(listed("PROJECT.md")
+      ? [
+          "- PROJECT.md is the navigation map: link the project's own key files/folders,",
+          "  and keep its relative links working.",
+        ]
+      : []),
+    ...(listed("REMARKS.md")
+      ? [
+          "- REMARKS.md keeps its format note and uses `- [ ] [path:line](./path:line) — text`",
+          "  bullets; the line suffix is optional.",
+        ]
+      : []),
     "",
     "Files to fill:",
     fileList,
@@ -270,6 +280,20 @@ export function providerFromCloneUrl(raw: string): "github" | "gitlab" | "" {
 }
 
 /** Join a remote directory path with a child segment using POSIX separators. */
+/**
+ * Why `folder` can't be the one folder a new remote project makes on its host
+ * ("" = it can). Any spelling the host accepts is fine — case, spaces, dots —
+ * but it must stay one segment, and it must pass the backend's `validate_arg`
+ * (no leading `-`, no control or formatting characters).
+ */
+export function hostFolderNameProblem(folder: string): "" | "required" | "invalid" {
+  const name = folder.trim();
+  if (!name) return "required";
+  if (name === "." || name === ".." || /[/\\]/.test(name) || name.startsWith("-")) return "invalid";
+  if (/[\p{Cc}\p{Cf}]/u.test(name)) return "invalid";
+  return "";
+}
+
 export function joinRemotePath(base: string, child: string): string {
   if (!base || base === "/") return `/${child}`;
   return `${base.replace(/\/+$/, "")}/${child}`;

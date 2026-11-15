@@ -52,8 +52,20 @@ pub type Counters = HashMap<String, u64>;
 /// Mirrored in `src/lib/usageMetrics.ts` — keep the two in step.
 pub mod metric {
     /// One outcome per autocomplete suggestion, suffixed with `<mode>.<model>`.
+    /// History only: kept for the recap, no longer written.
     pub const AUTOCOMPLETE_ACCEPT: &str = "autocomplete.accept";
     pub const AUTOCOMPLETE_DISMISS: &str = "autocomplete.dismiss";
+    /// `autocomplete.<event>.<mode>.<provider>/<model>`: a ghost visible 750 ms
+    /// or accepted, and how it was taken (Tab, a word, a line, typed through)
+    /// or rejected (dismissed after 750 ms with nothing taken).
+    pub const AUTOCOMPLETE_SHOWN: &str = "autocomplete.shown";
+    pub const AUTOCOMPLETE_TAB: &str = "autocomplete.tab";
+    pub const AUTOCOMPLETE_WORD: &str = "autocomplete.word";
+    pub const AUTOCOMPLETE_LINE: &str = "autocomplete.line";
+    pub const AUTOCOMPLETE_TYPED: &str = "autocomplete.typed";
+    pub const AUTOCOMPLETE_REJECTED: &str = "autocomplete.rejected";
+    /// `autocomplete.request.<ok|empty|error|cache>.<provider>/<model>`.
+    pub const AUTOCOMPLETE_REQUEST: &str = "autocomplete.request";
     /// `agent.tab.<cmd>` — an agent tab was opened (not counting restore-respawns).
     pub const AGENT_TAB: &str = "agent.tab";
     /// `agent.tab.local.<model>` — a local (Ollama-backed) agent tab was opened.

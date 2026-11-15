@@ -408,6 +408,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copilot_cancel", Core),
     ("copilot_close_editor", Core),
     ("copilot_complete", Core),
+    ("copilot_diagnostics", Core),
     ("copilot_finish_sign_in", Core),
     ("copilot_message_action", Core),
     ("copilot_prepare", Core),
@@ -580,6 +581,19 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("detect_project_ides", Client),
     ("open_project_in_ide", Client),
     ("set_ide_launcher", Client),
+    // commands/checkpoints.rs
+    ("checkpoint_clear", Core),
+    ("checkpoint_diff", Core),
+    ("checkpoint_list", Core),
+    ("checkpoint_now", Core),
+    ("checkpoint_restore", Core),
+    ("checkpoint_settings_get", Core),
+    ("checkpoint_settings_set", Core),
+    // commands/tab_archive.rs
+    ("tab_archive_add", Core),
+    ("tab_archive_delete", Core),
+    ("tab_archive_list", Core),
+    ("tab_archive_take", Core),
     // commands/local_loss.rs
     ("local_loss_ack", Core),
     ("local_loss_list", Core),
@@ -791,6 +805,15 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("print_mcp_decide", Client),
     ("print_mcp_pdf", Client),
     ("print_mcp_requests", Client),
+    // commands/tabs_mcp.rs — tab messaging is served by the window alone
+    // (`Runtime::serves_tabs`); its state, the Deliver button and the idle
+    // wake live where the window runs. Nothing crosses the phone.
+    ("set_project_tab_messages_wake", Client),
+    ("tabs_mcp_clear", Client),
+    ("tabs_mcp_deliver", Client),
+    ("tabs_mcp_human_input", Client),
+    ("tabs_mcp_traffic", Client),
+    ("tabs_mcp_wake_claim", Client),
     // commands/project_runtime.rs
     ("load_side_panel_folder", Core),
     ("save_side_panel_folder", Core),
@@ -820,7 +843,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("patch_compute_host", Core),
     ("plan_project_dir_rename", Core),
     ("preview_project_scaffold", Core),
+    ("create_project_doc", Core),
+    ("project_agent_memory", Core),
+    ("project_agent_memory_read", Core),
     ("project_agents_empty", Core),
+    ("project_docs_status", Core),
     ("project_folder_exists", Core),
     ("project_generated_dir", Core),
     ("project_migration_apply", Core),
@@ -989,10 +1016,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_resolve_if_identical", Core),
     ("sync_scan_host_new", Core),
     ("sync_set_auto", Core),
+    ("sync_take_newer_get", Core),
+    ("sync_set_take_newer", Core),
     ("sync_set_excluded", Core),
     ("sync_status", Core),
     ("sync_transfer_preview", Core),
-    ("sync_whole_project", Core),
     // commands/terminal.rs
     ("agent_fence_marks", Core),
     ("agent_fence_status", Core),

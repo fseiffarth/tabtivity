@@ -120,7 +120,7 @@ const EDGE = /^[↑↓]$/u;
  * under the run, and nothing but the count and one word. */
 const HIDDEN_ROWS = /^\s*(?:…|\.\.\.)\s*\+(\d{1,2})\s+\p{L}+$/u;
 const RADIO_AGENT = /gemini|qwen/iu;
-/** GitHub Copilot CLI (1.0.106 to 1.0.109) draws a row whose label wraps with
+/** GitHub Copilot CLI (1.0.106 to 1.0.110) draws a row whose label wraps with
  * no hanging indent: the row and its next line both start under the `1.` of
  * the rows that fit, inside the dialog's box —
  *

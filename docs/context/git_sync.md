@@ -22,7 +22,11 @@ the *why*.
   because it happens during background passes nobody triggered. Each site now files a
   warning that `LocalLossDialog` raises. The exception that is **not** recoverable, and is
   labelled as such: a confirmed manual pull overwriting a mirror file that held
-  unsynced local edits (resolving amber by choosing the host). It is a **log file**, not an
+  unsynced local edits (resolving amber by choosing the host). The one opt-in break with
+  "never picks a winner" is the orange view's **take the newer copy** switch
+  (`services::sync_take_newer`): it lets the engine resolve a both-sides-changed file on
+  an auto path by mtime, the one place byte-sync trusts the two clocks, so it is off by
+  default, backs up the losing copy first and logs it here. It is a **log file**, not an
   event: the services are `AppHandle`-free and a background pass can delete with no window
   listening, so a loss recorded while the app was closed still surfaces on next launch.
 - **Every manual transfer asks first** (`stores/remote/syncConfirm` → `SyncConfirmDialog`,
@@ -129,6 +133,14 @@ the *why*.
   staged beside the mirror destination before rename, matching the push side's
   temp-and-rename rule. A crash therefore leaves an old or new complete mirror
   file, not a truncated file that masquerades as a divergence.
+- **Byte transfers overlap, their bookkeeping does not** (`remote/sync_pool`).
+  `run_ordered` runs the transfers four at a time within a 128 MiB listed-size
+  budget, while the record, progress and failure half stays sequential in file
+  order; a halt (stall, stop, a manual action waiting) starts no further file and
+  lets those in flight finish, so a file is never cut off mid-write. `RecordBatch`
+  keeps `sync.json` writes to one per batch, flushed before the caller reports; a
+  cut-off run leaves a base that reads as moved, never as clean. `sync_task` is
+  the one lifecycle for the auto loop and the lockstep poll.
 - **A commit is not a checkout** (`head_target_moved`). Head-move detection
   compares the checkout *target* — branch name, or the sha while detached — not
   the whole `HeadRef`. Comparing shas made every commit on the mirror replay as

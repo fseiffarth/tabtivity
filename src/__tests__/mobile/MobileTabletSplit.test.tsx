@@ -4,7 +4,8 @@
  * the same `projectView` (selecting keeps Home and marks the row), the project
  * screen has no way back of its own, the Back gesture (and steering's Back)
  * deselects it, tapping Projects again deselects, a portrait tablet and a phone still swap
- * Home for the project, and keyboard steering walks the pane it is on.
+ * Home for the project, keyboard steering walks the pane it is on, and the
+ * header's sidebar button folds the list away (kept per device).
  */
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -154,6 +155,46 @@ describe("split routing", () => {
     expect(homeRow("Alpha").getAttribute("aria-current")).toBe("true");
     pressBack();
     await waitFor(() => expect(projectScreen()).toBeNull());
+  });
+
+  it("folds the list away from the project header, and keeps it folded for the next project", async () => {
+    stubTier("split");
+    render(<App />);
+    await screen.findByText("Alpha", { selector: "strong" });
+    fireEvent.click(homeRow("Alpha"));
+    await waitFor(() => expect(projectScreen()).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide project list" }));
+    await waitFor(() => expect(document.querySelector(".home-screen")).toBeNull());
+    expect(projectScreen()).toBeTruthy();
+    expect(document.querySelector(".tabbed")?.classList.contains("split")).toBe(false);
+    expect(localStorage.getItem(storageKey("mobile.splitListHidden"))).toBe("1");
+
+    // Back still leaves the project, for Home on its own; the next project
+    // opens with the list still folded.
+    pressBack();
+    await screen.findByText("Alpha", { selector: "strong" });
+    expect(projectScreen()).toBeNull();
+    fireEvent.click(homeRow("Beta"));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Beta" })).toBeTruthy());
+    expect(document.querySelector(".home-screen")).toBeNull();
+  });
+
+  it("opens a project with the list folded when this device left it so, and Show brings it back", async () => {
+    stubTier("split");
+    localStorage.setItem(storageKey("mobile.splitListHidden"), "1");
+    render(<App />);
+    await screen.findByText("Alpha", { selector: "strong" });
+    // No project yet: Home stands as usual.
+    expect(screen.getByText("Choose a project")).toBeTruthy();
+    fireEvent.click(homeRow("Alpha"));
+    await waitFor(() => expect(projectScreen()).toBeTruthy());
+    expect(document.querySelector(".home-screen")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show project list" }));
+    await waitFor(() => expect(document.querySelector(".home-screen")).toBeTruthy());
+    expect(document.querySelector(".tabbed")?.classList.contains("split")).toBe(true);
+    expect(homeRow("Alpha").getAttribute("aria-current")).toBe("true");
+    expect(localStorage.getItem(storageKey("mobile.splitListHidden"))).toBe("0");
   });
 
   it("leaves the split for the other sections: they take the whole window", async () => {

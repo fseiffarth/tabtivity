@@ -5,8 +5,11 @@ use app_core::sync::LockExt;
 use std::process::Stdio;
 use std::sync::Mutex;
 use tokio::process::{Child, ChildStdin, ChildStdout};
+use super::rpc::LogSink;
 
-pub const SERVER_VERSION: &str = "1.547.0";
+/// Probed in the fence 2026-11-14 (`docs/context/copilot_completion.md`).
+/// 1.567.5 was one day old then; the plan takes a version at least a week old.
+pub const SERVER_VERSION: &str = "1.565.6";
 
 pub fn install_directory() -> PathBuf {
     crate::storage::state_dir().join("copilot").join(SERVER_VERSION)
@@ -26,10 +29,16 @@ pub fn server_path(installation: &Path) -> Result<PathBuf, String> {
     Ok(executable)
 }
 
+/// Installs the native server package for this machine alone. The umbrella
+/// package (`@github/copilot-language-server`) pulls in every platform's
+/// optional builds, which on 1.565.6 include the Copilot CLI and SDK (about
+/// 600 MB on Linux x64 against 159 MB for the server).
 pub fn install_command() -> Result<String, String> {
     if !supported() { return Err("copilot_unsupported_platform".into()); }
     let path = crate::quote::posix(&install_directory().to_string_lossy());
-    Ok(format!("npm install --prefix {path} --ignore-scripts --no-audit --no-fund @github/copilot-language-server@{SERVER_VERSION}"))
+    let architecture = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
+    Ok(format!("npm install --prefix {path} --ignore-scripts --no-audit --no-fund \
+        @github/copilot-language-server-linux-{architecture}@{SERVER_VERSION}"))
 }
 
 /// Pure plan, deliberately much narrower than the general agent fence: no host
@@ -40,7 +49,9 @@ pub fn install_command() -> Result<String, String> {
 fn fence_args(executable: &Path, installation: &Path, project: &Path) -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> = [
         "--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-        "--unshare-user", "--cap-drop", "ALL", "--clearenv",
+        // No --clearenv: the bwrap process itself starts from an empty
+        // environment plus [`forwarded_env`] (see `launch_installed`).
+        "--unshare-user", "--cap-drop", "ALL",
         "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
         "--dir", concat!("/run/", crate::app_slug!(), "-copilot/config/github-copilot/auth.db"),
         "--setenv", "XDG_CONFIG_HOME", concat!("/run/", crate::app_slug!(), "-copilot/config"),
@@ -64,15 +75,44 @@ fn fence_args(executable: &Path, installation: &Path, project: &Path) -> Vec<std
     args
 }
 
+/// The host variables the server may see: the proxy settings (both cases) and
+/// extra CA roots, so a network that needs them still reaches GitHub. Set on
+/// the bwrap process's own environment, never as `--setenv` arguments: an
+/// argument list is readable by every local account, and a proxy address can
+/// hold a password. Pure + tested.
+const FORWARDED_ENV: &[&str] = &[
+    "http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE",
+];
+
+fn forwarded_env(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<(&'static str, std::ffi::OsString)> {
+    FORWARDED_ENV.iter().filter_map(|name| Some((*name, get(name).filter(|value| !value.is_empty())?))).collect()
+}
+
+/// Hand each stderr line to the project's log; the task ends with the stream
+/// (the process exiting or being killed), so it never outlives the server.
+fn drain_stderr(stderr: tokio::process::ChildStderr, log: LogSink) {
+    use tokio::io::AsyncBufReadExt;
+    tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            log(format!("stderr: {line}"));
+        }
+    });
+}
+
 pub struct ManagedProcess { child: Mutex<Option<Child>> }
 
 impl ManagedProcess {
-    pub fn launch(project: &Path) -> Result<(Self, ChildStdout, ChildStdin), String> {
-        Self::launch_installed(&install_directory(), project)
+    pub fn launch(project: &Path, log: Option<LogSink>) -> Result<(Self, ChildStdout, ChildStdin), String> {
+        Self::launch_installed(&install_directory(), project, log)
     }
 
     /// Also used by the standalone probe, with its isolated installation.
-    pub fn launch_installed(installation: &Path, project: &Path) -> Result<(Self, ChildStdout, ChildStdin), String> {
+    /// `log` receives the server's stderr, line by line; without one it is
+    /// discarded.
+    pub fn launch_installed(installation: &Path, project: &Path, log: Option<LogSink>)
+        -> Result<(Self, ChildStdout, ChildStdin), String> {
         let executable = server_path(installation)?;
         let installation = installation.canonicalize().map_err(|_| "copilot_not_installed")?;
         let project = project.canonicalize().map_err(|_| "copilot_invalid_project")?;
@@ -93,11 +133,15 @@ impl ManagedProcess {
             let _ = (&executable, &installation, &project);
             Err::<tokio::process::Command, _>("copilot_unsupported_platform")?
         };
-        command.env_clear().current_dir(&installation).stdin(Stdio::piped()).stdout(Stdio::piped())
-            .stderr(Stdio::null()).kill_on_drop(true);
+        command.env_clear().envs(forwarded_env(|name| std::env::var_os(name)))
+            .current_dir(&installation).stdin(Stdio::piped()).stdout(Stdio::piped())
+            .stderr(if log.is_some() { Stdio::piped() } else { Stdio::null() }).kill_on_drop(true);
         let mut child = command.spawn().map_err(|_| "copilot_spawn_failed")?;
         let output = child.stdout.take().ok_or("copilot_spawn_failed")?;
         let input = child.stdin.take().ok_or("copilot_spawn_failed")?;
+        if let (Some(log), Some(stderr)) = (log, child.stderr.take()) {
+            drain_stderr(stderr, log);
+        }
         Ok((Self { child: Mutex::new(Some(child)) }, output, input))
     }
 
@@ -128,12 +172,33 @@ mod tests {
     fn boundary_has_no_host_writes_or_inherited_credentials() {
         let args = fence_args(Path::new("/state/cls/bin"), Path::new("/state/cls"), Path::new("/project"));
         let args: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
-        assert!(args.iter().any(|a| a == "--clearenv"));
+        // The environment is the bwrap process's own (env_clear + the
+        // forwarded set), so no host variable rides on the argument list.
+        assert!(!args.iter().any(|a| a == "--clearenv"));
+        assert!(!args.iter().any(|a| a.contains("proxy") || a.contains("PROXY") || a.contains("CERT")));
         assert!(!args.iter().any(|a| a == "--bind"));
         assert!(!args.windows(3).any(|a| a[0] == "--ro-bind" && a[1] == "/"));
         assert!(args.iter().any(|a| a.ends_with("github-copilot/auth.db")));
         assert!(args.windows(3).any(|a| a == ["--ro-bind", "/project", "/project"]));
     }
+    /// B9: exactly the proxy and CA variables reach the fence, nothing else of
+    /// the host environment (tokens, HOME, DISPLAY, SSH agent).
+    #[test]
+    fn only_proxy_and_ca_variables_are_forwarded() {
+        let host = |name: &str| -> Option<std::ffi::OsString> {
+            match name {
+                "HOME" | "GITHUB_TOKEN" | "GH_TOKEN" | "SSH_AUTH_SOCK" | "DISPLAY" => Some("leak".into()),
+                "no_proxy" => Some("".into()),
+                _ => Some(format!("value-of-{name}").into()),
+            }
+        };
+        let forwarded = forwarded_env(host);
+        let names: Vec<&str> = forwarded.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"]);
+        assert_eq!(forwarded[0].1, std::ffi::OsString::from("value-of-http_proxy"));
+        assert!(forwarded_env(|_| None).is_empty());
+    }
+
     #[test]
     fn executable_cannot_escape_installation_via_symlink() {
         let install = tempfile::tempdir().unwrap();

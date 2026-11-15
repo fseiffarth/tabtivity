@@ -751,56 +751,6 @@
   flex-shrink: 0;
 }
 
-/* ── Machines view: the cards above the tiles ────────────────────────── */
-.machines-view-section {
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-secondary);
-  padding: 0 8px 8px;
-  margin-bottom: 12px;
-}
-/* The machine list (`CockpitMachineList`): one row per machine. */
-.cockpit-mrow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 34px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: var(--text-sm);
-}
-.cockpit-mrow:hover {
-  background: var(--control-hover-bg);
-}
-.cockpit-mrow-name {
-  flex: 0 1 220px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-}
-.cockpit-mrow-projects {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.cockpit-mchip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.cockpit-mchip .dim {
-  color: var(--text-muted);
-  white-space: pre;
-}
-.cockpit-mrow-connect {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
 /* ── Root view: the Needs-you rail ─────────────────────────
    Beside the console's pane region, in `.subwindow-body`'s row. Collapsed it is
    `CockpitRail`'s groups at 40 px (`CockpitRailIcons`); open, the real rail
@@ -999,8 +949,4 @@
   min-height: 0;
   display: flex;
   padding: 4px;
-}
-/* The machine list wraps its rows. */
-.root-overlay[data-band="narrow"] .cockpit-mrow {
-  flex-wrap: wrap;
 }

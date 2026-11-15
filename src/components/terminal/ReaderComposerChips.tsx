@@ -17,7 +17,7 @@ const COMMIT_HINTS: Record<CommitChoice, TranslationKey> = { own: "mobile.commit
  * stand apart at the row's right end, beside the mic and Send (2026-11-04:
  * back from the top bar, where they read as view controls).
  */
-export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit, extra }: {
+export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onClear, onCommit, onCheckpoint, checkpointNote, checkpointError, extra }: {
   prefixes: readonly string[];
   /** The command the draft leads with, if it is one of `prefixes`. */
   active: string | null;
@@ -26,6 +26,12 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
   onClear: () => void;
   /** Unset: no Commit chip (a Tabby chat has no files). */
   onCommit?: (choice: CommitChoice) => void;
+  /** Set: a Checkpoint chip (per-turn checkpoints, experimental) takes a manual
+   *  checkpoint of the folder; `checkpointNote` is what it answers with. */
+  onCheckpoint?: () => void;
+  checkpointNote?: "done" | "failed";
+  /** Why the folder's last checkpoint failed: the chip says so until one lands. */
+  checkpointError?: string | null;
   /** Chips of the composer's own after the prefixes (read-aloud, hands-free). */
   extra?: ReactNode;
 }) {
@@ -81,6 +87,16 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
       >
         {t("mobile.composer.clearChip")}
       </button>
+      {onCheckpoint && <button
+        type="button"
+        className="terminal-reader-chip"
+        disabled={disabled}
+        onMouseDown={keepFocus}
+        onClick={onCheckpoint}
+        title={checkpointError ? t("checkpoints.now.failingHint", { error: checkpointError }) : t("checkpoints.now.hint")}
+      >
+        {t(checkpointNote === "done" ? "checkpoints.now.done" : checkpointNote === "failed" ? "checkpoints.now.failed" : checkpointError ? "checkpoints.now.failing" : "checkpoints.now")} <UntestedTag id="checkpoints.now" />
+      </button>}
       {onCommit && <button
         type="button"
         className={`terminal-reader-chip${commitOpen ? " active" : ""}`}

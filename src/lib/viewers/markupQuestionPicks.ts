@@ -9,6 +9,56 @@
  * checks against the ask (`services::markup_mcp::Answer`).
  */
 
+/** The longest typed **Other…** answer (`markup_mcp::MAX_OTHER_CHARS`). */
+export const MAX_OTHER = 500;
+/** How long a card that just opened for a new ask takes no taps or clicks:
+ * the reader may be mid-stroke where it lands, and a pen, finger or click
+ * already on its way down must not pick or send for them. */
+export const ARRIVAL_GUARD_MS = 1_200;
+
+/** The arrival guard, once for every host and surface: the question card
+ * (`arrive` when it opens for a new ask, `settling` while it takes nothing)
+ * and the ✓ badges (`see` the keys now shown — a key gone from the list is
+ * forgotten, a new one stamps `now`, so a badge that went and comes back, or
+ * a group that grew, arrives anew; `settlingFor` the keys a click would
+ * approve, or `null` for Approve all: the newest arrival of any). A key never
+ * seen counts as settling. Time is passed in, so the caller owns the clock. */
+export type ArrivalGuard<K> = {
+  arrive: (now: number) => void;
+  settling: (now: number) => boolean;
+  see: (keys: Iterable<K>, now: number) => void;
+  settlingFor: (keys: Iterable<K> | null, now: number) => boolean;
+};
+
+export function arrivalGuard<K = never>(): ArrivalGuard<K> {
+  let newest = Number.NEGATIVE_INFINITY;
+  let seen = new Map<K, number>();
+  const settling = (now: number) => now - newest < ARRIVAL_GUARD_MS;
+  return {
+    arrive: (now) => { newest = now; },
+    settling,
+    see: (keys, now) => {
+      const next = new Map<K, number>();
+      for (const key of keys) {
+        const was = seen.get(key);
+        next.set(key, was ?? now);
+        if (was === undefined) newest = now;
+      }
+      seen = next;
+    },
+    settlingFor: (keys, now) => {
+      if (keys === null) return settling(now);
+      let last = Number.NEGATIVE_INFINITY;
+      for (const key of keys) {
+        const at = seen.get(key);
+        if (at === undefined) return true;
+        last = Math.max(last, at);
+      }
+      return now - last < ARRIVAL_GUARD_MS;
+    },
+  };
+}
+
 export type MarkupChoice = { label: string; description?: string };
 export type MarkupQuestion = {
   question: string;

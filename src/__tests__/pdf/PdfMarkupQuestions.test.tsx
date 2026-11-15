@@ -38,7 +38,8 @@ import { PdfMarkupAgentPanel } from "../../components/embed/pdf/PdfMarkupAgentPa
 import { PdfMarkupDock } from "../../components/embed/pdf/PdfMarkupDock";
 /** The harness shows the agent panel open throughout. */
 const PINNED: ReadonlySet<string> = new Set(["ask-1:0"]);
-import { ARRIVAL_GUARD_MS, PdfMarkupQuestions, PdfQuestionPins } from "../../components/embed/pdf/PdfMarkupQuestions";
+import { PdfMarkupQuestions, PdfQuestionPins } from "../../components/embed/pdf/PdfMarkupQuestions";
+import { ARRIVAL_GUARD_MS } from "../../lib/viewers/markupQuestionPicks";
 import { usePdfMarkup } from "../../components/embed/pdf/usePdfMarkup";
 import {
   answersOf,

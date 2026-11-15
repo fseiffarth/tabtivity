@@ -19,10 +19,19 @@ export function chatMoment(at: string | undefined): Date | null {
  * locale is not the desktop's, so without it an English UI printed `2:05 PM`
  * on a 24-hour desktop. The phone leaves it to its own browser's locale. */
 export function chatTime(moment: Date, use24h?: boolean): string {
-  return moment.toLocaleTimeString([], use24h === undefined
-    ? { hour: "2-digit", minute: "2-digit" }
-    : { hour: "2-digit", minute: "2-digit", hour12: !use24h });
+  let format = clockFormats.get(use24h);
+  if (!format) {
+    format = new Intl.DateTimeFormat([], use24h === undefined
+      ? { hour: "2-digit", minute: "2-digit" }
+      : { hour: "2-digit", minute: "2-digit", hour12: !use24h });
+    clockFormats.set(use24h, format);
+  }
+  return format.format(moment);
 }
+
+/** One formatter per clock face: a chat stamps every bubble on every render,
+ * and `toLocaleTimeString` builds a new one each call. */
+const clockFormats = new Map<boolean | undefined, Intl.DateTimeFormat>();
 
 /** The phone's own clock face — what `chatTime` prints without a desktop
  * answer, and so what the phone's clock-entry fields (`TimeFieldCore`) show. */

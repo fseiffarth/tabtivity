@@ -91,7 +91,7 @@ fn a_failed_manifest_save_after_a_transfer_never_reads_clean() {
     let host_now = Some((20, Some(200)));
     let local_now = Some((20, Some(201)));
     let m = cache.get_mut("p").unwrap();
-    record_pull(m, "f", 20, Some(200), 20, Some(201));
+    record_pull(m, "f", (20, Some(200)), (20, Some(201)));
     let err = save_or_mark_stale_at(&path, m, &["f".to_string()]).unwrap_err();
     assert_eq!(err, CHANGED_ELSEWHERE);
     // The caller's copy no longer vouches for the record.
@@ -109,7 +109,7 @@ fn a_failed_manifest_save_after_a_transfer_never_reads_clean() {
     // base would have read green against them).
     assert_eq!(compute_state(f, Some((10, Some(100))), Some((10, Some(100))), false), SyncState::Amber);
     // A later successful save goes through as usual.
-    record_pull(fresh, "f", 20, Some(200), 20, Some(201));
+    record_pull(fresh, "f", (20, Some(200)), (20, Some(201)));
     save_or_mark_stale_at(&path, fresh, &["f".to_string()]).expect("current again");
     assert_eq!(compute_state(&cache["p"]["f"], host_now, local_now, false), SyncState::Green);
 }
@@ -125,7 +125,7 @@ fn an_unwritable_manifest_forgets_the_unsaved_record() {
     let path = blocker.join("sync.json");
     let mut cache = HashMap::new();
     let m = ensure_loaded_at(&mut cache, "p", &path);
-    record_push(m, "f", 20, Some(200), 20, Some(201));
+    record_push(m, "f", (20, Some(200)), (20, Some(201)));
     assert!(save_or_mark_stale_at(&path, m, &["f".to_string()]).is_err());
     let host_now = Some((20, Some(200)));
     assert_eq!(compute_state(&m["f"], host_now, Some((20, Some(201))), false), SyncState::Amber);
@@ -235,7 +235,7 @@ fn the_mirror_walk_stops_at_a_nested_repo_or_worktree() {
     std::fs::write(nested.join("lib.rs"), b"x").unwrap();
 
     let mut out = Vec::new();
-    walk_mirror_inner(root, root, &mut out).unwrap();
+    walk_mirror_inner(root, root, &|_| false, &mut out).unwrap();
     out.sort();
     assert_eq!(
         out,
@@ -256,7 +256,7 @@ fn the_mirror_walk_does_not_stop_at_the_project_root_itself() {
     std::fs::write(root.join("sub/b.txt"), b"x").unwrap();
 
     let mut out = Vec::new();
-    walk_mirror_inner(root, root, &mut out).unwrap();
+    walk_mirror_inner(root, root, &|_| false, &mut out).unwrap();
     out.sort();
     assert_eq!(out, vec!["a.txt".to_string(), "sub/b.txt".to_string()]);
 }
@@ -1270,7 +1270,7 @@ fn compute_state_none_when_unselected() {
 #[test]
 fn record_pull_marks_selected_and_stamps_bases() {
     let mut m = Manifest::new();
-    record_pull(&mut m, "src/main.rs", 42, Some(7), 42, Some(9));
+    record_pull(&mut m, "src/main.rs", (42, Some(7)), (42, Some(9)));
     let e = m.get("src/main.rs").unwrap();
     assert!(e.selected);
     assert_eq!(e.host_size, 42);
@@ -1520,6 +1520,45 @@ fn is_auto_project_wide_root_marker_and_exclusions() {
     assert!(is_auto(&m, "vendor/keep/x.rs")); // explicit ON still wins
 }
 
+/// The auto walk may skip a folder only when no file below it is auto.
+#[test]
+fn the_auto_walk_skips_only_folders_with_no_auto_file_below() {
+    let dir = |auto_sync, auto_off, excluded| SyncEntry {
+        selected: true,
+        is_dir: true,
+        auto_sync,
+        auto_off,
+        excluded,
+        ..Default::default()
+    };
+    let mut m = Manifest::new();
+    m.insert("".to_string(), dir(true, false, false));
+    m.insert("data".to_string(), dir(false, false, true));
+    m.insert("data/configs".to_string(), dir(true, false, false));
+    m.insert("vendor".to_string(), dir(false, true, false));
+    // A file's own marker reaches nothing below it: a folder that took the
+    // path over still inherits the root's auto.
+    m.insert("was_file".to_string(), SyncEntry { auto_off: true, ..Default::default() });
+    m.insert("logs/keep.txt".to_string(), SyncEntry { auto_sync: true, ..Default::default() });
+    m.insert("logs".to_string(), dir(false, true, false));
+
+    let skip = auto_walk_skip(&m);
+    for (folder, file, skipped) in [
+        ("src", "src/main.rs", false),
+        ("data", "data/configs/a.yaml", false),
+        ("data/raw", "data/raw/big.bin", true),
+        ("data/configs", "data/configs/a.yaml", false),
+        ("vendor", "vendor/lib.rs", true),
+        ("vendor/deep", "vendor/deep/x.rs", true),
+        ("was_file", "was_file/x", false),
+        ("logs", "logs/keep.txt", false),
+        ("logs/old", "logs/old/a.log", true),
+    ] {
+        assert_eq!(skip(folder), skipped, "{folder}");
+        assert_eq!(is_auto(&m, file), !skipped, "{file}");
+    }
+}
+
 /// Why `commands::projects::clear_host_bound_state` must exist.
 ///
 /// A manifest entry is a claim about **one specific host**. Point the project at a
@@ -1667,7 +1706,7 @@ mod mirror_reads {
         std::fs::write(secret.path(), b"host login").unwrap();
         // The walk's view: a regular file in a regular folder.
         let mut listed = Vec::new();
-        walk_mirror_inner(root.path(), root.path(), &mut listed).unwrap();
+        walk_mirror_inner(root.path(), root.path(), &|_| false, &mut listed).unwrap();
         assert_eq!(listed, vec!["d/f.txt".to_string()]);
         // The leaf is swapped for a link to a file the agent cannot see.
         std::fs::remove_file(root.path().join("d").join("f.txt")).unwrap();
@@ -1737,4 +1776,24 @@ fn a_pull_counts_only_what_the_mirror_does_not_hold() {
     assert_eq!(pull_bytes_needed(mirror, &files), 37, "held and shrunk add nothing");
     assert_eq!(pull_bytes_needed(mirror, &[("../out.bin".to_string(), 5)]), 5, "an unconfined path counts in full");
     assert_eq!(pull_bytes_needed(mirror, &[("d/held.bin".to_string(), 160)]), 60);
+}
+
+/// A same-size pair found different is remembered for exactly the stats it had:
+/// a moved mtime or size on either side, another file or another project reads
+/// the bytes again.
+#[test]
+fn a_known_different_pair_is_remembered_only_for_its_stats() {
+    let known = KnownDifferent::default();
+    let (host, local) = ((10, Some(100)), (10, Some(200)));
+    assert!(!known.holds("p", "a.bin", host, local));
+    known.note("p", "a.bin", host, local);
+    assert!(known.holds("p", "a.bin", host, local));
+    assert!(!known.holds("p", "a.bin", (10, Some(101)), local), "the host copy was rewritten");
+    assert!(!known.holds("p", "a.bin", host, (10, Some(201))), "the local copy was rewritten");
+    assert!(!known.holds("p", "b.bin", host, local));
+    assert!(!known.holds("q", "a.bin", host, local));
+    // The newer verdict replaces the older one.
+    known.note("p", "a.bin", (10, Some(101)), local);
+    assert!(!known.holds("p", "a.bin", host, local));
+    assert!(known.holds("p", "a.bin", (10, Some(101)), local));
 }

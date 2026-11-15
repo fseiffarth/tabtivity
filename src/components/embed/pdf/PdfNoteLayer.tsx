@@ -159,6 +159,7 @@ export function PdfNoteLayer({
   onMove,
   onRecolor,
   onDelete,
+  onPrintFrom,
 }: {
   /** The remarks on this sheet, as they should be shown: the arrangement's own set
    *  where it has taken the sheet over, else the file's. */
@@ -191,6 +192,8 @@ export function PdfNoteLayer({
   /** A highlight was given a different colour. */
   onRecolor?: (noteId: string, color: [number, number, number]) => void;
   onDelete: (noteId: string) => void;
+  /** Open the print preview on this sheet to the end ("Print from here"). */
+  onPrintFrom?: () => void;
 }) {
   const t = useT();
   const byId = (id?: string) => notes.find((n) => n.id === id);
@@ -622,6 +625,21 @@ export function PdfNoteLayer({
               {ready ? t("pdfNotes.addHere") : t("pdfNotes.reading")}
               <UntestedTag id="pdfNoteLayer.1" />
             </button>
+          )}
+          {!menu.noteId && onPrintFrom && (
+            <>
+              <hr />
+              <button
+                className="untested"
+                onClick={() => {
+                  onCloseMenu();
+                  onPrintFrom();
+                }}
+              >
+                {t("pdfNotes.printFromHere")}
+                <UntestedTag id="pdfNotes.printFromHere" />
+              </button>
+            </>
           )}
         </ContextMenuPortal>
       )}

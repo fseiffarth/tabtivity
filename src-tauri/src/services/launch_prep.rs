@@ -56,6 +56,8 @@ const CONTROL_ENV: &[&str] = &[
     crate::services::root_mcp::PRINT_URL_ENV,
     crate::services::root_mcp::WEB_TOKEN_ENV,
     crate::services::root_mcp::WEB_URL_ENV,
+    crate::services::root_mcp::TABS_TOKEN_ENV,
+    crate::services::root_mcp::TABS_URL_ENV,
 ];
 
 /// Whether `key` is one of [`CONTROL_ENV`] or a key carrier, in the current
@@ -622,6 +624,10 @@ pub struct PreparedLaunch {
     pub live_turn: Option<crate::services::agent_turn::TurnState>,
     /// The local folder the tab works in, `None` for a remote tab.
     pub drop_dir: Option<String>,
+    /// The key the window names the tab's checkpoints by
+    /// (`checkpoints::bind`), `None` when it has none. Only the window gets
+    /// it; it is never in the agent's environment.
+    pub checkpoint_key: Option<String>,
     /// The tab runs an AI ([`is_ai_spawn`]): while the AI switch is off its
     /// input is refused (`commands::terminal::pty_write`).
     pub ai: bool,
@@ -1109,6 +1115,10 @@ pub async fn prepare(
     // the read-only help lane. All of it is decided in `grant_lanes` against
     // this process's listener (`runtime()`: the window's, or the Mobile
     // host's, which serves no root, reader or markup lane).
+    // Whether an OpenCode inline config was here before the lanes merged
+    // their MCP servers into one (below, the local-models config yields only
+    // to that earlier one).
+    let opencode_inline_before_lanes = opts.env.contains_key(crate::services::agent_api_keys::OPENCODE_INLINE_ENV);
     let root_agent = crate::services::root_mcp::grant_lanes(
         &mut opts,
         agent_spawn,
@@ -1133,18 +1143,23 @@ pub async fn prepare(
     // `services::local_drivers::opencode_loaded_models_config`) — handed over as an
     // inline config, never written into OpenCode's own. A remote run's OpenCode
     // talks to the far host's Ollama, and an inline config the user set wins.
-    const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
+    // The MCP servers the lanes merged into a config of their own carry over.
+    const OPENCODE_INLINE: &str = crate::services::agent_api_keys::OPENCODE_INLINE_ENV;
     // (A chat's profile builds its own config, tools off, and the user's
     // environment's never wins: `assistant::launch_line` sets it.)
     if !remote_agent_run
         && !assistant
-        && !opts.env.contains_key(OPENCODE_INLINE)
+        && !opencode_inline_before_lanes
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
         if let Some(requested) = crate::services::local_drivers::opencode_spawn_model(&opts.cmd, &opts.args) {
             if let Some(cfg) =
                 crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref())
             {
+                let cfg = match opts.env.get(OPENCODE_INLINE) {
+                    Some(lanes) => crate::services::root_mcp::merge_opencode_mcp(&cfg, lanes),
+                    None => cfg,
+                };
                 opts.env.insert(OPENCODE_INLINE.into(), cfg);
             }
         }
@@ -1200,10 +1215,26 @@ pub async fn prepare(
                 }
                 _ => false,
             };
-            crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs)
+            let left = crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs);
+            // Per-turn checkpoints (`services::checkpoints`): only a local
+            // project's agent tab gets a folder; remote, root, Host-session
+            // and assistant tabs are unbound. The folder is found among the
+            // fence roots (`projects.json` / `boxes.json`), never from the tab.
+            let local_project = !project
+                .as_deref()
+                .is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
+            let checkpoint_roots = fence_roots
+                .as_deref()
+                .filter(|_| agent_spawn && !assistant && !remote_agent_run && !opts.host_session && local_project);
+            // The previous run's record shows its hooks work: no turn state
+            // then means idle (a restore needs no "can't tell" confirmation).
+            let turns_known = left.cut_off || left.resting || left.live.is_some();
+            let key = crate::services::checkpoints::bind(&uid, &opts.cwd, project.as_deref(), &opts.cmd, checkpoint_roots, turns_known);
+            (left, key)
         }
         None => Default::default(),
     };
+    let (left, checkpoint_key) = left;
     let (interrupted, resting, live_turn) = (left.cut_off, left.resting, left.live);
 
     // Codex resume, without the hook. Codex will not run Tabtivity's SessionStart
@@ -1624,6 +1655,7 @@ pub async fn prepare(
         interrupted,
         resting,
         live_turn,
+        checkpoint_key,
         mcp_spawn_guard,
         resume_claim,
         fenced_scope,
@@ -1849,7 +1881,7 @@ mod tests {
             mux_wrapped: false,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, live_turn: None, drop_dir: None, ai: true, host_attach_only: false, mcp_spawn_guard: None,
+            opts, named: false, interrupted: false, resting: false, live_turn: None, checkpoint_key: None, drop_dir: None, ai: true, host_attach_only: false, mcp_spawn_guard: None,
             resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, privacy_check: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }

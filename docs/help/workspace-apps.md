@@ -48,17 +48,23 @@ counts appear too.
 The `+` menu's **Monitoring** group has **System Monitor** (CPU, memory and
 GPU, per process), **Disk Usage** and **Network Traffic** — for this computer,
 or for a connected remote machine (on a remote project, or from a machine's
-tile in **Machines**). The header can
+row in **Machines**). The header can
 also show live CPU, RAM and GPU meters (Settings → System → Resource
 monitor).
 
 ## Machines
 
 The header's **Machines** indicator lists your SSH machines that belong to no
-single project, with their state and a live load bar. Click it for one tile
-per machine: connect, check, open its system monitor, see who is logged in
-and what runs there, or hand it to a project as a worker or as its host. See
-`remote-projects`.
+single project, with their state and a live load bar. Click it for the
+Machines view: this machine's meters on top, then one list of every SSH host
+your projects use and every machine you added, merged by host name and sorted
+by state (Connected, Connecting, Needs attention, Up, Off), then name. Each row
+shows its state, address, the projects using it and its load. Connect or
+disconnect from the row, click the name to open its system monitor, and use the
+**⋯** menu to check it, add it to a project as a worker or as its host, set
+**Connect on launch** or the HPC tag, edit or remove it. A filter box and state
+chips narrow the list; off machines no project uses fold into one **idle** line.
+See `remote-projects`.
 
 ## Browser
 

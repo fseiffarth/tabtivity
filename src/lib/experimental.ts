@@ -78,6 +78,7 @@ export const EXPERIMENTAL_FLAGS = [
   "assistant",
   "voice_hands_free",
   "windows_session_host",
+  "turn_checkpoints",
 ] as const;
 
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number];

@@ -54,6 +54,8 @@ const BG_SUFFIX: &str = ".bg";
 /// (`<uid>.from`): `phone` or `desktop`, written by [`note_input_from`] and
 /// read by `tabtivity-send`, which sends a file to that screen.
 pub const FROM_SUFFIX: &str = ".from";
+/// The marker a sibling's message leaves (`note_mail`), spent by the hook.
+pub const MAIL_SUFFIX: &str = ".mail";
 
 /// The most task ids [`note_background_tasks`] takes from a record.
 const BG_TASKS_MAX: usize = 32;
@@ -237,6 +239,7 @@ pub fn on_tab_gone(pty_id: &str) {
     let mut bg = bg_tasks().lock_ok();
     let mut projects = bound_projects().lock_ok();
     for uid in gone {
+        crate::services::checkpoints::unbind(&uid);
         projects.remove(&uid);
         states.remove(&uid);
         jobs.remove(&uid);
@@ -302,6 +305,58 @@ fn note_input_from_in(live_root: &Path, pty_id: &str, from: InputFrom) -> std::i
         }
     }
     Ok(())
+}
+
+/// Leave PTY `pty_id`'s agent the empty `<uid>.mail` marker beside its turn
+/// record (`services::tabs_mcp`: a sibling tab sent it a message): the agent
+/// hook prints `tabs_mcp::NOTICE` beside the next prompt and removes it, as it
+/// does the naming reminder. Written where [`note_input_from`] writes, through
+/// a directory handle (the slice is agent-writable), and empty: what a forged
+/// or deleted marker costs is a spurious or missed notice, nothing else.
+pub fn note_mail(pty_id: &str) -> std::io::Result<()> {
+    note_mail_in(&live_sessions_dir(), pty_id)
+}
+
+fn note_mail_in(live_root: &Path, pty_id: &str) -> std::io::Result<()> {
+    for rel in mail_marker_rels(pty_id) {
+        home_io::HomeFile::open(live_root, &rel)
+            .ok_or_else(|| std::io::Error::other(format!("{rel}: not a plain folder")))?
+            .write(b"")?;
+    }
+    Ok(())
+}
+
+/// Remove PTY `pty_id`'s `<uid>.mail` markers, in the root and the project
+/// slice alike (`services::tabs_mcp`: the tab read its inbox, so the notice is
+/// moot). The hook removes only the copy it sees — a fenced agent sees the
+/// slice at the root's path — so without this the other copy would stay. A
+/// link at the name is removed, never followed; a missing marker is fine.
+pub fn clear_mail(pty_id: &str) {
+    clear_mail_in(&live_sessions_dir(), pty_id);
+}
+
+fn clear_mail_in(live_root: &Path, pty_id: &str) {
+    for rel in mail_marker_rels(pty_id) {
+        if let Some(file) = home_io::HomeFile::open_existing(live_root, &rel) {
+            let _ = file.remove();
+        }
+    }
+}
+
+/// Where PTY `pty_id`'s mail markers go, relative to the live-sessions root:
+/// `<uid>.mail` for each uid bound to it, and again in its project's slice.
+fn mail_marker_rels(pty_id: &str) -> Vec<String> {
+    let uids: Vec<String> =
+        bindings().lock_ok().iter().filter(|(_, v)| v.as_str() == pty_id).map(|(k, _)| k.clone()).collect();
+    let mut rels = Vec::new();
+    for uid in uids {
+        let name = format!("{uid}{MAIL_SUFFIX}");
+        if let Some(pid) = bound_projects().lock_ok().get(&uid) {
+            rels.push(format!("{}/{name}", crate::storage::project_key(pid)));
+        }
+        rels.push(name);
+    }
+    rels
 }
 
 fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
@@ -537,17 +592,29 @@ fn last_scan() -> &'static Mutex<Option<Instant>> {
     L.get_or_init(|| Mutex::new(None))
 }
 
-/// Record what the hooks just said about `uid`. `Idle` is the session's end:
-/// its state and job flag go with it.
-fn note_state(uid: &str, state: TurnState) {
+/// The state `uid`'s hooks last reported, if the tab has spoken and not ended.
+pub fn state_of(uid: &str) -> Option<TurnState> {
+    states().lock_ok().get(uid).copied()
+}
+
+/// When the turn record at `path` was written, in milliseconds since the
+/// epoch (never read through a link: the agent can write the record's folder).
+fn record_written_ms(path: &Path) -> Option<u64> {
+    let modified = std::fs::symlink_metadata(path).ok()?.modified().ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
+}
+
+/// Record what the hooks just said about `uid`; the state it had before.
+/// `Idle` is the session's end: its state and job flag go with it.
+fn note_state(uid: &str, state: TurnState) -> Option<TurnState> {
     // Whatever the agent just did, the next timer tick must look again.
     settled().lock_ok().remove(uid);
     if state == TurnState::Idle {
-        states().lock_ok().remove(uid);
+        let prev = states().lock_ok().remove(uid);
         jobs().lock_ok().remove(uid);
         turn_ends().lock_ok().remove(uid);
         bg_tasks().lock_ok().remove(uid);
-        return;
+        return prev;
     }
     let mut states = states().lock_ok();
     let prev = states.insert(uid.to_string(), state);
@@ -562,6 +629,7 @@ fn note_state(uid: &str, state: TurnState) {
             None => ends.remove(uid),
         };
     }
+    prev
 }
 
 /// Whether a shell of `uid`'s agent was running at the last scan.
@@ -944,7 +1012,10 @@ pub fn start(ctx: CoreCtx) {
                         continue;
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {
-                        note_state(&uid, state);
+                        let prev = note_state(&uid, state);
+                        // A turn's edges are checkpointed (`services::checkpoints`),
+                        // queued on its folder's worker: no lock is held here.
+                        crate::services::checkpoints::on_turn(&uid, prev, state, record_written_ms(&path));
                         if let Some(dir) = path.parent() {
                             note_background_tasks(&uid, dir);
                         }
@@ -1059,6 +1130,48 @@ mod tests {
         assert!(!root.join(&name).exists());
         assert_eq!(InputFrom::parse("phone"), Some(InputFrom::Phone));
         assert_eq!(InputFrom::parse("tablet"), None);
+    }
+
+    /// A sibling's message leaves the empty `<uid>.mail` marker where
+    /// `<uid>.from` goes: the root and the project slice, never through a link.
+    #[test]
+    fn mail_marker_lands_empty_in_the_root_and_the_slice_and_never_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("live_sessions");
+        let uid = "mail-test-uid-1";
+        let pty = "proj-mail:agent-mail-1";
+        bindings().lock().unwrap().insert(uid.to_string(), pty.to_string());
+        bound_projects().lock().unwrap().insert(uid.to_string(), "proj/mail".to_string());
+        let name = format!("{uid}{MAIL_SUFFIX}");
+        let slice = root.join(crate::storage::project_key("proj/mail"));
+        note_mail_in(&root, pty).unwrap();
+        assert_eq!(std::fs::read(root.join(&name)).unwrap(), b"");
+        assert_eq!(std::fs::read(slice.join(&name)).unwrap(), b"");
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::fs::write(&target, "keep").unwrap();
+            std::fs::remove_file(slice.join(&name)).unwrap();
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            note_mail_in(&root, pty).unwrap();
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+            assert!(!std::fs::symlink_metadata(slice.join(&name)).unwrap().file_type().is_symlink());
+        }
+        // Reading the inbox clears both copies; the hook only reaches one.
+        clear_mail_in(&root, pty);
+        assert!(!root.join(&name).exists() && !slice.join(&name).exists(), "both markers go");
+        clear_mail_in(&root, pty);
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            clear_mail_in(&root, pty);
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep", "the link goes, not its target");
+            assert!(std::fs::symlink_metadata(slice.join(&name)).is_err());
+        }
+        on_tab_gone(pty);
+        note_mail_in(&root, pty).unwrap();
+        assert!(!root.join(&name).exists(), "an unbound PTY gets nothing");
     }
 
     #[test]

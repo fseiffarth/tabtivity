@@ -20,7 +20,10 @@ no sshfs, no FUSE mount, nothing to install on the host.
    blank to use your SSH key or agent; fill it in for password login.
 5. Click **Connect**. A remote file browser appears.
 6. Step into the folder you want and click **Use this folder**. New creates a
-   subfolder there; Import registers the folder in place.
+   subfolder there, named like the project by default; edit **Folder name on the
+   host** to use another spelling (capitals and spaces are fine, but it must be
+   a single name: no `/` or `\`, not `.` or `..`, not starting with `-`). Import
+   registers the folder in place.
 7. Name the project, pick a Git hosting option, and click Create/Import.
 
 Passwords are not saved unless you opt in; a saved password goes to the OS
@@ -96,7 +99,8 @@ offered on a VM project.
 1. Right-click the local project's pill → **Extend to remote…**.
 2. Connect to the host (or pick one under "Your machines").
 3. Browse to the parent folder where the host copy should live → **Use this
-   folder**, then review Local ⇄ Remote and click **Extend to remote**.
+   folder**, optionally change the **Folder name on the host**, then review
+   Local ⇄ Remote and click **Extend to remote**.
 4. Your local files are not touched: they become the mirror, and Git sync
    carries commits between the two. See `sync`.
 

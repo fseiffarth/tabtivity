@@ -24,6 +24,13 @@
 //!   would *replace* the `~/.claude/CLAUDE.md` it otherwise falls back to,
 //!   which is where the user's global instructions reach it.
 //!
+//! Two CLIs read no `AGENTS.md` by default, and the project scaffold no longer
+//! carries `CLAUDE.md`/`GEMINI.md` pointer files, so the same register points
+//! them at it from the home side: Gemini gets `AGENTS.md` added to
+//! `context.fileName` in `.gemini/settings.json` (its own `GEMINI.md` stays),
+//! Aider gets it in the `read:` list of `.aider.conf.yml`. Both are unions: a
+//! user's entries stay, a file that is not what we expect is left alone.
+//!
 //! Where a CLI loads user skills from its home, a **skill** of the same name
 //! as the command carries what one line cannot: piped output, `--clear`, the
 //! limits and exit codes — and it is a slash command the user can type
@@ -45,9 +52,32 @@ use serde_json::{json, Value};
 use crate::services::home_io::HomeFile;
 use crate::storage;
 
-/// What every CLI is told.
-pub const HINT: &str =
-    concat!("When the user asks you to send or show them a file, run `", crate::app_slug!(), "-send <file>` (local and container tabs): it goes to the screen they last typed from, the phone or the desktop. Do what its output says: for the desktop, name the path it prints in your reply, and the chat shows the pictures and PDFs a reply names. Add `--phone` or `--desktop` when the user names a screen.");
+/// The send line, as a literal: [`HINT`] and [`HOOK_HINT`] are built from it.
+macro_rules! send_hint {
+    () => {
+        concat!("When the user asks you to send or show them a file, run `", crate::app_slug!(), "-send <file>` (local and container tabs): it goes to the screen they last typed from, the phone or the desktop. Do what its output says: for the desktop, name the path it prints in your reply, and the chat shows the pictures and PDFs a reply names. Add `--phone` or `--desktop` when the user names a screen.")
+    };
+}
+
+/// What every CLI is told: Claude and Codex through their session hook.
+pub const HINT: &str = send_hint!();
+
+/// The `<slug>-mcp` line: Tabtivity's MCP tools for a CLI the lanes could not
+/// name them to at launch (`agent_registry::McpWiring::None`).
+macro_rules! tools_hint {
+    () => {
+        concat!(
+            "This tab may also hold ", crate::app_name!(), " tools (print a PDF once the user approves it, push, PDF markup questions, ",
+            "messages to the other agent tabs of the project, ", crate::app_name!(), " help). When they are not among your own tools, run `", crate::app_slug!(),
+            "-mcp` to list the servers, `", crate::app_slug!(), "-mcp tools SERVER` for their tools and arguments, and `",
+            crate::app_slug!(), "-mcp call SERVER TOOL JSON` to call one, with the arguments as one quoted JSON object."
+        )
+    };
+}
+
+/// What the CLIs past Claude and Codex are told, by hook or instructions
+/// file: the send line and the `<slug>-mcp` line.
+pub const HOOK_HINT: &str = concat!(send_hint!(), " ", tools_hint!());
 
 /// The send skill's folder and `name`, which is also Claude's slash command.
 pub const SKILL_NAME: &str = concat!(crate::app_slug!(), "-send");
@@ -157,13 +187,13 @@ impl Shape {
     /// What the hook prints in a Tabtivity project tab.
     fn output(self) -> String {
         match self {
-            Shape::Plain => HINT.to_string(),
+            Shape::Plain => HOOK_HINT.to_string(),
             Shape::Context => json!({
-                "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": HINT }
+                "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": HOOK_HINT }
             })
             .to_string(),
-            Shape::Copilot => json!({ "additionalContext": HINT }).to_string(),
-            Shape::Cursor => json!({ "additional_context": HINT }).to_string(),
+            Shape::Copilot => json!({ "additionalContext": HOOK_HINT }).to_string(),
+            Shape::Cursor => json!({ "additional_context": HOOK_HINT }).to_string(),
         }
     }
 
@@ -196,6 +226,18 @@ const COPILOT_HOOKS: &str = crate::brand::COPILOT_HINT_HOOKS;
 pub(crate) const VIBE_INSTRUCTIONS: &str = ".vibe/AGENTS.md";
 /// OpenCode's global config; its `instructions` files add to `AGENTS.md`.
 pub(crate) const OPENCODE_CONFIG: &str = ".config/opencode/opencode.json";
+/// Gemini's user settings; `context.fileName` names the instruction files it
+/// loads (default `GEMINI.md` only, so `AGENTS.md` is not read).
+pub(crate) const GEMINI_SETTINGS: &str = ".gemini/settings.json";
+/// The names Gemini gets in `context.fileName`, `GEMINI.md` first: the first
+/// name is where its `save_memory` writes.
+const GEMINI_CONTEXT_FILES: &[&str] = &["GEMINI.md", "AGENTS.md"];
+/// Aider's user config; its `read:` list holds read-only files, cwd-relative.
+pub(crate) const AIDER_CONFIG: &str = ".aider.conf.yml";
+/// The project's instruction file Aider is told to read.
+const AIDER_READ_FILE: &str = "AGENTS.md";
+/// A config over this is not read (an agent wrote it): left as it is.
+const CONFIG_CAP: u64 = 1 << 20;
 /// The hint as an instructions file, beside the script: the hooks dir is
 /// mounted read-only at its own path in the fence.
 const INSTRUCTIONS_NAME: &str = crate::brand::AGENT_HINT_MD;
@@ -233,7 +275,7 @@ fn command(shape: Shape) -> String {
 const HINT_ENV: &[&str] = &["TAB_UID", "TAB_AGENT", "PROJECT_DIR"];
 
 /// POSIX body. Every printed string is a single-quoted literal, which is why
-/// [`HINT`] must never hold a `'` (a test pins that).
+/// [`HOOK_HINT`] must never hold a `'` (a test pins that).
 #[cfg_attr(windows, allow(dead_code))]
 fn posix_script_body() -> String {
     posix_script_body_in(&crate::services::agent_session::live_sessions_dir().to_string_lossy())
@@ -317,7 +359,7 @@ pub fn write_script() -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(instructions_path(), format!("{HINT}\n"))?;
+    std::fs::write(instructions_path(), format!("{HOOK_HINT}\n"))?;
     #[cfg(windows)]
     std::fs::write(&path, powershell_script_body())?;
     #[cfg(not(windows))]
@@ -351,6 +393,14 @@ pub fn register_in_home(home: &std::path::Path) {
             report(rel, merge_json(&file, |root| add_session_start_group(root, true, &command(Shape::Context))));
         }
     }
+    // After the hooks above and after `agent_global::apply_to_home` (the caller's
+    // order): ours is the last word on the names.
+    if let Some(file) = open(GEMINI_SETTINGS) {
+        report(GEMINI_SETTINGS, merge_json(&file, |root| add_context_file_names(root, GEMINI_CONTEXT_FILES)));
+    }
+    if let Some(file) = open(AIDER_CONFIG) {
+        report(AIDER_CONFIG, merge_aider_read(&file, AIDER_READ_FILE));
+    }
     if let Some(file) = open(DROID_HOOKS) {
         report(DROID_HOOKS, merge_json(&file, |root| add_session_start_group(root, false, &command(Shape::Plain))));
     }
@@ -380,6 +430,97 @@ fn add_instructions(root: &mut Value, path: &str) -> bool {
     !present
 }
 
+/// Make `names` part of Gemini's `context.fileName`, which is a string or a
+/// list. A user's entries all stay and keep their order; the missing names are
+/// appended, so the list starts with `names` only when there was none. False
+/// when nothing changed, or when `context` / `fileName` is not the shape
+/// Gemini documents (left for the user to sort out, never replaced).
+fn add_context_file_names(root: &mut Value, names: &[&str]) -> bool {
+    let Some(map) = root.as_object_mut() else { return false };
+    let Some(context) = map.entry("context").or_insert_with(|| json!({})).as_object_mut() else { return false };
+    let before = context.get("fileName").cloned().unwrap_or(Value::Null);
+    let mut list = match &before {
+        Value::Null => Vec::new(),
+        Value::String(s) if s.trim().is_empty() => Vec::new(),
+        Value::String(_) => vec![before.clone()],
+        Value::Array(a) => a.clone(),
+        _ => return false,
+    };
+    for name in names {
+        if !list.iter().any(|v| v.as_str() == Some(name)) {
+            list.push(json!(name));
+        }
+    }
+    let after = Value::Array(list);
+    if after == before {
+        return false;
+    }
+    context.insert("fileName".into(), after);
+    true
+}
+
+/// Make `name` (relative, like `AGENTS.md`) part of the `read:` list in an
+/// Aider config (a YAML mapping; `read` is a string or a list). Entries stay
+/// in order. A file that is not a mapping, whose `read` is neither a string
+/// nor a list, that is not UTF-8 or is over [`CONFIG_CAP`] is left alone. The
+/// file is rewritten only when the list changed; YAML comments in a mapping
+/// do not survive that (it sits in Tabtivity's own agent home).
+fn merge_aider_read(file: &HomeFile, name: &str) -> io::Result<()> {
+    use serde_norway::Value as Y;
+    let bytes = match file.read_capped(CONFIG_CAP) {
+        Some(bytes) => Some(bytes),
+        None if file.is_file() => return Ok(()),
+        None => None,
+    };
+    let text = match bytes.map(String::from_utf8) {
+        None => String::new(),
+        Some(Ok(text)) => text,
+        Some(Err(_)) => return Ok(()),
+    };
+    let is_there = |y: &Y| y.as_str().is_some_and(|s| s == name || s.strip_prefix("./") == Some(name));
+    let Ok(doc) = serde_norway::from_str::<Y>(&text) else { return Ok(()) };
+    let mut map = match doc {
+        Y::Mapping(map) => map,
+        // Empty, or comments only: keep the text and add the key under it.
+        Y::Null => {
+            // A document that is the scalar `null` / `~` is not "empty":
+            // a mapping appended under it would not parse. Left alone.
+            if text.lines().any(|l| !matches!(l.trim(), "" | "---") && !l.trim_start().starts_with('#')) {
+                return Ok(());
+            }
+            let mut out = text;
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&format!("read:\n  - {name}\n"));
+            return file.write(out.as_bytes());
+        }
+        _ => return Ok(()),
+    };
+    let key = Y::from("read");
+    let list = match map.get(&key) {
+        None | Some(Y::Null) => vec![Y::from(name)],
+        Some(current @ Y::String(_)) => {
+            if is_there(current) {
+                return Ok(());
+            }
+            vec![current.clone(), Y::from(name)]
+        }
+        Some(Y::Sequence(list)) => {
+            if list.iter().any(is_there) {
+                return Ok(());
+            }
+            let mut list = list.clone();
+            list.push(Y::from(name));
+            list
+        }
+        Some(_) => return Ok(()),
+    };
+    map.insert(key, Y::Sequence(list));
+    let out = serde_norway::to_string(&Y::Mapping(map)).map_err(io::Error::other)?;
+    file.write(out.as_bytes())
+}
+
 fn write_if_changed(file: &HomeFile, bytes: &[u8]) -> io::Result<()> {
     if file.read().as_deref() == Some(bytes) {
         return Ok(());
@@ -391,7 +532,13 @@ fn write_if_changed(file: &HomeFile, bytes: &[u8]) -> io::Result<()> {
 /// that changed something. A file that is there but isn't plain JSON (some
 /// CLIs accept comments) is left alone rather than replaced.
 pub(crate) fn merge_json(file: &HomeFile, edit: impl FnOnce(&mut Value) -> bool) -> io::Result<()> {
-    let mut root = match file.read() {
+    let bytes = match file.read_capped(CONFIG_CAP) {
+        Some(bytes) => Some(bytes),
+        // Over the cap: not ours to replace.
+        None if file.is_file() => return Ok(()),
+        None => None,
+    };
+    let mut root = match bytes {
         None => json!({}),
         Some(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => json!({}),
         Some(bytes) => match serde_json::from_slice::<Value>(&bytes) {
@@ -462,7 +609,7 @@ fn copilot_hooks(cmd: &str) -> String {
 /// `current` with Tabtivity's block in it: replaced in place when the markers are
 /// there, appended otherwise. Nothing outside the markers changes.
 fn with_block(current: &str) -> String {
-    let block = format!("{BLOCK_START}\n{HINT}\n{BLOCK_END}\n");
+    let block = format!("{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\n");
     if let Some(start) = current.find(BLOCK_START) {
         if let Some(end) = current[start..].find(BLOCK_END).map(|i| start + i + BLOCK_END.len()) {
             let rest = current[end..].strip_prefix('\n').unwrap_or(&current[end..]);
@@ -504,7 +651,7 @@ mod tests {
         }
         let v: Value = serde_json::from_str(&Shape::Context.output()).unwrap();
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
-        assert_eq!(v["hookSpecificOutput"]["additionalContext"], HINT);
+        assert_eq!(v["hookSpecificOutput"]["additionalContext"], HOOK_HINT);
     }
 
     #[cfg(unix)]
@@ -641,6 +788,171 @@ mod tests {
         assert!(!home.join(".config/opencode/AGENTS.md").exists());
     }
 
+    fn gemini_names(home: &std::path::Path) -> Value {
+        read_json(&home.join(GEMINI_SETTINGS))["context"]["fileName"].clone()
+    }
+
+    fn put(home: &std::path::Path, rel: &str, text: &str) {
+        let path = home.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn gemini_reads_agents_md_next_to_its_own_file_and_nothing_else_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A fresh home gets both names, GEMINI.md first (where save_memory writes).
+        register_in_home(tmp.path());
+        assert_eq!(gemini_names(tmp.path()), json!(["GEMINI.md", "AGENTS.md"]));
+        let once = std::fs::read(tmp.path().join(GEMINI_SETTINGS)).unwrap();
+        register_in_home(tmp.path());
+        assert_eq!(std::fs::read(tmp.path().join(GEMINI_SETTINGS)).unwrap(), once);
+
+        // The user's own list keeps its order; only what is missing is appended.
+        let own = tempfile::tempdir().unwrap();
+        put(own.path(), GEMINI_SETTINGS, r#"{"ui":{"theme":"x"},"context":{"fileName":["MINE.md","AGENTS.md"],"other":1}}"#);
+        register_in_home(own.path());
+        assert_eq!(gemini_names(own.path()), json!(["MINE.md", "AGENTS.md", "GEMINI.md"]));
+        let settings = read_json(&own.path().join(GEMINI_SETTINGS));
+        assert_eq!(settings["ui"]["theme"], "x");
+        assert_eq!(settings["context"]["other"], 1);
+        register_in_home(own.path());
+        assert_eq!(gemini_names(own.path()), json!(["MINE.md", "AGENTS.md", "GEMINI.md"]));
+
+        // A string becomes a list that starts with it.
+        let single = tempfile::tempdir().unwrap();
+        put(single.path(), GEMINI_SETTINGS, r#"{"context":{"fileName":"MINE.md"}}"#);
+        register_in_home(single.path());
+        assert_eq!(gemini_names(single.path()), json!(["MINE.md", "GEMINI.md", "AGENTS.md"]));
+    }
+
+    #[test]
+    fn gemini_settings_of_an_unexpected_shape_are_not_replaced() {
+        for text in [
+            r#"{"context":"nope"}"#,
+            r#"{"context":{"fileName":7}}"#,
+            r#"{"context":{"fileName":{"a":1}}}"#,
+            "[1,2]",
+            "{\n  // mine\n  \"context\": {}\n}\n",
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            put(tmp.path(), GEMINI_SETTINGS, text);
+            register_in_home(tmp.path());
+            let now = std::fs::read_to_string(tmp.path().join(GEMINI_SETTINGS)).unwrap();
+            // The hook merge may add its group to valid JSON objects; the context never changes.
+            if serde_json::from_str::<Value>(text).is_ok_and(|v| v.is_object()) {
+                assert_eq!(serde_json::from_str::<Value>(&now).unwrap()["context"], serde_json::from_str::<Value>(text).unwrap()["context"], "{text}");
+            } else {
+                assert_eq!(now, text);
+            }
+        }
+    }
+
+    #[test]
+    fn gemini_names_survive_the_global_layer_applied_before_ours() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let home = tmp.path().join("home");
+        put(&crate::services::agent_global::global_dir_in(&state), GEMINI_SETTINGS, r#"{"context":{"fileName":"LAYER.md"}}"#);
+        for _ in 0..2 {
+            crate::services::agent_global::apply_to_home(&state, &home).unwrap();
+            register_in_home(&home);
+            assert_eq!(gemini_names(&home), json!(["LAYER.md", "GEMINI.md", "AGENTS.md"]));
+        }
+    }
+
+    fn aider(home: &std::path::Path) -> serde_norway::Value {
+        serde_norway::from_str(&std::fs::read_to_string(home.join(AIDER_CONFIG)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn aider_reads_agents_md_and_keeps_what_the_user_listed() {
+        let yaml = |s: &str| -> serde_norway::Value { serde_norway::from_str(s).unwrap() };
+        // No file: created, idempotent.
+        let fresh = tempfile::tempdir().unwrap();
+        register_in_home(fresh.path());
+        assert_eq!(aider(fresh.path()), yaml("read: [AGENTS.md]"));
+        let once = std::fs::read(fresh.path().join(AIDER_CONFIG)).unwrap();
+        register_in_home(fresh.path());
+        assert_eq!(std::fs::read(fresh.path().join(AIDER_CONFIG)).unwrap(), once);
+
+        // A list keeps its order and the other keys; a string becomes a list.
+        let list = tempfile::tempdir().unwrap();
+        put(list.path(), AIDER_CONFIG, "model: sonnet\nread:\n  - CONVENTIONS.md\n  - docs/style.md\n");
+        register_in_home(list.path());
+        assert_eq!(aider(list.path()), yaml("model: sonnet\nread: [CONVENTIONS.md, docs/style.md, AGENTS.md]"));
+        register_in_home(list.path());
+        assert_eq!(aider(list.path()), yaml("model: sonnet\nread: [CONVENTIONS.md, docs/style.md, AGENTS.md]"));
+        let string = tempfile::tempdir().unwrap();
+        put(string.path(), AIDER_CONFIG, "read: CONVENTIONS.md\n");
+        register_in_home(string.path());
+        assert_eq!(aider(string.path()), yaml("read: [CONVENTIONS.md, AGENTS.md]"));
+
+        // Already listed (either spelling): not touched, comments included.
+        for text in ["# mine\nread: AGENTS.md\n", "# mine\nread: [x.md, ./AGENTS.md]\n"] {
+            let there = tempfile::tempdir().unwrap();
+            put(there.path(), AIDER_CONFIG, text);
+            register_in_home(there.path());
+            assert_eq!(std::fs::read_to_string(there.path().join(AIDER_CONFIG)).unwrap(), text);
+        }
+
+        // Comments only: kept, the key added under them.
+        let comments = tempfile::tempdir().unwrap();
+        put(comments.path(), AIDER_CONFIG, "# mine\n");
+        register_in_home(comments.path());
+        assert_eq!(std::fs::read_to_string(comments.path().join(AIDER_CONFIG)).unwrap(), "# mine\nread:\n  - AGENTS.md\n");
+    }
+
+    #[test]
+    fn an_aider_config_that_is_not_what_we_expect_is_left_alone() {
+        let big = format!("# {}\nmodel: x\n", "a".repeat(2 << 20));
+        for text in ["- just\n- a list\n", "read: {a: 1}\n", "read: 5\n", "a: [unclosed\n", "a: 1\na: 2\n", "plain scalar", "null\n", "# mine\n~\n", big.as_str()] {
+            let tmp = tempfile::tempdir().unwrap();
+            put(tmp.path(), AIDER_CONFIG, text);
+            register_in_home(tmp.path());
+            assert_eq!(std::fs::read_to_string(tmp.path().join(AIDER_CONFIG)).unwrap(), text);
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(AIDER_CONFIG), [0xff, 0xfe, b'x']).unwrap();
+        register_in_home(tmp.path());
+        assert_eq!(std::fs::read(tmp.path().join(AIDER_CONFIG)).unwrap(), [0xff, 0xfe, b'x']);
+    }
+
+    /// A config an agent made huge is never read whole nor replaced: JSON over
+    /// the cap (any caller of `merge_json`) and a YAML alias bomb under it.
+    #[test]
+    fn an_over_cap_or_bomb_config_is_left_exactly_as_it_is() {
+        let pad = "a".repeat(2 << 20);
+        let big_json = format!(r#"{{"context":{{"fileName":"MINE.md"}},"pad":"{pad}"}}"#);
+        let mut bomb = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..14 {
+            bomb.push_str(&format!("a{i}: &a{i} [{}]\n", vec![format!("*a{}", i - 1); 10].join(", ")));
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), GEMINI_SETTINGS, &big_json);
+        put(tmp.path(), OPENCODE_CONFIG, &big_json);
+        put(tmp.path(), AIDER_CONFIG, &bomb);
+        // No wall-clock bound (a loaded machine is slow): a bomb that were
+        // expanded would exhaust memory or hang, not merely run late.
+        register_in_home(tmp.path());
+        for (rel, text) in [(GEMINI_SETTINGS, &big_json), (OPENCODE_CONFIG, &big_json), (AIDER_CONFIG, &bomb)] {
+            assert_eq!(&std::fs::read_to_string(tmp.path().join(rel)).unwrap(), text, "{rel}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_aider_config_that_is_a_link_is_replaced_not_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside.yml");
+        std::fs::write(&outside, "model: theirs\n").unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join(AIDER_CONFIG)).unwrap();
+        register_in_home(&home);
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "model: theirs\n");
+    }
+
     #[test]
     fn a_config_that_is_not_plain_json_is_left_alone() {
         let tmp = tempfile::tempdir().unwrap();
@@ -667,11 +979,11 @@ mod tests {
     #[test]
     fn the_block_is_replaced_in_place_and_nothing_around_it_moves() {
         let once = with_block("before\n");
-        assert_eq!(once, format!("before\n\n{BLOCK_START}\n{HINT}\n{BLOCK_END}\n"));
+        assert_eq!(once, format!("before\n\n{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\n"));
         let stale = format!("top\n{BLOCK_START}\nold text\n{BLOCK_END}\nbottom\n");
-        assert_eq!(with_block(&stale), format!("top\n{BLOCK_START}\n{HINT}\n{BLOCK_END}\nbottom\n"));
+        assert_eq!(with_block(&stale), format!("top\n{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\nbottom\n"));
         assert_eq!(with_block(&with_block("")), with_block(""));
-        assert_eq!(with_block(""), format!("{BLOCK_START}\n{HINT}\n{BLOCK_END}\n"));
+        assert_eq!(with_block(""), format!("{BLOCK_START}\n{HOOK_HINT}\n{BLOCK_END}\n"));
     }
 
     #[test]

@@ -7,6 +7,8 @@ import {
   type FileEntry, type SortKey, sortEntries, isHiddenByEnding, STANDARD_PROJECT_FILES,
 } from "../../lib/viewers/fileUtils";
 import { argsToLines } from "../../lib/terminal/runArgsFormat";
+import type { DocStatus } from "../../lib/projects/projectDocs";
+import { buildDocsGroup } from "./projectDocsGroup";
 import type { GitStatusMap, MoveTargetAttrs, RowActions } from "./fileTreeTypes";
 import type { useFileTreeRunState } from "./useFileTreeRun";
 
@@ -26,7 +28,7 @@ export const ROW_CAP_STEP = 100;
 export function useFileTreeRows({
   gitStatuses, entries, hiddenEndings, relPath, shownPaths, separateScaffold, separateGitignored,
   dirIgnoredBytes, dirSizes, sortKey, descending, projectId, scaffoldExpanded, gitignoredExpanded,
-  hiddenExtExpanded, setSelected,
+  hiddenExtExpanded, docsStatus, setSelected,
 }: {
   gitStatuses: GitStatusMap;
   entries: FileEntry[];
@@ -43,6 +45,8 @@ export function useFileTreeRows({
   scaffoldExpanded: boolean;
   gitignoredExpanded: boolean;
   hiddenExtExpanded: boolean;
+  /** The backend's per-doc status for the "Project docs" group; `null` until known. */
+  docsStatus: DocStatus[] | null;
   setSelected: Dispatch<SetStateAction<Set<string>>>;
 }) {
   // Per-entry git status resolving the "whole directory is ignored" sentinel the
@@ -122,6 +126,11 @@ export function useFileTreeRows({
     descending,
   ]);
 
+  // The "Project docs" group: the root's standard files in display order (a
+  // pointer file nested under AGENTS.md) plus the ghost rows. Ghost rows are not
+  // files: `docsGroup.files` is what the row cap and the selection axis see.
+  const docsGroup = useMemo(() => buildDocsGroup(sections.standard, docsStatus), [sections.standard, docsStatus]);
+
   // How many rows the tree will actually render, raised a page at a time by the
   // "show more" footer. Rows are NOT virtualized, and each one is ~16 elements
   // with ~11 handlers rebuilt on every render of this component — so a folder
@@ -152,26 +161,27 @@ export function useFileTreeRows({
       budget -= out.length;
       return out;
     };
+    const standard = scaffoldExpanded ? clip(docsGroup.files) : [];
     const regular = clip(sections.regular);
-    const standard = scaffoldExpanded ? clip(sections.standard) : [];
     const gitignored = gitignoredExpanded ? clip(sections.gitignored) : [];
     const hiddenExt = hiddenExtExpanded ? clip(sections.hiddenExt) : [];
     const total =
       sections.regular.length +
-      (scaffoldExpanded ? sections.standard.length : 0) +
+      (scaffoldExpanded ? docsGroup.files.length : 0) +
       (gitignoredExpanded ? sections.gitignored.length : 0) +
       (hiddenExtExpanded ? sections.hiddenExt.length : 0);
     const shown = regular.length + standard.length + gitignored.length + hiddenExt.length;
     return { regular, standard, gitignored, hiddenExt, hidden: total - shown };
-  }, [sections, rowCap, scaffoldExpanded, gitignoredExpanded, hiddenExtExpanded]);
+  }, [sections, docsGroup, rowCap, scaffoldExpanded, gitignoredExpanded, hiddenExtExpanded]);
 
   // Flat list of visible row paths in on-screen order — the axis a shift-range
   // spans. Collapsed sections contribute no rows (they aren't rendered), and
   // neither do rows beyond the cap: a range must span exactly what the user can
   // see, or shift-click would silently select rows that aren't on screen.
   const orderedVisible = useMemo(() => {
-    const paths = rowWindow.regular.map((e) => e.path);
-    paths.push(...rowWindow.standard.map((e) => e.path));
+    // The docs group renders first, above the regular rows.
+    const paths = rowWindow.standard.map((e) => e.path);
+    paths.push(...rowWindow.regular.map((e) => e.path));
     paths.push(...rowWindow.gitignored.map((e) => e.path));
     paths.push(...rowWindow.hiddenExt.map((e) => e.path));
     return paths;
@@ -194,7 +204,7 @@ export function useFileTreeRows({
     // `setSelected` is a state setter, passed in: stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries]);
-  return { displayStatuses, sections, setRowCap, rowWindow, orderedVisible };
+  return { displayStatuses, sections, docsGroup, setRowCap, rowWindow, orderedVisible };
 }
 
 /** The two stable objects every row gets: its drop-target identity and its handler forwarders. */

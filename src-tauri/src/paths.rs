@@ -1452,17 +1452,21 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
         let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
-        // Dead: gone from the table, or a zombie waiting for its new parent.
-        let gone = |pid: u32| {
+        // Dead: gone from the table, or a zombie (`Z`) or dying (`X`) task
+        // waiting for its new parent. A loaded CI runner (the whole suite
+        // in parallel) can take seconds to schedule the killed task's exit,
+        // so the wait is generous; a live state is reported on failure.
+        let state = |pid: u32| {
             std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .map(|stat| stat.rsplit(") ").next().is_some_and(|rest| rest.starts_with('Z')))
-                .unwrap_or(true)
+                .ok()
+                .and_then(|stat| stat.rsplit(") ").next().and_then(|rest| rest.chars().next()))
         };
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let gone = |pid: u32| state(pid).is_none_or(|s| matches!(s, 'Z' | 'X' | 'x'));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !gone(pid) && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline");
+        assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline (state {:?})", state(pid));
     }
 
     /// A process that leaves the group and keeps a pipe open cannot hold a

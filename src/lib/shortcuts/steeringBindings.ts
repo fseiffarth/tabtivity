@@ -92,6 +92,7 @@ export type SteeringAction =
   | "viewOpen"
   | "viewOpenAlt"
   | "viewNew"
+  | "viewNote"
   | SteeringSlotAction;
 
 /** Where an action acts. `mode` is every level; `panes` covers the subwindow
@@ -192,6 +193,8 @@ export const STEERING_BINDINGS: SteeringBindingDef[] = [
   { action: "viewOpen", labelKey: "steering.viewOpen.label", scopes: ["inside"], defaults: ["o"] },
   { action: "viewOpenAlt", labelKey: "steering.viewOpenAlt.label", scopes: ["inside"], defaults: ["v"] },
   { action: "viewNew", labelKey: "steering.viewNew.label", scopes: ["inside"], defaults: ["n"] },
+  // C (comment): N was taken by Next new. Only Diffs acts on it.
+  { action: "viewNote", labelKey: "steering.viewNote.label", scopes: ["inside"], defaults: ["c"] },
   { action: "back", labelKey: "steering.back.label", scopes: ["region"], defaults: ["Escape"] },
   { action: "press", labelKey: "steering.press.label", scopes: ["region"], defaults: ["Enter"] },
   { action: "search", labelKey: "steering.search.label", scopes: ["region"], defaults: ["/"] },

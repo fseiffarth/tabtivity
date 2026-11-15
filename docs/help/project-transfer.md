@@ -72,10 +72,12 @@ started in the old folder can't be resumed from the new one.
 
 ## Repair the scaffold
 
-New projects get `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, a `.gitignore` and
-`.claude/settings.json`. **Repair scaffold files** on the pill menu (or
+New projects get `AGENTS.md`, `README.md` and, for a git project, a
+`.gitignore`. **Repair scaffold files** on the pill menu (or
 **Settings → Workspace & apps → Repair Project Scaffold** for several
-projects) fills in any that are missing. It never overwrites what is there.
+projects) fills in any that are missing. It never overwrites what you or an
+agent wrote; the one exception is an `AGENTS.md` that is empty or still an
+earlier Tabtivity template, which it upgrades to the current text.
 
 ## Remove git and history
 

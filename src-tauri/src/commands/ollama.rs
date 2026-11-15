@@ -3130,10 +3130,28 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// section entirely. Pure + tested.
 fn build_context_block(files: &[ContextFile]) -> String {
     let mut out = String::new();
+    for (name, body) in capped_references(files, |_| true) {
+        out.push_str("--- ");
+        out.push_str(name);
+        out.push_str(" ---\n");
+        out.push_str(&body);
+        out.push_str("\n\n");
+    }
+    out
+}
+
+/// The references a request may carry, in order, each trimmed and truncated
+/// to [`MAX_CONTEXT_PER_FILE`] until [`MAX_CONTEXT_TOTAL`] is spent. Empty
+/// files and those `keep` refuses are skipped and cost nothing. Pure.
+fn capped_references(files: &[ContextFile], keep: impl Fn(&ContextFile) -> bool) -> Vec<(&str, String)> {
+    let mut out = Vec::new();
     let mut total = 0usize;
     for f in files {
         if total >= MAX_CONTEXT_TOTAL {
             break;
+        }
+        if !keep(f) {
+            continue;
         }
         let cap = MAX_CONTEXT_PER_FILE.min(MAX_CONTEXT_TOTAL - total);
         let body = truncate_chars(f.content.trim(), cap);
@@ -3141,13 +3159,62 @@ fn build_context_block(files: &[ContextFile]) -> String {
             continue;
         }
         total += body.len();
-        out.push_str("--- ");
-        out.push_str(f.name.trim());
-        out.push_str(" ---\n");
-        out.push_str(&body);
-        out.push_str("\n\n");
+        out.push((f.name.trim(), body));
     }
     out
+}
+
+/// A FIM model family whose trained multi-file layout is known, so references
+/// can travel on the FIM path through `raw: true` (plan, fixed decision 2).
+struct FimLayout {
+    /// Matched against the model's family key ([`fim_family_key`]).
+    starts_with: &'static str,
+    repo_name: &'static str,
+    file_sep: &'static str,
+    fim_prefix: &'static str,
+    fim_suffix: &'static str,
+    fim_middle: &'static str,
+    /// The family's other control tokens, sent as stop strings too.
+    extra_stops: &'static [&'static str],
+}
+
+impl FimLayout {
+    /// Every control token: what a raw prompt stops at and what no reference,
+    /// file name or caret text may contain.
+    fn tokens(&self) -> impl Iterator<Item = &'static str> + '_ {
+        [self.repo_name, self.file_sep, self.fim_prefix, self.fim_suffix, self.fim_middle]
+            .into_iter()
+            .chain(self.extra_stops.iter().copied())
+    }
+
+    fn holds_token(&self, text: &str) -> bool {
+        self.tokens().any(|token| text.contains(token))
+    }
+}
+
+/// Families with a known layout. `qwen2.5-coder` is Qwen's repository-level
+/// layout (`<|repo_name|>`, `<|file_sep|>`, then the FIM tokens), as the
+/// model card describes it.
+const FIM_LAYOUTS: &[FimLayout] = &[FimLayout {
+    starts_with: "qwen2.5-coder",
+    repo_name: "<|repo_name|>",
+    file_sep: "<|file_sep|>",
+    fim_prefix: "<|fim_prefix|>",
+    fim_suffix: "<|fim_suffix|>",
+    fim_middle: "<|fim_middle|>",
+    extra_stops: &["<|endoftext|>", "<|fim_pad|>"],
+}];
+
+/// A model name's family key: lower case, between the last `/` and the `:`
+/// (`registry.example/ns/Qwen2.5-Coder:1.5b` → `qwen2.5-coder`). Pure.
+fn fim_family_key(model: &str) -> String {
+    let name = model.trim().rsplit('/').next().unwrap_or("");
+    name.split(':').next().unwrap_or("").to_ascii_lowercase()
+}
+
+fn fim_layout(model: &str) -> Option<&'static FimLayout> {
+    let key = fim_family_key(model);
+    FIM_LAYOUTS.iter().find(|layout| key.starts_with(layout.starts_with))
 }
 
 /// Build the user message paired with [`COMPLETION_SYSTEM`]: a per-caret TASK hint
@@ -3157,7 +3224,9 @@ fn build_context_block(files: &[ContextFile]) -> String {
 /// word/sentence/line (and, when mid-sentence, biases toward finishing it first),
 /// `Block` completes the current block/paragraph, and `Scope` the whole enclosing
 /// function or scope. When `context` is non-empty it is inserted as a read-only
-/// REFERENCE FILES section before BEFORE/AFTER. Pure + tested.
+/// REFERENCE FILES section before AFTER/BEFORE. Section order is
+/// `Language / references / AFTER / BEFORE / TASK`, so the text that changes
+/// while typing is last (plan B4). Pure + tested.
 fn completion_prompt(
     prefix: &str,
     suffix: &str,
@@ -3215,7 +3284,10 @@ insertion; never output, quote, or repeat them):\n{context}\n"
     let prose = if is_completion_prose(language) {
         "Continue prose in the natural language of BEFORE and AFTER, even when references use another language. Preserve Markdown/LaTeX markup. Do not translate or switch to English.\n"
     } else { "" };
-    format!("Language: {lang}\n{prose}{task}\n\n{reference}BEFORE:\n{prefix}\n\nAFTER:\n{suffix}")
+    // What changes while the user types goes last: the prefix's tail, and the
+    // TASK, which switches at a line start and at `;` or `:`. Everything before
+    // the first changed token is served from the model's prompt cache.
+    format!("Language: {lang}\n{prose}\n{reference}AFTER:\n{suffix}\n\nBEFORE:\n{prefix}\n\n{task}")
 }
 
 /// Strip wrapping artefacts a chat model sometimes adds around a raw completion:
@@ -3285,13 +3357,26 @@ fn overlap_len(a: &str, b: &str) -> usize {
 /// cursor (BEFORE "…return " → completion "return a + b") or pre-echo the text just
 /// after it. Trims a leading run of `completion` that repeats the tail of `prefix`
 /// and a trailing run that repeats the head of `suffix`, ignoring whitespace at the
-/// seam. Pure + tested.
-fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str) -> String {
+/// seam. With `keep_break` (see [`keeps_line_break`]) a line break after the
+/// echoed tail survives with the next line's indentation, so code written below
+/// an echoed comment lands on its own line, not inside the comment. Pure + tested.
+fn trim_context_overlap(prefix: &str, suffix: &str, completion: &str, keep_break: bool) -> String {
     // Leading overlap with the end of BEFORE.
     let head = completion.trim_start();
     let p = prefix.trim_end();
     let mut c = match overlap_len(p, head) {
-        n if n >= MIN_SEAM_OVERLAP => head[n..].trim_start(),
+        n if n >= MIN_SEAM_OVERLAP => {
+            let rest = &head[n..];
+            let body = rest.trim_start();
+            let gap = &rest[..rest.len() - body.len()];
+            match gap.rfind('\n') {
+                // The last line break (with its `\r`), then the next line's indent.
+                Some(nl) if keep_break && !body.is_empty() => {
+                    &rest[if gap[..nl].ends_with('\r') { nl - 1 } else { nl }..]
+                }
+                _ => body,
+            }
+        }
         _ => completion,
     };
 
@@ -3317,12 +3402,42 @@ pub fn cancel_text_completion(request_id: String) {
     crate::services::text_completion::cancel(&request_id);
 }
 
+/// Whether a chat answer's leading line break is part of the insertion: only
+/// when the caret's line has text before it (else the break would double) and
+/// the sentence stop is off (else [`completion_stop`] would cut the answer at
+/// that break and return nothing). Pure.
+fn keeps_line_break(prefix: &str, sentence: bool) -> bool {
+    !sentence && !prefix.ends_with('\n')
+}
+
 /// Preserve native FIM whitespace. Chat output still needs conservative wrapper
-/// cleanup; withhold incomplete fence/preamble lines while tokens arrive.
-fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &str) -> String {
+/// cleanup; withhold incomplete fence/preamble lines while tokens arrive. With
+/// `keep_break` one leading line break of the answer is set aside, the wrapper
+/// handling runs on the rest, and the break is put back: a completion that
+/// starts on the next line (code below an intent comment) stays there.
+fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &str, keep_break: bool) -> String {
     if fim {
         return raw.to_string();
     }
+    let lead = if !keep_break {
+        ""
+    } else if raw.starts_with("\r\n") {
+        "\r\n"
+    } else if raw.starts_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+    let rest = chat_preview(&raw[lead.len()..], done, prefix, suffix, keep_break);
+    // Nothing to show yet, or the rest brought its own break (an echoed line).
+    if rest.is_empty() || rest.starts_with(['\n', '\r']) {
+        return rest;
+    }
+    format!("{lead}{rest}")
+}
+
+/// [`completion_preview`] of a chat answer without its kept line break.
+fn chat_preview(raw: &str, done: bool, prefix: &str, suffix: &str, keep_break: bool) -> String {
     if !done && !raw.contains('\n') {
         let first = raw.trim_start().to_ascii_lowercase();
         if first.starts_with('`')
@@ -3347,7 +3462,162 @@ fn completion_preview(raw: &str, fim: bool, done: bool, prefix: &str, suffix: &s
     let cleaned = clean_completion(raw);
     // Do not flicker by removing a suffix match that may still grow. The final
     // snapshot applies both seams before the frontend marks it finished.
-    trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned)
+    trim_context_overlap(prefix, if done { suffix } else { "" }, &cleaned, keep_break)
+}
+
+/// `text-completion-stats-<requestId>`: how one completion went, emitted once
+/// before `complete_text` returns successfully (the plan's IPC contract). The
+/// Ollama counts are absent when the socket was dropped before its final
+/// record (sentence stop, time budget).
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct CompletionStats {
+    endpoint: &'static str,
+    model: String,
+    /// `done` (the model finished), `line` (sentence stop), `budget` (time budget).
+    stop: &'static str,
+    first_token_ms: Option<u64>,
+    total_ms: u64,
+    reference_bytes: usize,
+    references_dropped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_eval_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_eval_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eval_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eval_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    load_ms: Option<u64>,
+}
+
+impl CompletionStats {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        endpoint: &'static str,
+        model: &str,
+        stop: &'static str,
+        first_token: Option<Duration>,
+        total: Duration,
+        reference_bytes: usize,
+        references_dropped: bool,
+        record: Option<&crate::services::text_completion::FinalRecord>,
+    ) -> Self {
+        let ms = |ns: Option<u64>| ns.map(|ns| ns / 1_000_000);
+        Self {
+            endpoint,
+            model: model.to_string(),
+            stop,
+            first_token_ms: first_token.map(|d| d.as_millis() as u64),
+            total_ms: total.as_millis() as u64,
+            reference_bytes,
+            references_dropped,
+            prompt_eval_count: record.and_then(|r| r.prompt_eval_count),
+            prompt_eval_ms: ms(record.and_then(|r| r.prompt_eval_duration)),
+            eval_count: record.and_then(|r| r.eval_count),
+            eval_ms: ms(record.and_then(|r| r.eval_duration)),
+            load_ms: ms(record.and_then(|r| r.load_duration)),
+        }
+    }
+}
+
+/// What the editor shows for the answer so far, and whether the sentence stop
+/// ended it (the stream is then dropped). `sentence` is the stop being on:
+/// Sentence mode without an intent comment. Pure + tested.
+fn completion_snapshot(
+    raw: &str,
+    fim: bool,
+    done: bool,
+    prefix: &str,
+    suffix: &str,
+    sentence: bool,
+    prose: bool,
+) -> (String, bool) {
+    let mut text = completion_preview(raw, fim, done, prefix, suffix, keeps_line_break(prefix, sentence));
+    let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
+    if let Some(end) = stop {
+        text.truncate(end);
+    }
+    (text, stop.is_some())
+}
+
+/// How long an automatic request may stream after its first token before it
+/// settles for the complete lines it has (plan B6). Sentence mode reaches it
+/// only for an intent comment, where its line stop is off.
+fn completion_budget(mode: CompletionMode) -> Duration {
+    match mode {
+        CompletionMode::Sentence => Duration::from_millis(1500),
+        CompletionMode::Block => Duration::from_secs(3),
+        CompletionMode::Scope => Duration::from_secs(6),
+    }
+}
+
+/// Where `text` ends after its complete lines: at its last line break (`\r`
+/// included), when non-blank text comes before it. Pure.
+fn complete_lines_end(text: &str) -> Option<usize> {
+    let nl = text.rfind('\n')?;
+    let end = if text[..nl].ends_with('\r') { nl - 1 } else { nl };
+    (!text[..end].trim().is_empty()).then_some(end)
+}
+
+/// The time budget's verdict for an automatic request: where to cut `text`
+/// once `since_first_token` passed the mode's budget and the text holds a
+/// complete line, else `None` (keep streaming). Pure + tested.
+fn budget_cut(mode: CompletionMode, since_first_token: Duration, text: &str) -> Option<usize> {
+    if since_first_token < completion_budget(mode) {
+        return None;
+    }
+    complete_lines_end(text)
+}
+
+/// The final text of a request the time budget stopped: the complete lines
+/// its last preview showed (the same snapshot of the same answer, cut at the
+/// same place), and only then the seam against AFTER that a final chat text
+/// gets. The other order trims a half-written echo of AFTER first and then
+/// cuts one complete line more than the preview did. Pure + tested.
+fn budget_text(raw: &str, fim: bool, prefix: &str, suffix: &str, sentence: bool, prose: bool) -> String {
+    let mut text = completion_snapshot(raw, fim, false, prefix, suffix, sentence, prose).0;
+    if let Some(end) = complete_lines_end(&text) {
+        text.truncate(end);
+    }
+    if fim {
+        return text;
+    }
+    // The leading seam is already trimmed; an empty BEFORE leaves it alone.
+    trim_context_overlap("", suffix, &text, false)
+}
+
+/// The endpoint one completion request may use, or why it may not run: the
+/// policy block `complete_text` runs before any client exists. A local-models-
+/// only project (`services::agent_privacy`) is completed by this machine's
+/// models only: loopback host, a model the endpoint lists without a remote (an
+/// Ollama cloud model answers on ollama.com). Every request then asks `gate`
+/// (`owner_gate`) whose listener the address is, as every other Ollama call
+/// does before it writes a byte, so source text never reaches a process
+/// squatting on the loopback port. `refusal` and `gate` are parameters
+/// because a unit test can make neither real one refuse on demand.
+fn completion_endpoint(
+    settings: &crate::schema::Settings,
+    locked: bool,
+    project_id: Option<&str>,
+    model: &str,
+    refusal: &dyn Fn(&str, &str) -> Option<String>,
+    gate: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<String, String> {
+    let local_only = locked
+        || project_id
+            .and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
+            .is_some_and(|policy| policy.local_only);
+    let (host, allow_remote) = host_setting(settings);
+    let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
+    if locked {
+        if let Some(refusal) = refusal(&addr, model) {
+            return Err(refusal);
+        }
+    }
+    gate(&addr)?;
+    Ok(addr)
 }
 
 fn completion_body(
@@ -3365,9 +3635,14 @@ fn completion_body(
     } else {
         mode.num_predict()
     };
+    // No penalties: code repeats identifiers and brackets by nature. The first
+    // candidate is greedy (`top_k` 1); [`sample_candidate`] widens alternates.
     let mut body = serde_json::json!({
         "model": model, "stream": true, "think": false,
-        "options": { "temperature": 0.1, "num_predict": cap }
+        "options": {
+            "temperature": 0.1, "num_predict": cap, "top_k": 1,
+            "repeat_penalty": 1.0, "presence_penalty": 0,
+        }
     });
     if fim {
         body["prompt"] = prefix.into();
@@ -3384,10 +3659,121 @@ fn completion_body(
     body
 }
 
+/// Alt+[ / Alt+] cycle through up to three candidates: each has its own seed,
+/// and an alternate samples at temperature 0.5 with the model's own `top_k`
+/// rather than the first candidate's greedy pick. Pure + tested.
+fn sample_candidate(body: &mut serde_json::Value, candidate: u32) {
+    let candidate = candidate.min(2);
+    body["options"]["seed"] = serde_json::json!(candidate + 1);
+    if candidate > 0 {
+        body["options"]["temperature"] = serde_json::json!(0.5);
+        if let Some(options) = body["options"].as_object_mut() {
+            options.remove("top_k");
+        }
+    }
+}
+
+/// Whether a request goes the FIM way first (plan, fixed decision 1): a model
+/// with `insert` always does for code; prose stays on chat so its language and
+/// markup instructions apply. Pure.
+fn uses_fim(language: &str, insert: bool) -> bool {
+    insert && !is_completion_prose(language)
+}
+
+/// What one attempt sends: the endpoint, the body, the bytes of references it
+/// carries and whether this path drops references (a FIM model without a known
+/// layout: true whether or not any were attached, so the editor can stop
+/// sending them).
+#[derive(Debug)]
+struct CompletionPlan {
+    endpoint: &'static str,
+    body: serde_json::Value,
+    reference_bytes: usize,
+    references_dropped: bool,
+}
+
+/// One attempt's request (plan B3). `fim` comes from [`uses_fim`], false for
+/// the chat retry after a FIM refusal. On FIM an empty suffix is sent as
+/// `"\n"`: the published templates take the FIM branch only for a non-empty
+/// `.Suffix`. References ride along only for a family in [`FIM_LAYOUTS`],
+/// through `raw: true` in its trained repository layout, which bypasses the
+/// model's template; a reference whose name or text holds one of the family's
+/// control tokens is left out, and caret text or a file name holding one
+/// keeps the templated body without references. Pure + tested.
+#[allow(clippy::too_many_arguments)]
+fn completion_plan(
+    prefix: &str,
+    suffix: &str,
+    model: &str,
+    language: &str,
+    mode: CompletionMode,
+    references: &[ContextFile],
+    file_name: Option<&str>,
+    fim: bool,
+) -> CompletionPlan {
+    if !fim {
+        let carried = capped_references(references, |_| true);
+        let context = build_context_block(references);
+        return CompletionPlan {
+            endpoint: "chat",
+            body: completion_body(prefix, suffix, model, language, mode, &context, false),
+            reference_bytes: carried.iter().map(|(_, body)| body.len()).sum(),
+            references_dropped: false,
+        };
+    }
+    let suffix = if suffix.is_empty() { "\n" } else { suffix };
+    let mut body = completion_body(prefix, suffix, model, language, mode, "", true);
+    let Some(layout) = fim_layout(model) else {
+        return CompletionPlan { endpoint: "generate", body, reference_bytes: 0, references_dropped: true };
+    };
+    let file_name = file_name.map(str::trim).filter(|name| !name.is_empty()).unwrap_or("file");
+    let carried = capped_references(references, |f| !layout.holds_token(&f.name) && !layout.holds_token(&f.content));
+    let unsafe_text = [prefix, suffix, file_name].iter().any(|text| layout.holds_token(text))
+        || file_name.contains(['\n', '\r']);
+    if carried.is_empty() || unsafe_text {
+        return CompletionPlan { endpoint: "generate", body, reference_bytes: 0, references_dropped: false };
+    }
+    let mut prompt = format!("{}project\n", layout.repo_name);
+    for (name, content) in &carried {
+        prompt.push_str(&format!("{}{name}\n{content}\n", layout.file_sep));
+    }
+    prompt.push_str(&format!(
+        "{}{file_name}\n{}{prefix}{}{suffix}{}",
+        layout.file_sep, layout.fim_prefix, layout.fim_suffix, layout.fim_middle
+    ));
+    let line_stop = body["options"].get("stop").is_some();
+    let mut stops: Vec<&str> = layout.tokens().collect();
+    if line_stop {
+        stops.push("\n");
+    }
+    if let Some(fields) = body.as_object_mut() {
+        fields.remove("suffix");
+    }
+    body["prompt"] = prompt.into();
+    body["raw"] = true.into();
+    body["options"]["stop"] = serde_json::json!(stops);
+    CompletionPlan {
+        endpoint: "generate",
+        body,
+        reference_bytes: carried.iter().map(|(_, content)| content.len()).sum(),
+        references_dropped: false,
+    }
+}
+
+/// A FIM refusal the chat retry may answer: Ollama's 400 for a model without
+/// insert support, matched exactly rather than any text holding "400".
+fn fim_refused(error: &str) -> bool {
+    error == "ollama HTTP 400" || error.contains("does not support insert")
+}
+
 /// Streaming completion through the configured Ollama endpoint. Insert support
 /// comes from /api/show capabilities, carried by list_ollama_models_detailed.
-/// Attached references stay on the chat path to avoid injecting prose into raw
-/// source. Unsupported FIM falls back to chat before any ghost is published.
+/// A model with `insert` completes code through FIM (`/api/generate`), with
+/// references only for a family whose layout [`completion_plan`] knows; prose
+/// and other models use chat. Unsupported FIM falls back to chat before any
+/// ghost is published. `trigger` is `auto` or `manual` (missing: manual);
+/// `file_name` is the edited file's project-relative path for the reference
+/// layout (missing: `file`).
 #[cfg_attr(feature = "desktop", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn complete_text(
@@ -3402,82 +3788,99 @@ pub async fn complete_text(
     request_id: String,
     candidate: Option<u32>,
     project_id: Option<String>,
+    file_name: Option<String>,
+    trigger: Option<String>,
 ) -> Result<String, String> {
     use crate::services::text_completion;
     crate::services::ai_switch::check()?;
     let event = format!("text-completion-{request_id}");
+    let stats_event = format!("text-completion-stats-{request_id}");
     text_completion::run(request_id, async move {
-        let settings = crate::storage::load_settings().unwrap_or_default();
-        // A local-models-only project (`services::agent_privacy`) is completed
-        // by this machine's models only: loopback host, a model the endpoint
-        // lists without a remote (an Ollama cloud model answers on ollama.com).
-        let locked = crate::services::agent_privacy::completion_locked(project_id.as_deref());
-        let local_only = locked || project_id.as_ref().and_then(|id| settings.completion_project_policies.as_ref()?.get(id))
-            .is_some_and(|policy| policy.local_only);
-        let (host, allow_remote) = host_setting(&settings);
-        let addr = resolve_ollama_addr(host, !local_only && allow_remote)?;
-        if locked {
-            let (checked_addr, checked_model) = (addr.clone(), model.clone());
-            let refusal = app_core::rt::blocking("Local models only", move || {
-                crate::services::agent_privacy::completion_refusal(true, &checked_addr, &checked_model)
-            })
-            .await?;
-            if let Some(refusal) = refusal {
-                return Err(refusal);
-            }
-        }
+        // Judged afresh for every request, off the async worker: a cached lock
+        // verdict would let a project that was just locked reach a remote host.
+        let (checked_project, checked_model) = (project_id.clone(), model.clone());
+        let addr = app_core::rt::try_blocking("Completion endpoint", move || {
+            let settings = crate::storage::load_settings().unwrap_or_default();
+            let locked = crate::services::agent_privacy::completion_locked(checked_project.as_deref());
+            completion_endpoint(
+                &settings,
+                locked,
+                checked_project.as_deref(),
+                &checked_model,
+                &|addr, model| crate::services::agent_privacy::completion_refusal(true, addr, model),
+                &owner_gate,
+            )
+        })
+        .await?;
         let client = text_completion::client()?;
         let mode = CompletionMode::parse(mode.as_deref().unwrap_or("sentence"));
-        let context = context
-            .as_deref()
-            .map(build_context_block)
-            .unwrap_or_default();
+        let references = context.unwrap_or_default();
         // Bound independently of the UI for callers other than the text viewer.
         let prefix = bounded_completion_prefix(&prefix);
         let suffix = truncate_chars(&suffix, 4096);
         let prose = is_completion_prose(&language);
         let sentence = mode == CompletionMode::Sentence && trailing_comment_intent(&prefix, &language).is_none();
-        // Prose always uses chat so language/markup instructions are effective.
-        let fim = !prose && insert == Some(true) && context.is_empty() && !suffix.is_empty();
+        let fim = uses_fim(&language, insert == Some(true));
+        let automatic = trigger.as_deref() == Some("auto");
         for use_fim in if fim { vec![true, false] } else { vec![false] } {
-            let mut body =
-                completion_body(&prefix, &suffix, &model, &language, mode, &context, use_fim);
-            let candidate = candidate.unwrap_or(0).min(2);
-            body["options"]["seed"] = serde_json::json!(candidate + 1);
-            if candidate > 0 {
-                body["options"]["temperature"] = serde_json::json!(0.5);
-            }
-            let endpoint = if use_fim { "generate" } else { "chat" };
+            let CompletionPlan { endpoint, mut body, reference_bytes, references_dropped } = completion_plan(
+                &prefix, &suffix, &model, &language, mode, &references, file_name.as_deref(), use_fim,
+            );
+            sample_candidate(&mut body, candidate.unwrap_or(0));
             let mut published = false;
+            let started = Instant::now();
+            let mut first_token: Option<Duration> = None;
+            let mut over_budget = false;
             let result = text_completion::stream(
                 &client,
                 &format!("http://{addr}/api/{endpoint}"),
                 &body,
                 |raw, done| {
-                    let mut text = completion_preview(raw, use_fim, done, &prefix, &suffix);
-                    let stop = sentence.then(|| completion_stop(&text, prose, done)).flatten();
-                    if let Some(end) = stop { text.truncate(end); }
+                    if first_token.is_none() && !raw.is_empty() {
+                        first_token = Some(started.elapsed());
+                    }
+                    let (mut text, mut stopped) =
+                        completion_snapshot(raw, use_fim, done, &prefix, &suffix, sentence, prose);
+                    if automatic && !stopped && !done {
+                        let since_first = first_token.map_or(Duration::ZERO, |at| started.elapsed().saturating_sub(at));
+                        if let Some(end) = budget_cut(mode, since_first, &text) {
+                            text.truncate(end);
+                            (stopped, over_budget) = (true, true);
+                        }
+                    }
                     published |= !text.is_empty();
                     // Target only the requesting editor's client (the calling
                     // window). IPC Channels bypass the embedded browser's origin
                     // ACL (see browser.rs tests).
                     ctx.emit_to_caller(&event, text);
-                    Ok(stop.is_some())
+                    Ok(stopped)
                 },
             )
             .await;
             match result {
-                Ok(raw) => {
-                    let mut text = completion_preview(&raw, use_fim, true, &prefix, &suffix);
-                    if sentence {
-                        if let Some(end) = completion_stop(&text, prose, true) { text.truncate(end); }
-                    }
+                Ok(streamed) => {
+                    let stop = if streamed.record.is_some() {
+                        "done"
+                    } else if over_budget {
+                        "budget"
+                    } else {
+                        "line"
+                    };
+                    let text = if stop == "budget" {
+                        budget_text(&streamed.text, use_fim, &prefix, &suffix, sentence, prose)
+                    } else {
+                        completion_snapshot(&streamed.text, use_fim, true, &prefix, &suffix, sentence, prose).0
+                    };
+                    let stats = CompletionStats::new(endpoint, &model, stop, first_token, started.elapsed(), reference_bytes, references_dropped, streamed.record.as_ref());
+                    // Once, before the final text, on its own event: an older
+                    // frontend ignores it, and the return value stays the text.
+                    ctx.emit_to_caller(&stats_event, stats);
                     return Ok(text);
                 }
                 Err(e)
                     if use_fim
                         && !published
-                        && (e.contains("400") || e.contains("does not support insert")) =>
+                        && fim_refused(&e) =>
                 {
                     continue
                 }
@@ -4165,6 +4568,42 @@ mod phone_control_tests {
         // This test process's own listener, in its own namespace, passes.
         let own = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         assert_eq!(owner_gate(&format!("127.0.0.1:{}", own.local_addr().unwrap().port())), Ok(()));
+    }
+
+    /// B1: a completion asks the owner gate before its client exists, so a
+    /// refused listener never sees a connection, let alone the source text.
+    #[test]
+    fn a_completion_asks_the_owner_gate_before_it_connects() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let settings = crate::schema::Settings { ollama_host: Some(addr.clone()), ..Default::default() };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let refusing = |a: &str| -> Result<(), String> {
+            asked.borrow_mut().push(a.to_string());
+            Err(format!("{LISTENER_REFUSED}: another account (uid 1002) is listening"))
+        };
+        let never = |_: &str, _: &str| -> Option<String> { panic!("an unlocked project asks no locality") };
+        for project in [None, Some("p1")] {
+            let err = completion_endpoint(&settings, false, project, "coder", &never, &refusing).unwrap_err();
+            assert!(err.starts_with(LISTENER_REFUSED), "{err}");
+        }
+        assert_eq!(*asked.borrow(), vec![addr.clone(), addr.clone()]);
+        assert_eq!(
+            listener.accept().map(|_| ()).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the refused listener was never connected to"
+        );
+
+        // A passing gate hands the address on; a locked project's refusal
+        // comes first and the gate is not asked at all.
+        assert_eq!(completion_endpoint(&settings, false, None, "coder", &never, &|_| Ok(())), Ok(addr.clone()));
+        let refuse_locked = |_: &str, m: &str| Some(format!("refused {m}"));
+        let gate_unasked = |_: &str| -> Result<(), String> { panic!("refused before the gate") };
+        assert_eq!(
+            completion_endpoint(&settings, true, Some("p1"), "big:cloud", &refuse_locked, &gate_unasked),
+            Err("refused big:cloud".into())
+        );
     }
 
     #[test]

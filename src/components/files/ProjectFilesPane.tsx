@@ -902,7 +902,7 @@ export function ProjectFilesPane({
    * Run one whole-tree transfer with the confirm dialog in front of it, and
    * REPORT it. Both buttons went through a bare `void (async () => …)()`, so the
    * one thing a user needs to see was the one thing that could not reach them:
-   * `sync_push`/`sync_whole_project` reject on the ordinary failures (a dropped
+   * `sync_push`/`sync_pull` reject on the ordinary failures (a dropped
    * pool — "remote project not connected — reconnect first" — a walk that hit an
    * unreadable dir), and an unhandled rejection inside a floating promise renders
    * nothing at all. The success path was silent too, and a push that skips every

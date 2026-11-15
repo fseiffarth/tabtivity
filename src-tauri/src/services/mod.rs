@@ -25,7 +25,7 @@ pub use mail::{
     mail_thunderbird,
 };
 pub mod mcp;
-pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, schedule_mcp, web_lane};
+pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, schedule_mcp, tabs_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
@@ -75,6 +75,11 @@ pub mod port_forward;
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// Per-turn checkpoints: a snapshot of an agent tab's folder as each turn begins and
+// ends, in a store of its own under the state dir, and a restore with its own undo.
+pub mod checkpoints;
+// The per-scope tab archive: tabs put away on purpose, beside the saved layout.
+pub mod tab_archive;
 // The way a fenced agent with no network reaches the local Ollama and a few of
 // Tabtivity's tools (Local models only + Cut network, docs/context/local_models_only.md).
 #[cfg(unix)]
@@ -118,6 +123,12 @@ pub mod process_lease;
 pub mod project_runtime;
 // The projects.json write side: serialized read-modify-write + entry patches.
 pub mod project_registry;
+// The project scaffold catalog: the root docs a project can hold, their
+// templates and their three states (missing / template / edited).
+pub mod scaffold;
+// The agent CLIs' own per-project memories (Claude's auto memory, Codex's
+// memories), listed and read through agent-home handles, read-only.
+pub mod agent_memory;
 // The boxes.json store and the box tab scope (`box:<id>`, its allowed roots).
 pub mod box_store;
 // Which roots the absolute-path file commands may touch, and the
@@ -125,7 +136,7 @@ pub mod box_store;
 pub mod fs_confine;
 pub mod prompt_blame;
 pub mod remote;
-pub use remote::{agent_host_move, remote_credentials, remote_scaffold, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, tar_stream, worker_sync};
+pub use remote::{agent_host_move, remote_credentials, remote_scaffold, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, sync_take_newer, sync_task, tar_stream, worker_sync};
 pub use app_core::services::remote_agents;
 pub mod restore_service;
 pub mod root_mcp;

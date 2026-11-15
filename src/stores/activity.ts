@@ -262,6 +262,12 @@ export function noteScheduleProposal(ptyId: string): void {
   useActivityStore.getState().recompute();
 }
 const inputByPty: Record<string, number> = {};
+/// When the user marked the tab unread again (`markTabUnread`, the tab menu's
+/// "Mark as unread"). Holds as a `done` until somebody next deliberately opens
+/// the tab (`readAtByPty`) or types into it (`noteUserInput`); like every
+/// silence-born flag it stays dark while the tab is the visible one, so marking
+/// the tab in front of you lights it the moment you look away.
+const unreadMarkByPty: Record<string, number> = {};
 /// When the user cut the agent's turn off (an interrupt key while it was
 /// working, or on a pending prompt — see `noteUserInput`). An interrupted turn
 /// fires no Stop, so without this the tab went back to looking idle, exactly as
@@ -376,6 +382,7 @@ const PTY_MAPS: Record<string, unknown>[] = [
   seenAtByPty,
   bellByPty,
   proposalByPty,
+  unreadMarkByPty,
   inputByPty,
   interruptedByPty,
   readAtByPty,
@@ -653,6 +660,28 @@ export function lastPtyOutputAt(ptyId: string): number | undefined {
   return lastOutputByPty[ptyId];
 }
 
+/** Mark an agent tab's output unread again: it reads as a finished turn
+ *  (`done`) until it is next opened or typed into. A popout forwards it to the
+ *  main window, whose store alone classifies. */
+export function markTabUnread(ptyId: string): void {
+  if (!splitPtyId(ptyId)) return;
+  if (isDetachedWindow()) {
+    void emit(DETACHED_ACTIVITY_EVENT, { ptyId, kind: "unread" });
+    return;
+  }
+  unreadMarkByPty[ptyId] = Date.now();
+  useActivityStore.getState().recompute();
+}
+
+/** When the user marked the tab unread (`markTabUnread`), while nobody has
+ *  opened it since; undefined otherwise. For the surfaces that judge "unread"
+ *  for themselves (`agentRoster`), which must honour the mark on the tab left
+ *  visible here too. */
+export function tabMarkedUnreadAt(ptyId: string): number | undefined {
+  const at = unreadMarkByPty[ptyId];
+  return at !== undefined && at > (readAtByPty[ptyId] ?? 0) ? at : undefined;
+}
+
 /** When the tab was last deliberately opened by a person (ms epoch), on either
  *  surface, or undefined if nobody has this session. Read-only view of
  *  `readAtByPty` for the surfaces that must decide "has anyone seen this turn?"
@@ -699,6 +728,8 @@ export function noteUserInput(ptyId: string, interrupt = false, dialog?: DialogI
     return;
   }
   const now = Date.now();
+  // Typing into a tab reads it: a "Mark as unread" is retired.
+  delete unreadMarkByPty[ptyId];
   const turn = turnVerdict(ptyId, now);
   if (interrupt) {
     const inFlight = turn
@@ -1065,6 +1096,7 @@ function attentionFor(
   // Past here everything is inferred from silence, which a watched tab's own
   // screen already tells the user better than a lamp could.
   if (lookedAt) return null;
+  if (tabMarkedUnreadAt(ptyId) !== undefined) return "done";
   if ((proposalByPty[ptyId] ?? 0) > seen) return "done";
   // With a hook verdict the question is only whether the finish is unread:
   // Stop fired after the user last had eyes on the tab. A verdict needs no

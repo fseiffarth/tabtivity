@@ -197,8 +197,8 @@ contains:
   `header-center`).
 - Tab bar (from `TabBar.tsx`).
 - Indicators, each owning its own surface and lifecycle: `MailIndicator` (✉),
-  `CalendarIndicator`, `TodoIndicator`, `MachinesIndicator` (the fleet, with a
-  live CPU/GPU bar per machine), `VpnIndicator` (machine-wide OpenVPN — project
+  `CalendarIndicator`, `TodoIndicator`, `MachinesIndicator` (the fleet: a dropdown, and a Machines view
+  with one merged machine list and a live CPU/GPU bar per machine), `VpnIndicator` (machine-wide OpenVPN — project
   UI must not imply the tunnel is project-scoped), `MobileIndicator`,
   `BatteryIndicator`, `AppResourceDisplay`, and `AppTimerDisplay`.
 - Custom minimize, maximize/restore, and close buttons.
@@ -274,6 +274,18 @@ Toolbar behavior:
   `FileBrowser`. Viewer tabs (`kind: "files"` with a `viewer`) render the native
   viewer for their file type; full-surface tabs render a workspace app.
 - Tab layout is auto-saved to the session file whenever tabs change.
+- An agent tab's right-click menu has **Mark as unread** (`TabMarkMenuItems`,
+  `activity.markTabUnread`): the tab reads as a finished turn again until it is
+  opened or typed into, on every surface that judges unread (`agentRoster`
+  included); a popout forwards the mark to the main window's store.
+- Agent tabs of one local project can message each other through the `tabs`
+  MCP lane (`services/mcp/tabs_mcp.rs`, in-memory mailbox; the cockpit's
+  Messages fold shows every message, an opt-in per-project wake types a fixed
+  notice into idle tabs): `docs/context/tab_messaging_mcp.md`. With the
+  experimental `turn_checkpoints` flag, a local agent tab's folder is
+  snapshotted at each turn start and end into a store outside the project
+  (`services/checkpoints/`, restore from the Chat):
+  `docs/context/checkpoints.md`.
 - If no tabs exist for the active scope, the stack shows an empty Subwindow with
   a `+`.
 - A project-switch toast notification appears briefly after switching projects.
@@ -621,6 +633,26 @@ it, a VM belongs to the one that booted it (the other is refused), a remote
 project's background sync runs in one of them, and a sync setting changed
 in both at once asks to be done again (`docs/context/web_client.md`). Takes
 effect when the host (re)starts.
+
+**Linked desktops (one phone app, several computers — in progress).**
+**Settings → Mobile → Linked desktops** edits
+`tabtivity_mobile_host.linked_desktops`: up to eight other computers' phone-host
+origins (`https://<machine>.<same tailnet>.ts.net[:port]`, never `*.c.ts.net`,
+never this host's own), each listed on both computers. The sidecar re-reads and
+re-validates the list on every request (`mobile_control/linked.rs`; a bad entry
+is dropped alone, the hosted gateway ignores the list). Only the phone's HTML
+documents change: with a list they allow the listed origins to frame them and to
+be framed (`frame-ancestors` / `frame-src` / `connect-src`), delegate the
+microphone and speech recognition to them, and answer their `/healthz` probe
+with CORS; the PDF frame names them among its ancestors; `/api/*`, `/assets/*`
+and `/desktop/*` stay closed, and with no list every header is byte-identical to
+before. A link is a framing permission, never a session: a framed page signs in
+as a paired device of its own computer, under that computer's own lock and
+access lists. Phases 0–2 of `docs/phone_multi_desktop_plan.md` are built (also a
+host on an explicit Serve port names its session cookie after the port, so two
+hosts on one machine keep separate sign-ins), and so is a minimal Phase 3: the
+phone's switcher shell with one framed desktop (`mobile-web/src/shell/`,
+`docs/phone_multi_desktop_handoff.md`). None of it has run on a real phone yet.
 
 ### Hosted server: signing in with your organisation's account
 
@@ -1139,33 +1171,43 @@ target has no `.git/`, Tabtivity initializes git and commits the registration.
 
 ### Scaffold Files
 
-New and imported projects receive these files when missing:
+A new or imported project receives a lean default set, each file only when it is
+missing (nothing is overwritten):
 
 | File | Purpose |
 |------|---------|
-| `AGENTS.md` | Canonical agent instructions — the single source of truth; links every sibling agent doc. |
-| `CLAUDE.md` | Claude Code pointer: `@AGENTS.md` import plus Claude-specific overrides. |
-| `GEMINI.md` | Gemini CLI pointer: `@AGENTS.md` import plus Gemini-specific overrides. |
-| `.claude/settings.json` | Claude permission allow/deny rules scoped to the project. |
-| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output. |
-| `TODO.md` | Concrete task backlog with grouped IDs. |
-| `ROADMAP.md` | High-level project direction and sequencing. |
-| `STATUS.md` | Current-state and validation snapshot. |
+| `AGENTS.md` | Canonical agent instructions — the single source of truth. Every agent CLI Tabtivity wraps reads it by itself (Gemini through the `context.fileName` Tabtivity sets in its own agent homes, never in the project), so no pointer files are written. |
 | `README.md` | Project overview. |
-| `DOCUMENTATION.md` | Architecture, behavior, and persistence notes. |
+| `.gitignore` | Common ignores for Python, Node, macOS, logs, and build output (git projects only); a folder holding `.tex` files also gets the LaTeX build files (`*.aux`, `*.synctex.gz`, …), and Repair adds them later. |
 
-`AGENTS.md` carries the actual template; `CLAUDE.md` and `GEMINI.md` are
-pointers that `@AGENTS.md`-import it (real import syntax in both CLIs, so the
-text is loaded rather than merely referenced) and link the sibling agent files.
-Writing guidance in one file is the point — three interchangeable stubs meant it
-got written three times, or into whichever file that day's agent happened to
-read.
+These are created **on demand** from the file tree's *Project docs* group (below),
+each from a short template: `PROJECT.md` (what the project is), `TODO.md`
+(task backlog), `ROADMAP.md` (direction and sequencing), `STATUS.md` (current
+state and validation) and `DOCUMENTATION.md` (architecture and behavior notes).
+`REMARKS.md` is made by the remarks feature on the first remark. Tabtivity no
+longer writes `CLAUDE.md`, `GEMINI.md` or `.claude/settings.json`; a project
+that already holds them keeps them, untouched.
 
-A **scaffold repair** (Settings → Scaffold repair) additionally upgrades an agent
-doc still byte-identical to its old pre-`AGENTS.md` stub, or empty — provably
-untouched text — and reports it as `updated_files`. Anything a user or agent
-wrote is left alone, and `project_scaffold_missing` counts a legacy stub as
-missing so the pill's tag agrees with what a repair would actually do.
+The **Project docs** group sits at the top of the file tree's root (and in the
+Files browser tab and the phone's file library), governed by the project setting
+*Separate project docs section*. Its header reads `present/total` for the default
+docs plus `· n template` while a doc is still the text Tabtivity wrote; such a
+doc shows a `template` pill and is dimmed, an edited doc looks like any file, and
+an old `CLAUDE.md`/`GEMINI.md` nests under `AGENTS.md` with a `pointer` pill. A doc
+that is not there but can be made shows as a ghost row (`+ TODO.md  create`);
+clicking it (on the phone: its menu → *Create*) writes that one file from its
+template, never over anything, and opens it. The fold is remembered per project.
+Under the docs, *Agent memory (n)* lists what the agent CLIs (Claude Code, Codex)
+remember about the project — read-only, opened in a preview dialog; the CLIs
+maintain those files themselves.
+
+A **scaffold repair** (Settings → Scaffold repair) adds the missing defaults and
+additionally upgrades `AGENTS.md` when it is still byte-identical to an earlier
+Tabtivity template, or empty — provably untouched text — and reports it as
+`updated_files`. Anything a user or agent wrote is left alone. The amber *no
+scaffold* tag counts only missing defaults (a legacy-template `AGENTS.md` is not
+missing); clicking it names them and offers Repair. Remote-only projects get the
+lean set on the host at creation but no status or ghost rows.
 
 The root terminal also gets context files in `~/tabtivity/root/`:
 `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`.
@@ -1442,6 +1484,10 @@ and the host-aware variants, never inferred from path conventions.
   Byte-sync is opt-in per path from an explicit manifest and does **not** read
   `.gitignore`, so a pull is previewed and confirmed before it drags a big host
   tree down.
+  Transfers run four files at a time (`sync_pool`, within a 128 MiB budget), and a
+  both-sides-changed file stays orange unless the project's opt-in *take the newer
+  copy* switch is on (`sync_take_newer`: newer mtime wins, the loser is backed up
+  and logged in `local_loss`). Details: `docs/remote_sync_guide.md`.
 - **Remote-only.** A remote project created with *Keep a local copy* off has no
   mirror at all: `RemoteSpec.remote_only` (written by the backend from the
   create request's top-level `remoteOnly`, never taken from the renderer's

@@ -194,7 +194,7 @@ pub struct AgentFenceStatus {
 /// Default read-only host paths made visible inside the otherwise-empty home.
 pub const DEFAULT_PATHS: &[&str] = crate::schema::settings::DEFAULT_AGENT_FENCE_PATHS;
 
-fn basename(cmd: &str) -> &str {
+pub(crate) fn basename(cmd: &str) -> &str {
     let base = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
     base.strip_suffix(".exe").unwrap_or(base)
 }
@@ -1450,6 +1450,7 @@ pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
     // A private store may itself be a symlink outside the state tree.
     for name in ["calendar.json", "projects.json", "settings.json", "boxes.json", "root_mcp", "mail",
         "time_summary.json", "usage_stats.json", "remote-projects", "sessions",
+        crate::services::checkpoints::store::DIR, "checkpoints.json",
         crate::services::agent_global::GLOBAL_DIR] {
         paths.push(state_dir.join(name));
         if let Ok(real) = state_dir.join(name).canonicalize() { paths.push(real); }
@@ -1822,6 +1823,13 @@ pub fn wrap_pty_options_bwrap(
             crate::services::claude_token::inject_launch(opts);
         }
     }
+    // A self-updater switched off only by a flag (Cursor), like the env ones below.
+    let agent_exe = if agent_cmd.contains('/') {
+        Some(PathBuf::from(&agent_cmd))
+    } else {
+        search_dirs.iter().map(|dir| dir.join(&agent_cmd)).find(|cand| cand.is_file())
+    };
+    crate::services::agent_install::apply_fence_args(&agent_cmd, agent_exe.as_deref(), &mut opts.args);
     let mut args = bwrap_args(
         &paths::home_dir_string(),
         Some(&scope_home.to_string_lossy()),
@@ -2304,6 +2312,7 @@ pub fn wrap_pty_options_sandbox_exec(
             crate::services::claude_token::inject_launch(opts);
         }
     }
+    crate::services::agent_install::apply_fence_args(&agent_cmd, Some(&resolved), &mut opts.args);
     let mut args = vec![
         "-f".to_string(),
         profile_path.to_string_lossy().into_owned(),

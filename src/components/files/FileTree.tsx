@@ -72,6 +72,10 @@ import { useFileTreeEmbedCaps, useFileTreeMountProbes, useFileTreeSearch, useFil
 import { useFileTreePythonMain, useFileTreeRunState } from "./useFileTreeRun";
 import { useFileTreeRemote, useFileTreeSyncStatus } from "./useFileTreeRemote";
 import { ROW_CAP_STEP, useFileTreeRowActions, useFileTreeRows } from "./useFileTreeRows";
+import { useAgentMemory, useDocsGroupOpen, useProjectDocsStatus } from "./useProjectDocs";
+import { AGENT_MEMORY_CLI_NAME, AgentMemoryDialog } from "./AgentMemoryDialog";
+import { createProjectDoc, type AgentMemoryEntry, type DocState } from "../../lib/projects/projectDocs";
+import { usePaneVisible } from "../../lib/files/fileAccess";
 import { useFileTreeDirSizes } from "./useFileTreeSizes";
 
 // The context menu's Delete rows name their keyboard twin (handleTreeKeyDown).
@@ -297,8 +301,10 @@ function describeListError(
 
 interface FileRowProps {
   entry: FileEntry;
-  /** Scaffold / gitignored / hidden-ending section member (dimmed). */
+  /** Gitignored / hidden-ending section member (dimmed). */
   scaffold: boolean;
+  /** The row's place in the "Project docs" group, when it is in it: its state (a `template` row is dimmed and badged, a `pointer` row badged) and whether it nests under AGENTS.md. */
+  doc: { state: DocState | null; nested: boolean } | null;
   /** Git letter (never for the gitignored / hidden-ending sections). */
   status: string | undefined;
   /** A folder's headline size (its non-ignored weight), once known. */
@@ -346,6 +352,7 @@ interface FileRowProps {
 const FileRow = React.memo(function FileRow({
   entry: e,
   scaffold,
+  doc,
   status,
   dirShown,
   scanExcluded,
@@ -377,7 +384,7 @@ const FileRow = React.memo(function FileRow({
   const sizeClass = !e.is_dir ? sizeCategory(e.size) : "";
   return (
     <div
-      className={`file-entry ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${scaffold ? " scaffold" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
+      className={`file-entry ${e.is_dir ? "dir" : "file"}${dragTarget ? " embeddable" : ""}${scaffold ? " scaffold" : ""}${doc?.state === "template" ? " doc-template" : ""}${doc?.nested ? " doc-nested" : ""}${isMoveTarget ? " move-drop-target" : ""}${selected ? " selected" : ""}${notOnRemote ? " not-on-remote" : ""}`}
       // Row key for jump-to-path reveal scroll (search results).
       data-entry-path={e.path}
       // Keyboard steering opens a file as the pointer does, with a double-click
@@ -550,6 +557,14 @@ const FileRow = React.memo(function FileRow({
       {runSlot && !canRun && !isCompiling && <span className="file-run-slot" aria-hidden="true" />}
       <span className="file-icon"><FileIcon ext={e.extension} isDir={e.is_dir} /></span>
       <span className="file-name">{e.name}</span>
+      {(doc?.state === "template" || doc?.state === "pointer") && (
+        <span
+          className={`file-doc-badge file-doc-badge--${doc.state}`}
+          title={t(doc.state === "template" ? "fileTree.docTemplateTitle" : "fileTree.docPointerTitle")}
+        >
+          {t(doc.state === "template" ? "fileTree.docTemplate" : "fileTree.docPointer")}
+        </span>
+      )}
       {notOnRemote && (
         <span
           className="file-offhost-tag"
@@ -578,6 +593,34 @@ const FileRow = React.memo(function FileRow({
         <span className={`file-size ${sizeClass}`}>{fmtSize(e.size)}</span>
       )}
     </div>
+  );
+});
+
+/**
+ * A creatable doc that is not there: `+ name  create`. Deliberately not a file
+ * row — no selection, drag, context menu or run slot; the whole row is one
+ * button that creates the file from its template and opens it.
+ */
+const DocGhostRow = React.memo(function DocGhostRow({
+  name, busy, onCreate,
+}: {
+  name: string;
+  busy: boolean;
+  onCreate: (name: string) => void;
+}) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      className="file-entry doc-ghost"
+      disabled={busy}
+      title={t("fileTree.docCreateTitle", { name })}
+      onClick={() => onCreate(name)}
+    >
+      <span className="file-icon doc-ghost-plus" aria-hidden="true">+</span>
+      <span className="file-name">{name}</span>
+      <span className="file-doc-badge file-doc-badge--create">{t("fileTree.docCreate")}</span>
+    </button>
   );
 });
 
@@ -630,7 +673,8 @@ export function FileTree({
       return false;
     }
   });
-  const [scaffoldExpanded, setScaffoldExpanded] = useState(false);
+  // The "Project docs" group's fold, remembered per project.
+  const [scaffoldExpanded, toggleScaffold, revealScaffold] = useDocsGroupOpen(projectId);
   const [hiddenExtExpanded, setHiddenExtExpanded] = useState<boolean>(() => {
     try {
       return localStorage.getItem(HIDDEN_EXT_EXPANDED_KEY) === "1";
@@ -794,10 +838,28 @@ export function FileTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshNonce]);
 
-  const { displayStatuses, sections, setRowCap, rowWindow, orderedVisible } = useFileTreeRows({
+  // The docs status describes the project's LOCAL folder at its root: asked only
+  // while this tree is on screen, lists that root, and is not the host's (a
+  // remote listing needs no status, and a hidden pane must not probe).
+  const paneVisible = usePaneVisible();
+  const { status: docsStatus, refresh: refreshDocsStatus } = useProjectDocsStatus({
+    projectId,
+    enabled: !!projectId && separateScaffold && !relPath && !remoteListing && active && paneVisible,
+    listingKey: entries,
+  });
+  // The agent CLIs' memory for this project: a read-only sub-group at the end
+  // of the Project docs group, hidden while there is none.
+  const agentMemory = useAgentMemory({
+    projectId,
+    enabled: !!projectId && separateScaffold && !relPath && !remoteListing && active && paneVisible,
+    refreshKey: scaffoldExpanded,
+  });
+  const [memoryExpanded, setMemoryExpanded] = useState(false);
+  const [memoryPreview, setMemoryPreview] = useState<AgentMemoryEntry | null>(null);
+  const { displayStatuses, sections, docsGroup, setRowCap, rowWindow, orderedVisible } = useFileTreeRows({
     gitStatuses, entries, hiddenEndings, relPath, shownPaths, separateScaffold, separateGitignored,
     dirIgnoredBytes, dirSizes, sortKey, descending, projectId, scaffoldExpanded, gitignoredExpanded,
-    hiddenExtExpanded, setSelected,
+    hiddenExtExpanded, docsStatus, setSelected,
   });
 
   function clearSelection() {
@@ -1084,7 +1146,7 @@ export function FileTree({
     // Expand the collapsible sections so the row is rendered wherever it lives
     // (a scaffold or gitignored file would otherwise be hidden). The subsequent
     // effect selects and scrolls once the folder has listed.
-    setScaffoldExpanded(true);
+    revealScaffold();
     setGitignoredExpanded(true);
     setPendingReveal({ parent, name });
     if (parent !== relPath) load(parent);
@@ -1158,6 +1220,34 @@ export function FileTree({
       placeTab: fileDrop ? fileDrop.openTab : undefined,
       scope: tabScope,
     });
+  }
+
+  // A ghost row's click: write the doc from its template (create-new, never over
+  // anything) and open it. `false` means something is already there under that
+  // name, which is no error: the status and listing just catch up.
+  const [creatingDoc, setCreatingDoc] = useState<string | null>(null);
+  async function createDoc(name: string) {
+    if (!projectId || creatingDoc) return;
+    setCreatingDoc(name);
+    try {
+      const written = await createProjectDoc(projectId, name);
+      await refresh(relPath);
+      refreshDocsStatus();
+      if (written) {
+        openEntry(
+          { name, path: resolvePath(projectDir, name), is_dir: false, size: 0, extension: ".md", mime: "text/markdown" },
+          false,
+        );
+      }
+    } catch (e) {
+      await showMessage({
+        title: t("fileTree.docCreateFailedTitle"),
+        body: t("fileTree.docCreateFailed", { name, error: String(e) }),
+        error: true,
+      });
+    } finally {
+      setCreatingDoc(null);
+    }
   }
 
   // Single-click routing. A plain click on a folder navigates into it (and
@@ -2923,7 +3013,7 @@ export function FileTree({
         // Only the three collapsible sections read their full list here (their
         // headers count it); the regular section has no header, so it is read
         // from `rows` alone.
-        const { standard, gitignored, hiddenExt } = sections;
+        const { gitignored, hiddenExt } = sections;
         const rows = rowWindow;
 
         // The same two run verdicts `renderEntry` hands each row, asked of every
@@ -2937,7 +3027,13 @@ export function FileTree({
           || (gitignoredExpanded && rows.gitignored.some(runnableRow))
           || (hiddenExtExpanded && rows.hiddenExt.some(runnableRow));
 
-        function renderEntry(e: FileEntry, isScaffold = false, isGitignored = false, isHiddenExt = false) {
+        function renderEntry(
+          e: FileEntry,
+          isScaffold = false,
+          isGitignored = false,
+          isHiddenExt = false,
+          doc: { state: DocState | null; nested: boolean } | null = null,
+        ) {
           const status = isGitignored || isHiddenExt ? undefined : displayStatuses[e.name];
           // A folder's headline number is its non-ignored weight — the part
           // that's actually "yours" — with the full total + ignored split
@@ -3031,6 +3127,7 @@ export function FileTree({
               key={e.path}
               entry={e}
               scaffold={isScaffold || isGitignored || isHiddenExt}
+              doc={doc}
               status={status}
               dirShown={dirShown}
               scanExcluded={e.is_dir && isScanExcluded(rel)}
@@ -3062,27 +3159,80 @@ export function FileTree({
 
         return (
           <>
-            {rows.regular.map((e) => renderEntry(e, false))}
-            {standard.length > 0 && (
+            {docsGroup.rows.length > 0 && (
               <>
                 <button
                   type="button"
-                  className="file-tree-section-divider file-tree-hidden-toggle"
+                  className="file-tree-section-divider file-tree-hidden-toggle file-tree-docs-toggle"
                   aria-expanded={scaffoldExpanded}
-                  onClick={() => setScaffoldExpanded((v) => !v)}
+                  onClick={toggleScaffold}
                   title={t(scaffoldExpanded ? "fileTree.collapseScaffold" : "fileTree.expandScaffold")}
                 >
                   <span className="file-tree-hidden-caret">{scaffoldExpanded ? "▾" : "▸"}</span>
-                  {t("fileTree.scaffoldSection", { count: standard.length })}
+                  {docsGroup.summary ? t("fileTree.docsSection") : t("fileTree.scaffoldSection", { count: docsGroup.files.length })}
+                  {docsGroup.summary && (
+                    <span className="file-docs-summary">
+                      {t("fileTree.docsSummary", { present: docsGroup.summary.present, total: docsGroup.summary.total })}
+                      {docsGroup.summary.templates > 0 && ` · ${t(
+                        docsGroup.summary.templates === 1 ? "fileTree.docsTemplatesOne" : "fileTree.docsTemplatesMany",
+                        { count: docsGroup.summary.templates },
+                      )}`}
+                    </span>
+                  )}
+                  <UntestedTag id="fileTree.docsSection" />
                   {renderGroupTotal(
                     groupSizes.standard,
                     groupSizes.standardPartial,
                     sizeTitle(t, groupSizes.standard, groupSizes.standardIgnored, t("fileTree.totalSizeScaffold")),
                   )}
                 </button>
-                {scaffoldExpanded && rows.standard.map((e) => renderEntry(e, true))}
+                {scaffoldExpanded && (() => {
+                  // The row cap clips the FILE rows of the group (a prefix of
+                  // `docsGroup.files`); ghost rows are not files and never count.
+                  let fileBudget = rows.standard.length;
+                  return docsGroup.rows.map((r) => {
+                    if (r.kind === "ghost") {
+                      return <DocGhostRow key={`ghost:${r.name}`} name={r.name} busy={creatingDoc !== null} onCreate={(n) => void createDoc(n)} />;
+                    }
+                    if (fileBudget <= 0) return null;
+                    fileBudget -= 1;
+                    return renderEntry(r.entry, false, false, false, { state: r.state, nested: r.nested });
+                  });
+                })()}
+                {scaffoldExpanded && projectId && agentMemory.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      className="file-tree-memory-toggle"
+                      aria-expanded={memoryExpanded}
+                      onClick={() => setMemoryExpanded((v) => !v)}
+                      title={t("fileTree.agentMemoryTitle")}
+                    >
+                      <span className="file-tree-hidden-caret">{memoryExpanded ? "▾" : "▸"}</span>
+                      {t("fileTree.agentMemory", { count: agentMemory.length })}
+                      <UntestedTag id="fileTree.agentMemory" />
+                    </button>
+                    {memoryExpanded && agentMemory.map((m) => (
+                      <button
+                        type="button"
+                        key={`${m.home}:${m.cli}:${m.name}`}
+                        className="file-entry doc-memory"
+                        title={t("fileTree.memoryOpenTitle", { name: m.name })}
+                        onClick={() => setMemoryPreview(m)}
+                      >
+                        <span className="file-icon"><FileIcon ext=".md" isDir={false} /></span>
+                        <span className="file-name">{m.name}</span>
+                        <span className="file-doc-badge">
+                          {AGENT_MEMORY_CLI_NAME[m.cli]}{m.home === "local" ? ` · ${t("fileTree.memoryLocal")}` : ""}
+                        </span>
+                        <span className="file-size size-small">{fmtSize(m.bytes)}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
               </>
             )}
+            {rows.regular.map((e) => renderEntry(e, false))}
             {gitignored.length > 0 && (
               <>
                 <button
@@ -3154,6 +3304,9 @@ export function FileTree({
           </>
         );
       })()}
+      {memoryPreview && projectId && (
+        <AgentMemoryDialog projectId={projectId} entry={memoryPreview} onClose={() => setMemoryPreview(null)} />
+      )}
       {contextMenu?.rowRect && createPortal(
         <div
           key={contextMenu.entry?.path ?? "root"}

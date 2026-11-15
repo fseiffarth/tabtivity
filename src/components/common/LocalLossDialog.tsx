@@ -32,6 +32,7 @@ import { useT, type TranslationKey } from "../../lib/i18n";
 const KIND_LABEL_KEY: Record<LocalLoss["kind"], TranslationKey> = {
   deleted: "localLoss.kindDeleted",
   overwritten: "localLoss.kindOverwritten",
+  overwrittenOnHost: "localLoss.kindOverwrittenOnHost",
 };
 
 const SOURCE_LABEL_KEY: Record<LocalLoss["source"], TranslationKey> = {

@@ -39,6 +39,11 @@ pub mod ssh_common;
 pub mod ssh_exec;
 pub mod sync_auto;
 pub mod sync_op;
+// Bounded, ordered concurrency for byte-sync transfers and the host walk.
+pub mod sync_pool;
+// "Take the newer copy" for both-sides-changed files, per project.
+pub mod sync_take_newer;
+pub mod sync_task;
 pub mod worker_sync;
 // Streaming tar reader: a remote project packed straight from `tar -cf -` over SSH.
 pub mod tar_stream;

@@ -1202,6 +1202,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["viewMode"], labelKey: "steering.changes.layout.label", descKey: "steering.changes.layout.desc", levels: ["scroll"], when: "inChanges", group: "act" },
   { actions: ["viewOpen"], labelKey: "steering.changes.open.label", descKey: "steering.changes.open.desc", levels: ["scroll"], when: "inChanges", group: "act" },
   { actions: ["viewOpenAlt"], labelKey: "steering.changes.openDiff.label", descKey: "steering.changes.openDiff.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewNote"], labelKey: "steering.changes.note.label", descKey: "steering.changes.note.desc", levels: ["scroll"], when: "inChanges", group: "act" },
   // -- inside Diffs: end
   // Inside the Reader's Files view (`when: "inFiles"`, levels ["scroll"]); the
   // Files step fills this block.

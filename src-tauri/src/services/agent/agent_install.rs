@@ -257,6 +257,47 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// The auto-update switch of a CLI that has one only as an argument, by
+/// command basename: the flag, and the oldest build it was read in, which also
+/// names how that CLI's installed build is read.
+///
+/// Cursor: the hidden top-level `--disable-auto-update` skips the background
+/// update its session starts two seconds in (read out of 2026.09.28 and
+/// 2026.11.11; there is no environment variable). Without it, a fenced Cursor
+/// downloads every new build into the agent home's `~/.local/share/cursor-agent`
+/// and can never link it in, as `~/.local/bin` is read-only there.
+const AUTOUPDATE_OFF_ARGS: &[(&str, &str, &str)] = &[("cursor-agent", "--disable-auto-update", "2026.09.28")];
+
+/// The argument switch of [`AUTOUPDATE_OFF_ARGS`] for `cmd`, when the build
+/// `version` (read from the resolved executable) is one it was read in. An
+/// unread or older build gets nothing: the flag is hidden, and a build that
+/// does not know it would refuse to start.
+fn autoupdate_off_arg(cmd: &str, version: Option<&str>) -> Option<&'static str> {
+    let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
+    let bin = bin.strip_suffix(".exe").unwrap_or(bin);
+    let (_, flag, since) = AUTOUPDATE_OFF_ARGS.iter().find(|(b, _, _)| *b == bin)?;
+    let version = version?;
+    (crate::services::agent_versions::version_cmp(version, since) != std::cmp::Ordering::Less).then_some(*flag)
+}
+
+/// [`apply_fence_env`]'s twin for a CLI whose only switch is an argument
+/// ([`AUTOUPDATE_OFF_ARGS`]): put it first in a session's `args`. `exe` is the
+/// executable `cmd` resolves to, whose `versions/<build>/` folder names the
+/// installed build. A subcommand (`cursor-agent login`) is left alone — the
+/// first argument names it — and so is an argv that already carries the flag.
+pub fn apply_fence_args(cmd: &str, exe: Option<&Path>, args: &mut Vec<String>) {
+    if crate::services::agent_fence::runs_subcommand(args) {
+        return;
+    }
+    let version = exe.and_then(crate::services::agent_latest::installed_build);
+    let Some(flag) = autoupdate_off_arg(cmd, version.as_deref()) else {
+        return;
+    };
+    if !args.iter().any(|a| a == flag) {
+        args.insert(0, flag.to_string());
+    }
+}
+
 /// Switch off the self-updater of a CLI for a fenced spawn: its install is
 /// read-only in every fence, whether Tabtivity or the host installed it (a
 /// payload one scope's agent could rewrite would run in every other scope
@@ -406,6 +447,43 @@ mod tests {
         let mut env = std::collections::HashMap::new();
         apply_fence_env("codex", &mut env);
         assert!(env.is_empty());
+    }
+
+    #[test]
+    fn cursors_updater_is_switched_off_only_on_a_build_known_to_take_the_flag() {
+        let flag = Some("--disable-auto-update");
+        assert_eq!(autoupdate_off_arg("cursor-agent", Some("2026.09.28-64d2043")), flag);
+        assert_eq!(autoupdate_off_arg("/home/u/.local/bin/cursor-agent", Some("2026.11.11-b912975")), flag);
+        assert_eq!(autoupdate_off_arg("cursor-agent.exe", Some("2027.01.02-abc")), flag);
+        // Older or unread: the flag is hidden, and a build without it refuses to start.
+        assert_eq!(autoupdate_off_arg("cursor-agent", Some("2026.09.23-86fc751")), None);
+        assert_eq!(autoupdate_off_arg("cursor-agent", None), None);
+        assert_eq!(autoupdate_off_arg("claude", Some("2026.10.01")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fenced_cursor_session_gets_the_flag_first_and_a_subcommand_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let build = tmp.path().join("cursor-agent").join("versions").join("2026.11.11-b912975");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("cursor-agent"), "").unwrap();
+        let link = tmp.path().join("cursor-agent-link");
+        std::os::unix::fs::symlink(build.join("cursor-agent"), &link).unwrap();
+        let run = |args: &[&str]| {
+            let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            apply_fence_args("cursor-agent", Some(&link), &mut args);
+            args
+        };
+        assert_eq!(run(&[]), ["--disable-auto-update"]);
+        assert_eq!(run(&["--continue"]), ["--disable-auto-update", "--continue"]);
+        assert_eq!(run(&["-p", "hello"]), ["--disable-auto-update", "-p", "hello"]);
+        assert_eq!(run(&["--disable-auto-update", "-p", "x"]), ["--disable-auto-update", "-p", "x"]);
+        assert_eq!(run(&["login"]), ["login"]);
+        // An executable outside a `versions/` folder: build unread, nothing added.
+        let mut args = vec!["--continue".to_string()];
+        apply_fence_args("cursor-agent", Some(tmp.path()), &mut args);
+        assert_eq!(args, ["--continue"]);
     }
 
     #[test]

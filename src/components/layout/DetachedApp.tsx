@@ -72,9 +72,7 @@ import { useRemoteStatusStore } from "../../stores/remote/remoteStatus";
 import { useProjectsStore } from "../../stores/projects";
 import { useBoxesStore } from "../../stores/boxes";
 import { installWindowsEvents } from "../../stores/windows";
-import { listenPdfReveal } from "../../stores/viewers/pdfSync";
-import { listenEditorJump } from "../../stores/viewers/editorJump";
-import { listenTexCenter } from "../../stores/viewers/texCenter";
+import { listenTexPdfChannels } from "../embed/fileViewer/sourceJump";
 import { chordMatches, resolveChord, zoomFor, type ShortcutMap } from "../../lib/shortcuts/shortcuts";
 import { useSteering } from "../../hooks/useSteering";
 import { DetachedCenterPanel } from "./DetachedCenterPanel";
@@ -294,24 +292,11 @@ export function DetachedApp({ param }: Props) {
   // Settings live (this popout is its own runtime; see the hook).
   useCrossWindowAppearance();
 
-  // #42: when a PDF tab is popped out into THIS window, a SyncTeX forward search
-  // from a TeX editor in the main (or another) window reaches us only over a
-  // cross-window broadcast. Register the listener so the PDF here reveals/flashes
-  // the target box. (The main shell registers the mirror image.)
-  useTauriListener(listenPdfReveal, []);
-
-  // #42: SyncTeX reverse search may resolve to a source editor hosted in THIS
-  // detached window while the PDF the user clicked lives elsewhere (or the jump
-  // is applied in the main window). Register the cross-window jump listener so
-  // our editor scrolls. (The main shell registers the mirror image.)
-  useTauriListener(listenEditorJump, []);
-
-  // #42: a reverse-search center switch aimed at a TeX workspace popped out into
-  // THIS window. The main window cannot switch our center itself — this heap's
-  // workspace renders its ViewerState from a one-time seed, so a main-side
-  // `setViewerState` write never reaches it; it broadcasts, and the registry
-  // this listener consults holds the mounted workspace's own goTo.
-  useTauriListener(listenTexCenter, []);
+  // #42: the TeX ↔ PDF channels cross windows: a PDF, an editor or a workspace
+  // popped out into THIS window is reached from the others only by broadcast (a
+  // main-side store write never arrives in this heap). The main shell registers
+  // the same listener.
+  useTauriListener(listenTexPdfChannels, []);
 
   // WebKitGTK doesn't reliably fire DOM 'resize' / ResizeObserver for OS-level
   // window size changes. Panes (terminals especially) refit off the DOM 'resize'

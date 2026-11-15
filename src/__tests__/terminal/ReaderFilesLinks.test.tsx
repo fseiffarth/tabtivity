@@ -10,7 +10,7 @@ import type { ChatLink } from "../../../mobile-web/src/terminal/chatLinks";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
 
 const entry: FileEntry = { name: "a.md", path: "/proj/a.md", is_dir: false, size: 10, extension: ".md", mime: "text/markdown" };
-const file: ReaderFile = { entry, label: "a.md" };
+const file: ReaderFile = { entry, label: "a.md", from: "named" };
 const link = (url: string, over: Partial<ChatLink> = {}): ChatLink => {
   const parsed = new URL(url);
   return { url, host: parsed.host, rest: parsed.pathname === "/" ? "" : parsed.pathname, from: "agent", ...over };
@@ -25,14 +25,27 @@ describe("Reader Data: Files and Links sections", () => {
     const { container } = render(<TerminalReaderFiles {...base} files={[file]} links={[pr, doc]} onOpenLink={() => {}} />);
     expect(screen.getByRole("complementary", { name: "Data" })).toBeTruthy();
     const headings = [...container.querySelectorAll(".terminal-files-heading")].map((el) => el.textContent);
-    expect(headings.map((text) => text?.replace(/untested$/, ""))).toEqual(["Files", "Links"]);
+    expect(headings.map((text) => text?.replace(/untested$/, ""))).toEqual(["Mentioned in its answers (1)", "Links"]);
     expect(within(screen.getByRole("listbox", { name: "Links this conversation names" })).getAllByRole("option")).toHaveLength(2);
-    expect(within(screen.getByRole("listbox", { name: "Files this conversation names" })).getAllByRole("option")).toHaveLength(1);
+    expect(within(screen.getByRole("listbox", { name: "Mentioned in its answers (1)" })).getAllByRole("option")).toHaveLength(1);
   });
 
-  it("labels the Files section when it is the only section", () => {
+  it("groups the files as the phone does, agent's sends first, yours last, each group in its own order", () => {
+    const at = (name: string, from: ReaderFile["from"]): ReaderFile => ({ entry: { ...entry, name, path: `/proj/${name}` }, label: name, from });
+    const files = [at("mine.png", "you"), at("named.md", "named"), at("sent.pdf", "agent"), at("mine2.txt", "you"), at("named2.md", "named")];
+    const { container } = render(<TerminalReaderFiles {...base} files={files} links={[]} />);
+    const headings = [...container.querySelectorAll(".terminal-files-heading")].map((el) => el.textContent?.replace(/untested$/, ""));
+    expect(headings).toEqual(["Sent by the agent (1)", "Mentioned in its answers (2)", "Sent by you (2)"]);
+    expect(container.querySelector(".terminal-files-heading")?.getAttribute("title")).toBe("Sent to you from this chat");
+    const names = (group: string) => within(screen.getByRole("listbox", { name: group })).getAllByRole("option").map((el) => el.textContent);
+    expect(names("Sent by the agent (1)")).toEqual(["sent.pdf"]);
+    expect(names("Mentioned in its answers (2)")).toEqual(["named.md", "named2.md"]);
+    expect(names("Sent by you (2)")).toEqual(["mine.png", "mine2.txt"]);
+  });
+
+  it("heads the one group when files are the only section", () => {
     const { container } = render(<TerminalReaderFiles {...base} files={[file]} links={[]} onOpenLink={() => {}} />);
-    expect(container.querySelector(".terminal-files-heading")?.textContent).toBe("Files");
+    expect(container.querySelector(".terminal-files-heading")?.textContent?.replace(/untested$/, "")).toBe("Mentioned in its answers (1)");
     expect(screen.queryByRole("listbox", { name: "Links this conversation names" })).toBeNull();
   });
 

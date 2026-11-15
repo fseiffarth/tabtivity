@@ -374,6 +374,8 @@ describe("How to start intro wizard", () => {
       ],
       node_runtime_status: () => ({ npm: false, version: null, min_major: 24, too_old: false }),
     });
+    const updateSettings = vi.fn(async () => {});
+    useSettingsStore.setState({ updateSettings });
     const onClose = vi.fn();
     render(<HowToStart onClose={onClose} />);
     await screen.findByRole("button", { name: "Codex" });
@@ -384,6 +386,8 @@ describe("How to start intro wizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Install Codex in a terminal" }));
     expect(runInstallInTab).toHaveBeenCalledWith("Install Codex", "curl codex | sh", "bash");
+    // Installing is the pick: it becomes the default agent CLI.
+    expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "codex" });
     expect(onClose).toHaveBeenCalled();
 
     // npm-based: the Node.js prerequisite shows up with its own installer.

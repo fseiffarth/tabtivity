@@ -9,8 +9,8 @@
 //! runs it.
 
 use super::{
-    build_succeeded, latexmk_args, latexmk_flag, latexmk_summary, log_has_tex_error, log_shows_shell_escape, tail,
-    TexCompileResult, ENGINES, OPENOUT_PARANOID, RUN_TIMEOUT,
+    build_succeeded, latexmk_args, latexmk_flag, latexmk_summary, log_has_tex_error, log_shows_shell_escape,
+    stuck_note, tail, TexCompileResult, ENGINES, OPENOUT_PARANOID, RUN_TIMEOUT,
 };
 use crate::services::ssh_exec::shell_quote;
 
@@ -103,11 +103,7 @@ pub(super) fn read_host_build(tex: &HostTex, engine: Option<&str>, stdout: &str,
     let mut log = stdout.to_string();
     // `timeout` answers 124 for the build it stopped (137 when it had to KILL).
     if rc == 124 || rc == 137 {
-        log.push_str(&format!(
-            "\n! {app} stopped latexmk after {} seconds — the build appears to be stuck.\n",
-            RUN_TIMEOUT.as_secs(),
-            app = crate::brand::DISPLAY
-        ));
+        log.push_str(&stuck_note("latexmk", RUN_TIMEOUT));
     }
     let exists = !after.is_empty();
     let fresh = exists && after != before;

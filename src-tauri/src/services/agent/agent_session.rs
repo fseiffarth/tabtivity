@@ -2593,6 +2593,8 @@ fn posix_hook_script_body(live_dir: &str) -> String {
 fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let hint = crate::services::agent_hint::HINT;
     let name_hint = crate::services::cockpit_mcp::NAME_HINT;
+    let notice = crate::services::tabs_mcp::NOTICE;
+    let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
     format!(
         "#!/bin/sh\n\
          # {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
@@ -2704,6 +2706,16 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20   fi ;;\n\
          \x20 esac\n\
          fi\n\
+         # Another agent tab of the project left this one a message (the tab\n\
+         # messages lane): the next real prompt carries one fixed notice beside\n\
+         # itself and spends the marker. The marker is empty; nothing a sibling\n\
+         # wrote reaches the prompt.\n\
+         if [ \"$event\" = UserPromptSubmit ] && [ \"${UPPER}_TAB_AGENT\" = claude ] && [ -n \"${UPPER}_TABS_MCP_URL\" ]; then\n\
+         \x20 mail=\"$dir/${UPPER}_TAB_UID{mail_suffix}\"\n\
+         \x20 if [ -f \"$mail\" ] && ! printf '%s' \"$input\" | grep -Eq '\"prompt\"[[:space:]]*:[[:space:]]*\"[[:space:]]*/(clear|new|resume)'; then\n\
+         \x20   rm -f \"$mail\"; printf '%s\\n' '{notice}'\n\
+         \x20 fi\n\
+         fi\n\
          # The turn state, from the events the agent fires as it works: a prompt\n\
          # submitted or a tool finished means working (a finished tool is also what\n\
          # ends an approval wait), Stop means done, a permission or elicitation\n\
@@ -2779,6 +2791,8 @@ fn hook_script_body(live_dir: &str) -> String {
     let live_dir = crate::quote::powershell(live_dir);
     let hint = crate::services::agent_hint::HINT;
     let name_hint = crate::services::cockpit_mcp::NAME_HINT;
+    let notice = crate::services::tabs_mcp::NOTICE;
+    let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
     format!(
         "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
          # PermissionRequest, Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
@@ -2865,6 +2879,14 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20 }} elseif (($event -eq 'UserPromptSubmit') -and (Test-Path -LiteralPath $title) -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{\r\n\
          \x20   Remove-Item -LiteralPath $title -Force -ErrorAction SilentlyContinue\r\n\
          \x20   Write-Output '{name_hint}'\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
+         # A message from another agent tab of the project (see the POSIX twin).\r\n\
+         if (($event -eq 'UserPromptSubmit') -and ($env:{UPPER}_TAB_AGENT -eq 'claude') -and $env:{UPPER}_TABS_MCP_URL) {{\r\n\
+         \x20 $mail = $rec + '{mail_suffix}'\r\n\
+         \x20 if ((Test-Path -LiteralPath $mail) -and ($payload -notmatch '\"prompt\"\\s*:\\s*\"\\s*/(clear|new|resume)')) {{\r\n\
+         \x20   Remove-Item -LiteralPath $mail -Force -ErrorAction SilentlyContinue\r\n\
+         \x20   Write-Output '{notice}'\r\n\
          \x20 }}\r\n\
          }}\r\n\
          # The turn state, from the events the agent fires as it works (see the\r\n\

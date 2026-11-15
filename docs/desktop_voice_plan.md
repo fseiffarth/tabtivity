@@ -586,8 +586,8 @@ connecting SSIP there would freeze the window). Each gets a `Client` row in
     `temperature_inc = 0`. Text is read lossily.
   - Each finished segment comes back as `final` text, or an empty `final` when
     dropped. A due final aborts a running partial through the abort callback.
-  - Partials: about once a second while a segment is open, over only its last
-    ~5 s, skipped while one is still running.
+  - Partials: the whole open segment, adaptive (history: once a second over
+    the last 5 s until 2026-11-13); see `docs/context/voice.md` "Live preview".
   - Language: the desktop speech language (step 3); auto-detect only if picked
     explicitly. An optional initial prompt for step 9's name hints.
 - **Phantom text filter** (pure, `fn(text, no_speech, lang, prompt)`): drop a
@@ -680,6 +680,13 @@ system voice and rate with step 2c, and so does the stop-speaking shortcut
 (only "toggle mic", Ctrl+Shift+D, exists now). There is nothing for the ✕ to
 settle: whisper's finals are per segment, so "Heard:" only ever shows the
 open segment's partial. Like the phone, a send ends the dictation.
+
+**Update (2026-11-13/14, never run live):** a partial no longer stays on the "Heard:"
+line: it is written into the Chat draft as provisional text and the final
+replaces it in place (`lib/voice/provisionalDraft.ts`, `terminal/useLiveDictation.ts`;
+held back to "Heard:" while it may be a spoken edit, a send, or a stop word). The
+phone composer does the same (`mobile-web/src/voiceInput.ts`). Partials now
+transcribe the whole open segment (`docs/context/voice.md`, "Live preview").
 
 - `src/lib/voice/desktopVoice.ts` — the renderer side of the session:
   - Start, stop, event subscription and owner tracking.

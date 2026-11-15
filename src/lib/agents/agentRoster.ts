@@ -1,5 +1,5 @@
 import type { TabEntry } from "../../stores/tabs";
-import { agentTabStateOf, agentTurnStartedAt, lastTabReadAt, useActivityStore, type AttentionKind } from "../../stores/activity";
+import { agentTabStateOf, agentTurnStartedAt, lastTabReadAt, tabMarkedUnreadAt, useActivityStore, type AttentionKind } from "../../stores/activity";
 import { agentTabModelTag, tabModeMarks, useAgentModelsStore } from "../../stores/agents/agentModels";
 import { mobileSubagentCount } from "../mobileSubagents";
 import type { MobileAgentState } from "../mobileAgentTurns";
@@ -25,6 +25,9 @@ export interface AgentStateFacts {
   lastDoneAt: number | undefined;
   /** When the user last arrived at the tab (`lastTabReadAt`). */
   lastReadAt: number | undefined;
+  /** When the user marked the tab unread and nobody opened it since
+   *  (`tabMarkedUnreadAt`). Optional: absent reads as not marked. */
+  markedUnreadAt?: number;
 }
 
 /**
@@ -49,6 +52,7 @@ export function deriveAgentRosterState(facts: AgentStateFacts): AgentRosterState
   if (live !== "idle") return live;
   if (facts.attention === "interrupted") return "interrupted";
   if (facts.attention === "done") return "done";
+  if (facts.markedUnreadAt !== undefined) return "done";
   if (facts.lastDoneAt !== undefined && facts.lastDoneAt > (facts.lastReadAt ?? 0)) return "done";
   return "idle";
 }
@@ -61,6 +65,7 @@ export function agentRosterState(ptyId: string): AgentRosterState {
     attention: activity.attentionByTab[ptyId],
     lastDoneAt: activity.lastDoneByTab[ptyId],
     lastReadAt: lastTabReadAt(ptyId),
+    markedUnreadAt: tabMarkedUnreadAt(ptyId),
   });
 }
 

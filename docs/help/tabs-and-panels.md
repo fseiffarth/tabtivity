@@ -60,6 +60,12 @@ Settings → Agents → Manage CLIs (see `agent-clis`).
   again to clear. The mark shows on the tab, and the project's pill shows the
   most pressing one with a count — click it to jump to that tab. Marks are
   saved with the layout.
+- Mark an agent tab as unread: right-click a tab whose output you have read →
+  **Mark as unread**. It lights up as a finished turn again, in the tab bar, on
+  the project's pill, in the cockpit and in the phone's agent list, until you
+  open the tab again or type into it. While it is the tab in front of you it
+  stays dark and lights the moment you look away. The entry is not offered
+  while the tab already shows something unread.
 - To-do card from a tab (to-do board switched on): right-click → **Create to-do
   card** files a card titled after the tab under its project and opens it. The
   tab then shows ☑ (click to open the card) and the card shows the tab (click
@@ -74,6 +80,18 @@ resume: Claude, Codex, Mistral and OpenCode reopen their exact prior
 conversation; Gemini, Qwen, Grok, Cursor, Copilot and Antigravity continue the
 project's most recent one. Agents without a resume path (Aider, for one) start
 fresh from the `+` menu. Closing a popped-out window closes its tabs for good.
+
+## Archiving tabs
+
+Right-click a tab → **Archive** to put it away without losing it: the tab
+closes and waits in the project's archive (**Archive the other tabs** does the
+same for the rest of that subwindow). Open the archive from the `+` menu →
+**Archived tabs…** or the file panel's **Archive** view, and click a row to
+bring the tab back: an agent resumes its conversation, a shell starts fresh in
+its folder, a viewer reopens its file. Nothing runs while a tab is archived.
+The archive is kept per project across restarts; × on a row deletes it. On the
+phone, a card's ⋯ → **Archive tab** does the same, and the **Archived** fold
+under the cards lists the project's archive.
 
 ## The file panel
 

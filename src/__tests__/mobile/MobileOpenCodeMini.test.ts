@@ -17,7 +17,7 @@ import {
   type OpenCodePickerRow,
 } from "../../../mobile-web/src/terminal/openCodeMini";
 import { readableScreen, type ReadableBufferLike, type ReadableLine } from "../../../mobile-web/src/terminal/readableScreen";
-import { groupOpenCodeModels } from "../../../mobile-web/src/terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import { modelPickKeys, readModelPicker, readOpenCodeModelPage } from "../../lib/agents/readerLive";
 import { BRAND } from "../../lib/brand";
 
@@ -815,5 +815,16 @@ describe(`${BRAND.display} Mobile OpenCode model picker walk`, () => {
     const met = mergeOpenCodePage(wrapped, ["b", "c", "d"].map(row));
     expect(met.done).toBe(true);
     expect(met.main.map((entry) => entry.text)).toEqual(["a", "b", "c", "d", "e", "f"]);
+  });
+});
+
+describe(`${BRAND.display} OpenCode model list test`, () => {
+  it("is OpenCode's own Select model step only", () => {
+    expect(isOpenCodeModelList("OpenCode", "Select model")).toBe(true);
+    expect(isOpenCodeModelList("open code", "Select model")).toBe(true);
+    expect(isOpenCodeModelList("OpenCode", "Select agent")).toBe(false);
+    expect(isOpenCodeModelList("Claude", "Select model")).toBe(false);
+    expect(isOpenCodeModelList(undefined, "Select model")).toBe(false);
+    expect(isOpenCodeModelList("OpenCode", undefined)).toBe(false);
   });
 });

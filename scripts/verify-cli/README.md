@@ -66,7 +66,11 @@ gives its usage.
   is rebuilt from `opencode_session.rs` on every run. `tabby.py` checks the
   assistant's tool pin, read from `assistant.rs`. `resume.py` covers
   `--session`, `--continue` and the warm-up `run`. `db.py` reads the session
-  database. Get a binary without installing it:
+  database. The app's own store reader runs over a run's database with
+  `VERIFY_OPENCODE_DB=<home>/.local/share/opencode/opencode.db
+  VERIFY_OPENCODE_DIR=<home>/work VERIFY_OPENCODE_SESSION=<live record>
+  cargo test -p tabtivity --no-default-features --lib verify_cli_reads_a_captured_store -- --ignored --nocapture`
+  (entries, the subagent through its handle, completed changes). Get a binary without installing it:
   `npm pack @opencode/cli-linux-x64@<v>`, unpack, `package/bin/opencode`.
 - **Antigravity** (`antigravity/`): `main.py <label> <bin> <port> [cols]`
   covers first run, `/model`, `/effort`, turns, a second `--continue`,
@@ -91,6 +95,13 @@ gives its usage.
   custom provider, but no round has tried it yet. Give the
   work folder its own `git init`, or the trust question offers to trust
   the enclosing repo.
+
+- **Copilot** (`copilot/`): `screens.sh <label> <bin> [port]` walks the folder
+  trust question, idle, a stub-forced `create` approval at 110 and 60 columns
+  and the Esc after it, BYOK against `stub_openai.py`, for `frames.probe.ts`.
+  The session store is `scripts/copilot-events-probe.py` (`COPILOT_BIN=<bin>`).
+  Get a binary without installing it: `npm pack @github/copilot-linux-x64@<v>`,
+  unpack, `package/copilot`.
 
 - **Muse**: no script yet. Fetch a binary from the public channel manifest
   (checklist §1.5, Meta Muse Code). Run the binary, not the launcher, and drive

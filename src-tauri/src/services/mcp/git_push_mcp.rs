@@ -2635,12 +2635,15 @@ mod tests {
         // CI on every branch names no branch.
         let ci = pats("on:\n  push:\n    branches: ['**', '!dependabot/**']\n");
         assert!(ci.iter().all(|p| !pattern_names_branch(p, "develop") && !pattern_names_branch(p, "release/1")), "{ci:?}");
-        // An alias bomb in 64 KiB is refused or finishes at once, never hangs.
+        // An alias bomb in 64 KiB is refused, never expanded: the parser stops
+        // after 100 alias jumps per event, so the work is bounded by the input
+        // size. Asserted on that refusal, not on wall-clock time, which a
+        // loaded test machine stretches past any fixed bound.
         let mut bomb = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
         for i in 1..9 { bomb.push_str(&format!("a{i}: &a{i} [{}]\n", vec![format!("*a{}", i - 1); 10].join(", "))); }
-        let started = Instant::now();
+        let refused = serde_norway::from_str::<serde_norway::Value>(&bomb).expect_err("an alias bomb is refused");
+        assert!(refused.to_string().contains("repetition limit exceeded"), "{refused}");
         assert!(pats(&bomb).is_empty());
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     fn commit_files(work: &Path, files: &[(&str, &str)]) -> String {

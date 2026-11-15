@@ -63,13 +63,15 @@ function vpnStatusHint(
  */
 export function RemoteProjectSection({
   kind,
-  safeName,
+  hostFolder,
   onClose,
   onUseThisFolder,
   remote,
 }: {
   kind: "new" | "import";
-  safeName: string;
+  /** The folder the project makes inside the chosen one (a New or a host
+   *  clone; "" while unnamed), or `null` when it uses the chosen folder itself. */
+  hostFolder: string | null;
   onClose: () => void;
   onUseThisFolder: () => void;
   remote: RemoteSession;
@@ -752,8 +754,8 @@ export function RemoteProjectSection({
           onCreateFolder={(name) => void createRemoteFolder(name)}
           footer={
             remoteChosenPath
-              ? kind === "new"
-                ? t("remoteProjectSection.willCreateLabel", { path: joinRemotePath(remoteChosenPath, safeName || "<name>") })
+              ? hostFolder !== null
+                ? t("remoteProjectSection.willCreateLabel", { path: joinRemotePath(remoteChosenPath, hostFolder || "<name>") })
                 : t("remoteProjectSection.selectedLabel", { path: remoteChosenPath })
               : t("remoteMachines.browserFooter")
           }

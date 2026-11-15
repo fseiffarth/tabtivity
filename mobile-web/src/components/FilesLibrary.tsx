@@ -4,9 +4,11 @@ import { ArrowUpRightIcon } from "../../../src/components/common/icons/Icon";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { STANDARD_PROJECT_FILES } from "../../../src/lib/viewers/fileUtils";
-import { ApiError, MAX_UPLOAD_FILE, checkProjectFolderZip, makeProjectFolder, markablePicture, listProjectFiles, lookUpFileRow, lookUpProjectFile, projectFolderZipUrl, searchProjectFiles, undoProjectFolder, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
+import { buildDocsGroup, type DocsGroup } from "../../../src/components/files/projectDocsGroup";
+import type { DocState, DocStatus } from "../../../src/lib/projects/docStatus";
+import { ApiError, MAX_UPLOAD_FILE, checkProjectFolderZip, createProjectDoc, makeProjectFolder, markablePicture, listProjectFiles, lookUpFileRow, lookUpProjectFile, projectFolderZipUrl, searchProjectFiles, undoProjectFolder, undoProjectUpload, uploadProjectFile, type FilesSide, type OutboxFile, type ProjectFileEntry, type ProjectFileHit, type ProjectFileListing, type ProjectFileSearch, type ViewerScope } from "../api";
 import { filesPlaceId, isFavorite, onFavorites, onFolderColors, onRecents, openFileTab, readFavorites, readFilesPlace, readFolderColors, readRecents, recordRecent, rememberFilesPlace, removeFavorite, removeRecent, savedPlace, setFolderColor, toggleFavorite, type FilesCrumb, type FilesRecent, type FilesSaved } from "../filesPlace";
-import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readLibraryView, sortEntries, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
+import { LISTED_CAP, LIBRARY_SORTS, glyphOf, readDocsOpen, readLibraryView, sortEntries, writeDocsOpen, writeLibraryView, type Glyph, type LibrarySort, type LibraryView } from "../libraryView";
 import { canShareFiles, shareAs, shareSize, sizeOfMany, useOutboxShare, useShareMany } from "../outboxShare";
 import { ShareSizeSheet } from "./ShareSizeSheet";
 import { TAB_COLORS, TAB_COLOR_IDS, tabColorCss } from "../../../src/lib/theme/tabColors";
@@ -102,12 +104,18 @@ export function LibraryCover({ projectId, entry, place, thumbs, color, side }: L
  * each folded into its own section. A scaffold file git ignores stays a
  * scaffold file, as on the desktop. Each section is sorted on its own, so the
  * folded ones stay at the end whatever the sort. */
-function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean, view: LibraryView, lang?: string) {
+function sectionsOf(entries: ProjectFileEntry[], atRoot: boolean, view: LibraryView, lang?: string, docs?: DocStatus[]) {
   const scaffold = atRoot ? entries.filter((entry) => STANDARD_PROJECT_FILES.has(entry.name)) : [];
   const rest = atRoot ? entries.filter((entry) => !STANDARD_PROJECT_FILES.has(entry.name)) : entries;
+  // The root's "Project docs" group, as the desktop tree builds it: the
+  // desktop's states laid over the sorted standard files (pointer files nested
+  // under AGENTS.md), then a ghost row per doc that can be created. With no
+  // status (an older desktop, a folder, a timed-out read) it is the plain group.
+  const group = buildDocsGroup(sortEntries(scaffold, view, lang), atRoot ? docs ?? null : null);
   return {
     regular: sortEntries(rest.filter((entry) => !entry.ignored), view, lang),
-    scaffold: sortEntries(scaffold, view, lang),
+    scaffold: group.files,
+    docs: group,
     ignored: sortEntries(rest.filter((entry) => entry.ignored), view, lang),
   };
 }
@@ -322,10 +330,15 @@ export function noteFileOpened(projectId: string, side: FilesSide, entry: Projec
 /** The sheet over the library, if any: the path menu (the title), the view
  * menu (⋯), one item's menu — with the folder the item was listed in — a
  * folder's colours, or a favorite or recent that no longer opens. */
-type Sheet = { kind: "path" } | { kind: "view" } | { kind: "folder" }
+type Sheet = { kind: "path" } | { kind: "view" } | { kind: "folder" } | { kind: "doc"; name: string }
   | { kind: "item"; entry: ProjectFileEntry; at: Crumb[]; hit?: ProjectFileHit; saved?: Saved }
   | { kind: "color"; place: string; name: string }
   | { kind: "gone"; saved: Saved };
+
+/** What the root's "Project docs" group says of one of its files: the desktop's
+ * state (`null` before it is known, and for `.gitignore`) and whether it is a
+ * pointer file nested under AGENTS.md. */
+type DocMark = { state: DocState | null; nested: boolean };
 
 /** The sealed crumbs below the root of a trail, as favorites and recents keep them. */
 const crumbsOf = (at: Crumb[]): FilesCrumb[] => at.slice(1).flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []);
@@ -381,8 +394,9 @@ const CHECK = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5
  * A landed file's row offers Undo while the library stays in that folder; the
  * desktop deletes it only while it is still unchanged.
  *
- * The project root's scaffold files and everything git ignores sit in
- * collapsed sections after the rest, as in the desktop's file tree.
+ * The project root's "Project docs" group sits above the rest and everything
+ * git ignores after it, both collapsed until opened, as in the desktop's file
+ * tree.
  *
  * The phone never holds a path: each folder and file is a sealed token the
  * sidecar handed out, and the trail is the tokens walked so far. The trail is
@@ -464,7 +478,12 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
    * focus goes back to what opened the file when it closes. */
   const covered = fileOpen !== null && !split;
   // Both fold shut by default, and stay as set while the library is walked.
-  const [scaffoldOpen, setScaffoldOpen] = useState(false);
+  // The docs group also remembers its fold per project, like the desktop tree.
+  const [scaffoldOpen, setScaffoldOpenNow] = useState(() => readDocsOpen(projectId));
+  const setScaffoldOpen = (open: boolean) => {
+    setScaffoldOpenNow(open);
+    writeDocsOpen(projectId, open);
+  };
   const [ignoredOpen, setIgnoredOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [found, setFound] = useState<ProjectFileSearch | null>(null);
@@ -528,6 +547,8 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const [dropping, setDropping] = useState(false);
   /** Why **Download as zip** gave nothing, said under the list's head. */
   const [zipFailure, setZipFailure] = useState<TranslationKey | null>(null);
+  /** Why a ghost row's **Create** made nothing (already the sentence). */
+  const [docFailure, setDocFailure] = useState<string | null>(null);
   /** How many files the last **Download as zip** left out for their names. */
   const [zipSkipped, setZipSkipped] = useState(0);
   useEffect(() => {
@@ -615,6 +636,26 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       },
       () => setMadeFolder({ ...made, state: "made", failure: t("mobile.files.folder.undoFailed") }),
     );
+  };
+
+  /** A ghost row's **Create**: the doc written from its template, then listed
+   * again and opened as a tap on it would. A name that is taken since is listed
+   * again and said so; nothing is overwritten. */
+  const createDoc = async (name: string) => {
+    setDocFailure(null);
+    try {
+      const entry = await createProjectDoc(projectId, name);
+      relist();
+      open(entry);
+    } catch (reason) {
+      const code = codeOf(reason);
+      if (code === "already_exists" || RELIST.has(code)) relist();
+      setDocFailure(
+        code === "already_exists" ? t("mobile.files.docs.exists", { name })
+          : code === "uploads_off" || code === "files_off" ? t("mobile.files.docs.off", { name })
+          : t("mobile.files.docs.failed", { name }),
+      );
+    }
   };
 
   /** **Download as zip** of the folder `dir` (none: the root), named `name`:
@@ -723,7 +764,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     rememberFilesPlace(placeId, trail.flatMap((crumb) => crumb.token ? [{ token: crumb.token, name: crumb.name }] : []));
   }, [placeId, trail]);
 
-  const sections = useMemo(() => sectionsOf(listing?.entries ?? [], atRoot, view, lang), [listing, atRoot, view, lang]);
+  const sections = useMemo(() => sectionsOf(listing?.entries ?? [], atRoot, view, lang, listing?.docs), [listing, atRoot, view, lang]);
 
   /** The folder's shown pictures, which the viewer steps through in shown order. */
   const pictures = useMemo(
@@ -1019,25 +1060,33 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   const isStale = (saved?: Saved) => saved !== undefined && stale.has(savedPlace(saved.item));
   /** The file shown beside the folder, marked in the list. */
   const shownBeside = (entry: ProjectFileEntry) => paned && entry.kind !== "dir" && fileOpen?.ref === entry.token;
-  const itemClass = (base: string, folded: boolean, saved?: Saved, entry?: ProjectFileEntry) =>
-    [base, folded && "files-folded", isStale(saved) && "files-stale", entry && shownBeside(entry) && "files-shown",
+  const itemClass = (base: string, folded: boolean, saved?: Saved, entry?: ProjectFileEntry, doc?: DocMark) =>
+    [base, folded && "files-folded", doc?.nested && "files-doc-nested", isStale(saved) && "files-stale", entry && shownBeside(entry) && "files-shown",
       entry && !saved && picked.has(entry.token) && "files-picked"].filter(Boolean).join(" ") || undefined;
   /** In **Select files**, a file's button says whether it is ticked. */
   const pickedState = (entry: ProjectFileEntry, hit?: ProjectFileHit, saved?: Saved) => ticks(entry, hit, saved) ? picked.has(entry.token) : undefined;
 
+  /** `template` / `pointer` pill beside a doc's name, as on the desktop tree;
+   * an edited doc wears none. */
+  const docBadge = (doc?: DocMark) => doc?.state === "template" || doc?.state === "pointer"
+    ? <span className={`files-doc-badge files-doc-badge-${doc.state}`}
+      title={t(doc.state === "template" ? "fileTree.docTemplateTitle" : "fileTree.docPointerTitle")}>
+      {t(doc.state === "template" ? "fileTree.docTemplate" : "fileTree.docPointer")}</span>
+    : null;
+
   /** A list row: its tile, name and times, ↗ Share for a file and ⋯ for the
    * item menu. A search hit, favorite or recent names its folder above the
    * times. */
-  function row(entry: ProjectFileEntry, folded = false, hit?: ProjectFileHit, saved?: Saved) {
+  function row(entry: ProjectFileEntry, folded = false, hit?: ProjectFileHit, saved?: Saved, doc?: DocMark) {
     const file = entry.kind === "dir" || saved ? null : asViewerFile(entry);
     const ready = sharing.ready === entry.name;
     const above = saved?.item.trail ?? hit?.trail;
-    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("", folded, saved, entry)}>
+    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("", folded, saved, entry, doc)}>
       <button {...pressOf(entry, hit, saved)} aria-label={ticks(entry, hit, saved) ? t("mobile.files.select.pick", { name: entry.name }) : openLabel(entry)}
         aria-pressed={pickedState(entry, hit, saved)} aria-current={shownBeside(entry) || undefined}>
         <FileGlyph kind={entry.kind} color={colorOf(entry, atOf(hit, saved))} />
         <span>
-          <strong>{entry.name}</strong>
+          <strong>{entry.name}{docBadge(doc)}</strong>
           {above && hitPlace(above)}
           {saved?.from !== "favorite" && <small>{rowMeta(entry, t, lang)}</small>}
         </span>
@@ -1057,18 +1106,18 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
   /** A grid tile: its cover, the name on two lines, a folder's item count or
    * a file's date and size, and ▾ for the item menu. A share the phone held
    * back for a second tap (or that failed) says so under it. */
-  function tile(entry: ProjectFileEntry, folded = false, hit?: ProjectFileHit, saved?: Saved) {
+  function tile(entry: ProjectFileEntry, folded = false, hit?: ProjectFileHit, saved?: Saved, doc?: DocMark) {
     const file = entry.kind === "dir" || saved ? null : asViewerFile(entry);
     const meta = saved?.from === "favorite" ? "" : tileMeta(entry, t, lang);
     const at = atOf(hit, saved);
     const above = saved?.item.trail ?? hit?.trail;
     // A favorite keeps no size or time to key a cover by.
     const thumbs = view.thumbs && saved?.from !== "favorite";
-    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("files-tile", folded, saved, entry)}>
+    return <li key={saved ? savedPlace(saved.item) : entry.token} className={itemClass("files-tile", folded, saved, entry, doc)}>
       <button className="files-tile-open" {...pressOf(entry, hit, saved)} aria-label={ticks(entry, hit, saved) ? t("mobile.files.select.pick", { name: entry.name }) : openLabel(entry)}
         aria-pressed={pickedState(entry, hit, saved)} aria-current={shownBeside(entry) || undefined}>
         <LibraryCover projectId={projectId} entry={entry} place={placeOf(at)} thumbs={thumbs} color={colorOf(entry, at)} side={side} />
-        <strong>{entry.name}</strong>
+        <strong>{entry.name}{docBadge(doc)}</strong>
         {above && hitPlace(above)}
         {meta && <small>{meta}</small>}
       </button>
@@ -1139,19 +1188,76 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     </div>;
   }
 
-  /** A folded section: the desktop tree's divider (across the whole grid),
-   * then its entries when open. */
-  function section(kind: "scaffold" | "ignored", isOpen: boolean, setOpen: (open: boolean) => void, entries: ProjectFileEntry[]) {
-    const scaffold = kind === "scaffold";
+  /** The gitignored section, folded: the desktop tree's divider (across the
+   * whole grid), then its entries when open. */
+  function ignoredSection(entries: ProjectFileEntry[]) {
     return <>
       <li className="files-section">
-        <button aria-expanded={isOpen} onClick={() => setOpen(!isOpen)}
-          title={t(scaffold ? (isOpen ? "fileTree.collapseScaffold" : "fileTree.expandScaffold") : (isOpen ? "fileTree.collapseGitignored" : "fileTree.expandGitignored"))}>
+        <button aria-expanded={ignoredOpen} onClick={() => setIgnoredOpen(!ignoredOpen)}
+          title={t(ignoredOpen ? "fileTree.collapseGitignored" : "fileTree.expandGitignored")}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-          <span>{t(scaffold ? "fileTree.scaffoldSection" : "fileTree.gitignoredSection", { count: entries.length })}</span>
+          <span>{t("fileTree.gitignoredSection", { count: entries.length })}</span>
         </button>
       </li>
-      {isOpen && entries.map((entry) => item(entry, !scaffold))}
+      {ignoredOpen && entries.map((entry) => item(entry, true))}
+    </>;
+  }
+
+  /** `2/2 · 1 template`: the default docs there are, and the shown docs still
+   * holding the untouched template. */
+  const docsSummary = (summary: NonNullable<DocsGroup<ProjectFileEntry>["summary"]>) =>
+    t("fileTree.docsSummary", { present: summary.present, total: summary.total })
+    + (summary.templates > 0
+      ? ` · ${t(summary.templates === 1 ? "fileTree.docsTemplatesOne" : "fileTree.docsTemplatesMany", { count: summary.templates })}`
+      : "");
+
+  /** A ghost row of the docs group: a catalog doc that is not in the project
+   * yet. A tap opens its menu, whose one choice is **Create**. Not a file: no
+   * selection, share, favorite or token. */
+  function ghostRow(name: string) {
+    const openMenu = () => {
+      setDocFailure(null);
+      setSheet({ kind: "doc", name });
+    };
+    const label = t("mobile.files.docs.ghost", { name });
+    const plus = <span className="files-icon files-icon-file files-doc-plus" aria-hidden="true">+</span>;
+    return grid
+      ? <li key={`ghost:${name}`} className="files-tile files-doc-ghost">
+        <button className="files-tile-open" aria-haspopup="dialog" aria-label={label} onClick={openMenu}>
+          <span className="files-tile-cover files-tile-cover-file">{plus}</span>
+          <strong>{name}</strong>
+          <small>{t("fileTree.docCreate")}</small>
+        </button>
+      </li>
+      : <li key={`ghost:${name}`} className="files-doc-ghost">
+        <button aria-haspopup="dialog" aria-label={label} onClick={openMenu}>
+          {plus}
+          <span><strong>{name}<span className="files-doc-badge files-doc-badge-create">{t("fileTree.docCreate")}</span></strong></span>
+        </button>
+      </li>;
+  }
+
+  /** The root's "Project docs" group, as the desktop tree draws it: a divider
+   * with the `present/total · n template` summary (a plain count while the
+   * desktop sent no status), then its files with the template / pointer pills
+   * and, where the phone may add files, a ghost row per doc that can be made. */
+  function docsSection(group: DocsGroup<ProjectFileEntry>) {
+    const { summary } = group;
+    const canCreate = !onHost && listing?.uploads === true;
+    return <>
+      <li className="files-section">
+        <button aria-expanded={scaffoldOpen} onClick={() => setScaffoldOpen(!scaffoldOpen)}
+          title={t(scaffoldOpen ? "fileTree.collapseScaffold" : "fileTree.expandScaffold")}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          <span>
+            {summary ? `${t("fileTree.docsSection")} ` : t("fileTree.scaffoldSection", { count: group.files.length })}
+            {summary && <small className="files-docs-summary">{docsSummary(summary)}</small>}
+          </span>
+        </button>
+      </li>
+      {scaffoldOpen && group.rows.map((docRow) => docRow.kind === "ghost"
+        ? canCreate && ghostRow(docRow.name)
+        : item(docRow.entry, docRow.state === "template", undefined, undefined, { state: docRow.state, nested: docRow.nested }))}
     </>;
   }
 
@@ -1219,6 +1325,15 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       if (!failure) setSheet(null);
       return failure;
     }} />;
+    if (shown.kind === "doc") {
+      const { name } = shown;
+      return <OptionSheet title={name} note={{ text: t("mobile.files.docs.createNote", { name }) }} waiting="" busy={false} onClose={() => setSheet(null)}
+        options={[{ key: "create", label: t("mobile.files.docs.create"), current: false }]}
+        onPick={() => {
+          setSheet(null);
+          void createDoc(name);
+        }} />;
+    }
     if (shown.kind === "color") return colorSheet(shown.place, shown.name);
     if (shown.kind === "gone") {
       const { saved } = shown;
@@ -1261,7 +1376,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     || isUntested("mobile.files.thumbs") || isUntested("mobile.files.favorites") || isUntested("mobile.files.recent")
     || isUntested("mobile.files.colors") || isUntested("mobile.files.share") || isUntested("mobile.files.sections")
     || isUntested("mobile.files.remember") || isUntested("mobile.files.keepPlace") || isUntested("mobile.files.pathBar")
-    || isUntested("mobile.files.refresh") || isUntested("mobile.files.longPress") || isUntested("mobile.files.searchScope") || isUntested("mobile.files.wide") || isUntested("mobile.files.stream") || isUntested("mobile.files.split") || isUntested("mobile.files.keys") || isUntested("mobile.files.drop") || isUntested("mobile.files.newFolder") || isUntested("mobile.files.zip") || isUntested("mobile.files.select") || isUntested("mobile.files.bigUpload") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload")
+    || isUntested("mobile.files.refresh") || isUntested("mobile.files.longPress") || isUntested("mobile.files.searchScope") || isUntested("mobile.files.wide") || isUntested("mobile.files.stream") || isUntested("mobile.files.split") || isUntested("mobile.files.keys") || isUntested("mobile.files.drop") || isUntested("mobile.files.newFolder") || isUntested("mobile.files.zip") || isUntested("mobile.files.select") || isUntested("mobile.files.bigUpload") || isUntested("mobile.files.search") || isUntested("mobile.files.searchButton") || isUntested("mobile.files.upload") || isUntested("mobile.files.docs")
     || ((onSide !== undefined || onHost) && isUntested("mobile.files.host"));
 
   return <><section ref={host} className={paned ? "files-library files-split" : "files-library"} role="dialog" aria-modal={!paned && !docked} data-docked={docked && !paned ? "" : undefined} aria-label={t("mobile.files.title")}>
@@ -1311,6 +1426,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
     <div ref={body} className={`files-library-body${dropping ? " files-dropping" : ""}${selecting ? " files-selecting" : ""}`} onScroll={onBodyScroll} {...dropHandlers}>
       {dropping && <p className="files-drop-note" role="status">{t("mobile.files.upload.drop", { folder: here.name })}</p>}
       {zipFailure && <p className="sheet-note error" role="alert">{t(zipFailure)}</p>}
+      {docFailure && <p className="sheet-note error" role="alert">{docFailure}</p>}
       {zipSkipped > 0 && <p className="sheet-note" role="status">{t("mobile.files.zip.skipped", { count: zipSkipped })}</p>}
       {madeFolder && folderRow(madeFolder)}
       {!searching && listing?.uploads && <button className="new-tab-file files-upload" onClick={() => uploads.open({ folder: here.token, place: here.name, visit })}>
@@ -1350,12 +1466,13 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
           ? <p className="sheet-note error" role="alert">{t(failure)}</p>
           : !listing
             ? <p className="sheet-note">{t("mobile.files.loading")}</p>
-            : listing.entries.length === 0
+            : listing.entries.length === 0 && sections.docs.rows.length === 0
               ? <p className="sheet-note">{t("mobile.files.empty")}</p>
               : <ul className={listClass} aria-label={here.name}>
+                {/* The docs group leads, as on the desktop tree. */}
+                {sections.docs.rows.length > 0 && docsSection(sections.docs)}
                 {sections.regular.map((entry) => item(entry))}
-                {sections.scaffold.length > 0 && section("scaffold", scaffoldOpen, setScaffoldOpen, sections.scaffold)}
-                {sections.ignored.length > 0 && section("ignored", ignoredOpen, setIgnoredOpen, sections.ignored)}
+                {sections.ignored.length > 0 && ignoredSection(sections.ignored)}
               </ul>}
       {showRecents ? null : searching
         ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>

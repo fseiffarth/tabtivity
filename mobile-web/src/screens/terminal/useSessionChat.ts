@@ -24,8 +24,8 @@ import { isViewedSubagent, viewedSubagent } from "../../terminal/subagentInput";
 import { agentFamily } from "../../terminal/composer";
 import { withPending, type PendingPrompt } from "../../terminal/pendingPrompts";
 import { outboxPosts } from "../../terminal/outboxPosts";
-import { inboxLeaves, useInboxFiles } from "../../terminal/inboxRefs";
-import { useChangedFiles, useNamedFiles } from "../../terminal/chatFiles";
+import { useInboxFiles } from "../../terminal/inboxRefs";
+import { answerTextsOf, promptLeavesOf, useChangedFiles, useNamedFiles } from "../../terminal/chatFiles";
 import { afterClear, type ClearMark } from "../../terminal/clearedSession";
 import { startVisiblePoll, type VisiblePoll } from "../../visiblePoll";
 import { limitMeters, parseUsageReport, type LimitMeters } from "../../../../shared/usageReport";
@@ -234,7 +234,7 @@ export function useSessionEntries({
   const chatPosts = useMemo(() => outboxPosts(sessionEntries, outbox.filter((file) => file.from_tab)), [sessionEntries, outbox]);
   /** What the phone sent into the inbox, as the chat's prompts and the
    * composer name it — described once by the desktop for their previews. */
-  const promptLeaves = useMemo(() => [...new Set(sessionEntries.flatMap((entry) => entry.kind === "prompt" ? inboxLeaves(entry.text) : []))], [sessionEntries]);
+  const promptLeaves = useMemo(() => promptLeavesOf(sessionEntries), [sessionEntries]);
   const inboxNamed = useMemo(() => [...new Set([
     ...promptLeaves,
     ...uploads.flatMap((upload) => upload.reference === undefined || upload.failure ? [] : [leafOfReference(upload.reference)]),
@@ -243,10 +243,7 @@ export function useSessionEntries({
   /** What the chat touched in the project: the files its answers name and
    * the ones it changed. Only where the 📁 library can open them. */
   const filesInReach = sessionFocus && tab.kind === "agent" && !!project;
-  const answerTexts = useMemo(
-    () => sessionEntries.filter((entry) => entry.kind === "answer" && !entry.queued && !entry.questions?.length).map((entry) => entry.text),
-    [sessionEntries],
-  );
+  const answerTexts = useMemo(() => answerTextsOf(sessionEntries), [sessionEntries]);
   const namedFiles = useNamedFiles(tab.id, answerTexts, filesInReach);
   // Until the desktop reads the new session, its changes are the cleared one's.
   const changed = useChangedFiles(tab.id, filesInReach && sinceClear === null);

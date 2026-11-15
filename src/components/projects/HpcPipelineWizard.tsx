@@ -369,7 +369,7 @@ function HpcPipelineWizard({ onClose }: { onClose: () => void }) {
             </p>
             <RemoteProjectSection
               kind="new"
-              safeName={safeName}
+              hostFolder={safeName}
               onClose={onClose}
               onUseThisFolder={useThisFolder}
               remote={remote}

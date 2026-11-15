@@ -1663,6 +1663,19 @@ fn parse_entries(
                     }
                     entries.extend(transcript_entry(role, &raw, at.clone()));
                 }
+                Record::CommandArgs(raw) => {
+                    // Only onto the bare command its warning just recorded
+                    // (that prompt, then Claude's answer).
+                    let Some(args) = clean_text(&raw) else { continue };
+                    let len = entries.len();
+                    if len >= 2 && entries[len - 1].kind == "answer" && entries[len - 1].text.starts_with("Unknown command: /") {
+                        let prompt = &mut entries[len - 2];
+                        if prompt.kind == "prompt" && prompt.text.starts_with('/') && !prompt.text.contains(char::is_whitespace) {
+                            prompt.text = format!("{} {args}", prompt.text);
+                            bound_entry(prompt, MAX_PROMPT_CHARS);
+                        }
+                    }
+                }
                 Record::Shell { call, mut shell } => {
                     shell.at = at.clone();
                     commands.insert(call.clone(), shell.clone());
@@ -1988,6 +2001,9 @@ fn claude_tool_results(value: &Value) -> Vec<String> {
 enum Record {
     /// A prompt or an answer.
     Turn(&'static str, String),
+    /// The words typed after a command Claude refused as unknown, recorded
+    /// apart from it ([`claude_unknown_command`]): they join that prompt.
+    CommandArgs(String),
     /// A plan put up for approval: an answer, marked as the plan.
     Plan(String),
     /// A subagent spawned by tool call `call`, sent to do `task`.
@@ -2071,11 +2087,12 @@ fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
             .or_else(|| agent_session::claude_prompt_in_record(value).map(|text| Record::Turn("prompt", text)))
             .into_iter()
             .collect(),
-        // A slash command typed at the prompt, as current releases record it.
-        Some("system") if !sidechain => agent_session::claude_local_command(value)
-            .map(|text| Record::Turn("prompt", text))
-            .into_iter()
-            .collect(),
+        // A slash command typed at the prompt, as current releases record it,
+        // or one Claude refused as unknown.
+        Some("system") if !sidechain => match agent_session::claude_local_command(value) {
+            Some(text) => vec![Record::Turn("prompt", text)],
+            None => claude_unknown_command(value),
+        },
         // A prompt typed while Claude was working lives only here.
         Some("attachment") if !sidechain => agent_session::claude_queued_prompt(value)
             .map(|text| Record::Turn("prompt", text))
@@ -2178,6 +2195,33 @@ fn claude_rewound(lines: &[&str]) -> std::collections::HashSet<String> {
         }
     }
     dead
+}
+
+/// A slash command Claude refused as unknown (2.1.323): it runs nothing and
+/// records no prompt, only its own warning — an `informational` system record
+/// `Unknown command: /simplity. Did you mean /simplify?` and, when words
+/// followed the command, a second one `Args from unknown skill: <words>`. The
+/// first becomes the command's prompt with Claude's words as the answer, the
+/// second the prompt's words ([`Record::CommandArgs`]), so the chat shows what
+/// was typed and why nothing came of it instead of waiting for a turn.
+fn claude_unknown_command(value: &Value) -> Vec<Record> {
+    if value.get("subtype").and_then(Value::as_str) != Some("informational") {
+        return Vec::new();
+    }
+    let Some(text) = value.get("content").and_then(Value::as_str).map(str::trim) else {
+        return Vec::new();
+    };
+    if let Some(args) = text.strip_prefix("Args from unknown skill:") {
+        return vec![Record::CommandArgs(args.trim().to_string())];
+    }
+    let Some(rest) = text.strip_prefix("Unknown command: /") else {
+        return Vec::new();
+    };
+    let name: String = rest.chars().take_while(|c| !c.is_whitespace() && *c != '.').collect();
+    if name.is_empty() {
+        return Vec::new();
+    }
+    vec![Record::Turn("prompt", format!("/{name}")), Record::Turn("answer", text.to_string())]
 }
 
 /// The notice Claude writes when the user cuts a turn off —

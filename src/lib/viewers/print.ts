@@ -206,6 +206,61 @@ export function printSequence(pages: PageList, opts: PrintOptions): PageList {
   return pages.filter((_, i) => positions.has(i + 1));
 }
 
+/** Write 1-based positions back as a page spec: `[2,3,4,7]` → `"2-4, 7"`. */
+export function formatPageRange(positions: readonly number[]): string {
+  const sorted = [...new Set(positions)].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const lo = sorted[i];
+    while (i + 1 < sorted.length && sorted[i + 1] === sorted[i] + 1) i++;
+    parts.push(sorted[i] === lo ? String(lo) : `${lo}-${sorted[i]}`);
+  }
+  return parts.join(", ");
+}
+
+/**
+ * Fold an edit of the *selected* sheets back into the whole arrangement — the
+ * strip shows only the pages a custom range prints, so its edits arrive as the
+ * new selection alone. The edited sheets fill the selection's slots in order; a
+ * deleted one gives its slot up, a duplicate goes in after the last slot. The
+ * range is rewritten only when the old one no longer picks out exactly the
+ * edited sheets (a delete inside "3-5" would otherwise pull page 6 in).
+ */
+export function spliceSelection(
+  pages: PageList,
+  opts: PrintOptions,
+  edited: PageList,
+): { pages: PageList; range: string } {
+  const positions = new Set(selectedPages(opts, pages.length));
+  const queue = [...edited];
+  const out: PageList = [];
+  let insertAt = 0;
+  pages.forEach((ref, i) => {
+    if (!positions.has(i + 1)) {
+      out.push(ref);
+      return;
+    }
+    const next = queue.shift();
+    if (next) out.push(next);
+    insertAt = out.length;
+  });
+  out.splice(insertAt, 0, ...queue);
+  const ids = new Set(edited.map((r) => r.id));
+  const now = out.flatMap((r, i) => (ids.has(r.id) ? [i + 1] : []));
+  const old = parsePageRange(opts.range, out.length);
+  const same = old.length === now.length && old.every((p, i) => p === now[i]);
+  return { pages: out, range: same ? opts.range : formatPageRange(now) };
+}
+
+/**
+ * The paper one copy of the print takes: its sides (one per imposed sheet, or
+ * per page), halved when the printer prints both sides of each sheet.
+ */
+export function paperSheets(count: number, opts: PrintOptions, twoSided: boolean): number {
+  const sides = isImposed(opts) ? sheetCount(count, opts) : count;
+  return twoSided && opts.duplex !== "none" ? Math.ceil(sides / 2) : sides;
+}
+
 /**
  * The print order with every copy spelled out, collated: each copy is the whole
  * sequence, so a stack comes off the printer ready to hand out rather than as
@@ -582,7 +637,16 @@ export interface PrintApproval {
   onReject: () => Promise<void>;
 }
 
-export function printDocument(fullHtml: string, native?: NativePrint, approval?: PrintApproval): Promise<void> {
+/** A page selection the caller opens the preview on ("Print from here"): the
+ *  selection is never restored from the saved options, so it is per job anyway. */
+export type PrintSelection = Pick<PrintOptions, "pages" | "range">;
+
+export function printDocument(
+  fullHtml: string,
+  native?: NativePrint,
+  approval?: PrintApproval,
+  selection?: PrintSelection,
+): Promise<void> {
   return new Promise<void>((resolve) => {
     // ── Overlay chrome (reuses the app's shared modal classes) ──────────────
     const backdrop = document.createElement("div");
@@ -940,14 +1004,30 @@ export function printDocument(fullHtml: string, native?: NativePrint, approval?:
       if (empty) {
         printBtn.textContent = translateNow("print.noneSelected");
       } else {
+        // Several pages to a sheet, or both sides of it, put fewer sheets in the
+        // tray than there are pages: then the label counts the paper too.
+        const subset = paged && sequence.length < pageEls.length;
+        const sheets = paged ? paperSheets(sequence.length, opts, twoSided) : sequence.length;
+        const count = sequence.length;
+        const what = !paged
+          ? translateNow("print.print")
+          : sheets !== count
+            ? subset
+              ? sheets === 1
+                ? translateNow("print.printPagesOneSheet", { count })
+                : translateNow("print.printPagesSheets", { count, sheets })
+              : sheets === 1
+                ? translateNow("print.printOneSheet")
+                : translateNow("print.printSheets", { sheets })
+            : subset
+              ? count === 1
+                ? translateNow("print.printOnePage")
+                : translateNow("print.printPages", { count })
+              : translateNow("print.print");
         const label = approval && !decided
           ? translateNow("printRequest.approve") +
             (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "")
-          : (paged && sequence.length < pageEls.length
-            ? sequence.length === 1
-              ? translateNow("print.printOnePage")
-              : translateNow("print.printPages", { count: sequence.length })
-            : translateNow("print.print")) +
+          : what +
           (opts.copies > 1 ? translateNow("print.copiesSuffix", { count: opts.copies }) : "");
         printBtn.innerHTML = `${PRINTER_SVG} ${escapeHtml(label)}`;
       }
@@ -1114,11 +1194,23 @@ export function printDocument(fullHtml: string, native?: NativePrint, approval?:
     const renderStrip = (sequence: PageList) => {
       if (pageEls.length === 0) return;
       const printing = new Set(sequence.map((r) => r.id));
+      // A custom range narrows the strip to the pages it prints: "24-" of a
+      // 33-page file is ten cards to arrange, not 33 with 23 of them dimmed.
+      // Odd/even keep the whole strip — a delete there flips the parity of
+      // every later page, which only the dimmed cards make visible.
+      const narrowed = opts.pages === "custom";
       const props: PageStripProps = {
-        pages: arrangement,
+        pages: narrowed ? sequence : arrangement,
         orientation: "row",
         onChange: (next) => {
-          arrangement = next;
+          if (narrowed) {
+            const spliced = spliceSelection(arrangement, opts, next);
+            arrangement = spliced.pages;
+            opts = { ...opts, range: spliced.range };
+            rangeInput.value = spliced.range;
+          } else {
+            arrangement = next;
+          }
           apply();
         },
         // The thumbnail is the page's own already-rasterised image, taken straight
@@ -1404,6 +1496,8 @@ export function printDocument(fullHtml: string, native?: NativePrint, approval?:
       if (approval) {
         opts = sanitizePrintOptions({ ...opts, ...approval.preset });
         touched = true;
+      } else if (selection && pageEls.length > 0) {
+        opts = { ...opts, ...selection };
       }
       syncControls();
       apply(); // style the preview immediately; the button stays "Preparing…"
@@ -1599,8 +1693,9 @@ export function printHtmlBody(
   title?: string,
   native?: NativePrint,
   approval?: PrintApproval,
+  selection?: PrintSelection,
 ): Promise<void> {
-  return printDocument(buildPrintDoc(bodyHtml, css, title), native, approval);
+  return printDocument(buildPrintDoc(bodyHtml, css, title), native, approval, selection);
 }
 
 /**

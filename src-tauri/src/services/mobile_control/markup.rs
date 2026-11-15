@@ -1345,12 +1345,9 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
     };
     let pdf = root.join(rel);
     let status = crate::services::synctex::status(&pdf);
-    if !status.has_map || status.pdf_newer_than_map {
+    if !status.is_current() {
         return found;
     }
-    // Spelled as `resolve_pages` spells an input (both under the PDF folder as
-    // given), so a plain comparison finds them.
-    let edited: std::collections::BTreeSet<&str> = status.newer_sources.iter().map(String::as_str).collect();
     let mut points: BTreeMap<u32, Vec<(f64, f64)>> = BTreeMap::new();
     let mut asked: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     let mut count = 0usize;
@@ -1367,7 +1364,9 @@ fn source_lines(root: &Path, source: &ResolvedSource, pages: &[MarkupPage]) -> B
     for (page, answers) in crate::services::synctex::resolve_pages(&pdf, &points) {
         for (index, answer) in asked.get(&page).into_iter().flatten().zip(answers) {
             let Some((input, line)) = answer else { continue };
-            if edited.contains(input.as_str()) {
+            // Spelled as `resolve_pages` spells an input (both under the PDF folder
+            // as given), so a plain comparison finds it.
+            if status.is_edited(&input) {
                 continue;
             }
             // SyncTeX spells a source under the PDF's folder as given

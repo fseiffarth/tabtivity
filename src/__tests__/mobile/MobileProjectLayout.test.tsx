@@ -60,7 +60,7 @@ describe("Mobile project screen — layout", () => {
     fireEvent.click(await screen.findByRole("button", { name: "More for claude 1" }));
     const sheet = screen.getByRole("dialog", { name: "claude 1" });
     expect(within(sheet).getAllByRole("button").map((row) => row.getAttribute("aria-label") ?? row.textContent))
-      .toEqual(["Close", "Rename", "Colour…", "Scheduled prompts", "Close tab"]);
+      .toEqual(["Close", "Rename", "Colour", "Scheduled prompts", "Files", "Archive tab", "Close tab"]);
     fireEvent.click(within(sheet).getByRole("button", { name: "Close tab" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => (init as RequestInit | undefined)?.method === "DELETE" && String(input) === "/api/v1/tabs/a")).toBe(true));
     expect(screen.queryByRole("dialog", { name: "claude 1" })).toBeNull();
