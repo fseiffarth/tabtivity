@@ -1,3 +1,4 @@
+import { forPlatformKeys } from "../../lib/shortcuts/shortcuts";
 import { useEffect, useRef, useState } from "react";
 import { useTourStore } from "../../stores/tour";
 import { useProjectsStore } from "../../stores/projects";
@@ -310,7 +311,7 @@ export function TourHost() {
       rect={rect}
       placement={step.placement}
       title={t(step.titleKey)}
-      body={t(step.bodyKey, step.bodyParams?.(t))}
+      body={forPlatformKeys(t(step.bodyKey, step.bodyParams?.(t)))}
       stepNumber={stepNumber}
       stepTotal={stepTotal}
       isFirst={isFirst}

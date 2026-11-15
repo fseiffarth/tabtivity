@@ -1,3 +1,4 @@
+import { forPlatformKeys } from "../../lib/shortcuts/shortcuts";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
@@ -42,7 +43,7 @@ export function PathLinkHint({ hover }: { hover: PathLinkHover | null }) {
       {!hover.isDir && !hover.viewless && (
         <>
           <br />
-          {t("terminal.pathLink.newSubwindow")}
+          {forPlatformKeys(t("terminal.pathLink.newSubwindow"))}
           <UntestedTag id="terminal.pathLink.newSubwindow" />
         </>
       )}

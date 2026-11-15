@@ -10,7 +10,7 @@ import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
-import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS, IS_MAC } from "../../lib/platform";
 import { reportFrontendIssue } from "../../crashReporter";
 import { isDetachedPtyId, useTabsStore, type TabKind } from "../../stores/tabs";
 import { agentDeliveryTurn, isDialogNavigationInput, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
@@ -1387,7 +1387,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         rows: term.rows,
         length: buf.length,
         lineText: (y) => buf.getLine(y)?.translateToString(true) ?? "",
-      });
+      }, IS_MAC);
       if (step.kind === "move") {
         keySelect = step.state;
         drawKeySelect();
