@@ -118,8 +118,9 @@ pub const OLLAMA_DOWNLOAD_URL: &str = "https://ollama.com/download";
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_ollama(ctx: Ctx) -> Result<String, String> {
     let ctx = ctx.0;
-    // The installer runs for minutes: its whole run stays off the runtime.
-    app_core::rt::try_blocking("install", move || install_ollama_blocking(&ctx)).await
+    // The installer runs for minutes: its whole run stays off the runtime,
+    // holding the install lock for exactly that long.
+    crate::services::agent_install::run_locked("ollama", "Ollama", move || install_ollama_blocking(&ctx)).await
 }
 
 /// The blocking body of [`install_ollama`].
@@ -330,7 +331,8 @@ fn vibe_installed() -> bool {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_vibe(ctx: Ctx) -> Result<String, String> {
     let ctx = ctx.0;
-    app_core::rt::try_blocking("install", move || install_vibe_blocking(&ctx)).await
+    // The key of Manage CLIs' `vibe`: the two never install it side by side.
+    crate::services::agent_install::run_locked("vibe", "Vibe", move || install_vibe_blocking(&ctx)).await
 }
 
 /// The blocking body of [`install_vibe`].

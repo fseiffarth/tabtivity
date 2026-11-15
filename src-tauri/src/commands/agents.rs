@@ -528,12 +528,14 @@ fn manual_install_cmd(spec: &AgentSpec) -> &'static str {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    let running = crate::services::agent_install::begin_install(spec.id, spec.label)?;
 
     if spec_is_installed(spec) {
         return Ok(format!("{} is already installed.", spec.label));
     }
     prefetch_release(&ctx.0, spec).await;
-    run_installer(ctx.0.clone(), spec, installer_command)
+    let ctx = ctx.0;
+    running.run(move || run_installer(ctx, spec, installer_command)).await
 }
 
 /// Update an installed agent CLI: its official installer run again, which
@@ -544,11 +546,13 @@ pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    let running = crate::services::agent_install::begin_install(spec.id, spec.label)?;
     if !spec_is_installed(spec) {
         return Err(format!("{} is not installed.", spec.label));
     }
     prefetch_release(&ctx.0, spec).await;
-    run_installer(ctx.0.clone(), spec, update_command)
+    let ctx = ctx.0;
+    running.run(move || run_installer(ctx, spec, update_command)).await
 }
 
 /// Get Codex's package down before its installer runs, whose own download gives
@@ -805,6 +809,15 @@ fn npm_uninstall_command(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn uninstall_agent(id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    // The install lock: a removal never races an install or update of it.
+    crate::services::agent_install::run_locked(spec.id, spec.label, move || {
+        uninstall_agent_blocking(spec)
+    })
+    .await
+}
+
+/// The blocking body of [`uninstall_agent`] (npm runs, files go).
+fn uninstall_agent_blocking(spec: &'static AgentSpec) -> Result<String, String> {
     server_installs_are_the_helpers(spec.id)?;
 
     let cmd_for_platform = if cfg!(windows) {
