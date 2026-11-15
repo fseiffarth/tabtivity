@@ -38,7 +38,7 @@ import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { isOpenCodeTab } from "../../../mobile-web/src/terminal/openCodeMini";
 import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../../../mobile-web/src/terminal/openCodeModelGroups";
 import { useActivityStore } from "../../stores/activity";
-import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
+import { agentTabLabel, useAgentTabModelTag } from "../../stores/agents/agentModels";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
 import { chordLabel } from "../../lib/shortcuts/shortcuts";
 import { COMMIT_CHOICES, COMMIT_PROMPTS, type CommitChoice } from "../../../mobile-web/src/terminal/commitPrompts";
@@ -150,8 +150,7 @@ function promptSuggestionOf(ptyId: string, agent: string): string {
 
 function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Open; onClose: () => void }) {
   const t = useT();
-  const modelsByTab = useAgentModelsStore((state) => state.byTab);
-  const screenModels = useAgentModelsStore((state) => state.screenByTab);
+  const modelTag = useAgentTabModelTag(target.scope, target.tab);
   const ptyId = `${target.scope}:${target.tab.key}`;
   const working = useActivityStore((state) => !!state.busyByTab[ptyId]);
   // Which agent the prompt goes to, in the words its own status line uses.
@@ -187,7 +186,7 @@ function PromptBox({ draftKey, target, onClose }: { draftKey: string; target: Op
     return term ? sessionStatus(readableScreen(term.buffer.active).lines, agent) : null;
   };
   const [status, setStatus] = useState(readStatus);
-  const model = status?.model ?? agentTabModelTag(target.scope, target.tab, modelsByTab, screenModels);
+  const model = status?.model ?? modelTag;
   const [pickedEffort, setPickedEffort] = useState<string | undefined>();
   const effort = pickedEffort ?? status?.effort;
 

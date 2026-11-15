@@ -37,7 +37,7 @@ import { fileMtime } from "../../../lib/files/fileAccess";
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { holdPhonePrompt } from "../../../lib/agents/phoneHolds";
 import { readTabDialogLine } from "../../../lib/agents/tabDialog";
-import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../../stores/agents/agentModels";
+import { agentTabLabel, useAgentTabModelTag } from "../../../stores/agents/agentModels";
 import {
   blobBase64,
   DEFAULT_PDF_MARKUP_APPLY,
@@ -560,15 +560,13 @@ export function usePdfMarkup({
   const showRoundTarget = useCallback(() => showTab(roundPty), [showTab, roundPty]);
   const tabAgent = useActivityStore((s) => (target ? agentTabStateOf(s, target.ptyId) : "idle"));
   const roundTabAgent = useActivityStore((s) => (roundTarget ? agentTabStateOf(s, roundTarget.ptyId) : "idle"));
-  const modelsByTab = useAgentModelsStore((s) => s.byTab);
-  const screenModels = useAgentModelsStore((s) => s.screenByTab);
   const targetTab = target && projectId ? tabs?.find((tab) => `${projectId}:${tab.key}` === target.ptyId) : undefined;
   const roundTab = roundTarget && projectId ? tabs?.find((tab) => `${projectId}:${tab.key}` === roundTarget.ptyId) : undefined;
   /** The target's model as the tab bar says it — the strip's model chip. */
-  const targetModelTag = targetTab && projectId ? agentTabModelTag(projectId, targetTab, modelsByTab, screenModels)?.trim() : undefined;
+  const targetModelTag = useAgentTabModelTag(projectId ?? "", projectId ? targetTab : undefined)?.trim();
   /** Who the pill says is at work: the round's tab's model by its first word,
    *  as the reader view's working row says it (`Opus is working…`). */
-  const roundModelTag = roundTab && projectId ? agentTabModelTag(projectId, roundTab, modelsByTab, screenModels)?.trim() : undefined;
+  const roundModelTag = useAgentTabModelTag(projectId ?? "", projectId ? roundTab : undefined)?.trim();
   const targetModel = roundModelTag?.split(/\s+/)[0];
 
   // ── The agent's questions (`markup_ask`) ─────────────────────────────────

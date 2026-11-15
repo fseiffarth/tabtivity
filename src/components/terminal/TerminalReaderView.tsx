@@ -34,7 +34,7 @@ import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
-import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
+import { agentTabLabel, useAgentTabModelTag } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
@@ -511,7 +511,9 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
 /** What a subagent's card or list row opens: its handle and what it says. */
 type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
-function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore }: {
+/** Memoised: the Reader re-renders on every live-screen tick while an agent
+ * streams, and a turn already drawn has nothing new to say then. */
+const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore }: {
   /** A prompt bubble's "Restore files to before this" (`ReaderCheckpoints`). */
   restore?: ReactNode;
   action?: ReactNode;
@@ -585,7 +587,7 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
       {time}
     </div>
   );
-}
+});
 
 /**
  * The Reader's composer, holding its own draft: a keystroke re-renders this
@@ -1494,9 +1496,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
   const agentLabel = tab ? agentTabLabel(tab) : "";
   const use24h = useUse24h();
-  const modelsByTab = useAgentModelsStore((state) => state.byTab);
-  const screenModels = useAgentModelsStore((state) => state.screenByTab);
-  const modelTag = tab ? agentTabModelTag(scope, tab, modelsByTab, screenModels) : undefined;
+  const modelTag = useAgentTabModelTag(scope, tab);
   /** The working row's name for the agent, as the phone's says it: the model
    * the session prints, its first word (`Opus is working…`). */
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];

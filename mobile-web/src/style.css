@@ -457,7 +457,7 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
    out of the viewport; without it the last card sits under the bar. */
-.mobile-tabbar { position:fixed; inset:auto 0 0 0; z-index:8; margin:0; gap:2px; padding:6px max(8px,calc((100vw - var(--screen-measure)) / 2)) max(6px,env(safe-area-inset-bottom)); border-top:1px solid #2b2f3f; background:rgba(13,15,21,.96); backdrop-filter:blur(10px); }
+.mobile-tabbar { position:fixed; inset:auto 0 0 0; z-index:8; margin:0; gap:2px; padding:6px max(8px,calc((100vw - var(--screen-measure)) / 2)) max(6px,env(safe-area-inset-bottom)); border-top:1px solid #2b2f3f; background:rgba(13,15,21,.96); }
 .mobile-tab { flex:1; display:grid; justify-items:center; gap:3px; padding:7px 4px; border:0; border-radius:10px; background:transparent; color:#9498aa; font-size:.72rem; line-height:1.1; }
 .mobile-tab span { display:grid; place-items:center; width:35px; height:31px; font-size:1.2rem; line-height:1.15; }
 .mobile-tab.active { background:rgba(108,92,231,.18); color:#d7cffd; }

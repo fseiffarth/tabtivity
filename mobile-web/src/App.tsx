@@ -10,6 +10,7 @@ import { carryConnectTrace, connectTrace, getMobileStatus, primeConnection, setP
 import { classifyUnavailable, describeUnavailable, suspectsTunnel, tailscaleAppLink, TUNNEL_STEPS, unavailableDetail, type UnavailableReason } from "./connection";
 import { parsePlace, rememberLastPlace, resolvePlace, restoreLastPlace, type LastPlace, type MobileSection, type RestoredPlace } from "./lastPlace";
 import { forgetDeviceData } from "./forgetDeviceData";
+import { useVisiblePoll } from "./visiblePoll";
 import { forgetProjectCovers } from "./thumbs";
 import { refreshPush } from "./push";
 import { hasLocalUnlock } from "./localLock";
@@ -485,31 +486,22 @@ export function App() {
     rememberLastPlace(currentPlace(tab, projectView, terminal));
   }, [auth, tab, projectView, terminal]);
 
-  useEffect(() => {
-    if (auth !== "paired") return;
-    const refresh = () => {
-      void getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops }) => {
-        noteDesktopTheme(color_scheme);
-        // The switcher's list, kept for a home that is down (`linkedDesktops.ts`).
-        noteHomeStatus({ host, linked_desktops });
-        if (typeof host === "string" && host) setHostName(host);
-        const hidden = hideableSections(hidden_sections);
-        setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
-        try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
-        const visible = show_untested_tags === true;
-        if (setUntestedTagsVisible(visible)) refreshTags((tick) => tick + 1);
-        try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
-      }).catch(() => undefined);
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 30_000);
-    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [auth]);
+  useVisiblePoll(
+    () => getMobileStatus().then(({ show_untested_tags, color_scheme, hidden_sections, host, linked_desktops }) => {
+      noteDesktopTheme(color_scheme);
+      // The switcher's list, kept for a home that is down (`linkedDesktops.ts`).
+      noteHomeStatus({ host, linked_desktops });
+      if (typeof host === "string" && host) setHostName(host);
+      const hidden = hideableSections(hidden_sections);
+      setHiddenSections((current) => current.join() === hidden.join() ? current : hidden);
+      try { localStorage.setItem(HIDDEN_SECTIONS_KEY, JSON.stringify(hidden)); } catch { /* unavailable */ }
+      const visible = show_untested_tags === true;
+      if (setUntestedTagsVisible(visible)) refreshTags((tick) => tick + 1);
+      try { localStorage.setItem(storageDashKey("show-untested-tags"), String(visible)); } catch { /* unavailable */ }
+    }),
+    30_000,
+    { enabled: auth === "paired" },
+  );
 
   // A notification tapped while a window is already open: `sw.js` focuses it
   // and says where to go. Locked, it waits for the unlock like a cold open.

@@ -660,6 +660,10 @@
   border-radius: 2px;
   transition: left var(--transition), top var(--transition), width var(--transition), height var(--transition);
 }
+:root[data-software-paint] .focus-frame,
+:root[data-software-paint] .split-preview {
+  transition: none;
+}
 .subwindow-number {
   position: absolute;
   z-index: 6;

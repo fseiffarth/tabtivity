@@ -1672,25 +1672,27 @@ function PdfCanvas({
 
   // "Page X / N" toolbar readout: the page occupying the viewport. The anchor
   // is a third of the way down the viewport (typical PDF-viewer feel); the page
-  // wraps are always all mounted, so a linear scan over their live rects stays
-  // correct across zoom, resize, and mixed page heights.
+  // wraps are always all mounted, so their live rects stay correct across zoom,
+  // resize, and mixed page heights. The pages are one column, so their bottoms
+  // only grow: the first one at or past the anchor is found by bisection — a
+  // scan from page 1 read hundreds of rects per scroll event deep in a long
+  // document.
   const updateVisiblePage = useCallback(() => {
     const el = scrollRef.current;
     const content = contentRef.current;
     if (!el || !content) return;
-    const anchor = el.getBoundingClientRect().top + el.clientHeight / 3;
     const pages = content.children;
-    for (let i = 0; i < pages.length; i++) {
-      if (pages[i].getBoundingClientRect().bottom >= anchor) {
-        visiblePageRef.current = i + 1;
-        setVisiblePage(i + 1);
-        return;
-      }
+    if (pages.length === 0) return;
+    const anchor = el.getBoundingClientRect().top + el.clientHeight / 3;
+    let low = 0;
+    let high = pages.length - 1;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (pages[mid].getBoundingClientRect().bottom >= anchor) high = mid;
+      else low = mid + 1;
     }
-    if (pages.length > 0) {
-      visiblePageRef.current = pages.length;
-      setVisiblePage(pages.length);
-    }
+    visiblePageRef.current = low + 1;
+    setVisiblePage(low + 1);
   }, []);
   useEffect(() => {
     visiblePageRef.current = 1;

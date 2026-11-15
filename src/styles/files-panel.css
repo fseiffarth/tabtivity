@@ -114,10 +114,6 @@
   transition: none;
 }
 
-.app-body.resizing {
-  transition: none;
-}
-
 /* Left-border resize grip. Sits just outside the panel's left edge (straddling
    the border) so it's easy to grab; widened beyond the visible border for a
    comfortable hit target. Only tinted on hover / during the drag. */
