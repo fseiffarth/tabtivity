@@ -213,12 +213,34 @@ fn cli_basename(cmd: &str) -> &str {
 /// The environment that makes a CLI use `home` as its home: `HOME`, the
 /// Windows profile set ([`windows_profile_env`]) and the CLI's own home
 /// variable ([`home_override_env_for`]). The live tab and the probe both
-/// build on it.
+/// build on it. On Windows the two `AppData` folders the set names are made
+/// first ([`create_windows_profile_dirs`]).
 pub fn scope_home_env(windows: bool, home: &Path, bin: &str) -> Vec<(String, String)> {
     let mut env = vec![("HOME".to_string(), home.to_string_lossy().into_owned())];
+    if windows {
+        create_windows_profile_dirs(home);
+    }
     env.extend(windows_profile_env(windows, home));
     env.extend(home_override_env_for(windows, home, bin));
     env
+}
+
+/// Make the `AppData\Roaming` and `AppData\Local` folders of a prepared
+/// `home`: [`windows_profile_env`] points `APPDATA` and `LOCALAPPDATA` at
+/// them, and nothing else creates them in an agent home. They must exist
+/// before a CLI runs there, for the reasons the installer's home has them
+/// (`commands::agents::into_install_home`): npm and PowerShell write into
+/// `%APPDATA%` without creating it, and for a missing `AppData\Local` .NET
+/// answers "", so PowerShell — which runs every session hook — puts its module
+/// cache relative to the working directory, the user's project. A `home` that
+/// is not there yet is left alone: preparing it is its owner's.
+fn create_windows_profile_dirs(home: &Path) {
+    if !home.is_dir() {
+        return;
+    }
+    for leaf in ["Roaming", "Local"] {
+        let _ = std::fs::create_dir_all(home.join("AppData").join(leaf));
+    }
 }
 
 /// The environment that makes a CLI use `home` as its home
@@ -1390,6 +1412,40 @@ mod tests {
             assert_eq!(get(&probe, k).as_deref(), Some(v.as_str()), "probe {k}");
             assert_eq!(get(&live, k).as_deref(), Some(v.as_str()), "live {k}");
         }
+    }
+
+    /// 2442c review: the live tab and the probe now point `APPDATA` and
+    /// `LOCALAPPDATA` into the agent home, where nothing made those folders;
+    /// npm and PowerShell do not make them either (the installer's home has
+    /// them for that reason). They exist once the environment is built.
+    #[test]
+    fn a_windows_agent_homes_appdata_folders_exist_before_a_cli_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let get = |env: &[(String, String)], k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| PathBuf::from(v));
+        type Build = fn(&Path) -> Vec<(String, String)>;
+        let builds: [(&str, Build); 3] = [
+            ("tab", |home| scope_home_env(true, home, "claude")),
+            ("probe", |home| probe_env_for(true, home, "claude.exe")),
+            ("live", |home| crate::services::agent_fence::home_env_for(true, home, Path::new("user"), None, "claude")),
+        ];
+        for (name, build) in builds {
+            let home = tmp.path().join(name);
+            std::fs::create_dir_all(&home).unwrap();
+            let env = build(&home);
+            for var in ["APPDATA", "LOCALAPPDATA"] {
+                let dir = get(&env, var).unwrap_or_else(|| panic!("{name}: {var}"));
+                assert!(dir.starts_with(&home) && dir.is_dir(), "{name}: {var} = {} must exist", dir.display());
+            }
+        }
+        // Linux and macOS: no such variables, no such folders.
+        let unix = tmp.path().join("unix");
+        std::fs::create_dir_all(&unix).unwrap();
+        scope_home_env(false, &unix, "claude");
+        assert!(!unix.join("AppData").exists());
+        // A home nobody prepared is not created by asking for its environment.
+        let absent = tmp.path().join("absent");
+        scope_home_env(true, &absent, "claude");
+        assert!(!absent.exists());
     }
 
     #[test]
