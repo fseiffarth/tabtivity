@@ -12,6 +12,13 @@ describe("scaffold agent fill guidance", () => {
     expect(agentForScaffoldFillMode("gemini", "codex")).toBe("gemini");
   });
 
+  it("runs a default agent's registry id as its binary", () => {
+    expect(agentForScaffoldFillMode("agent_choice", "antigravity")).toBe("agy");
+    expect(agentForScaffoldFillMode("agent_choice", "continue")).toBe("cn");
+    // A custom agent's command is no registry id and stays as it is.
+    expect(agentForScaffoldFillMode("agent_choice", "my-agent")).toBe("my-agent");
+  });
+
   it("groups only missing scaffold files selected for agent filling", () => {
     const fills = collectScaffoldAgentFills(
       [

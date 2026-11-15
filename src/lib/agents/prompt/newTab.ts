@@ -2,6 +2,7 @@ import { buildPreface } from "../agentPrefaces";
 import type { TabEntry } from "../../../stores/tabs";
 import type { CustomAgent, Settings } from "../../../types";
 import { AGENT_ITEMS, buildStaticTabSpec, customAgentToItem, type StaticMenuItem } from "../../tabs/newTabItems";
+import { agentBinForId } from "../agentClis";
 import type { TranslationKey } from "../../i18n";
 
 /**
@@ -9,10 +10,11 @@ import type { TranslationKey } from "../../i18n";
  * chart's toolbar names the agent that tab runs and the model it is told to
  * use; both are settings (`prompt_chart_agent`, `prompt_chart_model`), so
  * every window and project shares one answer, with the 🧠 menu's default
- * agent behind an unset one.
+ * agent behind an unset one. The default is a registry id, run as its binary
+ * (`antigravity` → `agy`).
  */
 export function promptChartNewTabAgent(settings: Pick<Settings, "prompt_chart_agent" | "default_agent_cmd"> | null | undefined): string {
-  return settings?.prompt_chart_agent?.trim() || settings?.default_agent_cmd?.trim() || "claude";
+  return agentBinForId(settings?.prompt_chart_agent?.trim() || settings?.default_agent_cmd?.trim() || "claude");
 }
 
 /** The menu item a bare agent command launches as: a built-in, a custom

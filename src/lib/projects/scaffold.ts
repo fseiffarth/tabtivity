@@ -2,6 +2,7 @@ import type { DetectedSpecSource, ProjectEntry } from "../../types";
 import { resolveProjectDirectory } from "../../types";
 import { translate, useI18nStore, type TranslationKey } from "../i18n";
 import { BRAND } from "../brand";
+import { agentBinForId } from "../agents/agentClis";
 
 export const TERMINAL_OPTIONS = ["claude", "codex", "gemini", "vibe"];
 
@@ -110,8 +111,10 @@ export function projectDirectory(project: ProjectEntry) {
   return resolveProjectDirectory(project);
 }
 
+/** The binary a fill mode runs: `agent_choice` is the default agent, whose
+ *  setting holds a registry id (`antigravity` launches `agy`). */
 export function agentForScaffoldFillMode(fillMode: string, defaultAgentCmd: string) {
-  return fillMode === "agent_choice" ? defaultAgentCmd : fillMode;
+  return fillMode === "agent_choice" ? agentBinForId(defaultAgentCmd) : fillMode;
 }
 
 export function collectScaffoldAgentFills(
