@@ -657,51 +657,62 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-editor-actions { align-items:center; }
 .todo-editor-actions > span { flex:1; }
 @media (max-width: 420px) { .todo-editor { padding:14px; } .todo-editor-grid,.todo-due-fields { grid-template-columns:1fr; } .todo-step-row { grid-template-columns:auto minmax(0,1fr) auto auto auto; gap:4px; } .todo-step-row button { padding-inline:6px; } }
-.mail-mobile-accounts,.mail-mobile-list,.mail-mobile-folders,.mail-mobile-account { display:grid; gap:10px; }
-.mail-mobile-account { padding:14px; border:1px solid #383c4d; border-radius:12px; background:rgba(28,31,43,.92); }
-.mail-mobile-account > div:first-child { display:grid; gap:3px; }
-.mail-mobile-folders { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); }
-.mail-mobile-folders button { display:flex; justify-content:space-between; gap:12px; text-align:left; }
-.mail-mobile-folders button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
-.mail-mobile-folders button small { white-space:nowrap; }
-.mail-mobile-row { display:grid; gap:6px; width:100%; text-align:left; padding:14px; background:rgba(28,31,43,.92); unicode-bidi:plaintext; }
-.mail-mobile-row.unread { border-left:4px solid #8c7df4; background:#24213a; }
-.mail-mobile-row > div { display:flex; justify-content:space-between; gap:12px; }
-.mail-mobile-row time { color:#9498aa; font-size:.78rem; white-space:nowrap; }
-.mail-mobile-row b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.mail-mobile-row > span { color:#aeb2c2; display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
-.mail-mobile-pager { display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:10px; margin-top:14px; text-align:center; }
-.mail-mobile-message { display:grid; gap:14px; }
-.mail-mobile-message-meta { display:grid; gap:4px; padding:14px; border-radius:12px; background:#1b1e29; unicode-bidi:plaintext; }
-.mail-mobile-message-meta span,.mail-mobile-message-meta time { color:#aeb2c2; }
-.mail-mobile-message pre { margin:0; padding:16px; border:1px solid #383c4d; border-radius:12px; background:#f5f2ea; color:#17171b; font:400 .96rem/1.5 ui-sans-serif,system-ui,sans-serif; white-space:pre-wrap; overflow-wrap:anywhere; unicode-bidi:plaintext; }
-.mail-mobile-warning { padding:10px; border-radius:9px; background:#493b20; color:#ffe29a; }
-.mail-mobile-attachments { display:grid; gap:8px; }
-.mail-mobile-attachments h2 { margin:0; font-size:1rem; }
-.mail-mobile-attachments div { display:flex; justify-content:space-between; gap:12px; padding:11px; border-radius:9px; background:#1b1e29; unicode-bidi:plaintext; }
-.mail-mobile-empty { padding:24px; text-align:center; color:#9498aa; }
-.mail-mobile-row.flagged b::before { content:"★ "; color:#f4c66c; }
-/* Answered: the shared UndoIcon's hooked arrow as a mask — a typed ↩ reached the colour-emoji font. */
-.mail-mobile-row.answered b::after { content:""; display:inline-block; width:1em; height:1em; margin-left:.3em; vertical-align:-.15em; background:#9498aa; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14L4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 010 11H11'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14L4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 010 11H11'/%3E%3C/svg%3E") center/contain no-repeat; }
-.mail-mobile-actions { display:flex; flex-wrap:wrap; gap:8px; }
-.mail-mobile-actions button { flex:1 1 auto; }
-.mail-mobile-reply { display:grid; gap:8px; padding:14px; border:1px solid #383c4d; border-radius:12px; background:rgba(28,31,43,.92); }
-.mail-mobile-reply h2 { margin:0; font-size:1rem; }
-.mail-mobile-reply small { color:#aeb2c2; overflow-wrap:anywhere; unicode-bidi:plaintext; }
-.mail-mobile-reply textarea { width:100%; min-height:110px; resize:vertical; border:1px solid #3a3e50; border-radius:12px; padding:13px; background:#171a24; color:#fff; }
-.mail-mobile-reply-confirm { display:grid; gap:8px; padding:12px; border-radius:10px; background:#493b20; color:#ffe29a; }
+/* Mail: folders and the inbox are inset groups (`.tool-group` / `.tool-row`),
+   the message a sender tile, its body on the raised surface, attachments as a
+   group and the reply as one group. The account / folder switch is the head's
+   subtitle button (`.mail-account-switch`, `.screen-head-sub > button`). */
+.mail-mobile-accounts,.mail-mobile-list { display:grid; gap:0; }
+.mail-mobile-folders { display:grid; }
+.mail-mobile-folder i { display:grid; place-items:center; flex:0 0 auto; width:28px; color:#bcb0ff; font-style:normal; }
+.mail-mobile-folder span { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
+.mail-mobile-folder.has-unread span { font-weight:700; color:#fff; }
+.mail-mobile-folder small { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
+.mail-mobile-chevron { flex:0 0 auto; color:var(--ink-muted); }
+.mail-mobile-more { min-height:var(--hit); color:#bcb0ff; font-size:var(--fs-sub); font-weight:600; }
+.mail-mobile-more span { flex:1 1 auto; }
+.mail-mobile-more[aria-expanded="true"] .mail-mobile-chevron { transform:rotate(90deg); }
+.mail-mobile-row { align-items:flex-start; unicode-bidi:plaintext; }
+.mail-mobile-dot { flex:0 0 auto; width:8px; height:8px; margin-top:6px; border-radius:50%; background:transparent; }
+.mail-mobile-row.unread .mail-mobile-dot { background:#8c7df4; }
+.mail-mobile-row-body { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
+.mail-mobile-row-top { display:flex; align-items:center; gap:var(--sp-2); min-width:0; }
+.mail-mobile-row-top strong { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+.mail-mobile-row.unread .mail-mobile-row-top strong { font-weight:700; }
+.mail-mobile-mark { flex:0 0 auto; color:var(--ink-muted); }
+.mail-mobile-flag { color:#f4c66c; }
+.mail-mobile-flag path { fill:currentColor; }
+.mail-mobile-row time { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-caption); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.mail-mobile-row b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-sub); font-weight:500; }
+.mail-mobile-preview { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-muted); font-size:var(--fs-sub); }
+.mail-mobile-empty { margin:0; padding:var(--sp-6); text-align:center; color:var(--ink-muted); }
+.mail-mobile-pager { display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:var(--sp-2); margin-top:var(--sp-3); text-align:center; color:var(--ink-muted); }
+.mail-mobile-message { display:grid; gap:var(--sp-4); }
+.mail-mobile-message-meta { display:flex; align-items:center; gap:var(--sp-3); padding:var(--sp-3); background:var(--surface-group); unicode-bidi:plaintext; }
+.mail-mobile-message-meta > div { display:grid; gap:2px; min-width:0; }
+.mail-mobile-message-meta strong,.mail-mobile-message-meta span { overflow-wrap:anywhere; }
+.mail-mobile-message-meta span,.mail-mobile-message-meta time { color:var(--ink-muted); font-size:var(--fs-sub); }
+.mail-mobile-message-meta time { font-size:var(--fs-caption); }
+.mail-mobile-avatar { display:grid; place-items:center; flex:0 0 auto; width:40px; height:40px; border-radius:50%; background:#2e2b48; color:#bcb0ff; font-style:normal; font-weight:700; }
+.mail-mobile-message pre { margin:0; padding:var(--sp-4); border:0; background:var(--surface-raised); color:inherit; font:400 var(--fs-body)/1.5 ui-sans-serif,system-ui,sans-serif; white-space:pre-wrap; overflow-wrap:anywhere; unicode-bidi:plaintext; }
+.mail-mobile-warning { margin:0; padding:10px; background:#493b20; color:#ffe29a; }
+.mail-mobile-attachments { display:grid; }
+.mail-mobile-attachments .tool-section-head { margin-top:0; }
+.mail-mobile-attachments .tool-row { justify-content:space-between; unicode-bidi:plaintext; }
+.mail-mobile-attachments .tool-row span { min-width:0; overflow-wrap:anywhere; }
+.mail-mobile-attachments .tool-row small { flex:0 0 auto; color:var(--ink-muted); white-space:nowrap; }
+.mail-mobile-note { margin:var(--sp-2) 2px 0; color:var(--ink-muted); font-size:var(--fs-foot); }
+.mail-mobile-star[aria-pressed="true"] { color:#f4c66c; }
+.mail-mobile-star[aria-pressed="true"] path { fill:currentColor; }
+.mail-mobile-reply { display:grid; gap:var(--sp-2); padding:var(--sp-3); background:var(--surface-group); }
+.mail-mobile-reply h2 { margin:0; font-size:var(--fs-sub); color:var(--ink-muted); }
+.mail-mobile-reply small { color:var(--ink-muted); overflow-wrap:anywhere; unicode-bidi:plaintext; }
+.mail-mobile-reply-field { position:relative; }
+.mail-mobile-reply textarea { display:block; width:100%; min-height:110px; box-sizing:border-box; resize:vertical; padding:13px 52px 13px 13px; border:1px solid #3a3e50; background:#171a24; color:#fff; }
+.mail-mobile-reply .mail-mobile-send { position:absolute; right:var(--sp-2); bottom:var(--sp-2); display:grid; place-items:center; width:36px; height:36px; padding:0; }
+.mail-mobile-reply-confirm { display:grid; gap:8px; padding:12px; background:#493b20; color:#ffe29a; }
 .mail-mobile-reply-confirm div { display:flex; gap:8px; }
 .mail-mobile-reply-confirm div button { flex:1; }
-.mail-mobile-sent { padding:10px; border-radius:9px; background:#1f3b2a; color:#b7f0c8; }
-/* Mail's pickers: the account dropdown heads the overview, and inside a folder
-   the account and folder dropdowns share one row. */
-.mail-mobile-picker { gap:6px; font-size:.86rem; }
-.mail-mobile-switch { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:8px; margin-bottom:12px; }
-.mail-mobile-folders button { align-items:center; }
-.mail-mobile-folders button i { flex:0 0 auto; font-style:normal; }
-.mail-mobile-folders button span { flex:1; min-width:0; }
-.mail-mobile-folders button.has-unread span { font-weight:700; color:#fff; }
-.mail-mobile-folders button.has-unread small { color:#d6d0ff; }
+.mail-mobile-sent { margin:0; padding:10px; background:#1f3b2a; color:#b7f0c8; }
 .mobile-calendar-screen { display:grid; align-content:start; gap:14px; }
 /* The view segment (the Focus segment's track, `.tool-segment`) and Today. */
 .mobile-calendar-actions { display:flex; align-items:center; gap:var(--sp-2); }
@@ -793,16 +804,17 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-editor { --r:14px; --rim:#524a78; }
 .todo-editor .todo-tag-list button { --r:6px; }
 /* Rounding · Mail */
-:where(.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select)) { --r:var(--r-md); --rim:#383c4d; }
-.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select) {
+:where(.mail-mobile-screen :is(.mail-mobile-reply textarea,.mail-mobile-reply button)) { --r:var(--r-md); --rim:#383c4d; }
+.mail-mobile-screen :is(.mail-mobile-reply textarea,.mail-mobile-reply button) {
   border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
 }
-:where(.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div)) { --r:var(--r-md); }
-.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div) {
+:where(.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-message pre,.mail-mobile-reply)) { --r:var(--r-lg); }
+:where(.mail-mobile-screen :is(.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm)) { --r:var(--r-md); }
+.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm) {
   border-radius:var(--r);
 }
-:where(.mail-mobile-screen :is(.mail-mobile-folders button,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-reply button,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div)) { --r:var(--r-sm); }
-.mail-mobile-row.unread { --rim-l:#8c7df4; --rim-lw:4px; }
+:where(.mail-mobile-screen :is(.mail-mobile-reply button,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm)) { --r:var(--r-sm); }
+.mail-mobile-screen .mail-mobile-send { --r:50%; --rim:#8c7df4; }
 /* Rounding · To-do */
 .todo-mobile-search,.todo-filter-switches { border-radius:var(--r-md); }
 .todo-filter-button,.todo-filter-reset,.todo-column-more,.todo-card-more { border-radius:var(--r-md); }
@@ -823,7 +835,6 @@ button.mobile-alert-row { cursor:pointer; }
 /* The shared `.selected` paints a picked button with `!important`; the picked
    day is lit by its tinted circle, so its cell stays bare. */
 .mobile-calendar-screen .mobile-calendar-day.selected { background-color:transparent !important; border-color:transparent !important; }
-@media (max-width:480px) { .mail-mobile-row > div { display:grid; gap:3px; } .mail-mobile-pager button { padding-inline:9px; } }
 @media (max-width:360px) { .projects-row { margin-top:14px; } .mobile-calendar-day,.mobile-calendar-weekstrip .mobile-calendar-day { min-height:46px; } .mobile-tab { font-size:.68rem; } }
 /* While the full-bleed terminal is up: no document scroll to lose the header
    down (see the `terminal-open` effect in screens/Terminal.tsx). */

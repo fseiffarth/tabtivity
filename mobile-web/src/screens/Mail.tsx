@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ArchiveIcon, FolderIcon, InboxIcon, OutboxIcon, PaperclipIcon, PencilIcon, TrashIcon, WarningIcon } from "../../../src/components/common/icons/Icon";
+import { ArrowUpIcon, InboxIcon, MailIcon, OutboxIcon, PaperclipIcon, TrashIcon, WarningIcon } from "../../../src/components/common/icons/Icon";
+import { ArchiveIcon, CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FolderIcon, InfoIcon, PencilIcon, StarIcon, UndoIcon } from "../glyphs";
 import { describeFailure } from "../connection";
 import {
   MAIL_MESSAGE_TIMEOUT,
@@ -21,6 +22,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { HintQueue, type HintKey } from "../components/HintMessage";
+import { OptionSheet, type SheetOption } from "../components/OptionSheet";
 import { ScreenHead } from "../components/ScreenHead";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -40,6 +42,22 @@ function sender(message: MobileMailHeader, t: Translate) {
 function dateLabel(value: string, lang: Language) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? safeText(value) : date.toLocaleString(lang);
+}
+
+/** A list row's time: today's as a clock, an older one as a short date. The
+ * full stamp stays in the element's `title`. */
+function listTime(value: string, lang: Language) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return safeText(value);
+  return date.toDateString() === new Date().toDateString()
+    ? date.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString(lang, { day: "numeric", month: "short" });
+}
+
+/** One or two capitals for the sender tile. */
+function initials(label: string) {
+  const words = label.replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean);
+  return words.slice(0, 2).map((word) => Array.from(word)[0]).join("").toUpperCase() || "?";
 }
 
 /** Longest reply the sidecar accepts (`protocol::MAX_MAIL_REPLY_BYTES`). */
@@ -96,6 +114,8 @@ export function Mail() {
   const [reply, setReply] = useState("");
   const [confirmReply, setConfirmReply] = useState(false);
   const [sent, setSent] = useState(false);
+  const [sheet, setSheet] = useState<"info" | "switch" | null>(null);
+  const [showEmpty, setShowEmpty] = useState(false);
   // The account the tab shows, remembered on this phone. A stored id the
   // desktop no longer lists falls back to its first account.
   const [accountId, setAccountId] = useState(() => readChoice("mailAccount", isAccountId, ""));
@@ -171,13 +191,51 @@ export function Mail() {
     else setFolder(null);
   };
 
-  const accountPicker = accounts && accounts.length > 1 && <select
-    className="mail-mobile-account-select"
-    aria-label={t("mobile.mail.account")}
-    value={(folder ? folderAccount : account)?.id ?? ""}
-    disabled={busy}
-    onChange={(event) => chooseAccount(event.target.value)}
-  >{accounts.map((item) => <option key={item.id} value={item.id}>{accountOption(item, t)}</option>)}</select>;
+  /** The sheet behind the line under the title: from inside a folder it lists
+   * that account's folders, then the other accounts; from the overview, the
+   * accounts. */
+  const switchOptions: SheetOption[] = [];
+  if (folder && folderAccount) {
+    for (const item of sortedFolders(folderAccount.folders)) {
+      switchOptions.push({
+        key: `folder:${item.id}`, label: safeText(item.name), group: t("mobile.mail.folder"),
+        current: item.id === folder.folder.id, icon: KIND_GLYPH[item.kind] ?? <FolderIcon />,
+        trailing: item.unread > 0 ? item.unread : undefined,
+      });
+    }
+  }
+  for (const item of accounts ?? []) {
+    if (folder && item.id === folderAccount?.id) continue;
+    switchOptions.push({
+      key: `account:${item.id}`, label: accountOption(item, t), group: folder ? t("mobile.mail.accountLabel") : undefined,
+      current: !folder && item.id === account?.id,
+    });
+  }
+  const pickSwitch = (key: string) => {
+    setSheet(null);
+    const at = key.indexOf(":");
+    const id = key.slice(at + 1);
+    if (key.slice(0, at) === "account") { chooseAccount(id); return; }
+    const target = folderAccount?.folders.find((item) => item.id === id);
+    if (target && target.id !== folder?.folder.id) void loadFolder(target);
+  };
+  const subjectAccount = folder ? folderAccount : account;
+  const switchable = folder ? folderAccount !== null : (accounts?.length ?? 0) > 1;
+  const subtitle = message || !subjectAccount ? undefined : switchable
+    ? <button className="mail-account-switch" onClick={() => setSheet("switch")} aria-haspopup="dialog" aria-label={`${t("mail.switchAccount")}: ${accountOption(subjectAccount, t)}`}>
+      {accountOption(subjectAccount, t)}<ChevronDownIcon size="1em" />
+      {isUntested("mobile.mail.accountPicker") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+    </button>
+    : accountOption(subjectAccount, t);
+  // The banner's sentences, kept: they now sit behind the head's ⓘ.
+  const notice = writes.actions || writes.reply
+    ? [
+      t("mobile.mail.noticeWrites"),
+      writes.actions ? t("mobile.mail.noticeActions") : "",
+      writes.reply ? t("mobile.mail.noticeReply") : "",
+      t("mobile.mail.noticeLimits"),
+    ].filter(Boolean).join(" ")
+    : t("mobile.mail.noticeReadOnly");
 
   /** Both writes answer with the refreshed folder page, so the list and the
    * open message's own header are updated from the desktop's answer rather
@@ -248,108 +306,133 @@ export function Mail() {
     else void loadOverview();
   };
 
+  const iconButton = (label: string, onClick: () => void, icon: ReactNode, extra: { className?: string; pressed?: boolean; disabled?: boolean } = {}) =>
+    <button className={`home-head-button${extra.className ? ` ${extra.className}` : ""}`} aria-label={label} title={label} aria-pressed={extra.pressed} disabled={extra.disabled} onClick={onClick}>{icon}</button>;
+
+  const folderRow = (item: MobileMailFolder) => <button className={`tool-row mail-mobile-folder${item.unread > 0 ? " has-unread" : ""}`} key={item.id} onClick={() => void loadFolder(item)} disabled={busy}
+    aria-label={`${safeText(item.name)}, ${t("mobile.mail.folderCounts", { unread: item.unread, total: item.total })}`}>
+    <i aria-hidden="true">{KIND_GLYPH[item.kind] ?? <FolderIcon />}</i>
+    <span>{safeText(item.name)}</span>
+    {item.unread > 0 && <b className="tool-badge">{item.unread}</b>}
+    <small>{item.total}</small>
+    <ChevronRightIcon className="mail-mobile-chevron" size="16px" />
+  </button>;
+  // Folders with nothing in them fold away; the inbox never does.
+  const ordered = account ? sortedFolders(account.folders) : [];
+  const emptyFolders = ordered.filter((item) => item.total === 0 && item.kind !== "inbox");
+  const shownFolders = ordered.filter((item) => !emptyFolders.includes(item));
+
+  const actions = <>
+    {message && writes.actions && <>
+      {iconButton(t(message.message.seen ? "mobile.mail.markUnread" : "mobile.mail.markRead"),
+        () => void mark(message.message.seen ? "unseen" : "seen"), message.message.seen ? <MailIcon size="22px" /> : <CheckIcon size="22px" />, { disabled: busy })}
+      {iconButton(t("mobile.mail.star"), () => void mark(message.message.flagged ? "unflag" : "flag"), <StarIcon size="22px" />,
+        { className: "mail-mobile-star", pressed: message.message.flagged === true, disabled: busy })}
+    </>}
+    {iconButton(t("mobile.mail.info"), () => setSheet("info"), <InfoIcon size="22px" />)}
+  </>;
+
   return <main ref={screen} className="screen mail-mobile-screen">
     <ScreenHead
       title={message ? safeText(message.message.subject) || t("mobile.mail.noSubject") : folder ? safeText(folder.folder.name) : t("mobile.mail.title")}
+      subtitle={subtitle}
       back={goBack ? { label: message && folder ? safeText(folder.folder.name) : t("mobile.mail.title"), onClick: goBack } : undefined}
+      actions={actions}
       onRefresh={refresh} refreshing={busy} untested={isUntested("mobile.design.mail")} />
-    <p className="notice">{writes.actions || writes.reply
-      ? [
-        t("mobile.mail.noticeWrites"),
-        writes.actions ? t("mobile.mail.noticeActions") : "",
-        writes.reply ? t("mobile.mail.noticeReply") : "",
-        t("mobile.mail.noticeLimits"),
-      ].filter(Boolean).join(" ")
-      : t("mobile.mail.noticeReadOnly")}</p>
     <HintQueue hints={MAIL_TIPS} />
     {error && <p className="error">{error}</p>}
     {busy && !accounts && <p className="mail-mobile-empty">{t("common.loading")}</p>}
 
     {message ? <article className="mail-mobile-message">
       <div className="mail-mobile-message-meta">
-        <strong>{sender(message.message, t)}</strong>
-        <span>{safeText(message.message.sender.address)}</span>
-        <time>{dateLabel(message.message.date, lang)}</time>
+        <i className="mail-mobile-avatar" aria-hidden="true">{initials(sender(message.message, t))}</i>
+        <div>
+          <strong>{sender(message.message, t)}</strong>
+          <span>{safeText(message.message.sender.address)}</span>
+          <time>{dateLabel(message.message.date, lang)}</time>
+        </div>
       </div>
-      {writes.actions && <div className="mail-mobile-actions">
-        <button disabled={busy} onClick={() => void mark(message.message.seen ? "unseen" : "seen")}>
-          {t(message.message.seen ? "mobile.mail.markUnread" : "mobile.mail.markRead")}
-        </button>
-        <button disabled={busy} onClick={() => void mark(message.message.flagged ? "unflag" : "flag")}>
-          {t(message.message.flagged ? "mobile.mail.unstar" : "mobile.mail.star")}
-        </button>
-      </div>}
       {message.truncated && <p className="mail-mobile-warning">{t("mobile.mail.truncated")}</p>}
       <pre>{safeText(message.body) || t("mobile.mail.noBody")}</pre>
       {message.attachments.length > 0 && <section className="mail-mobile-attachments">
-        <h2>{t("mail.attachments")}</h2>
-        {message.attachments.map((attachment, index) => <div key={`${attachment.filename}-${index}`}>
-          <span>{safeText(attachment.filename)}</span><small>{safeText(attachment.mime)} · {formatBytes(attachment.size)}</small>
-        </div>)}
+        <h2 className="tool-section-head">{t("mail.attachments")}</h2>
+        <div className="tool-group">
+          {message.attachments.map((attachment, index) => <div className="tool-row" key={`${attachment.filename}-${index}`}>
+            <span>{safeText(attachment.filename)}</span><small>{safeText(attachment.mime)} · {formatBytes(attachment.size)}</small>
+          </div>)}
+        </div>
+        <p className="mail-mobile-note">{t("mobile.mail.attachmentsDesktop")}</p>
       </section>}
       {writes.reply && <section className="mail-mobile-reply">
         <h2>{t("mail.composeReply")}</h2>
         <small>{t("mobile.mail.replyTo", { address: safeText(message.message.sender.address) })}</small>
         {sent && <p className="mail-mobile-sent">{t("mobile.mail.replySent")}</p>}
-        <textarea
-          aria-label={t("mobile.mail.replyText")}
-          value={reply}
-          disabled={busy}
-          placeholder={t("mobile.mail.replyPlaceholder")}
-          onChange={(event) => { setReply(event.target.value); setConfirmReply(false); setSent(false); }}
-        />
-        {confirmReply ? <div className="mail-mobile-reply-confirm">
+        <div className="mail-mobile-reply-field">
+          <textarea
+            aria-label={t("mobile.mail.replyText")}
+            value={reply}
+            disabled={busy}
+            placeholder={t("mobile.mail.replyPlaceholder")}
+            onChange={(event) => { setReply(event.target.value); setConfirmReply(false); setSent(false); }}
+          />
+          {!confirmReply && <button
+            className="primary mail-mobile-send"
+            aria-label={t("mobile.mail.sendReply")}
+            title={t("mobile.mail.sendReply")}
+            disabled={busy || !reply.trim() || replyBytes(reply) > MAX_REPLY_BYTES}
+            onClick={() => setConfirmReply(true)}
+          ><ArrowUpIcon size="20px" /></button>}
+        </div>
+        {confirmReply && <div className="mail-mobile-reply-confirm">
           <span>{t("mobile.mail.replyConfirm", { address: safeText(message.message.sender.address) })}</span>
           <div>
             <button className="primary" disabled={busy} onClick={() => void sendReply()}>{t("mobile.question.typeSend")}</button>
             <button disabled={busy} onClick={() => setConfirmReply(false)}>{t("common.cancel")}</button>
           </div>
-        </div> : <button
-          className="primary"
-          disabled={busy || !reply.trim() || replyBytes(reply) > MAX_REPLY_BYTES}
-          onClick={() => setConfirmReply(true)}
-        >{t("mobile.mail.sendReply")}</button>}
+        </div>}
         {replyBytes(reply) > MAX_REPLY_BYTES && <p className="mail-mobile-warning">{t("mobile.mail.replyTooLong")}</p>}
       </section>}
     </article> : folder ? <>
-      <div className="mail-mobile-switch">
-        {accountPicker}
-        {folderAccount && <select
-          aria-label={t("mobile.mail.folder")}
-          value={folder.folder.id}
-          disabled={busy}
-          onChange={(event) => {
-            const target = folderAccount.folders.find((item) => item.id === event.target.value);
-            if (target) void loadFolder(target);
-          }}
-        >{sortedFolders(folderAccount.folders).map((item) => <option key={item.id} value={item.id}>
-          {safeText(item.name)}{item.unread > 0 ? ` (${item.unread})` : ""}
-        </option>)}</select>}
-      </div>
-      <section className="mail-mobile-list">
-        {folder.messages.map((item) => <button className={`mail-mobile-row${item.seen ? "" : " unread"}${item.flagged ? " flagged" : ""}${item.answered ? " answered" : ""}`} key={item.id} onClick={() => void loadMessage(item)} disabled={busy}>
-          <div><strong>{sender(item, t)}</strong><time>{dateLabel(item.date, lang)}</time></div>
-          <b>{safeText(item.subject) || t("mobile.mail.noSubject")}{item.has_attachments ? <> <PaperclipIcon /></> : null}</b>
-          <span>{safeText(item.preview)}</span>
+      <section className="mail-mobile-list tool-group">
+        {folder.messages.map((item) => <button className={`tool-row mail-mobile-row${item.seen ? "" : " unread"}${item.flagged ? " flagged" : ""}${item.answered ? " answered" : ""}`} key={item.id} onClick={() => void loadMessage(item)} disabled={busy}>
+          <i className="mail-mobile-dot" aria-hidden="true" />
+          <span className="mail-mobile-row-body">
+            <span className="mail-mobile-row-top">
+              <strong>{sender(item, t)}</strong>
+              {item.answered && <UndoIcon className="mail-mobile-mark" size="14px" />}
+              {item.flagged && <StarIcon className="mail-mobile-mark mail-mobile-flag" size="14px" />}
+              {item.has_attachments && <PaperclipIcon className="mail-mobile-mark" size="14px" />}
+              <time title={dateLabel(item.date, lang)}>{listTime(item.date, lang)}</time>
+            </span>
+            <b>{safeText(item.subject) || t("mobile.mail.noSubject")}</b>
+            <span className="mail-mobile-preview">{safeText(item.preview)}</span>
+          </span>
         </button>)}
         {folder.syncing
           ? <p className="mail-mobile-empty">{t("mobile.mail.syncing")}</p>
           : !busy && folder.messages.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noMessages")}</p>}
       </section>
       <div className="mail-mobile-pager">
-        <button disabled={busy || folder.offset === 0} onClick={() => void loadFolder(folder.folder, Math.max(0, folder.offset - PAGE_SIZE))}>{t("mobile.mail.previous")}</button>
+        {iconButton(t("mobile.mail.previous"), () => void loadFolder(folder.folder, Math.max(0, folder.offset - PAGE_SIZE)), <ChevronLeftIcon size="22px" />, { disabled: busy || folder.offset === 0 })}
         <small>{t("mobile.mail.pageOf", { range: folder.total === 0 ? "0" : `${folder.offset + 1}–${Math.min(folder.offset + folder.messages.length, folder.total)}`, total: folder.total })}</small>
-        <button disabled={busy || folder.offset + folder.messages.length >= folder.total} onClick={() => void loadFolder(folder.folder, folder.offset + PAGE_SIZE)}>{t("common.next")}</button>
+        {iconButton(t("common.next"), () => void loadFolder(folder.folder, folder.offset + PAGE_SIZE), <ChevronRightIcon size="22px" />, { disabled: busy || folder.offset + folder.messages.length >= folder.total })}
       </div>
     </> : accounts && <section className="mail-mobile-accounts">
-      {accountPicker && <label className="mail-mobile-picker"><span>{t("mobile.mail.accountLabel")} {isUntested("mobile.mail.accountPicker") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>{accountPicker}</label>}
-      {account && <div className="mail-mobile-account">
-        <div><strong>{safeText(account.label)}</strong><small>{safeText(account.address)}</small></div>
-        <div className="mail-mobile-folders">{sortedFolders(account.folders).map((item) => <button className={item.unread > 0 ? "has-unread" : undefined} key={item.id} onClick={() => void loadFolder(item)} disabled={busy}>
-          <i aria-hidden="true">{KIND_GLYPH[item.kind] ?? <FolderIcon />}</i><span>{safeText(item.name)}</span><small>{t("mobile.mail.folderCounts", { unread: item.unread, total: item.total })}</small>
-        </button>)}</div>
-      </div>}
+      {account && <>
+        <h2 className="tool-section-head">{t("mail.folders")}</h2>
+        <div className="mail-mobile-folders tool-group">
+          {shownFolders.map(folderRow)}
+          {emptyFolders.length > 0 && <button className="tool-row mail-mobile-more" aria-expanded={showEmpty} onClick={() => setShowEmpty((open) => !open)}>
+            <span>{t("mobile.mail.moreFolders")} · {t("mobile.mail.emptyFolders", { count: emptyFolders.length })}</span>
+            <ChevronRightIcon className="mail-mobile-chevron" size="16px" />
+          </button>}
+          {showEmpty && emptyFolders.map(folderRow)}
+        </div>
+      </>}
       {accounts.length === 0 && <p className="mail-mobile-empty">{t("mobile.mail.noAccounts")}</p>}
     </section>}
+
+    {sheet === "info" && <OptionSheet title={t("mobile.mail.infoTitle")} note={{ text: notice }} options={[]} waiting="" busy={false} onPick={() => {}} onClose={() => setSheet(null)} />}
+    {sheet === "switch" && <OptionSheet title={t("mobile.mail.account")} options={switchOptions} waiting="" busy={busy} onPick={pickSwitch} onClose={() => setSheet(null)} />}
   </main>;
 }
