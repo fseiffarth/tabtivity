@@ -1,5 +1,14 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] **Continue work with another CLI** — planned, not implemented.
+  `docs/cli_session_handoff_plan.md`: manual Claude ↔ Codex handoff in local
+  project tabs, usable after a quota limit without another source-model call;
+  durable context, linked sessions, safe stop/delivery and retry recovery.
+  - [ ] Context collector and preview with explicit history coverage.
+  - [ ] Persisted lifecycle, source stop/continuation hold and crash recovery.
+  - [ ] Destination adapters, prompt receipts and linked-session restore.
+  - [ ] Shared desktop picker, i18n, untested register and regression coverage.
+
 - [ ] **Notes on diff lines, added to the Chat draft** (implemented 2026-11-13, never
   live; frontend only). Plan `docs/diff_notes_plan.md`, handoff
   `docs/diff_notes_handoff.md`; pill `diff-notes`, steering key `C` (`viewNote`).
