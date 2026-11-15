@@ -49,8 +49,14 @@ fn no_socket_in_the_shared_temps_home_or_docker_is_reachable_but_the_scopes_own_
         assert!(deny < pos(&allow_out("/var/folders/xy/T/app-tmp/k")));
     }
     let home = pos(&deny_out("/Users/a"));
-    pos("(deny network-outbound (remote unix-socket (literal \"/var/run/docker.sock\")))");
-    pos("(deny network-outbound (remote unix-socket (literal \"/private/var/run/docker.sock\")))");
+    pos(&deny_out("/var/run/docker.sock"));
+    pos(&deny_out("/private/var/run/docker.sock"));
+    // Inside `(remote|local unix-socket …)` only the `subpath` filter is used:
+    // it is the form the shipped profiles of other sandboxes use there, and a
+    // rule that does not parse on a Mac starts no agent at all.
+    for line in profile.lines().filter(|l| l.contains("unix-socket")) {
+        assert!(line.contains("unix-socket (subpath \""), "{line}");
+    }
     // What the fence shows anyway comes back after the home deny, the hidden
     // paths are denied again after that, then the scope's own dirs.
     let root = pos(&allow_out("/Users/a/p"));

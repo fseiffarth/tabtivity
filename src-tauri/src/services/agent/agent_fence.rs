@@ -2436,7 +2436,11 @@ fn seatbelt_socket_rules(p: &mut String, inputs: &SeatbeltInputs) {
     inputs.push_rules(p, DENY_OUT, "subpath", temps.iter());
     inputs.push_rules(p, "deny network-bind (local unix-socket", "subpath", temps.iter());
     inputs.push_rules(p, DENY_OUT, "subpath", std::iter::once(&inputs.home));
-    inputs.push_rules(p, DENY_OUT, "literal", docker.iter());
+    // `subpath`, which matches the socket itself: the one path filter both
+    // Codex's and Anthropic's shipped profiles put inside `(remote
+    // unix-socket …)`. Nobody here can try whether `literal` parses there,
+    // and a profile that does not parse starts no agent on any Mac.
+    inputs.push_rules(p, DENY_OUT, "subpath", docker.iter());
     let shown = inputs
         .roots
         .iter()
