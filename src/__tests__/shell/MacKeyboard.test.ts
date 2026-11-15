@@ -17,6 +17,9 @@ vi.mock("../../lib/platform", async (importOriginal) => ({
 import { chordFromEvent, chordMatches, forPlatformKeys, isOptionLetterOf, resolveChord } from "../../lib/shortcuts/shortcuts";
 import { keySelectStep, type KeySelectState } from "../../lib/terminal/keyboardSelect";
 import { exportDragHeld } from "../../components/files/fileTreeDrag";
+import { LESSONS } from "../../lib/lessons";
+import { stepBody } from "../../lib/tour";
+import { enSource } from "../../lib/i18n/en";
 
 const key = (over: Partial<KeyboardEvent>) =>
   ({ key: "", code: "", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...over }) as KeyboardEvent;
@@ -49,6 +52,23 @@ describe("Mac keyboard (2442x)", () => {
     expect(forPlatformKeys("Ctrl + / Ctrl − zoom, Ctrl 0 resets")).toBe("⌘ + / ⌘ − zoom, ⌘ 0 resets");
     expect(forPlatformKeys("Ctrl+B", false)).toBe("Ctrl+B");
     expect(forPlatformKeys("Controls")).toBe("Controls");
+  });
+
+  // Ctrl+C in a terminal interrupts the running program on a Mac too (⌘C
+  // copies), so a lesson that names it must not show ⌘ for it.
+  it("keeps a terminal's own Ctrl+C in a lesson body", () => {
+    const english = enSource as Record<string, string>;
+    const steps = LESSONS.flatMap((lesson) => lesson.steps);
+    const runFile = steps.find((step) => step.bodyKey === "lessons.runPython.runFileBody")!;
+    expect(stepBody(runFile, english[runFile.bodyKey])).toContain("input(), Ctrl+C");
+    // An app shortcut in a lesson still reads ⌘.
+    const revealTree = steps.find((step) => step.bodyKey === "lessons.nativeViewer.revealTreeBody")!;
+    expect(stepBody(revealTree, english[revealTree.bodyKey])).toContain("⌘+B");
+    expect(stepBody(revealTree, english[revealTree.bodyKey], false)).toContain("Ctrl+B");
+    // Every lesson body that names the interrupt key is marked as such.
+    for (const step of steps) {
+      if (/Ctrl\+C\b/.test(english[step.bodyKey])) expect(step.terminalKeys, step.bodyKey).toBe(true);
+    }
   });
 
   it("takes ⌥ for the export drag on a Mac and Ctrl elsewhere", () => {
