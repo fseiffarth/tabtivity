@@ -961,7 +961,7 @@ fn resolve_tex_root_prefers_magic_comment() {
     let main = dir.join("main.tex");
     fs::write(&main, "\\input{child}\n").unwrap();
     let child = dir.join("child.tex");
-    let main_disp = fs::canonicalize(&main).unwrap();
+    let main_disp = canonical(&main).unwrap();
     fs::write(
         &child,
         format!("% !TEX root = {}\n\\section{{x}}\n", main_disp.display()),
@@ -974,7 +974,26 @@ fn resolve_tex_root_prefers_magic_comment() {
     // A file that is its own root resolves to itself.
     let solo = resolve_tex_root_blocking(main.to_string_lossy().into_owned()).unwrap();
     assert_eq!(solo, main_disp.to_string_lossy());
+    // 2442i: the root the UI opens is spelled as the file tree spells it.
+    assert!(!solo.starts_with(r"\\?\") && !resolved.starts_with(r"\\?\"), "{solo}");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// 2442i: every canonical path this module hands latexmk, a format build,
+/// the root map or the UI goes through `canonical`, which drops Windows'
+/// verbatim `\\?\` prefix; a bare `fs::canonicalize` would bring it back.
+#[test]
+fn tex_paths_never_carry_the_verbatim_prefix() {
+    let src = include_str!("../tex.rs");
+    assert_eq!(src.matches("fs::canonicalize(").count(), 1, "only `canonical` calls it");
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("main.tex");
+    fs::write(&root, "\\input{one}\n").unwrap();
+    fs::write(tmp.path().join("one.tex"), "x\n").unwrap();
+    for p in scan_tex_includes(&root) {
+        assert!(!p.to_string_lossy().starts_with(r"\\?\"), "{}", p.display());
+    }
+    assert!(!canonical(&root).unwrap().to_string_lossy().starts_with(r"\\?\"));
 }
 
 // ── Cached document preambles (full compiles) ───────────────────────────

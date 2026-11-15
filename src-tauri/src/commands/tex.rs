@@ -1212,13 +1212,23 @@ fn own_folder_unlinked_check(path: &Path) -> Result<(), String> {
     }
 }
 
+/// `fs::canonicalize` without Windows' verbatim `\\?\` prefix
+/// (`paths::without_verbatim_prefix`): every canonical path here becomes
+/// latexmk's cwd and `-outdir`, a format build's paths, the include and root
+/// lists and the `pdf_path` the UI opens, and none of those expects the
+/// verbatim spelling (2442i). The only canonicalising in this module; a path
+/// only the verbatim form can name keeps it.
+fn canonical(path: impl AsRef<Path>) -> std::io::Result<std::path::PathBuf> {
+    fs::canonicalize(path).map(crate::paths::without_verbatim_prefix)
+}
+
 fn compile_tex_blocking(
     path: String,
     engine: Option<String>,
     out_dir: Option<String>,
     extra_flags: Option<Vec<String>>,
 ) -> Result<TexCompileResult, String> {
-    let src = fs::canonicalize(&path).map_err(|e| format!("canonicalize {path}: {e}"))?;
+    let src = canonical(&path).map_err(|e| format!("canonicalize {path}: {e}"))?;
     if !src.extension().is_some_and(|e| e.eq_ignore_ascii_case("tex")) {
         return Err(format!("not a .tex file: {}", src.display()));
     }
@@ -1925,7 +1935,7 @@ fn preview_snippet_blocking(
             preamble.len()
         ));
     }
-    let cwd = fs::canonicalize(&dir).map_err(|e| format!("canonicalize {dir}: {e}"))?;
+    let cwd = canonical(&dir).map_err(|e| format!("canonicalize {dir}: {e}"))?;
     if !cwd.is_dir() {
         return Err(format!("not a directory: {}", cwd.display()));
     }
@@ -2245,7 +2255,7 @@ fn scan_tex_includes(root: &Path) -> Vec<std::path::PathBuf> {
             } else {
                 dir.join(p)
             };
-            let abs = fs::canonicalize(&abs).unwrap_or(abs);
+            let abs = canonical(&abs).unwrap_or(abs);
             if seen.insert(abs.clone()) {
                 out.push(abs.clone());
                 walk(&abs, depth + 1, seen, out);
@@ -2253,7 +2263,7 @@ fn scan_tex_includes(root: &Path) -> Vec<std::path::PathBuf> {
         }
     }
     let mut seen = std::collections::HashSet::new();
-    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let root = canonical(root).unwrap_or_else(|_| root.to_path_buf());
     seen.insert(root.clone());
     let mut out = Vec::new();
     walk(&root, 0, &mut seen, &mut out);
@@ -2268,7 +2278,7 @@ fn record_root_mappings(root: &Path) {
 }
 
 fn record_root_mappings_in(path: &Path, root: &Path) {
-    let root_abs = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let root_abs = canonical(root).unwrap_or_else(|_| root.to_path_buf());
     let children = scan_tex_includes(&root_abs);
     if children.is_empty() {
         return;
@@ -2319,7 +2329,7 @@ fn magic_root(source: &str, dir: &Path) -> Option<std::path::PathBuf> {
             } else {
                 dir.join(p)
             };
-            return Some(fs::canonicalize(&abs).unwrap_or(abs));
+            return Some(canonical(&abs).unwrap_or(abs));
         }
     }
     None
@@ -2339,7 +2349,7 @@ pub async fn resolve_tex_root(path: String) -> Result<String, String> {
 }
 
 fn resolve_tex_root_blocking(path: String) -> Result<String, String> {
-    let src = fs::canonicalize(&path).unwrap_or_else(|_| Path::new(&path).to_path_buf());
+    let src = canonical(&path).unwrap_or_else(|_| Path::new(&path).to_path_buf());
     let dir = src.parent().unwrap_or_else(|| Path::new("."));
 
     // 1. Magic comment wins.
