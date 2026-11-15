@@ -640,7 +640,14 @@ Composition is explicit:
     tools that name it (files only), and the per-user cache dir (`…/C`,
     clang's module cache) stays writable.
   - Every rule is written under each path's resolved spelling too (2442w), so
-    a project reached through a symlink or `/var` vs `/private/var` matches.
+    a project below a symlink (`~/work` → another volume) or `/var` vs
+    `/private/var` matches. An **allow** rule follows no link that sits at or
+    inside a path the agent may write (`resolve_spelling`,
+    `SeatbeltInputs::planted`): Seatbelt lets an agent rename its root or its
+    home away and leave a link there, which Linux's mount points do not, and
+    the next profile must not allow that link's target. So a project whose
+    folder is *itself* a symlink gets no write access on a Mac (open the real
+    folder instead); denials follow every link.
   - **Still open on macOS:** Mach services (keychain below, pasteboard,
     `trustd`); `launchctl submit`/`bootstrap` into the user's launchd domain
     (no SBPL rule found that is known to stop it — check on a Mac:

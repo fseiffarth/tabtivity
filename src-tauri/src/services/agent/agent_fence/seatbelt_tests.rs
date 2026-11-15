@@ -103,28 +103,88 @@ fn the_private_tmp_is_per_scope_short_and_inside_the_users_tmpdir() {
 #[test]
 fn every_rule_is_rendered_under_the_resolved_spelling_too() {
     let mut inputs = scope_fixture();
-    inputs.roots.push("/Users/a/link".into());
-    let canon = |p: &Path| (p == Path::new("/Users/a/link")).then(|| PathBuf::from("/Volumes/x/p"));
-    add_canonical_spellings(&mut inputs, &canon);
-    // A symlinked root, and macOS's /var → /private/var for a path the
-    // resolver could not see.
-    assert_eq!(inputs.canonical.get("/Users/a/link").map(String::as_str), Some("/Volumes/x/p"));
+    inputs.roots.push("/Users/a/work/p2".into());
+    // `~/work` is the user's own link to another volume: it sits above every
+    // root, where no agent can write, so it is followed.
+    let links = |at: &str| (at == "/Users/a/work").then(|| "/Volumes/x".to_string());
+    add_canonical_spellings(&mut inputs, &links);
+    // A root behind a symlink, and macOS's /var → /private/var for a path the
+    // resolver saw no link on.
+    assert_eq!(inputs.canonical.get("/Users/a/work/p2").map(String::as_str), Some("/Volumes/x/p2"));
     assert_eq!(
         inputs.canonical.get("/var/folders/xy/T/app-tmp/k").map(String::as_str),
         Some("/private/var/folders/xy/T/app-tmp/k")
     );
     assert!(!inputs.canonical.contains_key("/Users/a/p"), "no second spelling where there is none");
     assert!(!inputs.canonical.contains_key("/private/tmp"));
+    assert!(inputs.planted.is_empty(), "{:?}", inputs.planted);
     let profile = sandbox_exec_profile(&inputs);
     let pos = |needle: &str| line_pos(&profile, needle);
-    assert_eq!(pos("(allow file-write* (subpath \"/Volumes/x/p\"))"), pos("(allow file-write* (subpath \"/Users/a/link\"))") + 1);
-    pos("(allow network-outbound (remote unix-socket (subpath \"/Volumes/x/p\")))");
+    assert_eq!(pos("(allow file-write* (subpath \"/Volumes/x/p2\"))"), pos("(allow file-write* (subpath \"/Users/a/work/p2\"))") + 1);
+    pos("(allow network-outbound (remote unix-socket (subpath \"/Volumes/x/p2\")))");
     pos("(deny file-read* file-write* (subpath \"/private/var/folders/xy/T\"))");
     let private = pos("(allow file-read* file-write* (subpath \"/private/var/folders/xy/T/app-tmp/k\"))");
     assert!(private > pos("(deny file-read* file-write* (subpath \"/private/var/folders/xy/T\"))"));
     // A trailing slash is dropped before matching and rendering.
-    assert_eq!(canonical_spelling("/tmp/", &|_| None).as_deref(), Some("/private/tmp"));
-    assert_eq!(canonical_spelling("/variable/x", &|_| None), None);
+    assert_eq!(resolved_spelling("/tmp/", &|_| None, &[]).as_deref(), Some("/private/tmp"));
+    assert_eq!(resolved_spelling("/variable/x", &|_| None, &[]).as_deref(), Some("/variable/x"));
+    // The links as a Mac has them: relative targets, `..` taken after the link.
+    let mac = |at: &str| match at {
+        "/var" => Some("private/var".to_string()),
+        "/x/l" => Some("../y".to_string()),
+        "/loop" => Some("/loop".to_string()),
+        _ => None,
+    };
+    assert_eq!(resolve_spelling("/var/folders/xy/T", &mac, &[]).as_deref(), Some("/private/var/folders/xy/T"));
+    assert_eq!(resolve_spelling("/x/l/z", &mac, &[]).as_deref(), Some("/y/z"));
+    assert_eq!(resolve_spelling("/loop/z", &mac, &[]), None);
+    assert_eq!(resolve_spelling("relative/x", &mac, &[]), None);
+}
+
+/// 2442w review: a fenced agent can rename a folder it may write away and
+/// leave a link in its place. No allow rule may follow such a link, or the
+/// next profile would hand the agent the link's target.
+#[test]
+fn an_allow_rule_never_follows_a_link_the_agent_could_have_planted() {
+    let mut inputs = scope_fixture();
+    inputs.readable.push("/Users/a/p/vendor/tool".into());
+    inputs.hidden.push("/Users/a/p/secret".into());
+    inputs.roots.push("/Users/a/work/p2".into());
+    let links = |at: &str| match at {
+        // The root and the scope home, swapped for links by an agent.
+        "/Users/a/p" => Some("/Users/a".to_string()),
+        "/Users/a/state/agent-homes/p" => Some("/Users/a/state".to_string()),
+        // The user's own link, above every root.
+        "/Users/a/work" => Some("/Volumes/x".to_string()),
+        _ => None,
+    };
+    add_canonical_spellings(&mut inputs, &links);
+    let planted: Vec<&str> = inputs.planted.iter().map(String::as_str).collect();
+    assert_eq!(planted, ["/Users/a/p", "/Users/a/p/vendor/tool", "/Users/a/state/agent-homes/p"]);
+    let profile = sandbox_exec_profile(&inputs);
+    for line in profile.lines().filter(|l| l.starts_with("(allow")) {
+        for target in ["(subpath \"/Users/a\")", "(subpath \"/Users/a/state\")", "\"/Users/a/vendor/tool\""] {
+            assert!(!line.contains(target), "an allow followed a planted link: {line}");
+        }
+    }
+    // The paths as spelled keep their rules (they match nothing while the
+    // link stands), the user's own link is followed, and a denial follows
+    // every link.
+    line_pos(&profile, "(allow file-write* (subpath \"/Users/a/p\"))");
+    line_pos(&profile, "(allow file-write* (subpath \"/Volumes/x/p2\"))");
+    line_pos(&profile, "(deny file-read* file-write* (subpath \"/Users/a/secret\"))");
+    assert_eq!(profile.lines().last(), Some("(allow file-read* file-write* (subpath \"/Users/a/state/agent-homes/p\"))"));
+
+    // A link of the user's that leads into a root, then one left there.
+    let chain = |at: &str| match at {
+        "/Users/a/short" => Some("/Users/a/p/sub".to_string()),
+        "/Users/a/p/sub" => Some("/Users/a/.ssh".to_string()),
+        _ => None,
+    };
+    assert_eq!(resolve_spelling("/Users/a/short/x", &chain, &[]).as_deref(), Some("/Users/a/.ssh/x"));
+    assert_eq!(resolve_spelling("/Users/a/short/x", &chain, &["/Users/a/p".to_string()]), None);
+    // By the place's resolved location too, whatever the case of the spelling.
+    assert_eq!(resolve_spelling("/users/A/short/x", &|at| chain(&at.replace("/users/A", "/Users/a")), &["/Users/a/P".to_string()]), None);
 }
 
 #[cfg(unix)]
@@ -132,13 +192,24 @@ fn every_rule_is_rendered_under_the_resolved_spelling_too() {
 fn canonical_spellings_follow_a_real_symlink() {
     let tmp = tempfile::tempdir().unwrap();
     let real = tmp.path().join("real");
-    std::fs::create_dir(&real).unwrap();
+    std::fs::create_dir_all(real.join("child")).unwrap();
     let link = tmp.path().join("link");
     std::os::unix::fs::symlink(&real, &link).unwrap();
-    let mut inputs = SeatbeltInputs { roots: vec![link.to_string_lossy().into_owned()], ..SeatbeltInputs::default() };
-    add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
-    let want = real.canonicalize().unwrap().to_string_lossy().into_owned();
-    assert_eq!(inputs.canonical.get(&*link.to_string_lossy()), Some(&want));
+    // A root below a link: the link is not the agent's to change.
+    let root = link.join("child").to_string_lossy().into_owned();
+    let mut inputs = SeatbeltInputs { roots: vec![root.clone()], ..SeatbeltInputs::default() };
+    add_canonical_spellings(&mut inputs, &seatbelt_read_link);
+    let want = real.canonicalize().unwrap();
+    assert_eq!(inputs.canonical.get(&root), Some(&want.join("child").to_string_lossy().into_owned()));
+    assert!(inputs.planted.is_empty(), "{:?}", inputs.planted);
+    // The root itself a link: an agent can leave one there, so its target is
+    // never allowed.
+    let link = link.to_string_lossy().into_owned();
+    let mut swapped = SeatbeltInputs { roots: vec![link.clone()], ..SeatbeltInputs::default() };
+    add_canonical_spellings(&mut swapped, &seatbelt_read_link);
+    assert!(swapped.planted.contains(&link), "{:?}", swapped.planted);
+    let allowed = format!("(allow file-write* (subpath {}))", sbpl_string(&want.to_string_lossy()));
+    assert!(!sandbox_exec_profile(&swapped).contains(&allowed));
 }
 
 /// The env step runs here as it does inside the profile: no ssh-agent, the
@@ -205,7 +276,7 @@ mod real {
             private_tmp: Some(private_tmp.to_string_lossy().into_owned()),
             ..SeatbeltInputs::default()
         };
-        add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
+        add_canonical_spellings(&mut inputs, &seatbelt_read_link);
         let profile = base.path().join("fence.sb");
         std::fs::write(&profile, sandbox_exec_profile(&inputs)).unwrap();
         Fence { _base: base, root, outside, private_tmp: private_tmp.to_string_lossy().into_owned(), profile }

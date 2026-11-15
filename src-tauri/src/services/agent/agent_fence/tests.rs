@@ -570,6 +570,7 @@ fn seatbelt_profile_denies_writes_then_restores_roots_and_protects_hooks() {
         own_home: None,
         private_tmp: None,
         canonical: Default::default(),
+        planted: Default::default(),
     };
     let profile = sandbox_exec_profile(&inputs);
     let lines: Vec<&str> = profile.lines().collect();

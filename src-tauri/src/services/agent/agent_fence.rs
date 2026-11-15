@@ -1983,6 +1983,11 @@ pub(crate) struct SeatbeltInputs {
     /// needs a rule under both. Every rule is rendered for each spelling.
     /// Filled by [`add_canonical_spellings`].
     pub canonical: std::collections::BTreeMap<String, String>,
+    /// The paths whose resolved spelling no *allow* rule is rendered under: a
+    /// symlink on them sits where a fenced agent can write, so the agent may
+    /// have put it there to have the next profile allow its target. Denials
+    /// still follow it. Filled by [`add_canonical_spellings`].
+    pub planted: std::collections::BTreeSet<String>,
 }
 
 /// The temp trees every process of the user shares: `/tmp` and the per-user
@@ -2011,10 +2016,15 @@ pub(crate) const SEATBELT_ESCAPE_DENIALS: &str = "(deny lsopen)\n(deny appleeven
 
 #[cfg(any(target_os = "macos", test))]
 impl SeatbeltInputs {
-    /// `path` (trailing `/` dropped), then its resolved spelling if it has one.
-    fn spellings(&self, path: &str) -> Vec<String> {
+    /// `path` (trailing `/` dropped), then its resolved spelling if it has
+    /// one — for an `allow` rule only when no link on it could be the agent's
+    /// ([`SeatbeltInputs::planted`]).
+    fn spellings(&self, path: &str, allow: bool) -> Vec<String> {
         let path = trim_sbpl_path(path);
         let mut out = vec![path.to_string()];
+        if allow && self.planted.contains(path) {
+            return out;
+        }
         if let Some(real) = self.canonical.get(path) {
             if real != path {
                 out.push(real.clone());
@@ -2028,11 +2038,18 @@ impl SeatbeltInputs {
     /// gets it closed.
     fn push_rules<'a>(&self, p: &mut String, head: &str, filter: &str, paths: impl Iterator<Item = &'a String>) {
         let close = ")".repeat(1 + head.matches('(').count());
+        let allow = head.starts_with("allow");
         for path in paths {
-            for spelled in self.spellings(path) {
+            for spelled in self.spellings(path, allow) {
                 p.push_str(&format!("({head} ({filter} {}){close}\n", sbpl_string(&spelled)));
             }
         }
+    }
+
+    /// Where a fenced agent may write: the roots, the writable support paths,
+    /// its home and its temp dir.
+    fn granted(&self) -> impl Iterator<Item = &String> {
+        self.roots.iter().chain(&self.writable).chain(self.own_home.iter()).chain(self.private_tmp.iter())
     }
 }
 
@@ -2043,27 +2060,109 @@ fn trim_sbpl_path(path: &str) -> &str {
     if trimmed.is_empty() { "/" } else { trimmed }
 }
 
-/// The resolved spelling of `path` (2442w): `canon` (the filesystem's
-/// `canonicalize` at run time) where the path exists, else macOS's own
-/// `/var`, `/tmp`, `/etc` → `/private/…` links, so a path that does not exist
-/// yet still gets its second spelling. `None` when it has only the one.
+/// Whether `path` is `dir` or inside it. ASCII case is ignored, as the default
+/// macOS volume does; on a case-sensitive one that only refuses more.
 #[cfg(any(target_os = "macos", test))]
-fn canonical_spelling(path: &str, canon: &dyn Fn(&Path) -> Option<PathBuf>) -> Option<String> {
-    let path = trim_sbpl_path(path);
-    let real = canon(Path::new(path))
-        .map(|p| p.to_string_lossy().into_owned())
-        .or_else(|| {
-            ["/var", "/tmp", "/etc"]
-                .into_iter()
-                .find(|top| path == *top || path.strip_prefix(top).is_some_and(|rest| rest.starts_with('/')))
-                .map(|_| format!("/private{path}"))
-        })?;
-    (real != path).then_some(real)
+fn sbpl_path_within(path: &str, dir: &str) -> bool {
+    let (path, dir) = (path.to_ascii_lowercase(), dir.to_ascii_lowercase());
+    dir == "/" || path == dir || path.strip_prefix(&dir).is_some_and(|rest| rest.starts_with('/'))
 }
 
-/// Record the resolved spelling of every path in `inputs` (2442w).
+/// The most links one path is followed through, as the kernel's `MAXSYMLINKS`.
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn add_canonical_spellings(inputs: &mut SeatbeltInputs, canon: &dyn Fn(&Path) -> Option<PathBuf>) {
+const SEATBELT_LINK_HOPS: usize = 32;
+
+/// `path` as the kernel resolves it, which is the spelling Seatbelt matches
+/// (2442w): every symlink on it followed, one component at a time. `read_link`
+/// answers the target of a link at an already resolved location and `None`
+/// for anything else, a missing entry included, so a path that does not exist
+/// yet still resolves through the links above it.
+///
+/// `None` for a relative path, a loop, and for a link that sits at or inside
+/// one of `refuse_in`. That last one is why this is not `canonicalize`: a
+/// fenced agent can rename a folder it may write (its root, its home) away
+/// and leave a link in its place, and a profile that then allowed the link's
+/// target would hand the agent the user's home at its next start. Linux has
+/// no twin of this: there a root is a mount point, which cannot be renamed.
+#[cfg(any(target_os = "macos", test))]
+fn resolve_spelling(path: &str, read_link: &dyn Fn(&str) -> Option<String>, refuse_in: &[String]) -> Option<String> {
+    if !path.starts_with('/') {
+        return None;
+    }
+    // A stack: the next component is the last element.
+    let parts = |text: &str| -> Vec<String> { text.split('/').filter(|c| !c.is_empty()).rev().map(str::to_string).collect() };
+    let mut pending = parts(path);
+    let mut resolved: Vec<String> = Vec::new();
+    let mut hops = 0;
+    while let Some(name) = pending.pop() {
+        match name.as_str() {
+            "." => {}
+            ".." => {
+                resolved.pop();
+            }
+            _ => {
+                let at = format!("/{}", resolved.iter().chain(std::iter::once(&name)).cloned().collect::<Vec<_>>().join("/"));
+                let Some(target) = read_link(&at) else {
+                    resolved.push(name);
+                    continue;
+                };
+                hops += 1;
+                if hops > SEATBELT_LINK_HOPS || refuse_in.iter().any(|dir| sbpl_path_within(&at, dir)) {
+                    return None;
+                }
+                if target.starts_with('/') {
+                    resolved.clear();
+                }
+                pending.extend(parts(&target));
+            }
+        }
+    }
+    Some(format!("/{}", resolved.join("/")))
+}
+
+/// [`resolve_spelling`], then macOS's own `/var`, `/tmp`, `/etc` →
+/// `/private/…` links for a path `read_link` showed no link on (a test's fake
+/// filesystem, a link that could not be read): they are the system's, so the
+/// second spelling is safe to name without looking.
+#[cfg(any(target_os = "macos", test))]
+fn resolved_spelling(path: &str, read_link: &dyn Fn(&str) -> Option<String>, refuse_in: &[String]) -> Option<String> {
+    let path = trim_sbpl_path(path);
+    let real = resolve_spelling(path, read_link, refuse_in)?;
+    if real != path {
+        return Some(real);
+    }
+    let system = ["/var", "/tmp", "/etc"].into_iter().any(|top| sbpl_path_within(path, top));
+    Some(if system { format!("/private{path}") } else { real })
+}
+
+/// Record the resolved spelling of every path in `inputs` (2442w), and which
+/// of the allowed paths must not be allowed under it
+/// ([`SeatbeltInputs::planted`]): those reached through a link at or inside a
+/// place the agent may write, by that place's spelled or resolved location.
+/// `read_link` is the filesystem's (`seatbelt_read_link`).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn add_canonical_spellings(inputs: &mut SeatbeltInputs, read_link: &dyn Fn(&str) -> Option<String>) {
+    let follow = |path: &str| resolved_spelling(path, read_link, &[]);
+    // Where a link may be the agent's: each granted path as spelled and where
+    // its own entry really sits (the resolved parent plus its name) — not
+    // where it resolves, since a folder renamed away and replaced by a link
+    // resolves to a place the agent could never write.
+    let mut reach: Vec<String> = Vec::new();
+    for path in inputs.granted() {
+        let path = trim_sbpl_path(path);
+        reach.push(path.to_string());
+        if let Some((parent, leaf)) = path.rsplit_once('/') {
+            let parent = follow(if parent.is_empty() { "/" } else { parent });
+            reach.extend(parent.map(|parent| format!("{}/{leaf}", parent.trim_end_matches('/'))));
+        }
+    }
+    let allowed: Vec<String> = inputs.granted().chain(&inputs.readable).cloned().collect();
+    for path in allowed {
+        let path = trim_sbpl_path(&path);
+        if resolved_spelling(path, read_link, &reach).is_none() {
+            inputs.planted.insert(path.to_string());
+        }
+    }
     let paths: Vec<String> = std::iter::once(&inputs.home)
         .chain(&inputs.roots)
         .chain(&inputs.writable)
@@ -2076,10 +2175,17 @@ pub(crate) fn add_canonical_spellings(inputs: &mut SeatbeltInputs, canon: &dyn F
         .cloned()
         .collect();
     for path in paths {
-        if let Some(real) = canonical_spelling(&path, canon) {
-            inputs.canonical.insert(trim_sbpl_path(&path).to_string(), real);
+        let path = trim_sbpl_path(&path);
+        if let Some(real) = follow(path).filter(|real| real != path) {
+            inputs.canonical.insert(path.to_string(), real);
         }
     }
+}
+
+/// The target of the symlink at `path`, for [`add_canonical_spellings`].
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn seatbelt_read_link(path: &str) -> Option<String> {
+    std::fs::read_link(path).ok().map(|target| target.to_string_lossy().into_owned())
 }
 
 /// The user's per-user cache dir (`…/C`, the sibling of `$TMPDIR`'s `…/T`):
@@ -2253,7 +2359,7 @@ pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
     p.push_str(SEATBELT_ESCAPE_DENIALS);
     seatbelt_socket_rules(&mut p, inputs);
     // Reads: hide $HOME, then restore what the agent needs to see.
-    for home in inputs.spellings(&inputs.home) {
+    for home in inputs.spellings(&inputs.home, false) {
         p.push_str(&format!(
             "(deny file-read* (subpath {}))\n(allow file-read-metadata (literal {}))\n",
             sbpl_string(&home),
@@ -2552,7 +2658,7 @@ pub fn wrap_pty_options_sandbox_exec(
         );
     }
     // Every path also under the spelling Seatbelt matches (2442w).
-    add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
+    add_canonical_spellings(&mut inputs, &seatbelt_read_link);
     let private_tmp = inputs.private_tmp.clone().ok_or("Agent sandbox: no private temp dir")?;
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
@@ -3033,7 +3139,7 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
             .into_iter()
             .map(|p| p.to_string_lossy().into_owned()),
     );
-    add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
+    add_canonical_spellings(&mut inputs, &seatbelt_read_link);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
     let profile_path = stage.join("preflight.sb");
     std::fs::write(&profile_path, sandbox_exec_profile(&inputs)).map_err(|e| format!("Agent sandbox: {e}"))?;
