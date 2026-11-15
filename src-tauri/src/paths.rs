@@ -250,6 +250,10 @@ const MACOS_EXTRA_DIRS: &[&str] = &[
     "/Library/TeX/texbin",
 ];
 
+/// Where Ollama.app (ollama.com's `install.sh`, the download, Homebrew's
+/// cask) keeps the `ollama` CLI on macOS.
+pub const MACOS_OLLAMA_CLI_DIR: &str = "/Applications/Ollama.app/Contents/Resources";
+
 fn supplemental_path_dirs_for(
     os: OsKind,
     home: &Path,
@@ -278,6 +282,10 @@ fn supplemental_path_dirs_for(
             dirs.push(PathBuf::from(
                 "/Applications/Docker.app/Contents/Resources/bin",
             ));
+            // Ollama's own `install.sh` on macOS puts Ollama.app here and links
+            // its CLI into /usr/local/bin only through `sudo` when that dir is
+            // not the user's — which a headless install has no terminal for.
+            dirs.push(PathBuf::from(MACOS_OLLAMA_CLI_DIR));
         }
         OsKind::Windows => {
             if let Some(local) = local_app_data {
@@ -1434,6 +1442,8 @@ mod tests {
         assert!(mac.contains(&home.join(".docker").join("bin")));
         assert!(mac.contains(&home.join(".orbstack").join("bin")));
         assert!(mac.contains(&PathBuf::from("/Applications/Docker.app/Contents/Resources/bin")));
+        assert!(mac.contains(&PathBuf::from(MACOS_OLLAMA_CLI_DIR)));
+        assert!(!unix.contains(&PathBuf::from(MACOS_OLLAMA_CLI_DIR)));
         // The container dirs are the Mac's alone: Linux keeps its list unchanged.
         assert!(!unix.contains(&home.join(".docker").join("bin")));
         assert!(!unix.contains(&home.join(".orbstack").join("bin")));

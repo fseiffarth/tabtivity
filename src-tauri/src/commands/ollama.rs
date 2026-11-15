@@ -110,9 +110,15 @@ pub const OLLAMA_DOWNLOAD_URL: &str = "https://ollama.com/download";
 /// - **Windows**: `winget install --id Ollama.Ollama …` (silent, per-user). winget
 ///   ships with all supported Windows 10/11 builds; if it is absent or fails, the
 ///   UI falls back to the manual command + the ollama.com download link.
-/// - **Linux/macOS**: the official `curl … install.sh | sh` script. It needs root
+/// - **Linux**: the official `curl … install.sh | sh` script. It needs root
 ///   to drop the binary and register the systemd service; it invokes `sudo` itself,
 ///   so a non-interactive run only succeeds with passwordless sudo or as root.
+/// - **macOS**: the same script, whose Darwin branch downloads `Ollama-darwin.zip`,
+///   moves Ollama.app into /Applications (an admin account's right, no `sudo`),
+///   then links `/usr/local/bin/ollama` — through `sudo` only when that dir is not
+///   the user's, which fails without a terminal. That one step does not matter:
+///   the app's CLI dir is on Tabtivity's PATH ([`crate::paths::MACOS_OLLAMA_CLI_DIR`]),
+///   so a run that got the app in place installed Ollama ([`install_failed`]).
 ///
 /// Returns the install log on success, or the tail of the output on failure.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -149,6 +155,8 @@ fn install_ollama_blocking(ctx: &CoreCtx) -> Result<String, String> {
     // Per-OS hint appended to failure messages (the likely reason it didn't take).
     let fail_hint: &str = if cfg!(target_os = "windows") {
         "It may need winget (App Installer) or administrator rights"
+    } else if cfg!(target_os = "macos") {
+        "It may need an administrator account (it installs into /Applications)"
     } else {
         "It likely needs sudo"
     };
@@ -189,7 +197,7 @@ fn install_ollama_blocking(ctx: &CoreCtx) -> Result<String, String> {
     let combined = lines.join("\n");
     let combined = combined.trim().to_string();
 
-    if !status.success() {
+    if install_failed(status.success(), cfg!(target_os = "macos"), ollama_installed) {
         let tail: Vec<&str> = combined.lines().rev().take(20).collect();
         let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
         return Err(if tail.is_empty() {
@@ -218,6 +226,14 @@ fn install_ollama_blocking(ctx: &CoreCtx) -> Result<String, String> {
     } else {
         combined
     })
+}
+
+/// Whether an Ollama installer run failed: it exited non-zero, except on
+/// macOS when Ollama is detected anyway — `install.sh` then stopped only at
+/// its `sudo ln` into /usr/local/bin, after Ollama.app was in place (see
+/// [`install_ollama`]). `detected` runs only for that case.
+fn install_failed(exited_ok: bool, macos: bool, detected: impl FnOnce() -> bool) -> bool {
+    !exited_ok && !(macos && detected())
 }
 
 /// OS-appropriate install guidance for the frontend, so the UI can render the

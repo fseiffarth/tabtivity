@@ -364,7 +364,9 @@ pub(crate) fn friendly_ollama_error(raw: &str) -> String {
 /// fallback all stay in sync with whatever the installer actually runs.
 ///
 /// - Windows: winget (present on all supported Windows 10/11 builds).
-/// - Linux/macOS: the official distro-agnostic install script.
+/// - Linux/macOS: the official install script. It has a Darwin branch
+///   (checked 2026-11-15): Ollama.app into /Applications, the CLI linked into
+///   /usr/local/bin; no Homebrew needed, which a fresh Mac lacks.
 pub fn ollama_install_cmd() -> &'static str {
     if cfg!(target_os = "windows") {
         "winget install --id Ollama.Ollama -e --silent --accept-source-agreements --accept-package-agreements"
