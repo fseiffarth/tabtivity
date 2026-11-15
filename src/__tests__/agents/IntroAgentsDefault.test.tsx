@@ -1,7 +1,8 @@
 /**
  * The intro's Agents page saves the user's pick as `default_agent_cmd`: it
- * opens on the current default, an installed chip or an Install click saves,
- * and clicking through an uninstalled chip (browsing) saves nothing.
+ * opens on the current default, an installed chip or a confirmed install
+ * saves, and clicking through an uninstalled chip (browsing) or an install
+ * that failed saves nothing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -16,6 +17,7 @@ vi.mock("../../lib/installCommand", async (orig) => ({
 
 import { AgentsPage } from "../../components/layout/intro/AgentsPage";
 import { useSettingsStore } from "../../stores/settings";
+import { resetInstallRuns } from "../../stores/installRuns";
 import type { Settings } from "../../types";
 
 const invokeMock = vi.mocked(invoke);
@@ -52,7 +54,19 @@ afterEach(() => {
   cleanup();
   invokeMock.mockReset();
   updateSettings.mockClear();
+  resetInstallRuns();
 });
+
+/** `install_agent` held open until the returned `finish` is called. */
+function holdInstall(): () => void {
+  let finish: () => void = () => {};
+  const base = invokeMock.getMockImplementation()!;
+  invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+    if (cmd === "install_agent") return new Promise<string>((r) => (finish = () => r("ok")));
+    return base(cmd, args as never);
+  });
+  return () => finish();
+}
 
 const chip = (name: string) => screen.findByRole("button", { name: new RegExp(`^${name}$`) });
 
@@ -70,12 +84,59 @@ describe("intro Agents page default CLI", () => {
     expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "codex" });
   });
 
-  it("does not save an uninstalled chip until Install is clicked", async () => {
+  it("does not save an uninstalled chip until its install is confirmed", async () => {
+    let finish: (v: string) => void = () => {};
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "install_agent") return new Promise<string>((r) => (finish = r));
+      return base(cmd, args as never);
+    });
     mount();
     fireEvent.click(await chip("Gemini CLI"));
     expect(updateSettings).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole("button", { name: /^Install Gemini CLI/ }));
-    expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "gemini" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("install_agent", { id: "gemini" }));
+    // Clicked, still running: nothing saved yet.
+    expect(updateSettings).not.toHaveBeenCalled();
+    finish("ok");
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "gemini" }));
+  });
+
+  it("does not save the default when the install fails", async () => {
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "install_agent") throw "npm ERR! EACCES";
+      return base(cmd, args as never);
+    });
+    mount();
+    fireEvent.click(await chip("Gemini CLI"));
+    fireEvent.click(await screen.findByRole("button", { name: /^Install Gemini CLI/ }));
+    await screen.findByRole("alert");
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("a late install does not overwrite a default picked since the click", async () => {
+    const finish = holdInstall();
+    mount();
+    fireEvent.click(await chip("Gemini CLI"));
+    fireEvent.click(await screen.findByRole("button", { name: /^Install Gemini CLI/ }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("install_agent", { id: "gemini" }));
+    fireEvent.click(await chip("Codex"));
+    expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "codex" });
+    finish();
+    await waitFor(() => expect(invokeMock.mock.calls.filter(([c]) => c === "list_agents").length).toBeGreaterThan(1));
+    expect(updateSettings).not.toHaveBeenCalledWith({ default_agent_cmd: "gemini" });
+  });
+
+  it("an install that ends after the user moved on still becomes the default", async () => {
+    const finish = holdInstall();
+    mount();
+    fireEvent.click(await chip("Gemini CLI"));
+    fireEvent.click(await screen.findByRole("button", { name: /^Install Gemini CLI/ }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("install_agent", { id: "gemini" }));
+    cleanup();
+    finish();
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "gemini" }));
   });
 
   it("saves when Recheck finds the selected CLI installed", async () => {

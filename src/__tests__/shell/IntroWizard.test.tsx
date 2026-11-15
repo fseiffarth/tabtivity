@@ -363,9 +363,10 @@ describe("How to start intro wizard", () => {
     expect(screen.getByText("1 project(s) open")).toBeTruthy();
   });
 
-  it("Agent CLIs: installed state per CLI, and Install runs the registry command in a terminal tab", async () => {
+  it("Agent CLIs: installed state per CLI, and Install runs the registry installer in place", async () => {
     localStorage.setItem(storageKey("intro.page"), "agents");
     backend({
+      install_agent: () => "ok",
       list_agents: () => [
         { id: "claude", label: "Claude", bin: "claude", install_cmd: "curl claude | bash", shell_kind: "bash", docs: "", installed: true },
         { id: "codex", label: "Codex", bin: "codex", install_cmd: "curl codex | sh", shell_kind: "bash", docs: "", installed: false },
@@ -384,11 +385,13 @@ describe("How to start intro wizard", () => {
     expect(screen.getByText("installed")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
-    fireEvent.click(screen.getByRole("button", { name: "Install Codex in a terminal" }));
-    expect(runInstallInTab).toHaveBeenCalledWith("Install Codex", "curl codex | sh", "bash");
-    // Installing is the pick: it becomes the default agent CLI.
-    expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "codex" });
-    expect(onClose).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Install Codex" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_agent", { id: "codex" }));
+    // A confirmed install is the pick: it becomes the default agent CLI, and
+    // the wizard stays open (no terminal needed).
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "codex" }));
+    expect(runInstallInTab).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
 
     // npm-based: the Node.js prerequisite shows up with its own installer.
     fireEvent.click(screen.getByRole("button", { name: "Google Gemini" }));

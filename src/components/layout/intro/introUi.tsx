@@ -40,10 +40,17 @@ export function IntroStep({
 }
 
 /** Live state as the Settings panels show it: a dot and a short phrase.
- *  `null` state = still probing (no dot, muted text). */
-export function IntroStatus({ ok, children }: { ok: boolean | null; children: ReactNode }) {
+ *  `null` state = still probing (no dot, muted text). `role="status"` makes
+ *  it a polite live region (no extra `aria-live`), so a probe or an install
+ *  that changes it is read out; `id` lets a disabled button point at it. */
+export function IntroStatus({ ok, id, children }: { ok: boolean | null; id?: string; children: ReactNode }) {
   return (
-    <span className="ollama-status-text intro-status" data-state={ok === null ? "probing" : ok ? "ok" : "off"}>
+    <span
+      className="ollama-status-text intro-status"
+      data-state={ok === null ? "probing" : ok ? "ok" : "off"}
+      id={id}
+      role="status"
+    >
       {ok !== null && <span className={`ollama-status-dot ${ok ? "running" : "stopped"}`} />}
       {children}
     </span>
