@@ -1,7 +1,7 @@
 ---
 id: mobile
 title: Tabtivity Mobile (phone companion)
-keywords: [mobile, phone, linked desktops, link computers, several computers, project docs, send now, files, browse, project files, read-only, upload, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, not connecting, stuck, force stop, version]
+keywords: [mobile, phone, linked desktops, several computers, project docs, send now, files, project files, read-only, upload, search files, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, not connecting, stuck, force stop, version]
 related: [pdf-and-markup, scheduled-prompts, server, local-models]
 ---
 
