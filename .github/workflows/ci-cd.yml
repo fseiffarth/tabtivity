@@ -319,6 +319,7 @@ jobs:
         with:
           name: ci-passed-Linux-${{ steps.plan.outputs.key }}
           path: .ci-passed
+          include-hidden-files: true   # upload-artifact skips dot paths by default
           retention-days: 30
           if-no-files-found: error
 
@@ -328,6 +329,7 @@ jobs:
         with:
           name: ci-passed-Windows-${{ steps.plan.outputs.key }}
           path: .ci-passed
+          include-hidden-files: true   # upload-artifact skips dot paths by default
           retention-days: 30
           if-no-files-found: error
 
@@ -337,6 +339,7 @@ jobs:
         with:
           name: ci-passed-macOS-${{ steps.plan.outputs.key }}
           path: .ci-passed
+          include-hidden-files: true   # upload-artifact skips dot paths by default
           retention-days: 30
           if-no-files-found: error
 
@@ -477,6 +480,7 @@ jobs:
         with:
           name: ci-passed-${{ runner.os }}-${{ needs.ci-plan.outputs.key }}
           path: .ci-passed
+          include-hidden-files: true   # upload-artifact skips dot paths by default
           retention-days: 30
           if-no-files-found: error
 
@@ -598,6 +602,7 @@ jobs:
         with:
           name: ci-passed-${{ runner.os }}-${{ needs.ci-plan.outputs.key }}
           path: .ci-passed
+          include-hidden-files: true   # upload-artifact skips dot paths by default
           retention-days: 30
           if-no-files-found: error
 
@@ -716,6 +721,7 @@ jobs:
         with:
           name: ci-passed-${{ runner.os }}-${{ needs.ci-plan.outputs.key }}
           path: .ci-passed
+          include-hidden-files: true   # upload-artifact skips dot paths by default
           retention-days: 30
           if-no-files-found: error
 
