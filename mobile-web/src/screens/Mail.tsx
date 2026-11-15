@@ -21,6 +21,7 @@ import { isUntested } from "../../../src/lib/untested";
 import { formatBytes } from "../../../src/lib/formatBytes";
 import { useI18nStore, useT, type Language, type TranslationKey } from "../../../src/lib/i18n";
 import { HintQueue, type HintKey } from "../components/HintMessage";
+import { ScreenHead } from "../components/ScreenHead";
 
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
 
@@ -248,11 +249,10 @@ export function Mail() {
   };
 
   return <main ref={screen} className="screen mail-mobile-screen">
-    <header>
-      {goBack && <button className="back" onClick={goBack}>‹</button>}
-      <h1>{message ? safeText(message.message.subject) || t("mobile.mail.noSubject") : folder ? safeText(folder.folder.name) : t("mobile.mail.title")}</h1>
-      <button onClick={refresh} disabled={busy}>↻</button>
-    </header>
+    <ScreenHead
+      title={message ? safeText(message.message.subject) || t("mobile.mail.noSubject") : folder ? safeText(folder.folder.name) : t("mobile.mail.title")}
+      back={goBack ? { label: message && folder ? safeText(folder.folder.name) : t("mobile.mail.title"), onClick: goBack } : undefined}
+      onRefresh={refresh} refreshing={busy} untested={isUntested("mobile.design.mail")} />
     <p className="notice">{writes.actions || writes.reply
       ? [
         t("mobile.mail.noticeWrites"),

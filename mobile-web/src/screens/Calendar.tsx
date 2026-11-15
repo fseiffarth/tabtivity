@@ -10,6 +10,7 @@ import { TimeFieldCore } from "../../../src/components/common/TimeFieldCore";
 import { phoneUse24h } from "../terminal/chatTimes";
 import { useBackLayer } from "../backStack";
 import { HintQueue, type HintKey } from "../components/HintMessage";
+import { ScreenHead } from "../components/ScreenHead";
 
 const NAMES: TranslationKey[] = ["agentSchedule.sun", "agentSchedule.mon", "agentSchedule.tue", "agentSchedule.wed", "agentSchedule.thu", "agentSchedule.fri", "agentSchedule.sat"];
 const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };
@@ -94,7 +95,7 @@ export function Calendar() {
   const createAt = (date: string, hour?: number) => setEditing({ draft: hour === undefined ? blankEvent(date, data?.calendars ?? []) : blankEventAt(date, hour, data?.calendars ?? []) });
   const canWrite = !!data?.calendars.some((c) => !c.readonly);
   return <main className="screen mobile-calendar-screen">
-    <header><h1>{t("mobile.calendar.title")}</h1><button onClick={() => void load()} disabled={busy}>↻</button></header>
+    <ScreenHead title={t("mobile.calendar.title")} onRefresh={() => void load()} refreshing={busy} untested={isUntested("mobile.design.calendar")} />
     <div className="mobile-calendar-actions"><button className="primary" disabled={busy || !canWrite} onClick={() => createAt(selected)}>{t("mobile.calendar.addEvent")}</button><button disabled={busy} onClick={() => setManage(true)}>{t("calendarSidebar.calendarsTitle")}</button><button onClick={() => setReminders(true)}>{t("mobile.push.reminders")}{isUntested("mobile.calendar.push") && <> <span className="untested">{t("mobile.newTab.untested")}</span></>}</button></div>
     {error && <p className="error">{error}</p>}
     <HintQueue hints={CALENDAR_TIPS} />

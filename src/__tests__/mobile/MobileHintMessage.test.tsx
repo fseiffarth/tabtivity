@@ -88,6 +88,13 @@ describe("phone hint messages", () => {
     expect(screen.getByRole("status")).toBeTruthy();
   });
 
+  it("lays its actions out as one text row: Turn off tips, then Skip and Read in the accent", () => {
+    const { container } = render(<HintMessage hint="agentHold" />);
+    const row = [...container.querySelectorAll(".hint-message-actions > button")];
+    expect(row.map((b) => b.textContent)).toEqual(["Turn off tips", "Skip", "Read"]);
+    expect(row.map((b) => b.className)).toEqual(["hint-message-off", "hint-message-skip", "hint-message-read"]);
+  });
+
   it("Skip closes the tip for this visit without counting a read", () => {
     const first = render(<HintMessage hint="agentHold" />);
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));

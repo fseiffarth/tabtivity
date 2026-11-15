@@ -50,7 +50,7 @@ describe("phone mail writes", () => {
   it("shows no write controls when the desktop reports neither capability", async () => {
     await openMessage({});
     expect(screen.queryByText("Mark read")).toBeNull();
-    expect(screen.queryByText("★ Star")).toBeNull();
+    expect(screen.queryByText("Star")).toBeNull();
     expect(screen.queryByLabelText("Reply text")).toBeNull();
     expect(screen.getByText(/Read-only mail/)).toBeTruthy();
   });
@@ -76,7 +76,7 @@ describe("phone mail writes", () => {
   it("explains a desktop-side refusal instead of echoing the code", async () => {
     await openMessage({ actions: true });
     vi.mocked(api).mockRejectedValue(new ApiError(403, "mail_actions_disabled"));
-    fireEvent.click(screen.getByText("★ Star"));
+    fireEvent.click(screen.getByText("Star"));
     await screen.findByText(new RegExp(String.raw`Switched off in ${BRAND.display}`));
   });
 

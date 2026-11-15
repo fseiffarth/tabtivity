@@ -13,6 +13,7 @@ import { fallbackColumnId } from "../../../shared/todoColumns";
 import { ConfirmSheet, NameSheet, type Confirm, type NameAsk } from "../components/ConfirmSheet";
 import { useBackLayer } from "../backStack";
 import { HintQueue, type HintKey } from "../components/HintMessage";
+import { ScreenHead } from "../components/ScreenHead";
 
 type Editing = TodoCard | "new" | null;
 type Translate = (key: TranslationKey, vars?: Record<string, string | number>) => string;
@@ -182,7 +183,7 @@ export function Todo({ card }: { card?: string }) {
     !(hideDone && task.done) && !(hideArchived && archivedColumns.has(task.column)));
 
   return <main className="screen todo-screen">
-    <header><h1>{t("todo.overlayTitle")}</h1><button onClick={load} disabled={busy}>↻</button></header>
+    <ScreenHead title={t("todo.overlayTitle")} onRefresh={load} refreshing={busy} untested={isUntested("mobile.design.todo")} />
     {error && <p className="error">{boardError(error.reason, t)}</p>}
     {board?.desktop_available === false && <p className="notice">{t("mobile.headless.owner")} {isUntested("mobile.headless.todo") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
     {/* The search is the first thing under the header: it is what a board of

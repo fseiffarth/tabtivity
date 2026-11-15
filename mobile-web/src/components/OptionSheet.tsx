@@ -25,6 +25,8 @@ export interface SheetOption {
   more?: boolean;
   /** A destructive act (close, delete): drawn in the danger colour. */
   danger?: boolean;
+  /** The row is shown but cannot be taken (a move the desktop would refuse). */
+  disabled?: boolean;
 }
 
 /**
@@ -47,7 +49,8 @@ export function OptionSheet({ title, subtitle, note, children, footer, options, 
   /** Shown under the rows. */
   footer?: ReactNode;
   options: SheetOption[];
-  /** Shown while the list is still empty. */
+  /** Shown while the list is still empty; with no text, nothing is drawn (a
+   * sheet that is only a `note` or `children`). */
   waiting: string;
   busy: boolean;
   onPick: (key: string) => void;
@@ -68,7 +71,7 @@ export function OptionSheet({ title, subtitle, note, children, footer, options, 
       {note && <p className={note.error ? "sheet-note error" : "sheet-note"} role={note.error ? "alert" : undefined}>{note.text}</p>}
       {children}
       {options.length === 0
-        ? <p className="sheet-note">{waiting}</p>
+        ? (waiting ? <p className="sheet-note">{waiting}</p> : null)
         : <ul className="option-list">{options.map((option, index) => {
             const prev = options[index - 1];
             const heading = option.group && option.group !== prev?.group;
@@ -78,7 +81,7 @@ export function OptionSheet({ title, subtitle, note, children, footer, options, 
             {heading && <li className="option-list-group">{option.group}</li>}
             {gap && <li className="option-list-group option-list-gap" aria-hidden="true" />}
             <li>
-            <button className={classes} aria-current={option.current || undefined} data-steer-confirm={option.key === "confirm" ? "" : undefined} disabled={busy} onClick={() => onPick(option.key)}>
+            <button className={classes} aria-current={option.current || undefined} data-steer-confirm={option.key === "confirm" ? "" : undefined} disabled={busy || option.disabled} onClick={() => onPick(option.key)}>
               {option.icon && <i className="option-icon" aria-hidden="true">{option.icon}</i>}
               <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
               {option.trailing !== undefined && <span className="option-trail">{option.trailing}</span>}

@@ -367,7 +367,7 @@ small { color:#9498aa; }
 /* Home: slim bar, large title, one segmented switch, then inset groups with
    hairline rows. No gradients: accent for actions and selection, colour for
    state. The project screen shares the gutter and the ground. */
-.home-screen,.project-screen { padding-inline:var(--sp-4); background:#0b0d13; }
+.home-screen,.project-screen,.mail-mobile-screen,.todo-screen,.mobile-calendar-screen { padding-inline:var(--sp-4); background:#0b0d13; }
 .project-screen { padding-top:0; }
 .home-header { min-height:var(--hit); gap:var(--sp-1); }
 .home-brand { display:flex; flex:1; align-items:center; gap:var(--sp-2); min-width:0; }
@@ -387,16 +387,16 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .home-head-button > .untested { position:absolute; top:-6px; right:-4px; }
 .home-settings svg { width:22px; height:22px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .projects-row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:var(--sp-3); }
-.projects-row h1 { font-size:var(--fs-large); font-weight:700; letter-spacing:-.02em; }
+.projects-row h1,.screen-head h1 { font-size:var(--fs-large); font-weight:700; letter-spacing:-.02em; }
 .projects-row > .new-tab { --o:var(--r-sm); display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); padding:0; border:0; font-size:1.25rem; line-height:1; }
 /* Four segments have to fit the narrowest phones in every language. */
 /* The projects' caption shows only under Needs you; alone, the title says it. */
 .home-section-head { margin:var(--sp-6) 2px var(--sp-2); font-size:var(--fs-headline); font-weight:700; letter-spacing:-.01em; }
 .home-needs > .home-section-head { margin-top:var(--sp-5); }
 /* An inset group. Never put a sheet in one: the clip would cut it off. */
-.home-group,.home-screen > .home-projects { --o:var(--r-lg); display:grid; gap:0; background:var(--surface-group); }
-.home-group > * + *,.home-projects > * + * { border-top:1px solid var(--hairline); }
-.home-needs-row,.home-group-more { display:flex; align-items:center; gap:var(--sp-3); width:100%; min-height:52px; padding:10px var(--sp-3); border:0; border-radius:0; background:transparent; text-align:left; }
+.home-group,.tool-group,.home-screen > .home-projects { --o:var(--r-lg); display:grid; gap:0; background:var(--surface-group); }
+.home-group > * + *,.home-projects > * + *,.tool-group > * + * { border-top:1px solid var(--hairline); }
+.home-needs-row,.home-group-more,.tool-row { display:flex; align-items:center; gap:var(--sp-3); width:100%; min-height:52px; padding:10px var(--sp-3); border:0; border-radius:0; background:transparent; text-align:left; }
 .home-needs-row > .agent-status { flex:0 0 auto; justify-content:center; width:28px; height:28px; padding:0; }
 .home-needs-copy { display:grid; flex:1 1 auto; gap:2px; min-width:0; }
 .home-needs-title,.home-needs-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -425,9 +425,10 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .hint-message-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .hint-message-head > button { flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -8px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.3rem; }
 .hint-message > p { margin:8px 0; }
-.hint-message-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; }
-.hint-message-actions > button { min-height:var(--hit); padding:6px 14px; }
-.hint-message-actions > .untested { margin-right:auto; }
+.hint-message-actions { display:flex; align-items:center; gap:var(--sp-1); margin-bottom:calc(-1 * var(--sp-2)); }
+.hint-message-actions > button { min-height:var(--hit); padding:0 var(--sp-3); border:0; border-radius:var(--r-sm); background:transparent; color:#d7d3f5; font-size:var(--fs-sub); font-weight:600; }
+.hint-message-actions > .hint-message-off { margin-right:auto; margin-left:calc(-1 * var(--sp-3)); color:var(--ink-muted); font-weight:500; }
+.hint-message-actions > .hint-message-read { color:#bcb0ff; }
 .hint-message-floating { position:fixed; z-index:10; top:calc(64px + env(safe-area-inset-top)); left:max(12px,calc((100vw - var(--screen-measure)) / 2 + 12px)); right:max(12px,calc((100vw - var(--screen-measure)) / 2 + 12px)); margin:0; max-height:calc(100dvh - 90px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow:auto; box-shadow:0 8px 24px rgba(4,5,9,.45); }
 .home-empty,.project-empty { display:grid; justify-items:center; gap:6px; padding:var(--sp-7) var(--sp-4); text-align:center; }
 .home-empty-glyph,.project-empty-glyph { color:#6f7488; font-size:40px; line-height:1; }
@@ -453,7 +454,30 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .project-activate { margin-bottom:var(--sp-3); }
 .project-activate > button { --o:var(--r-md); width:100%; min-height:var(--hit); border:0; }
 /* The radius these screens round their pieces to, each its own `--o`. */
-.projects-row > .new-tab,.home-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
+.projects-row > .new-tab,.home-group,.tool-group,.home-screen > .home-projects,.tab-card-tile,.home-tile,.home-desktop > .phone-settings .option-list button,.project-foot,.project-activate > button { border-radius:var(--o); }
+/* Tool screens: the head and the few pieces Mail, To-do and Calendar share
+   (docs/mobile_tool_screens_plan.md). The group, the row, the segment and the
+   large title are Home's own rules above (`.tool-group`, `.tool-row`,
+   `.tool-segment`, `.screen-head h1` are aliases there). Dark-palette tokens
+   only; the build rewrites the colours per theme. */
+.screen-head { flex-direction:column; align-items:stretch; justify-content:flex-start; gap:0; min-height:0; }
+.screen-head .projects-row { align-items:flex-start; }
+.screen-head h1 { min-width:0; overflow-wrap:anywhere; unicode-bidi:plaintext; }
+.screen-head-main { display:grid; flex:1 1 auto; min-width:0; align-self:center; }
+.screen-head-title { display:flex; flex-wrap:wrap; align-items:center; column-gap:var(--sp-2); }
+.screen-head-back { display:inline-flex; align-items:center; align-self:flex-start; gap:var(--sp-1); min-height:var(--hit); margin-left:calc(-1 * var(--sp-2)); padding:0 var(--sp-3) 0 var(--sp-1); border:0; border-radius:var(--r-md); background:transparent; color:#bcb0ff; font-size:var(--fs-body); font-weight:600; }
+.screen-head-back > .app-icon { width:20px; height:20px; }
+.screen-head-back > .app-icon g { stroke-width:2; }
+.screen-head-sub { color:var(--ink-muted); font-size:var(--fs-sub); }
+.screen-head-sub > button { display:inline-flex; align-items:center; gap:var(--sp-1); max-width:100%; min-height:var(--hit); margin-block:calc(-1 * var(--sp-3)); padding:0; border:0; background:transparent; color:inherit; font-size:inherit; text-align:left; }
+.screen-head-actions { display:flex; flex:0 0 auto; align-items:center; gap:var(--sp-1); }
+.tool-section-head { margin:var(--sp-6) 2px var(--sp-2); color:var(--ink-muted); font-size:var(--fs-foot); font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+.tool-segment { width:100%; }
+.tool-segment button { flex:1 1 0; min-width:0; }
+.tool-segment button[aria-pressed="true"] { background-color:#3b326e; }
+.tool-chip { display:inline-flex; align-items:center; gap:var(--sp-1); min-height:28px; padding:0 var(--sp-3); border:0; border-radius:999px; background:#2e2b48; color:#bcb0ff; font-size:var(--fs-foot); font-weight:600; white-space:nowrap; }
+.tool-chip > .app-icon { width:14px; height:14px; }
+.tool-badge { display:inline-grid; place-items:center; min-width:20px; height:20px; padding:0 6px; border-radius:999px; background:#2e2b48; color:#bcb0ff; font-size:var(--fs-micro); font-weight:700; font-variant-numeric:tabular-nums; }
 /* The four top-level sections. Fixed to the bottom edge so it survives the long
    scroll of a board or a month, on the same `--screen-measure` as `.screen`, and kept under the modal backdrops (z-index 10/12) so an
    open editor still covers it. `.tabbed > .screen` pays for the space it takes
@@ -534,7 +558,7 @@ button.mobile-alert-row { cursor:pointer; }
 /* The last card must not end under the button the way it must not end under the
    tab bar; this replaces `.tabbed > .screen`'s allowance rather than adding to
    it, so the two never double up. */
-.tabbed > .todo-screen,.tabbed > .project-screen,.tabbed > .home-screen.has-fab { padding-bottom:calc(150px + max(24px,env(safe-area-inset-bottom))); }
+.tabbed > .todo-screen,.tabbed > .mobile-calendar-screen,.tabbed > .project-screen,.tabbed > .home-screen.has-fab { padding-bottom:calc(150px + max(24px,env(safe-area-inset-bottom))); }
 /* The search sits on its own, directly under the header: it is the first thing
    reached for on a board of forty cards, so it is not one cell of the filter
    grid below it. */
@@ -642,7 +666,6 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-editor-actions { align-items:center; }
 .todo-editor-actions > span { flex:1; }
 @media (max-width: 420px) { .todo-editor { padding:14px; } .todo-editor-grid,.todo-due-fields { grid-template-columns:1fr; } .todo-step-row { grid-template-columns:auto minmax(0,1fr) auto auto auto; gap:4px; } .todo-step-row button { padding-inline:6px; } }
-.mail-mobile-screen header h1 { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
 .mail-mobile-accounts,.mail-mobile-list,.mail-mobile-folders,.mail-mobile-account { display:grid; gap:10px; }
 .mail-mobile-account { padding:14px; border:1px solid #383c4d; border-radius:12px; background:rgba(28,31,43,.92); }
 .mail-mobile-account > div:first-child { display:grid; gap:3px; }
@@ -679,6 +702,15 @@ button.mobile-alert-row { cursor:pointer; }
 .mail-mobile-reply-confirm div { display:flex; gap:8px; }
 .mail-mobile-reply-confirm div button { flex:1; }
 .mail-mobile-sent { padding:10px; border-radius:9px; background:#1f3b2a; color:#b7f0c8; }
+/* Mail's pickers: the account dropdown heads the overview, and inside a folder
+   the account and folder dropdowns share one row. */
+.mail-mobile-picker { gap:6px; font-size:.86rem; }
+.mail-mobile-switch { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:8px; margin-bottom:12px; }
+.mail-mobile-folders button { align-items:center; }
+.mail-mobile-folders button i { flex:0 0 auto; font-style:normal; }
+.mail-mobile-folders button span { flex:1; min-width:0; }
+.mail-mobile-folders button.has-unread span { font-weight:700; color:#fff; }
+.mail-mobile-folders button.has-unread small { color:#d6d0ff; }
 .mobile-calendar-screen { display:grid; align-content:start; gap:14px; }
 .mobile-calendar-actions { display:flex; gap:8px; }
 .mobile-calendar-actions button { flex:1; }
@@ -730,26 +762,18 @@ button.mobile-alert-row { cursor:pointer; }
 .mobile-calendar-hour-lane { display:grid; gap:8px; min-height:34px; align-content:start; }
 .mobile-calendar-hour-add { width:100%; min-height:34px; border:1px dashed #383c4d; border-radius:9px; background:transparent; color:#687084; font-size:1rem; }
 .mobile-calendar-empty { margin:0; padding:18px; border:1px solid #383c4d; border-radius:11px; color:#9498aa; text-align:center; }
-/* Mail's pickers: the account dropdown heads the overview, and inside a folder
-   the account and folder dropdowns share one row. */
-.mail-mobile-picker { gap:6px; font-size:.86rem; }
-.mail-mobile-switch { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(0,1fr); gap:8px; margin-bottom:12px; }
-.mail-mobile-folders button { align-items:center; }
-.mail-mobile-folders button i { flex:0 0 auto; font-style:normal; }
-.mail-mobile-folders button span { flex:1; min-width:0; }
-.mail-mobile-folders button.has-unread span { font-weight:700; color:#fff; }
-.mail-mobile-folders button.has-unread small { color:#d6d0ff; }
 /* Mail, To-do and Calendar are rounded to the home screen's scale as well, on
    the same two rules: a bordered element takes `--r` and its rim colour
    `--rim` (`--rim-l`/`--rim-lw` for a heavier left edge); a borderless one
    only `--r`. The defaults sit in `:where()` so any rule can retint or resize
-   a piece. */
-:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"]))) { --r:var(--r-md); --rim:#383c4d; }
-:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) > header > button:not(.back),:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select),.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-fab,.todo-chip),.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"])) {
+   a piece. One group each below: shared, Mail, To-do, Calendar. */
+/* Rounding · shared (the event/card editor, the round + button, inputs) */
+:where(:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button:not(.sheet-close),select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),:is(.todo-screen,.mobile-calendar-screen) .todo-fab) { --r:var(--r-md); --rim:#383c4d; }
+:is(.todo-screen,.mobile-calendar-screen) .todo-editor,:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button:not(.sheet-close),select,textarea,fieldset,input:not([type="checkbox"],[type="range"],[type="color"])),:is(.todo-screen,.mobile-calendar-screen) .todo-fab {
   border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
 }
-:where(:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.notice:not(.todo-mobile-note),.error),.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div),.todo-screen .todo-column-count,.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i)) { --r:var(--r-md); }
-:is(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.notice:not(.todo-mobile-note),.error),.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div),.todo-screen .todo-column-count,.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i) {
+:where(:is(.todo-screen,.mobile-calendar-screen) :is(.notice:not(.todo-mobile-note),.error)) { --r:var(--r-md); }
+:is(.todo-screen,.mobile-calendar-screen) :is(.notice:not(.todo-mobile-note),.error) {
   border-radius:var(--r);
 }
 /* Sizes and edges, per piece. Inputs, dropdowns and text areas keep the input
@@ -758,9 +782,34 @@ button.mobile-alert-row { cursor:pointer; }
 :where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) .primary { --rim:#8c7df4; }
 /* Focus retints the rim; the field draws no outline of its own. */
 :where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(input,select,textarea):focus { --rim:#7c6cff; outline:0; }
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.mail-mobile-folders button,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-reply button,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div,.todo-editor :is(button,fieldset),.todo-mobile-filters .todo-inline-check,.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-warning) { --r:var(--r-sm); }
-:where(.mail-mobile-screen,.todo-screen,.mobile-calendar-screen) :is(.mail-mobile-account,.mail-mobile-message pre,.mail-mobile-reply,.todo-add-column) { --r:var(--r-md); }
+:where(:is(.todo-screen,.mobile-calendar-screen) .todo-editor :is(button,fieldset)) { --r:var(--r-sm); }
+.todo-editor-heading > .sheet-close { padding:0; background:transparent; }
+.todo-fab { --r:17px; }
+.todo-tag-list button { --rim:#3d3860; }
+.todo-editor { --r:14px; --rim:#524a78; }
+.todo-editor .todo-tag-list button { --r:6px; }
+/* Rounding · Mail */
+:where(.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select)) { --r:var(--r-md); --rim:#383c4d; }
+.mail-mobile-screen :is(.mail-mobile-account,.mail-mobile-folders button,.mail-mobile-row,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-message pre,.mail-mobile-reply,.mail-mobile-reply textarea,.mail-mobile-reply button,.mail-mobile-switch select,.mail-mobile-picker select) {
+  border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
+}
+:where(.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div)) { --r:var(--r-md); }
+.mail-mobile-screen :is(.mail-mobile-message-meta,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div) {
+  border-radius:var(--r);
+}
+:where(.mail-mobile-screen :is(.mail-mobile-folders button,.mail-mobile-pager button,.mail-mobile-actions button,.mail-mobile-reply button,.mail-mobile-warning,.mail-mobile-sent,.mail-mobile-reply-confirm,.mail-mobile-attachments div)) { --r:var(--r-sm); }
 .mail-mobile-row.unread { --rim-l:#8c7df4; --rim-lw:4px; }
+/* Rounding · To-do */
+:where(.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-chip)) { --r:var(--r-md); --rim:#383c4d; }
+.todo-screen :is(.todo-mobile-search,.todo-mobile-filters select,.todo-mobile-filters .todo-inline-check,.todo-mobile-column,.todo-mobile-card,.todo-check,.todo-mobile-actions button,.todo-mobile-actions select,.todo-mobile-column-head > div > button,.todo-add-column,.todo-chip) {
+  border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
+}
+:where(.todo-screen .todo-column-count) { --r:var(--r-md); }
+.todo-screen .todo-column-count {
+  border-radius:var(--r);
+}
+:where(.todo-screen :is(.todo-mobile-filters .todo-inline-check)) { --r:var(--r-sm); }
+:where(.todo-screen :is(.todo-add-column)) { --r:var(--r-md); }
 .todo-screen .todo-mobile-search { --r:var(--r-md); }
 .todo-mobile-column { --r:var(--r-md); }
 .todo-mobile-card { --r:7px; --rim:#2a2f44; --rim-l:var(--todo-accent, #7c6cff); --rim-lw:2px; }
@@ -770,14 +819,21 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-mobile-actions button:first-child { --rim:#31364a; }
 .todo-mobile-actions select { --rim:#272c3b; }
 .todo-mobile-column-head > div > button { --r:6px; --rim:transparent; }
-.todo-fab { --r:17px; }
-.todo-chip,.todo-column-count,.todo-editor .todo-tag-list button { --r:6px; }
+.todo-chip,.todo-column-count { --r:6px; }
 .todo-chip { --rim:transparent; }
 .todo-chip.due.overdue { --rim:#65323d; }
 .todo-chip.due.today { --rim:#66522a; }
 .todo-chip.due.soon { --rim:#2f4658; }
-.todo-tag-list button { --rim:#3d3860; }
-.todo-editor { --r:14px; --rim:#524a78; }
+/* Rounding · Calendar */
+:where(.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"]))) { --r:var(--r-md); --rim:#383c4d; }
+.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"])) {
+  border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
+}
+:where(.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i)) { --r:var(--r-md); }
+.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i) {
+  border-radius:var(--r);
+}
+:where(.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-warning)) { --r:var(--r-sm); }
 .mobile-calendar-day { --r:6px; --rim:#303545; }
 .mobile-calendar-hour-add { --r:6px; }
 .mobile-calendar-day.today > span { --r:6px; }
@@ -809,9 +865,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .terminal-title .tabby-model { justify-self:start; color:var(--ink-muted); font-size:var(--fs-caption); }
 /* A segment: a dark track, the picked half lit. In the Focus head it is one
    pill, the view's name over its menu. */
-.terminal-view-switch { display:flex; gap:2px; padding:2px; border:0; border-radius:0; background:#0b0d13; }
-.terminal-view-switch button { min-height:30px; padding:0 12px; border:0; border-radius:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-foot); font-weight:600; }
-.terminal-view-switch button.selected { color:#e7e9f2; }
+.terminal-view-switch,.tool-segment { display:flex; gap:2px; padding:2px; border:0; border-radius:0; background:#0b0d13; }
+.terminal-view-switch button,.tool-segment button { min-height:30px; padding:0 12px; border:0; border-radius:0; background:transparent; color:var(--ink-muted); font-size:var(--fs-foot); font-weight:600; }
+.terminal-view-switch button.selected,.tool-segment button.selected,.tool-segment button[aria-pressed="true"] { color:#e7e9f2; }
 .terminal-screen > header .terminal-view-switch { padding:0; background:transparent; }
 .terminal-view-switch .view-pill { display:inline-flex; align-items:center; height:34px; padding:0 10px 0 12px; background:var(--surface-group); color:#e7e9f2; }
 /* The Focus head reads as one row: ‹, the name with its connection dot right
@@ -2257,9 +2313,9 @@ span.files-close { background:transparent; }
 /* The composer's own field and the bare controls inside a rounded box stay plain. */
 .terminal-screen .prompt-composer textarea,.mobile-schedule-form input.markup-ask-dial { border:0; }
 /* Borderless pieces: only rounded. */
-:where(.terminal-view-switch,.terminal-view-switch button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button) { --r:var(--r-sm); }
+:where(.terminal-view-switch,.terminal-view-switch button,.tool-segment,.tool-segment button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button) { --r:var(--r-sm); }
 :where(.focus-menu button,.composer-bar .send-icon,.voice-feedback,.last-sent,.inbox-upload,.sign-in-notice,.composer-thumb,.usage-notes li,.question-tabs.stepped button,.link-sheet-target,.local-models-list .local-model-info,.sign-in-tick,.new-tab-agents .agent-create > button:first-child,.list-skeleton > i) { --r:var(--r-md); }
-.terminal-view-switch,.terminal-view-switch button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button,.list-skeleton > i,
+.terminal-view-switch,.terminal-view-switch button,.tool-segment,.tool-segment button,.composer-segment,.composer-prefix,.composer-add,.composer-clear,.slash-pick,.status-headline strong,.transcript-day span,.git-head strong,.sign-in-step,.inbox-upload button,.composer-thumb button,.list-skeleton > i,
 .focus-menu button,.composer-bar .send-icon,.voice-feedback,.last-sent,.inbox-upload,.sign-in-notice,.composer-thumb,.usage-notes li,.question-tabs.stepped button,.link-sheet-target,.local-models-list .local-model-info,.sign-in-tick,.new-tab-agents .agent-create > button:first-child {
   border-radius:var(--r);
 }
@@ -2396,7 +2452,7 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
 @media (min-width:700px) and (min-height:600px) {
   :root { --screen-measure:100vw; --gutter:28px; --r-card:22px; --r-panel:26px; --soft:0 1px 2px rgba(0,0,0,.14),0 8px 24px rgba(0,0,0,.16); }
   .home-screen,.project-screen { padding-inline:var(--gutter); }
-  .tabbed > .screen,.tabbed > .todo-screen,.tabbed > .project-screen,.tabbed > .home-screen.has-fab { padding-bottom:calc(112px + max(24px,env(safe-area-inset-bottom))); }
+  .tabbed > .screen,.tabbed > .todo-screen,.tabbed > .mobile-calendar-screen,.tabbed > .project-screen,.tabbed > .home-screen.has-fab { padding-bottom:calc(112px + max(24px,env(safe-area-inset-bottom))); }
 
   /* The section bar floats, centred and 420px wide, instead of spanning the window. */
   .mobile-tabbar { inset:auto auto max(12px,env(safe-area-inset-bottom)) 50%; transform:translateX(-50%); width:min(420px,calc(100vw - 32px)); gap:4px; padding:5px; border:0; border-radius:var(--r-card); background:#1a1d2b; -webkit-backdrop-filter:none; backdrop-filter:none; box-shadow:var(--soft); }

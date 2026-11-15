@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { rollHint } from "../../../src/lib/hintChance";
 import { isUntested } from "../../../src/lib/untested";
+import { CloseIcon } from "../glyphs";
 import { readFlag, readHintReads, readHintShown, readTipShownAt, writeFlag, writeHintReads, writeHintShown, writeTipShownAt, type MobileFlag } from "../prefs";
 
 /** Every phone tip: one short thing each. A tip split from a longer one keeps
@@ -51,18 +52,18 @@ const TARGETS: Partial<Record<HintKey, string>> = {
   composerPlanGoal: ".composer-segment", composerClear: ".composer-tool",
   composerCommit: ".composer-commit", composerMic: ".composer-dictate",
   tabCard: ".tab-card-more", sentFiles: ".terminal-gallery", markup: ".terminal-gallery",
-  mailBack: ".back", mailPickers: ".mail-mobile-switch", mailWrite: ".mail-mobile-reply textarea",
+  mailBack: ".screen-head-back", mailPickers: ".mail-account-switch", mailWrite: ".mail-mobile-reply textarea",
   sendHold: ".send-icon", chatMenu: ".view-pill", chatSwipe: ".readable-output",
   statusLamp: ".fact-action:has(.fact-lamp)",
   statusModel: '[data-phone-hint="model"]', statusMode: '[data-phone-hint="mode"]',
   statusWorktree: ".fact-worktree, .fact-branch",
-  todoDone: ".todo-check", todoEdit: ".todo-mobile-actions > button",
-  todoMove: ".todo-mobile-actions > select", todoFilter: ".todo-mobile-filters",
+  todoDone: ".todo-check", todoEdit: ".todo-card-body",
+  todoMove: ".todo-card-more", todoFilter: ".todo-filter-button",
   todoColumns: ".todo-column-fold", todoAdd: ".todo-fab",
-  calendarViews: '.mobile-calendar-actions[role="group"]', calendarDays: ".mobile-calendar-day",
+  calendarViews: ".mobile-calendar-views", calendarDays: ".mobile-calendar-day",
   calendarEvents: ".mobile-calendar-event",
-  calendarCalendars: ".mobile-calendar-actions:not([role]) > button:nth-child(2)",
-  calendarReminders: ".mobile-calendar-actions:not([role]) > button:nth-child(3)",
+  calendarCalendars: ".mobile-calendar-more",
+  calendarReminders: ".mobile-calendar-more",
 };
 
 /** Tips about a gesture on their target, not a tap: a tap there keeps them. */
@@ -238,18 +239,17 @@ export function HintMessage({ hint, floating = false, vars, onClose }: { hint: H
   return <aside ref={card} className={`hint-message${floating ? " hint-message-floating" : ""}`} aria-label={t("mobile.hints.title")}>
     {view === "tip" && <HintPointer card={card} hint={hint} />}
     <div className="hint-message-head">
-      <strong>{t("mobile.hints.title")}{(isUntested("mobile.hints") || isUntested("mobile.hints.pace") || isUntested("mobile.hints.pointer")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong>
-      <button onClick={close} aria-label={t("mobile.hints.close")}>×</button>
+      <strong>{t("mobile.hints.title")}{(isUntested("mobile.hints") || isUntested("mobile.hints.pace") || isUntested("mobile.hints.pointer") || isUntested("mobile.hints.read") || isUntested("mobile.design.tips")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong>
+      <button onClick={close} aria-label={t("mobile.hints.close")}><CloseIcon size="1em" /></button>
     </div>
     {view === "off"
       ? <p role={floating ? "status" : undefined}>{t("mobile.hints.offNote")}</p>
       : <>
         <p role={floating ? "status" : undefined}>{t(text, vars)}</p>
         <div className="hint-message-actions">
-          {isUntested("mobile.hints.read") && <span className="untested">{t("mobile.newTab.untested")}</span>}
-          <button onClick={() => { writeFlag("hintsOff", true); setView("off"); }}>{t("mobile.hints.turnOff")}</button>
-          <button onClick={close}>{t("mobile.hints.skip")}</button>
-          <button onClick={() => { readTip(hint); close(); }}>{t("mobile.hints.read")}</button>
+          <button className="hint-message-off" onClick={() => { writeFlag("hintsOff", true); setView("off"); }}>{t("mobile.hints.turnOff")}</button>
+          <button className="hint-message-skip" onClick={close}>{t("mobile.hints.skip")}</button>
+          <button className="hint-message-read" onClick={() => { readTip(hint); close(); }}>{t("mobile.hints.read")}</button>
         </div>
       </>}
   </aside>;

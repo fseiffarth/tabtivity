@@ -1011,3 +1011,25 @@ export function RingIcon(p: IconProps) {
     </Frame>
   );
 }
+
+/** ⓘ — information: a ring with an "i". */
+export function InfoIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5.2" />
+      <circle cx="12" cy="7.9" r="1.05" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** Two sliders — filters. */
+export function FilterIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M4 8h9M17 8h3M4 16h3M11 16h9" />
+      <circle cx="15" cy="8" r="2" />
+      <circle cx="9" cy="16" r="2" />
+    </Frame>
+  );
+}
