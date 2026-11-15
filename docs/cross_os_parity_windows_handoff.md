@@ -253,3 +253,165 @@ Windows reader for another process's command line exists here yet
       `notApplied: ["duplex"]`.
    9. System monitor (2442m): a SYSTEM-owned process shows — in CPU/MEM/RSS
       with a tooltip.
+
+## Review
+
+A second reading of `4dd315378..cbc49d4b1` (2026-11-15), with three fixes on
+top, on branch `worktree-agent-a9a30858096c48a1f`. Nothing was run on Windows
+or macOS. **Run** means executed here on Linux; **read** means concluded from
+the code.
+
+### Per commit
+
+| Commit | Item | Verdict |
+|---|---|---|
+| `82171671f` | 2442b+c | **fixed** — the moved `APPDATA`/`LOCALAPPDATA` named folders nothing creates (`e09916b8f`). The rest ok (read). |
+| `1a22a6752` | 2442d | **fixed** — a CLI an agent starts itself was refused, or the shim ran itself (`d02479fca`). **Flagged**: R1, R3. |
+| `8653abd3e` | 2442h | ok (read). **Flagged**: R2. |
+| `92dc6af66` | 2442g | ok (read; its test run). **Flagged**: R4. |
+| `27699511d` | 2442i | ok (read; tests run). |
+| `76ced2a7a` | 2442j | ok (read; tests run). Note R8. |
+| `6ca31db62` | 2442e+f | ok — the five rows fetched again from the vendors' pages (Grok, Cursor, Muse, Goose, Vibe) and they match; nothing run. **Flagged**: implementer's 1–3. |
+| `8140fcbe0` | 2442m | ok (read). **Flagged**: R6, R7. |
+| `f98d2beb1` | 2442aa | **fixed** — a baked-grayscale sheet came out mid-gray wherever the page was blank (`afa9ab992`). **Flagged**: R5. |
+| `865e16e11`, `cbc49d4b1` | import, docs | ok. |
+
+Linux and macOS arms: read commit by commit. Two things change off Windows:
+the print commit's macOS half, which the item asks for, and the
+persisted-env deny-list, which drops `HOMEDRIVE`, `HOMEPATH` and
+`CODEX_HOME` from a saved tab layout on every OS (no built-in tab saves
+one; a custom agent's own setting is still honoured).
+
+### Fixes
+
+1. **`afa9ab992` fix(print)** — 2442aa. *Input:* Windows or macOS, a
+   grayscale job, any page with unpainted paper (every LaTeX page).
+   *Wrong outcome:* the `Saturation` rectangle is blended inside the page's
+   isolated transparency group; where nothing was painted there is no
+   backdrop, and a blend over none paints its own colour, 50 % gray, over the
+   whole blank part of the sheet. **Run:** Ghostscript, MuPDF and Poppler all
+   render the unfixed PDF's paper as RGB 127; with the fix, 255, the red
+   test square gray 77. *Fix:* each baked sheet starts with an opaque white
+   rectangle beneath the document. *Test:* vitest
+   `paints a baked-grayscale sheet white beneath the document` (run; fails
+   with the fix removed).
+2. **`d02479fca` fix(windows)** — 2442d with 2442c. *Input:* a Windows agent
+   tab (its PATH starts with the shim directory, its `APPDATA` is the agent
+   home's since 2442c); the agent runs `claude …` or `codex …` from cmd or
+   PowerShell. *Wrong outcome:* `--agent-shim-env` resolves the app's state
+   dir from `%APPDATA%` (`storage::state_dir_base`), finds no settings, reads
+   the one-time acceptance as ungiven and refuses ("open an agent tab once
+   and accept that first"). In the Host session it skipped the wrong shim
+   directory, answered the shim itself, and the shim called itself without
+   end. Before 2442d both calls ran the real CLI. *Fix:* such an agent's
+   environment carries `<APP>_AGENT_UNFENCED=<shim dir>` (a control variable,
+   stripped from layouts like `AGENT_FENCE`; set for the agent tab, the Host
+   session and a CLI the shim started; Windows only). The shim's answer is
+   decided from it before any state is read: the real CLI from the caller's
+   PATH outside that directory, no second environment — what the POSIX shim
+   does inside a fence. *Tests:*
+   `a_windows_agents_own_cli_call_steps_aside_past_the_shim`,
+   `the_unfenced_agent_marker_is_set_by_the_spawn_and_only_on_windows` (run).
+   The Windows-only caller is covered by the cross-clippy only.
+3. **`e09916b8f` fix(windows)** — 2442c. *Input:* a Windows agent tab or
+   probe after 2442c. *State:* `<home>\AppData\Roaming` and
+   `<home>\AppData\Local` do not exist; only the installer's home creates
+   them, for the reason written at `commands::agents::into_install_home`.
+   *Wrong outcome (by that record, not seen here):* npm fails writing into a
+   missing `%APPDATA%`, and PowerShell — every session hook — writes its
+   module cache relative to the working directory, the user's project.
+   *Fix:* `scope_home_env` makes both folders of a prepared home. *Test:*
+   `a_windows_agent_homes_appdata_folders_exist_before_a_cli_runs` (run;
+   fails with the fix removed).
+
+### Gates and cross-checks
+
+All run on `e09916b8f`, the tree of the three fixes; this section was added
+afterwards and touches no gate but the always-run ones, run again on it.
+
+- **Gates** — `scripts/gates.sh --base cbc49d4b1` (the ten the fixes
+  select: brand, whitespace, lint-fe, clippy, clippy-dlib, clippy-dmn,
+  build, vitest, test, test-dlib): **all passed**.
+- **Windows cross-check** — `cargo clippy --manifest-path
+  src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets
+  --no-default-features --features desktop,voice-io -- -D warnings`, with
+  the msvc `rc`/`lib` stand-ins, the implementer's private `CARGO_HOME` and
+  `target/wt-parity-win`: **clean**, on `cbc49d4b1` and again on
+  `e09916b8f`. It type-checks the Windows-only code; it runs none of it.
+- **macOS cross-check** — `ci-local.sh`'s `macos-check` (`cargo check
+  --workspace --all-targets --target aarch64-apple-darwin
+  --no-default-features --features desktop,voice-io`, check-only `cc`/`ar`
+  stand-ins): **passed**, on `cbc49d4b1` and again on `e09916b8f`. Its one
+  note, a future-incompatibility warning for the `block` crate, is not this
+  branch's.
+- **Not run:** `windows-check` (the whole workspace; only `src-tauri`
+  changed), `gates.sh --all`, anything on a Windows or macOS machine. The
+  `#[cfg(windows)]` tests (`windows_gets_cmd_shims_and_a_stale_sh_one_is_removed`)
+  run on the CI Windows runner only.
+
+### Flagged for user
+
+Reviewer's, most serious first. None was acted on.
+
+- **R1 — 2442d, non-ASCII profile paths.** `--agent-shim-env` prints UTF-8;
+  cmd reads `for /f` output in the console code page (850 or 437 by
+  default). For an account like `C:\Users\Jörg` every value that names the
+  state dir (`USERPROFILE`, `APPDATA`, …) and a real CLI under the profile
+  would arrive garbled, and a typed `claude` would fail where before 2442d
+  it ran. From how cmd decodes; needs a Windows machine. Directions:
+  `chcp 65001` around the read and back, or the helper writing the console's
+  code page. (The app's own path is baked into the `.cmd`, but the
+  installer is per-machine, so it is ASCII.)
+- **R2 — 2442h, one Claude seen as two.** The walk counts processes, and
+  refuses at two. If npm's launcher (a Node whose command line names
+  `@anthropic-ai\claude-code\`) starts a native `claude.exe`, or a
+  self-relaunch spawns a child (Windows has no `exec`), the tab's own Claude
+  counts twice and its `/clear` and `/resume` stop moving the record.
+  Click-through 3's second half decides it; try both an npm and a native
+  install. If it fails: count a run of adjacent Claude processes as one.
+- **R3 — 2442d, letter case of the working directory.** `scope_for`
+  compares `current_dir()` to the registry's spelling with
+  `Path::starts_with`, which is case-sensitive on Windows. PowerShell keeps
+  the case the user typed (`cd c:\dev\proj`), so the shim would answer
+  "outside the scope's roots" inside the project.
+- **R4 — 2442g, a hook that is not a shell script.** `sh.exe <hook>`
+  ignores the `#!` line, so a `pre-push` written in Python or Node runs as
+  shell, fails, and the push is refused (it fails closed). Git itself
+  reads the `#!` line on Windows.
+- **R5 — 2442aa, the disabled Two-sided control still acts.** On Windows
+  and macOS it keeps a value saved earlier or sent by an agent's request,
+  and `layoutPrintPdf` goes on adding the blank filler side between copies
+  for it; the user cannot change it. Decide: a layout hint the user may
+  set, or always none there.
+- **R6 — 2442m, an English sentence from the backend.**
+  `MIKTEX_PERL_NOTE` reaches the TeX view untranslated (the other driver
+  notes are the tool's own output).
+- **R7 — 2442m, test reach.** The monitor's new test covers the JSON field
+  only; the Windows arm that sets `unreadable` and the pane's dash have none.
+- **R8 — 2442j, notes.** A host rename that changes only the case is
+  refused while the old spelling is in the mirror; the check adds one
+  `canonicalize` per path component per write on Windows.
+- **R9 — 2442c, residual.** Any app binary started under a Windows agent
+  tab resolves its state dir from the agent home's `APPDATA`. Only the
+  shim's helper does so today (fix 2). A second one needs the state dir
+  pinned in the tab's environment.
+
+Implementer's, all still open: **1** Kiro (per-machine MSI), **2** Vibe
+needs `uv` — note `commands::ollama::vibe_install_cmd` already chains
+Astral's installer for the same CLI, so the two Windows commands differ,
+**3** vendor installers edit the user PATH, **4** Git Bash runs unshimmed and
+the shim injects no API-key proxy or Claude token, **5** 2442l, **6** never
+run on Windows.
+
+Click-through, added to the implementer's list:
+
+10. Agent's own CLI call (fix 2): in a Codex tab and in a Host session ask
+    the agent to run `claude --version` through PowerShell → the version,
+    no "accept that first", no hang.
+11. AppData (fix 3): open an agent tab in a fresh project, let one prompt
+    finish → the project folder holds no new `Microsoft\Windows\PowerShell`
+    folder; `npm config get prefix` in the agent's shell names
+    `…\agent-homes\<project>\AppData\Roaming\npm`.
+12. Grayscale (fix 1; step 8 again): the paper around the text is white in
+    the system dialog's preview and on the sheet, not gray.
+13. R1: step 2 on an account whose name has a non-ASCII letter.
