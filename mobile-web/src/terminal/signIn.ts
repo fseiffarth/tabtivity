@@ -444,10 +444,31 @@ const SIGNED_OUT = [
   /\bhow would you like to authenticate\b/iu,
 ];
 
+/** The glyphs a TUI draws before a message: bullets, result hooks, borders,
+ * menu cursors. Markdown's own `-`/`*` are not among them. */
+const MESSAGE_LEAD = /^[\s●⎿│┃✗✘✖⚠❯›>]*/u;
+/** A label in front of the message proper: "Error:", "API Error: 401 ·". */
+const ERROR_LABEL = /^[\w ]{0,20}error(?::?\s*\d{3})?(?::\s*|\s+·\s+)/iu;
+
+/** Whether one screen line is a CLI's own sign-in message. The CLIs print it
+ * as a line of its own — "Not logged in · Please run /login", "Select login
+ * method:" — so the phrase must open the line, behind the TUI's glyphs and an
+ * error label at most, as a sentence does. The same words in an agent's
+ * answer sit mid-sentence ("…tabs that are not signed in."), in quotes, or in
+ * a diff or tool output it drew, and do not count. */
+function isSignedOutLine(text: string): boolean {
+  const line = text.replace(MESSAGE_LEAD, "");
+  const labelled = ERROR_LABEL.exec(line);
+  const message = labelled ? line.slice(labelled[0].length) : line;
+  // An unlabelled message starts a sentence; a wrapped answer line usually does not.
+  if (!labelled && !/^\p{Lu}/u.test(message)) return false;
+  return SIGNED_OUT.some((pattern) => pattern.exec(message)?.index === 0);
+}
+
 /** Whether the session at the bottom of the screen is asking for a sign-in:
  * the phone then offers one. Once the screen says it went through, it is not. */
 export function readSignedOut(lines: readonly SignInLineLike[]): boolean {
   const rows = lines.slice(Math.max(0, lines.length - SIGNED_OUT_WINDOW));
   if (rows.some(({ text }) => saysSignedIn(text))) return false;
-  return rows.some(({ text }) => SIGNED_OUT.some((pattern) => pattern.test(text)));
+  return rows.some(({ text }) => isSignedOutLine(text));
 }
