@@ -1126,7 +1126,6 @@
    line over chips and verbs); the grid gives it the overview tiles' border
    and radius, and pins the verbs to the card's foot so a row of cards lines
    its actions up. */
-.models-overlay-models .local-model-grid,
 .models-overlay-models .local-model-stats {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr));
@@ -2154,23 +2153,6 @@
 }
 .ollama-variant .dropdown-trigger:hover:not(:disabled) {
   border-color: var(--accent);
-}
-
-
-.models-tile-open {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 4px;
-  margin-left: auto;
-  color: var(--accent);
-  font-size: var(--text-md);
-  font-weight: 600;
-  transition: transform var(--transition);
-}
-.models-tile:hover .models-tile-open,
-.models-tile:focus-visible .models-tile-open {
-  transform: translateX(3px);
 }
 
 /* Local models: one page, short sentence-case headings, a card per model. */

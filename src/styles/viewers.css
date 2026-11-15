@@ -4993,26 +4993,16 @@ select.file-viewer-run-args-input {
 }
 .file-viewer-pdf-markup-bar .file-viewer-zoom-btn[aria-pressed="true"],
 .file-viewer-pdf-markup-model .file-viewer-zoom-btn.active,
-.file-viewer-pdf-markup-status .file-viewer-zoom-btn.active,
 .file-viewer-pdf-markup-questions .file-viewer-zoom-btn.active {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 55%, transparent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
-/* The strip's groups: tools, the armed tool's options (styles, sizes,
-   colours), and the sending half pushed to the right end. */
-.file-viewer-pdf-markup-tools,
-.file-viewer-pdf-markup-options,
-.file-viewer-pdf-markup-styles,
-.file-viewer-pdf-markup-sizes,
-.file-viewer-pdf-markup-colors,
-.file-viewer-pdf-markup-presets {
+/* The strip's colour group; the sending half is pushed to the right end. */
+.file-viewer-pdf-markup-colors {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-}
-.file-viewer-pdf-markup-options {
-  gap: 8px;
 }
 .file-viewer-pdf-markup-send {
   display: inline-flex;
@@ -5041,24 +5031,6 @@ select.file-viewer-run-args-input {
   background: color-mix(in srgb, var(--swatch) 16%, transparent);
   box-shadow: inset 0 0 0 1px var(--swatch);
 }
-/* A size as a dot of that size in the pen's colour; the eraser's reach as a
-   ring; the area eraser as a dashed rectangle. */
-.file-viewer-pdf-markup-size span {
-  display: inline-block;
-  border-radius: 50%;
-  vertical-align: middle;
-  border: 1px solid color-mix(in srgb, var(--text-primary) 35%, transparent);
-}
-.file-viewer-pdf-markup-size .file-viewer-pdf-markup-ring {
-  background: none;
-  border: 1.5px solid currentColor;
-}
-.file-viewer-pdf-markup-size .file-viewer-pdf-markup-area {
-  width: 13px;
-  height: 9px;
-  border-radius: 0;
-  border: 1.5px dashed currentColor;
-}
 .file-viewer-pdf-markup-check {
   display: inline-block;
   width: 16px;
@@ -5086,31 +5058,8 @@ select.file-viewer-run-args-input {
   padding: 0 1px;
   background: color-mix(in srgb, #ffd91a 55%, transparent);
 }
-/* A preset's chip: its tool's glyph over a bar of its colour (`--swatch`),
-   a static inset line, readable on a light strip and a dark one. */
-.file-viewer-pdf-markup-preset {
-  box-shadow: inset 0 -3px 0 var(--swatch);
-}
 .file-viewer-pdf-markup-more .dropdown-menu {
   min-width: 180px;
-}
-/* The pen's style button: the chosen style drawn, and a caret saying it
-   opens; its menu draws each style beside its name. */
-.file-viewer-pdf-markup-bar .file-viewer-pdf-markup-style-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-.file-viewer-pdf-markup-caret {
-  font-size: 9px;
-  opacity: 0.75;
-}
-.file-viewer-pdf-markup-style .dropdown-menu {
-  min-width: 150px;
-}
-.file-viewer-pdf-markup-style .dropdown-menu .file-viewer-pdf-markup-sample {
-  vertical-align: middle;
-  margin-right: 8px;
 }
 .file-viewer-pdf-markup-round {
   display: inline-flex;
@@ -5268,18 +5217,6 @@ select.file-viewer-run-args-input {
   white-space: nowrap;
   text-overflow: ellipsis;
   pointer-events: auto;
-}
-
-.file-viewer-pdf-copy-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-  padding: 5px 10px;
-  font-size: var(--text-md);
-  color: var(--text-secondary, var(--text-muted));
-  background: var(--control-bg);
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 /* The tool's strip under the toolbar. */

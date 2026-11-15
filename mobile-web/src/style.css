@@ -504,7 +504,6 @@ button.mobile-alert-row { cursor:pointer; }
 .home-screen .cards > button.card.in-plan { --rim:#7b6ee0; }
 .home-screen .cards > button.card.in-goal { --rim:#4fb3c0; }
 .home-screen .cards > button.card.has-tab-color { border-left:3px solid var(--tab-color); }
-.todo-create { display:grid; grid-template-columns:1fr 120px auto; gap:8px; margin:14px 0; }
 /* Adding a column is a rare, structural act, and it now sits at the foot of the
    column list where a new column would land — drawn as a ghost so it reads as
    the end of the board rather than as a second main action beside the FAB. */
@@ -641,7 +640,6 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-step-row button { padding:6px 8px; }
 .todo-editor-actions { align-items:center; }
 .todo-editor-actions > span { flex:1; }
-@media (max-width: 480px) { .todo-create { grid-template-columns:1fr auto; } .todo-create select { grid-column:span 2; } }
 @media (max-width: 420px) { .todo-editor { padding:14px; } .todo-editor-grid,.todo-due-fields { grid-template-columns:1fr; } .todo-step-row { grid-template-columns:auto minmax(0,1fr) auto auto auto; gap:4px; } .todo-step-row button { padding-inline:6px; } }
 .mail-mobile-screen header h1 { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; unicode-bidi:plaintext; }
 .mail-mobile-accounts,.mail-mobile-list,.mail-mobile-folders,.mail-mobile-account { display:grid; gap:10px; }
@@ -2093,11 +2091,8 @@ span.files-close { background:transparent; }
 .markup-pen { display:flex; flex-direction:column; align-items:center; gap:8px; padding:8px 10px; }
 .markup-pen-row { display:flex; align-items:center; justify-content:center; gap:8px; }
 .markup-pen .markup-colors { padding:2px 4px; }
-.markup-pen-style, .markup-pen-size { display:grid; place-items:center; width:38px; height:38px; padding:0; border:0; border-radius:50%; background:transparent; color:#e6e9f2; font-size:1.1rem; }
-.markup-pen-style.selected, .markup-pen-size.selected { background:#2f6fec; color:#fff; }
-.markup-pen-dot { display:block; border-radius:50%; box-shadow:0 0 0 1px rgba(255,255,255,.4); }
-.markup-pen-ring { display:block; border-radius:50%; border:1.5px solid currentColor; }
-.markup-pen-area { display:block; width:16px; height:11px; border:1.5px dashed currentColor; }
+.markup-pen-style { display:grid; place-items:center; width:38px; height:38px; padding:0; border:0; border-radius:50%; background:transparent; color:#e6e9f2; font-size:1.1rem; }
+.markup-pen-style.selected { background:#2f6fec; color:#fff; }
 .markup-pen-meaning { margin:0; color:#c9cddb; font-size:.74rem; text-align:center; }
 /* What the area eraser will take while it is dragged. */
 .markup-area { position:absolute; border:1.5px dashed #333; outline:1.5px solid rgba(255,255,255,.85); pointer-events:none; z-index:3; }
@@ -2131,7 +2126,6 @@ span.files-close { background:transparent; }
 .markup-presets { flex-wrap:wrap; gap:6px; }
 .markup-preset { display:inline-flex; align-items:center; gap:5px; height:32px; padding:0 9px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#e6e9f2; font-size:.95rem; }
 .markup-preset.selected { border-color:#2f6fec; box-shadow:0 0 0 1px #2f6fec; }
-.markup-preset-dot { display:block; width:12px; height:12px; border-radius:50%; box-shadow:0 0 0 1.5px rgba(255,255,255,.55); }
 .markup-pen-actions { flex-wrap:wrap; gap:6px; }
 .markup-pen-actions button { min-height:32px; padding:0 12px; border:1px solid #34384a; border-radius:999px; background:#141a26; color:#d8e2f5; font:500 .76rem/1 Inter,ui-sans-serif,system-ui,sans-serif; }
 .markup-pen-actions button:disabled { opacity:.45; }

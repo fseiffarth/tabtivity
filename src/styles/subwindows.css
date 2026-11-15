@@ -721,27 +721,12 @@
   background: var(--accent);
   border-radius: var(--radius);
 }
-.steering-legend-level {
-  text-transform: none;
-  letter-spacing: normal;
-  color: inherit;
-}
 .steering-legend-item {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
   color: var(--text-secondary);
-}
-.steering-legend-count {
-  min-width: 16px;
-  padding: 0 var(--space-1);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  text-align: center;
-  color: var(--bg-main);
-  background: var(--accent);
-  border-radius: 8px;
 }
 .steering-legend-item kbd {
   font-family: inherit;
