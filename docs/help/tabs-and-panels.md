@@ -81,6 +81,18 @@ conversation; Gemini, Qwen, Grok, Cursor, Copilot and Antigravity continue the
 project's most recent one. Agents without a resume path (Aider, for one) start
 fresh from the `+` menu. Closing a popped-out window closes its tabs for good.
 
+## Archiving tabs
+
+Right-click a tab → **Archive** to put it away without losing it: the tab
+closes and waits in the project's archive (**Archive the other tabs** does the
+same for the rest of that subwindow). Open the archive from the `+` menu →
+**Archived tabs…** or the file panel's **Archive** view, and click a row to
+bring the tab back: an agent resumes its conversation, a shell starts fresh in
+its folder, a viewer reopens its file. Nothing runs while a tab is archived.
+The archive is kept per project across restarts; × on a row deletes it. On the
+phone, a card's ⋯ → **Archive tab** does the same, and the **Archived** fold
+under the cards lists the project's archive.
+
 ## The file panel
 
 - Click an icon on the edge bar (or press Ctrl+B / ⌘B; Alt+1 also works from a
