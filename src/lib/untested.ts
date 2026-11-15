@@ -353,6 +353,7 @@ export const UNTESTED = {
   "localModel.agentUpdates": { area: "layout", what: "LocalModelMenu · Agents section: once a day (90 s after launch, then hourly for any CLI last checked over a day ago) each installed CLI's newest release is checked; each row reads up to date / → <latest> (opens Manage CLIs) / couldn't check, and a line says when the releases were last checked; an installed Ollama is checked the same way and its section shows Upgrade to <latest> without a click" },
   "localModel.manageLocalModels": { area: "layout", what: "LocalModelMenu · Manage local models… / Install Ollama… opens the overlay's Ollama tab" },
   "localModelMenu.1": { area: "layout", what: "LocalModelMenu · MCP", tested: "2026-09-20" },
+  "localModel.upgradeRestarting": { area: "layout", what: "Upgrade Ollama: once the new version is installed and the old server is still running (Windows winget), the note says so, restarts the server and loads the resident models back; with none resident it only restarts; a failed restart shows the reason and a Restart Ollama button" },
   "localModelMenu.2": { area: "layout", what: "LocalModelMenu · Dismiss this notice" },
   "localModelMenu.3": { area: "layout", what: "LocalModelMenu · Dismiss this notice" },
   "localModelMenu.4": { area: "layout", what: "LocalModelMenu · MCP", tested: "2026-09-20" },

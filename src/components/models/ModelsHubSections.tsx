@@ -870,21 +870,40 @@ export function LocalModelsSection({
   const restoreNow = useOllamaUpgradeStore((s) => s.reloadNow);
   const restoreCancel = useOllamaUpgradeStore((s) => s.cancel);
   const restoreDismiss = useOllamaUpgradeStore((s) => s.dismiss);
+  const restoreTo = useOllamaUpgradeStore((s) => s.to);
+  const restartError = useOllamaUpgradeStore((s) => s.restartError);
+  const restartNow = useOllamaUpgradeStore((s) => s.restartNow);
   const showRestoreNote = !restoreDismissed && restorePhase !== "idle";
+  // Nothing was resident: the note is only about the server restart.
+  const restartOnly = restoreModels.length === 0;
+  const restartReason =
+    restartError === "ollama_remote"
+      ? t("localModel.restartRemote")
+      : restartError === "ollama_still_running"
+        ? t("localModel.upgradeRestartStillRunning")
+        : restartError || t("localModel.restartFailed");
   const restoreSentence = !showRestoreNote
     ? ""
     : restorePhase === "waiting"
-      ? t("localModel.upgradeRestoreWaiting", { names: restoreModels.join(", ") })
-      : restorePhase === "reloading"
-        ? t("localModel.upgradeRestoreLoading", { names: restoreModels.join(", ") })
-        : restorePhase === "done"
-          ? t("localModel.upgradeRestoreDone", { names: restoreLoaded.join(", ") })
-          : restorePhase === "timeout"
-            ? t("localModel.upgradeRestoreTimeout", { names: restoreModels.join(", ") })
-            : t("localModel.upgradeRestoreFailed", {
-                names: Object.keys(restoreFailed).join(", "),
-                error: Object.values(restoreFailed)[0] ?? "",
-              });
+      ? restartOnly
+        ? t("localModel.upgradeRestartWaiting")
+        : t("localModel.upgradeRestoreWaiting", { names: restoreModels.join(", ") })
+      : restorePhase === "restarting"
+        ? t("localModel.upgradeRestarting", { version: restoreTo })
+        : restorePhase === "restart_failed"
+          ? t("localModel.upgradeRestartFailed", { version: restoreTo, error: restartReason })
+          : restorePhase === "reloading"
+            ? t("localModel.upgradeRestoreLoading", { names: restoreModels.join(", ") })
+            : restorePhase === "done"
+              ? restartOnly
+                ? t("localModel.upgradeRestarted", { version: restoreTo })
+                : t("localModel.upgradeRestoreDone", { names: restoreLoaded.join(", ") })
+              : restorePhase === "timeout"
+                ? t("localModel.upgradeRestoreTimeout", { names: restoreModels.join(", ") })
+                : t("localModel.upgradeRestoreFailed", {
+                    names: Object.keys(restoreFailed).join(", "),
+                    error: Object.values(restoreFailed)[0] ?? "",
+                  });
 
   const autoNotice = useAutoloadNotice();
   const showAutoNote = autoNotice.show;
@@ -907,7 +926,11 @@ export function LocalModelsSection({
       {showRestoreNote && (
         <div
           className={`local-model-autostart-note${
-            restorePhase === "timeout" ? " saver" : restorePhase === "error" ? " failed" : ""
+            restorePhase === "timeout"
+              ? " saver"
+              : restorePhase === "error" || restorePhase === "restart_failed"
+                ? " failed"
+                : ""
           }`}
         >
           <button
@@ -922,6 +945,9 @@ export function LocalModelsSection({
           <div className="local-model-autostart-text">
             <span className="local-model-autostart-sentence">{restoreSentence}</span>
             <UntestedTag id="localModelMenu.2" />
+            {restorePhase !== "reloading" && restorePhase !== "error" && restorePhase !== "timeout" && (
+              <UntestedTag id="localModel.upgradeRestarting" />
+            )}
           </div>
           {/* Waiting is the one phase with something to *stop*; the two
               that ended without the models being back are the ones with
@@ -932,10 +958,22 @@ export function LocalModelsSection({
               <button
                 type="button"
                 className={noteBtn}
-                title={t("localModel.upgradeRestoreCancelTitle")}
+                title={t(restartOnly ? "localModel.upgradeRestartCancelTitle" : "localModel.upgradeRestoreCancelTitle")}
                 onClick={restoreCancel}
               >
-                {t("localModel.upgradeRestoreCancel")}
+                {t(restartOnly ? "localModel.upgradeRestartCancel" : "localModel.upgradeRestoreCancel")}
+              </button>
+            </div>
+          )}
+          {restorePhase === "restart_failed" && (
+            <div className="local-model-autostart-actions">
+              <button
+                type="button"
+                className={noteBtn}
+                title={t("localModel.restartOllamaTitle")}
+                onClick={() => void restartNow()}
+              >
+                {t("localModel.restartOllama")}
               </button>
             </div>
           )}

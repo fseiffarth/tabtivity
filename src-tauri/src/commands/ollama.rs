@@ -1462,6 +1462,10 @@ pub struct OllamaVersionStatus {
     /// check. Empty when no check has answered yet — never a stand-in for
     /// `current`.
     pub latest: String,
+    /// The version the running local server reports. Empty when none answered.
+    /// Not equal to `current` right after an upgrade that left the old server
+    /// running — the upgrade watcher's cue to restart it.
+    pub server: String,
     /// True only when both versions parsed *and* `latest` is genuinely newer.
     /// An unreadable version on either side is not an update.
     pub update_available: bool,
@@ -1511,6 +1515,22 @@ fn installed_version(text: &str) -> Option<String> {
         .or_else(|| parse_version(text))
 }
 
+/// The running local server's version out of the same `ollama --version`
+/// output: its `ollama version is X` line. `None` when no server answered (the
+/// CLI then says it could not connect, and prints only the client's version).
+///
+/// Differing from [`installed_version`] means the server still running is the
+/// one an upgrade replaced on disk — which the upgrade watcher restarts.
+fn server_version(text: &str) -> Option<String> {
+    if text.contains("could not connect") {
+        return None;
+    }
+    text.lines().find_map(|line| {
+        let (_, rest) = line.split_once("ollama version is")?;
+        parse_version(rest)
+    })
+}
+
 /// Compare two dotted versions numerically. `None` when either side doesn't
 /// parse — which the caller reports as "couldn't tell", never as an update.
 ///
@@ -1558,23 +1578,23 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
         // server-unreachable case is already handled: `ollama --version` prints
         // a warning line and then the client version, which is exactly what
         // `parse_version` scans past.
-        let current = crate::paths::command_no_window("ollama")
+        let text = crate::paths::command_no_window("ollama")
             .arg("--version")
             .output()
             .ok()
             .filter(|o| o.status.success())
-            .and_then(|o| {
-                let text = format!(
+            .map(|o| {
+                format!(
                     "{}{}",
                     String::from_utf8_lossy(&o.stdout),
                     String::from_utf8_lossy(&o.stderr)
-                );
-                installed_version(&text)
+                )
             })
             .unwrap_or_default();
 
         let mut status = OllamaVersionStatus {
-            current,
+            current: installed_version(&text).unwrap_or_default(),
+            server: server_version(&text).unwrap_or_default(),
             install_cmd: ollama_upgrade_cmd().to_string(),
             shell_kind: if cfg!(target_os = "windows") {
                 "powershell"

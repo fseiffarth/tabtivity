@@ -96,6 +96,10 @@ export interface OllamaVersionStatus {
   current: string;
   /** e.g. `"0.32.5"`, from the last stored check (daily or clicked); empty when none answered yet. */
   latest: string;
+  /** The version the running local server reports; empty when none answered.
+   *  Differs from `current` after an upgrade that left the old server running.
+   *  Optional: a backend built before it existed doesn't send it. */
+  server?: string;
   /** True only when both versions parsed and `latest` is genuinely newer. */
   update_available: boolean;
   /** The one-click upgrade command — the install command, which upgrades in place. */
