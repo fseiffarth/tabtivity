@@ -4,7 +4,7 @@
  * turned page lands inside its box, not off the paper.
  */
 import { describe, it, expect } from "vitest";
-import { PDFDict, PDFDocument, PDFName, degrees } from "pdf-lib";
+import { PDFArray, PDFDict, PDFDocument, PDFName, decodePDFRawStream, degrees, type PDFRawStream } from "pdf-lib";
 import { layoutPrintPdf, turnedOrigin } from "../../lib/viewers/pdfPrintLayout";
 import { PAGED_PRINT_OPTIONS, type PrintOptions } from "../../lib/viewers/print";
 
@@ -85,6 +85,46 @@ describe("layoutPrintPdf", () => {
         expect(page.modes).not.toContain("/Saturation");
         expect(page.group).toBe("");
       }
+    }
+  });
+
+  // A page is an isolated transparency group: paper the document paints
+  // nothing on has no backdrop, and the Saturation rectangle over none paints
+  // its own 50 % gray there — the whole sheet came out gray around the text
+  // (Ghostscript, MuPDF and Poppler all render it so). The sheet is painted
+  // white first, beneath the document, so the blend always has a backdrop.
+  it("paints a baked-grayscale sheet white beneath the document", async () => {
+    /** The page's content streams, decoded, as one string of operators. */
+    const operators = (doc: PDFDocument, index: number): string => {
+      const contents = doc.getPage(index).node.Contents();
+      const streams = contents instanceof PDFArray ? contents.asArray().map((ref) => doc.context.lookup(ref)) : [contents];
+      return streams
+        .map((s) => new TextDecoder("latin1").decode(decodePDFRawStream(s as PDFRawStream).decode()))
+        .join("\n");
+    };
+    const sheets = [{ page: 1, rot: 0 }, { page: 2, rot: 0 }];
+    const baked = await PDFDocument.load(
+      await layoutPrintPdf(await source(), sheets, opts({ grayscale: true }), { bakeGrayscale: true }),
+    );
+    for (let i = 0; i < baked.getPageCount(); i++) {
+      const ops = operators(baked, i);
+      const white = ops.indexOf("1 1 1 rg");
+      const firstDraw = ops.indexOf(" Do");
+      const blend = ops.lastIndexOf(" gs");
+      expect(white).toBeGreaterThanOrEqual(0);
+      expect(firstDraw).toBeGreaterThan(white);
+      // The white fill covers the whole sheet and is closed before the document is drawn.
+      expect(ops.slice(white, firstDraw)).toMatch(/0 0 595\.\d+ 841\.\d+ re\s+f\s+Q/);
+      // The gray blend stays the last thing on the sheet.
+      expect(blend).toBeGreaterThan(ops.lastIndexOf(" Do"));
+    }
+    // Colour, or a dialog that takes the preset: no backdrop is added.
+    for (const bytes of [
+      await layoutPrintPdf(await source(), sheets, opts({ grayscale: false }), { bakeGrayscale: true }),
+      await layoutPrintPdf(await source(), sheets, opts({ grayscale: true })),
+    ]) {
+      const doc = await PDFDocument.load(bytes);
+      for (let i = 0; i < doc.getPageCount(); i++) expect(operators(doc, i)).not.toContain("1 1 1 rg");
     }
   });
 

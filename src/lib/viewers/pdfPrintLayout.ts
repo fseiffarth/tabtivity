@@ -48,9 +48,26 @@ const PT_PER_CM = 72 / 2.54;
 const NUMBER_BAND_PT = 12;
 const NUMBER_SIZE_PT = 7.5;
 
+/** Paint the whole sheet opaque white, as the first thing on `page`: the
+ *  backdrop `desaturate` blends against. A page is an isolated transparency
+ *  group, so paper nothing was painted on has no backdrop at all, and a blend
+ *  over none paints its own colour — the gray of `desaturate`'s rectangle, on
+ *  every unpainted part of the sheet (Ghostscript, MuPDF and Poppler all
+ *  render it so). Over white it leaves white. */
+function whiteBackdrop(page: PDFPage, w: number, h: number): void {
+  page.pushOperators(
+    pushGraphicsState(),
+    setFillingRgbColor(1, 1, 1),
+    rectangle(0, 0, w, h),
+    fill(),
+    popGraphicsState(),
+  );
+}
+
 /** Make everything drawn on `page` so far gray: a full-sheet neutral rectangle
  *  in the `Saturation` blend mode on top, the sheet an RGB transparency group
- *  (see `layoutPrintPdf`). */
+ *  (see `layoutPrintPdf`). The sheet must have been given its `whiteBackdrop`
+ *  first. */
 function desaturate(doc: PDFDocument, page: PDFPage, w: number, h: number): void {
   page.node.set(
     PDFName.of("Group"),
@@ -110,7 +127,8 @@ export function turnedOrigin(
  * neutral gray in the `Saturation` blend mode, which keeps what lies beneath
  * it with its own lightness and no saturation — text and vector art stay
  * vector. The sheet is an RGB transparency group, the space that blend mode is
- * defined in.
+ * defined in, and starts with an opaque white rectangle, so the blend has a
+ * backdrop on paper the document paints nothing on (`whiteBackdrop`).
  */
 export async function layoutPrintPdf(
   bytes: Uint8Array,
@@ -148,6 +166,8 @@ export async function layoutPrintPdf(
       const used = planned.filter((at) => at !== null && pages[sheets[at]!.page - 1]);
       if (used.length === 0) continue;
       const page = out.addPage([paperW, paperH]);
+      const gray = bakeGrayscale && opts.grayscale;
+      if (gray) whiteBackdrop(page, paperW, paperH);
       for (const [k, at] of planned.entries()) {
         const sheet = at === null ? undefined : sheets[at];
         const from = sheet ? pages[sheet.page - 1] : undefined;
@@ -198,7 +218,7 @@ export async function layoutPrintPdf(
           });
         }
       }
-      if (bakeGrayscale && opts.grayscale) desaturate(out, page, paperW, paperH);
+      if (gray) desaturate(out, page, paperW, paperH);
     }
     // Two-sided: a copy with an odd number of sides would hand its last sheet's
     // back to the next copy's first page. A blank side keeps every copy whole.
