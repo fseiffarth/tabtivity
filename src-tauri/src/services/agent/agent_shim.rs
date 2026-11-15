@@ -46,11 +46,21 @@ pub fn plan(cli: &str, env: &HashMap<String, String>) -> Result<(Option<String>,
     Ok((project_id, cwd))
 }
 
-/// Build the fenced command for `cli args…` in the calling tab's scope.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, String> {
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let (project_id, cwd) = plan(cli, &env)?;
+/// The calling tab's scope for a typed CLI ([`scope_for`]).
+struct ShimScope {
+    project_id: Option<String>,
+    cwd: PathBuf,
+    scope_id: String,
+    #[cfg_attr(windows, allow(dead_code))]
+    roots: Vec<PathBuf>,
+    home: PathBuf,
+}
+
+/// The calling tab's scope for `cli`: its id, writable roots and prepared home,
+/// with the cwd checked against the roots. Shared by the fenced shim and the
+/// Windows one.
+fn scope_for(cli: &str, env: &HashMap<String, String>) -> Result<ShimScope, String> {
+    let (project_id, cwd) = plan(cli, env)?;
     if !crate::services::agent_registry::agent_bins().contains(&cli) {
         return Err(format!("agent shim: '{cli}' is not a registry CLI"));
     }
@@ -65,7 +75,129 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
     }
     let home = crate::services::agent_home::prepare_scope_home(&scope_id, &roots)
         .map_err(|e| format!("agent shim: prepare home: {e}"))?;
-    let mut opts = crate::terminal::PtyOptions {
+    Ok(ShimScope { project_id, cwd, scope_id, roots, home: home.dir })
+}
+
+/// The variable names of the Windows shim's answer ([`env_answer`]): the
+/// real CLI, how `cmd` must start it, and a refusal.
+pub fn windows_answer_vars() -> (String, String, String) {
+    let u = crate::brand::UPPER;
+    (format!("{u}_SHIM_REAL"), format!("{u}_SHIM_CALL"), format!("{u}_SHIM_ERROR"))
+}
+
+/// How `cmd.exe` starts the resolved CLI `real` as the last line of the
+/// `.cmd` shim: an `.exe` directly, another batch file through `call` (so it
+/// returns its status), a PowerShell script through `powershell.exe`.
+pub fn windows_call_prefix(real: &std::path::Path) -> &'static str {
+    match real.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("cmd" | "bat") => "call",
+        Some("ps1") => "powershell.exe -NoProfile -ExecutionPolicy Bypass -File",
+        _ => "",
+    }
+}
+
+/// The environment a CLI typed into a Windows shell tab runs with, on top
+/// of the shell's own `process_env`: the scope home and the Windows profile
+/// set (`agent_fence::home_env_for`, the agent tab's), which replace the
+/// shell's values, and the per-CLI file-storage switches
+/// (`agent_auth::fence_env`), where a value the user set wins. What a
+/// Windows agent tab of the scope gets (`launch_prep`, the "platform" arm).
+pub fn windows_scope_env(
+    home: &std::path::Path,
+    user_home: &std::path::Path,
+    user_appdata: Option<&std::path::Path>,
+    cli: &str,
+    process_env: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut env = crate::services::agent_fence::home_env_for(true, home, user_home, user_appdata, cli);
+    for (k, v) in crate::services::agent_auth::fence_env(cli) {
+        if !process_env.contains_key(*k) {
+            env.push(((*k).to_string(), (*v).to_string()));
+        }
+    }
+    env
+}
+
+/// The answer `--agent-shim-env` prints for the `.cmd` shim to read with
+/// `for /f`: one `NAME=value` per line, the real CLI last. A refusal is the
+/// one error line, so the shim can say it and stop. A value with a line
+/// break cannot cross and is dropped.
+pub fn env_answer(result: Result<(std::path::PathBuf, Vec<(String, String)>), String>) -> String {
+    let (real_var, call_var, err_var) = windows_answer_vars();
+    let clean = |s: &str| !s.contains(['\r', '\n']);
+    match result {
+        Ok((real, env)) => {
+            let mut out = String::new();
+            for (k, v) in env.iter().filter(|(k, v)| clean(k) && clean(v) && !k.contains('=')) {
+                out.push_str(&format!("{k}={v}\n"));
+            }
+            out.push_str(&format!("{call_var}={}\n", windows_call_prefix(&real)));
+            out.push_str(&format!("{real_var}={}\n", real.to_string_lossy()));
+            out
+        }
+        Err(e) => format!("{err_var}={}\n", e.replace(['\r', '\n'], " ")),
+    }
+}
+
+/// Windows has no fence to build: what the shell-tab shim needs is the CLI
+/// itself and the scope's environment, which the `.cmd` shim
+/// (`agent_bin::cmd_shim_script`) sets and then runs the CLI with — on the
+/// same console, so its TUI stays in the tab (this binary is a GUI
+/// executable there and could not host it). The same gates as an agent tab:
+/// the AI switch, the user's one-time acceptance of unfenced agents, the
+/// scope's roots, Local models only.
+#[cfg(windows)]
+fn windows_env_plan(cli: &str) -> Result<(std::path::PathBuf, Vec<(String, String)>), String> {
+    if crate::services::ai_switch::is_off() {
+        return Err(concat!("agent shim: AI is off; switch it on with the power button in ", crate::app_name!(), "'s side panel").into());
+    }
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let real = || {
+        crate::paths::resolve_executable(cli).ok_or_else(|| format!("{cli}: command not found"))
+    };
+    // The root console's Host session already runs in its own home.
+    if env.contains_key(crate::app_env!("HOST_SESSION")) {
+        return Ok((real()?, Vec::new()));
+    }
+    if !crate::services::agent_fence::platform_accepted() {
+        return Err(concat!(
+            "agent shim: agents run unfenced on Windows; open an agent tab in ", crate::app_name!(),
+            " once and accept that first"
+        ).into());
+    }
+    let ShimScope { project_id, cwd, scope_id, home, .. } = scope_for(cli, &env)?;
+    let opts = shim_pty_options(cli, &[], &env, &cwd, project_id);
+    crate::services::agent_privacy::fence_gate(&opts, &scope_id)?;
+    let user_appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+    let scope_env = windows_scope_env(&home, &crate::paths::home_dir(), user_appdata.as_deref(), cli, &env);
+    Ok((real()?, scope_env))
+}
+
+/// The entry point behind `tabtivity --agent-shim-env <cli>` (Windows): print
+/// [`env_answer`] on stdout, which the `.cmd` shim reads. Always exits 0;
+/// a refusal is in the answer.
+pub fn run_env(cli: &str) -> i32 {
+    #[cfg(windows)]
+    let result = windows_env_plan(cli);
+    #[cfg(not(windows))]
+    let result = Err::<(PathBuf, Vec<(String, String)>), String>(format!(
+        "agent shim: {cli}: the environment answer is for the Windows shim only"
+    ));
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let _ = out.write_all(env_answer(result).as_bytes());
+    let _ = out.flush();
+    0
+}
+
+fn shim_pty_options(
+    cli: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    cwd: &std::path::Path,
+    project_id: Option<String>,
+) -> crate::terminal::PtyOptions {
+    crate::terminal::PtyOptions {
         login: None,
         assistant: None,
         id: format!("shim:{}", std::process::id()),
@@ -78,7 +210,7 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         local_only: true,
         sandbox: false,
         agent: true,
-        project_id: project_id.clone(),
+        project_id,
         remote_host_id: None,
         tmux_session: None,
         tmux_attach: None,
@@ -88,7 +220,15 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         host_session: false,
         api_key: None,
         mux_wrapped: false,
-    };
+    }
+}
+
+/// Build the fenced command for `cli args…` in the calling tab's scope.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, String> {
+    let env: HashMap<String, String> = std::env::vars().collect();
+    let ShimScope { project_id, cwd, scope_id, roots, home: home_dir } = scope_for(cli, &env)?;
+    let mut opts = shim_pty_options(cli, args, &env, &cwd, project_id);
     let own = roots
         .iter()
         .filter(|root| cwd.starts_with(root))
@@ -97,9 +237,9 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         .unwrap_or_else(|| cwd.clone());
     crate::services::agent_fence::add_box_root_args(&mut opts, &roots, &own);
     #[cfg(target_os = "linux")]
-    crate::services::agent_fence::wrap_pty_options_bwrap(&mut opts, &roots, &scope_id, &home.dir)?;
+    crate::services::agent_fence::wrap_pty_options_bwrap(&mut opts, &roots, &scope_id, &home_dir)?;
     #[cfg(target_os = "macos")]
-    crate::services::agent_fence::wrap_pty_options_sandbox_exec(&mut opts, &roots, &scope_id, &home.dir)?;
+    crate::services::agent_fence::wrap_pty_options_sandbox_exec(&mut opts, &roots, &scope_id, &home_dir)?;
     let mut command = std::process::Command::new(&opts.cmd);
     command.args(&opts.args).current_dir(&opts.cwd);
     for (k, v) in &opts.env {
@@ -200,6 +340,39 @@ mod tests {
         env.insert(crate::app_env!("AGENT_FENCE").into(), "1".into());
         assert!(plan("claude", &env).is_err());
     }
+    /// 2442d: what a CLI typed into a Windows shell tab runs with — the scope
+    /// home over the shell's own profile, the file-storage switch unless the
+    /// user set it — and the answer the `.cmd` shim reads.
+    #[test]
+    fn the_windows_shim_env_replaces_the_profile_and_keeps_the_users_switch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("agent-homes").join("p");
+        let user = tmp.path().join("user");
+        let mut shell = HashMap::new();
+        shell.insert("USERPROFILE".to_string(), user.to_string_lossy().into_owned());
+        let env = windows_scope_env(&home, &user, None, "goose", &shell);
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| PathBuf::from(v));
+        assert_eq!(get("USERPROFILE"), Some(home.clone()), "the scope home replaces the shell's");
+        assert_eq!(get("APPDATA"), Some(home.join("AppData").join("Roaming")));
+        assert_eq!(get("GOOSE_DISABLE_KEYRING"), Some(PathBuf::from("1")));
+        shell.insert("GOOSE_DISABLE_KEYRING".to_string(), "0".to_string());
+        let env = windows_scope_env(&home, &user, None, "goose", &shell);
+        assert!(!env.iter().any(|(k, _)| k == "GOOSE_DISABLE_KEYRING"), "the user's value wins");
+
+        let (real_var, call_var, err_var) = windows_answer_vars();
+        let real = PathBuf::from(r"C:\npm\claude.cmd");
+        let answer = env_answer(Ok((real, vec![
+            ("HOME".into(), r"C:\h".into()),
+            ("BAD".into(), "a\nb".into()),
+        ])));
+        let lines: Vec<&str> = answer.lines().collect();
+        assert_eq!(lines, [r"HOME=C:\h".to_string(), format!("{call_var}=call"), format!(r"{real_var}=C:\npm\claude.cmd")]);
+        let refused = env_answer(Err("no\nway".into()));
+        assert_eq!(refused, format!("{err_var}=no way\n"));
+        assert_eq!(windows_call_prefix(std::path::Path::new(r"C:\x\claude.exe")), "");
+        assert!(windows_call_prefix(std::path::Path::new(r"C:\x\c.PS1")).starts_with("powershell.exe"));
+    }
+
     #[test]
     fn the_shim_refuses_the_chat_assistants_scope() {
         // A typed CLI would be seeded from and run with the scope's global
