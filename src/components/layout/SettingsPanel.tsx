@@ -93,7 +93,7 @@ import {
 
 export type { SettingsPanelKind } from "./settingsIndex";
 import { useUse24h } from "../../lib/timeFormat";
-import { IS_HOST_WINDOWS, IS_LINUX, IS_MAC, PLATFORM } from "../../lib/platform";
+import { IS_HOST_WINDOWS, IS_LINUX, IS_MAC, IS_WINDOWS, PLATFORM } from "../../lib/platform";
 import { localSessionBackendOn } from "../../lib/terminal/localSessions";
 import { PersistLocalSessionsToggle, WindowsSessionHostToggle } from "./WindowsSessionHostToggle";
 import { runInstallInTab } from "../../lib/installCommand";
@@ -2068,13 +2068,17 @@ export function SettingsDialog({
                 GPU/driver path the DMABUF re-test failed on (flicker, missing
                 content, renderer crash — docs/typing_latency_plan.md Step 4):
                 canvas is the safe renderer, and a terminal whose WebGL fails
-                demotes itself back to it (TerminalView's renderer ladder). */}
-            <ToggleCard
-              label={<>{t("settings.terminalWebgl")} <UntestedTag id="settings.terminalWebgl" /></>}
-              checked={experimentalEnabled(settings, "terminal_webgl")}
-              onChange={(e) => void updateSettings({ terminal_webgl: e.target.checked })}
-              help={t("settings.terminalWebglHelp")}
-            />
+                demotes itself back to it (TerminalView's renderer ladder).
+                Not on Windows: WebView2's WebGL is dependable, so it is always
+                on there (`lib/experimental`) and a switch would mean nothing. */}
+            {!IS_WINDOWS && (
+              <ToggleCard
+                label={<>{t("settings.terminalWebgl")} <UntestedTag id="settings.terminalWebgl" /></>}
+                checked={experimentalEnabled(settings, "terminal_webgl")}
+                onChange={(e) => void updateSettings({ terminal_webgl: e.target.checked })}
+                help={t("settings.terminalWebglHelp")}
+              />
+            )}
 
             {/* Linux only: WebKitGTK's DMA-BUF renderer, read by the backend at
                 launch (docs/done/gpu_compositing_plan.md). The canvas defect that

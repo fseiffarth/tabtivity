@@ -22,7 +22,7 @@
  * on, the legacy branch is dead.
  *
  * `terminal_webgl` was never carried by Debug mode (it rides the GPU/driver path
- * and is opt-in everywhere), so the migration leaves it unset. `gpu_compositing`
+ * and is opt-in everywhere but Windows, where it is always on), so the migration leaves it unset. `gpu_compositing`
  * is held to the same rule: it switches WebKit's renderer and has crash history.
  *
  * An explicit value always wins, in both directions: a user can opt into one
@@ -56,6 +56,7 @@
  * (`stores/tabs`'s `loadFromLayout`).
  */
 
+import { IS_WINDOWS } from "./platform";
 import { useSettingsStore } from "../stores/settings";
 import type { Settings } from "../types";
 import type { TabKind } from "../stores/tabs";
@@ -93,8 +94,12 @@ export function experimentalEnabled(
   flag: ExperimentalFlag,
 ): boolean {
   // WebGL can fall back to software rendering (notably while DMABUF is disabled),
-  // which makes a visible terminal slower rather than faster. Keep the renderer
-  // opt-in until that platform path is dependable; an explicit true still wins.
+  // which makes a visible terminal slower rather than faster. That is the Linux
+  // WebKitGTK path, so the renderer stays opt-in there (and on macOS, unverified);
+  // an explicit true still wins. A Windows webview (WebView2) renders WebGL
+  // dependably, so there it is always on and Settings shows no switch — a
+  // terminal whose WebGL fails still demotes itself (TerminalView's ladder).
+  if (flag === "terminal_webgl" && IS_WINDOWS) return true;
   if (flag === "terminal_webgl" && settings?.terminal_webgl == null) return false;
   // Same rule for the GPU renderer switch (the backend's `gpu_compositing()` is
   // a strict `unwrap_or(false)` too).

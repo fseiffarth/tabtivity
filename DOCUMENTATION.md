@@ -395,7 +395,7 @@ and `terminal_webgl`. An unset flag falls back to
 `settings.debug`, so everything is on in a development build and off in a
 release one — except `terminal_webgl`, which stays opt-in because WebGL can fall
 back to software rendering while DMABUF is disabled, making a visible terminal
-slower rather than faster. `EXPERIMENTAL_TAB_KINDS` marks the flags that own a
+slower rather than faster. On a Windows webview (WebView2) it is always on and has no switch. `EXPERIMENTAL_TAB_KINDS` marks the flags that own a
 tab end to end and whose "off" closes something already open; the live sweep and
 the restore filter both do nothing until settings have actually loaded, because
 unknown must not read as off.
