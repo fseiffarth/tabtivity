@@ -262,20 +262,85 @@ fn lexically_confined_rel(rel: &str) -> PathBuf {
 
 /// The name components of project-relative `rel`, or why it may not be written:
 /// a `..`, root or prefix component, or a NUL. A leading `/` is tolerated (the
-/// same "project-relative" reading [`mirror_local_path`] always gave it).
+/// same "project-relative" reading [`mirror_local_path`] always gave it). On
+/// Windows also a name the filesystem would read as something else
+/// ([`windows_name_refusal`]).
 fn rel_components(rel: &str) -> Result<Vec<&std::ffi::OsStr>, String> {
+    rel_components_for(cfg!(windows), rel)
+}
+
+/// [`rel_components`] with the OS as a parameter, so the Windows rules run on
+/// every OS's tests.
+fn rel_components_for(windows: bool, rel: &str) -> Result<Vec<&std::ffi::OsStr>, String> {
     if rel.contains('\0') {
         return Err(format!("refusing '{rel}': the path holds a NUL byte"));
     }
     let mut parts = Vec::new();
     for c in Path::new(rel.trim_start_matches('/')).components() {
         match c {
-            Component::Normal(name) => parts.push(name),
+            Component::Normal(name) => {
+                if windows {
+                    if let Some(reason) = name.to_str().and_then(windows_name_refusal) {
+                        return Err(format!("refusing '{rel}': {reason}"));
+                    }
+                }
+                parts.push(name)
+            }
             Component::CurDir => {}
             _ => return Err(format!("refusing '{rel}': it steps outside the local mirror")),
         }
     }
     Ok(parts)
+}
+
+/// Why Windows would not keep a mirror name as itself (2442j): a reserved
+/// device name (`aux.py`, `nul`, `COM1`), or what mail attachments already
+/// refuse (`mail_attach::windows_part_refusal`) — a `:` (a drive or a hidden
+/// stream), a short alias (`NAME~1`), a trailing dot or space. A host file
+/// named so is left on the host, never written under another name.
+fn windows_name_refusal(name: &str) -> Option<String> {
+    if crate::paths::is_windows_device_name(name) {
+        return Some(format!("'{name}' is a reserved device name on Windows"));
+    }
+    crate::services::mail_attach::windows_part_refusal(name)
+        .map(|why| format!("'{name}' cannot be kept as itself on Windows ({})", why.trim_start_matches("`path` ")))
+}
+
+/// Refuse a write whose path matches an EXISTING mirror entry that differs
+/// only in case (2442j). The policy: on a case-insensitive filesystem
+/// (Windows) the first spelling written stays and the other is refused and
+/// reported — never one host file overwriting another (`README.md` and
+/// `readme.md`), nor two host folders merged into one. `real_name` answers
+/// how the filesystem spells an existing path's last component (`None`: not
+/// there, or not asked); off Windows it is never asked.
+fn refuse_case_collisions(
+    root: &Path,
+    parts: &[&std::ffi::OsStr],
+    rel: &str,
+    real_name: &dyn Fn(&Path) -> Option<std::ffi::OsString>,
+) -> Result<(), String> {
+    let mut cur = root.to_path_buf();
+    for part in parts {
+        cur.push(part);
+        let Some(real) = real_name(&cur) else { return Ok(()) };
+        if real.as_os_str() != *part {
+            return Err(format!(
+                "refusing '{rel}': the local mirror already holds '{}', which differs only in case, and Windows cannot keep both",
+                real.to_string_lossy()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// How the filesystem spells `path`'s last component, if it exists: Windows
+/// only (the case-insensitive filesystem the collision check is for).
+fn real_name_on_disk(path: &Path) -> Option<std::ffi::OsString> {
+    // A link names itself, not its target: nothing to compare.
+    if !cfg!(windows) || !std::fs::symlink_metadata(path).is_ok_and(|m| !m.file_type().is_symlink()) {
+        return None;
+    }
+    std::fs::canonicalize(path).ok()?.file_name().map(|n| n.to_os_string())
 }
 
 /// Refuse when any EXISTING path among `root/parts[0]`, `root/parts[0]/parts[1]`,
@@ -322,6 +387,7 @@ pub fn confined_mirror_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
         return Err(format!("refusing '{rel}': no file name inside the local mirror"));
     };
     refuse_symlinked_components(root, dirs, rel)?;
+    refuse_case_collisions(root, &parts, rel, &real_name_on_disk)?;
     Ok(parts.iter().fold(root.to_path_buf(), |p, part| p.join(part)))
 }
 
@@ -331,6 +397,7 @@ pub fn confined_mirror_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
 pub fn confined_mirror_dir(root: &Path, rel: &str) -> Result<PathBuf, String> {
     let parts = rel_components(rel)?;
     refuse_symlinked_components(root, &parts, rel)?;
+    refuse_case_collisions(root, &parts, rel, &real_name_on_disk)?;
     Ok(parts.iter().fold(root.to_path_buf(), |p, part| p.join(part)))
 }
 

@@ -1797,3 +1797,47 @@ fn a_known_different_pair_is_remembered_only_for_its_stats() {
     assert!(!known.holds("p", "a.bin", host, local));
     assert!(known.holds("p", "a.bin", (10, Some(101)), local));
 }
+
+/// 2442j: on Windows a host name the filesystem would not keep as itself is
+/// refused, never written under another name; Linux and macOS keep it.
+#[test]
+fn windows_hostile_mirror_names_are_refused_on_windows_only() {
+    for bad in ["aux.py", "src/nul", "COM1.txt", "lpt3", "notes.txt:hidden", "GIT~1/config", "trail.", "trail /x"] {
+        assert!(rel_components_for(true, bad).is_err(), "{bad:?}");
+        assert!(rel_components_for(false, bad).is_ok(), "{bad:?} is an ordinary name off Windows");
+    }
+    for ok in ["auxiliary.py", "src/null.c", "COM10", "draft~final.md", "a/b.txt", ".hidden"] {
+        assert!(rel_components_for(true, ok).is_ok(), "{ok:?}");
+    }
+}
+
+/// 2442j's case policy: the spelling already in the mirror stays, and a
+/// host path that differs from it only in case — the file or a folder above
+/// it — is refused, never written over it.
+#[test]
+fn a_case_only_collision_is_refused_and_the_first_spelling_stays() {
+    use std::ffi::{OsStr, OsString};
+    let root = Path::new("/m");
+    // What a case-insensitive filesystem holds: `Docs/README.md`.
+    let real = |p: &Path| -> Option<OsString> {
+        let rel = p.strip_prefix(root).ok()?.to_string_lossy().to_lowercase().replace('\\', "/");
+        match rel.as_str() {
+            "docs" => Some("Docs".into()),
+            "docs/readme.md" => Some("README.md".into()),
+            _ => None,
+        }
+    };
+    let check = |rel: &str| {
+        let parts: Vec<&OsStr> = rel.split('/').map(OsStr::new).collect();
+        refuse_case_collisions(root, &parts, rel, &real)
+    };
+    assert!(check("Docs/README.md").is_ok(), "the same spelling is the same file");
+    assert!(check("Docs/new.md").is_ok(), "a new file in the folder");
+    let err = check("Docs/readme.md").unwrap_err();
+    assert!(err.contains("'README.md'"), "{err}");
+    assert!(check("docs/other.md").unwrap_err().contains("'Docs'"), "a folder differing in case is refused too");
+    // Off Windows the filesystem is never asked.
+    if !cfg!(windows) {
+        assert_eq!(real_name_on_disk(Path::new("/")), None);
+    }
+}
