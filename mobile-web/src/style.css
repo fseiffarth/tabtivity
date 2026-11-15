@@ -540,7 +540,8 @@ button.mobile-alert-row { cursor:pointer; }
 /* The round FABs (＋ New tab, Home's Tabby) sit just clear of the tab bar
    (≈73px tall above the safe area), not a thumb's width above it. */
 .fab { bottom:calc(80px + max(6px,env(safe-area-inset-bottom))); }
-.todo-fab { width:58px; height:58px; padding:0; border-radius:50%; font-size:1.9rem; line-height:1; box-shadow:0 10px 24px rgba(4,5,9,.55); }
+.todo-fab { display:grid; place-items:center; width:58px; height:58px; padding:0; border-radius:50%; line-height:1; box-shadow:0 10px 24px rgba(4,5,9,.55); }
+.todo-fab svg { width:26px; height:26px; stroke-width:2.2; }
 /* ＋ New tab and Home's Tabby chat: the to-do FAB's place, a circle, icon only
    (its name is the aria-label). Face and shadow are round layers, the shadow a
    static offset copy. */

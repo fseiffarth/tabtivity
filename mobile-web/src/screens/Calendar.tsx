@@ -109,7 +109,7 @@ export function Calendar() {
     </>}
     {view === "week" && <WeekView week={week} selected={selected} weekStart={weekStart} events={events} sortEvents={sortEvents} open={open} truncated={!!data?.truncated} onPick={(date) => { setSelected(date); setView("day"); }} />}
     {view === "day" && <DayView date={selected} dayEvents={selectedEvents} open={open} truncated={!!data?.truncated} canWrite={canWrite} onCreateAt={(hour) => createAt(selected, hour)} />}
-    <button className="primary todo-fab" aria-label={t("eventDialog.newEventTitle")} title={t("eventDialog.newEventTitle")} disabled={busy || !canWrite} onClick={() => createAt(selected)}>＋</button>
+    <button className="primary todo-fab" aria-label={t("eventDialog.newEventTitle")} title={t("eventDialog.newEventTitle")} disabled={busy || !canWrite} onClick={() => createAt(selected)}><PlusIcon /></button>
     {menu && <OptionSheet title={t("mobile.calendar.title")} waiting="" busy={false} onClose={() => setMenu(false)} onPick={(key) => { setMenu(false); if (key === "calendars") setManage(true); else setReminders(true); }} options={[
       { key: "calendars", label: t("calendarSidebar.calendarsTitle"), description: t("mobile.calendar.manageNote"), current: false, more: true, disabled: busy },
       { key: "reminders", label: t("mobile.push.reminders"), description: t("mobile.calendar.remindersNote"), current: false, more: true, trailing: isUntested("mobile.calendar.push") ? <span className="untested">{t("mobile.newTab.untested")}</span> : undefined },

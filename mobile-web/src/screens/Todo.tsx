@@ -57,11 +57,11 @@ function dueInfo(due: string, t: Translate, lang: Language, now = new Date()): {
 // The editor offers None/High/Normal/Low, so a bare "Priority 1" on a card is
 // the one number on the board nobody can read back. iCalendar's own banding
 // (1–4 high, 5 normal, 6–9 low) turns it back into the word that was picked.
-function priorityChip(priority: number): { label: TranslationKey; glyph: string; tone: string } | null {
+function priorityChip(priority: number): { label: TranslationKey; tone: string } | null {
   if (priority <= 0) return null;
-  if (priority <= 4) return { label: "tasksView.priorityHigh", glyph: "▲", tone: "high" };
-  if (priority <= 5) return { label: "tasksView.priorityNormal", glyph: "■", tone: "normal" };
-  return { label: "tasksView.priorityLow", glyph: "▼", tone: "low" };
+  if (priority <= 4) return { label: "tasksView.priorityHigh", tone: "high" };
+  if (priority <= 5) return { label: "tasksView.priorityNormal", tone: "normal" };
+  return { label: "tasksView.priorityLow", tone: "low" };
 }
 
 // The derived fields have to come off, `rank` included: the desktop's task input
@@ -233,7 +233,7 @@ export function Todo({ card }: { card?: string }) {
         run: (name) => columnAction({ type: "column_create", name }),
       })}><PlusIcon size="18px" />{t("todoBoard.addColumn")}</button></div>
     </section>
-    <button className="primary todo-fab" aria-label={t("mobile.todo.addCard")} title={t("mobile.todo.addCard")} disabled={busy || !board?.calendars.length} onClick={() => setEditing("new")}>＋</button>
+    <button className="primary todo-fab" aria-label={t("mobile.todo.addCard")} title={t("mobile.todo.addCard")} disabled={busy || !board?.calendars.length} onClick={() => setEditing("new")}><PlusIcon /></button>
     {editing && board && <TaskEditor
       board={board} task={editing === "new" ? null : editing} busy={busy}
       close={() => setEditing(null)}
@@ -368,7 +368,7 @@ function TodoMeta({ task, accent }: { task: TodoCard; accent: string }) {
   if (!due && !priority && !steps && task.tags.length === 0 && !progress) return null;
   return <div className="todo-mobile-meta">
     {due && <small className={`todo-chip due ${due.tone}`}><ClockIcon /> {due.label}</small>}
-    {priority && <small className={`todo-chip prio ${priority.tone}`}>{priority.glyph} {t(priority.label)}</small>}
+    {priority && <small className={`todo-chip prio ${priority.tone}`}>{t(priority.label)}</small>}
     {steps > 0 && <small className="todo-chip steps"><CheckboxIcon /> {task.subtasks.filter((step) => step.done).length}/{steps}</small>}
     {task.tags.map((tag) => <small className="todo-chip tag" key={tag}>#{tag}</small>)}
     {progress && <span className="todo-mobile-progress" role="progressbar" aria-valuenow={task.percent} aria-valuemin={0} aria-valuemax={100} aria-label={t("mobile.todo.progressOf", { name: task.title })}>
