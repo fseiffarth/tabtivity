@@ -946,6 +946,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("read_spreadsheet", Core),
     // commands/skills.rs
     ("skills_add_source", Core),
+    ("skills_copy", Core),
     ("skills_get_detail", Core),
     ("skills_install", Core),
     ("skills_list_catalog", Core),

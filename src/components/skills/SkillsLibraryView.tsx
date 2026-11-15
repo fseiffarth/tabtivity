@@ -5,6 +5,7 @@ import { onMarkdownLinkClick } from "../../lib/viewers/markdownLinks";
 import {
   PERSONAL_SKILLS,
   addSkillSource,
+  copyInstalledSkill,
   getSkillDetail,
   installSkill,
   listInstalledSkills,
@@ -20,8 +21,14 @@ import type {
   SkillCatalogEntry,
   SkillDetail,
   SkillSource,
+  SkillTarget,
 } from "../../types/skills";
+import { useProjectsStore } from "../../stores/projects";
+import { resolveProjectDirectory } from "../../types";
+import { isHostPinned } from "../../lib/projectTabHost";
 import { ErrorNote } from "../common/ErrorNote";
+import { UntestedTag } from "../common/UntestedTag";
+import { SkillCopyDialog, type SkillCopyDestination } from "./SkillCopyDialog";
 import { useDialogs } from "../common/PromptDialogs";
 import { CloseIcon } from "../common/icons/Icon";
 
@@ -106,6 +113,31 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [view, setView] = useState<"browse" | "installed">("browse");
 
+  // Copying between projects. Every local project with a folder is a place a
+  // skill can come from or go to; a host-pinned one (VM, remote-only) has no
+  // local `.claude/skills` to read or write, so it is left out, and so is the
+  // project this view is about (it is "here", not "another project").
+  const projects = useProjectsStore((s) => s.projects);
+  const otherProjects = useMemo(
+    () =>
+      projects
+        .filter((p) => !isHostPinned(p))
+        .map((p) => ({ id: p.id, name: p.name, dir: resolveProjectDirectory(p) }))
+        .filter((p) => p.dir && p.dir !== projectDir)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [projects, projectDir],
+  );
+  /** The Installed view's "From" switch: `""` is this view's own scope, else
+   *  another project's id whose skills are listed with "Copy here". */
+  const [pullFrom, setPullFrom] = useState("");
+  const [pulled, setPulled] = useState<InstalledSkill[]>([]);
+  const pullProject = otherProjects.find((p) => p.id === pullFrom) ?? null;
+  const [copying, setCopying] = useState<{
+    skill: InstalledSkill;
+    from: SkillTarget;
+    destinations: SkillCopyDestination[];
+  } | null>(null);
+
   const reloadInstalled = useCallback(() => {
     listInstalledSkills(target)
       .then(setInstalled)
@@ -141,6 +173,21 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
     if (!visible) return;
     reloadInstalled();
   }, [visible, reloadInstalled]);
+
+  const pullDir = pullProject?.dir ?? "";
+  const reloadPulled = useCallback(() => {
+    if (!pullDir) {
+      setPulled([]);
+      return;
+    }
+    listInstalledSkills(projectSkills(pullDir))
+      .then(setPulled)
+      .catch((e) => setError(String(e)));
+  }, [pullDir]);
+  useEffect(() => {
+    if (!visible) return;
+    reloadPulled();
+  }, [visible, reloadPulled]);
 
   // The catalog is re-derived from the source's cache on every selection —
   // nothing about it is persisted, and no clone/pull happens here (only an
@@ -290,10 +337,61 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
     }
   }
 
+  /** "Copy to…" on an installed card: every other project, plus the personal
+   *  scope when the skill is not already from it. */
+  function openCopy(skill: InstalledSkill, from: "target" | "personal") {
+    const fromTarget = from === "personal" ? PERSONAL_SKILLS : target;
+    const fromPersonal = fromTarget.kind === "personal";
+    const destinations: SkillCopyDestination[] = [];
+    if (fromPersonal && projectDir) {
+      destinations.push({
+        id: "@here",
+        label: t("skillsLibrary.scopeProject"),
+        hint: projectDir,
+        target: projectSkills(projectDir),
+      });
+    }
+    if (!fromPersonal) {
+      destinations.push({
+        id: "@personal",
+        label: t("skillsLibrary.scopePersonal"),
+        hint: t("skillsLibrary.scopePersonalNote"),
+        target: PERSONAL_SKILLS,
+      });
+    }
+    for (const p of otherProjects) {
+      destinations.push({ id: p.id, label: p.name, hint: p.dir, target: projectSkills(p.dir) });
+    }
+    setCopying({ skill, from: fromTarget, destinations });
+  }
+
+  /** "Copy here" on another project's card: into the scope this view installs
+   *  to (this project, or the personal scope where there is none). */
+  async function handleCopyHere(skill: InstalledSkill) {
+    if (!pullDir) return;
+    const overwrite = installedFolders.has(skill.folder);
+    if (overwrite) {
+      const ok = await confirmAction({
+        title: t("skillsLibrary.copyHere"),
+        body: t("skillsLibrary.confirmCopyOverwrite", { name: skill.name }),
+        confirmLabel: t("skillsLibrary.copyHere"),
+      });
+      if (!ok) return;
+    }
+    setError("");
+    try {
+      await copyInstalledSkill(projectSkills(pullDir), skill.folder, target, overwrite);
+      reloadInstalled();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   const q = filter.trim().toLowerCase();
   const matches = (e: { name: string; description: string }) =>
     !q || e.name.toLowerCase().includes(q) || e.description.toLowerCase().includes(q);
   const installedShown = installed.filter(matches);
+  const pulledShown = pulled.filter(matches);
   const inheritedShown = inProject ? inherited.filter(matches) : [];
   const installedCount = installed.length + (inProject ? inherited.length : 0);
   const selectedSource = sources.find((s) => s.id === selectedSourceId) ?? null;
@@ -307,12 +405,36 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
       <span className="skills-card-name">{skill.name}</span>
       <span className="skills-card-desc">{skill.description}</span>
       <span className="skills-card-foot">
+        <button type="button" className="skills-btn" onClick={() => openCopy(skill, from)}>
+          {t("skillsLibrary.copyTo")}
+        </button>
         <button
           type="button"
           className="skills-btn danger"
           onClick={() => handleUninstall(skill, from)}
         >
           {t("skillsLibrary.uninstall")}
+        </button>
+      </span>
+    </div>
+  );
+
+  /** Another project's skill, offered for copying into this view's scope. */
+  const pulledRow = (skill: InstalledSkill) => (
+    <div className="skills-card skills-card-static" key={`pull:${skill.folder}`}>
+      <span className="skills-card-name">{skill.name}</span>
+      <span className="skills-card-desc">{skill.description}</span>
+      <span className="skills-card-foot">
+        {installedFolders.has(skill.folder) && (
+          <span className="skills-badge installed">{t("skillsLibrary.installedBadge")}</span>
+        )}
+        <button
+          type="button"
+          className="skills-btn"
+          title={inProject ? t("skillsLibrary.copyHereProject") : t("skillsLibrary.copyHerePersonal")}
+          onClick={() => void handleCopyHere(skill)}
+        >
+          {t("skillsLibrary.copyHere")}
         </button>
       </span>
     </div>
@@ -428,7 +550,34 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
 
       <div className={`skills-body${previewOpen ? " has-preview" : ""}`}>
         <div className="skills-list-col">
-          {view === "installed" ? (
+          {view === "installed" && otherProjects.length > 0 && (
+            <div className="skills-pull-bar">
+              <span className="skills-seg-label">{t("skillsLibrary.pullFrom")}</span>
+              <select
+                className="skills-source-select"
+                aria-label={t("skillsLibrary.pullFrom")}
+                value={pullProject ? pullFrom : ""}
+                onChange={(e) => setPullFrom(e.target.value)}
+              >
+                <option value="">{inProject ? t("skillsLibrary.scopeProject") : t("skillsLibrary.scopePersonal")}</option>
+                {otherProjects.map((p) => (
+                  <option key={p.id} value={p.id} title={p.dir}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <UntestedTag id="skills.copyFrom" />
+            </div>
+          )}
+          {view === "installed" && pullProject ? (
+            pulled.length === 0 ? (
+              <div className="skills-empty">{t("skillsLibrary.pullEmpty", { name: pullProject.name })}</div>
+            ) : pulledShown.length === 0 ? (
+              <div className="skills-empty">{t("skillsLibrary.noMatches", { q: filter.trim() })}</div>
+            ) : (
+              <div className="skills-grid">{pulledShown.map(pulledRow)}</div>
+            )
+          ) : view === "installed" ? (
             installedCount === 0 ? (
               <div className="skills-empty">{t("skillsLibrary.noInstalled")}</div>
             ) : installedShown.length + inheritedShown.length === 0 ? (
@@ -621,6 +770,15 @@ export function SkillsLibraryView({ projectDir, visible = true }: SkillsLibraryV
           </aside>
         )}
       </div>
+      {copying && (
+        <SkillCopyDialog
+          skill={copying.skill}
+          from={copying.from}
+          destinations={copying.destinations}
+          onClose={() => setCopying(null)}
+          onCopied={reloadInstalled}
+        />
+      )}
       {dialogs}
     </div>
   );

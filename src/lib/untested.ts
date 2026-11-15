@@ -1138,6 +1138,8 @@ export const UNTESTED = {
   "remoteMachines.syncCopyRemoteOnly": { area: "projects", what: "Remote-only project · Remote machines: Sync a copy is disabled with the reason, in the add form and on shared workers" },
 
   // --- skills — The skills library ----------------------------------
+  "skills.copyTo": { area: "skills", what: "Skills library · Installed · Copy to… on a skill card: tick other projects (and/or All projects) and Copy; a destination that already has the skill says so and is overwritten; the skill shows up in each destination's Installed list" },
+  "skills.copyFrom": { area: "skills", what: "Skills library · Installed · the From switch lists another project's skills; Copy here puts one into this project (or into your personal skills where there is no project), asking before it overwrites" },
 
   // --- tabs — Tabs and the new-tab menus ----------------------------
   "tabBar.1": { area: "tabs", what: "TabBar · Duplicate tab" },

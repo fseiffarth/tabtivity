@@ -2612,6 +2612,7 @@ pub fn run() {
             commands::skills::skills_get_detail,
             commands::skills::skills_install,
             commands::skills::skills_uninstall,
+            commands::skills::skills_copy,
             commands::skills::skills_list_installed,
             // Git worktrees (TODO Group E #23)
             commands::git::git_worktree_list,

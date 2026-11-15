@@ -695,6 +695,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["save_window_state", "client"],
   ["read_spreadsheet", "core"],
   ["skills_add_source", "core"],
+  ["skills_copy", "core"],
   ["skills_get_detail", "core"],
   ["skills_install", "core"],
   ["skills_list_catalog", "core"],

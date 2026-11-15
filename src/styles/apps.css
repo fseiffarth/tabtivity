@@ -1837,6 +1837,26 @@
   color: var(--text-muted);
   font-size: var(--text-md);
 }
+/* Installed view: the "From" switch above the list (another project's skills). */
+.skills-pull-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* "Copy to…" picker (SkillCopyDialog): checkbox rows, a flag on the right. */
+.skills-copy .skills-copy-body { display: flex; flex-direction: column; gap: var(--space-3); }
+.skills-copy-list {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px;
+  max-height: 46vh; overflow-y: auto; font-size: var(--text-md);
+}
+.skills-copy-list li { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.skills-copy-list label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
+.skills-copy-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.skills-copy-flag { color: var(--text-muted); flex: none; }
+.skills-copy-flag.is-error { color: var(--danger); }
+.skills-copy-note { font-size: var(--text-md); color: var(--text-secondary); }
+
 .skills-install-note {
   color: var(--text-muted);
   font-size: var(--text-sm);
