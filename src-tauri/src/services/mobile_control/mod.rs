@@ -40,6 +40,7 @@ pub mod pty_bridge;
 pub mod remarks;
 pub mod scheduler;
 pub mod serve;
+pub mod shell_mask;
 pub mod push;
 pub mod sign_in;
 pub mod store;

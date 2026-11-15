@@ -182,7 +182,9 @@ Security / data loss:
   able to write it. Tabtivity registers its session hooks in those homes, not in
   the user's own CLI config.
 - `services::mobile_control`: raw project ids, paths, commands, tmux targets
-  never cross the browser API.
+  never cross the browser API. One exception: a running shell's command line
+  crosses masked (`shell_mask`: project-relative, other paths cut to the leaf,
+  secrets hidden) — never send one past it.
 - Terminal `kill`/`kill_all` reap the whole child subtree.
 - A project's `.gitignore`/`project.json`/`info/exclude` is opened only
   through the guarded helpers, never raw `fs::*`. A store never pairs

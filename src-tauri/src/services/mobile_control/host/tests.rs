@@ -893,26 +893,40 @@ async fn the_phone_has_no_route_to_the_saved_launch_defaults() {
     }
 }
 
-/// The phone's chat shows the running shells like the desktop's, but the
-/// command line never crosses the browser API (threat model gap 79): what the
-/// agent said the shell does and whether it runs in the background do.
+/// The phone's chat shows the running shells like the desktop's, their
+/// command lines masked (threat model gap 79): the tab's own folder made
+/// relative, other host paths cut to their leaf, secrets hidden — in the
+/// agent's description too. Whether a shell runs in the background, and that
+/// the desktop cut it, cross as they are.
 #[tokio::test]
-async fn a_phone_transcript_keeps_the_running_shells_without_their_command_lines() {
+async fn a_phone_transcript_masks_the_running_shells_command_lines() {
     use crate::services::agent_transcript::{AgentTranscript, RunningShell};
     let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(52)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let root = host.root.to_string_lossy().into_owned();
     let transcript = AgentTranscript {
         shells: vec![
-            RunningShell { command: "cat ~/.ssh/config".into(), description: Some("Check the config".into()), cut: true, ..Default::default() },
-            RunningShell { command: "npm run dev".into(), background: true, ..Default::default() },
+            RunningShell {
+                command: format!("cd {root} && curl -H 'Authorization: Bearer sk-live-0123456789abcdef' -o /var/tmp/deep/out.json x"),
+                description: Some(format!("Fetch into {root}/data")),
+                cut: true,
+                ..Default::default()
+            },
+            RunningShell { command: "cat ~/.ssh/config".into(), background: true, ..Default::default() },
         ],
         ..Default::default()
     };
-    let wire = phone_transcript(&host.state, &Phone("d1".into()), "t1", transcript).await;
-    assert_eq!(wire["shells"][0]["description"], "Check the config");
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
+    assert_eq!(wire["shells"][0]["command"], "cd . && curl -H 'Authorization: •••' -o …/out.json x", "{wire}");
+    assert_eq!(wire["shells"][0]["description"], "Fetch into data");
+    assert_eq!(wire["shells"][0]["cut"], true);
+    assert_eq!(wire["shells"][1]["command"], "cat ~/…/config");
     assert_eq!(wire["shells"][1]["background"], true);
-    assert!(!wire.to_string().contains("ssh"), "{wire}");
-    assert!(!wire.to_string().contains("npm run dev"), "{wire}");
-    assert!(wire["shells"][0].get("cut").is_none());
+    let text = wire.to_string();
+    for leaked in [root.as_str(), "sk-live", "/var/tmp", ".ssh"] {
+        assert!(!text.contains(leaked), "{leaked}: {wire}");
+    }
 }
 
 /// H3 (headless owner plan §3): with no window open, the phone's tab

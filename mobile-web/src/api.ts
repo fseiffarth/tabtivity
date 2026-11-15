@@ -1139,7 +1139,7 @@ export interface SessionTranscript {
   tokens?: number;
   /** The shells the agent is running now — Claude's `Bash` calls still
    * without a result, and background ones still running. The phone's API
-   * empties each `command` (command lines never cross it). */
+   * masks each `command` and `description` (`services::mobile_control::shell_mask`). */
   shells?: RunningShell[];
   /** Desktop Reader only (the phone's API strips it): the newest `/context`
    * card Claude printed, colour codes stripped. */
@@ -1150,13 +1150,13 @@ export interface SessionTranscript {
 }
 
 /** A shell command the agent started and is waiting on. The phone's API
- * empties `command` and drops `cut` (command lines never cross it); only the
- * desktop's Reader sees them. */
+ * sends a masked `command` (the tab's folders project-relative, other host
+ * paths cut to their leaf, secrets hidden); the desktop's Reader sees it whole. */
 export interface RunningShell {
   command: string;
   description?: string;
   at?: string;
-  /** The command was cut at the desktop's bound (desktop Reader only). */
+  /** The command was cut at the desktop's bound. */
   cut?: boolean;
   /** Sent to the background: it can run on past the turn. */
   background?: boolean;

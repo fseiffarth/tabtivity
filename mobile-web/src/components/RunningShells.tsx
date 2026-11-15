@@ -1,3 +1,4 @@
+import { useId, useState } from "react";
 import { useT } from "../../../src/lib/i18n";
 import type { RunningShell } from "../api";
 
@@ -10,10 +11,11 @@ export function shownShells(shells: readonly RunningShell[] | undefined, waited:
 }
 
 /** The desktop Reader's "Shell is running…" lines, one per shell: the agent's
- * own few words on what it does and whether it runs in the background. The
- * command line itself never crosses the browser API (it carries host paths and
- * whatever the agent put inline), so the row offers the Terminal view, which
- * shows the screen, in its place. */
+ * own few words on what it does (else the command's first line), whether it
+ * runs in the background, and on a tap the whole command, as the desktop
+ * Reader's line opens it. The phone's command is the sidecar's masked copy
+ * (`services::mobile_control::shell_mask`: project-relative, other host paths
+ * cut to their leaf, secrets hidden). The Terminal view shows the screen. */
 export function RunningShells({ shells, untested, onShowTerminal }: {
   shells: readonly RunningShell[];
   untested?: string;
@@ -26,7 +28,9 @@ export function RunningShells({ shells, untested, onShowTerminal }: {
 
 function ShellRow({ shell, untested, onShowTerminal }: { shell: RunningShell; untested?: string; onShowTerminal?: () => void }) {
   const t = useT();
-  const summary = shell.description;
+  const [open, setOpen] = useState(false);
+  const commandId = useId();
+  const summary = shell.description || shell.command.split("\n", 1)[0];
   return <div className="transcript-shell-item">
     <div className="transcript-working transcript-shell" role="status">
       <span className="transcript-shell-mark" aria-hidden="true">$</span>
@@ -35,7 +39,11 @@ function ShellRow({ shell, untested, onShowTerminal }: { shell: RunningShell; un
         {summary}
         {untested && <em>{summary && " · "}{untested}</em>}
       </small>}
+      {shell.command && <button type="button" className="transcript-shell-toggle" aria-expanded={open} aria-controls={commandId}
+        aria-label={t(open ? "terminal.reader.shellHide" : "terminal.reader.shellShow")} title={t(open ? "terminal.reader.shellHide" : "terminal.reader.shellShow")}
+        onClick={() => setOpen((shown) => !shown)}><span aria-hidden="true">{open ? "▴" : "▾"}</span></button>}
       {onShowTerminal && <button type="button" className="transcript-shell-toggle transcript-shell-terminal" onClick={onShowTerminal}>{t("mobile.focus.shellInTerminal")}</button>}
     </div>
+    {open && shell.command && <pre id={commandId} className="transcript-shell-command">{shell.command}{shell.cut && "…"}</pre>}
   </div>;
 }

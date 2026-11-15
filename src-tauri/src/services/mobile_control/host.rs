@@ -62,6 +62,7 @@ use super::{
     remarks,
     scheduler,
     serve,
+    shell_mask,
     uploads,
     push::{AgentTabRef, PushPrefs},
     sign_in,
@@ -5229,15 +5230,18 @@ async fn tab_named_files(
     (StatusCode::OK, Json(json!({ "files": found })))
 }
 
-/// The running shells keep what the agent said they do and whether they run
-/// in the background; the command line, and that it was cut, stay on the
-/// desktop. A command line carries absolute host paths and whatever the agent
-/// put inline (a token in a header, a password), and `AGENTS.md` says commands
-/// never cross the browser API (threat model gap 79).
-fn empty_shell_commands(transcript: &mut crate::services::agent_transcript::AgentTranscript) {
+/// The running shells cross masked (`shell_mask`, threat model gap 79): the
+/// command line and the agent's description of it with the tab's own folders
+/// made project-relative, every other host path cut to its leaf and anything
+/// secret-shaped hidden. `folders` are the scope's roots, the tab's and the
+/// session's cwd. The masked line may be longer or shorter than the desktop's
+/// cut; `cut` still says the desktop cut it.
+fn mask_shell_commands(transcript: &mut crate::services::agent_transcript::AgentTranscript, folders: &[&str]) {
     for shell in &mut transcript.shells {
-        shell.command.clear();
-        shell.cut = false;
+        shell.command = shell_mask::mask_command(&shell.command, folders);
+        if let Some(description) = shell.description.as_mut() {
+            *description = shell_mask::mask_command(description, folders);
+        }
     }
 }
 
@@ -5245,27 +5249,39 @@ fn empty_shell_commands(transcript: &mut crate::services::agent_transcript::Agen
 /// subagents work in are paths, which do not cross the browser API. A
 /// subagent's folder in a linked worktree of the tab's project crosses as that
 /// worktree's name and branch instead (`worktree` on its `agent` entry), as the
-/// tab cards name it. The running shells cross without their command lines
-/// ([`empty_shell_commands`]).
+/// tab cards name it. The running shells cross masked
+/// ([`mask_shell_commands`]).
 async fn phone_transcript(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
-    empty_shell_commands(&mut transcript);
+    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
+    let wants_tab = !transcript.shells.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
+    let found = wants_tab
+        .then(|| catalog(state, phone).ok())
+        .flatten()
+        .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone())));
+    if !transcript.shells.is_empty() {
+        let mut folders: Vec<String> = transcript.cwd.iter().cloned().collect();
+        if let Some((project, cwd)) = &found {
+            folders.push(cwd.clone());
+            folders.extend(std::iter::once(&project.root).chain(&project.roots).map(|root| root.to_string_lossy().into_owned()));
+        }
+        let folders: Vec<&str> = folders.iter().map(String::as_str).collect();
+        mask_shell_commands(&mut transcript, &folders);
+    }
     transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
     if let Some(prompt) = transcript.cut_prompt.as_mut() {
         prompt.cwd = None;
     }
-    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
     let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
-    let project = (entry_cwds.iter().any(|cwd| !cwd.is_empty()))
-        .then(|| catalog(state, phone).ok())
-        .flatten()
-        .and_then(|catalog| catalog.tab(tab_id).map(|(project, _)| project.clone()))
+    let project = found
+        .filter(|_| entry_cwds.iter().any(|cwd| !cwd.is_empty()))
+        .map(|(project, _)| project)
         .filter(is_git_project);
     if let Some(project) = project {
         let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();
