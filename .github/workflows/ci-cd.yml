@@ -52,6 +52,10 @@ env:
 # green run (2026-10), so a hung test fails the job instead of holding the
 # runner for GitHub's six-hour default (and release.yml's two-hour wait).
 #
+# Setup Node keeps no npm cache: its key is package-lock.json's hash, which
+# the pre-push version bump changes on every push, so it never hit and left
+# 190 MB behind each time, in a 10 GB store the Rust caches need.
+#
 # `npm ci --ignore-scripts`: no dependency's install script runs here, where
 # a compromised package's postinstall would execute with the job's token and
 # secrets. The lock's only install script is fsevents' (a rebuild of a
@@ -210,7 +214,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -262,9 +265,87 @@ jobs:
       - name: Lint daemon crate
         run: cargo clippy -p app-serverd --all-targets -- -D warnings
 
+  # Which OS test jobs this push can skip (scripts/ci-skip.sh says how):
+  # one that already passed on the same content (docs-only pushes, re-runs),
+  # or one the push's `CI-Only:` commit trailers leave out while it was green
+  # on the commit before. Branch pushes other than main only. Anything this
+  # job cannot work out, or its failure, leaves every OS to run.
+  ci-plan:
+    name: ci-plan
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Never turns a run red: a failed plan only means every OS runs its tests.
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read   # looks up earlier runs' ci-passed-* artifacts
+    outputs:
+      key: ${{ steps.plan.outputs.key }}
+      skip_linux: ${{ steps.plan.outputs.skip_linux }}
+      skip_windows: ${{ steps.plan.outputs.skip_windows }}
+      skip_macos: ${{ steps.plan.outputs.skip_macos }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0     # the push's commits, for their trailers
+          filter: blob:none  # trees and messages; the few blobs the key reads load on demand
+
+      - name: Plan the OS test jobs
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+        run: bash scripts/ci-skip.sh plan || echo "::warning::ci-skip.sh failed; every OS runs its tests"
+
+      # A carried verdict is recorded too, so a second fix on top of the first
+      # still carries it.
+      - name: Write the carried verdict
+        if: steps.plan.outputs.record_linux == 'true' || steps.plan.outputs.record_windows == 'true' || steps.plan.outputs.record_macos == 'true'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: mkdir -p .ci-passed && printf 'carried from %s\n' "$BEFORE" > .ci-passed/verdict
+
+      - name: Record the carried Linux verdict
+        if: steps.plan.outputs.record_linux == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-passed-Linux-${{ steps.plan.outputs.key }}
+          path: .ci-passed
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Record the carried Windows verdict
+        if: steps.plan.outputs.record_windows == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-passed-Windows-${{ steps.plan.outputs.key }}
+          path: .ci-passed
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Record the carried macOS verdict
+        if: steps.plan.outputs.record_macos == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-passed-macOS-${{ steps.plan.outputs.key }}
+          path: .ci-passed
+          retention-days: 30
+          if-no-files-found: error
+
   test-ubuntu:
     name: test-ubuntu
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')
+    # Skipped when ci-plan says this OS already passed on this content (or the
+    # push's CI-Only trailers carry it); runs when ci-plan is skipped or fails.
+    needs: ci-plan
+    if: ${{ !cancelled() && needs.ci-plan.outputs.skip_linux != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -291,7 +372,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -302,6 +382,9 @@ jobs:
         uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
+          # A red test run still built every dependency: without this a
+          # red streak never saves them and each run builds them again.
+          cache-on-failure: true
 
       - name: Install frontend dependencies
         run: npm ci --ignore-scripts
@@ -326,15 +409,28 @@ jobs:
 
       - name: Re-run the last run's failed tests first
         shell: bash
+        timeout-minutes: 40
         run: bash scripts/ci-failed-first.sh previous
 
+      # A branch push other than main runs only the tests the change since
+      # this OS's last green suite can reach (scripts/ci-vitest-select.mjs);
+      # main, a PR and a run started by hand take the whole suite.
       - name: Run frontend tests
         shell: bash
         run: bash scripts/ci-failed-first.sh frontend
 
+      # A step timeout, well inside the job's: the job's own cancels the
+      # run and names nothing, this one fails it and the next step says
+      # which tests were still running. Sized for a build with no cache.
       - name: Run backend tests
         shell: bash
+        timeout-minutes: 40
         run: bash scripts/ci-failed-first.sh backend
+
+      - name: Name the tests a cut-off run left running
+        if: always()
+        shell: bash
+        run: bash scripts/ci-failed-first.sh hung
 
       - name: Save this run's failed tests
         if: always()
@@ -368,12 +464,31 @@ jobs:
             exit 1
           fi
 
+      # This content's green verdict, for a later push's ci-plan
+      # (scripts/ci-skip.sh). Reached only when every step above passed.
+      - name: Write the passed verdict
+        if: needs.ci-plan.outputs.key != ''
+        shell: bash
+        run: mkdir -p .ci-passed && printf 'passed at %s\n' "$GITHUB_SHA" > .ci-passed/verdict
+
+      - name: Record the passed verdict
+        if: needs.ci-plan.outputs.key != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-passed-${{ runner.os }}-${{ needs.ci-plan.outputs.key }}
+          path: .ci-passed
+          retention-days: 30
+          if-no-files-found: error
+
   # windows-2025 and macos-26, not the -latest aliases, for the reason the
   # package job's comment gives for ubuntu-24.04: the runner image is an input
   # to the shipped .exe and .dmg. They are what -latest named in 2026-10.
   test-windows:
     name: test-windows
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')
+    # Skipped when ci-plan says this OS already passed on this content (or the
+    # push's CI-Only trailers carry it); runs when ci-plan is skipped or fails.
+    needs: ci-plan
+    if: ${{ !cancelled() && needs.ci-plan.outputs.skip_windows != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')) }}
     runs-on: windows-2025
     timeout-minutes: 100
 
@@ -387,7 +502,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -399,6 +513,9 @@ jobs:
         uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
+          # A red test run still built every dependency: without this a
+          # red streak never saves them and each run builds them again.
+          cache-on-failure: true
 
       - name: Install frontend dependencies
         run: npm ci --ignore-scripts
@@ -423,15 +540,28 @@ jobs:
 
       - name: Re-run the last run's failed tests first
         shell: bash
+        timeout-minutes: 60
         run: bash scripts/ci-failed-first.sh previous
 
+      # A branch push other than main runs only the tests the change since
+      # this OS's last green suite can reach (scripts/ci-vitest-select.mjs);
+      # main, a PR and a run started by hand take the whole suite.
       - name: Run frontend tests
         shell: bash
         run: bash scripts/ci-failed-first.sh frontend
 
+      # A step timeout, well inside the job's: the job's own cancels the
+      # run and names nothing, this one fails it and the next step says
+      # which tests were still running. Sized for a build with no cache.
       - name: Run backend tests
         shell: bash
+        timeout-minutes: 60
         run: bash scripts/ci-failed-first.sh backend
+
+      - name: Name the tests a cut-off run left running
+        if: always()
+        shell: bash
+        run: bash scripts/ci-failed-first.sh hung
 
       - name: Save this run's failed tests
         if: always()
@@ -455,9 +585,28 @@ jobs:
         continue-on-error: true
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      # This content's green verdict, for a later push's ci-plan
+      # (scripts/ci-skip.sh). Reached only when every step above passed.
+      - name: Write the passed verdict
+        if: needs.ci-plan.outputs.key != ''
+        shell: bash
+        run: mkdir -p .ci-passed && printf 'passed at %s\n' "$GITHUB_SHA" > .ci-passed/verdict
+
+      - name: Record the passed verdict
+        if: needs.ci-plan.outputs.key != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-passed-${{ runner.os }}-${{ needs.ci-plan.outputs.key }}
+          path: .ci-passed
+          retention-days: 30
+          if-no-files-found: error
+
   test-macos:
     name: test-macos
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')
+    # Skipped when ci-plan says this OS already passed on this content (or the
+    # push's CI-Only trailers carry it); runs when ci-plan is skipped or fails.
+    needs: ci-plan
+    if: ${{ !cancelled() && needs.ci-plan.outputs.skip_macos != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')) }}
     runs-on: macos-26
     timeout-minutes: 100
 
@@ -471,7 +620,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -483,6 +631,9 @@ jobs:
         uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: . -> target
+          # A red test run still built every dependency: without this a
+          # red streak never saves them and each run builds them again.
+          cache-on-failure: true
 
       - name: Install frontend dependencies
         run: npm ci --ignore-scripts
@@ -507,15 +658,28 @@ jobs:
 
       - name: Re-run the last run's failed tests first
         shell: bash
+        timeout-minutes: 60
         run: bash scripts/ci-failed-first.sh previous
 
+      # A branch push other than main runs only the tests the change since
+      # this OS's last green suite can reach (scripts/ci-vitest-select.mjs);
+      # main, a PR and a run started by hand take the whole suite.
       - name: Run frontend tests
         shell: bash
         run: bash scripts/ci-failed-first.sh frontend
 
+      # A step timeout, well inside the job's: the job's own cancels the
+      # run and names nothing, this one fails it and the next step says
+      # which tests were still running. Sized for a build with no cache.
       - name: Run backend tests
         shell: bash
+        timeout-minutes: 60
         run: bash scripts/ci-failed-first.sh backend
+
+      - name: Name the tests a cut-off run left running
+        if: always()
+        shell: bash
+        run: bash scripts/ci-failed-first.sh hung
 
       - name: Save this run's failed tests
         if: always()
@@ -539,14 +703,31 @@ jobs:
         continue-on-error: true
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      # This content's green verdict, for a later push's ci-plan
+      # (scripts/ci-skip.sh). Reached only when every step above passed.
+      - name: Write the passed verdict
+        if: needs.ci-plan.outputs.key != ''
+        shell: bash
+        run: mkdir -p .ci-passed && printf 'passed at %s\n' "$GITHUB_SHA" > .ci-passed/verdict
+
+      - name: Record the passed verdict
+        if: needs.ci-plan.outputs.key != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-passed-${{ runner.os }}-${{ needs.ci-plan.outputs.key }}
+          path: .ci-passed
+          retention-days: 30
+          if-no-files-found: error
+
   package-windows:
     name: package-windows
     runs-on: windows-2025
     timeout-minutes: 50
-    if: github.event_name == 'push'
+    # A test job ci-plan skipped counts as passed (its verdict stands).
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.privacy.result == 'success' && needs.brand.result == 'success' && (needs.test-windows.result == 'success' || (needs.test-windows.result == 'skipped' && needs.ci-plan.outputs.skip_windows == 'true')) }}
     # `privacy` gates every package job: a build that leaks must never become a
     # downloadable artifact, let alone a release asset.
-    needs: [test-windows, privacy, brand]
+    needs: [ci-plan, test-windows, privacy, brand]
     # A short target dir: MSBuild's file tracker cannot write a log at 260
     # characters or more, and whisper.cpp's Vulkan shader generator is a nested
     # cmake project whose try-compile logs reach 267 under the checkout's own
@@ -566,7 +747,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -626,8 +806,9 @@ jobs:
     name: package-linux
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    if: github.event_name == 'push'
-    needs: [test-ubuntu, privacy, brand]
+    # A test job ci-plan skipped counts as passed (its verdict stands).
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.privacy.result == 'success' && needs.brand.result == 'success' && (needs.test-ubuntu.result == 'success' || (needs.test-ubuntu.result == 'skipped' && needs.ci-plan.outputs.skip_linux == 'true')) }}
+    needs: [ci-plan, test-ubuntu, privacy, brand]
 
     steps:
       - name: Checkout
@@ -662,7 +843,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -713,8 +893,9 @@ jobs:
     name: package-server
     runs-on: ubuntu-24.04
     timeout-minutes: 40
-    if: github.event_name == 'push'
-    needs: [test-ubuntu, privacy, brand]
+    # A test job ci-plan skipped counts as passed (its verdict stands).
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.privacy.result == 'success' && needs.brand.result == 'success' && (needs.test-ubuntu.result == 'success' || (needs.test-ubuntu.result == 'skipped' && needs.ci-plan.outputs.skip_linux == 'true')) }}
+    needs: [ci-plan, test-ubuntu, privacy, brand]
 
     steps:
       - name: Checkout
@@ -726,7 +907,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -755,8 +935,9 @@ jobs:
     name: package-macos
     runs-on: macos-26
     timeout-minutes: 90
-    if: github.event_name == 'push'
-    needs: [test-macos, privacy, brand]
+    # A test job ci-plan skipped counts as passed (its verdict stands).
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.privacy.result == 'success' && needs.brand.result == 'success' && (needs.test-macos.result == 'success' || (needs.test-macos.result == 'skipped' && needs.ci-plan.outputs.skip_macos == 'true')) }}
+    needs: [ci-plan, test-macos, privacy, brand]
 
     steps:
       - name: Checkout
@@ -768,7 +949,6 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
