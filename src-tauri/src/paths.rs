@@ -348,6 +348,25 @@ fn supplemental_path_dirs_for(
     dirs
 }
 
+/// Directories searched *after* the inherited PATH: install dirs whose tools
+/// a version manager on PATH must keep shadowing. `%ProgramFiles%\nodejs` is
+/// where winget's `OpenJS.NodeJS.LTS` (the setup wizard's Node install) puts
+/// `node.exe`/`npm.cmd`; its MSI adds that dir to the machine PATH for *new*
+/// processes only, so without this every npm-based CLI install failed with
+/// "npm not found" until Tabtivity was relaunched. Behind PATH, not ahead of
+/// it: nvm-windows, Volta or fnm on the inherited PATH still pick the Node.
+fn fallback_path_dirs_for(os: OsKind, program_files: Option<&OsStr>) -> Vec<PathBuf> {
+    match (os, program_files) {
+        (OsKind::Windows, Some(pf)) => vec![PathBuf::from(pf).join("nodejs")],
+        _ => Vec::new(),
+    }
+}
+
+/// [`fallback_path_dirs_for`] this host.
+fn fallback_path_dirs() -> Vec<PathBuf> {
+    fallback_path_dirs_for(OsKind::current(), std::env::var_os("ProgramFiles").as_deref())
+}
+
 /// Directories prepended to every child process PATH. GUI-launched applications
 /// commonly miss per-user package directories on every supported OS.
 pub fn extra_path_dirs() -> Vec<PathBuf> {
@@ -487,6 +506,7 @@ pub fn effective_path() -> Option<std::ffi::OsString> {
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = extra_path_dirs();
     paths.extend(std::env::split_paths(&current));
+    paths.extend(fallback_path_dirs());
     std::env::join_paths(&paths).ok()
 }
 
@@ -577,6 +597,7 @@ fn executable_search_dirs() -> Vec<PathBuf> {
     let shims = crate::services::agent_bin::bin_dir();
     let mut dirs: Vec<PathBuf> = extra_path_dirs().into_iter().filter(|d| *d != shims).collect();
     dirs.extend(std::env::split_paths(&current).filter(|d| *d != shims));
+    dirs.extend(fallback_path_dirs());
     dirs
 }
 
@@ -1475,6 +1496,21 @@ mod tests {
         assert!(windows.iter().any(|path| path.ends_with(Path::new("Microsoft/WinGet/Links"))));
         assert!(windows.iter().any(|path| path.ends_with(Path::new("Docker/Docker/resources/bin"))));
         assert!(windows.iter().any(|path| path.ends_with(Path::new("OpenVPN/bin"))));
+    }
+
+    #[test]
+    fn winget_node_is_searched_after_path_on_windows_only() {
+        let pf = OsStr::new(r"C:\Program Files");
+        assert_eq!(
+            fallback_path_dirs_for(OsKind::Windows, Some(pf)),
+            vec![PathBuf::from(pf).join("nodejs")]
+        );
+        assert!(fallback_path_dirs_for(OsKind::Windows, None).is_empty());
+        assert!(fallback_path_dirs_for(OsKind::Macos, Some(pf)).is_empty());
+        assert!(fallback_path_dirs_for(OsKind::Unix, Some(pf)).is_empty());
+        // Never ahead of PATH: a version manager's Node keeps winning.
+        let ahead = supplemental_path_dirs_for(OsKind::Windows, Path::new(r"C:\Users\alice"), None, None, Some(pf));
+        assert!(!ahead.iter().any(|d| d.ends_with("nodejs")));
     }
 
     #[test]
