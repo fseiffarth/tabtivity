@@ -187,6 +187,44 @@ fn an_allow_rule_never_follows_a_link_the_agent_could_have_planted() {
     assert_eq!(resolve_spelling("/users/A/short/x", &|at| chain(&at.replace("/users/A", "/Users/a")), &["/Users/a/P".to_string()]), None);
 }
 
+/// 2442n review: `realpath`, git and Node `lstat` every folder on the way to
+/// a path and fail on the first they may not. The folders between a hidden
+/// region and something shown inside it answer `lstat`, and nothing else.
+#[test]
+fn the_folders_above_what_is_shown_answer_lstat_and_nothing_else() {
+    let mut inputs = scope_fixture();
+    inputs.roots.push("/Users/a/code/deep/p2".into());
+    add_canonical_spellings(&mut inputs, &|_| None);
+    let profile = sandbox_exec_profile(&inputs);
+    let lines: Vec<&str> = profile.lines().collect();
+    let stat = |dir: &str| format!("(allow file-read-metadata (literal \"{dir}\"))");
+    let last_hidden = lines.iter().rposition(|l| l.starts_with("(deny file-read* file-write*")).unwrap();
+    for dir in [
+        // A project two folders below the home.
+        "/Users/a/code",
+        "/Users/a/code/deep",
+        // The scope home inside the hidden homes tree.
+        "/Users/a/state",
+        "/Users/a/state/agent-homes",
+        // The private temp dir inside the user's hidden `$TMPDIR`, both spellings.
+        "/var/folders/xy/T",
+        "/var/folders/xy/T/app-tmp",
+        "/private/var/folders/xy/T",
+        "/private/var/folders/xy/T/app-tmp",
+    ] {
+        assert!(line_pos(&profile, &stat(dir)) > last_hidden, "{dir} must come after the hidden denials");
+    }
+    // Not a folder outside every hidden region, not what is shown anyway, not
+    // a hidden folder nothing shown sits in.
+    for dir in ["/Users", "/var/folders/xy", "/private/var/folders/xy", "/private", "/Users/a/p", "/Users/a/code/deep/p2", "/Users/a/state/mail"] {
+        assert!(!profile.contains(&stat(dir)), "{dir}\n{profile}");
+    }
+    // Only the entry itself, never what is below it, and the scope's own
+    // dirs still close the profile.
+    assert!(!profile.contains("(allow file-read-metadata (subpath"), "{profile}");
+    assert_eq!(lines.last(), Some(&"(allow file-read* file-write* (subpath \"/Users/a/state/agent-homes/p\"))"));
+}
+
 #[cfg(unix)]
 #[test]
 fn canonical_spellings_follow_a_real_symlink() {
@@ -258,9 +296,14 @@ mod real {
     /// the scope's private temp dir, canonical spellings added. Under the
     /// crate dir, not `$TMPDIR` — that is what the profile hides.
     fn fence() -> Fence {
+        fence_in(&["r"])
+    }
+
+    /// [`fence`] with the root at `root` below the fake home.
+    fn fence_in(root: &[&str]) -> Fence {
         let base = tempfile::Builder::new().prefix(".sbt").tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let home = base.path().join("h");
-        let root = home.join("r");
+        let root = root.iter().fold(home.clone(), |dir, name| dir.join(name));
         let outside = home.join("o");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
@@ -348,6 +391,25 @@ mod real {
         let made = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let private = Path::new(&f.private_tmp).canonicalize().unwrap();
         assert!(Path::new(&made).canonicalize().unwrap().starts_with(&private), "{made} not in {}", private.display());
+    }
+
+    /// A project that is not directly in the home, and the private temp dir
+    /// inside the hidden `$TMPDIR`: the folders above them answer `stat`
+    /// (git resolves its work tree one folder at a time) but are not listed
+    /// and nothing else in them is read.
+    #[test]
+    fn the_folders_above_a_root_and_the_private_tmp_answer_stat_only() {
+        let f = fence_in(&["x", "r"]);
+        let between = f.root.parent().unwrap();
+        let secret = between.join("secret.txt");
+        std::fs::write(&secret, "s").unwrap();
+        let out = f.sh(&format!("/usr/bin/stat -f %N '{}' \"$TMPDIR/..\" \"$TMPDIR/../..\"", between.display()));
+        assert!(out.status.success(), "{out:?}");
+        let out = f.sh(&format!("/bin/ls '{}' || /bin/cat '{}'", between.display(), secret.display()));
+        assert!(!out.status.success(), "a folder above the root was listed or read: {out:?}");
+        let git = format!("cd '{}' && /usr/bin/git init -q . && /usr/bin/git rev-parse --show-toplevel", f.root.display());
+        let out = f.run("/bin/sh", &["-c", &git], Duration::from_secs(120)).expect("git timed out");
+        assert!(out.status.success(), "{out:?}");
     }
 
     #[test]

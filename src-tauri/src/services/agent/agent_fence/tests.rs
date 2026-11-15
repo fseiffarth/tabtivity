@@ -601,7 +601,18 @@ fn seatbelt_profile_denies_writes_then_restores_roots_and_protects_hooks() {
     // The protected paths are denied LAST so they win over the .claude allow.
     let hook_deny = pos("(deny file-write* (subpath \"/Users/a/.claude/settings.json\"))");
     assert!(hook_deny > pos("(allow file-write* (subpath \"/Users/a/.claude\"))"));
-    assert_eq!(lines.last().unwrap(), &concat!("(deny file-write* (subpath \"/Users/a/.local/share/", crate::app_slug!(), "/hooks\"))"));
+    let last_write = lines.iter().rposition(|l| l.contains("file-write")).unwrap();
+    assert_eq!(lines[last_write], concat!("(deny file-write* (subpath \"/Users/a/.local/share/", crate::app_slug!(), "/hooks\"))"));
+    // After it only `lstat` of the folders above the root: no read of their
+    // contents, no write.
+    let stat_only = &lines[last_write + 1..];
+    assert_eq!(
+        stat_only,
+        [
+            concat!("(allow file-read-metadata (literal \"/Users/a/", crate::app_slug!(), "\"))"),
+            concat!("(allow file-read-metadata (literal \"/Users/a/", crate::app_slug!(), "/projects\"))"),
+        ]
+    );
     // Quoting: a path with a quote or backslash stays one Scheme string.
     assert_eq!(sbpl_string("/a/b\"c\\d"), "\"/a/b\\\"c\\\\d\"");
 }

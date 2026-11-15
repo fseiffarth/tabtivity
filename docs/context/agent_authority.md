@@ -648,6 +648,12 @@ Composition is explicit:
     the next profile must not allow that link's target. So a project whose
     folder is *itself* a symlink gets no write access on a Mac (open the real
     folder instead); denials follow every link.
+  - The folders between a hidden region (the home, a hidden path) and
+    something shown inside it answer `lstat` and nothing else
+    (`stat_only_dirs`, `(allow file-read-metadata (literal …))`): `realpath`,
+    git and Node resolve a path one folder at a time, so a project at
+    `~/code/app` needs `~/code`, and the private temp dir needs the hidden
+    `$TMPDIR` above it. Linux shows the same folders as empty mount parents.
   - **Still open on macOS:** Mach services (keychain below, pasteboard,
     `trustd`); `launchctl submit`/`bootstrap` into the user's launchd domain
     (no SBPL rule found that is known to stop it — check on a Mac:

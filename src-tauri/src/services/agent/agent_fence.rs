@@ -2051,6 +2051,31 @@ impl SeatbeltInputs {
     fn granted(&self) -> impl Iterator<Item = &String> {
         self.roots.iter().chain(&self.writable).chain(self.own_home.iter()).chain(self.private_tmp.iter())
     }
+
+    /// The folders between a hidden region (the user's home, a `hidden` path)
+    /// and something shown inside it, which answer `lstat` and nothing else.
+    /// `realpath`, git and Node resolve a path one folder at a time and fail
+    /// on the first they may not stat: a project at `~/code/app` needs
+    /// `~/code`, the private temp dir needs the user's `$TMPDIR` above it. No
+    /// listing and no file in them is opened by this; Linux shows the same
+    /// folders as the empty parents of its mounts.
+    fn stat_only_dirs(&self) -> std::collections::BTreeSet<String> {
+        let homes = self.spellings(&self.home, false);
+        let denied: Vec<String> = self.hidden.iter().flat_map(|path| self.spellings(path, false)).chain(homes.clone()).collect();
+        let shown = self.readable.iter().chain(self.granted());
+        let mut dirs = std::collections::BTreeSet::new();
+        for spelled in shown.flat_map(|path| self.spellings(path, true)) {
+            let mut at = spelled.as_str();
+            while let Some((parent, _)) = at.rsplit_once('/') {
+                // The home itself already answers (rendered with its denial).
+                if !parent.is_empty() && !homes.iter().any(|home| home == parent) && denied.iter().any(|dir| sbpl_path_within(parent, dir)) {
+                    dirs.insert(parent.to_string());
+                }
+                at = parent;
+            }
+        }
+        dirs
+    }
 }
 
 /// A rule path without its trailing `/` (`$TMPDIR` ends in one), `/` kept.
@@ -2376,6 +2401,9 @@ pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
     inputs.push_rules(&mut p, "deny file-write*", "subpath", inputs.protected.iter());
     inputs.push_rules(&mut p, "deny file-write*", "literal", inputs.pinned.iter());
     inputs.push_rules(&mut p, "deny file-read* file-write*", "subpath", inputs.hidden.iter());
+    for dir in inputs.stat_only_dirs() {
+        p.push_str(&format!("(allow file-read-metadata (literal {}))\n", sbpl_string(&dir)));
+    }
     inputs.push_rules(&mut p, "allow file-read* file-write*", "subpath", inputs.private_tmp.iter());
     inputs.push_rules(&mut p, "allow file-read* file-write*", "subpath", inputs.own_home.iter());
     p
