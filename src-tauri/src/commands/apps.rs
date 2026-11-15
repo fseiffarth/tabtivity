@@ -229,7 +229,8 @@ fn launch_family_now(id: &str, since: u64) -> Vec<FamilyMember> {
 /// starts carries the launch marker, and the app is not `open`'s child. Asked
 /// again for a few seconds while a cold-starting app has no process yet; an
 /// app that was already running (a hand-off) started before the launch and
-/// is no member, as on Linux.
+/// is no member, as on Linux, and neither is a helper it starts for the
+/// request ([`bundle_members`]).
 fn exit_family(entry: &TrackedWindow, track: Option<&LaunchTrack>) -> Vec<FamilyMember> {
     let Some(track) = track else { return Vec::new() };
     #[cfg(target_os = "macos")]
@@ -264,6 +265,13 @@ fn is_app_bundle(exec: &str) -> bool {
 /// process belongs when its executable sits inside `<bundle>/Contents/` (the
 /// main binary and every helper an Electron or Chromium app starts); the lead
 /// is then the oldest, the app itself.
+///
+/// Empty unless one of them is the app's own executable (directly in
+/// `Contents/MacOS/`): an Electron or Chromium app that was already running
+/// answers the request by starting a helper (a renderer, in
+/// `Contents/Frameworks/<Name> Helper.app/`). That helper alone is a hand-off
+/// — the running instance's process, not this launch's — and a row owned by
+/// it would have Close signal a renderer of an app the row never started.
 #[cfg(any(target_os = "macos", test))]
 fn bundle_members(
     procs: impl IntoIterator<Item = (u32, PathBuf, u64)>,
@@ -271,11 +279,17 @@ fn bundle_members(
     since: u64,
 ) -> Vec<FamilyMember> {
     let contents = bundle.join("Contents");
-    procs
+    let own_dir = contents.join("MacOS");
+    let mut app_started = false;
+    let members: Vec<FamilyMember> = procs
         .into_iter()
         .filter(|(_, path, start)| *start >= since && path.starts_with(&contents))
-        .map(|(pid, _, start)| FamilyMember { pid, start })
-        .collect()
+        .map(|(pid, path, start)| {
+            app_started |= path.parent() == Some(own_dir.as_path());
+            FamilyMember { pid, start }
+        })
+        .collect();
+    if app_started { members } else { Vec::new() }
 }
 
 #[cfg(target_os = "macos")]
@@ -3371,6 +3385,14 @@ mod tests {
         assert_eq!(family, vec![FamilyMember { pid: 10, start: 500 }, FamilyMember { pid: 11, start: 520 }]);
         assert_eq!(family_lead(&family), Some(10), "the app, not its helper");
         assert!(bundle_members(Vec::new(), bundle, 0).is_empty());
+        // A hand-off: the app was running since 100 and answered the request
+        // by starting a helper at 520. That helper is the running instance's,
+        // so the launch has no family (the row is demoted, as on Linux).
+        let handoff = vec![
+            (12, PathBuf::from("/Applications/Code.app/Contents/MacOS/Electron"), 100),
+            (11, PathBuf::from("/Applications/Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper"), 520),
+        ];
+        assert!(bundle_members(handoff, bundle, 480).is_empty());
         assert!(is_app_bundle("/Applications/Code.app") && is_app_bundle("/A/X.APP"));
         assert!(!is_app_bundle("/usr/bin/code") && !is_app_bundle("/A/app"));
     }
