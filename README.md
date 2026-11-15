@@ -109,7 +109,11 @@ desktop, file tree, and agent tabs — and unbox afterwards.
 
 **How it compares.** Agent orchestrators (Vibe Kanban, Conductor, Claude Squad,
 the Claude Code desktop app) manage agent processes *inside one repo* but have
-no notion of your desktop. KDE Activities, virtual desktops, tmux, and `workon`
+no notion of your desktop. T3 Code comes closest on the agent side — one
+interface for Claude Code, Codex, Cursor, OpenCode and other CLIs, a worktree
+per thread, phone apps, agents on other machines over Tailscale — but it is a
+chat-and-git front end: its project ends at the repo and its threads, not the
+windows, files and cluster jobs around it. KDE Activities, virtual desktops, tmux, and `workon`
 scripts each cover one slice without a project model. Remote tooling (VS Code
 Remote, JupyterHub) attaches one editor to one host, leaving the cluster half a
 terminal exercise. Vendor phone apps reach only *their own* agent through
