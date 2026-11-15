@@ -27,6 +27,12 @@ const CARD: TodoCard = {
 
 const board = { columns: COLUMNS, tasks: [CARD], calendars: [{ id: "calendar", name: "Personal" }], projects: [] };
 
+/** A column's ⋯ sheet, then one of its rows. */
+function columnAction(column: string, row: string) {
+  fireEvent.click(screen.getByRole("button", { name: `${column}: column actions` }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: column })).getByRole("button", { name: row }));
+}
+
 /** The bodies POSTed so far. */
 const posts = () => vi.mocked(api).mock.calls
   .filter(([, init]) => init?.method === "POST")
@@ -51,9 +57,75 @@ async function mount() {
 }
 
 describe("mobile board sheets", () => {
+  it("offers the column actions in a sheet, and no delete on the only column", async () => {
+    vi.mocked(api).mockResolvedValue({ board: { ...board, columns: [COLUMNS[0]] } });
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "Doing: column actions" }));
+    const sheet = screen.getByRole("dialog", { name: "Doing" });
+    expect(within(sheet).getByRole("button", { name: "Rename Doing" })).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Fold" })).toBeTruthy();
+    expect((within(sheet).getByRole("button", { name: "Move Doing left" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(sheet).getByRole("button", { name: "Move Doing right" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(sheet).queryByRole("button", { name: "Delete Doing" })).toBeNull();
+  });
+
+  it("folds and moves a column from its sheet", async () => {
+    await mount();
+    columnAction("Backlog", "Fold");
+    expect(screen.getByRole("button", { name: "Backlog" }).getAttribute("aria-expanded")).toBe("false");
+    columnAction("Backlog", "Move Backlog left");
+    await waitFor(() => expect(posts()).toEqual([{ type: "column_move", column_id: "backlog", delta: -1 }]));
+  });
+
+  it("moves a card up, down and to another column from its sheet", async () => {
+    const second: TodoCard = { ...CARD, id: "second", title: "Review it", rank: 2 };
+    vi.mocked(api).mockResolvedValue({ board: { ...board, tasks: [{ ...CARD, rank: 1 }, second] } });
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "Write it up: card actions" }));
+    let sheet = screen.getByRole("dialog", { name: "Write it up" });
+    // First card: nothing above it; the current column has no "Move to" row.
+    expect((within(sheet).getByRole("button", { name: "Move Write it up up" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(sheet).queryByRole("button", { name: "Move to Doing" })).toBeNull();
+    fireEvent.click(within(sheet).getByRole("button", { name: "Move Write it up down" }));
+    await waitFor(() => expect(posts()).toEqual([{ type: "move", task_id: "card", column: "doing", index: 1 }]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Write it up" })).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Review it: card actions" }));
+    sheet = screen.getByRole("dialog", { name: "Review it" });
+    expect((within(sheet).getByRole("button", { name: "Move Review it down" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(sheet).getByRole("button", { name: "Move to Backlog" }));
+    await waitFor(() => expect(posts()[posts().length - 1]).toEqual({ type: "move", task_id: "second", column: "backlog" }));
+  });
+
+  it("opens the editor from the card sheet", async () => {
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "Write it up: card actions" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Write it up" })).getByRole("button", { name: "Edit" }));
+    expect(await screen.findByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  it("filters by project and tag from the sheet, shows chips, and removes them", async () => {
+    const tagged: TodoCard = { ...CARD, id: "tagged", title: "Tagged", tags: ["work"], project_id: "p1" };
+    vi.mocked(api).mockResolvedValue({ board: { ...board, tasks: [CARD, tagged], projects: [{ id: "p1", name: "Atlas" }] } });
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const sheet = screen.getByRole("dialog", { name: "Filters" });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Atlas" }));
+    expect(screen.queryByText("Write it up")).toBeNull();
+    expect(screen.getByText("Tagged")).toBeTruthy();
+    fireEvent.click(within(sheet).getByRole("button", { name: "#work" }));
+    fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+    // Both filters show as removable chips, and the button counts them.
+    expect(screen.getByRole("button", { name: "Filters, 2 on" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove filter Tag: #work" }));
+    expect(screen.queryByRole("button", { name: "Remove filter Tag: #work" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove filter Project: Atlas" }));
+    expect(screen.getByText("Write it up")).toBeTruthy();
+  });
+
   it("names a new column in a sheet", async () => {
     await mount();
-    fireEvent.click(screen.getByRole("button", { name: "+ Column" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add a column" }));
     const sheet = screen.getByRole("dialog", { name: "Add a column" });
     const add = within(sheet).getByRole("button", { name: "Add" }) as HTMLButtonElement;
     // Nothing to add until there is a name.
@@ -66,7 +138,7 @@ describe("mobile board sheets", () => {
 
   it("renames a column from a pre-filled sheet, and an unchanged name sends nothing", async () => {
     await mount();
-    fireEvent.click(screen.getByRole("button", { name: "Rename Doing" }));
+    columnAction("Doing", "Rename Doing");
     const sheet = screen.getByRole("dialog", { name: "Rename Doing" });
     const field = within(sheet).getByLabelText("Column name") as HTMLInputElement;
     expect(field.value).toBe("Doing");
@@ -80,7 +152,7 @@ describe("mobile board sheets", () => {
 
   it("asks before deleting a column", async () => {
     await mount();
-    fireEvent.click(screen.getByRole("button", { name: "Delete Doing" }));
+    columnAction("Doing", "Delete Doing");
     expect(posts()).toEqual([]);
     const sheet = screen.getByRole("dialog", { name: "Delete Doing" });
     expect(sheet.textContent).toContain("1 cards will be refiled");
@@ -90,7 +162,7 @@ describe("mobile board sheets", () => {
 
   it("asks before deleting a card, over its editor", async () => {
     await mount();
-    fireEvent.click(screen.getByRole("button", { name: "✎ Edit" }));
+    fireEvent.click(screen.getByText("Write it up"));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
     const sheet = screen.getByRole("dialog", { name: "Delete “Write it up”?" });
     expect(posts()).toEqual([]);
