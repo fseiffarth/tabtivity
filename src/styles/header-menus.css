@@ -2239,6 +2239,18 @@ html[data-header-drag] * {
 .mobile-indicator-device-disconnect {
   font-size: var(--text-sm);
 }
+/* "Keep running when closed": one switch row, ruled off like the device list. */
+.mobile-indicator-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: 10px;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--control-border);
+  font-size: var(--text-sm);
+  cursor: var(--cur-pointer, pointer);
+}
 .mobile-indicator-actions {
   display: flex;
   flex-wrap: wrap;

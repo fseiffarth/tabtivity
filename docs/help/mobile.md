@@ -159,8 +159,13 @@ is refused. Works with the desktop window closed.
   prompts. The hint line under the cards goes for good once you tap its ×.
 - Attaching to a running tab keeps working while the desktop Tabtivity is closed
   or restarting.
-- Creating a new tab from the phone goes through the running desktop, so
-  Tabtivity must be up.
+- **Keep running when Tabtivity is closed** (off unless you turn it on) leaves
+  the Mobile host up after you quit, so the phone, scheduled prompts and
+  reminders go on with no window; open tabs still close on quit. Tabtivity
+  asks once, at the first start with Mobile on; the switch is in the header's
+  phone menu and in Settings → Mobile.
+- Creating a new tab from the phone needs Tabtivity up, or the switch above
+  on.
 - A paired phone types into a terminal exactly like your keyboard: keep agent
   approval modes conservative while Mobile is on.
 - An agent tab opens as a **Chat**: the conversation as messages, a text box

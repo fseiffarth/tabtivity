@@ -60,6 +60,9 @@ export type ConfirmSpec = {
   body: ReactNode;
   /** Confirm button text; defaults to "OK". */
   confirmLabel?: string;
+  /** Cancel button text; defaults to "Cancel". For a plain yes/no question,
+   *  where the other answer is not "back out". */
+  cancelLabel?: string;
   /** Paints the confirm button as the destructive action. */
   danger?: boolean;
 };
@@ -295,6 +298,7 @@ export function ConfirmDialog({
   title,
   body,
   confirmLabel,
+  cancelLabel,
   danger = false,
   onCancel,
   onConfirm,
@@ -306,7 +310,7 @@ export function ConfirmDialog({
       <p className="file-delete-body">{body}</p>
       <div className="file-delete-actions">
         <button type="button" autoFocus={danger} onClick={onCancel}>
-          {t("common.cancel")}
+          {cancelLabel ?? t("common.cancel")}
         </button>
         <button
           type="button"

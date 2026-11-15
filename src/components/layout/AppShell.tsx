@@ -122,7 +122,8 @@ import { RailAiSwitch } from "./RailAiSwitch";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import type { FilesPanelView } from "../../types";
 import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
-import { BRAND } from "../../lib/brand";
+import { BRAND, MOBILE_HOST_KEY } from "../../lib/brand";
+import { isServerClient } from "../../lib/transport/linkState";
 import { PdfLoadWarningHost } from "./PdfLoadWarningHost";
 import { CheckIcon } from "../common/icons/Icon";
 
@@ -151,6 +152,9 @@ const HpcPipelineWizardHost = lazy(() =>
 const HowToStart = lazy(() => import("./HowToStart").then((m) => ({ default: m.HowToStart })));
 const RemoteFeaturesPrompt = lazy(() =>
   import("./RemoteFeaturesPrompt").then((m) => ({ default: m.RemoteFeaturesPrompt })),
+);
+const StayAfterQuitPrompt = lazy(() =>
+  import("../mobile/StayAfterQuitPrompt").then((m) => ({ default: m.StayAfterQuitPrompt })),
 );
 const LessonsMenu = lazy(() => import("./LessonsMenu").then((m) => ({ default: m.LessonsMenu })));
 
@@ -325,6 +329,14 @@ export function AppShell() {
   const remoteFeaturesPrompted = useSettingsStore(
     (s) => s.settings?.remote_features_prompted ?? false,
   );
+  // The "keep running when closed?" ask: only with Mobile on (the Mobile host
+  // is what stays running; without it the switch does nothing), only once.
+  const stayAfterQuitAsk = useSettingsStore(
+    (s) =>
+      !!s.settings?.[MOBILE_HOST_KEY]?.enabled &&
+      !s.settings[MOBILE_HOST_KEY]?.stay_after_quit &&
+      !s.settings.stay_after_quit_prompted,
+  );
   const loadBoxes = useBoxesStore((s) => s.load);
   const activeId = useProjectsStore((s) => s.activeId);
   const rootDir = useProjectsStore((s) => s.rootDir);
@@ -393,6 +405,7 @@ export function AppShell() {
   // first — this defers the remote-features ask until HowToStart closes
   // instead of stacking two modals on the very first launch.
   const [pendingRemoteFeaturesPrompt, setPendingRemoteFeaturesPrompt] = useState(false);
+  const [showStayAfterQuitPrompt, setShowStayAfterQuitPrompt] = useState(false);
   const [showLessons, setShowLessons] = useState(false);
   const panelCloseTimer = useRef<number | null>(null);
 
@@ -527,6 +540,14 @@ export function AppShell() {
     if (!remoteFeaturesPrompted) {
       setShowRemoteFeaturesPrompt(true);
       void updateSettings({ remote_features_prompted: true });
+      return;
+    }
+    // Last in line, so it never stacks on the asks above: a launch that showed
+    // one of them leaves this one to the next launch. Not in a browser client,
+    // which has no window to close.
+    if (stayAfterQuitAsk && !isServerClient()) {
+      setShowStayAfterQuitPrompt(true);
+      void updateSettings({ stay_after_quit_prompted: true });
     }
   }, [
     settingsLoaded,
@@ -534,6 +555,7 @@ export function AppShell() {
     onboardingSeen,
     projectCount,
     remoteFeaturesPrompted,
+    stayAfterQuitAsk,
     updateSettings,
   ]);
 
@@ -1578,6 +1600,9 @@ export function AppShell() {
       </LazyWhen>
       <LazyWhen when={showRemoteFeaturesPrompt}>
         <RemoteFeaturesPrompt onClose={() => setShowRemoteFeaturesPrompt(false)} />
+      </LazyWhen>
+      <LazyWhen when={showStayAfterQuitPrompt}>
+        <StayAfterQuitPrompt onClose={() => setShowStayAfterQuitPrompt(false)} />
       </LazyWhen>
       <LazyWhen when={showLessons}>
         <LessonsMenu onClose={() => setShowLessons(false)} />

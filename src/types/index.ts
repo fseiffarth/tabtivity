@@ -868,6 +868,10 @@ export interface Settings {
   /** True once the first-run "Using VPN or remote machines?" prompt has been
    *  shown/answered, so it never re-asks automatically. */
   remote_features_prompted?: boolean;
+  /** True once the launch-time "Keep running when closed?" question
+   *  (`mobile/StayAfterQuitPrompt`) has been shown, so it never re-asks; the
+   *  answer itself is the Mobile host's `stay_after_quit`. */
+  stay_after_quit_prompted?: boolean;
   /** Energy-saver mode. "off" never throttles; "battery" (the default) throttles
    *  only while running on battery; "always" throttles regardless of power. When
    *  active, Tabtivity pauses the blob auto-spin, collapses idle animations, and

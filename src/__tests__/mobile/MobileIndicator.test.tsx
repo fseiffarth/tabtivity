@@ -267,3 +267,37 @@ describe("MobileIndicator Add device", () => {
     expect(screen.getByRole("img", { name: "QR code for pairing a phone" })).toBeTruthy();
   });
 });
+
+describe("MobileIndicator keep running when closed", () => {
+  afterEach(() => {
+    invokeMock.mockReset();
+    useSettingsStore.setState({ settings: null, loaded: false });
+    useHeaderHoverMenuStore.setState({ openId: null });
+  });
+
+  it("flips the Mobile host's stay_after_quit and keeps the block's other keys", async () => {
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+    useSettingsStore.setState({
+      settings: {
+        [MOBILE_HOST_KEY]: { enabled: true, shell_tabs: true },
+        mobile_indicator: true,
+      } as Settings,
+      loaded: true,
+      updateSettings,
+    });
+    invokeMock.mockImplementation((command: string) =>
+      Promise.resolve(command === "mobile_host_status" ? connected : null),
+    );
+    const user = userEvent.setup();
+    render(<MobileIndicator />);
+
+    await user.click(await screen.findByLabelText(`${BRAND.display} Mobile connected`));
+    const toggle = screen.getByRole("checkbox", { name: /Keep running when/ });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    await user.click(toggle);
+
+    expect(updateSettings).toHaveBeenCalledWith({
+      [MOBILE_HOST_KEY]: { enabled: true, shell_tabs: true, stay_after_quit: true },
+    });
+  });
+});
