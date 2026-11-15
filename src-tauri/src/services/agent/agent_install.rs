@@ -62,11 +62,7 @@ pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)>
         ("PIP_USER".into(), "1".into()),
         ("PYTHONUSERBASE".into(), s(root.join(".local"))),
     ];
-    if windows {
-        env.push(("USERPROFILE".into(), s(root.clone())));
-        env.push(("APPDATA".into(), s(root.join("AppData").join("Roaming"))));
-        env.push(("LOCALAPPDATA".into(), s(root.join("AppData").join("Local"))));
-    }
+    env.extend(crate::services::agent_home::windows_profile_env(windows, &root));
     env
 }
 

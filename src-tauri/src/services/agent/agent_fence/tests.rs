@@ -1523,3 +1523,29 @@ fn the_assistant_scope_has_no_fence_status_and_no_one_shot_command() {
     }
 }
 
+/// 2442b/2442c: a live Windows tab moves the whole profile set, Codex's own
+/// home variable, and keeps the user's per-user Python packages importable.
+#[test]
+fn a_live_windows_tab_moves_the_profile_set_and_keeps_user_python() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scope = tmp.path().join("agent-homes").join("p");
+    let user = tmp.path().join("user");
+    let appdata = user.join("AppData").join("Roaming");
+    std::fs::create_dir_all(appdata.join("Python")).unwrap();
+    let get = |env: &[(String, String)], k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| PathBuf::from(v));
+    let win = home_env_for(true, &scope, &user, Some(&appdata), "codex.exe");
+    assert_eq!(get(&win, "USERPROFILE"), Some(scope.clone()));
+    assert_eq!(get(&win, "APPDATA"), Some(scope.join("AppData").join("Roaming")));
+    assert_eq!(get(&win, "LOCALAPPDATA"), Some(scope.join("AppData").join("Local")));
+    assert_eq!(get(&win, "CODEX_HOME"), Some(scope.join(".codex")));
+    if std::env::var_os("PYTHONUSERBASE").is_none() {
+        assert_eq!(get(&win, "PYTHONUSERBASE"), Some(appdata.join("Python")));
+    }
+    // macOS (Seatbelt) and Linux: `HOME` only, as before.
+    let unix = home_env_for(false, &scope, &user, Some(&appdata), "codex");
+    for var in ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "CODEX_HOME", "PYTHONUSERBASE"] {
+        assert_eq!(get(&unix, var), None, "{var}");
+    }
+    assert_eq!(get(&unix, "HOME"), Some(scope));
+}
+

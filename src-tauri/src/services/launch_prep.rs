@@ -1529,7 +1529,7 @@ pub async fn prepare(
                     cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
                     sandbox: crate::services::agent_features::Sandbox::HostSession,
                 });
-                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
+                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir(), &opts.cmd) {
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
@@ -1550,7 +1550,7 @@ pub async fn prepare(
                     cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
                     sandbox: crate::services::agent_features::Sandbox::Unfenced,
                 });
-                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
+                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir(), &opts.cmd) {
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);

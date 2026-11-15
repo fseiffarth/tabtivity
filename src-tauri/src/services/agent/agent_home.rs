@@ -117,20 +117,117 @@ pub fn is_probe_home(home: &Path) -> bool {
     home.file_name().is_some_and(|n| n == PROBE_SCOPE_KEY)
 }
 
-/// The environment that makes a CLI use `home` as its home: `HOME`, and on
-/// Windows `USERPROFILE` and `APPDATA` (what `agent_install::install_env_for`
-/// sets for an installer), plus the per-CLI file-storage switches a spawn gets
+/// The Windows variables that name a user's profile, all pointed at `home`:
+/// `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, and `HOMEDRIVE` + `HOMEPATH`
+/// (which some tools join instead of reading `USERPROFILE`). One set for the
+/// live tab (`agent_fence::home_env`), the probe ([`probe_env_for`]) and the
+/// installer (`agent_install::install_env_for`), so a CLI is probed,
+/// installed and run against the same tree. Empty off Windows. A drive-less
+/// `home` (it never is on Windows) leaves `HOMEDRIVE`/`HOMEPATH` out.
+pub fn windows_profile_env(windows: bool, home: &Path) -> Vec<(String, String)> {
+    if !windows {
+        return Vec::new();
+    }
+    let s = |p: PathBuf| p.to_string_lossy().into_owned();
+    let mut env = vec![
+        ("USERPROFILE".to_string(), s(home.to_path_buf())),
+        ("APPDATA".to_string(), s(home.join("AppData").join("Roaming"))),
+        ("LOCALAPPDATA".to_string(), s(home.join("AppData").join("Local"))),
+    ];
+    if let Some((drive, path)) = split_windows_drive(&home.to_string_lossy()) {
+        env.push(("HOMEDRIVE".to_string(), drive));
+        env.push(("HOMEPATH".to_string(), path));
+    }
+    env
+}
+
+/// `C:\Users\u` → (`C:`, `\Users\u`); `\\server\share\u` → (`\\server\share`,
+/// `\u`); a verbatim `\\?\` prefix is dropped first. A string, not a `Path`,
+/// so the Windows shape is testable on every OS.
+fn split_windows_drive(path: &str) -> Option<(String, String)> {
+    let path = match path.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => path.strip_prefix(r"\\?\").unwrap_or(path).to_string(),
+    };
+    let tail = |rest: &str| {
+        if rest.is_empty() {
+            "\\".to_string()
+        } else if rest.starts_with(['\\', '/']) {
+            rest.to_string()
+        } else {
+            format!("\\{rest}")
+        }
+    };
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return Some((path[..2].to_string(), tail(&path[2..])));
+    }
+    let unc = path.strip_prefix(r"\\")?;
+    let mut parts = unc.splitn(3, '\\');
+    let (server, share) = (parts.next().filter(|p| !p.is_empty())?, parts.next().filter(|p| !p.is_empty())?);
+    let rest = parts.next().unwrap_or("");
+    Some((format!(r"\\{server}\{share}"), tail(rest)))
+}
+
+/// Per-CLI variables naming the CLI's own home, as (variable, path relative
+/// to the scope home). For a CLI that finds its home without the environment
+/// on Windows: Codex takes it from the `dirs` crate, which asks the shell for
+/// the profile Known Folder and ignores `USERPROFILE`, so only `CODEX_HOME`
+/// keeps it in the scope home. Another CLI with such a variable
+/// (`KIMI_CODE_HOME`, `COPILOT_HOME`, …) gets a row once it is shown to need
+/// one.
+pub fn home_override_env(bin: &str) -> &'static [(&'static str, &'static str)] {
+    match bin {
+        "codex" => &[("CODEX_HOME", ".codex")],
+        _ => &[],
+    }
+}
+
+/// [`home_override_env`] for the command `bin` (a path or a bare name, `.exe`
+/// or not) against `home`, Windows only: on Linux and macOS the CLIs read
+/// `$HOME`, which the fence already sets. Each folder is created, because
+/// Codex refuses a `CODEX_HOME` that does not exist.
+pub fn home_override_env_for(windows: bool, home: &Path, bin: &str) -> Vec<(String, String)> {
+    if !windows {
+        return Vec::new();
+    }
+    home_override_env(cli_basename(bin))
+        .iter()
+        .map(|(var, rel)| {
+            let dir = rel.split('/').fold(home.to_path_buf(), |p, seg| p.join(seg));
+            let _ = std::fs::create_dir_all(&dir);
+            ((*var).to_string(), dir.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+/// A command's CLI name: the last path segment without `.exe`/`.cmd`.
+fn cli_basename(cmd: &str) -> &str {
+    let bin = cmd.rsplit(['/', '\\']).next().unwrap_or(cmd);
+    [".exe", ".cmd", ".EXE", ".CMD"]
+        .iter()
+        .find_map(|ext| bin.strip_suffix(ext))
+        .unwrap_or(bin)
+}
+
+/// The environment that makes a CLI use `home` as its home: `HOME`, the
+/// Windows profile set ([`windows_profile_env`]) and the CLI's own home
+/// variable ([`home_override_env_for`]). The live tab and the probe both
+/// build on it.
+pub fn scope_home_env(windows: bool, home: &Path, bin: &str) -> Vec<(String, String)> {
+    let mut env = vec![("HOME".to_string(), home.to_string_lossy().into_owned())];
+    env.extend(windows_profile_env(windows, home));
+    env.extend(home_override_env_for(windows, home, bin));
+    env
+}
+
+/// The environment that makes a CLI use `home` as its home
+/// ([`scope_home_env`]), plus the per-CLI file-storage switches a spawn gets
 /// (`agent_auth::fence_env`) so a login a keyring would hold lands in the
 /// file the keeper copies.
 pub fn probe_env_for(windows: bool, home: &Path, bin: &str) -> Vec<(String, String)> {
-    let s = |p: PathBuf| p.to_string_lossy().into_owned();
-    let mut env = vec![("HOME".to_string(), s(home.to_path_buf()))];
-    if windows {
-        env.push(("USERPROFILE".to_string(), s(home.to_path_buf())));
-        env.push(("APPDATA".to_string(), s(home.join("AppData").join("Roaming"))));
-    }
-    let bin = bin.rsplit(['/', '\\']).next().unwrap_or(bin);
-    let bin = bin.strip_suffix(".exe").unwrap_or(bin);
+    let mut env = scope_home_env(windows, home, bin);
+    let bin = cli_basename(bin);
     env.extend(
         crate::services::agent_auth::fence_env(bin)
             .iter()
@@ -1270,6 +1367,59 @@ mod tests {
         assert_eq!(get(&win, "USERPROFILE"), get(&win, "HOME"));
         assert!(get(&win, "APPDATA").is_some_and(|a| Path::new(&a).starts_with(home)));
         assert!(PROBE_UNSET.contains(&"CLAUDE_CONFIG_DIR") && PROBE_UNSET.contains(&"CODEX_HOME"));
+    }
+
+    /// 2442c: the live tab, the probe and the installer move the same Windows
+    /// profile set, `LOCALAPPDATA` and `HOMEDRIVE`/`HOMEPATH` included.
+    #[test]
+    fn the_windows_profile_set_moves_every_profile_variable_into_the_home() {
+        let get = |env: &[(String, String)], k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        assert!(windows_profile_env(false, Path::new("/s/h")).is_empty());
+        let home = Path::new(r"C:\Users\u\AppData\Roaming\app\agent-homes\p");
+        let win = windows_profile_env(true, home);
+        assert_eq!(get(&win, "USERPROFILE").as_deref(), Some(home.to_str().unwrap()));
+        for var in ["APPDATA", "LOCALAPPDATA"] {
+            assert!(get(&win, var).is_some_and(|v| Path::new(&v).starts_with(home)), "{var}");
+        }
+        assert_eq!(get(&win, "HOMEDRIVE").as_deref(), Some("C:"));
+        assert_eq!(get(&win, "HOMEPATH").as_deref(), Some(r"\Users\u\AppData\Roaming\app\agent-homes\p"));
+        // The probe and the live tab build on the same set.
+        let probe = probe_env_for(true, home, "goose.exe");
+        let live = scope_home_env(true, home, "goose");
+        for (k, v) in &win {
+            assert_eq!(get(&probe, k).as_deref(), Some(v.as_str()), "probe {k}");
+            assert_eq!(get(&live, k).as_deref(), Some(v.as_str()), "live {k}");
+        }
+    }
+
+    #[test]
+    fn a_windows_home_splits_into_drive_and_path() {
+        let split = |p: &str| split_windows_drive(p);
+        assert_eq!(split(r"D:\x\y"), Some(("D:".into(), r"\x\y".into())));
+        assert_eq!(split(r"\\?\C:\x"), Some(("C:".into(), r"\x".into())));
+        assert_eq!(split("C:"), Some(("C:".into(), r"\".into())));
+        assert_eq!(split(r"\\srv\share\homes\u"), Some((r"\\srv\share".into(), r"\homes\u".into())));
+        assert_eq!(split(r"\\?\UNC\srv\share\u"), Some((r"\\srv\share".into(), r"\u".into())));
+        assert_eq!(split(r"\\srv"), None);
+        assert_eq!(split("/s/agent-homes/p"), None);
+    }
+
+    /// 2442b: Codex takes its home from the profile Known Folder on Windows,
+    /// so only `CODEX_HOME` keeps it in the scope home. It must exist.
+    #[test]
+    fn codex_gets_its_home_variable_on_windows_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let get = |env: &[(String, String)], k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+        for cmd in ["codex", "codex.exe", r"C:\npm\codex.cmd", "/usr/bin/codex"] {
+            let env = scope_home_env(true, home, cmd);
+            assert_eq!(get(&env, "CODEX_HOME").map(PathBuf::from), Some(home.join(".codex")), "{cmd}");
+        }
+        assert!(home.join(".codex").is_dir(), "Codex refuses a CODEX_HOME that does not exist");
+        assert_eq!(get(&scope_home_env(false, home, "codex"), "CODEX_HOME"), None);
+        assert_eq!(get(&scope_home_env(true, home, "claude"), "CODEX_HOME"), None);
+        // The probe sets it too, after `PROBE_UNSET` dropped the user's own.
+        assert!(get(&probe_env_for(true, home, "codex.exe"), "CODEX_HOME").is_some());
     }
 
     /// Gap 54 in the probe home: a warm-up's `opencode run` must not start or

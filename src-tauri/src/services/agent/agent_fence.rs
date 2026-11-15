@@ -1976,18 +1976,38 @@ pub(crate) struct SeatbeltInputs {
 /// (macOS Seatbelt, Windows): the agent's home is the scope home, while git's
 /// global config and the toolchain homes stay the user's, read-only where the
 /// platform can say so. Only variables the user has not set themselves.
-pub fn home_env(scope_home: &Path, user_home: &Path) -> Vec<(String, String)> {
-    let mut env = vec![("HOME".to_string(), scope_home.to_string_lossy().into_owned())];
-    if cfg!(windows) {
-        env.push(("USERPROFILE".to_string(), scope_home.to_string_lossy().into_owned()));
-    }
-    for (var, rel) in [
-        ("GIT_CONFIG_GLOBAL", ".gitconfig"),
-        ("CARGO_HOME", ".cargo"),
-        ("RUSTUP_HOME", ".rustup"),
-        ("DOCKER_CONFIG", ".docker"),
-    ] {
-        let path = user_home.join(rel);
+/// `cmd` is the agent's command: on Windows its own home variable
+/// (`agent_home::home_override_env`, Codex's `CODEX_HOME`) joins the set.
+pub fn home_env(scope_home: &Path, user_home: &Path, cmd: &str) -> Vec<(String, String)> {
+    let user_appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+    home_env_for(cfg!(windows), scope_home, user_home, user_appdata.as_deref(), cmd)
+}
+
+/// [`home_env`] with the OS and the user's own `%APPDATA%` as parameters.
+/// The profile set is the probe's and the installer's
+/// (`agent_home::scope_home_env`), so a CLI that keeps state under
+/// `%APPDATA%` or `%LOCALAPPDATA%` (Goose) runs against the tree it was
+/// probed in. The user's per-user Python packages stay importable
+/// (`PYTHONUSERBASE`): with `APPDATA` moved, a CLI installed with
+/// `pip install --user` would otherwise no longer find its own modules.
+pub fn home_env_for(
+    windows: bool,
+    scope_home: &Path,
+    user_home: &Path,
+    user_appdata: Option<&Path>,
+    cmd: &str,
+) -> Vec<(String, String)> {
+    let mut env = crate::services::agent_home::scope_home_env(windows, scope_home, cmd);
+    let python_base = user_appdata.filter(|_| windows).map(|a| a.join("Python"));
+    let pass_through = [
+        ("GIT_CONFIG_GLOBAL", Some(user_home.join(".gitconfig"))),
+        ("CARGO_HOME", Some(user_home.join(".cargo"))),
+        ("RUSTUP_HOME", Some(user_home.join(".rustup"))),
+        ("DOCKER_CONFIG", Some(user_home.join(".docker"))),
+        ("PYTHONUSERBASE", python_base),
+    ];
+    for (var, path) in pass_through {
+        let Some(path) = path else { continue };
         if path.exists() && std::env::var_os(var).is_none() {
             env.push((var.to_string(), path.to_string_lossy().into_owned()));
         }
@@ -2325,7 +2345,7 @@ pub fn wrap_pty_options_sandbox_exec(
         .insert(crate::app_env!("AGENT_FENCE").to_string(), "1".to_string());
     // Seatbelt cannot redirect a path: the agent's home is the scope home by
     // environment, with the user's git config and toolchains passed through.
-    for (k, v) in home_env(scope_home, &paths::home_dir()) {
+    for (k, v) in home_env(scope_home, &paths::home_dir(), &agent_cmd) {
         opts.env.entry(k).or_insert(v);
     }
     crate::services::agent_auth::apply_fence_env(&agent_cmd, &mut opts.env);
