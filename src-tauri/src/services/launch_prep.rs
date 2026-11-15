@@ -31,6 +31,9 @@ use crate::terminal::PtyOptions;
 /// carriers (`agent_exec::CARRIER_PREFIX`) count as well.
 const CONTROL_ENV: &[&str] = &[
     crate::app_env!("AGENT_FENCE"),
+    // `AGENT_FENCE`'s twin where there is no fence: planted, it makes the
+    // Windows shim hand a shell tab the real CLI in the user's own home.
+    crate::services::agent_shim::UNFENCED_ENV,
     crate::app_env!("HOST_SESSION"),
     crate::app_env!("SCOPE"),
     crate::app_env!("PROJECT_DIR"),
@@ -726,6 +729,15 @@ fn push_fence_scope(
         crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => Some(scope_id.to_string()),
         _ => None,
     }
+}
+
+/// Mark `env` as an agent's that runs unfenced in a Tabtivity-owned home on a
+/// platform with no fence (`agent_shim::UNFENCED_ENV`; Windows only): a CLI
+/// the agent types in its own shell reaches the `.cmd` shim, which then steps
+/// aside instead of looking for Tabtivity's state under the agent home's
+/// `APPDATA`. Always Tabtivity's value, never one the tab brought.
+fn mark_unfenced_agent(env: &mut std::collections::HashMap<String, String>) {
+    env.extend(crate::services::agent_shim::unfenced_marker(cfg!(windows), &crate::services::agent_bin::bin_dir()));
 }
 
 /// Whether a Pusher binding records that its tab runs unfenced on a
@@ -1544,6 +1556,7 @@ pub async fn prepare(
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
+                mark_unfenced_agent(&mut opts.env);
                 // Last: it may put `agent_exec` in front of the CLI.
                 inject_api_keys(&mut opts, &scope_id)?;
             }
@@ -1564,6 +1577,7 @@ pub async fn prepare(
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                mark_unfenced_agent(&mut opts.env);
                 inject_api_keys(&mut opts, &scope_id)?;
             }
             // Fail closed on a fence-less platform too: the tab that asked
@@ -2094,6 +2108,26 @@ mod tests {
         assert_eq!(env[crate::app_env!("TAB_UID")], "uid-1");
         assert_eq!(env[crate::app_env!("LOCAL_MODEL")], "qwen3:8b");
         assert_eq!(env["VIBE_HOME"], "/home/u/.vibe-local");
+    }
+
+    /// 2442d review: the marker that makes the Windows shim step aside for a
+    /// CLI an agent starts itself is Tabtivity's alone — a planted one would
+    /// hand a shell tab the real CLI in the user's own home — and is set on
+    /// both spawns that run an agent unfenced in a home of its own (the Host
+    /// session and the fence-less platform's agent tab), on Windows only.
+    #[test]
+    fn the_unfenced_agent_marker_is_set_by_the_spawn_and_only_on_windows() {
+        let marker = crate::services::agent_shim::UNFENCED_ENV;
+        let incoming = HashMap::from([(marker.to_string(), "planted".to_string())]);
+        let mut env = own_env(incoming, "p1", None);
+        assert!(!env.contains_key(marker), "a planted marker must not survive");
+        mark_unfenced_agent(&mut env);
+        let want = cfg!(windows).then(|| crate::services::agent_bin::bin_dir().to_string_lossy().into_owned());
+        assert_eq!(env.get(marker), want.as_ref(), "the shim directory on Windows, nothing elsewhere");
+        let source = include_str!("launch_prep.rs");
+        let start = source.find("pub async fn prepare(").expect("prepare");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+        assert_eq!(body.matches("mark_unfenced_agent(&mut opts.env);").count(), 2, "the Host session arm and the platform arm");
     }
 
     #[test]

@@ -379,8 +379,8 @@ name a vendor's installer leaves beside it (`VENDOR_ALIASES`: OpenCode's
 `TABTIVITY_SCOPE` — same scope home, same shared logins — and runs it as its
 child on the same terminal, draining the terminal's input queue once the
 CLI has exited and before the shell reads again (reevaluation item 3).
-`TABTIVITY_SCOPE`, `TABTIVITY_AGENT_FENCE` and `TABTIVITY_HOST_SESSION` are
-only ever Tabtivity's: `launch_prep::prepare` drops each one (and the other
+`TABTIVITY_SCOPE`, `TABTIVITY_AGENT_FENCE`, `TABTIVITY_AGENT_UNFENCED` and
+`TABTIVITY_HOST_SESSION` are only ever Tabtivity's: `launch_prep::prepare` drops each one (and the other
 control variables) from a tab's incoming env and sets the scope itself, so a
 persisted layout cannot name another scope or switch the shim off (gap 17).
 Inside a fence the shim steps aside to the real CLI, skipping its own
@@ -399,6 +399,13 @@ present and unset), the user's home hidden as before and the whole
 agent tabs still use the same Tabtivity-owned homes and shared logins through
 `HOME`/`USERPROFILE`, with the user's full rights, accepted once
 (`agent_fence_platform_accepted`). Neither is compiled or run here.
+The Windows shell-tab shim is a `<cli>.cmd` that asks
+`tabtivity --agent-shim-env <cli>` for the scope's environment and the real
+CLI (2442d). An agent's own environment there carries
+`TABTIVITY_AGENT_UNFENCED=<shim dir>` (agent tab, Host session, a CLI the shim
+started): a CLI the agent types in its own shell gets the real CLI and keeps
+its environment, as inside a fence. That is decided from the marker alone,
+because the agent home's `APPDATA` no longer leads to Tabtivity's state dir.
 
 **The Host session.** For work that is not a project's — repairing Firefox,
 the printer, the machine — a fence cannot serve (bubblewrap sets

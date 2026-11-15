@@ -16,6 +16,12 @@
 //! (`commands::terminal::pty_spawn`); outside a Tabtivity tab the shim refuses.
 //! Inside a fence (`TABTIVITY_AGENT_FENCE`) the script never reaches here — it
 //! execs the real CLI from the rest of PATH instead.
+//!
+//! Windows has no fence: its `.cmd` shim asks `--agent-shim-env` ([`run_env`])
+//! for the scope's environment and the real CLI and runs it itself. There the
+//! "already an agent" case does reach this binary, marked by
+//! `TABTIVITY_AGENT_UNFENCED` ([`UNFENCED_ENV`]): [`nested_real_cli`] answers
+//! the real CLI alone.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -139,15 +145,68 @@ pub fn env_answer(result: Result<(std::path::PathBuf, Vec<(String, String)>), St
     }
 }
 
+/// Set in the environment of every agent CLI Tabtivity starts unfenced in a
+/// home of its own on a platform with no fence (Windows): an agent tab, the
+/// Host session, a CLI the shim started in a shell tab. The Windows twin of
+/// `AGENT_FENCE` for the shim: a CLI typed *there* (the agent's own shell)
+/// already has its scope's environment, so the shim steps aside and answers
+/// the real CLI only, as the POSIX script does inside a fence. Its value is
+/// the shim directory, which that lookup skips: the caller's `APPDATA` is the
+/// agent home's, so `--agent-shim-env` cannot find Tabtivity's state dir —
+/// nor the shim directory under it — from its own environment. A control
+/// variable (`launch_prep::CONTROL_ENV`): only Tabtivity sets it.
+pub const UNFENCED_ENV: &str = crate::app_env!("AGENT_UNFENCED");
+
+/// [`UNFENCED_ENV`] for a spawn on this platform: set on Windows, nothing on
+/// Linux and macOS, whose fence (or, for the Host session, the POSIX script's
+/// own `HOST_SESSION` branch) is the marker.
+pub fn unfenced_marker(windows: bool, shim_dir: &std::path::Path) -> Option<(String, String)> {
+    windows.then(|| (UNFENCED_ENV.to_string(), shim_dir.to_string_lossy().into_owned()))
+}
+
+/// What the Windows shim answers when its caller already runs in an agent's
+/// environment (`marker` is the caller's [`UNFENCED_ENV`]): the real CLI,
+/// found on the caller's `path` outside the shim directory the marker names.
+/// `None` when the caller is not such a process and the scope's gates and
+/// environment apply. Decided before anything is read from Tabtivity's state
+/// dir, which such a caller's `APPDATA` no longer leads to: read from there,
+/// the one-time acceptance looked ungiven and the agent's own `claude` was
+/// refused, and the Host session's lookup, skipping the wrong directory,
+/// answered the shim itself, which then ran itself without end.
+pub fn nested_real_cli(
+    os: crate::paths::OsKind,
+    cli: &str,
+    marker: Option<&std::ffi::OsStr>,
+    path: Option<&std::ffi::OsStr>,
+    pathext: Option<&std::ffi::OsStr>,
+    exists: &impl Fn(&std::path::Path) -> bool,
+) -> Option<Result<PathBuf, String>> {
+    let shims = PathBuf::from(marker.filter(|m| !m.is_empty())?);
+    let real = path.and_then(|path| crate::paths::resolve_on_path_skipping(os, path, &shims, cli, pathext, exists));
+    Some(real.ok_or_else(|| format!("{cli}: command not found")))
+}
+
 /// Windows has no fence to build: what the shell-tab shim needs is the CLI
 /// itself and the scope's environment, which the `.cmd` shim
 /// (`agent_bin::cmd_shim_script`) sets and then runs the CLI with — on the
 /// same console, so its TUI stays in the tab (this binary is a GUI
 /// executable there and could not host it). The same gates as an agent tab:
 /// the AI switch, the user's one-time acceptance of unfenced agents, the
-/// scope's roots, Local models only.
+/// scope's roots, Local models only. A caller that is itself an agent
+/// ([`nested_real_cli`]) gets the real CLI and keeps its environment.
 #[cfg(windows)]
 fn windows_env_plan(cli: &str) -> Result<(std::path::PathBuf, Vec<(String, String)>), String> {
+    // First, and from the environment alone: see `nested_real_cli`.
+    if let Some(real) = nested_real_cli(
+        crate::paths::OsKind::Windows,
+        cli,
+        std::env::var_os(UNFENCED_ENV).as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os("PATHEXT").as_deref(),
+        &|path| path.is_file(),
+    ) {
+        return real.map(|real| (real, Vec::new()));
+    }
     if crate::services::ai_switch::is_off() {
         return Err(concat!("agent shim: AI is off; switch it on with the power button in ", crate::app_name!(), "'s side panel").into());
     }
@@ -169,7 +228,9 @@ fn windows_env_plan(cli: &str) -> Result<(std::path::PathBuf, Vec<(String, Strin
     let opts = shim_pty_options(cli, &[], &env, &cwd, project_id);
     crate::services::agent_privacy::fence_gate(&opts, &scope_id)?;
     let user_appdata = std::env::var_os("APPDATA").map(PathBuf::from);
-    let scope_env = windows_scope_env(&home, &crate::paths::home_dir(), user_appdata.as_deref(), cli, &env);
+    let mut scope_env = windows_scope_env(&home, &crate::paths::home_dir(), user_appdata.as_deref(), cli, &env);
+    // The CLI is an agent from here on: one it starts itself steps aside.
+    scope_env.extend(unfenced_marker(true, &crate::services::agent_bin::bin_dir()));
     Ok((real()?, scope_env))
 }
 
@@ -371,6 +432,50 @@ mod tests {
         assert_eq!(refused, format!("{err_var}=no way\n"));
         assert_eq!(windows_call_prefix(std::path::Path::new(r"C:\x\claude.exe")), "");
         assert!(windows_call_prefix(std::path::Path::new(r"C:\x\c.PS1")).starts_with("powershell.exe"));
+    }
+
+    /// 2442d review: a CLI an agent types in its own shell on Windows reaches
+    /// the `.cmd` shim with the agent home's `APPDATA`, from which Tabtivity's
+    /// state dir cannot be found. The marker the spawn left decides, before
+    /// any state is read: the real CLI past the shim directory, never the
+    /// shim itself (which would run itself again) and no second environment.
+    #[test]
+    fn a_windows_agents_own_cli_call_steps_aside_past_the_shim() {
+        use crate::paths::OsKind;
+        use std::ffi::OsStr;
+        use std::path::Path;
+        let shims = Path::new("state").join("bin");
+        let npm = Path::new("npm").to_path_buf();
+        let path = std::env::join_paths([shims.clone(), npm.clone()]).unwrap();
+        // The shim first on PATH, the real CLI behind it: npm's batch file
+        // beside its extensionless sh script.
+        let files = [shims.join("claude.cmd"), npm.join("claude.cmd"), npm.join("claude")];
+        let exists = |p: &Path| files.iter().any(|f| f == p);
+        let pathext = Some(OsStr::new(".COM;.EXE;.BAT;.CMD"));
+        let ask = |marker: Option<&OsStr>, path: &OsStr| nested_real_cli(OsKind::Windows, "claude", marker, Some(path), pathext, &exists);
+
+        // A shell tab: no marker, so the gates and the scope's environment apply.
+        assert_eq!(ask(None, &path), None);
+        assert_eq!(ask(Some(OsStr::new("")), &path), None);
+
+        // An agent tab, the Host session, a CLI the shim started: marked on
+        // Windows only, with the shim directory.
+        let (name, value) = unfenced_marker(true, &shims).expect("Windows marks the spawn");
+        assert_eq!(name, UNFENCED_ENV);
+        assert_eq!(unfenced_marker(false, &shims), None, "Linux and macOS have the fence's marker");
+        assert_eq!(ask(Some(OsStr::new(&value)), &path), Some(Ok(npm.join("claude.cmd"))));
+
+        // Nothing but the shim on PATH: not found, never the shim.
+        let only_shims = std::env::join_paths([shims.clone()]).unwrap();
+        assert_eq!(ask(Some(OsStr::new(&value)), &only_shims), Some(Err("claude: command not found".to_string())));
+        assert_eq!(
+            nested_real_cli(OsKind::Windows, "claude", Some(OsStr::new(&value)), None, pathext, &exists),
+            Some(Err("claude: command not found".to_string())),
+        );
+
+        // Only Tabtivity sets it: a tab layout that carries one loses it.
+        assert!(crate::services::launch_prep::is_control_env(UNFENCED_ENV));
+        assert!(crate::services::launch_prep::is_control_env(&UNFENCED_ENV.to_ascii_lowercase()));
     }
 
     #[test]

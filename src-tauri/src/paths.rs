@@ -547,6 +547,25 @@ pub fn resolve_executable(bin: &str) -> Option<PathBuf> {
     )
 }
 
+/// The first `bin` in the directories of `path` (a `PATH` value) other than
+/// `skip`, by `os`'s rules ([`resolve_executable`]'s: PATHEXT first on
+/// Windows). Only `path` is walked, none of the directories this process
+/// would add itself: what `command -v` finds for a shell that dropped one
+/// directory from its PATH. For the agent shim's own lookup past the shim
+/// directory (`services::agent_shim::nested_real_cli`), where the caller's
+/// environment is an agent's and the added directories would be read off it.
+pub(crate) fn resolve_on_path_skipping(
+    os: OsKind,
+    path: &OsStr,
+    skip: &Path,
+    bin: &str,
+    pathext: Option<&OsStr>,
+    exists: &impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let dirs: Vec<PathBuf> = std::env::split_paths(path).filter(|d| d != skip).collect();
+    resolve_executable_in_dirs(os, &dirs, bin, pathext, exists)
+}
+
 /// One pass over the search path, for a caller asking about many binaries at
 /// once (the whole agent registry, with the UI waiting on the answer).
 /// [`resolve_executable`] stats every candidate, `dirs × (1 + PATHEXT)` for a
