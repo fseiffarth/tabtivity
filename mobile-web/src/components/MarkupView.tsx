@@ -23,7 +23,7 @@ import {
   type DockTool, type PenPrefs, type PenTool,
 } from "../markup/pen";
 import { openMarkupTab, useOpenedTabAgent } from "../markup/newTab";
-import { layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
+import { REMARKS_KEY, layerKey, loadLayer, moveLayer, saveLayer, stale, type Fingerprint } from "../markup/store";
 import { canApply, canUndo, followRound, holdsUndo, nextCheck, NO_UNDO_KEYS, ROUND_KEYS, startRound, stepRound, undoneRound, undoFailureNote, undoSummary, type AgentSignal, type Round, type RoundPhase } from "../markup/submitState";
 import { DEFAULT_MARKUP_APPLY, DEFAULT_MARKUP_ASK, markupForSubagent, markupUndoNote, readMarkupApply, readMarkupAsk, readMarkupDirect, readMarkupInstruction } from "../markupInstruction";
 import { readMarkupOpen } from "../markupOpen";
@@ -49,8 +49,6 @@ const PEN_STYLE_GLYPHS: Record<(typeof PEN_STYLES)[number], string> = { pen: "âœ
  * words or a box, a note â€” and the select tool (a highlight's remark) and the
  * eraser. */
 const REMARK_TOOLBAR: readonly PenTool[] = ["textmark", "box", "text", "select", "eraser"];
-/** Annotate's layer is kept apart from the marks for an agent. */
-const REMARKS_KEY = "#remarks";
 /** What a refused remarks save says. */
 const REMARKS_FAILURES: Record<string, TranslationKey> = {
   file_changed: "mobile.remarks.failed.changed",

@@ -32,6 +32,7 @@ import { OutboxGallery } from "../components/OutboxGallery";
 import { OutboxViewer, type MarkupBack, type MarkupNewTab } from "../components/OutboxViewer";
 import { ProjectFiles, asViewerFile } from "../components/ProjectFiles";
 import { closeFileTab, findFileTab, onFileTabs, readFileTabs, refreshFileTab, type FileTab } from "../filesPlace";
+import { recoverMarkupTabs } from "../markup/recoverCards";
 import { markCount } from "../markup/layer";
 import { layerKey, loadLayer } from "../markup/store";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
@@ -247,6 +248,15 @@ export function Project({ id, back, splitList, terminal }: {
    * which means it has one. */
   const folderless = detail?.folder === false;
   const filesOffered = !!detail?.files && !assistantScope && !folderless;
+  /** Markups whose card fell off get it back (`markup/recoverCards.ts`),
+   * once the screen knows whether project files may be read. */
+  const detailLoaded = detail !== null;
+  useEffect(() => {
+    if (!detailLoaded || assistantScope) return;
+    const stop = new AbortController();
+    void recoverMarkupTabs(id, filesOffered, stop.signal);
+    return () => stop.abort();
+  }, [id, detailLoaded, assistantScope, filesOffered]);
   /** The files drawer's remote side: a remote project's tree on its host,
    * read over the desktop's connection (`detail.host_files`). This
    * computer's file cards stay `filesOffered`'s. */

@@ -37,6 +37,9 @@ export interface LayerBackend {
   delete(key: string): Promise<void>;
   /** Every record. Optional: only the app's own store is ever emptied whole. */
   clear?(): Promise<void>;
+  /** The keys from `from` up to, not including, `to`. Optional: only the
+   * app's own store is ever searched (`layerKeys`). */
+  keys?(from: string, to: string): Promise<IDBValidKey[]>;
 }
 
 const DB = NAMES.mobileMarkupDb;
@@ -95,7 +98,14 @@ export const indexedDbBackend: LayerBackend = {
   async clear() {
     await promised((await open()).transaction(STORE, "readwrite").objectStore(STORE).clear());
   },
+  async keys(from, to) {
+    return promised((await open()).transaction(STORE).objectStore(STORE).getAllKeys(IDBKeyRange.bound(from, to, false, true)));
+  },
 };
+
+/** What **Annotate**'s layer key adds to the file's own: its remarks are
+ * kept apart from the agent's marks, and never make a card. */
+export const REMARKS_KEY = "#remarks";
 
 /** The record key: the project and the file, as the phone names them. A file
  * browser token is sealed afresh with every listing, so a project file is
@@ -106,6 +116,19 @@ export function layerKey(projectId: string, source: { files: string } | { outbox
 }
 
 export { SENT_LIMITS };
+
+/** Every layer key of `projectId` — each a file with marks, unsent or sent,
+ * since a layer with neither is never stored (`saveLayer`); empty when the
+ * storage could not be read. */
+export async function layerKeys(projectId: string, backend: LayerBackend = indexedDbBackend): Promise<string[]> {
+  try {
+    // `;` follows `:` in code-unit order, so this range is the `<id>:` keys.
+    const keys = await backend.keys?.(`${projectId}:`, `${projectId};`);
+    return (keys ?? []).filter((key): key is string => typeof key === "string");
+  } catch {
+    return [];
+  }
+}
 
 /** Whether a layer is one the desktop would accept — never store one it
  * would refuse at Submit. The sent marks never go out again and are never
