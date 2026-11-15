@@ -47,6 +47,7 @@ import {
   chordFromEvent,
   chordLabel,
   findConflicts,
+  forPlatformKeys,
   isUnbound,
   modifierLabel,
   resolveChord,
@@ -1355,7 +1356,7 @@ export function SettingsDialog({
               help={
                 <>
                   {t("settings.zoomHelp1")} <strong>{t("settings.zoomHelpBold")}</strong>
-                  {t("settings.zoomHelp2")}
+                  {forPlatformKeys(t("settings.zoomHelp2"))}
                 </>
               }
             />

@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { experimentalEnabled } from "../../lib/experimental";
+import { runInstallInTab, TMUX_INSTALL_CMD } from "../../lib/installCommand";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { useTmuxAvailable } from "../../lib/tmuxAvailable";
 import { useSettingsStore } from "../../stores/settings";
 import type { Settings } from "../../types";
 import { useDialogs } from "../common/PromptDialogs";
@@ -82,7 +84,8 @@ export function WindowsSessionHostToggle() {
  * backend exists (the caller gates that: tmux, or the Windows session host).
  * On Windows with the host on, turning it off goes through
  * `useEndHostSessionsThenSave`; on Unix it only saves, as before (tmux sessions
- * are reattached by name whatever the setting).
+ * are reattached by name whatever the setting). Without tmux (a Mac out of the
+ * box) the help says so and offers the install (2442r).
  */
 export function PersistLocalSessionsToggle() {
   const t = useT();
@@ -90,6 +93,7 @@ export function PersistLocalSessionsToggle() {
   const hostOn = useSettingsStore((s) => experimentalEnabled(s.settings, "windows_session_host"));
   const updateSettings = useSettingsStore((s) => s.updateSettings);
   const { endThenSave, dialogs } = useEndHostSessionsThenSave();
+  const tmuxAvailable = useTmuxAvailable();
 
   const change = async (next: boolean) => {
     if (!next && IS_HOST_WINDOWS && hostOn) {
@@ -116,6 +120,19 @@ export function PersistLocalSessionsToggle() {
             <>
               {t("settings.persistLocalHelp1")} <code>tmux</code>
               {t("settings.persistLocalHelp2")}
+              {tmuxAvailable === false && (
+                <>
+                  {" "}<strong>{t("settings.persistLocalNoTmux")}</strong>{" "}
+                  <UntestedTag id="settings.persistLocalNoTmux" />{" "}
+                  <button
+                    type="button"
+                    className="settings-btn sm"
+                    onClick={() => runInstallInTab(t("settings.installTmux"), TMUX_INSTALL_CMD, "default")}
+                  >
+                    {t("settings.installTmux")}
+                  </button>
+                </>
+              )}
             </>
           )
         }

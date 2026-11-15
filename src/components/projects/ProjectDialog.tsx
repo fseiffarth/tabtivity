@@ -35,7 +35,7 @@ import { useRemoteSession, type RemoteStep } from "./useRemoteSession";
 import { RemoteProjectSection } from "./RemoteProjectSection";
 import { useProjectsStore } from "../../stores/projects";
 import { Dropdown } from "../common/Dropdown";
-import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL } from "../../lib/installCommand";
+import { runInstallInTab, containerBuildShell, PROVIDER_CLI_INSTALL, MAC_GIT_INSTALL } from "../../lib/installCommand";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../lib/platform";
 import { connectCreatedRemoteProject } from "../../lib/remote/remoteConnect";
@@ -54,7 +54,7 @@ import { CloseIcon } from "../common/icons/Icon";
 const GIT_INSTALL_CMD = IS_HOST_WINDOWS
   ? "winget install --id Git.Git -e --source winget"
   : IS_HOST_MAC
-    ? "brew install git"
+    ? MAC_GIT_INSTALL
     : "sudo apt-get install -y git";
 
 /** Where an import's files come from: a folder already on this machine, a

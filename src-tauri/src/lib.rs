@@ -1515,7 +1515,8 @@ pub fn run() {
     // Reports runs that died with nothing logged, then keeps this one's beat.
     services::run_heartbeat::start(storage::state_dir(), BUILD_COMMIT, crash_log_append);
 
-    // The webview's data directory is `<data dir>/<identifier>` on Linux, and
+    // The webview's data directory is `<data dir>/<identifier>` (per OS, see
+    // `webview_data_root`; only Linux's WebKitGTK keeps a `WebKitCache`), and
     // the identifier is the Tauri config's — asked for rather than hardcoded, so
     // a rename cannot leave this sweeping a directory nothing writes to any
     // more. Built here, at the top of `run`, because the cache has to be judged
@@ -1908,6 +1909,7 @@ pub fn run() {
             commands::mobile_control::mobile_browser_client_rotate,
             commands::mobile_control::mobile_verify_tailscale_serve,
             commands::mobile_control::mobile_tailscale_serve_status,
+            commands::mobile_control::mobile_tailscale_serve_command,
             commands::mobile_control::mobile_desktop_images,
             commands::mobile_control::mobile_attach_desktop_image,
             commands::mobile_control::project_inbox_describe,
@@ -2467,6 +2469,7 @@ pub fn run() {
             commands::terminal::pty_watch,
             commands::terminal::pty_unwatch,
             commands::terminal::agent_tab_features,
+            commands::terminal::local_tmux_available,
             commands::terminal::local_tmux_kill,
             commands::terminal::local_tmux_kill_app_sessions,
             commands::terminal::local_tmux_rename,

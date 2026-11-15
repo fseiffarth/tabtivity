@@ -213,6 +213,17 @@ pub async fn agent_fence_marks(
     .await
 }
 
+/// Whether this machine has a usable tmux (2442r): persistent local terminals
+/// and phone terminals need it, and a Mac ships without. Re-probed by the
+/// backend while missing, so an install is noticed without a restart. `async`:
+/// the probe spawns `tmux -V`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn local_tmux_available() -> bool {
+    app_core::rt::try_blocking("terminal", || Ok::<bool, String>(crate::services::tmux_local::tmux_available()))
+        .await
+        .unwrap_or(false)
+}
+
 /// Kill a **local** tmux session (TODO #85) — the explicit-close / Sessions-view
 /// kill of a local persistent tab, through the session mux (`SessionMux::kill`,
 /// which reaps the pane's process subtree first). No-op where the machine has
