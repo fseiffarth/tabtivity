@@ -726,6 +726,29 @@ fn hook_body_is_no_op_without_env_and_bakes_dir() {
     assert!(twin.contains(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions")));
 }
 
+/// 2442h: the PowerShell hook takes a clear/resume start only from a Claude
+/// with no other Claude above it up to the app, like the POSIX twin; any
+/// other unknown start is still refused.
+#[test]
+fn the_powershell_hook_refuses_a_nested_claudes_resume() {
+    let body = powershell_hook_script_body(r"C:\live", "App's.exe");
+    let walk = body.find("elseif (($src -eq 'clear') -or ($src -eq 'resume'))").expect("the clear/resume arm");
+    let rest = &body[walk..];
+    assert!(rest.contains("Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine"));
+    assert!(rest.contains("$q = $procs[[int]$PID]"), "the walk starts at the hook");
+    assert!(rest.contains("($q.Name -ieq 'App''s.exe')"), "and stops at the app, quoted");
+    assert!(rest.contains("($q.Name -ieq 'claude.exe')"));
+    assert!(rest.contains(r"'@anthropic-ai[\\/]claude-code[\\/]'"), "an npm Claude runs as node");
+    assert!(rest.contains("if ($n -ge 2) { exit 0 }"));
+    assert!(rest.contains("($hops -lt 64)"), "bounded against a pid-reuse cycle");
+    let arm_end = rest.find("} else { exit 0 }").expect("other starts are refused");
+    assert!(rest[..arm_end].contains("$n -ge 2"));
+    // Balanced braces: the script still parses as one block structure.
+    let opens = body.matches('{').count();
+    let closes = body.matches('}').count();
+    assert_eq!(opens, closes);
+}
+
 /// `/fork` starts a thread with no `SessionStart` the matcher lets through, so
 /// the fork's rollout is what moves the record (Codex 0.166.0, payloads and
 /// rollout header as captured). The move comes on the fork's first event, or a
@@ -2563,8 +2586,8 @@ fn both_hook_twins_carry_the_mail_block() {
     let src = include_str!("../agent_session.rs");
     let posix = src.split("fn posix_hook_script_body_with").nth(1).expect("posix body");
     let posix = posix.split("\n}\n").next().unwrap();
-    // The PowerShell twin is compiled on Windows only: held to the POSIX one here.
-    let ps = src.split("#[cfg(windows)]\nfn hook_script_body").nth(1).expect("powershell body");
+    // The PowerShell twin, held to the POSIX one here.
+    let ps = src.split("fn powershell_hook_script_body").nth(1).expect("powershell body");
     let ps = ps.split("\n}\n").next().unwrap();
     for body in [posix, ps] {
         assert!(body.contains("tabs_mcp::NOTICE") && body.contains("agent_turn::MAIL_SUFFIX"), "{body}");

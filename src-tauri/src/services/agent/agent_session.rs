@@ -2569,7 +2569,8 @@ fn container_hook_script_path() -> PathBuf {
 /// those carrying its id under any `*_TAB_UID` name: a probe that unset only
 /// the current name still reached the hook through the legacy one, and a walk
 /// matching the current name alone counted nothing and let it through (2.1.288).
-/// The PowerShell twin has no such check yet.
+/// The PowerShell twin walks the parent chain instead (2442h,
+/// `powershell_hook_script_body`).
 #[cfg(not(windows))]
 fn hook_script_body(live_dir: &str) -> String {
     posix_hook_script_body(live_dir)
@@ -2786,9 +2787,32 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
 /// `read_live_session`'s `trim()`/`is_uuidish` checks.
 #[cfg(windows)]
 fn hook_script_body(live_dir: &str) -> String {
+    let host = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| concat!(crate::app_slug!(), ".exe").to_string());
+    powershell_hook_script_body(live_dir, &host)
+}
+
+/// The PowerShell body with the app's executable name `host_exe` baked in:
+/// the clear/resume check walks the hook's ancestors up to it. Compiled for
+/// tests everywhere, so the text is checked on every OS.
+///
+/// The stray-`--resume` check (2442h) cannot read another process's
+/// environment as the POSIX twin does (`/proc/<pid>/environ`, `ps -E`), so it
+/// does not bound the walk by the tab id: it walks the parent chain from the
+/// hook up to the app that started the tab and counts the Claude processes on
+/// the way (`claude.exe`, or a Node/Bun running `@anthropic-ai/claude-code`).
+/// The tab's CLI has none above it; a `claude -p --resume` run from the
+/// agent's shell has the tab's Claude above it. One process-table read, only
+/// for a clear/resume start; an unreadable table counts nothing and the start
+/// is taken, as on POSIX.
+#[cfg(any(windows, test))]
+fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
     // `live_dir` is a Windows path (backslashes); embed it in a single-quoted
     // PowerShell literal so backslashes are not treated as escapes.
     let live_dir = crate::quote::powershell(live_dir);
+    let host_exe = crate::quote::powershell(host_exe);
     let hint = crate::services::agent_hint::HINT;
     let name_hint = crate::services::cockpit_mcp::NAME_HINT;
     let notice = crate::services::tabs_mcp::NOTICE;
@@ -2865,7 +2889,22 @@ fn hook_script_body(live_dir: &str) -> String {
          \x20   if ($ref -eq '') {{ $ref = $uid }}\r\n\
          \x20   $tdir = Split-Path ($mt.Groups[1].Value -replace '\\\\\\\\', '\\') -Parent\r\n\
          \x20   if (Test-Path -Path (Join-Path (Split-Path $tdir -Parent) ('*\\' + $ref + '.jsonl'))) {{ exit 0 }}\r\n\
-         \x20 }} elseif (($src -ne 'clear') -and ($src -ne 'resume')) {{ exit 0 }}\r\n\
+         \x20 }} elseif (($src -eq 'clear') -or ($src -eq 'resume')) {{\r\n\
+         \x20   # A /clear or /resume typed in the tab comes from the tab's own CLI; a\r\n\
+         \x20   # `claude --resume` nested under it (the agent's shell) sends the same\r\n\
+         \x20   # start. Up to the app that started the tab, the tab's CLI has no Claude\r\n\
+         \x20   # above it, a nested one has (see powershell_hook_script_body).\r\n\
+         \x20   $procs = @{{}}\r\n\
+         \x20   foreach ($q in @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine)) {{ $procs[[int]$q.ProcessId] = $q }}\r\n\
+         \x20   $n = 0; $hops = 0; $q = $procs[[int]$PID]\r\n\
+         \x20   while ($q -and ($hops -lt 64)) {{\r\n\
+         \x20     $hops++\r\n\
+         \x20     $q = $procs[[int]$q.ParentProcessId]\r\n\
+         \x20     if ((-not $q) -or ($q.Name -ieq {host_exe})) {{ break }}\r\n\
+         \x20     if (($q.Name -ieq 'claude.exe') -or ([string]$q.CommandLine -match '@anthropic-ai[\\\\/]claude-code[\\\\/]')) {{ $n++ }}\r\n\
+         \x20   }}\r\n\
+         \x20   if ($n -ge 2) {{ exit 0 }}\r\n\
+         \x20 }} else {{ exit 0 }}\r\n\
          }}\r\n\
          if (($env:{UPPER}_TAB_AGENT -eq 'claude' -or $env:{UPPER}_TAB_AGENT -eq 'codex') -and $env:{UPPER}_PROJECT_DIR -and $event -eq 'SessionStart') {{ Write-Output '{hint}' }}\r\n\
          # The tab-naming reminder (see the POSIX twin).\r\n\
