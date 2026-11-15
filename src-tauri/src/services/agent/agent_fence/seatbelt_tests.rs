@@ -189,6 +189,21 @@ fn an_allow_rule_never_follows_a_link_the_agent_could_have_planted() {
     };
     assert_eq!(resolve_spelling("/Users/a/short/x", &chain, &[]).as_deref(), Some("/Users/a/.ssh/x"));
     assert_eq!(resolve_spelling("/Users/a/short/x", &chain, &["/Users/a/p".to_string()]), None);
+    // `/tmp` is writable in the fence, but the link at `/tmp` is the system's
+    // (nobody writes `/`): a temp dir below it still gets its real spelling,
+    // which is the only one Seatbelt matches.
+    let tmp = |at: &str| (at == "/tmp").then(|| "private/tmp".to_string());
+    let writable = ["/tmp".to_string(), "/private/tmp".to_string()];
+    assert_eq!(resolve_spelling("/tmp/app-tmp/k", &tmp, &writable).as_deref(), Some("/private/tmp/app-tmp/k"));
+    let mut under_tmp = SeatbeltInputs {
+        writable: writable.to_vec(),
+        hidden: vec!["/tmp".into()],
+        private_tmp: Some("/tmp/app-tmp/k".into()),
+        ..SeatbeltInputs::default()
+    };
+    add_canonical_spellings(&mut under_tmp, &tmp);
+    assert!(under_tmp.planted.is_empty(), "{:?}", under_tmp.planted);
+    line_pos(&sandbox_exec_profile(&under_tmp), "(allow file-read* file-write* (subpath \"/private/tmp/app-tmp/k\"))");
     // By the place's resolved location too, whatever the case of the spelling.
     assert_eq!(resolve_spelling("/users/A/short/x", &|at| chain(&at.replace("/users/A", "/Users/a")), &["/Users/a/P".to_string()]), None);
 }

@@ -2097,6 +2097,12 @@ fn sbpl_path_within(path: &str, dir: &str) -> bool {
 #[cfg(any(target_os = "macos", test))]
 const SEATBELT_LINK_HOPS: usize = 32;
 
+/// macOS's own links at the volume root, each to `/private/<name>`. They sit
+/// in `/`, which no user can write, so they are never an agent's — though
+/// `/tmp` itself is a path the fence lets an agent write.
+#[cfg(any(target_os = "macos", test))]
+const SEATBELT_SYSTEM_LINKS: [&str; 3] = ["/var", "/tmp", "/etc"];
+
 /// `path` as the kernel resolves it, which is the spelling Seatbelt matches
 /// (2442w): every symlink on it followed, one component at a time. `read_link`
 /// answers the target of a link at an already resolved location and `None`
@@ -2132,7 +2138,8 @@ fn resolve_spelling(path: &str, read_link: &dyn Fn(&str) -> Option<String>, refu
                     continue;
                 };
                 hops += 1;
-                if hops > SEATBELT_LINK_HOPS || refuse_in.iter().any(|dir| sbpl_path_within(&at, dir)) {
+                let system = SEATBELT_SYSTEM_LINKS.contains(&at.as_str());
+                if hops > SEATBELT_LINK_HOPS || (!system && refuse_in.iter().any(|dir| sbpl_path_within(&at, dir))) {
                     return None;
                 }
                 if target.starts_with('/') {
@@ -2156,7 +2163,7 @@ fn resolved_spelling(path: &str, read_link: &dyn Fn(&str) -> Option<String>, ref
     if real != path {
         return Some(real);
     }
-    let system = ["/var", "/tmp", "/etc"].into_iter().any(|top| sbpl_path_within(path, top));
+    let system = SEATBELT_SYSTEM_LINKS.into_iter().any(|top| sbpl_path_within(path, top));
     Some(if system { format!("/private{path}") } else { real })
 }
 
