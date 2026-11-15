@@ -66,7 +66,7 @@ describe("tab archive", () => {
       args: ["--session-id", "s-1"],
       sessionId: "s-1",
       color: "blue",
-      tmuxSession: "tabtivity-p-agent-1",
+      tmuxSession: "app-p-agent-1",
     });
     expect(await archiveTabs("p", [claude.key])).toBe(1);
     expect(labels()).toEqual(["a"]);
@@ -82,7 +82,7 @@ describe("tab archive", () => {
     expect(back.key).not.toBe(claude.key);
     expect(back.args).toEqual(["--resume", "s-1"]);
     expect(back.color).toBe("blue");
-    expect(back.tmuxSession).not.toBe("tabtivity-p-agent-1");
+    expect(back.tmuxSession).not.toBe("app-p-agent-1");
     expect(archive).toEqual([]);
     // Gone: a second restore of the same id finds nothing.
     expect(await restoreArchivedTab("p", "a0")).toBeNull();
