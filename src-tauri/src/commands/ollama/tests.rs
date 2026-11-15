@@ -349,6 +349,31 @@ fn the_installed_version_is_found_whatever_else_the_command_printed() {
 }
 
 #[test]
+fn an_upgraded_binary_beside_the_old_running_server_reports_the_binary() {
+    // A server still running from before the upgrade answers first; the
+    // binary's own version is the warning line, and it is what is installed.
+    assert_eq!(
+        installed_version(
+            "ollama version is 0.40.10\n\
+             Warning: client version is 0.40.16\n"
+        )
+        .as_deref(),
+        Some("0.40.16")
+    );
+    // Server and binary agree: one line, no warning.
+    assert_eq!(installed_version("ollama version is 0.40.16\n").as_deref(), Some("0.40.16"));
+    // No server: the connect warning, then the client's version.
+    assert_eq!(
+        installed_version(
+            "Warning: could not connect to a running Ollama instance\n\
+             Warning: client version is 0.40.16\n"
+        )
+        .as_deref(),
+        Some("0.40.16")
+    );
+}
+
+#[test]
 fn a_stored_release_check_is_compared_against_the_installed_version() {
     use crate::services::agent_latest::Checked;
     let checked = Checked { latest: Some("0.35.1".into()), error: None, checked_at: 1 };

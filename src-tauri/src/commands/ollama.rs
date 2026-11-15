@@ -1494,6 +1494,23 @@ fn parse_version(text: &str) -> Option<String> {
         .next()
 }
 
+/// The installed binary's version out of `ollama --version` output.
+///
+/// With a server running, the CLI's first line is the **server's** version and
+/// the binary's own comes after as `Warning: client version is X` — printed
+/// only when the two differ. That is exactly the state right after an upgrade
+/// whose installer left the old server running (Windows' silent winget upgrade),
+/// where taking the first version kept showing the replaced one. So the client
+/// line wins when present.
+fn installed_version(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| {
+            let (_, rest) = line.split_once("client version is")?;
+            parse_version(rest)
+        })
+        .or_else(|| parse_version(text))
+}
+
 /// Compare two dotted versions numerically. `None` when either side doesn't
 /// parse — which the caller reports as "couldn't tell", never as an update.
 ///
@@ -1552,7 +1569,7 @@ pub async fn ollama_version_status(check_remote: bool) -> OllamaVersionStatus {
                     String::from_utf8_lossy(&o.stdout),
                     String::from_utf8_lossy(&o.stderr)
                 );
-                parse_version(&text)
+                installed_version(&text)
             })
             .unwrap_or_default();
 
