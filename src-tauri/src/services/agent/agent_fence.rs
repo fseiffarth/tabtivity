@@ -2268,7 +2268,9 @@ fn ensure_private_tmp(dir: &Path) -> Result<(), String> {
 /// temp dir, then execs the CLI. Inside the profile, so it holds whatever env a
 /// tmux server adds to the pane (`update-environment` carries
 /// `SSH_AUTH_SOCK`); `"$@"` keeps a path with `=` or spaces one word.
-#[cfg(any(target_os = "macos", test))]
+/// Tested where there is a `/bin/sh` to run the step, so not built for a
+/// Windows test run (dead code there).
+#[cfg(any(target_os = "macos", all(test, unix)))]
 pub(crate) fn seatbelt_argv(profile: &str, private_tmp: &str, cmd: &str, args: &[String]) -> Vec<String> {
     let mut argv = vec![
         "-f".to_string(),
@@ -2285,7 +2287,7 @@ pub(crate) fn seatbelt_argv(profile: &str, private_tmp: &str, cmd: &str, args: &
 }
 
 /// The shell step of [`seatbelt_argv`]: `$1` is the private temp dir.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 const SEATBELT_ENV_STEP: &str = "unset SSH_AUTH_SOCK SSH_AGENT_PID; TMPDIR=$1; export TMPDIR; shift; exec \"$@\"";
 
 /// `HOME` and the pass-throughs a fence that cannot redirect a path sets
