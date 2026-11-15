@@ -11,8 +11,8 @@ import { orderedClis, useAssistantOptions } from "./useAssistantOptions";
  * Settings → the assistant's page (below the section title the panel draws):
  * the CLI and model a new chat starts with, and the web lane's search backend
  * (`AssistantSearchSetup`, the form the overlay's setup card shares). The
- * switch itself is Settings → Experimental, and the phone's is in the Mobile
- * section.
+ * switch itself is the toggle the panel draws above this, and the phone's is
+ * in the Mobile section.
  *
  * The CLI and model choices are stored (`Settings.assistant_settings`) and
  * only *preselect* the new-chat form; the backend validates whatever a chat is

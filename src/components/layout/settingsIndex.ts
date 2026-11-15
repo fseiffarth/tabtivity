@@ -21,6 +21,7 @@ export const MAIN_SECTIONS = [
   "hintsOnboarding",
   "downloads",
   "browser",
+  "mail",
   "calendar",
   "usageStats",
   "pdfMarkup",
@@ -50,7 +51,7 @@ export function sectionOfAnchor(anchor: string | undefined): MainSection {
  *  `settings.group.<key>`; entry labels `settings.<section>` / `nav.<panel>.title`. */
 export const SETTINGS_GROUPS: { key: "general" | "workspace" | "agents" | "remote" | "system"; entries: NavEntry[] }[] = [
   { key: "general", entries: ["general", "layout", "clock", "hintsOnboarding", "shortcuts", "updates", "help"] },
-  { key: "workspace", entries: ["global", "filetypes", "downloads", "browser", "calendar", "usageStats", "archive", "scaffoldRepair"] },
+  { key: "workspace", entries: ["global", "filetypes", "downloads", "browser", "mail", "calendar", "usageStats", "archive", "scaffoldRepair"] },
   { key: "agents", entries: ["agents", "ollama", "pdfMarkup", "rootConsole", "assistant", "voice"] },
   { key: "remote", entries: ["remoteFeatures", "git", "remoteHosts", "vpn", "vm", "mobile"] },
   { key: "system", entries: ["performance", "resourceMonitor", "experimental"] },
@@ -126,6 +127,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   browser: {
     labels: ["settings.browserHome", "settings.browserSearch", "settings.browserLinkTarget", "settings.browserRestoreNavigate", "settings.browserLivePages"],
   },
+  mail: { labels: ["settings.mailClient", "settings.mailCheckInterval"] },
   calendar: {
     labels: ["settings.calendarGlobalApp", "settings.todoBoard", "settings.weekStartsOn", "settings.defaultView", "settings.dayGridStart", "settings.defaultReminder"],
   },
@@ -134,7 +136,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   rootConsole: {
     labels: ["settings.rootMcp", "settings.rootMcpLocalOnly", "settings.rootMcpMail", "settings.rootMcpMailLocalOnly", "settings.rootMcpMailLocalRead", "rootReview.setting", "mcpSecurity.title"],
   },
-  assistant: { labels: ["assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
+  assistant: { labels: ["settings.assistantSwitch", "assistant.settings.defaultCli", "assistant.settings.defaultModel", "assistant.settings.search", "assistant.search.kind"] },
   voice: { aliases: "settings.searchAlias.voice", labels: ["settings.voice.model", "settings.voice.lang", "settings.voice.gpu"] },
   remoteFeatures: { labels: ["settings.vpnEnabled", "settings.machinesEnabled", "settings.headlessRemote"] },
   vm: { aliases: "settings.searchAlias.vm", labels: ["settings.vmPrerequisites", "projectDialog.vmInstallBtn"] },
@@ -150,7 +152,7 @@ const SEARCH_INDEX: Record<NavEntry, SearchPage> = {
   },
   resourceMonitor: { labels: ["settings.showCpu", "settings.showRam", "settings.showGpu", "statusCluster.settingLabel"] },
   experimental: {
-    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.windowsSessionHost", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.mailClient", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter", "settings.assistant", "settings.voiceHandsFree"],
+    labels: ["settings.debug", "settings.terminalWebgl", "settings.gpuCompositing", "settings.windowsSessionHost", "settings.mdGraph", "settings.projectRemarks", "settings.copilotCompletion", "settings.webBrowser", "settings.pythonRunDebug", "settings.deckPresenter", "settings.voiceHandsFree"],
   },
   git: { keywords: ["nav.git.blurb"], aliases: "settings.searchAlias.git" },
   vpn: { keywords: ["nav.vpn.blurb"], aliases: "settings.searchAlias.vpn" },

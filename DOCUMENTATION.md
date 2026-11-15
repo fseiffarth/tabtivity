@@ -390,8 +390,10 @@ Themes are `THEMES` in `src/types/index.ts` — Fancy Dark, Plain Dark (the
 default), Plain Light, Fancy Light, and Light Lavender.
 
 **Experimental flags** (`src/lib/experimental.ts`) gate surfaces that are not
-finished: `mail_client`, `web_browser`, `deck_presenter`, `python_run_debug`,
-and `terminal_webgl`. An unset flag falls back to
+finished: `web_browser`, `deck_presenter`, `python_run_debug`,
+and `terminal_webgl`. Mail (`mail_client`) and the assistant (`assistant`) are
+shipped, on unless switched off, with their switches on their own Settings
+pages; they ride the same flag rule only for its tri-state. An unset flag falls back to
 `settings.debug`, so everything is on in a development build and off in a
 release one — except `terminal_webgl`, which stays opt-in because WebGL can fall
 back to software rendering while DMABUF is disabled, making a visible terminal
@@ -857,7 +859,7 @@ list. Where a link still needs an app, `src/lib/linkTarget.ts::routeUri` decides
 
 | Surface | Frontend | Backend | Notes |
 |---------|----------|---------|-------|
-| Mail | `components/mail/`, `stores/mail.ts` | `commands/mail.rs`, `services/mail_{engine,store,crypt,crypto,pgp,sanitize,filters,authres,ai}.rs` | IMAP/SMTP. Behind `mail_client`. |
+| Mail | `components/mail/`, `stores/mail.ts` | `commands/mail.rs`, `services/mail_{engine,store,crypt,crypto,pgp,sanitize,filters,authres,ai}.rs` | IMAP/SMTP. Switch `mail_client` (Settings → Mail, on by default). |
 | Calendar | `components/calendar/`, `stores/calendar/calendar.ts` | `commands/calendar.rs`, `commands/caldav.rs`, `services/caldav.rs` | Month / time-grid / agenda, alarms, `.ics` import+export, CalDAV accounts. |
 | To-do board | `components/todo/`, `stores/todo.ts` | shares `calendar.json` | Cards **are** calendar tasks — one store, not a second one. |
 | Browser | `components/browser/`, `stores/browser.ts` | `commands/browser.rs`, `services/browser_engine.rs`, `services/web_safety.rs` | Reader mode, no scripts. Behind `web_browser`. |
@@ -1019,8 +1021,8 @@ Tabby is a chat assistant that searches and reads the web and sees nothing
 else on the computer. Design, the two layers and the accepted limits:
 `docs/context/assistant.md`; user-facing text: `docs/help/assistant.md`.
 
-- **Switch.** Settings → System → Experimental, `settings.json["assistant"]`
-  (absent = off); the backend refuses its commands, spawns and web lane while
+- **Switch.** Settings → Agents → the assistant's page, `settings.json["assistant"]`
+  (absent = on); the backend refuses its commands, spawns and web lane while
   it is off. `settings.json["assistant_settings"]` holds the default CLI and
   model and the search backend (`search.kind` `searxng` or `ollama`,
   `searxng_url`); the Ollama key lives only in the keychain.

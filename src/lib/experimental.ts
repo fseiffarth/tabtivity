@@ -3,7 +3,10 @@
  *
  * Every experimental feature is **off until someone ticks it**, except the few
  * in `ON_BY_DEFAULT_FLAGS` (mail, Tabby, project remarks; user decision
- * 2026-10-26, so a fresh install shows them): the flag is a tri-state, an
+ * 2026-10-26, so a fresh install shows them). Mail and Tabby are no longer
+ * experiments at all (user decision 2026-11-15): their switches live on their
+ * own Settings pages (Mail, Tabby), not under Experimental, and they stay in
+ * this list only so the one tri-state rule reads them. The flag is a tri-state, an
  * explicit value is the answer, and an unset flag is its default — Debug mode
  * included. A feature that is still moving needs to be invisible to someone
  * using Tabtivity to work, and Debug mode is now just Debug mode: turning it on

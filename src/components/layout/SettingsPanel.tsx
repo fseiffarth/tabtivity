@@ -1224,10 +1224,9 @@ export function SettingsDialog({
     return revealSetting(root, reveal.path, reveal.open);
   }, [reveal, modalRef]);
 
-  // The assistant's page exists only while its experimental switch is on;
-  // Voice only where the microphone is this machine's (not a browser client).
-  const shown = (entry: NavEntry) =>
-    (entry !== "assistant" || experimentalEnabled(settings, "assistant")) && (entry !== "voice" || voiceInputOffered());
+  // Voice exists only where the microphone is this machine's (not a browser
+  // client). The assistant's page is always there: it holds its own switch.
+  const shown = (entry: NavEntry) => entry !== "voice" || voiceInputOffered();
   const navGroups = SETTINGS_GROUPS.map((group) => ({
     label: t(`settings.group.${group.key}` as TranslationKey),
     entries: group.entries.filter(shown).map((entry) => ({ value: pageValue(entry), label: t(pageLabelKey(entry)) })),
@@ -1634,6 +1633,53 @@ export function SettingsDialog({
             />
             </>)}
 
+            {section === "mail" && (<>
+            <SettingsSection anchor="settings-anchor-mail" title={t("settings.mail")} />
+
+            {/* Mail is ONE switch. It used to be two — this gate plus a
+                `mail_global_app` sub-toggle deciding whether the header button
+                appeared *as well as* the mail tab — but the tab is retired, so
+                the overlay is the only surface and a second switch could only
+                ever mean "mail on, and unreachable". The interval check stays
+                nested because it is genuinely a different question (how often to
+                dial out), and it is the one part of the feature that reaches the
+                network without a click. Shipped, not experimental: on unless
+                the user switches it off (`ON_BY_DEFAULT_FLAGS`). */}
+            <SettingsCard>
+              <ToggleRow
+                label={<>{t("settings.mailClient")} <UntestedTag id="settings.mailClient" /></>}
+                checked={experimentalEnabled(settings, "mail_client")}
+                onChange={(e) => void updateSettings({ mail_client: e.target.checked })}
+              />
+              <p className="settings-help">{t("settings.mailClientHelp")}</p>
+              {experimentalEnabled(settings, "mail_client") && (
+                <>
+                  <div className="settings-card-row">
+                    <span>{t("settings.mailCheckInterval")}</span>
+                    <Dropdown
+                      value={String(
+                        settings?.mail_check_interval_min ?? DEFAULT_MAIL_CHECK_MIN,
+                      )}
+                      onChange={(v) =>
+                        void updateSettings({ mail_check_interval_min: Number(v) })
+                      }
+                      options={[
+                        { value: "0", label: t("settings.mailCheckNever") },
+                        { value: "5", label: t("settings.mailCheckMinutes", { count: 5 }) },
+                        { value: "10", label: t("settings.mailCheckMinutes", { count: 10 }) },
+                        { value: "15", label: t("settings.mailCheckMinutes", { count: 15 }) },
+                        { value: "30", label: t("settings.mailCheckMinutes", { count: 30 }) },
+                        { value: "60", label: t("settings.mailCheckMinutes", { count: 60 }) },
+                      ]}
+                    />
+                  </div>
+                  <p className="settings-help">{t("settings.mailCheckIntervalHelp")}</p>
+                </>
+              )}
+            </SettingsCard>
+
+            </>)}
+
             {section === "calendar" && (<>
             <SettingsSection anchor="settings-anchor-calendar" title={t("settings.calendar")} />
 
@@ -1867,6 +1913,14 @@ export function SettingsDialog({
 
             {section === "assistant" && (<>
             <SettingsSection anchor="settings-anchor-assistant" title={t("settings.assistant")} help={t("assistant.settings.help")} />
+            {/* The switch the backend reads too (`Settings::assistant_enabled`).
+                Shipped, not experimental: on unless the user switches it off. */}
+            <ToggleCard
+              label={<>{t("settings.assistantSwitch")} <UntestedTag id="settings.assistant" /></>}
+              checked={experimentalEnabled(settings, "assistant")}
+              onChange={(e) => void updateSettings({ assistant: e.target.checked })}
+              help={t("settings.assistantHelp")}
+            />
             <AssistantSettings />
             </>)}
 
@@ -2120,17 +2174,6 @@ export function SettingsDialog({
             />
             {experimentalEnabled(settings, "copilot_completion") && <CopilotCompletionCard />}
 
-            {/* The chat assistant: the switch the backend reads too
-                (`Settings::assistant_enabled`). Its other settings (CLI,
-                model, search backend) are the assistant page's, which
-                exists in the navigation only while this is on. */}
-            <ToggleCard
-              label={<>{t("settings.assistant")} <UntestedTag id="settings.assistant" /></>}
-              checked={experimentalEnabled(settings, "assistant")}
-              onChange={(e) => void updateSettings({ assistant: e.target.checked })}
-              help={t("settings.assistantHelp")}
-            />
-
             {/* The Chat's hands-free voice loop; its chip appears beside
                 read-aloud only while this is on. */}
             <ToggleCard
@@ -2139,49 +2182,6 @@ export function SettingsDialog({
               onChange={(e) => void updateSettings({ voice_hands_free: e.target.checked })}
               help={t("settings.voiceHandsFreeHelp")}
             />
-
-            {/* Mail is ONE switch. It used to be two — this gate plus a
-                `mail_global_app` sub-toggle deciding whether the header button
-                appeared *as well as* the mail tab — but the tab is retired, so
-                the overlay is the only surface and a second switch could only
-                ever mean "mail on, and unreachable". The interval check stays
-                nested because it is genuinely a different question (how often to
-                dial out), and it is the one part of the feature that reaches the
-                network without a click. The browser below still owns a whole TAB,
-                so switching *it* off closes what it opened — see
-                lib/experimentalSweep. */}
-            <SettingsCard>
-              <ToggleRow
-                label={<>{t("settings.mailClient")} <UntestedTag id="settings.mailClient" /></>}
-                checked={experimentalEnabled(settings, "mail_client")}
-                onChange={(e) => void updateSettings({ mail_client: e.target.checked })}
-              />
-              <p className="settings-help">{t("settings.mailClientHelp")}</p>
-              {experimentalEnabled(settings, "mail_client") && (
-                <>
-                  <div className="settings-card-row">
-                    <span>{t("settings.mailCheckInterval")}</span>
-                    <Dropdown
-                      value={String(
-                        settings?.mail_check_interval_min ?? DEFAULT_MAIL_CHECK_MIN,
-                      )}
-                      onChange={(v) =>
-                        void updateSettings({ mail_check_interval_min: Number(v) })
-                      }
-                      options={[
-                        { value: "0", label: t("settings.mailCheckNever") },
-                        { value: "5", label: t("settings.mailCheckMinutes", { count: 5 }) },
-                        { value: "10", label: t("settings.mailCheckMinutes", { count: 10 }) },
-                        { value: "15", label: t("settings.mailCheckMinutes", { count: 15 }) },
-                        { value: "30", label: t("settings.mailCheckMinutes", { count: 30 }) },
-                        { value: "60", label: t("settings.mailCheckMinutes", { count: 60 }) },
-                      ]}
-                    />
-                  </div>
-                  <p className="settings-help">{t("settings.mailCheckIntervalHelp")}</p>
-                </>
-              )}
-            </SettingsCard>
 
             <ToggleCard
               label={t("settings.webBrowser")}
