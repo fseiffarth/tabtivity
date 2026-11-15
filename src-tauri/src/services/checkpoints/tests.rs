@@ -9,7 +9,9 @@ use super::store::{Kind, Row, Store};
 use super::worker::{Job, Queues, Runner};
 use super::*;
 use crate::services::agent_turn::TurnState;
-use crate::test_util::{git, init_repo};
+#[cfg(unix)]
+use crate::test_util::git;
+use crate::test_util::init_repo;
 
 struct Fixture {
     _tmp: tempfile::TempDir,
