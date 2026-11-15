@@ -64,6 +64,8 @@ fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {
             write_script(dir, &format!("{old}.cmd"), alias.as_bytes())?;
         }
     }
+    #[cfg(target_os = "macos")]
+    write_script(dir, "mktemp", mktemp_shim_script().as_bytes())?;
     if let Some(exe) = exe {
         let aliases = VENDOR_ALIASES.iter().filter(|(_, cli)| clis.contains(cli)).copied();
         for (name, cli) in clis.iter().map(|cli| (*cli, *cli)).chain(aliases) {
@@ -80,6 +82,48 @@ fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The `mktemp` in front of macOS's (installed on macOS only). Its `mktemp`
+/// never reads `$TMPDIR`: without a template it asks the system
+/// (`confstr(_CS_DARWIN_USER_TEMP_DIR)`) and lands in the user's own
+/// `/var/folders/…/T`, which the Seatbelt fence hides (2442n), so every bare
+/// `mktemp` in a fenced tab failed. Inside a fence a call without a template
+/// (`mktemp`, `-d`, `-q`, `-u`, `-t prefix`) gets one in `$TMPDIR`, the scope's
+/// private temp dir; anything else — a template, `-p`, an option this does not
+/// know, or no fence — runs the real one untouched. Programs that ask the
+/// system themselves (Foundation's `NSTemporaryDirectory`) are not covered.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+pub(crate) fn mktemp_shim_script() -> String {
+    mktemp_shim_script_for("/usr/bin/mktemp")
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn mktemp_shim_script_for(real: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # {DISPLAY} fence mktemp: a call without a template gets one in $TMPDIR (services::agent_bin).\n\
+         real={real}\n\
+         if [ -z \"${{{UPPER}_AGENT_FENCE:-}}\" ] || [ -z \"${{TMPDIR:-}}\" ]; then\n\
+         \x20   exec \"$real\" \"$@\"\n\
+         fi\n\
+         prefix=tmp\n\
+         flags=\n\
+         want_prefix=\n\
+         for a in \"$@\"; do\n\
+         \x20   if [ -n \"$want_prefix\" ]; then prefix=$a; want_prefix=; continue; fi\n\
+         \x20   case $a in\n\
+         \x20       -t) want_prefix=1 ;;\n\
+         \x20       -t?*) prefix=${{a#-t}} ;;\n\
+         \x20       -[dqu]|-[dqu][dqu]|-[dqu][dqu][dqu]) flags=\"$flags $a\" ;;\n\
+         \x20       *) exec \"$real\" \"$@\" ;;\n\
+         \x20   esac\n\
+         done\n\
+         [ -z \"$want_prefix\" ] || exec \"$real\" \"$@\"\n\
+         # $flags holds only -d/-q/-u letters: split on purpose.\n\
+         exec \"$real\" $flags \"${{TMPDIR%/}}/$prefix.XXXXXXXXXX\"\n",
+        real = crate::quote::posix(real),
+    )
 }
 
 /// The shim for `cli`: exec the fence through `exe`, or — already inside a
@@ -382,5 +426,60 @@ mod tests {
             .unwrap();
         assert_eq!(out.status.code(), Some(127));
         assert!(String::from_utf8_lossy(&out.stderr).contains("fakecli: command not found"));
+    }
+
+    /// Runs the mktemp shim with `args`, fenced or not, in front of `real`.
+    #[cfg(unix)]
+    fn run_mktemp_shim(real: &str, dir: &Path, fenced: bool, args: &[&str]) -> std::process::Output {
+        let shim = dir.join("mktemp");
+        write_script(dir, "mktemp", mktemp_shim_script_for(real).as_bytes()).unwrap();
+        let mut cmd = std::process::Command::new(&shim);
+        cmd.args(args).env("TMPDIR", dir.join("private")).env_remove(crate::app_env!("AGENT_FENCE"));
+        if fenced {
+            cmd.env(crate::app_env!("AGENT_FENCE"), "1");
+        }
+        cmd.output().unwrap()
+    }
+
+    /// macOS's mktemp ignores `$TMPDIR` without a template, so inside the
+    /// fence the shim names one there; everything else reaches it untouched.
+    #[cfg(unix)]
+    #[test]
+    fn the_fenced_mktemp_gets_a_template_in_tmpdir_and_passes_anything_else_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let echo = dir.path().join("echo-args");
+        write_script(dir.path(), "echo-args", b"#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n").unwrap();
+        let echo = echo.to_string_lossy().into_owned();
+        let private = dir.path().join("private").to_string_lossy().into_owned();
+        let args_of = |fenced: bool, args: &[&str]| {
+            let out = run_mktemp_shim(&echo, dir.path(), fenced, args);
+            assert!(out.status.success(), "{out:?}");
+            String::from_utf8(out.stdout).unwrap().lines().map(str::to_string).collect::<Vec<_>>()
+        };
+        let tmpl = |prefix: &str| format!("{private}/{prefix}.XXXXXXXXXX");
+        assert_eq!(args_of(true, &[]), [tmpl("tmp")]);
+        assert_eq!(args_of(true, &["-d"]), ["-d".to_string(), tmpl("tmp")]);
+        assert_eq!(args_of(true, &["-dq"]), ["-dq".to_string(), tmpl("tmp")]);
+        assert_eq!(args_of(true, &["-q", "-t", "build"]), ["-q".to_string(), tmpl("build")]);
+        assert_eq!(args_of(true, &["-tcache"]), [tmpl("cache")]);
+        // A template, -p, an unknown option, a dangling -t: untouched.
+        for args in [&["x.XXXXXX"][..], &["-p", "/elsewhere"], &["--tmpdir"], &["-t"], &["-d", "a b.XXXXXX"]] {
+            assert_eq!(args_of(true, args), args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), "{args:?}");
+        }
+        // Not fenced: untouched.
+        assert_eq!(args_of(false, &[]), Vec::<String>::new());
+        assert_eq!(args_of(false, &["-d"]), ["-d"]);
+
+        // And the template it names is one the real mktemp takes.
+        assert_eq!(mktemp_shim_script(), mktemp_shim_script_for("/usr/bin/mktemp"));
+        std::fs::create_dir_all(&private).unwrap();
+        for args in [&[][..], &["-d"], &["-t", "probe"]] {
+            let out = run_mktemp_shim("/usr/bin/mktemp", dir.path(), true, args);
+            assert!(out.status.success(), "{args:?}: {out:?}");
+            let made = String::from_utf8(out.stdout).unwrap();
+            let made = Path::new(made.trim());
+            assert_eq!(made.parent(), Some(Path::new(&private)), "{args:?}");
+            assert!(made.exists());
+        }
     }
 }

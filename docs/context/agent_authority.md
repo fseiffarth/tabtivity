@@ -638,7 +638,11 @@ Composition is explicit:
   - **Private temp:** `TMPDIR` is `<user $TMPDIR>/<slug>-tmp/<hash>` (0700,
     per scope), the user's own `$TMPDIR` is hidden, `/tmp` stays writable for
     tools that name it (files only), and the per-user cache dir (`…/C`,
-    clang's module cache) stays writable.
+    clang's module cache) stays writable. macOS's `mktemp` never reads
+    `$TMPDIR` (it asks `confstr(_CS_DARWIN_USER_TEMP_DIR)`, the hidden dir),
+    so a `mktemp` shim in `<state_dir>/bin` gives a fenced call without a
+    template one in `$TMPDIR` (`agent_bin::mktemp_shim_script`). One-shots
+    (push preflight) hide the whole state dir and do not see the shim.
   - Every rule is written under each path's resolved spelling too (2442w), so
     a project below a symlink (`~/work` → another volume) or `/var` vs
     `/private/var` matches. An **allow** rule follows no link that sits at or

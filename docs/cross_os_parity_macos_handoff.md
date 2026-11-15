@@ -477,7 +477,10 @@ New from the review:
 10. **Tools that ask the system for the temp dir instead of `$TMPDIR`**
     (`confstr(_CS_DARWIN_USER_TEMP_DIR)`: Foundation's
     `NSTemporaryDirectory`, so `swift build`, `xcodebuild`) get the hidden
-    dir. Check on a Mac: `swift build` in a fenced tab.
+    dir. Check on a Mac: `swift build` in a fenced tab. macOS's own
+    `mktemp` is one of them (CI run 623: a bare `mktemp` was refused in the
+    fence); a `mktemp` shim in `<state_dir>/bin` now hands it a template in
+    `$TMPDIR` in tabs, not in one-shots (push preflight hides the state dir).
 11. A symlink *on the way* to a shown path (not the leaf): `realpath` reads
     the link itself (`readlink`, `file-read-data`), which fix 2 does not
     allow — the kernel resolves it, so opens work, but a tool that resolves

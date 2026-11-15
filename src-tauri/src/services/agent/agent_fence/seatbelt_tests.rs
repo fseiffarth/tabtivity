@@ -310,6 +310,8 @@ mod real {
         outside: PathBuf,
         private_tmp: String,
         profile: PathBuf,
+        /// The shim dir, first on PATH as `agent_bin::bin_dir` is in a tab.
+        bin: PathBuf,
     }
 
     /// A scope profile built the way a tab's is: a fake home with a root in
@@ -340,10 +342,17 @@ mod real {
             private_tmp: Some(private_tmp.to_string_lossy().into_owned()),
             ..SeatbeltInputs::default()
         };
+        let bin = base.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let shim = bin.join("mktemp");
+        std::fs::write(&shim, crate::services::agent_bin::mktemp_shim_script()).unwrap();
+        let exec = <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755);
+        std::fs::set_permissions(&shim, exec).unwrap();
+        inputs.readable.push(bin.to_string_lossy().into_owned());
         add_canonical_spellings(&mut inputs, &seatbelt_read_link);
         let profile = base.path().join("fence.sb");
         std::fs::write(&profile, sandbox_exec_profile(&inputs)).unwrap();
-        Fence { _base: base, root, outside, private_tmp: private_tmp.to_string_lossy().into_owned(), profile }
+        Fence { _base: base, root, outside, private_tmp: private_tmp.to_string_lossy().into_owned(), profile, bin }
     }
 
     fn wait(mut child: std::process::Child, limit: Duration) -> Option<Output> {
@@ -367,6 +376,8 @@ mod real {
             let mut command = Command::new("/usr/bin/sandbox-exec");
             command
                 .args(seatbelt_argv(&self.profile.to_string_lossy(), &self.private_tmp, cmd, &args))
+                .env(crate::app_env!("AGENT_FENCE"), "1")
+                .env("PATH", format!("{}:{}", self.bin.display(), std::env::var("PATH").unwrap_or_default()))
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
@@ -407,6 +418,8 @@ mod real {
             let out = f.sh(&format!("echo no > '{}'", probe.display()));
             assert!(!out.status.success() && !probe.exists(), "{out:?}");
         }
+        // Through the shim: macOS's own mktemp asks the system for the
+        // (hidden) user temp dir and never reads $TMPDIR.
         let out = f.sh("f=$(mktemp) && echo hi > \"$f\" && echo \"$f\"");
         assert!(out.status.success(), "{out:?}");
         let made = String::from_utf8_lossy(&out.stdout).trim().to_string();
