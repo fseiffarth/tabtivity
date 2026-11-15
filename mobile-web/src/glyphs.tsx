@@ -5,8 +5,8 @@ import { CalendarIcon, CheckboxIcon, FolderIcon, MailIcon, type IconProps } from
  * icon set so they weigh the same on every phone. Text stays only inside
  * content — a chat line, a hint sentence, a git row a test reads. */
 export {
-  ArchiveIcon, BranchIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, DiamondIcon, DiffIcon,
-  FolderIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, MeterIcon, StarIcon, MoreIcon, NewChatIcon, PencilIcon, PlayMark, PlusIcon, QuestionIcon, SearchIcon, SidebarIcon, StopIcon, UndoIcon, WindowIcon,
+  ArchiveIcon, BranchIcon, CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, DiamondIcon, DiffIcon,
+  FolderIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, MeterIcon, StarIcon, MoreIcon, NewChatIcon, PageIcon, PencilIcon, PlayMark, PlusIcon, QuestionIcon, SearchIcon, SidebarIcon, StopIcon, UndoIcon, WindowIcon,
 } from "../../src/components/common/icons/Icon";
 
 /**

@@ -153,7 +153,7 @@ is refused. Works with the desktop window closed.
 - In a project, **＋ New tab** floats above the bottom bar. Tap a tab card to
   open it; its model opens the model picker, ◷ (shown once the tab has
   scheduled prompts) lists them, ✕ closes the tab — as does swiping the card
-  to the left — and ⋯ holds **Rename**, **Colour…**, **Scheduled prompts**,
+  to the left — and ⋯ holds **Rename**, **Colour**, **Scheduled prompts**,
   **Subagents** and **Close tab**. Under the cards, **Recently closed (n)**
   unfolds to reopen one, and **◷ Collected prompts** opens the project's
   prompts. The hint line under the cards goes for good once you tap its ×.
@@ -446,7 +446,8 @@ switched or created from there:
 
 It works with the desktop closed, refreshes when you come back to the app or
 tap **↻ Refresh**, and covers projects only, not boxes or the root console.
-The ＋ sheet's **Agents start in** row lists the same worktrees.
+The ＋ sheet's **Agents start in** dropdown, under **Runs on**, lists the same
+worktrees; it takes one row however many there are, and its list scrolls.
 
 To move a running agent to another of these worktrees, tap the **⎇ branch**
 chip in its chat's facts row, as on the desktop (see `agent-clis`). The row

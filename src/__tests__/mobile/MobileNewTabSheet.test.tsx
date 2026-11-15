@@ -46,6 +46,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+
+/** The pick a dropdown field shows, without the field's own name beside it. */
+function fieldValue(field: HTMLElement): string | null | undefined {
+  return field.querySelector(":scope > span")?.textContent;
+}
+
 describe("Mobile project screen — the ＋ in a Local models only project", () => {
   // The desktop's ＋ menu offers the local model's rows and the shells alone there; the
   // phone's sheet reads the same rule (`cloudRowsOffered`) off the row's flag.
@@ -340,7 +346,10 @@ describe("Mobile ＋ sheet — API key", () => {
     fireEvent.click(within(group).getByText("Claude (API)"));
     expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { api_key: true });
     expect((within(group).getByText("Gemini (API) — budget reached") as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByText("fix-build"));
+    // The worktree is a dropdown: its field opens the list, a row picks.
+    fireEvent.click(screen.getByRole("button", { name: /^Agents start in/ }));
+    fireEvent.click(within(screen.getByRole("list", { name: /^Agents start in/ })).getByText("fix-build"));
+    expect(screen.queryByRole("list", { name: /^Agents start in/ })).toBeNull();
     fireEvent.click(within(group).getByText("Claude (API)"));
     expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { worktree: "w1", api_key: true });
   });
@@ -374,7 +383,7 @@ describe("Mobile ＋ sheet — a remote-only project", () => {
     serve(machines(true));
     const onPick = sheet();
     const picker = await screen.findByRole("button", { name: /^Runs on/ });
-    expect(picker.textContent).toBe("h.invalid (primary)");
+    expect(fieldValue(picker)).toBe("h.invalid (primary)");
     fireEvent.click(picker);
     const rows = within(screen.getByRole("list", { name: /^Runs on/ })).getAllByRole("button");
     expect(rows.map((row) => row.textContent)).toEqual(["h.invalid (primary)", "gpu-1"]);
@@ -406,7 +415,7 @@ describe("Mobile ＋ sheet — a remote-only project", () => {
     expect((within(list).getByRole("button", { name: /h\.invalid \(primary\)/ }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(list).getByRole("button", { name: "gpu-1" }));
     expect(screen.queryByRole("list", { name: /^Runs on/ })).toBeNull();
-    expect(picker.textContent).toBe("gpu-1");
+    expect(fieldValue(picker)).toBe("gpu-1");
     expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Claude" }));
     expect(onPick).toHaveBeenCalledWith("agent", agents[0], undefined, { host: "m-w1" });
@@ -421,7 +430,7 @@ describe("Mobile ＋ sheet — a remote-only project", () => {
     ] });
     const onPick = sheet();
     const picker = await screen.findByRole("button", { name: /^Runs on/ });
-    expect(picker.textContent).toBe("gpu-1");
+    expect(fieldValue(picker)).toBe("gpu-1");
     expect((screen.getByRole("button", { name: "Claude" }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Claude" }));
     expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { host: "m-w1" });

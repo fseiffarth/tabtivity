@@ -11896,7 +11896,7 @@ export const enSource = {
   "mobile.home.searchAll": "Search all projects",
   "mobile.home.reorderHint": "Drag {grip} to arrange.",
   "mobile.home.desktopHead": "Desktop",
-  "mobile.project.colorRow": "Colour…",
+  "mobile.project.colorRow": "Colour",
   "mobile.project.subagentsRow": "Subagents",
   "mobile.project.filesRow": "Files",
   "mobile.project.closeRow": "Close tab",

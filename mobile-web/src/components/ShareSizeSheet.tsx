@@ -19,7 +19,7 @@ export function ShareSizeSheet({ files, onShare, onClose }: {
     ? t("mobile.outbox.shareBig.one", { name: sentName(list[0]), size })
     : t("mobile.outbox.shareBig.many", { count: list.length, size });
   return <ConfirmSheet
-    confirm={{ title, note: t("mobile.outbox.shareBig.note"), label: t("mobile.outbox.shareBig.yes"), run: onShare }}
+    confirm={{ title, note: t("mobile.outbox.shareBig.note"), label: t("mobile.outbox.shareBig.yes"), run: onShare, danger: false }}
     busy={false}
     onClose={onClose}
   />;

@@ -21,7 +21,7 @@ import { TabFilesSheet } from "./TabFilesSheet";
 import type { SentFile } from "../components/SentFilesIndex";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
-import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, type TabAction } from "../components/TabCard";
+import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActionOption, tabActions, tabMenuSubtitle, type TabAction } from "../components/TabCard";
 import { OptionSheet } from "../components/OptionSheet";
 import { HintQueue, type HintKey } from "../components/HintMessage";
 import { lastWorkedAt } from "../components/AgentModeMarks";
@@ -1034,10 +1034,11 @@ export function Project({ id, back, splitList, terminal }: {
     ><span aria-hidden="true" className="fab-plus"><PlusIcon size="1em" /></span>{(isUntested("mobile.project.fab") || (quickTarget && isUntested("mobile.project.fabQuick"))) && <span className="untested" aria-hidden="true">{t("mobile.newTab.untested")}</span>}</button>}
     {moreTab && <OptionSheet
       title={moreTab.label}
+      subtitle={tabMenuSubtitle(moreTab)}
       waiting=""
       busy={false}
       onClose={() => setMoreTab(null)}
-      options={tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available), detail?.desktop_available === true).map((action) => ({ key: action, label: t(TAB_ACTION_LABEL[action]), current: false }))}
+      options={tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available), detail?.desktop_available === true).map((action) => tabActionOption(moreTab, action, t(TAB_ACTION_LABEL[action])))}
       onPick={(key) => { const action = tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available), detail?.desktop_available === true).find((row) => row === key); if (action) runAction(moreTab, action); }}
     >{isUntested("mobile.project.cardMenu") && <p className="sheet-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}</OptionSheet>}
     {newTabOpen && detail && <NewTabSheet

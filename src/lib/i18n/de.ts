@@ -11804,7 +11804,7 @@ export const dict: Dict = {
   "mobile.home.searchAll": "Alle Projekte durchsuchen",
   "mobile.home.reorderHint": "Zum Anordnen {grip} ziehen.",
   "mobile.home.desktopHead": "Desktop",
-  "mobile.project.colorRow": "Farbe…",
+  "mobile.project.colorRow": "Farbe",
   "mobile.project.subagentsRow": "Subagenten",
   "mobile.project.filesRow": "Dateien",
   "mobile.project.closeRow": "Tab schließen",

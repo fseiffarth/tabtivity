@@ -334,21 +334,22 @@ small { color:#9498aa; }
 .new-tab-agents .agent-create > button:first-child { padding-right:44px; }
 .new-tab-default { position:absolute; top:6px; right:6px; display:grid; place-items:center; width:44px; height:44px; padding:0; border:0; background:none; color:#9da3b6; font-size:1.15rem; }
 .new-tab-default[aria-pressed="true"] { color:#f5c451; }
-.new-tab-where { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
-.new-tab-where > small { flex:1 0 100%; padding:0 6px; color:#9da3b6; font-size:.8rem; }
-.new-tab-where > button { min-height:36px; padding:6px 10px; font-size:.8rem; overflow-wrap:anywhere; }
-/* "Runs on": the label beside a field drawn as the compact select, which
-   unfolds the sheets' `.option-list` under it (no native picker); the note
-   under both. Only the chevron's turn moves. */
-.new-tab-machine { display:grid; gap:6px; }
-.new-tab-machine-field { display:flex; align-items:center; gap:8px; min-width:0; }
-.new-tab-machine-field > small { flex:0 0 auto; padding:0 6px; color:#9da3b6; font-size:.8rem; }
-.new-tab-machine-toggle { display:flex; flex:1 1 auto; align-items:center; gap:8px; min-width:0; padding:7px 10px 7px 12px; border-color:var(--edge); background-color:#0b0d13; color:#fff; font-size:.85rem; text-align:left; }
-.new-tab-machine-toggle.open { --rim:#7c6cff; }
-.new-tab-machine-toggle > span { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.new-tab-machine-toggle > svg { width:16px; height:16px; flex:0 0 auto; fill:none; stroke:#9aa0b4; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .15s ease; }
-.new-tab-machine-toggle.open > svg { transform:rotate(180deg); }
-.new-tab-machine-list button { font-size:.9rem; }
+/* A sheet's pick fields ("Runs on", "Agents start in"): one inset group, a
+   row per field — its name left, the pick right, a ⌄. The rows unfold as the
+   sheets' `.option-list` floating under the field, a few rows tall and then
+   scrolling, so no count of rows moves what is under it. Only the chevron's
+   turn moves; the list's shadow is static. */
+.sheet-fields { display:grid; border-radius:var(--r-md); background:var(--surface-raised); }
+.sheet-fields > .sheet-select + .sheet-select { border-top:1px solid var(--hairline); }
+.sheet-select { position:relative; min-width:0; }
+.sheet-select-field { display:flex; align-items:center; gap:10px; width:100%; min-width:0; min-height:52px; padding:0 12px 0 14px; border:0; border-radius:var(--r-md); background:transparent; text-align:left; }
+.sheet-select-field.open { background:#2a2f42; }
+.sheet-select-field > small { flex:0 0 auto; color:var(--ink-muted); font-size:var(--fs-sub); }
+.sheet-select-field > span { flex:1; min-width:0; text-align:right; font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.sheet-select-field > svg { width:16px; height:16px; flex:0 0 auto; color:var(--ink-muted); transition:transform .15s ease; }
+.sheet-select-field.open > svg { transform:rotate(180deg); color:#8fb8ff; }
+.sheet-select-list { position:absolute; z-index:3; top:calc(100% + 4px); left:0; right:0; max-height:min(300px, 46dvh); overflow-y:auto; overscroll-behavior:contain; border:1px solid var(--edge); border-radius:var(--r-md); background:var(--surface-raised); box-shadow:0 14px 32px rgba(0,0,0,.45); }
+.sheet-select-list button { font-size:.95rem; }
 /* The local-model group: the agents grid under a label worded like "Agents start in". */
 .new-tab-local { display:flex; flex-direction:column; gap:6px; }
 .new-tab-local > small { padding:0 6px; color:#9da3b6; font-size:.8rem; overflow-wrap:anywhere; }
@@ -2243,10 +2244,10 @@ span.files-close { background:transparent; }
 :where(:is(.terminal-screen,.sheet-backdrop,.brand-screen) .primary) { --rim:#8c7df4; }
 :where(.prompt-composer,.focus-menu,.transcript-screen) { --r:var(--r-lg); }
 :where(.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent) { --r:var(--r-md); --rim:var(--edge); }
-:where(.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin) { --r:var(--r-sm); --rim:var(--edge); }
+:where(.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.local-unlock-use-pin) { --r:var(--r-sm); --rim:var(--edge); }
 :is(.terminal-screen,.sheet-backdrop,.brand-screen) :is(button:not([class]),button.primary,button.danger,button.mode,button.new-tab-file,select,textarea,input:not([type="checkbox"],[type="radio"],[type="range"],[type="color"],[type="file"])),
 .prompt-composer,.focus-menu,.transcript-screen,.chat-change,.transcript-agent,.hint-message,.usage-meter,.cli-overview-card,.usage-raw,.mobile-schedule-list article,.new-tab-agents .agent-create,.sign-in-open a,.sign-in-code,.sign-in-agent,
-.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.new-tab-machine-toggle,.local-unlock-use-pin {
+.transcript-working-stop,.subagent-index-toggle,.subagent-index-list button,.chat-link-index-list button,.git-rows > li,.subagent-bar button,.diverged-actions button,.mobile-schedule-weekdays label,.terminal-gallery,.local-unlock-use-pin {
   border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
 }
 /* Focus retints the rim; the field draws no outline of its own. */
@@ -2267,6 +2268,28 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { --ct:0px; --cb:0p
 ul.option-list:not(.files-list) > li:not(.option-list-group) + li:not(.option-list-group) { border-top:1px solid var(--hairline); }
 ul.option-list:not(.files-list) > li:first-child,ul.option-list:not(.files-list) > .option-list-group + li { --ct:var(--r-md); }
 ul.option-list:not(.files-list) > li:last-child,ul.option-list:not(.files-list) > li:has(+ .option-list-group) { --cb:var(--r-md); }
+/* The row's button fills its run's rounded corners rather than painting
+   square ones over them. A gap (`section`) is an unlabelled group label: it
+   splits the runs without a heading. */
+ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; }
+.option-list-group.option-list-gap { height:0; margin:6px 0; }
+.option-list button.current { color:#bcb0ff; background:var(--surface-raised); }
+.option-list button.current small { color:var(--ink-muted); }
+/* A row's parts: a leading glyph in the accent, a value at its end, a › when
+   it opens another sheet; a destructive row in the danger colour. */
+.option-list .option-icon { display:grid; place-items:center; flex:0 0 auto; width:24px; height:24px; color:#8fb8ff; font-style:normal; }
+.option-list .option-icon svg { width:21px; height:21px; stroke-width:1.9; }
+.option-list button > span.option-trail { display:flex; flex:0 0 auto; align-items:center; gap:6px; color:var(--ink-muted); font-size:var(--fs-sub); font-variant-numeric:tabular-nums; }
+.option-list .option-chevron { width:16px; height:16px; color:#6f7790; stroke-width:2.2; }
+.option-list button.danger-row { color:#ff7a8c; }
+.option-list button.danger-row .option-icon { color:inherit; }
+.option-swatch { display:block; width:18px; height:18px; border:2px solid var(--ink-muted); border-radius:50%; box-sizing:border-box; }
+.option-swatch.filled { border-color:transparent; background:var(--swatch); }
+/* The head: the title over a line of context, the ✕ a round button. */
+.option-sheet .sheet-heading { flex:1; min-width:0; display:grid; gap:2px; margin-left:4px; }
+.option-sheet .sheet-heading h2 { margin:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.option-sheet .sheet-sub { display:flex; align-items:center; gap:6px; min-width:0; margin:0; color:var(--ink-muted); font-size:var(--fs-foot); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.option-sheet header > button.sheet-close { border-radius:50%; background:radial-gradient(circle 18px, var(--surface-raised) 96%, transparent 100%); font-size:18px; }
 /* A list on its way in (`ListSkeleton`): still rows, an opacity pulse. */
 .list-skeleton { display:grid; gap:var(--sp-3); margin:var(--sp-2) 0; }
 .list-skeleton > i { display:block; height:68px; background:var(--surface-group); animation:list-skeleton-pulse 1.4s ease-in-out infinite; }
