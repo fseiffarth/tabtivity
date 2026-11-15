@@ -22,6 +22,27 @@ pub const DEFAULT_AGENT_FENCE_PATHS: &[&str] = &[
     "~/.config/git",
 ];
 
+/// The macOS toolchain homes added to [`DEFAULT_AGENT_FENCE_PATHS`] on a Mac
+/// (2442z): pnpm's and fnm's Mac locations and the version managers
+/// `paths::version_manager_dirs` puts on PATH, whose shims a fenced CLI must be
+/// able to run. Mirrors `AGENT_FENCE_MACOS_PATHS` in `src/lib/agents/agentFence.ts`.
+pub const MACOS_AGENT_FENCE_PATHS: &[&str] = &[
+    "~/Library/pnpm",
+    "~/Library/Application Support/fnm",
+    "~/.local/share/fnm",
+    "~/.fnm",
+    "~/.volta",
+    "~/.asdf",
+    "~/.local/share/mise",
+    "~/.rbenv",
+];
+
+/// The default fence paths for `os` (unset setting). Pure.
+pub fn default_agent_fence_paths(os: crate::paths::OsKind) -> Vec<String> {
+    let mac: &[&str] = if os == crate::paths::OsKind::Macos { MACOS_AGENT_FENCE_PATHS } else { &[] };
+    DEFAULT_AGENT_FENCE_PATHS.iter().chain(mac).map(|path| (*path).to_string()).collect()
+}
+
 /// One entry in `settings["global_apps"]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalAppEntry {
@@ -1323,12 +1344,9 @@ impl Settings {
     /// The configured read-only toolchain/config allowlist, or the documented
     /// defaults when the key has never been written.
     pub fn agent_fence_paths(&self) -> Vec<String> {
-        self.agent_fence_paths.clone().unwrap_or_else(|| {
-            DEFAULT_AGENT_FENCE_PATHS
-                .iter()
-                .map(|path| (*path).to_string())
-                .collect()
-        })
+        self.agent_fence_paths
+            .clone()
+            .unwrap_or_else(|| default_agent_fence_paths(crate::paths::OsKind::current()))
     }
 
     /// Whether the usage recap auto-opens once a day. Defaults ON when unset, so
@@ -1934,13 +1952,13 @@ mod tests {
         assert!(serde_json::to_value(&defaults).unwrap().get("root_fence_projects_readable").is_none());
         let reading: Settings = serde_json::from_str(r#"{"root_fence_projects_readable":true}"#).unwrap();
         assert!(reading.root_fence_projects_readable());
-        assert_eq!(
-            defaults.agent_fence_paths(),
-            super::DEFAULT_AGENT_FENCE_PATHS
-                .iter()
-                .map(|path| (*path).to_string())
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(defaults.agent_fence_paths(), super::default_agent_fence_paths(crate::paths::OsKind::current()));
+        // A Mac adds its toolchain homes (2442z); elsewhere the shared list.
+        let shared: Vec<String> = super::DEFAULT_AGENT_FENCE_PATHS.iter().map(|path| (*path).to_string()).collect();
+        assert_eq!(super::default_agent_fence_paths(crate::paths::OsKind::Unix), shared);
+        assert_eq!(super::default_agent_fence_paths(crate::paths::OsKind::Windows), shared);
+        let mac = super::default_agent_fence_paths(crate::paths::OsKind::Macos);
+        assert!(mac.starts_with(&shared) && mac.contains(&"~/Library/pnpm".to_string()) && mac.contains(&"~/.volta".to_string()));
 
         let off: Settings =
             serde_json::from_str(r#"{"agent_fence":false,"agent_fence_paths":[]}"#)

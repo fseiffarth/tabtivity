@@ -3,7 +3,8 @@ import { ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { useSettingsStore } from "../../stores/settings";
 import { useT } from "../../lib/i18n";
-import { AGENT_FENCE_DEFAULT_PATHS, parseAgentFencePaths } from "../../lib/agents/agentFence";
+import { agentFenceDefaultPaths, parseAgentFencePaths } from "../../lib/agents/agentFence";
+import { HOST_OS } from "../../lib/platform";
 import { AgentsHelp, AgentsStatus, AgentsFold } from "./agentsUi";
 
 /** The Agent sandbox group. There is no switch for the sandbox itself: what is
@@ -12,10 +13,11 @@ export function AgentFenceCard() {
   const t = useT();
   const { settings, updateSettings } = useSettingsStore();
   const stored = settings?.agent_fence_paths;
-  const effective = stored ?? [...AGENT_FENCE_DEFAULT_PATHS];
+  const defaults = agentFenceDefaultPaths(HOST_OS);
+  const effective = stored ?? defaults;
   const [paths, setPaths] = useState(effective.join("\n"));
   useEffect(() => {
-    setPaths((stored ?? [...AGENT_FENCE_DEFAULT_PATHS]).join("\n"));
+    setPaths((stored ?? agentFenceDefaultPaths(HOST_OS)).join("\n"));
   }, [stored]);
   const dirty = parseAgentFencePaths(paths).join("\n") !== effective.join("\n");
 
@@ -81,7 +83,7 @@ export function AgentFenceCard() {
             type="button"
             className="settings-btn sm"
             onClick={() => {
-              setPaths(AGENT_FENCE_DEFAULT_PATHS.join("\n"));
+              setPaths(defaults.join("\n"));
               void updateSettings({ agent_fence_paths: undefined });
             }}
           >

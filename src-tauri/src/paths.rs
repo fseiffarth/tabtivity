@@ -356,6 +356,43 @@ pub fn extra_path_dirs() -> Vec<PathBuf> {
     if OsKind::current() != OsKind::Windows {
         dirs.extend(nvm_default_node_bin());
     }
+    if OsKind::current() == OsKind::Macos {
+        dirs.extend(version_manager_dirs(&home_dir(), &|var| std::env::var_os(var)));
+    }
+    dirs
+}
+
+/// The bin and shim dirs of the common version managers (2442y), which a
+/// Finder-launched app never sees because only the user's shell rc adds them:
+/// Volta, bun, pnpm, fnm's default alias, mise, asdf, pyenv, rbenv. Each
+/// honours the manager's own home variable. After Homebrew and the rest of
+/// the fixed list, so a tool found there keeps winning; a dir that does not
+/// exist costs one failed lookup. macOS only, like the rest of the Mac list
+/// (on Linux an extra dir would change which binary wins). Login-shell PATH
+/// import, the full fix, is deferred (32z). Pure over `env`.
+fn version_manager_dirs(home: &Path, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let var = |name: &str, default: PathBuf| env(name).filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or(default);
+    let mut dirs = vec![
+        var("VOLTA_HOME", home.join(".volta")).join("bin"),
+        var("BUN_INSTALL", home.join(".bun")).join("bin"),
+        var("PNPM_HOME", home.join("Library").join("pnpm")),
+    ];
+    match env("FNM_DIR").filter(|v| !v.is_empty()) {
+        Some(dir) => dirs.push(PathBuf::from(dir).join("aliases").join("default").join("bin")),
+        None => {
+            for base in [
+                home.join("Library").join("Application Support").join("fnm"),
+                home.join(".local").join("share").join("fnm"),
+                home.join(".fnm"),
+            ] {
+                dirs.push(base.join("aliases").join("default").join("bin"));
+            }
+        }
+    }
+    dirs.push(var("MISE_DATA_DIR", home.join(".local").join("share").join("mise")).join("shims"));
+    dirs.push(var("ASDF_DATA_DIR", home.join(".asdf")).join("shims"));
+    dirs.push(var("PYENV_ROOT", home.join(".pyenv")).join("shims"));
+    dirs.push(var("RBENV_ROOT", home.join(".rbenv")).join("shims"));
     dirs
 }
 
@@ -1343,6 +1380,43 @@ mod tests {
         // `system` means the OS Node: nvm contributes nothing.
         assert_eq!(pick(Some("system")), None);
         assert_eq!(resolve_nvm_version(None, &aliases, &[]), None);
+    }
+
+    /// 2442y: the version managers a Finder-launched app cannot see, each at
+    /// its default home or the one its variable names.
+    #[test]
+    fn version_manager_dirs_follow_each_managers_home() {
+        let home = Path::new("/Users/alice");
+        let none = version_manager_dirs(home, &|_| None);
+        for rel in [
+            ".volta/bin",
+            ".bun/bin",
+            "Library/pnpm",
+            "Library/Application Support/fnm/aliases/default/bin",
+            ".local/share/fnm/aliases/default/bin",
+            ".fnm/aliases/default/bin",
+            ".local/share/mise/shims",
+            ".asdf/shims",
+            ".pyenv/shims",
+            ".rbenv/shims",
+        ] {
+            let want = rel.split('/').fold(home.to_path_buf(), |p, c| p.join(c));
+            assert!(none.contains(&want), "{rel}: {none:?}");
+        }
+        let set = |name: &str| match name {
+            "VOLTA_HOME" => Some(std::ffi::OsString::from("/v")),
+            "FNM_DIR" => Some(std::ffi::OsString::from("/f")),
+            "PYENV_ROOT" => Some(std::ffi::OsString::from("/py")),
+            "ASDF_DATA_DIR" => Some(std::ffi::OsString::new()),
+            _ => None,
+        };
+        let custom = version_manager_dirs(home, &set);
+        assert!(custom.contains(&Path::new("/v").join("bin")));
+        assert!(custom.contains(&Path::new("/py").join("shims")));
+        assert!(custom.contains(&Path::new("/f").join("aliases").join("default").join("bin")));
+        assert!(!custom.iter().any(|d| d.starts_with(home.join(".fnm"))), "FNM_DIR replaces the defaults");
+        // An empty variable is the default, not the current directory.
+        assert!(custom.contains(&home.join(".asdf").join("shims")));
     }
 
     #[test]
