@@ -234,7 +234,8 @@ pub fn alive(_proc: &Proc) -> bool {
 
 /// When `pid` started (clock ticks since boot, [`Proc::start`]), read from its
 /// `stat` now — a zombie still answers. With the pid it names one process
-/// across pid reuse. `None` for no such process, and always off Linux.
+/// across pid reuse. `None` for no such process (macOS: its own clock, below;
+/// Windows: always).
 #[cfg(target_os = "linux")]
 pub fn start_time(pid: u32) -> Option<u64> {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -243,7 +244,15 @@ pub fn start_time(pid: u32) -> Option<u64> {
         .map(|now| now.start)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS (2442o): `pbi_start_tvsec`/`usec` through `sysstat::process_start`,
+/// microseconds since the epoch — a different clock from Linux's, compared
+/// only with values read here.
+#[cfg(target_os = "macos")]
+pub fn start_time(pid: u32) -> Option<u64> {
+    crate::sysstat::process_start(pid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn start_time(_pid: u32) -> Option<u64> {
     None
 }
