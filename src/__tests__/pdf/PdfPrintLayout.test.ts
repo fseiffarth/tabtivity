@@ -4,7 +4,7 @@
  * turned page lands inside its box, not off the paper.
  */
 import { describe, it, expect } from "vitest";
-import { PDFDocument, degrees } from "pdf-lib";
+import { PDFDict, PDFDocument, PDFName, degrees } from "pdf-lib";
 import { layoutPrintPdf, turnedOrigin } from "../../lib/viewers/pdfPrintLayout";
 import { PAGED_PRINT_OPTIONS, type PrintOptions } from "../../lib/viewers/print";
 
@@ -49,6 +49,43 @@ describe("layoutPrintPdf", () => {
     );
     const { width, height } = out.getPage(0).getSize();
     expect(width).toBeGreaterThan(height);
+  });
+
+  // 2442aa: where the system dialog cannot be preset to grayscale (Windows,
+  // macOS), the PDF itself is made gray — a Saturation blend over each sheet,
+  // in an RGB transparency group — and only when the job asks for grayscale.
+  it("bakes grayscale into every sheet only when asked to", async () => {
+    const sheets = [{ page: 1, rot: 0 }, { page: 2, rot: 0 }];
+    /** Per output page: its transparency group, and the blend modes of its graphics states. */
+    const inspect = async (bytes: Uint8Array) => {
+      const doc = await PDFDocument.load(bytes);
+      return doc.getPages().map((page) => {
+        const states = page.node.Resources()?.lookupMaybe(PDFName.of("ExtGState"), PDFDict);
+        const modes = (states?.values() ?? []).map((v) =>
+          String(doc.context.lookupMaybe(v, PDFDict)?.get(PDFName.of("BM")) ?? ""),
+        );
+        return { group: String(page.node.get(PDFName.of("Group")) ?? ""), modes };
+      });
+    };
+    const baked = await inspect(
+      await layoutPrintPdf(await source(), sheets, opts({ grayscale: true }), { bakeGrayscale: true }),
+    );
+    expect(baked).toHaveLength(2);
+    for (const page of baked) {
+      expect(page.modes).toContain("/Saturation");
+      expect(page.group).toContain("/Transparency");
+    }
+    // Colour asked for, or a dialog that takes the preset (Linux): untouched.
+    const untouched = [
+      await layoutPrintPdf(await source(), sheets, opts({ grayscale: false }), { bakeGrayscale: true }),
+      await layoutPrintPdf(await source(), sheets, opts({ grayscale: true })),
+    ];
+    for (const bytes of untouched) {
+      for (const page of await inspect(bytes)) {
+        expect(page.modes).not.toContain("/Saturation");
+        expect(page.group).toBe("");
+      }
+    }
   });
 
   it("refuses an empty job rather than printing a blank one", async () => {

@@ -8189,6 +8189,8 @@ export const dict: Dict = {
   "print.duplexShort": "Kurze Kante",
   "print.duplexHint": "Wird im System-Druckdialog voreingestellt. Lange Kante wendet das Blatt wie ein Buch, kurze Kante wie einen Notizblock; eine Broschüre braucht die kurze Kante.",
   "print.duplexNoNativeHint": "Beidseitiger Druck wird im Druckdialog eingestellt — dieses Dokument druckt über den eigenen Dialog der Vorschau, der keine solche Angabe kennt.",
+  "print.duplexNotPresetHint": "Beidseitiger Druck wird im Druckdialog des Systems eingestellt: auf diesem System kann {app} ihn dort nicht voreinstellen.",
+  "print.paperNotPresetHint": "Die Seiten werden auf diesem Papier angeordnet. Wähle im Druckdialog des Systems dasselbe Papier: auf diesem System kann {app} es dort nicht voreinstellen.",
   "print.stripHint": "Ziehen zum Umordnen · Umschalt-Klick für einen Bereich · ⟳ dreht eine Seite · ✕ entfernt sie",
   "print.resetPages": "Seiten zurücksetzen",
   "print.noPagesHint": "Dieses Dokument hat keine festen Seiten — nutze den Seitenbereich des System-Druckdialogs.",

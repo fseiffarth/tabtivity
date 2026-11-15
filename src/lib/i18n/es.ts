@@ -8183,6 +8183,8 @@ export const dict: Dict = {
   "print.duplexShort": "Borde corto",
   "print.duplexHint": "Se preajusta en el diálogo de impresión del sistema. El borde largo gira la hoja como un libro, el corto como un bloc de notas; un folleto necesita el borde corto.",
   "print.duplexNoNativeHint": "La doble cara se ajusta en el diálogo de impresión — este documento se imprime con el diálogo propio de la vista previa, que no admite esa petición.",
+  "print.duplexNotPresetHint": "La doble cara se ajusta en el diálogo de impresión del sistema: en este sistema {app} no puede preajustarla allí.",
+  "print.paperNotPresetHint": "Las páginas se disponen en este papel. Elige el mismo papel en el diálogo de impresión del sistema: en este sistema {app} no puede preajustarlo allí.",
   "print.stripHint": "Arrastra para reordenar · mayús-clic para un rango · ⟳ gira una página · ✕ la elimina",
   "print.resetPages": "Restablecer páginas",
   "print.noPagesHint": "Este documento no tiene páginas fijas — usa el rango de páginas del diálogo de impresión del sistema.",

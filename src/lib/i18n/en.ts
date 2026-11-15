@@ -8562,6 +8562,8 @@ export const enSource = {
   "print.duplexShort": "Short edge",
   "print.duplexHint": "Preset in the system print dialog. Long edge turns the sheet like a book, short edge like a notepad; a booklet needs the short edge.",
   "print.duplexNoNativeHint": "Two-sided printing is set in the print dialog — this document prints through the preview's own dialog, which takes no such request.",
+  "print.duplexNotPresetHint": "Two-sided printing is set in the system print dialog: on this system {app} cannot preset it there.",
+  "print.paperNotPresetHint": "The pages are laid out on this paper. Pick the same paper in the system print dialog: on this system {app} cannot preset it there.",
   "print.stripHint": "Drag to reorder · shift-click for a range · ⟳ turns a page · ✕ removes it",
   "print.resetPages": "Reset pages",
   "print.noPagesHint": "This document has no fixed pages — use the system print dialog's page range.",

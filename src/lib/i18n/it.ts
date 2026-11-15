@@ -8183,6 +8183,8 @@ export const dict: Dict = {
   "print.duplexShort": "Lato corto",
   "print.duplexHint": "Preimpostato nel dialogo di stampa di sistema. Il lato lungo gira il foglio come un libro, il lato corto come un blocco per appunti; un opuscolo richiede il lato corto.",
   "print.duplexNoNativeHint": "Il fronte-retro si imposta nel dialogo di stampa — questo documento si stampa dal dialogo proprio dell'anteprima, che non accetta questa richiesta.",
+  "print.duplexNotPresetHint": "Il fronte-retro si imposta nel dialogo di stampa del sistema: su questo sistema {app} non può preimpostarlo.",
+  "print.paperNotPresetHint": "Le pagine sono disposte su questa carta. Scegli la stessa carta nel dialogo di stampa del sistema: su questo sistema {app} non può preimpostarla.",
   "print.stripHint": "Trascina per riordinare · maiusc-clic per un intervallo · ⟳ ruota una pagina · ✕ la rimuove",
   "print.resetPages": "Ripristina le pagine",
   "print.noPagesHint": "Questo documento non ha pagine fisse — usa l'intervallo di pagine del dialogo di stampa di sistema.",

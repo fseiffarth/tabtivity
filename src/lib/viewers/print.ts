@@ -26,6 +26,7 @@ import {
 import type { PageStripProps } from "../../components/common/PageStrip";
 import {
   followPrintJob,
+  nativePresets,
   printSnapshot,
   JOB_APPEAR_TIMEOUT_MS,
   type NativePdfPrint,
@@ -825,6 +826,7 @@ export function printDocument(
     nup.wrap.append(...untestedTag("print.layoutNup"));
     booklet.wrap.append(...untestedTag("print.booklet"));
     duplex.wrap.append(...untestedTag("print.duplex"));
+    if (!nativePresets().grayscale) grayscale.wrap.append(...untestedTag("print.grayscaleBaked"));
 
     optionsRow.append(
       copies.wrap,
@@ -927,9 +929,11 @@ export function printDocument(
       if (!paged && (opts.booklet || opts.nup !== 1)) opts = { ...opts, booklet: false, nup: 1 };
       // An agent's request presets its own options: never the user's defaults.
       if (!approval) savePrintOptions(opts, kind);
-      // Two-sided printing is handed to the native dialog, so it exists wherever
-      // there is one; the preview's own print dialog takes no such request.
-      const twoSided = paged && native !== undefined;
+      // Two-sided printing is handed to the native dialog, so it exists where
+      // that dialog can be preset to it (Linux; `nativePresets`); the preview's
+      // own print dialog takes no such request, nor do Windows' and macOS's.
+      const presets = nativePresets();
+      const twoSided = paged && native !== undefined && presets.duplex;
       nup.select.value = String(pagesPerSheet(opts));
       nup.select.disabled = !paged || opts.booklet;
       booklet.input.disabled = !paged;
@@ -940,7 +944,14 @@ export function printDocument(
       duplex.select.disabled = !twoSided;
       nup.wrap.title = paged ? (opts.booklet ? translateNow("print.nupBookletHint") : "") : NO_PAGES_HINT;
       booklet.wrap.title = paged ? translateNow("print.bookletHint") : NO_PAGES_HINT;
-      duplex.wrap.title = twoSided ? translateNow("print.duplexHint") : translateNow("print.duplexNoNativeHint");
+      duplex.wrap.title = twoSided
+        ? translateNow("print.duplexHint")
+        : paged && native !== undefined
+          ? translateNow("print.duplexNotPresetHint")
+          : translateNow("print.duplexNoNativeHint");
+      // Where the dialog cannot be preset to the paper (Windows, macOS), the
+      // pages are still laid out on it, and the user picks it there too.
+      paper.wrap.title = native !== undefined && !presets.paper ? translateNow("print.paperNotPresetHint") : "";
       pages.select.disabled = !paged;
       pageNumbers.input.disabled = !paged;
       rangeInput.disabled = !paged || opts.pages !== "custom";

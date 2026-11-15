@@ -13,7 +13,7 @@ import {
 } from "../../../lib/viewers/print";
 import type { PageList } from "../../../lib/viewers/pageModel";
 import { buildPdf, type PdfSources } from "./pdfDoc";
-import { printPdfNative } from "../../../lib/window/printing";
+import { nativePresets, printPdfNative } from "../../../lib/window/printing";
 import { layoutPrintPdf } from "../../../lib/viewers/pdfPrintLayout";
 import { basename } from "../../../lib/paths";
 import { useT } from "../../../lib/i18n";
@@ -76,7 +76,7 @@ export function usePdfPrint({
           redactDpi,
           stripMetadata: stripMeta,
         });
-        const laidOut = await layoutPrintPdf(bytes, sequence, opts);
+        const laidOut = await layoutPrintPdf(bytes, sequence, opts, { bakeGrayscale: !nativePresets().grayscale });
         return printPdfNative(laidOut, title, {
           paper: opts.paper,
           grayscale: opts.grayscale,

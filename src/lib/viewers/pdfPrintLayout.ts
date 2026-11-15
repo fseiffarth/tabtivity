@@ -18,7 +18,21 @@
 // each page is fitted into its own cell by the same rules — the page number
 // band, the scale cap and the centring are per cell.
 
-import { PDFDocument, StandardFonts, degrees, rgb, type PDFEmbeddedPage } from "pdf-lib";
+import {
+  PDFDocument,
+  PDFName,
+  StandardFonts,
+  degrees,
+  fill,
+  popGraphicsState,
+  pushGraphicsState,
+  rectangle,
+  rgb,
+  setFillingRgbColor,
+  setGraphicsState,
+  type PDFEmbeddedPage,
+  type PDFPage,
+} from "pdf-lib";
 import { MARGIN_CM, clampCopies, clampScale, pageBoxCm, type PrintOptions } from "./print";
 import {
   GUTTER_CM,
@@ -33,6 +47,27 @@ const PT_PER_CM = 72 / 2.54;
 /** The preview's page-number band and font: 16 px and 10 px, in points. */
 const NUMBER_BAND_PT = 12;
 const NUMBER_SIZE_PT = 7.5;
+
+/** Make everything drawn on `page` so far gray: a full-sheet neutral rectangle
+ *  in the `Saturation` blend mode on top, the sheet an RGB transparency group
+ *  (see `layoutPrintPdf`). */
+function desaturate(doc: PDFDocument, page: PDFPage, w: number, h: number): void {
+  page.node.set(
+    PDFName.of("Group"),
+    doc.context.obj({ Type: "Group", S: "Transparency", CS: "DeviceRGB" }),
+  );
+  // pdf-lib's `BlendMode` lists the separable modes only, so the graphics
+  // state is written by hand.
+  const gs = page.node.newExtGState("GS", doc.context.obj({ Type: "ExtGState", BM: "Saturation" }));
+  page.pushOperators(
+    pushGraphicsState(),
+    setGraphicsState(gs),
+    setFillingRgbColor(0.5, 0.5, 0.5),
+    rectangle(0, 0, w, h),
+    fill(),
+    popGraphicsState(),
+  );
+}
 
 /** One printed sheet: a 1-based page of the source PDF, and the turn the
  *  preview's strip added to it (clockwise degrees, a multiple of 90). */
@@ -68,11 +103,20 @@ export function turnedOrigin(
  * Lay `sheets` (print order, the preview's `printSequence`) out of `bytes` onto
  * paper as `opts` sets it — one page per sheet, several to a sheet, or a booklet
  * — `opts.copies` times collated: the document the preview shows, as a PDF.
+ *
+ * `bakeGrayscale`: where the system print dialog cannot be preset to print
+ * without colour (`nativePresets`, Windows and macOS), a grayscale job is made
+ * gray in the PDF itself: every sheet ends in one full-page rectangle of a
+ * neutral gray in the `Saturation` blend mode, which keeps what lies beneath
+ * it with its own lightness and no saturation — text and vector art stay
+ * vector. The sheet is an RGB transparency group, the space that blend mode is
+ * defined in.
  */
 export async function layoutPrintPdf(
   bytes: Uint8Array,
   sheets: readonly PrintSheet[],
   opts: PrintOptions,
+  { bakeGrayscale = false }: { bakeGrayscale?: boolean } = {},
 ): Promise<Uint8Array> {
   const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
   const out = await PDFDocument.create();
@@ -154,6 +198,7 @@ export async function layoutPrintPdf(
           });
         }
       }
+      if (bakeGrayscale && opts.grayscale) desaturate(out, page, paperW, paperH);
     }
     // Two-sided: a copy with an odd number of sides would hand its last sheet's
     // back to the next copy's first page. A blank side keeps every copy whole.

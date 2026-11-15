@@ -8185,6 +8185,8 @@ export const dict: Dict = {
   "print.duplexShort": "Petit côté",
   "print.duplexHint": "Prérégler dans le dialogue d'impression du système. Le grand côté retourne la feuille comme un livre, le petit côté comme un bloc-notes ; un livret exige le petit côté.",
   "print.duplexNoNativeHint": "Le recto verso se règle dans le dialogue d'impression — ce document s'imprime par le dialogue propre à l'aperçu, qui n'accepte pas ce réglage.",
+  "print.duplexNotPresetHint": "Le recto verso se règle dans le dialogue d'impression du système : sur ce système, {app} ne peut pas le prérégler.",
+  "print.paperNotPresetHint": "Les pages sont disposées sur ce papier. Choisissez le même papier dans le dialogue d'impression du système : sur ce système, {app} ne peut pas le prérégler.",
   "print.stripHint": "Glisser pour réordonner · maj-clic pour une plage · ⟳ tourne une page · ✕ la retire",
   "print.resetPages": "Réinitialiser les pages",
   "print.noPagesHint": "Ce document n'a pas de pages fixes — utilisez la plage de pages du dialogue d'impression du système.",

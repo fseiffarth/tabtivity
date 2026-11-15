@@ -492,6 +492,7 @@ export const UNTESTED = {
   "print.layoutNup": { area: "lib", what: "print · Pages per sheet (2/4/6/9/16-up) in the print preview and the PDF sent to the printer" },
   "print.booklet": { area: "lib", what: "print · Booklet imposition (saddle-stitch, two per landscape side, short-edge duplex) in the print preview and the PDF sent to the printer" },
   "print.duplex": { area: "lib", what: "print · Two-sided control: preset in the native print dialog (Linux GTK; Windows/macOS leave it to the system dialog)" },
+  "print.grayscaleBaked": { area: "lib", what: "print · Windows/macOS: Grayscale prints gray (baked into the PDF, text still sharp); Two-sided is disabled with a hint to set it in the system dialog; the Paper field says to pick the same paper there; an approved agent print_request that asked for two-sided reports notApplied: duplex in print_status" },
   "print.queueProgress": { area: "lib", what: "print · Print queue progress strip" },
   "shortcut.toggleSidePanel": { area: "shell", what: "shortcuts · Ctrl+B / ⌘B toggles the side panel (never from a terminal; Alt+1 works there)" },
   "fixedKeys.osFullscreen.label": { area: "lib", what: "shortcuts · F11 and the window-controls fullscreen button: real fullscreen for the main window and every popout (Windows too, no longer maximize); a popout's stray-fullscreen guard leaves it alone" },
