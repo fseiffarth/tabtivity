@@ -10,6 +10,25 @@ import { CloseIcon } from "../common/icons/Icon";
 
 const DEFAULT_PORT = 8742;
 
+// Where each step's Tailscale part is done. Store pages, not a generic search,
+// so the phone link lands on the real app.
+const TAILSCALE_ABOUT_URL = "https://tailscale.com/kb/1151/what-is-tailscale";
+const TAILSCALE_DOWNLOAD_URL = "https://tailscale.com/download";
+const TAILSCALE_APP_STORE_URL = "https://apps.apple.com/app/tailscale/id1470499037";
+const TAILSCALE_PLAY_URL = "https://play.google.com/store/apps/details?id=com.tailscale.ipn";
+const TAILSCALE_MACHINES_URL = "https://login.tailscale.com/admin/machines";
+const TAILSCALE_SERVE_DOCS_URL = "https://tailscale.com/docs/features/tailscale-serve";
+
+function ExternalLinks({ links }: { links: Array<[string, string]> }) {
+  return (
+    <div className="settings-link-row">
+      {links.map(([href, label]) => (
+        <a key={href} href={href} target="_blank" rel="noreferrer">{label} ↗</a>
+      ))}
+    </div>
+  );
+}
+
 /**
  * The setup instruction behind the header's phone icon while Tabtivity Mobile is
  * off — the one door into Mobile for someone who has never used it.
@@ -81,7 +100,9 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
             ><CloseIcon /></button>
           </div>
           <div className="dialog-scroll">
-            <p className="settings-help">{t("mobile.setupIntro")}</p>
+            <p className="settings-help">{t("mobile.setupIntro")} <UntestedTag id="mobile.setupLinks" /></p>
+            <p className="settings-help">{t("mobile.setupAboutTailscale")}</p>
+            <ExternalLinks links={[[TAILSCALE_ABOUT_URL, t("mobile.setupLinkAbout")]]} />
 
             <ol className="how-to-start-steps">
               <li className="how-to-start-step">
@@ -89,6 +110,7 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
                 <div>
                   <div className="how-to-start-step-title">{t("mobile.setupStep1Title")}</div>
                   <div className="settings-help">{t("mobile.setupStep1Body")}</div>
+                  <ExternalLinks links={[[TAILSCALE_DOWNLOAD_URL, t("mobile.setupLinkDownload")]]} />
                 </div>
               </li>
               <li className="how-to-start-step">
@@ -96,6 +118,12 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
                 <div>
                   <div className="how-to-start-step-title">{t("mobile.setupStep2Title")}</div>
                   <div className="settings-help">{t("mobile.setupStep2Body")}</div>
+                  <ExternalLinks links={[
+                    [TAILSCALE_APP_STORE_URL, t("mobile.setupLinkAppStore")],
+                    [TAILSCALE_PLAY_URL, t("mobile.setupLinkPlay")],
+                  ]} />
+                  <div className="settings-help">{t("mobile.setupStep2Check")}</div>
+                  <ExternalLinks links={[[TAILSCALE_MACHINES_URL, t("mobile.setupLinkMachines")]]} />
                 </div>
               </li>
               <li className="how-to-start-step">
@@ -143,8 +171,8 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
             <p className="settings-help">{t("mobile.guideOutro")}</p>
 
             <div className="settings-link-row">
-              <a href="https://tailscale.com/docs/features/tailscale-serve" target="_blank" rel="noreferrer">
-                {t("mobile.serveDocs")}
+              <a href={TAILSCALE_SERVE_DOCS_URL} target="_blank" rel="noreferrer">
+                {t("mobile.serveDocs")} ↗
               </a>
               <button type="button" className="how-to-start-got-it" onClick={onClose}>
                 {t("common.close")}

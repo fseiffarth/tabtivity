@@ -2304,6 +2304,13 @@ export const enSource = {
   "mobile.setupStep6Title": "Pair the phone",
   "mobile.setupStep6Body": "Press “Show install QR” and scan it with the phone, then create a pairing code and enter it there. A code is valid for five minutes.",
   "mobile.setupOpenSettings": "Open Mobile settings",
+  "mobile.setupAboutTailscale": "Tailscale is a private network (a “tailnet”) between your own devices, signed in with one account. It is free for personal use; {app} needs nothing else from it.",
+  "mobile.setupLinkAbout": "What is Tailscale?",
+  "mobile.setupLinkDownload": "Download Tailscale",
+  "mobile.setupLinkAppStore": "App Store (iPhone, iPad)",
+  "mobile.setupLinkPlay": "Google Play (Android)",
+  "mobile.setupStep2Check": "Both devices should then appear in your tailnet's machine list.",
+  "mobile.setupLinkMachines": "Open your Tailscale machines",
 
   // Settings — usage stats.
   "settings.usageStats": "Usage stats",
