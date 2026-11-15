@@ -1204,14 +1204,19 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
         and `launchctl print gui/$(id -u)/<the host's label>` (look for
         `last exit code`/`Code Signature Invalid`); see the handoff doc.
     - [x] **2442w — Seatbelt rules use un-canonicalised roots** *(likely)*.
-      Done 2026-11-15 with 2442n: `add_canonical_spellings` records each
-      path's `canonicalize` (or `/var`·`/tmp`·`/etc` → `/private/…` for a path
-      not there yet) and every rule is rendered under both spellings.
-      ⚠️ never run on a Mac.
+      Done 2026-11-15 with 2442n: `add_canonical_spellings` resolves each path
+      link by link (`resolve_spelling`; `/var`·`/tmp`·`/etc` → `/private/…`)
+      and every rule is rendered under both spellings. Review, same day: an
+      **allow** follows no link at or inside a path the agent may write (it
+      could have left the link there), so a project *below* a symlinked folder
+      works, and one whose folder is itself a symlink still gets no write
+      access (open: the handoff's Review). ⚠️ never run on a Mac.
       - [x] 🤖 Automated test — `every_rule_is_rendered_under_the_resolved_spelling_too`,
-        `canonical_spellings_follow_a_real_symlink`
-      - [ ] 🖐️ Manual test — Mac project reached through a symlinked folder:
-        a fenced agent can write a file in it
+        `canonical_spellings_follow_a_real_symlink`,
+        `an_allow_rule_never_follows_a_link_the_agent_could_have_planted`
+      - [ ] 🖐️ Manual test — Mac project below a symlinked folder (`~/work` →
+        another volume, project `~/work/app`): a fenced agent can write a file
+        in it
         - [ ] ✅ Works on Linux (X11)
         - [ ] ❌ Doesn't work on Linux (X11)
         - [ ] ✅ Works on Linux (Wayland)

@@ -302,3 +302,202 @@ Check on a Mac (Apple silicon, Homebrew absent, CLT absent is ideal):
    `codesign --verify --strict --verbose=4 "<control_dir>/bin/<version>/<binary>"`
    and `launchctl print gui/$(id -u)/<host label>` — `Code Signature Invalid`
    or a SIGKILL exit there means the plist must point into the bundle.
+
+## Review
+
+Reviewer pass over `66aff02e9..9b51d7461`, 2026-11-15. Nothing here ran on a
+Mac either. Sources checked for the Seatbelt questions: Codex's
+`codex-rs/sandboxing/src/seatbelt.rs`, Anthropic's `sandbox-runtime`
+(`src/sandbox/macos-sandbox-utils.ts`), XNU's `bsd/kern/uipc_usrreq.c`.
+
+### Per commit
+
+| sha | items | verdict |
+|---|---|---|
+| `2524d9a93` | 2442n, 2442w | **fixed** (three commits below) + flagged |
+| `7ff4d7674` | 2442o | **fixed** (hand-off helper) + flagged |
+| `70dd97117` | 2442q | ok — the step only copies (`copy_webview_data` keeps the old folder, never overwrites one under the current identifier); `%LOCALAPPDATA%\<identifier>` is Tauri's folder (WebView2's `EBWebView`), not the app's state dir (`%APPDATA%\<state dir>`); a symlink inside it would leave the step pending on Windows (`copy_link`), which is harmless |
+| `075b5173a` | 2442y, 2442z | ok |
+| `caa49cc2a` | 2442x | **fixed** (lesson Ctrl+C) + flagged (layouts) |
+| `7445a4957` | 2442r/s/t | ok + flagged (fish, Linux re-probe) |
+| `9b51d7461` | docs, todo | ok (2442w's todo line amended with the review's limit) |
+
+### Fixes (on top of `9b51d7461`)
+
+1. `91ecdfb1d` — **an allow rule followed a link the agent can plant**
+   (2442w). State: a fenced agent renames its root (or its scope home) away
+   — Seatbelt's `subpath` covers the folder itself, and `/private/tmp` is on
+   the same volume — and leaves a symlink to the user's home there. Outcome
+   at the next start in that scope: `canonicalize` gave the home, and the
+   profile held `(allow file-read* (subpath "<home>"))` and
+   `(allow file-write* …)`; for the scope home the allow came after every
+   hidden denial. Linux has no twin (a root is a mount point). Now paths
+   resolve link by link (`resolve_spelling`) and an allow gets the resolved
+   spelling only when no link sits at or inside a path the agent may write
+   (`SeatbeltInputs::planted`); denials follow every link. Tests:
+   `an_allow_rule_never_follows_a_link_the_agent_could_have_planted`,
+   `canonical_spellings_follow_a_real_symlink` (leaf case).
+   **Cost:** a project whose folder is *itself* a symlink gets no write
+   access on a Mac, as before 2442w; a project below a link works.
+   Follow-up `6a47c5646`: the system's own `/tmp`, `/var`, `/etc` links (in
+   `/`, which nobody writes) are followed whatever is granted below them —
+   without it, `TMPDIR=/tmp` in the app's environment left the private temp
+   dir allowed only under a spelling Seatbelt never matches.
+2. `588655680` — **fenced tools could not `lstat` the folders above what
+   they are shown** (2442n). State: `TMPDIR` is now inside the user's hidden
+   `$TMPDIR`; a project sits at `~/code/app`. Outcome: `realpath "$TMPDIR"`
+   (jest, the `temp-dir` package) and git's work-tree resolution fail with
+   EPERM on the first hidden folder (sandbox-runtime's source allows
+   directory metadata for exactly this reason). The `$TMPDIR` half is a
+   regression of 2442n; the nested-project half is older and was never
+   exercised (CI's fixture puts the root directly in the home). Now
+   `(allow file-read-metadata (literal …))` for the folders between a hidden
+   region and something shown inside it (`stat_only_dirs`). Tests:
+   `the_folders_above_what_is_shown_answer_lstat_and_nothing_else`,
+   `real::the_folders_above_a_root_and_the_private_tmp_answer_stat_only`
+   (macOS CI: `stat`, `git init` in a nested root, and `ls`/`cat` of the
+   folder in between still refused).
+3. `868cec760` — **Docker socket rule: `subpath` instead of `literal`**
+   (2442n). *Not a confirmed bug.* `(remote unix-socket (literal …))` appears
+   in no shipped profile found; Codex and sandbox-runtime use `subpath`
+   there. The probe does not carry the socket rules, so a parse error would
+   start no agent on any Mac. Same meaning, the form the other socket rules
+   already use; drop the commit if unwanted. Test:
+   `no_socket_in_the_shared_temps_home_or_docker_is_reachable_but_the_scopes_own_are`
+   (every `unix-socket` rule is `subpath`).
+4. `e7d2f4a16` — **`open -a` to a running Electron/Chromium app adopted its
+   new helper** (2442o). State: VS Code is running; the Apps view opens it
+   for a project. Outcome: the renderer the running instance starts within
+   the watcher's 3 s poll lies in `<bundle>/Contents/Frameworks/…` and
+   started after the launch, so the row became `KeepFamily` led by that
+   helper, and Close signalled it. Now a family counts only when the app's
+   own executable (directly in `Contents/MacOS`) started since the launch.
+   Test: `a_bundle_launch_family_is_the_bundles_new_processes` (hand-off
+   case).
+5. `72558bf71` — **the Windows cross-check's clippy failed on the fence
+   commit** (2442n). `seatbelt_argv` and `SEATBELT_ENV_STEP` were built for
+   every test run, but only the macOS wrapper and a `cfg(unix)` test use
+   them: `cargo clippy --target x86_64-pc-windows-msvc --all-targets -D
+   warnings` stopped with "never used" on both. Gated like their users. The
+   check is `ci-local.sh`'s `windows-clippy` step (CI's own Windows clippy
+   is still `continue-on-error`, 2442ab).
+6. `5b6e07548` — **the Run Python lesson said "input(), ⌘+C" on a Mac**
+   (2442x). `TourHost` put every lesson body through `forPlatformKeys`;
+   Ctrl+C there is the interrupt the program reads. `TourStep.terminalKeys`
+   + `stepBody`. Test: `MacKeyboard.test.ts` "keeps a terminal's own Ctrl+C
+   in a lesson body".
+
+### Premises, confirmed or not
+
+- **Socket rules and relative paths / symlinks — settled.** XNU's
+  `unp_connect` looks the address up (`namei`, `FOLLOW`) and hands the MAC
+  hook the resulting vnode (`mac_vnode_check_uipc_connect(ctx, vp, so)`);
+  `unp_bind` hands it the resolved parent and the name. The sandbox judges
+  the socket found, not the string the client passed.
+- **`(remote|local unix-socket (subpath …))` parses** — the exact form in
+  Codex's `seatbelt.rs` and in sandbox-runtime.
+- **`lsopen` / `appleevent-send` are real operations** (sandbox-runtime:
+  `(allow lsopen)`, `(allow appleevent-send)`, with the comment that `open`
+  fails with -10822 / -54 without `lsopen` under deny-default). That a
+  *deny* under `(allow default)` stops `open` is still the CI test's to
+  show (`real::open_and_apple_events_start_nothing_outside_the_sandbox`).
+- sandbox-runtime notes that a specific `(deny file-write-unlink)` is not
+  overridden by a later `(allow file-write*)`. This profile never relies on
+  the opposite: it overrides wildcard with wildcard, an operation with the
+  same operation, and a wildcard deny with a later specific allow
+  (`file-read-metadata`, which the real tests exercise).
+- Still unconfirmed: WKWebView's `~/Library/WebKit/<bundle id>`,
+  `launchctl submit`, Cursor's `AGENT_CLI_CREDENTIAL_STORE`.
+
+### Gates and cross-checks
+
+The review was cut short by the session's usage limit: **no full gate run
+and no macOS cross-check finished on the final tree.** What ran:
+
+- `cargo test -p tabtivity --lib -- agent_fence commands::apps` (Linux):
+  133 passed, on the tree before the last two fence commits; `agent_fence`
+  alone (60 passed) after `6a47c5646`. `72558bf71` after it only changes two
+  `cfg` attributes and was not test-run on Linux.
+- `npx vitest run src/__tests__/shell/MacKeyboard.test.ts`: 5 passed.
+- `scripts/gates.sh --base 9b51d7461` on the final sources: brand,
+  whitespace, lint-fe, clippy (workspace, all targets) and clippy-dlib
+  **passed**; the run was stopped in clippy-dmn, so `npm run build`, vitest
+  `--changed` and both `cargo test` gates did **not** run.
+- `scripts/ci-local.sh --from windows-clippy` (`CARGO_HOME` =
+  `target/wt-parity/cargo-home-mac`, `CARGO_TARGET_DIR` =
+  `target/wt-parity-mac`): **fails**, now with one error that is on BASE
+  and not this run's — `unused import: git` in
+  `src-tauri/src/services/checkpoints/tests.rs:12` (Windows test build).
+  Before `72558bf71` it also failed on the fence commit's two dead-code
+  errors. `windows-check` and `macos-check` were queued behind the gate run
+  and **did not run**: the `cfg(target_os = "macos")` code of the fix
+  commits, the new `real::` test included, has not been type-checked.
+
+Owed before this branch moves: `scripts/gates.sh --base abe62d19c`, then
+`scripts/ci-local.sh --from windows-check` with the two variables above.
+
+Not reviewed: the docs wording of `threat_model.md` and
+`agent_fence_cross_os_plan.md` beyond the diff, and the todo block beyond
+2442w's line. Every code commit in the range was read.
+
+### Flagged for user (complete list)
+
+Decisions carried over from the implementer, all still open:
+
+1. Deny-default Seatbelt (§5) or `(allow default)` + targeted denials. Mach
+   services stay open.
+2. `launchctl submit` / `bootstrap` (check 3 in the list above).
+3. 2442p: attribute-only Keychain lookup for a Claude login (32z).
+4. Homebrew rsync 3 vs the root-owned-helper rule (#861).
+5. macOS git: `/usr/bin/git` stub preferred over a Homebrew git; only the
+   availability probe is guarded.
+6. Native menu titles (Rust-built, English).
+
+New from the review:
+
+7. **A project whose folder is itself a symlink** gets no write access on a
+   Mac (fix 1). To support it the profile has to stop the agent from
+   replacing its root: `(deny file-write-unlink file-write-create (literal
+   "<root>"))` for the roots, the writable dirs and the scope home
+   (sandbox-runtime's "move blocking"), then follow the leaf link. Needs a
+   Mac to verify, and makes `chmod`/rename of the root fail for tools.
+8. **The scope home can be swapped for a symlink on a Mac** (older than this
+   run, not fixed). `agent_home::create_private_dir` accepts a home that is
+   a link (`is_dir` follows it), so `prepare_scope_home` — outside the
+   sandbox — seeds, lays the `agent-global` layer and copies the shared
+   logins through it into whatever folder the agent chose. With fix 1 the
+   agent can no longer read or write that folder, but the app writes its
+   fixed file names there. Wanted: refuse a scope home that is not a plain
+   directory, on every OS.
+9. **`user-preference-write`**: under `(allow default)` a fenced
+   `defaults write` probably still reaches `cfprefsd`, which writes
+   `~/Library/Preferences/*.plist` for the caller — another app's settings
+   (Terminal's startup command) from inside the fence. Candidate rule
+   `(deny user-preference-write)`; unverified, part of decision 1.
+10. **Tools that ask the system for the temp dir instead of `$TMPDIR`**
+    (`confstr(_CS_DARWIN_USER_TEMP_DIR)`: Foundation's
+    `NSTemporaryDirectory`, so `swift build`, `xcodebuild`) get the hidden
+    dir. Check on a Mac: `swift build` in a fenced tab.
+11. A symlink *on the way* to a shown path (not the leaf): `realpath` reads
+    the link itself (`readlink`, `file-read-data`), which fix 2 does not
+    allow — the kernel resolves it, so opens work, but a tool that resolves
+    by hand may fail. Mac check with a project below a linked folder.
+12. Other root daemons' sockets in `/var/run` (`usbmuxd`, `cupsd`, `pcscd`)
+    stay reachable; Linux's private `/run` hides them.
+13. **2442o:** pid-0 rows still have no liveness (implementer's note). An
+    app run from a translocated or cryptex path (`Safari.app`) does not
+    match its bundle path and keeps the old behaviour. A hand-off now waits
+    the full 3 s poll before the row is demoted.
+14. **2442x:** an ⌥+letter chord matches the physical key (`e.code`), which
+    is the labelled letter only on QWERTY: on QWERTZ ⌥Z is `KeyY`, on AZERTY
+    ⌥Q is `KeyA`. Needs a layout map or a decision to accept it.
+    `hint.fileTreeBody` is not routed through `forPlatformKeys`.
+15. **2442t:** `withHomebrew` / `with_homebrew` use `{ …; }` grouping, which
+    zsh and bash run and fish does not; a user whose tab shell is fish gets
+    a syntax error from the install buttons.
+16. **2442r changes Linux too:** a tmux installed while the app runs is
+    noticed within 30 s on every unix (before: at the next start). Wanted by
+    the item; named here because it is a Linux behaviour change.
+17. German `mobile.setupNoTmux` says "Ihre Tabs" where the dictionary says
+    "du" elsewhere; `platform/macos.rs` has `list_window_ids`' doc comment
+    sitting on `named_windows` now. Wording only, not touched.
