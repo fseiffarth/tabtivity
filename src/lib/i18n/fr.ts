@@ -10183,6 +10183,7 @@ export const dict: Dict = {
   "sysmon.processCountMany": "{count} processus",
   "sysmon.filterPlaceholder": "Filtrer par nom, commande ou PID…",
   "sysmon.commandCol": "Commande",
+  "sysmon.unreadableTitle": "Windows ne laisse pas {app} lire l'utilisation de ce processus (un processus protégé ou élevé).",
   "sysmon.thisMachineLower": "cette machine",
   "sysmon.theHost": "l'hôte",
   "howToStart.step1Title": "Utilisez le terminal racine",

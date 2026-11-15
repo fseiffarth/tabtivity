@@ -10568,6 +10568,7 @@ export const enSource = {
   "sysmon.processCountMany": "{count} processes",
   "sysmon.filterPlaceholder": "Filter by name, command, or PID…",
   "sysmon.commandCol": "Command",
+  "sysmon.unreadableTitle": "Windows does not let {app} read this process's usage (a protected or elevated process).",
   "sysmon.thisMachineLower": "this machine",
   "sysmon.theHost": "the host",
   "howToStart.step1Title": "Use the root terminal",

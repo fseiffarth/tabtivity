@@ -35,8 +35,27 @@ pub struct TexCapability {
     pub engines: Vec<String>,
     /// Whether `bibtex` is on `PATH` (used for bibliography passes).
     pub bibtex: bool,
-    /// Whether `latexmk` is on `PATH` (preferred build driver).
+    /// Whether `latexmk` is on `PATH` (preferred build driver) and can run.
     pub latexmk: bool,
+    /// A `latexmk` was found but cannot run: MiKTeX's, with no Perl on
+    /// `PATH` (MiKTeX ships none). Builds then drive the engine directly and
+    /// say why ([`MIKTEX_PERL_NOTE`]).
+    #[serde(skip)]
+    pub latexmk_needs_perl: bool,
+}
+
+/// What a build driven without latexmk because MiKTeX's needs Perl says.
+const MIKTEX_PERL_NOTE: &str = "MiKTeX's latexmk needs Perl, which is not installed (MiKTeX ships none), so this was built by running the engine directly. Install Perl (Strawberry Perl, for one) to build with latexmk.";
+
+/// Whether the `latexmk` found at `latexmk` is MiKTeX's on Windows with no
+/// Perl to run it: MiKTeX's `latexmk.exe` is a launcher for the Perl script
+/// and fails with "could not find the script engine 'perl'" without one.
+/// TeX Live's runs on the Perl it bundles. Pure; `perl_on_path` is asked
+/// only for MiKTeX's.
+fn latexmk_needs_missing_perl(windows: bool, latexmk: Option<&Path>, perl_on_path: impl FnOnce() -> bool) -> bool {
+    windows
+        && latexmk.is_some_and(|p| p.to_string_lossy().to_ascii_lowercase().contains("miktex"))
+        && !perl_on_path()
 }
 
 /// Outcome of a `compile_tex` run.
@@ -77,11 +96,15 @@ pub fn detect_capability() -> TexCapability {
         .filter(|e| on_path(e))
         .map(|e| e.to_string())
         .collect();
-    let latexmk = on_path("latexmk");
+    let found = on_path("latexmk");
+    let latexmk_needs_perl = found
+        && latexmk_needs_missing_perl(cfg!(windows), crate::paths::resolve_executable("latexmk").as_deref(), || on_path("perl"));
+    let latexmk = found && !latexmk_needs_perl;
     TexCapability {
         available: latexmk || !engines.is_empty(),
         bibtex: on_path("bibtex"),
         latexmk,
+        latexmk_needs_perl,
         engines,
     }
 }
@@ -1443,8 +1466,9 @@ fn compile_tex_blocking(
         shell_escape: log_shows_shell_escape(&log),
         log: tail(&log),
         // Nothing to explain: there is no driver between Tabtivity and the engine,
-        // so a failure here is the engine's own and the log already says it.
-        driver_note: None,
+        // so a failure here is the engine's own and the log already says it —
+        // except why latexmk was passed over, when it was (2442m).
+        driver_note: cap.latexmk_needs_perl.then(|| MIKTEX_PERL_NOTE.to_string()),
     })
 }
 
@@ -2088,7 +2112,11 @@ fn font_dirs() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "macos")]
     out.push(home.join("Library/Fonts"));
     #[cfg(target_os = "windows")]
-    out.push(home.join("AppData/Local/Microsoft/Windows/Fonts"));
+    out.extend(windows_font_dirs(
+        &home,
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+        std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).as_deref(),
+    ));
     let _ = &home;
     #[cfg(target_os = "linux")]
     {
@@ -2100,9 +2128,28 @@ fn font_dirs() -> Vec<std::path::PathBuf> {
         out.push("/Library/Fonts".into());
         out.push("/System/Library/Fonts".into());
     }
-    #[cfg(target_os = "windows")]
-    out.push("C:\\Windows\\Fonts".into());
     out
+}
+
+/// Windows' font folders, the user's first: `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
+/// (under the profile when the variable is unset) and `%WINDIR%\Fonts` — not a
+/// `C:\Windows` literal, which misses a Windows installed on another drive
+/// (2442m). Pure, so every OS runs its test.
+#[cfg(any(target_os = "windows", test))]
+fn windows_font_dirs(
+    home: &Path,
+    local_appdata: Option<&std::ffi::OsStr>,
+    windir: Option<&std::ffi::OsStr>,
+) -> Vec<std::path::PathBuf> {
+    let local = local_appdata
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Local"));
+    let windir = windir
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"));
+    vec![local.join("Microsoft").join("Windows").join("Fonts"), windir.join("Fonts")]
 }
 
 /// Turn a font file's stem into something a picker can show: `LiberationSerif-BoldItalic`

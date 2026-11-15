@@ -979,6 +979,34 @@ fn resolve_tex_root_prefers_magic_comment() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// 2442m: MiKTeX's latexmk without Perl is passed over (the build drives the
+/// engine and says why); TeX Live's, or MiKTeX's with Perl, is used.
+#[test]
+fn miktex_latexmk_without_perl_is_passed_over() {
+    let miktex = Path::new(r"C:\Program Files\MiKTeX\miktex\bin\x64\latexmk.exe");
+    let texlive = Path::new(r"C:\texlive\2025\bin\windows\latexmk.exe");
+    assert!(latexmk_needs_missing_perl(true, Some(miktex), || false));
+    assert!(!latexmk_needs_missing_perl(true, Some(miktex), || true), "Perl on PATH");
+    assert!(!latexmk_needs_missing_perl(true, Some(texlive), || panic!("not asked for TeX Live")));
+    assert!(!latexmk_needs_missing_perl(false, Some(miktex), || false), "Windows only");
+    assert!(!latexmk_needs_missing_perl(true, None, || false));
+    assert!(MIKTEX_PERL_NOTE.contains("Perl"));
+}
+
+/// 2442m: Windows' system fonts come from `%WINDIR%`, so a Windows on another
+/// drive is found; the user's folder from `%LOCALAPPDATA%`.
+#[test]
+fn windows_font_dirs_follow_windir_and_localappdata() {
+    use std::ffi::OsStr;
+    let home = Path::new("home");
+    let dirs = windows_font_dirs(home, Some(OsStr::new("L")), Some(OsStr::new("D:\\Win")));
+    assert_eq!(dirs[0], Path::new("L").join("Microsoft").join("Windows").join("Fonts"));
+    assert_eq!(dirs[1], Path::new("D:\\Win").join("Fonts"));
+    let fallback = windows_font_dirs(home, None, Some(OsStr::new("")));
+    assert_eq!(fallback[0], home.join("AppData").join("Local").join("Microsoft").join("Windows").join("Fonts"));
+    assert_eq!(fallback[1], Path::new(r"C:\Windows").join("Fonts"));
+}
+
 /// 2442i: every canonical path this module hands latexmk, a format build,
 /// the root map or the UI goes through `canonical`, which drops Windows'
 /// verbatim `\\?\` prefix; a bare `fs::canonicalize` would bring it back.

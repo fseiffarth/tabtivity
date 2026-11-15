@@ -10187,6 +10187,7 @@ export const dict: Dict = {
   "sysmon.processCountMany": "{count} Prozesse",
   "sysmon.filterPlaceholder": "Nach Name, Befehl oder PID filtern…",
   "sysmon.commandCol": "Befehl",
+  "sysmon.unreadableTitle": "Windows lässt {app} die Auslastung dieses Prozesses nicht lesen (ein geschützter oder erhöhter Prozess).",
   "sysmon.thisMachineLower": "diese Maschine",
   "sysmon.theHost": "der Host",
   "howToStart.step1Title": "Das Root-Terminal nutzen",
