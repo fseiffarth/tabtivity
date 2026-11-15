@@ -5,7 +5,7 @@ import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon,
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, getProjectDetail, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, getProjectDetail, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type ViewerScope } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, readFlag, writeChoice, writeFlag, type MobileFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -17,6 +17,8 @@ import { isAssistantScope, rememberScopeKind } from "../scopeKind";
 import { useProjectInbox } from "../components/ProjectInbox";
 import { PromptsSheet } from "./PromptsSheet";
 import { SubagentsSheet } from "./SubagentsSheet";
+import { TabFilesSheet } from "./TabFilesSheet";
+import type { SentFile } from "../components/SentFilesIndex";
 import { RenameSheet } from "./RenameSheet";
 import { ScheduleSheet } from "./ScheduleSheet";
 import { FileTabCard, TAB_ACTION_LABEL, TabCard, schedulesOffered, tabActions, type TabAction } from "../components/TabCard";
@@ -336,6 +338,11 @@ export function Project({ id, back, splitList, terminal }: {
   const [colorTab, setColorTab] = useState<TabRow | null>(null);
   /** The tab whose subagent pill was tapped: its subagents are listed. */
   const [subagentsTab, setSubagentsTab] = useState<TabRow | null>(null);
+  /** The tab whose ⋯ Files row was picked: its conversation's files are listed. */
+  const [filesTab, setFilesTab] = useState<TabRow | null>(null);
+  /** A file of that list, open full screen over it; closing it comes back to
+   * the list. `place`/`folder`: a project file's, for Mark up's card. */
+  const [chatFile, setChatFile] = useState<{ file: OutboxFile; scope: ViewerScope; place?: string; folder?: string } | null>(null);
   /** The tab whose ⋯ sheet is up: rename, colour, schedules, subagents and
    *  close, the actions a card no longer spends its own width on. */
   const [moreTab, setMoreTab] = useState<TabRow | null>(null);
@@ -688,7 +695,19 @@ export function Project({ id, back, splitList, terminal }: {
     else if (action === "color") setColorTab(tab);
     else if (action === "schedule") setScheduleTab({ tab });
     else if (action === "subagents") setSubagentsTab(tab);
+    else if (action === "files") setFilesTab(tab);
     else void close(tab);
+  };
+  /** A file of a tab's Files sheet, in the viewer of its side, as its chat
+   *  opens it: what the agent sent from its outbox, what the phone sent from
+   *  the tab's inbox, a project file it changed or named from the library. */
+  const openChatFile = (tab: TabRow, { file, from }: SentFile) => {
+    if (from === "agent") setChatFile({ file, scope: { tab: tab.id } });
+    else if (from === "phone") setChatFile({ file, scope: { inbox: tab.id } });
+    else if (file.file_row) {
+      const row = file.file_row;
+      setChatFile({ file: { name: row.name, kind: row.kind, size: row.size, modified: row.modified, ref: row.token }, scope: filesScope, place: row.place, folder: row.folder });
+    }
   };
   /** Opening a finished tab is reading what it finished: Home's Needs you
    *  stops listing it (`seenDone.ts`). */
@@ -968,6 +987,7 @@ export function Project({ id, back, splitList, terminal }: {
       onPick={(kind, agent, mode, launch) => { setNewTabOpen(false); void create(kind, agent, mode, launch); }}
       onSendFile={() => { projectInbox.open(); setNewTabOpen(false); }}
     />}
+    {filesTab && !chatFile && <TabFilesSheet tab={filesTab} project={filesOffered ? id : undefined} onClose={() => setFilesTab(null)} onOpen={(row) => openChatFile(filesTab, row)} />}
     {subagentsTab && <SubagentsSheet tab={subagentsTab} onClose={() => setSubagentsTab(null)} onOpen={(step) => { const row = subagentsTab; setSubagentsTab(null); terminal(row, { subagent: step }); }} />}
     {/* A send-now is a one-time schedule: with no window, not to a tab on
         the remote host (`schedulesOffered`). */}
@@ -1015,6 +1035,8 @@ export function Project({ id, back, splitList, terminal }: {
       startMarking={fileTabOpen.kind.startsWith("image/")}
       newTab={markupNewTab && (fileTabOpen.from === "outbox" ? markupNewTab
         : { ...markupNewTab, place: fileTabOpen.place, folder: fileTabOpen.folder, refresh: refreshFileTabRow })} />}
+    {chatFile && <OutboxViewer key={`chat/${chatFile.file.ref ?? chatFile.file.name}`} scope={chatFile.scope} file={chatFile.file} onClose={() => setChatFile(null)}
+      newTab={"inbox" in chatFile.scope ? undefined : markupNewTab && { ...markupNewTab, place: chatFile.place, folder: chatFile.folder }} />}
     {fileOpen && <OutboxViewer key={`${id}/${fileOpen.name}`} scope={outboxScope} file={fileOpen} pictures={outboxPictures} onStep={setFileOpen} onClose={() => setFileOpen(null)}
       newTab={markupNewTab} />}
   </main>;

@@ -223,7 +223,7 @@ export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOf
 /** The ⋯ sheet's rows for one tab. Their names differ from the card's own
  * buttons ("Rename", not "Rename claude 2"), so each control on the screen
  * keeps one accessible name. */
-export type TabAction = "rename" | "color" | "schedule" | "subagents" | "close";
+export type TabAction = "rename" | "color" | "schedule" | "subagents" | "files" | "close";
 
 /** Whether a tab's schedules are offered: the host has tmux (`terminals`),
  * and a tab on the remote host only while a desktop window is open — with
@@ -240,6 +240,9 @@ export function tabActions(tab: TabRow, schedules: boolean): TabAction[] {
     "color" as const,
     ...(agent && schedules ? ["schedule" as const] : []),
     ...(agent && tab.available && (tab.agent_subagents ?? 0) > 0 ? ["subagents" as const] : []),
+    // The files its chat produced and got: a cloud session records none, and
+    // files cannot reach a tab on the remote host.
+    ...(agent && !tab.cloud && !tab.on_host ? ["files" as const] : []),
     "close" as const,
   ];
 }
@@ -249,6 +252,7 @@ export const TAB_ACTION_LABEL: Record<TabAction, TranslationKey> = {
   color: "mobile.project.colorRow",
   schedule: "agentPrompts.scheduledHeading",
   subagents: "mobile.project.subagentsRow",
+  files: "mobile.project.filesRow",
   close: "mobile.project.closeRow",
 };
 
