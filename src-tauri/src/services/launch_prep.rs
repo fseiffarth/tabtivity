@@ -728,6 +728,15 @@ fn push_fence_scope(
     }
 }
 
+/// Whether a Pusher binding records that its tab runs unfenced on a
+/// fence-less platform the user accepted (Windows; 2442g): only a local agent
+/// whose decision is the "platform" one. Not the Host session (it gets no
+/// Pusher), not an ssh or docker wrap, whose agent sits behind a boundary of
+/// its own a host hook run would cross.
+fn push_unfenced_host(decision: &crate::services::agent_fence::FenceDecision, local_agent: bool) -> bool {
+    matches!(decision, crate::services::agent_fence::FenceDecision::NotApplicable { reason: "platform" }) && local_agent
+}
+
 /// Whether a local agent whose fence decision no explicit arm of [`prepare`]
 /// handled may still spawn (screen 2026-11-12 H1). Only a decision whose
 /// boundary really applied passes: "container" when the docker wrap ran,
@@ -1486,6 +1495,7 @@ pub async fn prepare(
         let local_agent = opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd);
         let scope_id = crate::services::agent_home::scope_of(opts.project_id.as_deref());
         let push_scope = push_fence_scope(&decision, local_agent, &scope_id);
+        let push_unfenced_host = push_unfenced_host(&decision, local_agent);
         match decision {
             crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => {
                 // The scope's Tabtivity-owned home (`services::agent_home`), the
@@ -1587,6 +1597,11 @@ pub async fn prepare(
         // failed returned already, so the scope is the tab's real fence.
         if let (Some(token), Some(scope)) = (push_token.as_deref(), push_scope.as_deref()) {
             crate::services::root_mcp::tokens().stamp_push_fence_scope(token, scope);
+        }
+        // No fence on this platform: the binding says so, and the preflight
+        // runs an approved hook on the host (2442g).
+        if let (Some(token), true) = (push_token.as_deref(), push_unfenced_host) {
+            crate::services::root_mcp::tokens().stamp_push_unfenced_host(token);
         }
     }
 
@@ -1973,6 +1988,19 @@ mod tests {
             FenceDecision::Unavailable,
         ] {
             assert_eq!(push_fence_scope(&decision, true, "p1"), None, "{decision:?}");
+        }
+        // 2442g: only the fence-less platform's accepted local agent may have
+        // its approved hook run on the host.
+        assert!(push_unfenced_host(&FenceDecision::NotApplicable { reason: "platform" }, true));
+        assert!(!push_unfenced_host(&FenceDecision::NotApplicable { reason: "platform" }, false), "ssh or docker");
+        for decision in [
+            fenced,
+            FenceDecision::NotApplicable { reason: HOST_SESSION_REASON },
+            FenceDecision::NotApplicable { reason: "container" },
+            FenceDecision::PlatformUnaccepted,
+            FenceDecision::Unavailable,
+        ] {
+            assert!(!push_unfenced_host(&decision, true), "{decision:?}");
         }
     }
 

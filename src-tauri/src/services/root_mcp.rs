@@ -186,6 +186,13 @@ pub struct PushBinding {
     /// runs the repo's `pre-push` hook inside this scope's fence, and refuses
     /// while it is `None` — never on the host (gap 18).
     pub fence_scope: Option<String>,
+    /// The tab is a local agent on a platform with no fence (Windows) that
+    /// the user accepted running with their rights, stamped by the spawn path
+    /// ([`TokenStore::stamp_push_unfenced_host`]). Its preflight runs the
+    /// repo's `pre-push` on the host, without the token, and only while
+    /// `exec_trust` holds the user's approval of the hook files (2442g): the
+    /// agent itself already runs on the host with the same rights.
+    pub unfenced_host: bool,
     /// The `.git` entry git discovery found from `dir` at spawn
     /// ([`git_push_mcp::git_entry_identity`](super::git_push_mcp::git_entry_identity)).
     /// Pushes, releases and CI reads refuse (`repo_changed`) when there was
@@ -240,6 +247,17 @@ impl TokenStore {
             .filter(|s| s.identity.caller == Caller::Pusher)
             .and_then(|s| s.identity.push.as_mut()) else { return false };
         binding.fence_scope = Some(scope.to_string());
+        true
+    }
+    /// Record on `token`'s Pusher binding that its tab runs unfenced on a
+    /// fence-less platform the user accepted ([`PushBinding::unfenced_host`]).
+    /// Same caller and timing as [`Self::stamp_push_fence_scope`].
+    pub fn stamp_push_unfenced_host(&self, token: &str) -> bool {
+        let mut map = self.map();
+        let Some(binding) = map.get_mut(token)
+            .filter(|s| s.identity.caller == Caller::Pusher)
+            .and_then(|s| s.identity.push.as_mut()) else { return false };
+        binding.unfenced_host = true;
         true
     }
     /// See [`register_token`].
@@ -1326,7 +1344,7 @@ pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     let Some(token) = mint_token() else { return };
     apply_git_push_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None }), endpoint: None, model: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None, unfenced_host: false }), endpoint: None, model: None }, false);
     }
 }
 

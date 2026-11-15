@@ -561,6 +561,23 @@ fn refusal_shell() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("sh"))
 }
 
+/// A command that runs the git hook `hook` as git itself would: directly
+/// where the OS honours its `#!` line, through Git for Windows' `sh.exe`
+/// (the shell git runs hooks with there) on Windows, where `CreateProcess`
+/// cannot start a script. The caller adds the hook's arguments.
+pub(crate) fn hook_command(hook: &Path) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = crate::paths::command_no_window(refusal_shell());
+        cmd.arg(hook);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        crate::paths::command_no_window(hook)
+    }
+}
+
 /// Where Git for Windows keeps `sh.exe` relative to a `git.exe` it ships —
 /// `<root>\cmd\git.exe`, `<root>\bin\git.exe` or
 /// `<root>\mingw64\bin\git.exe` — in lookup order. Pure.

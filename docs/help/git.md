@@ -79,7 +79,9 @@ outside the agent's sandbox, so the agent never sees it.
   or a branch you listed as protected. A push to the remote's default branch
   (usually `main`) is allowed but always waits for your click, even at
   **Push immediately**. The repository's `pre-push` hook runs first inside the
-  sandbox, without the token.
+  sandbox, without the token. On Windows, which has no sandbox, it runs only
+  once you approved the repository's hooks: push once from the git bar,
+  which asks, and agent pushes run the hook from then on until it changes.
 - **git_release** proposes an annotated release tag on the branch's pushed
   tip. A release **always** waits for you to press **Release** on its card.
 - **ci_runs**, **ci_run** and **ci_security_alerts** read the repository's
