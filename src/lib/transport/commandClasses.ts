@@ -13,6 +13,8 @@ export type CommandClass = "core" | "client" | "admin" | "off";
 /** The named reason an `off` command is refused with (`OffReason::as_str`). */
 export const OFF_REASON_ROWS: readonly (readonly [string, string])[] = [
   ["agent_global_import", "local-cli-files"],
+  ["agent_import_offer", "local-cli-files"],
+  ["agent_import_offer_answer", "local-cli-files"],
   ["agent_login_import", "local-cli-files"],
   ["save_boxes", "whole-document-save"],
   ["keyring_state", "os-keychain"],
@@ -44,6 +46,8 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["agent_global_open", "client"],
   ["agent_global_set_codex_auto_review", "core"],
   ["agent_global_status", "core"],
+  ["agent_import_offer", "off"],
+  ["agent_import_offer_answer", "off"],
   ["agent_is_installed", "core"],
   ["agent_login_import", "off"],
   ["agent_logins", "core"],

@@ -111,6 +111,21 @@
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ How to start → Already on this computer (fresh profile on a computer
+    that holds a Claude or Codex login): the page is step 2; before an answer
+    Settings → Agent logins shows the CLI not signed in. Untick one card, page
+    away and back (it stays unticked), Import the ticked ones: only the ticked
+    logins are signed in, the config lands in Global agent config. A second
+    fresh profile with Don't import: nothing is copied, and the next start
+    still copies nothing.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
   - [ ] 🖐️ Gemini and Aider read `AGENTS.md`: in a project with only `AGENTS.md`, a
     fresh Gemini tab lists it among its loaded context files; Aider's start shows
     it as a read-only file. Your own `context.fileName` / `read:` entries stay.

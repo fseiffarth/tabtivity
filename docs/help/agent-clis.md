@@ -176,9 +176,13 @@ per-project homes, and Tabtivity shares each CLI's login file across all of
 them, so every other project's tab of that CLI is signed in too. If this
 computer already holds a login for the CLI, Settings → Agent sandbox → **Agent
 logins** → *Import from this computer* copies just that file into Tabtivity
-(never config, skills or MCP entries). The first start of this version does
-that for you, once, for every CLI Tabtivity has no login for yet. **Sign out** there forgets it
-everywhere. A CLI that keeps its login in the system keyring or a database
+(never config, skills or MCP entries). A fresh install asks you first: the
+first-run intro's **Already on this computer** page lists the logins it found,
+and copies only the ones you leave ticked when you press *Import the ticked
+ones*. *Don't import* copies nothing; either answer is final, and the Settings
+button stays. An install updated from a version without per-project homes
+imports them once without asking, since its agents were signed in before.
+**Sign out** there forgets it everywhere. A CLI that keeps its login in the system keyring or a database
 (Kiro, Kilo, OpenClaw, Copilot), or in a file it also reads as settings or
 environment (Mistral Vibe's `.env`, Aider, mini-swe-agent, Cline), signs in
 once per project instead — an agent in one project must not be able to plant
@@ -402,8 +406,9 @@ What you want in every project — your `CLAUDE.md`, `AGENTS.md` or
 line), MCP servers — goes in the **global agent config**: Settings → Agent
 sandbox → Global agent config. *Import from this computer* copies it from your
 own `~/.claude`, `~/.codex` and `~/.gemini` (never logins, history or folder
-trust) — done once for you at the first start, if the global config is still
-empty; *Open folder* lets you edit it. Every agent tab gets a fresh copy
+trust). A fresh install offers this on the intro's **Already on this
+computer** page, next to the logins, and copies nothing until you say so;
+*Open folder* lets you edit it. Every agent tab gets a fresh copy
 when it starts, merged into the settings files the CLI writes itself, so a
 model you picked in one project stays picked there. Agents cannot change
 the global config; what an agent changes in its own project's home stays in

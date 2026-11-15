@@ -350,10 +350,28 @@ it. Settings → Agent fence → Agent logins imports a login this computer
 already holds (the one safe direction) and signs out. An older Tabtivity's
 Claude mirror (`agent-creds/`) is adopted into the store at startup. The
 first start after the upgrade also runs both imports once
-(`agent_auth::import_once`, `agent_global::import_once`, marker files in
-the state dir): every login the store lacks, and the global layer if it is
+(`agent_auth::import_once_in`, `agent_global::import_once_in`, marker files
+in the state dir): every login the store lacks, and the global layer if it is
 empty — the user asked not to have to remember it. Never repeated, so a
 Sign out or a file removed from the layer stays.
+
+**A fresh install is asked instead** (`services::agent_import_offer`,
+2026-11-15). Silently copying credentials, and hooks and MCP servers that run
+code, was right for an upgrade that only kept what the user already had in
+Tabtivity; on a new install nobody asked for it. `startup_in` runs the silent
+imports only when the state dir shows an earlier run (an import marker, an
+agent home, a stored login, an older build's stores, a registered project, or
+`onboarding_seen`). Otherwise it writes `.agent_import_offer` and imports
+nothing; the first-run wizard's *Already on this computer* page
+(`intro/ComputerPage.tsx`) lists what `offer_in` found and `answer_in`
+imports what stayed ticked. Either answer writes both import markers. Rules
+that must hold: the pending marker outranks every sign of an earlier run (a
+fresh install that opened a tab before answering has agent homes); if the
+marker cannot be written the question is closed unanswered, never left to a
+later silent import; an answer takes only what the offer lists; a fresh
+install with nothing to import is closed at once, so a login that appears
+later is never taken behind the user's back. The wizard may be skipped: the
+question then stays open and the Settings import buttons are the way in.
 
 **Installs are read-only in the fence.** A CLI installed through Manage CLIs
 goes into `<state_dir>/agents/install` (`services::agent_install`: the

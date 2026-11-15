@@ -31,6 +31,13 @@ describe("introRoute", () => {
     expect(effectiveGoals([])).toEqual(["explore"]);
   });
 
+  it("the import question's page joins right after Welcome, only when asked for", () => {
+    expect(introRoute(["organize"], { computer: true })).toEqual(["welcome", "computer", "goals", "forYou", "askApp", "done"]);
+    expect(introRoute([], { computer: true }).slice(0, 3)).toEqual(["welcome", "computer", "goals"]);
+    expect(introRoute([], { computer: false })).toEqual(introRoute([]));
+    expect(introRoute([])).not.toContain("computer");
+  });
+
   it("a goal without setup pages skips straight to For you", () => {
     expect(introRoute(["organize"])).toEqual(["welcome", "goals", "forYou", "askApp", "done"]);
     expect(introRoute(["phone"])).toEqual(["welcome", "goals", "forYou", "askApp", "done"]);

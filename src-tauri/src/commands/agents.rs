@@ -2190,6 +2190,25 @@ pub async fn agent_global_import() -> Result<crate::services::agent_global::Impo
         .map_err(|e| e.to_string())
 }
 
+/// The first-start question of a fresh install (`services::agent_import_offer`):
+/// whether it is open, and which logins and config folders this computer
+/// holds to import. Names only, never a login's content.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_import_offer() -> Result<crate::services::agent_import_offer::Offer, String> {
+    app_core::rt::blocking("agent", crate::services::agent_import_offer::offer).await
+}
+
+/// The user's answer to it: import the ticked logins (registry ids) and, with
+/// `config`, the config layer. Closes the question whatever was ticked.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_import_offer_answer(
+    logins: Vec<String>,
+    config: bool,
+) -> Result<crate::services::agent_import_offer::Outcome, String> {
+    app_core::rt::try_blocking("agent", move || crate::services::agent_import_offer::answer(&logins, config))
+        .await
+}
+
 /// The Manage CLIs switch for Codex auto-review in the Tabtivity-wide layer;
 /// every Codex tab picks it up at its next start.
 #[cfg_attr(feature = "desktop", tauri::command)]

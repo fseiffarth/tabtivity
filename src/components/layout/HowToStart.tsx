@@ -3,6 +3,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { Typewriter } from "../common/Typewriter";
 import { Dropdown } from "../common/Dropdown";
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { HOW_TO_START_STEPS, focusModeTip } from "../../lib/shortcuts/hints";
 import { useT } from "../../lib/i18n";
 import { PLATFORM } from "../../lib/platform";
@@ -12,16 +13,20 @@ import { LESSONS } from "../../lib/lessons";
 import {
   INTRO_PAGE_TITLE_KEYS,
   firstRecommendedLesson,
+  allImportKeys,
   introRoute,
+  offerAsks,
   readIntroGoals,
   readIntroPage,
   toggleGoal,
   writeIntroGoals,
   writeIntroPage,
+  type ImportOffer,
   type IntroGoal,
   type IntroPage,
 } from "./intro/introData";
 import { startLessonById } from "./intro/introUi";
+import { ComputerPage, type ImportAnswer } from "./intro/ComputerPage";
 import { GoalsPage } from "./intro/GoalsPage";
 import { ForYouPage } from "./intro/ForYouPage";
 import { ProjectsPage } from "./intro/ProjectsPage";
@@ -37,7 +42,9 @@ import { ChevronLeftIcon, ChevronRightIcon } from "../common/icons/Icon";
  * do?") → only the setup pages those goals need (Projects, Agent CLIs, Local
  * models — `introRoute`) → For you (lessons matched to the goals) → Ask
  * Tabtivity → Done, which names the best first lesson for the answers. No goal
- * picked is the full tour. The answers are remembered (`readIntroGoals`) and
+ * picked is the full tour. A fresh install whose computer already holds agent
+ * logins or config gets one more page right after Welcome, Already on this
+ * computer, which asks before any of it is copied (`ComputerPage`). The answers are remembered (`readIntroGoals`) and
  * can be changed any time; the rail, the dropdown, "Step n of total" and
  * Back/Next all walk the current route, and a remembered page the route no
  * longer contains opens on the goals page.
@@ -58,7 +65,28 @@ export function HowToStart({ onClose, firstRun = false }: {
 }) {
   const t = useT();
   const [goals, setGoals] = useState<IntroGoal[]>(readIntroGoals);
-  const route = introRoute(goals);
+  // The fresh-install import question, as it stood when the wizard opened: an
+  // open one with something to ask about puts its page on the route, and the
+  // page stays for this session once answered, to show what the answer did.
+  // A browser client and an install that was never asked get none.
+  const [offer, setOffer] = useState<ImportOffer | null>(null);
+  const [importPicked, setImportPicked] = useState<string[]>([]);
+  const [importAnswer, setImportAnswer] = useState<ImportAnswer | null>(null);
+  useEffect(() => {
+    let live = true;
+    invoke<ImportOffer>("agent_import_offer")
+      .then((found) => {
+        if (!live || !offerAsks(found)) return;
+        setOffer(found);
+        setImportPicked(allImportKeys(found));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const routeOpts = { computer: offer !== null };
+  const route = introRoute(goals, routeOpts);
   // A remembered page the current answers don't route through opens on the
   // goals page, where the route is decided.
   const [page, setPage] = useState<IntroPage>(() => {
@@ -85,7 +113,7 @@ export function HowToStart({ onClose, firstRun = false }: {
     writeIntroGoals(next);
     // Toggles happen on the goals page, so this only guards a page that
     // dropped out of the route from under the user.
-    if (!introRoute(next).includes(current)) go("goals");
+    if (!introRoute(next, routeOpts).includes(current)) go("goals");
   };
   // Finishing (the Done page's primary) starts the next open from Welcome;
   // any other close keeps the page, so a user who stepped out to run an
@@ -180,6 +208,15 @@ export function HowToStart({ onClose, firstRun = false }: {
           />
           <div className="dialog-scroll" key={current}>
             {current === "welcome" && <WelcomePage greet={greet} />}
+            {current === "computer" && offer && (
+              <ComputerPage
+                offer={offer}
+                picked={importPicked}
+                onPick={setImportPicked}
+                answer={importAnswer}
+                onAnswer={setImportAnswer}
+              />
+            )}
             {current === "goals" && <GoalsPage goals={goals} onToggle={onToggleGoal} route={route} />}
             {current === "projects" && <ProjectsPage onClose={onClose} />}
             {current === "agents" && <AgentsPage onClose={onClose} />}

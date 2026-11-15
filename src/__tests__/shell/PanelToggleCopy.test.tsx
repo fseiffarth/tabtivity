@@ -41,11 +41,14 @@ describe("panel-toggle copy", () => {
 
   it("How to start names no key before the probe answers, then the live one", async () => {
     let answer: (owned: boolean) => void = () => {};
-    invoke.mockImplementation(
-      () =>
-        new Promise<boolean>((resolve) => {
-          answer = resolve;
-        }),
+    // Only the probe is held open; the wizard's other reads (the import
+    // question) are simply unavailable here.
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "desktop_owns_super_key"
+        ? new Promise<boolean>((resolve) => {
+            answer = resolve;
+          })
+        : Promise.reject(new Error(`unmocked ${cmd}`)),
     );
     const { container } = render(<HowToStart onClose={() => {}} />);
     expect(container.textContent).not.toContain("Super");

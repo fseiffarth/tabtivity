@@ -73,6 +73,7 @@ export const UNTESTED = {
   "desktop.welcome": { area: "shell", what: "Project-first welcome and primary dismissal" },
   "desktop.intro.wizard": { area: "shell", what: "How to start wizard · step rail, Back/Skip/Next, ←/→, remembered page" },
   "desktop.intro.projects": { area: "shell", what: "How to start · Projects page: project count, New/Import/Clone open the + menu's dialogs" },
+  "desktop.intro.computer": { area: "shell", what: "How to start · Already on this computer page (fresh install only): found logins and agent config as toggle cards, Import / Don't import, nothing copied before the answer, result lines" },
   "desktop.intro.agents": { area: "shell", what: "How to start · Agent CLIs page: installed chips, install/sign-in in a terminal, Node.js prerequisite, the pick saved as the default CLI" },
   "desktop.intro.localModels": { area: "shell", what: "How to start · Local models page: Ollama install/start, recommended pull, GPU load, use for tabs" },
   "desktop.intro.agentsInlineInstall": { area: "shell", what: "How to start · Agent CLIs page: Install runs the Manage CLIs installer right in the intro with a live log and stays open; the chip and step 1 turn installed on success and only then becomes the default CLI; a failure shows the error with Try again, Run in terminal and (npm) Run with sudo; Install waits while Node.js is missing; leaving the page mid-install and coming back shows the same run, and another window's run is waited on (no error, no fallback); the chips show a tick and an installed/not installed tooltip" },

@@ -1779,8 +1779,11 @@ pub fn run() {
             services::agent_install::migrate_legacy_stores();
             // Once, at the first start with per-scope homes: this computer's
             // logins and its ~/.claude, ~/.codex, ~/.gemini config, so no
-            // agent comes back signed out or without its instructions. Before
-            // the keeper and before any tab can spawn.
+            // agent comes back signed out or without its instructions — for an
+            // install that ran before. A fresh install is asked first, on a
+            // page of the first-run wizard, and nothing is copied until it
+            // answers (`services::agent_import_offer`). Before the keeper and
+            // before any tab can spawn.
             // First, drop the login paths that stopped being shared (dotenv
             // files, Cline's provider config) from the store and the Host
             // home, so neither the import nor the keeper sees them again.
@@ -1788,8 +1791,7 @@ pub fn run() {
             // Login files that fail their CLI's content check (OpenCode's
             // `wellknown` entries) go aside, before the import and the keeper.
             services::agent_auth::sweep_unadmissible();
-            services::agent_auth::import_once();
-            services::agent_global::import_once();
+            services::agent_import_offer::startup();
             services::agent_auth::start();
             // Moves a fenced Copilot's `/login` token out of its private config
             // into the keyring, for every later fenced Copilot tab (the fence
@@ -2701,6 +2703,8 @@ pub fn run() {
             commands::agents::agent_api_key_clear,
             commands::agents::agent_global_status,
             commands::agents::agent_global_import,
+            commands::agents::agent_import_offer,
+            commands::agents::agent_import_offer_answer,
             commands::agents::agent_global_set_codex_auto_review,
             commands::agents::agent_global_open,
             commands::agents::agent_usage,

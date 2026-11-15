@@ -121,6 +121,76 @@ describe("How to start intro wizard", () => {
     expect(heading()).toContain(`Ask ${BRAND.display}`);
   });
 
+  it("Already on this computer: asks before copying, imports only what stays ticked", async () => {
+    const answers: unknown[] = [];
+    backend({
+      agent_import_offer: () => ({ pending: true, logins: ["claude", "codex"], config: [".claude", ".codex"] }),
+      agent_import_offer_answer: (args) => {
+        answers.push(args);
+        return { logins: [{ id: "claude", error: null }], config: { files: 3, configs: 1 }, configError: null };
+      },
+    });
+    await act(async () => {
+      render(<HowToStart onClose={vi.fn()} firstRun />);
+    });
+    // The page joins the route as step 2 once the backend answered.
+    await waitFor(() => expect(railEntries()[1]).toBe("2Already on this computer"));
+    expect(answers).toEqual([]);
+    next();
+    expect(heading()).toContain("Already on this computer");
+    const group = screen.getByRole("group", { name: "What to bring along" });
+    const cards = Array.from(group.querySelectorAll("button"));
+    expect(cards.map((c) => c.getAttribute("aria-pressed"))).toEqual(["true", "true", "true"]);
+    expect(group.textContent).toContain("~/.claude, ~/.codex");
+    // Untick Codex; paging away and back copies nothing.
+    fireEvent.click(cards[1]);
+    next();
+    back();
+    expect(answers).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Import the ticked ones" }));
+    await waitFor(() => expect(screen.getByText(/login imported/)).toBeTruthy());
+    expect(answers).toEqual([{ logins: ["claude"], config: true }]);
+    expect(screen.getByText("Agent config imported (4 files)")).toBeTruthy();
+    // The result stays while this wizard is open.
+    next();
+    back();
+    expect(screen.getByText(/login imported/)).toBeTruthy();
+    expect(readIntroPage()).toBe("welcome");
+  });
+
+  it("Already on this computer: Don't import sends an empty answer", async () => {
+    const answers: unknown[] = [];
+    backend({
+      agent_import_offer: () => ({ pending: true, logins: ["claude"], config: [] }),
+      agent_import_offer_answer: (args) => {
+        answers.push(args);
+        return { logins: [], config: null, configError: null };
+      },
+    });
+    await act(async () => {
+      render(<HowToStart onClose={vi.fn()} />);
+    });
+    await waitFor(() => expect(railEntries()[1]).toBe("2Already on this computer"));
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Don't import" }));
+    await waitFor(() => expect(screen.getByText("Nothing was imported.")).toBeTruthy());
+    expect(answers).toEqual([{ logins: [], config: false }]);
+  });
+
+  it("Already on this computer: no page when nothing is asked", async () => {
+    for (const offer of [
+      { pending: false, logins: [], config: [] },
+      { pending: true, logins: [], config: [] },
+    ]) {
+      cleanup();
+      backend({ agent_import_offer: () => offer });
+      await act(async () => {
+        render(<HowToStart onClose={vi.fn()} />);
+      });
+      expect(railEntries()[1]).toBe("2Your goals");
+    }
+  });
+
   it("types the Welcome greeting only on the first run, and only once", async () => {
     const greeting = `Hi there — I'm ${BRAND.display}.`;
     const typed = () => document.querySelector(".typewriter [aria-hidden='true']")?.textContent ?? "";

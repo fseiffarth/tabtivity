@@ -853,26 +853,95 @@ pub fn import_from_user_home() -> io::Result<ImportReport> {
 /// Marks that the first start of the Tabtivity-wide layer has run.
 const IMPORTED_MARKER: &str = ".agent_global_imported";
 
+/// Whether the first start of the layer has run, or the user answered the
+/// first-start question (`services::agent_import_offer`).
+pub(crate) fn import_marked_in(state_dir: &Path) -> bool {
+    state_dir.join(IMPORTED_MARKER).exists()
+}
+
+pub(crate) fn mark_imported_in(state_dir: &Path) {
+    let _ = std::fs::write(state_dir.join(IMPORTED_MARKER), b"");
+}
+
+/// Whether the layer under `state_dir` holds no file yet.
+pub(crate) fn layer_is_empty_in(state_dir: &Path) -> bool {
+    layer_files(&global_dir_in(state_dir)).is_empty()
+}
+
+/// The config folders of `user_home` that hold something
+/// [`import_from_user_home_in`] takes, home-relative (`.claude`, `.codex`,
+/// `.config/opencode`, …) and sorted: what the first-start question names.
+/// Presence only — nothing is copied, and the one file read is
+/// `~/.claude.json`, for whether it names an MCP server.
+pub(crate) fn import_sources_in(user_home: &Path) -> Vec<String> {
+    fn root(rel: &str) -> String {
+        let mut parts = rel.split('/');
+        let first = parts.next().unwrap_or(rel);
+        match (first, parts.next()) {
+            (".config", Some(second)) => format!(".config/{second}"),
+            _ => first.to_string(),
+        }
+    }
+    // A regular file directly in `dir` with one of `extensions`.
+    fn holds_file(dir: &Path, extensions: &[&str]) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                let path = entry.path();
+                path.is_file()
+                    && path.extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.contains(&e))
+            })
+        })
+    }
+    // An entry `take_dir` would not skip.
+    fn holds_entry(dir: &Path) -> bool {
+        std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.flatten().any(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        })
+    }
+    let mut found = std::collections::BTreeSet::new();
+    let claude = user_home.join(".claude");
+    let claude_mcp = read_json(&user_home.join(".claude.json"))
+        .and_then(|v| v.get("mcpServers").cloned())
+        .is_some_and(|s| s.as_object().is_some_and(|o| !o.is_empty()));
+    if holds_file(&claude, CLAUDE_TOP_EXTENSIONS) || claude.join("settings.json").is_file() || claude_mcp {
+        found.insert(".claude".to_string());
+    }
+    for dir in INSTRUCTION_DIRS {
+        if holds_file(&user_home.join(dir), &["md"]) {
+            found.insert(root(dir));
+        }
+    }
+    let files = [".codex/config.toml", ".gemini/settings.json", ".vibe/hooks.toml"];
+    for rel in IMPORT_FILES.iter().chain(IMPORT_JSON).chain(&files) {
+        if user_home.join(rel).is_file() {
+            found.insert(root(rel));
+        }
+    }
+    for rel in IMPORT_DIRS {
+        if holds_entry(&user_home.join(rel)) {
+            found.insert(root(rel));
+        }
+    }
+    found.into_iter().collect()
+}
+
 /// The import, done once for the user at the first start with the layer, so
 /// agents keep their instructions, skills, hooks and MCP servers without a
 /// trip to Settings. Skipped when the layer already holds files (the user
 /// filled it); never repeated, so later edits to the layer are the user's.
+/// Only for an install that ran before: a fresh one is asked first
+/// (`services::agent_import_offer`).
 pub fn import_once_in(state_dir: &Path, user_home: &Path) {
-    let marker = state_dir.join(IMPORTED_MARKER);
-    if marker.exists() {
+    if import_marked_in(state_dir) {
         return;
     }
-    if layer_files(&global_dir_in(state_dir)).is_empty() {
+    if layer_is_empty_in(state_dir) {
         if let Err(e) = import_from_user_home_in(state_dir, user_home) {
             eprintln!("agent_global: first import: {e}");
             return;
         }
     }
-    let _ = std::fs::write(&marker, b"");
-}
-
-pub fn import_once() {
-    import_once_in(&storage::state_dir(), &crate::paths::home_dir());
+    mark_imported_in(state_dir);
 }
 
 /// What the Settings row shows.
@@ -1239,6 +1308,26 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         apply_to_home(&state, &home).unwrap();
         assert!(!home.join(MANIFEST).exists());
+    }
+
+    #[test]
+    fn import_sources_name_only_folders_holding_something_to_take() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+        assert!(import_sources_in(&user).is_empty());
+        write(&user.join(".claude").join("CLAUDE.md"), "mine");
+        write(&user.join(".config").join("opencode").join("plugins").join("rtk.ts"), "x");
+        // Not config: a transcript folder, a CLI's own bundled skills, state.
+        write(&user.join(".gemini").join("tmp").join("chat.json"), "{}");
+        write(&user.join(".codex").join("skills").join(".system").join("a.md"), "x");
+        write(&user.join(".claude.json"), r#"{"numStartups":3}"#);
+        assert_eq!(import_sources_in(&user), [".claude", ".config/opencode"]);
+        // Nothing was copied anywhere by asking.
+        assert!(!tmp.path().join("state").exists());
+
+        let mcp = tmp.path().join("mcp");
+        write(&mcp.join(".claude.json"), r#"{"mcpServers":{"x":{"command":"y"}}}"#);
+        assert_eq!(import_sources_in(&mcp), [".claude"]);
     }
 
     #[test]
