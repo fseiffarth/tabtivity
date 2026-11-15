@@ -587,6 +587,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("checkpoint_restore", Core),
     ("checkpoint_settings_get", Core),
     ("checkpoint_settings_set", Core),
+    // commands/tab_archive.rs
+    ("tab_archive_add", Core),
+    ("tab_archive_delete", Core),
+    ("tab_archive_list", Core),
+    ("tab_archive_take", Core),
     // commands/local_loss.rs
     ("local_loss_ack", Core),
     ("local_loss_list", Core),

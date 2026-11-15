@@ -78,6 +78,8 @@ pub mod local_loss;
 // Per-turn checkpoints: a snapshot of an agent tab's folder as each turn begins and
 // ends, in a store of its own under the state dir, and a restore with its own undo.
 pub mod checkpoints;
+// The per-scope tab archive: tabs put away on purpose, beside the saved layout.
+pub mod tab_archive;
 // The way a fenced agent with no network reaches the local Ollama and a few of
 // Tabtivity's tools (Local models only + Cut network, docs/context/local_models_only.md).
 #[cfg(unix)]

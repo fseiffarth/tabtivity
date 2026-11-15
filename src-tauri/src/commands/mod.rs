@@ -36,6 +36,7 @@ pub mod hpc_ws;
 #[cfg(feature = "desktop")]
 pub mod ide;
 pub mod checkpoints;
+pub mod tab_archive;
 pub mod local_loss;
 pub mod mail;
 pub mod markdown;

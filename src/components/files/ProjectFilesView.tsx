@@ -118,6 +118,8 @@ import { isHostPinned } from "../../lib/projectTabHost";
 import { phoneReach, usePairedPhones } from "../mobile/usePairedPhones";
 import { tmuxSessionRest } from "../../lib/brandMigration";
 import { usePaneSleepHold } from "../../lib/sleepWhenHidden";
+import { useTabArchive } from "../../stores/tabArchive";
+import { TabArchiveList } from "../tabs/TabArchiveList";
 
 /** How long the pointer must rest on a session row before its stats card opens
  *  (TODO #85) — same value and rationale as `FileTree`'s `TOOLTIP_DWELL_MS`:
@@ -745,6 +747,8 @@ export function ProjectFilesView({
   // every viewer reads the same rows and a kill/rename lands in all of them.
   const sessionHosts = useMemo(() => sessionHostsOf(project), [project]);
   const sessionRows = useHostSessions(projectId, active && !!project?.remote);
+  // The scope's archived tabs (`stores/tabArchive`): the Archive view's count.
+  const archivedTabs = useTabArchive(scope, active);
   // The Sessions list is scoped to THIS project by default (the backend filters
   // by session name, falling back to the session's working directory for the
   // pre-scoping and hand-started ones a name cannot attribute). This is the
@@ -1837,17 +1841,21 @@ export function ProjectFilesView({
               ? orangeFiles.length + newLocalFiles.length
               : v === "sessions"
                 ? sessionRows.length
-                : v === "jobs"
-                  ? jobRows.length
-                  : 0;
+                : v === "archive"
+                  ? archivedTabs.length
+                  : v === "jobs"
+                    ? jobRows.length
+                    : 0;
           const title =
             v === "orange"
               ? t("projectFilesView.divergedFilesTitle", { count })
               : v === "sessions"
                 ? t("projectFilesView.persistentSessionsTitle", { count })
-                : v === "jobs"
-                  ? t("projectFilesView.slurmJobsTitle", { count })
-                  : undefined;
+                : v === "archive"
+                  ? t("tabArchive.viewTitle", { count })
+                  : v === "jobs"
+                    ? t("projectFilesView.slurmJobsTitle", { count })
+                    : undefined;
           return (
             <button
               key={v}
@@ -3012,6 +3020,12 @@ export function ProjectFilesView({
       )}
 
       {view === "agents" && <AgentSchedulesView scope={scope} active={active} />}
+
+      {view === "archive" && (
+        <div className="side-panel-scroll side-panel-orange" style={{ flex: 1, overflowY: "auto" }}>
+          <TabArchiveList scope={scope} />
+        </div>
+      )}
 
       {view === "clis" && <CliOverviewView active={active} />}
 

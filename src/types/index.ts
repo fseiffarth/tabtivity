@@ -132,6 +132,7 @@ export type FilesPanelView =
   | "agents"
   | "orange"
   | "sessions"
+  | "archive"
   | "jobs"
   | "remarks"
   | "todo"

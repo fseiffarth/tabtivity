@@ -1836,6 +1836,9 @@ fn rename_project_dir_blocking(project_id: &str, leaf: &str) -> Result<ProjectEn
     {
         eprintln!("rename_project_dir: saved tab layout not updated: {e}");
     }
+    if let Err(e) = crate::services::tab_archive::rewrite_paths(project_id, old_s, new_s) {
+        eprintln!("rename_project_dir: tab archive not updated: {e}");
+    }
     if new.join(".git").exists() {
         if let Err(e) = repair_moved_worktrees(&new, old_s, new_s) {
             eprintln!("rename_project_dir: git worktree repair: {e}");

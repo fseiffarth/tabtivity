@@ -1991,3 +1991,22 @@
   font-size: var(--text-sm);
   word-break: break-all;
 }
+
+/* The tab archive's list (`tabs/TabArchiveList`): the Sessions view's rows,
+   under a filter row. Shown in the side panel's Archive view and the + menu's
+   Archived tabs dialog. */
+.tab-archive-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.tab-archive-head input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-archive-dialog {
+  width: min(560px, 92vw);
+}
