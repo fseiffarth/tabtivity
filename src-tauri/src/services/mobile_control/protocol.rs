@@ -1203,6 +1203,24 @@ pub enum DesktopRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         closed_id: Option<String>,
     },
+    /// Archive one tab of a project (`stores/tabArchive` in the window): it
+    /// is kept in the project's archive and ends, as the desktop's tab menu
+    /// Archive does. Named like [`Self::CloseTab`]; answered `Closed`.
+    ArchiveTab {
+        request_id: String,
+        project_id: String,
+        tmux_session: String,
+    },
+    /// Bring back the archived tab `archive_id` names (an opaque id from the
+    /// project detail's `archived` rows). Answered `Created` when it came back
+    /// as a terminal the phone can attach to, `Activated` when it opened on
+    /// the desktop only (a viewer, a tab running where the phone cannot
+    /// reach); `nothing_to_restore` once the entry is gone.
+    RestoreArchivedTab {
+        request_id: String,
+        project_id: String,
+        archive_id: String,
+    },
     Prompts {
         request_id: String,
         project_id: String,
@@ -1639,6 +1657,8 @@ impl DesktopRequest {
             | Self::ReorderTab { request_id, .. }
             | Self::CloseTab { request_id, .. }
             | Self::ReopenTab { request_id, .. }
+            | Self::ArchiveTab { request_id, .. }
+            | Self::RestoreArchivedTab { request_id, .. }
             | Self::Prompts { request_id, .. }
             | Self::PromptMutate { request_id, .. }
             | Self::TabSeen { request_id, .. }
@@ -1754,6 +1774,8 @@ impl DesktopRequest {
             | Self::ReorderTab { .. }
             | Self::CloseTab { .. }
             | Self::ReopenTab { .. }
+            | Self::ArchiveTab { .. }
+            | Self::RestoreArchivedTab { .. }
             | Self::PromptMutate { .. }
             | Self::HoldPrompt { .. }
             | Self::EditHeldPrompt { .. }

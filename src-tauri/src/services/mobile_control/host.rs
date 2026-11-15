@@ -1407,6 +1407,7 @@ async fn project(
     // agent: the ＋ sheet's agent list would only offer what the create refuses.
     let agents = if public.kind == ScopeKind::Assistant { Vec::new() } else { agents };
     let closed = closed_tab_rows(closed);
+    let archived = archived_tab_rows(&state.config.state_dir, &project.raw_id, project.public.kind == ScopeKind::Assistant);
     let mut timings = timings
         .into_iter()
         .map(|timing| (timing.tmux_session.clone(), timing))
@@ -1476,7 +1477,7 @@ async fn project(
     (
         StatusCode::OK,
         Json(
-            json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed,
+            json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed, "archived": archived,
                 // Whether this project's 📁 answers (`files.rs`): the host-wide
                 // switch, and a project with a folder rather than a box, the
                 // root console or a project the phone has no folder of.
@@ -1537,6 +1538,44 @@ fn closed_tab_rows(rows: Vec<super::protocol::ClosedAgentTab>) -> Vec<serde_json
                 "label": clean(&row.label),
                 "agent": clean(&row.agent),
                 "closed_at": row.closed_at,
+            })
+        })
+        .collect()
+}
+
+/// How many archived tabs the project detail lists: the newest. The archive
+/// itself keeps more (`services::tab_archive`); the desktop lists them all.
+const MAX_ARCHIVED_ROWS: usize = 100;
+
+/// The project's archived tabs (`services::tab_archive`) for the phone's
+/// Archived fold, read off the state dir so they show with no window too:
+/// the opaque id, the label, the tab kind, the agent CLI for an agent tab and
+/// when it was archived. No folder, command line or session id crosses. The
+/// assistant's scope has no archive.
+fn archived_tab_rows(state_dir: &std::path::Path, raw_id: &str, assistant: bool) -> Vec<serde_json::Value> {
+    use crate::services::tab_archive;
+    if assistant {
+        return Vec::new();
+    }
+    let clean = |text: &str| -> String { text.chars().filter(|c| !c.is_control()).take(MAX_TAB_LABEL).collect() };
+    tab_archive::list_at(&tab_archive::archive_path_in(state_dir, raw_id))
+        .into_iter()
+        .filter(|entry| tab_archive::archive_id_ok(&entry.id))
+        .take(MAX_ARCHIVED_ROWS)
+        .map(|entry| {
+            let kind = entry.tab.extra.get("kind").and_then(serde_json::Value::as_str).unwrap_or("shell");
+            let kind = match kind {
+                "agent" | "local_agent" => "agent",
+                "shell" => "shell",
+                _ => "other",
+            };
+            let agent = if kind == "agent" { clean(&entry.tab.cmd) } else { String::new() };
+            json!({
+                "id": entry.id,
+                "label": clean(&entry.tab.label),
+                "kind": kind,
+                "agent": agent,
+                "archived_at": entry.archived_at,
             })
         })
         .collect()
@@ -1977,6 +2016,59 @@ async fn reopen_tab(
         };
     }
     answer_created(&state, &phone, &project_id, response).await
+}
+
+/// `POST /api/v1/projects/{project_id}/tabs/archived/{archive_id}/restore` —
+/// bring an archived tab back in the desktop window (`stores/tabArchive`),
+/// built the way a restart builds it. Answers like a create, with the tab's
+/// row, when it came back as a terminal the phone can attach to; `200
+/// { restored, on_desktop }` when it opened on the desktop only; `409
+/// nothing_to_restore` once the entry is gone. Needs the window: with none,
+/// `503 desktop_unavailable`.
+async fn restore_archived_tab(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((project_id, archive_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !crate::services::tab_archive::archive_id_ok(&archive_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some(project) = catalog_snapshot.project(&project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    if project.public.kind == ScopeKind::Assistant {
+        return api_error(StatusCode::NOT_FOUND, "nothing_to_restore");
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::RestoreArchivedTab {
+            request_id: new_request_id(),
+            project_id: project.raw_id.clone(),
+            archive_id,
+        },
+    )
+    .await;
+    if desktop_down(&response) {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+    }
+    match response {
+        Ok(DesktopResponse::Activated) => {
+            catalog_stale(&state);
+            (StatusCode::OK, Json(json!({ "restored": true, "on_desktop": true })))
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code == "nothing_to_restore" => {
+            api_error(StatusCode::CONFLICT, "nothing_to_restore")
+        }
+        other => answer_created(&state, &phone, &project_id, other).await,
+    }
 }
 
 /// The linked worktree each of the project's tabs works in, in tab order, for
@@ -4556,6 +4648,53 @@ fn schedule_desktop_error(
 /// prompt-send and rename routes need — those surfaces exist for agent tabs
 /// alone — while the close route serves every tab the phone lists, shell
 /// included. Neither value is ever serialized back to the phone.
+/// `POST /api/v1/tabs/{tab_id}/archive` — put one tab into its project's
+/// archive, as the desktop's tab menu Archive does: kept there, and ended.
+/// Needs the window (it writes the archive from the tab it holds); with none,
+/// `503 desktop_unavailable`.
+async fn archive_tab(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let (project_id, tmux_session) = match tab_target(&state, &phone, &tab_id, false) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::ArchiveTab { request_id: new_request_id(), project_id, tmux_session },
+    )
+    .await;
+    if desktop_down(&response) {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+    }
+    match response {
+        Ok(DesktopResponse::Closed) => {
+            catalog_stale(&state);
+            (StatusCode::OK, Json(json!({ "archived": true })))
+        }
+        Ok(DesktopResponse::Error { code, .. }) => api_error(
+            match code.as_str() {
+                "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                "tab_not_found" => StatusCode::NOT_FOUND,
+                "not_archivable" => StatusCode::CONFLICT,
+                _ => StatusCode::BAD_REQUEST,
+            },
+            &code,
+        ),
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
 fn tab_target(
     state: &HostState,
     phone: &Phone,
@@ -8564,6 +8703,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/projects/{project_id}/tabs", post(create_tab))
         .route("/api/v1/projects/{project_id}/tabs/reopen", post(reopen_tab))
+        .route("/api/v1/projects/{project_id}/tabs/archived/{archive_id}/restore", post(restore_archived_tab))
         .route(
             "/api/v1/projects/{project_id}/launch-options",
             get(launch_options),
@@ -8589,6 +8729,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/tabs/{tab_id}",
             get(tab).put(rename_tab).delete(close_tab),
         )
+        .route("/api/v1/tabs/{tab_id}/archive", post(archive_tab))
         .route("/api/v1/tabs/{tab_id}/color", put(color_tab))
         .route("/api/v1/tabs/{tab_id}/order", put(order_tab))
         .route("/api/v1/tabs/{tab_id}/prompt", post(sent_prompt))

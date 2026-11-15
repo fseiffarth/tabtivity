@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { goBack } from "../backStack";
 import { FileImageIcon } from "../../../src/components/common/icons/Icon";
-import { BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, SidebarIcon, UndoIcon, WindowIcon } from "../glyphs";
+import { ArchiveIcon, BranchIcon, ChevronLeftIcon, ClockIcon, DiffIcon, PlusIcon, SearchIcon, SidebarIcon, UndoIcon, WindowIcon } from "../glyphs";
 import { AGENT_SORTS, DEFAULT_AGENT_SORT, isAgentSort, sortAgentTabs, type AgentSort } from "../../../shared/agentSort";
 import { DivergedSheet } from "./DivergedSheet";
 import { GitSheet } from "./GitSheet";
-import { ApiError, TAB_CREATE_TIMEOUT, api, clearOutbox, closeTab, deleteOutboxFile, getProjectDetail, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type ViewerScope } from "../api";
+import { ApiError, TAB_CREATE_TIMEOUT, api, archiveTab, clearOutbox, closeTab, restoreArchivedTab, deleteOutboxFile, getProjectDetail, listOutbox, lookUpFileRow, reopenTab, reorderTab, type AgentRow, type ArchivedTabRow, type ClosedTabRow, type CreateVerdict, type ProjectHost, type OutboxFile, type ProjectDetail, type TabPlace, type TabRow, type ViewerScope } from "../api";
 import { OUTBOX_POLL, sameOutbox } from "../outbox";
 import { readChoice, readFlag, writeChoice, writeFlag, type MobileFlag } from "../prefs";
 import { useRowDrag } from "../rowDrag";
@@ -348,6 +348,8 @@ export function Project({ id, back, splitList, terminal }: {
   const [moreTab, setMoreTab] = useState<TabRow | null>(null);
   /** Recently closed, folded shut until asked for. */
   const [closedOpen, setClosedOpen] = useState(false);
+  /** Archived tabs, folded shut until asked for. */
+  const [archivedOpen, setArchivedOpen] = useState(false);
   /** The list's two gesture hints, each gone for good once dismissed or once
    *  its gesture has been used (`prefs.ts`). */
   const [hintsGone, setHintsGone] = useState(() => ({ reorder: readFlag("projectHintReorder"), swipe: readFlag("projectHintSwipe"), hold: readFlag("projectHintHold") }));
@@ -649,6 +651,52 @@ export function Project({ id, back, splitList, terminal }: {
       setReopeningId(null);
     }
   };
+  /** Archive a tab on the desktop (its tab menu's Archive): it is kept in the
+   *  project's archive and ends, so its card goes as a close's does; the
+   *  Archived fold lists it on the next read. */
+  const archive = async (tab: TabRow) => {
+    setClosingId(tab.id);
+    setError("");
+    try {
+      await archiveTab(tab.id);
+      dropTab(tab.id);
+      void load();
+    } catch (cause) {
+      setError(cause instanceof ApiError && (cause.status === 503 || cause.code === "desktop_unavailable")
+        ? t("mobile.project.archiveNeedsDesktop")
+        : t("mobile.project.archiveFailed"));
+    } finally {
+      setClosingId(null);
+    }
+  };
+  /** The archived tab whose restore is in flight. */
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  /** Bring an archived tab back on the desktop. A terminal this phone can
+   *  open gets its card back at once; anything else (a viewer) opens on the
+   *  desktop only and just leaves the fold. */
+  const restoreArchived = async (row: ArchivedTabRow) => {
+    setRestoringId(row.id);
+    setError("");
+    try {
+      const body = await restoreArchivedTab(id, row.id);
+      const back = body.tab;
+      if (back) closed.current.delete(back.id);
+      setDetail((prev) => prev ? {
+        ...prev,
+        tabs: !back || prev.tabs.some((tab) => tab.id === back.id) ? prev.tabs : [...prev.tabs, back],
+        archived: (prev.archived ?? []).filter((entry) => entry.id !== row.id),
+      } : prev);
+    } catch (cause) {
+      setError(cause instanceof ApiError && cause.code === "nothing_to_restore"
+        ? t("mobile.project.restoreGone")
+        : cause instanceof ApiError && (cause.status === 503 || cause.code === "desktop_unavailable")
+          ? t("mobile.project.restoreNeedsDesktop")
+          : describeFailure(cause));
+      void load();
+    } finally {
+      setRestoringId(null);
+    }
+  };
   /** Move one tab beside another and tell the desktop, which owns the layout
    *  this order is. The list is rearranged first — a drop that waits for a
    *  round trip before it moves anything reads as a dropped gesture — and then
@@ -696,6 +744,7 @@ export function Project({ id, back, splitList, terminal }: {
     else if (action === "schedule") setScheduleTab({ tab });
     else if (action === "subagents") setSubagentsTab(tab);
     else if (action === "files") setFilesTab(tab);
+    else if (action === "archive") void archive(tab);
     else void close(tab);
   };
   /** A file of a tab's Files sheet, in the viewer of its side, as its chat
@@ -719,6 +768,7 @@ export function Project({ id, back, splitList, terminal }: {
   const projectName = detail?.project.label ?? t("mobile.project.fallbackName");
   // A reopen starts a tab, which a project the phone cannot start tabs in refuses.
   const closedRows = createVerdict === "none" ? [] : detail?.closed ?? [];
+  const archivedRows = detail?.archived ?? [];
   const showReorderHint = canReorder && !hintsGone.reorder;
   const showSwipeHint = tabs.length > 0 && !hintsGone.swipe;
   // Only while a tap starts one agent: the sheet of the others sits behind a
@@ -920,7 +970,7 @@ export function Project({ id, back, splitList, terminal }: {
       </span>
       <button onClick={() => { if (showReorderHint) dropHint("reorder"); if (showSwipeHint) dropHint("swipe"); }} aria-label={t("mobile.project.hintDismiss")} title={t("mobile.project.hintDismiss")}><span aria-hidden="true">×</span></button>
     </p>}
-    {(!tablet || closedRows.length > 0) && <div className="project-foot">
+    {(!tablet || closedRows.length > 0 || archivedRows.length > 0) && <div className="project-foot">
       {/* Agent tabs closed on either surface, newest first, folded under one
           row: a tap reopens one on the desktop, resuming its conversation,
           and its card comes back. */}
@@ -941,6 +991,27 @@ export function Project({ id, back, splitList, terminal }: {
         >{reopeningId === row.id
           ? <><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span> {t("mobile.project.reopening", { label: row.label })}{isUntested("mobile.project.reopening") && <span className="untested">{t("mobile.newTab.untested")}</span>}</>
           : <>{row.label}</>}</button>)}
+      </section>}
+      {/* Tabs archived on either surface, newest first, folded like the
+          closed ones: a tap brings one back on the desktop. Listed with no
+          window too; restoring needs it. */}
+      {archivedRows.length > 0 && <section className="project-closed" aria-label={t("mobile.project.archived")}>
+        <button className="project-foot-row" aria-expanded={archivedOpen} onClick={() => setArchivedOpen((open) => !open)}>
+          <span aria-hidden="true" className="project-foot-icon"><ArchiveIcon size="1em" /></span>
+          <span>{t("mobile.project.archivedCount", { count: archivedRows.length })}{isUntested("mobile.project.archive") && <span className="untested">{t("mobile.newTab.untested")}</span>}</span>
+          <svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+        </button>
+        {archivedOpen && archivedRows.map((row) => <button
+          key={row.id}
+          className={restoringId === row.id ? "project-closed-row reopening" : "project-closed-row"}
+          disabled={restoringId !== null || detail?.desktop_available === false}
+          aria-busy={restoringId === row.id}
+          onClick={() => void restoreArchived(row)}
+          aria-label={t("mobile.project.restoreHint", { label: row.label })}
+          title={t("mobile.project.restoreHint", { label: row.label })}
+        >{restoringId === row.id
+          ? <><span className="transcript-working-dots" aria-hidden="true"><i /><i /><i /></span> {t("mobile.project.restoring", { label: row.label })}</>
+          : <>{row.agent ? `${row.label} · ${row.agent}` : row.label}</>}</button>)}
       </section>}
       {!tablet && <button className="project-foot-row" disabled={!detail} onClick={() => setPromptsOpen(true)} aria-haspopup="dialog" aria-expanded={promptsOpen}><span aria-hidden="true" className="project-foot-icon"><ClockIcon size="1em" /></span>{t("agentPrompts.heading")}<svg className="project-foot-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></button>}
     </div>}
@@ -966,8 +1037,8 @@ export function Project({ id, back, splitList, terminal }: {
       waiting=""
       busy={false}
       onClose={() => setMoreTab(null)}
-      options={tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available)).map((action) => ({ key: action, label: t(TAB_ACTION_LABEL[action]), current: false }))}
-      onPick={(key) => { const action = tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available)).find((row) => row === key); if (action) runAction(moreTab, action); }}
+      options={tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available), detail?.desktop_available === true).map((action) => ({ key: action, label: t(TAB_ACTION_LABEL[action]), current: false }))}
+      onPick={(key) => { const action = tabActions(moreTab, schedulesOffered(moreTab, terminalsOffered, detail?.desktop_available), detail?.desktop_available === true).find((row) => row === key); if (action) runAction(moreTab, action); }}
     >{isUntested("mobile.project.cardMenu") && <p className="sheet-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}</OptionSheet>}
     {newTabOpen && detail && <NewTabSheet
       projectId={id}

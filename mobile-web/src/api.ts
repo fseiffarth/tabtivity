@@ -223,10 +223,15 @@ export interface ProjectPromptList { prompts: ProjectPrompt[]; desktop_available
 /** An agent tab closed in the project this desktop session, newest first — an
  * opaque id and its label, reopened by `reopenTab`. */
 export interface ClosedTabRow { id: string; label: string; agent: string; closed_at: number }
+/** One of the project's archived tabs (the desktop's tab archive): its opaque
+ * id, label, kind (`agent`, `shell` or `other` — a viewer, a Files tab), the
+ * agent CLI for an agent tab, and when it was archived. Restored by
+ * `restoreArchivedTab`. */
+export interface ArchivedTabRow { id: string; label: string; kind: "agent" | "shell" | "other"; agent: string; archived_at: number }
 /** `files`: whether the read-only file browser answers for this project
  * (the desktop's switch is on, and it is a project, not a box or root). */
 export interface ProjectDetail {
-  project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; files?: boolean;
+  project: ProjectRow; tabs: TabRow[]; desktop_available: boolean; agents: AgentRow[]; closed?: ClosedTabRow[]; archived?: ArchivedTabRow[]; files?: boolean;
   /** Whether the file browser also has a remote side: a remote project's tree
    * on its host, read over the desktop's connection (`?on=host`). Absent (an
    * older desktop) is none. */
@@ -960,6 +965,24 @@ export function reopenTab(projectId: string, closedId?: string): Promise<{ tab: 
   return api(`/api/v1/projects/${encodeURIComponent(projectId)}/tabs/reopen`, {
     method: "POST",
     body: JSON.stringify(closedId ? { closed_id: closedId } : {}),
+  }, TAB_CREATE_TIMEOUT);
+}
+
+/** `POST /api/v1/tabs/{id}/archive` — put one tab into its project's archive,
+ * as the desktop's tab menu Archive does: it is kept there and ends. Needs
+ * desktop Tabtivity open (`503 desktop_unavailable`). */
+export function archiveTab(tabId: string): Promise<{ archived: boolean }> {
+  return api(`/api/v1/tabs/${encodeURIComponent(tabId)}/archive`, { method: "POST" });
+}
+
+/** `POST /api/v1/projects/{id}/tabs/archived/{archiveId}/restore` — bring an
+ * archived tab back in the desktop window. Answers with the tab's row when it
+ * came back as a terminal this phone can open, `{ on_desktop: true }` when it
+ * opened on the desktop only; `409 nothing_to_restore` once it is gone, `503
+ * desktop_unavailable` with no window. */
+export function restoreArchivedTab(projectId: string, archiveId: string): Promise<{ tab?: TabRow; on_desktop?: boolean }> {
+  return api(`/api/v1/projects/${encodeURIComponent(projectId)}/tabs/archived/${encodeURIComponent(archiveId)}/restore`, {
+    method: "POST",
   }, TAB_CREATE_TIMEOUT);
 }
 

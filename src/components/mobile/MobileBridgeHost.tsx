@@ -39,6 +39,7 @@ import { queuePromptForTab, sendCollectedPrompt, useAgentPromptsStore, type Proj
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { undoAgentClear } from "../../stores/agents/agentClearUndo";
 import { reopenClosedAgentTab, useClosedAgentTabsStore } from "../../stores/agents/closedAgentTabs";
+import { archiveTabs, canArchiveTab, restoreArchivedTab } from "../../stores/tabArchive";
 import { isTabColor } from "../../lib/theme/tabColors";
 import { mobileUsageText, type AgentUsageReport } from "../../lib/agents/agentUsage";
 import type { CliOverviewRow } from "../../../shared/cliOverview";
@@ -303,6 +304,8 @@ type DesktopRequest =
   | { type: "reorder_tab"; request_id: string; project_id: string; tmux_session: string; anchor_tmux_session: string; place: "before" | "after" }
   | { type: "close_tab"; request_id: string; project_id: string; tmux_session: string }
   | { type: "reopen_tab"; request_id: string; project_id: string; closed_id?: string | null }
+  | { type: "archive_tab"; request_id: string; project_id: string; tmux_session: string }
+  | { type: "restore_archived_tab"; request_id: string; project_id: string; archive_id: string }
   | { type: "prompts"; request_id: string; project_id: string }
   | { type: "prompt_mutate"; request_id: string; project_id: string; action: PromptMutation; device_id?: string }
   | { type: "agent_status"; request_id: string; project_id: string; tmux_session: string; refresh: boolean }
@@ -1511,6 +1514,52 @@ async function reopenMobileTab(projectId: string, closedId?: string): Promise<De
   if (scope.id === ASSISTANT_SCOPE) startAssistantChat(entry.key);
   await persistScopeLayout(scope.id);
   return { status: "created", tmux_session: entry.tmuxSession };
+}
+
+/** Archive one tab from the phone, as the desktop's tab menu Archive does
+ * (`stores/tabArchive`): it is kept in the project's archive and ends. Scoped,
+ * restored and persisted like the close above, for the same reasons. */
+async function archiveMobileTab(projectId: string, tmuxSession: string): Promise<DesktopResponse> {
+  const scope = mobileScope(projectId);
+  if (!scope) {
+    return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  await restoreScope(scope);
+  const tab = mobileTargetTab(scope.id, tmuxSession);
+  if (!tab) return { status: "error", code: "tab_not_found", message: "Tab is unavailable" };
+  if (!canArchiveTab(scope.id, tab)) {
+    return { status: "error", code: "not_archivable", message: "This tab cannot be archived" };
+  }
+  if ((await archiveTabs(scope.id, [tab.key])) === 0) {
+    return { status: "error", code: "archive_failed", message: "The tab could not be archived" };
+  }
+  await persistScopeLayout(scope.id);
+  return { status: "closed" };
+}
+
+/** Bring an archived tab back from the phone, as the desktop's archive list
+ * does: a new tab in the window, built the way a restart builds it. Like a
+ * reopen, the scope is shown first, since only the shown scope's panes spawn
+ * a terminal. A tab the phone can attach to is answered as created; one that
+ * came back on the desktop only (a viewer, a tab running on a host the phone
+ * cannot reach) as activated. */
+async function restoreMobileArchivedTab(projectId: string, archiveId: string): Promise<DesktopResponse> {
+  const scope = mobileScope(projectId);
+  if (!scope || scope.id === ASSISTANT_SCOPE) {
+    return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
+  }
+  await enterScope(scope);
+  let entry: TabEntry | null;
+  try {
+    entry = await restoreArchivedTab(scope.id, archiveId);
+  } catch {
+    return { status: "error", code: "restore_failed", message: "The tab could not be restored" };
+  }
+  if (!entry) return { status: "error", code: "nothing_to_restore", message: "That archived tab is gone" };
+  if (scope.id === ROOT_SCOPE) useTabsStore.getState().revealTabInScope(scope.id, entry.key);
+  await persistScopeLayout(scope.id);
+  const attachable = !!entry.tmuxSession && phoneReachesTab(scope.project, entry, scope.id) && phoneListsTab(scope.project, entry, scope.id);
+  return attachable && entry.tmuxSession ? { status: "created", tmux_session: entry.tmuxSession } : { status: "activated" };
 }
 
 /** Paint one tab from the phone, or clear its colour (#264).
@@ -3044,6 +3093,8 @@ async function handleRequest(
     case "rename_tab": return renameAgentTab(request.project_id, request.tmux_session, request.label);
     case "close_tab": return closeMobileTab(request.project_id, request.tmux_session);
     case "reopen_tab": return reopenMobileTab(request.project_id, request.closed_id ?? undefined);
+    case "archive_tab": return archiveMobileTab(request.project_id, request.tmux_session);
+    case "restore_archived_tab": return restoreMobileArchivedTab(request.project_id, request.archive_id);
     case "color_tab": return colorMobileTab(request.project_id, request.tmux_session, request.color);
     case "reorder_tab": return reorderMobileTab(request.project_id, request.tmux_session, request.anchor_tmux_session, request.place);
     case "schedules": return schedulesFor(request.project_id, request.tmux_session);
@@ -3114,7 +3165,7 @@ const mutationQueues = new Map<string, Promise<unknown>>();
  * `MobileMutationList.test.ts` holds the two in step (exported for it). */
 export function mutationDomain(type: DesktopRequest["type"]): string | null {
   switch (type) {
-    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "color_tab": case "reorder_tab": case "move_worktree": case "move_location": case "switch_assistant_model": return "tabs";
+    case "create": case "activate": case "rename_tab": case "close_tab": case "reopen_tab": case "archive_tab": case "restore_archived_tab": case "color_tab": case "reorder_tab": case "move_worktree": case "move_location": case "switch_assistant_model": return "tabs";
     case "todo_mutate": case "alert_resolve": case "calendar_mutate": return "board";
     case "mail_mark": case "mail_reply": return "mail";
     // A markup answer queues its prompt as a phone hold does.

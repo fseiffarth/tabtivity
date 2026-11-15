@@ -223,7 +223,7 @@ export function TabCard({ tab, draft, statusShown, drag, canReorder, schedulesOf
 /** The ⋯ sheet's rows for one tab. Their names differ from the card's own
  * buttons ("Rename", not "Rename claude 2"), so each control on the screen
  * keeps one accessible name. */
-export type TabAction = "rename" | "color" | "schedule" | "subagents" | "files" | "close";
+export type TabAction = "rename" | "color" | "schedule" | "subagents" | "files" | "archive" | "close";
 
 /** Whether a tab's schedules are offered: the host has tmux (`terminals`),
  * and a tab on the remote host only while a desktop window is open — with
@@ -233,7 +233,9 @@ export function schedulesOffered(tab: TabRow, terminalsOffered: boolean, desktop
   return terminalsOffered && !(tab.on_host && desktopAvailable === false);
 }
 
-export function tabActions(tab: TabRow, schedules: boolean): TabAction[] {
+/** `archivable`: Archive is offered (the desktop window is open — it holds
+ * the tab the archive is written from). */
+export function tabActions(tab: TabRow, schedules: boolean, archivable = false): TabAction[] {
   const agent = tab.kind === "agent";
   return [
     ...(agent ? ["rename" as const] : []),
@@ -243,6 +245,7 @@ export function tabActions(tab: TabRow, schedules: boolean): TabAction[] {
     // The files its chat produced and got: a cloud session records none, and
     // files cannot reach a tab on the remote host.
     ...(agent && !tab.cloud && !tab.on_host ? ["files" as const] : []),
+    ...(archivable ? ["archive" as const] : []),
     "close" as const,
   ];
 }
@@ -253,6 +256,7 @@ export const TAB_ACTION_LABEL: Record<TabAction, TranslationKey> = {
   schedule: "agentPrompts.scheduledHeading",
   subagents: "mobile.project.subagentsRow",
   files: "mobile.project.filesRow",
+  archive: "mobile.project.archiveRow",
   close: "mobile.project.closeRow",
 };
 

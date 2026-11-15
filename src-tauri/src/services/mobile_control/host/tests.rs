@@ -1005,6 +1005,51 @@ async fn tab_edits_close_and_reopen_are_the_owners_with_no_window() {
     assert_eq!(json(&body)["error"], "nothing_to_reopen");
 }
 
+/// The project's archived tabs (`services::tab_archive`) reach the phone as
+/// labels, kinds and the agent's CLI only — read off the state dir, so with
+/// no window too — while archiving and restoring need the window and say so.
+#[tokio::test]
+async fn archived_tabs_list_without_a_window_and_their_verbs_need_one() {
+    let host = headless_host(Arc::new(|_opts: PtyOptions| Box::pin(async { Ok(()) })));
+    let cookie = host.pair_device(&signing_key(52)).await.0;
+    let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+    let archive = host.state.config.state_dir.join("sessions").join(RAW_PROJECT).join(crate::services::tab_archive::ARCHIVE_FILE);
+    let secret_dir = host.root.join("deep").to_string_lossy().to_string();
+    std::fs::write(
+        &archive,
+        json!({ "entries": [
+            { "id": "a1b2", "archivedAt": 7, "tab": { "key": "k", "label": "Review\u{7}", "cmd": "claude", "cwd": secret_dir, "kind": "agent", "sessionId": "9d0f-archived" } },
+            { "id": "c3d4", "archivedAt": 6, "tab": { "key": "k2", "label": "notes.pdf", "cmd": "", "cwd": secret_dir, "kind": "embed", "embedPath": secret_dir } },
+            { "id": "../bad", "archivedAt": 5, "tab": { "key": "k3", "label": "x", "cmd": "", "cwd": "/" } }
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (_, _, body) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+    let detail = json(&body);
+    assert_eq!(detail["archived"].as_array().map(Vec::len), Some(2), "{body}");
+    assert_eq!(detail["archived"][0], json!({ "id": "a1b2", "label": "Review", "kind": "agent", "agent": "claude", "archived_at": 7 }));
+    assert_eq!(detail["archived"][1]["kind"], "other");
+    assert_eq!(detail["archived"][1]["agent"], "");
+    assert!(!body.contains(&secret_dir), "path leaked: {body}");
+    assert!(!body.contains("9d0f-archived"), "session id leaked: {body}");
+
+    let (status, _, body) = host.send(request_as("POST", &format!("/api/v1/tabs/{tab_id}/archive"), &cookie, None)).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+    assert_eq!(json(&body)["error"], "desktop_unavailable");
+    let (status, _, body) = host
+        .send(request_as("POST", &format!("/api/v1/projects/{project_id}/tabs/archived/a1b2/restore"), &cookie, None))
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "answered: {body}");
+    let (status, _, _) = host
+        .send(request_as("POST", &format!("/api/v1/projects/{project_id}/tabs/archived/a.b/restore"), &cookie, None))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Nothing was taken out by a refused restore.
+    assert_eq!(crate::services::tab_archive::list_at(&archive).len(), 3);
+}
+
 /// Bind the `with_project` host's agent tab to schedule target `tgt-1`.
 fn bind_schedule_target(host: &Fixture) {
     std::fs::write(
