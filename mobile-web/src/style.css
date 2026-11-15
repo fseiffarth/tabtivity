@@ -712,56 +712,69 @@ button.mobile-alert-row { cursor:pointer; }
 .mail-mobile-folders button.has-unread span { font-weight:700; color:#fff; }
 .mail-mobile-folders button.has-unread small { color:#d6d0ff; }
 .mobile-calendar-screen { display:grid; align-content:start; gap:14px; }
-.mobile-calendar-actions { display:flex; gap:8px; }
-.mobile-calendar-actions button { flex:1; }
-.mobile-calendar-event { display:grid; grid-template-columns:auto minmax(0,1fr); width:100%; gap:10px; align-items:start; text-align:left; background:#171a24; }
-.mobile-calendar-event > i,.mobile-calendar-manage-row > i { width:10px; height:10px; margin-top:5px; border-radius:50%; }
-.mobile-calendar-event div,.mobile-calendar-manage-row div { display:grid; gap:3px; min-width:0; }
-.mobile-calendar-event span { color:#aeb3c6; overflow-wrap:anywhere; }
-.mobile-calendar-event.cancelled { opacity:.58; text-decoration:line-through; }
-.mobile-calendar-manage-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid #303545; }
+/* The view segment (the Focus segment's track, `.tool-segment`) and Today. */
+.mobile-calendar-actions { display:flex; align-items:center; gap:var(--sp-2); }
+.mobile-calendar-views { flex:1 1 auto; width:auto; }
+.mobile-calendar-today { flex:0 0 auto; min-height:34px; padding:0 var(--sp-3); border:0; background:var(--surface-group); color:#bcb0ff; font-size:var(--fs-foot); font-weight:600; }
+/* One event row of a `.tool-group`: the time column, the colour dot, the title
+   and the place. */
+.mobile-calendar-event { gap:var(--sp-3); }
+.mobile-calendar-event > small { flex:0 0 5.4rem; color:var(--ink-muted); font-size:var(--fs-foot); font-variant-numeric:tabular-nums; }
+.mobile-calendar-event > i,.mobile-calendar-manage-row > i { flex:0 0 auto; width:10px; height:10px; }
+.mobile-calendar-event > i { align-self:center; }
+.mobile-calendar-manage-row > i { margin-top:5px; }
+.mobile-calendar-event > div,.mobile-calendar-manage-row div { display:grid; gap:3px; min-width:0; unicode-bidi:plaintext; }
+.mobile-calendar-event > div { flex:1 1 auto; }
+.mobile-calendar-event strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--fs-body); font-weight:600; }
+.mobile-calendar-event span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-muted); font-size:var(--fs-foot); }
+.mobile-calendar-event.cancelled { opacity:.58; }
+.mobile-calendar-event.cancelled strong { text-decoration:line-through; }
+.mobile-calendar-manage-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--hairline); }
 .mobile-calendar-manage-row strong { overflow-wrap:anywhere; }
 .mobile-calendar-manage-actions { grid-column:2 / -1; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
 .calendar-new { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:end; margin-top:14px; }
 .calendar-new input[type="color"] { min-width:54px; padding:5px; }
-.mobile-calendar-screen header { margin-bottom:-4px; }
+.mobile-calendar-screen > .screen-head { margin-bottom:-4px; }
 .mobile-calendar-screen .notice,.mobile-calendar-screen .error { margin:0; }
-.mobile-calendar-nav { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; text-align:center; }
-.mobile-calendar-nav strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.mobile-calendar-nav button { padding:7px 14px; font-size:1.35rem; }
-.mobile-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:4px; }
-.mobile-calendar-weekday { padding:3px 0; color:#9fa4b6; font-size:.7rem; font-weight:750; text-align:center; text-transform:uppercase; }
-.mobile-calendar-day { display:grid; min-width:0; min-height:54px; align-content:space-between; justify-items:center; gap:6px; padding:6px 3px; border-color:#303545; border-radius:9px; background:#171a24; font-size:.82rem; }
-.mobile-calendar-day.outside { color:#687084; background:#12151d; }
-.mobile-calendar-day.today > span { display:grid; place-items:center; width:22px; height:22px; border-radius:50%; background:#5c4fc9; color:#fff; font-weight:750; }
-.mobile-calendar-day.selected { outline:2px solid #9c8cff; outline-offset:1px; border-color:#9c8cff; background:#282248; }
+/* ‹ label › under the segment: Home's bare icon buttons either side. */
+.mobile-calendar-nav { display:grid; grid-template-columns:var(--hit) minmax(0,1fr) var(--hit); align-items:center; gap:var(--sp-2); text-align:center; }
+.mobile-calendar-nav strong { font-size:var(--fs-headline); font-weight:650; line-height:1.25; text-wrap:balance; unicode-bidi:plaintext; }
+/* The month and the week strip are one group: the weekday row over borderless
+   day cells. Today is a filled accent circle, the picked day a tinted one. */
+.mobile-calendar-grid,.mobile-calendar-weekstrip { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:2px 0; padding:var(--sp-2) var(--sp-1) var(--sp-2); border-radius:var(--r-lg); background:var(--surface-group); }
+.mobile-calendar-weekday { padding:var(--sp-1) 0; color:var(--ink-muted); font-size:var(--fs-micro); font-weight:700; text-align:center; text-transform:uppercase; }
+.mobile-calendar-day { display:grid; min-width:0; min-height:50px; align-content:start; justify-items:center; gap:3px; padding:4px 0; border:0; border-radius:var(--r-md); background:transparent; font-size:var(--fs-sub); }
+.mobile-calendar-day > span { display:grid; place-items:center; width:28px; height:28px; border-radius:50%; font-variant-numeric:tabular-nums; }
+.mobile-calendar-day.outside { color:#6f7488; }
+.mobile-calendar-day.today > span { background:#7c6cff; color:#fff; font-weight:700; }
+.mobile-calendar-day.selected > span { background:#2e2b48; color:#bcb0ff; font-weight:700; }
+.mobile-calendar-day.selected.today > span { background:#7c6cff; color:#fff; outline:2px solid #bcb0ff; outline-offset:1px; }
 .mobile-calendar-dots { display:flex; min-height:7px; align-items:center; justify-content:center; gap:3px; font-style:normal; }
 .mobile-calendar-dots b { width:5px; height:5px; border-radius:50%; }
-.mobile-calendar-warning { margin:0; padding:10px; border-radius:9px; background:#493b20; color:#ffe29a; }
-.mobile-calendar-agenda { display:grid; gap:9px; }
-.mobile-calendar-agenda h2 { margin:4px 0 0; font-size:1rem; }
-.mobile-calendar-agenda > p { margin:0; padding:18px; border:1px solid #383c4d; border-radius:11px; color:#9498aa; text-align:center; }
-.mobile-calendar-agenda article { display:grid; grid-template-columns:4px minmax(0,1fr); gap:11px; padding:11px; border:1px solid #383c4d; border-radius:11px; background:#1b1e29; }
-.mobile-calendar-agenda article > div { display:grid; min-width:0; gap:3px; unicode-bidi:plaintext; }
-.mobile-calendar-agenda article small { color:#aeb2c2; }
-.mobile-calendar-agenda article strong,.mobile-calendar-agenda article span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.mobile-calendar-agenda article span { color:#aeb2c2; font-size:.86rem; }
-.mobile-calendar-agenda article.cancelled { opacity:.58; }
-.mobile-calendar-agenda article.cancelled strong { text-decoration:line-through; }
-/* The week view: the same day cells as the month grid in a single strip, over
-   a per-day agenda of the days that hold something. */
-.mobile-calendar-weekstrip { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:4px; }
-.mobile-calendar-weekstrip .mobile-calendar-day { min-height:48px; }
-.mobile-calendar-weekgroup { display:grid; gap:9px; }
-.mobile-calendar-weekgroup h2 { margin:6px 0 0; font-size:.9rem; color:#c6cade; }
-/* The day view: the all-day rows on top, then one row per hour. An event sits
-   in the hour it starts in; an empty row's + drafts an event at that hour. */
+.mobile-calendar-warning { margin:0; padding:10px; border-radius:var(--r-sm); background:#493b20; color:#ffe29a; }
+/* The agenda under the month and the week strip: a small heading over an inset
+   group of event rows, or one quiet line when the day holds nothing. */
+.mobile-calendar-agenda { display:grid; }
+.mobile-calendar-agenda > .tool-section-head,.mobile-calendar-weekgroup > .tool-section-head { margin:var(--sp-2) 2px var(--sp-2); text-transform:none; letter-spacing:0; font-size:var(--fs-sub); }
+.mobile-calendar-agenda > p,.mobile-calendar-empty { margin:0; padding:var(--sp-5) var(--sp-4); color:var(--ink-muted); font-size:var(--fs-sub); text-align:center; }
+.mobile-calendar-agenda > p { border-radius:var(--r-lg); background:var(--surface-group); }
+.mobile-calendar-agenda.tool-group { gap:0; }
+/* The week view: the same day cells in a single strip, over a per-day agenda of
+   the days that hold something. */
+.mobile-calendar-weekstrip .mobile-calendar-day { min-height:50px; }
+.mobile-calendar-weekgroup { display:grid; }
+.mobile-calendar-weekgroup + .mobile-calendar-weekgroup { margin-top:var(--sp-3); }
+/* The day view: one group, a row per hour. An event sits in the hour it starts
+   in; an empty row is a borderless tap target with a faint + that drafts an
+   event at that hour. */
 .mobile-calendar-dayview { display:grid; }
-.mobile-calendar-hour { display:grid; grid-template-columns:44px minmax(0,1fr); gap:8px; padding:6px 0; border-bottom:1px solid #232836; }
-.mobile-calendar-hour-label { padding-top:9px; color:#9fa4b6; font-size:.75rem; font-variant-numeric:tabular-nums; }
-.mobile-calendar-hour-lane { display:grid; gap:8px; min-height:34px; align-content:start; }
-.mobile-calendar-hour-add { width:100%; min-height:34px; border:1px dashed #383c4d; border-radius:9px; background:transparent; color:#687084; font-size:1rem; }
-.mobile-calendar-empty { margin:0; padding:18px; border:1px solid #383c4d; border-radius:11px; color:#9498aa; text-align:center; }
+.mobile-calendar-hour { display:grid; grid-template-columns:44px minmax(0,1fr); gap:var(--sp-2); padding:0 var(--sp-3) 0 var(--sp-3); }
+.mobile-calendar-hour-label { padding-top:14px; color:var(--ink-muted); font-size:var(--fs-caption); font-variant-numeric:tabular-nums; }
+.mobile-calendar-hour-lane { display:grid; min-height:44px; align-content:start; }
+.mobile-calendar-hour-lane > * + * { border-top:1px solid var(--hairline); }
+.mobile-calendar-hour-lane > .mobile-calendar-event { padding-inline:0; }
+.mobile-calendar-hour-add { display:flex; align-items:center; justify-content:flex-start; width:100%; min-height:44px; padding:0; border:0; border-radius:0; background:transparent; color:#6f7488; opacity:.6; }
+.mobile-calendar-dayview > .mobile-calendar-empty { padding-block:var(--sp-4); }
 /* Mail, To-do and Calendar are rounded to the home screen's scale as well, on
    the same two rules: a bordered element takes `--r` and its rim colour
    `--rim` (`--rim-l`/`--rim-lw` for a heavier left edge); a borderless one
@@ -825,25 +838,21 @@ button.mobile-alert-row { cursor:pointer; }
 .todo-chip.due.today { --rim:#66522a; }
 .todo-chip.due.soon { --rim:#2f4658; }
 /* Rounding · Calendar */
-:where(.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"]))) { --r:var(--r-md); --rim:#383c4d; }
-.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-day,.mobile-calendar-event,.mobile-calendar-agenda > p,.mobile-calendar-empty,.mobile-calendar-hour-add,.calendar-new input:not([type="color"])) {
-  border-radius:var(--r); box-shadow:none; border-color:var(--rim); border-left-color:var(--rim-l, var(--rim)); border-left-width:var(--rim-lw, 1px);
+:where(.mobile-calendar-screen .calendar-new input:not([type="color"])) { --r:var(--r-md); --rim:#383c4d; }
+.mobile-calendar-screen .calendar-new input:not([type="color"]) {
+  border-radius:var(--r); box-shadow:none; border-color:var(--rim);
 }
-:where(.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i)) { --r:var(--r-md); }
-.mobile-calendar-screen :is(.mobile-calendar-warning,.mobile-calendar-day.today > span,.mobile-calendar-event > i,.mobile-calendar-manage-row > i) {
-  border-radius:var(--r);
-}
-:where(.mobile-calendar-screen :is(.mobile-calendar-actions button,.mobile-calendar-nav button,.mobile-calendar-warning)) { --r:var(--r-sm); }
-.mobile-calendar-day { --r:6px; --rim:#303545; }
-.mobile-calendar-hour-add { --r:6px; }
-.mobile-calendar-day.today > span { --r:6px; }
-.mobile-calendar-event > i,.mobile-calendar-manage-row > i { --r:3px; }
-/* The shared `.selected` paints the picked day with `!important`, which would
-   wipe the corner layers; the day repaints them the same way, in its own
-   colours, and drops the outline the clip would only cut off. */
-.mobile-calendar-screen .mobile-calendar-day.selected { --rim:#9c8cff; outline:0; border-color:var(--rim) !important; background-color:#282248 !important; }
+.mobile-calendar-screen .mobile-calendar-views { border-radius:var(--r-sm); }
+.mobile-calendar-screen .mobile-calendar-views button { border-radius:6px; }
+.mobile-calendar-screen .mobile-calendar-today { border-radius:var(--r-sm); }
+.mobile-calendar-screen .mobile-calendar-hour-add { border-radius:0; }
+.mobile-calendar-event > i { border-radius:50%; }
+.mobile-calendar-manage-row > i { border-radius:3px; }
+/* The shared `.selected` paints a picked button with `!important`; the picked
+   day is lit by its tinted circle, so its cell stays bare. */
+.mobile-calendar-screen .mobile-calendar-day.selected { background-color:transparent !important; border-color:transparent !important; }
 @media (max-width:480px) { .mail-mobile-row > div { display:grid; gap:3px; } .mail-mobile-pager button { padding-inline:9px; } }
-@media (max-width:360px) { .projects-row { margin-top:14px; } .mobile-calendar-day { min-height:48px; } .mobile-tab { font-size:.68rem; } }
+@media (max-width:360px) { .projects-row { margin-top:14px; } .mobile-calendar-day,.mobile-calendar-weekstrip .mobile-calendar-day { min-height:46px; } .mobile-tab { font-size:.68rem; } }
 /* While the full-bleed terminal is up: no document scroll to lose the header
    down (see the `terminal-open` effect in screens/Terminal.tsx). */
 body.terminal-open { min-height:0; overflow:hidden; }

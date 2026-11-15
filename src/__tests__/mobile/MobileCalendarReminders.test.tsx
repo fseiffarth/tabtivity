@@ -61,6 +61,7 @@ afterEach(() => {
 
 async function openSheet() {
   render(<Calendar />);
+  fireEvent.click(await screen.findByRole("button", { name: "More" }));
   fireEvent.click(await screen.findByRole("button", { name: /^Reminders/ }));
   await screen.findByRole("dialog", { name: "Notifications" });
 }
