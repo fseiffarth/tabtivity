@@ -118,29 +118,62 @@ pub fn trim_webview_cache(data_root: &Path) {
 
 /// Where the webview keeps its per-app data, for `identifier`.
 ///
-/// **Linux only, deliberately.** This exists to find one directory —
-/// `WebKitCache` — and only WebKitGTK writes one: WebView2 and WKWebView bound
-/// their own caches and keep them under their own layouts, so there is nothing
-/// on the other two platforms for the caller to trim and guessing at their paths
-/// would be inventing a cleanup target rather than fixing a measured one.
+/// The cache trim looks for one directory in it — `WebKitCache` — and only
+/// WebKitGTK writes one: WebView2 and WKWebView bound their own caches.
 ///
-/// The layout is wry's: `$XDG_DATA_HOME/<identifier>`, falling back to
+/// On Linux the layout is wry's: `$XDG_DATA_HOME/<identifier>`, falling back to
 /// `~/.local/share` per the XDG base-directory spec — the same resolution
 /// `storage::state_dir` does for Tabtivity's own state, minus the Tabtivity-specific
 /// override (this directory belongs to the engine, and pointing a dev sandbox's
 /// `TABTIVITY_STATE_DIR` at it would be pointing it at the wrong thing).
-#[cfg(target_os = "linux")]
+///
+/// The brand migration's `webview-data` step copies this whole directory from
+/// the old identifier to the current one, so it is given on every OS (2442q):
+/// - **Windows:** Tauri forces WebView2's user data folder to
+///   `app_local_data_dir()` = `%LOCALAPPDATA%\<identifier>` (tauri 2.12
+///   `manager/webview.rs`), where WebView2 keeps `EBWebView\`.
+/// - **macOS:** wry 0.57 uses `WKWebsiteDataStore.defaultDataStore` unless a
+///   data store identifier is set (Tabtivity sets none), which keeps
+///   localStorage and IndexedDB under `~/Library/WebKit/<bundle identifier>`
+///   (`WebsiteData/`); the bundle identifier is the Tauri identifier.
+///
+/// No `WebKitCache` lives in either, so [`trim_webview_cache`] finds nothing to
+/// trim there. A wrong guess costs nothing: the step copies only a folder that
+/// exists under the old identifier.
 pub fn webview_data_root(identifier: &str) -> Option<std::path::PathBuf> {
-    let base = match std::env::var("XDG_DATA_HOME") {
-        Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
-        _ => crate::paths::home_dir().join(".local").join("share"),
-    };
-    Some(base.join(identifier))
+    webview_data_root_for(
+        crate::paths::OsKind::current(),
+        identifier,
+        &crate::paths::home_dir(),
+        std::env::var_os("XDG_DATA_HOME").as_deref(),
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+    )
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn webview_data_root(_identifier: &str) -> Option<std::path::PathBuf> {
-    None
+/// [`webview_data_root`] over the OS and its environment. Pure.
+pub(crate) fn webview_data_root_for(
+    os: crate::paths::OsKind,
+    identifier: &str,
+    home: &Path,
+    xdg_data_home: Option<&std::ffi::OsStr>,
+    local_app_data: Option<&std::ffi::OsStr>,
+) -> Option<std::path::PathBuf> {
+    use crate::paths::OsKind;
+    if identifier.is_empty() {
+        return None;
+    }
+    let base = match os {
+        OsKind::Unix => match xdg_data_home.filter(|d| !d.is_empty()) {
+            Some(dir) => std::path::PathBuf::from(dir),
+            None => home.join(".local").join("share"),
+        },
+        OsKind::Macos => home.join("Library").join("WebKit"),
+        OsKind::Windows => match local_app_data.filter(|d| !d.is_empty()) {
+            Some(dir) => std::path::PathBuf::from(dir),
+            None => home.join("AppData").join("Local"),
+        },
+    };
+    Some(base.join(identifier))
 }
 
 /// Total size of the files under `dir`, or `None` if it does not exist.
@@ -171,6 +204,23 @@ fn dir_size(dir: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2442q: the webview's data dir is named on every OS, so the brand
+    /// migration's webview-data step copies it there too.
+    #[test]
+    fn the_webview_data_root_is_known_on_every_os() {
+        use crate::paths::OsKind;
+        use std::ffi::OsStr;
+        let home = Path::new("/h");
+        let id = "com.example.app";
+        assert_eq!(webview_data_root_for(OsKind::Unix, id, home, None, None), Some(home.join(".local").join("share").join(id)));
+        assert_eq!(webview_data_root_for(OsKind::Unix, id, home, Some(OsStr::new("/x")), None), Some(Path::new("/x").join(id)));
+        assert_eq!(webview_data_root_for(OsKind::Unix, id, home, Some(OsStr::new("")), None), Some(home.join(".local").join("share").join(id)));
+        assert_eq!(webview_data_root_for(OsKind::Macos, id, home, Some(OsStr::new("/x")), None), Some(home.join("Library").join("WebKit").join(id)));
+        assert_eq!(webview_data_root_for(OsKind::Windows, id, home, None, Some(OsStr::new("/lad"))), Some(Path::new("/lad").join(id)));
+        assert_eq!(webview_data_root_for(OsKind::Windows, id, home, None, None), Some(home.join("AppData").join("Local").join(id)));
+        assert_eq!(webview_data_root_for(OsKind::Macos, "", home, None, None), None);
+    }
 
     #[test]
     fn a_file_under_the_cap_is_left_alone() {
