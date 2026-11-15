@@ -422,7 +422,7 @@ const HOST_BINARY_NAME: &str = crate::brand::MOBILE_HOST_BIN;
 /// An install copies the running image byte for byte, so a copy of a different
 /// size, or one older than that image, is behind it. Comparing the bytes
 /// themselves is not worth a debug binary's 700 MB on every status poll.
-fn binary_behind(installed: &Path, running: &Path) -> bool {
+pub(crate) fn binary_behind(installed: &Path, running: &Path) -> bool {
     let (Ok(installed), Ok(running)) = (
         std::fs::metadata(installed),
         std::fs::metadata(running),
@@ -522,7 +522,7 @@ fn mobile_binary_source() -> Result<PathBuf, String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn mobile_binary_source() -> Result<PathBuf, String> {
+pub(crate) fn mobile_binary_source() -> Result<PathBuf, String> {
     std::env::current_exe().map_err(|e| e.to_string())
 }
 
@@ -634,6 +634,11 @@ const MOUNT_NAMESPACE_DIRECTIVES: &[&str] = &[
 
 /// Delete every `bin/<version>/` directory except `keep`.
 ///
+/// Only `bin/`: the Windows session host keeps its own versioned copies in
+/// the sibling `session-host/` and prunes them itself
+/// (`services::session_host::launch::prune_copies`), so a phone update never
+/// takes a running host — and the agents in it — away.
+///
 /// The sidecar is versioned per directory so an install can never write over the
 /// executable a running host is executing (see [`install_mobile_binary`]) — but
 /// nothing removed the superseded ones, so every Tabtivity version the user has
@@ -699,7 +704,14 @@ fn install_mobile_binary(source: &Path, target_dir: &Path) -> Result<PathBuf, St
 /// that file backs a running process, so callers stop the live host first.
 #[cfg(windows)]
 fn install_mobile_binary(source: &Path, target_dir: &Path) -> Result<PathBuf, String> {
-    let target = target_dir.join(HOST_BINARY_NAME);
+    install_binary_copy(source, target_dir, HOST_BINARY_NAME)
+}
+
+/// [`install_mobile_binary`] under any leaf name: the session host's copy
+/// (`services::session_host::launch`) is staged the same way.
+#[cfg(windows)]
+pub(crate) fn install_binary_copy(source: &Path, target_dir: &Path, leaf: &str) -> Result<PathBuf, String> {
+    let target = target_dir.join(leaf);
     let mut staged = tempfile::NamedTempFile::new_in(target_dir)
         .map_err(|error| format!("stage mobile host: {error}"))?;
     let mut source_file =
@@ -1673,7 +1685,7 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
     use crate::services::mobile_control::admin::pipe;
     let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
     app_core::rt::spawn(async move {
-        use tokio::net::windows::named_pipe::ServerOptions;
+        use crate::services::local_pipe;
         let name = pipe::pipe_name(&socket);
         // Either failure leaves every phone request that needs the desktop
         // reading `desktop_unavailable` for the whole session; say why.
@@ -1684,7 +1696,9 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
                 return;
             }
         };
-        let mut server = match ServerOptions::new().first_pipe_instance(true).create(&name) {
+        // The protected owner-only DACL (the default one is broader); a
+        // client of another user or integrity level never gets past accept.
+        let mut server = match local_pipe::create_server(&name, true) {
             Ok(server) => server,
             Err(error) => {
                 eprintln!("mobile host: desktop bridge cannot create its pipe: {error}");
@@ -1692,15 +1706,10 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
             }
         };
         loop {
-            if server.connect().await.is_err() {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                continue;
-            }
-            let Ok(next) = ServerOptions::new().create(&name) else {
+            let Ok(mut stream) = local_pipe::accept(&mut server, &name).await else {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
             };
-            let mut stream = std::mem::replace(&mut server, next);
             let ctx = ctx.clone();
             let state = state.clone();
             let token = token.clone();
@@ -1754,6 +1763,25 @@ mod prune_tests {
     fn prune_is_a_no_op_when_the_store_does_not_exist_yet() {
         let temp = tempfile::tempdir().expect("temp directory");
         prune_old_versions(&temp.path().join("nope"), "0.1.58");
+    }
+
+    /// The session host's copies sit beside `bin/`, never in it: a phone
+    /// install's prune leaves a running host's executable alone.
+    #[test]
+    fn prune_never_reaches_the_session_hosts_copies() {
+        use crate::services::session_host::copies;
+        let temp = tempfile::tempdir().expect("temp directory");
+        let control = temp.path();
+        let host_copy = copies::copy_path(control, "0.1.52");
+        std::fs::create_dir_all(host_copy.parent().unwrap()).expect("host copy directory");
+        std::fs::write(&host_copy, b"host").expect("host copy");
+        let bin = control.join("bin");
+        for version in ["0.1.52", "0.1.58"] {
+            std::fs::create_dir_all(bin.join(version)).expect("version directory");
+        }
+        prune_old_versions(&bin, "0.1.58");
+        assert!(!bin.join("0.1.52").exists());
+        assert!(host_copy.is_file(), "the session host's copy survives");
     }
 }
 

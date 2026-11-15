@@ -325,14 +325,17 @@ pub fn watch_setup_tab(pty_id: String, tmux_session: Option<String>) {
 }
 
 /// The screen and recent history of local tmux `session`, wrapped rows
-/// joined. `None` when there is no such session.
+/// joined. `None` when there is no such session. tmux-specific on purpose:
+/// the screen *and* its plain-text history in one capture (`-S -200`) is
+/// more than `SessionMux::screen` gives, so it runs only where the session
+/// mux is tmux, on that mux's server.
 fn tmux_screen(session: &str) -> Option<String> {
-    if !crate::services::ssh_exec::valid_tmux_session_name(session) || !crate::services::tmux_local::tmux_available() {
+    use crate::services::session_mux::{self, tmux::TmuxMux, MuxKind};
+    let mux = session_mux::mux();
+    if !crate::services::ssh_exec::valid_tmux_session_name(session) || mux.kind() != MuxKind::Tmux || !mux.available() {
         return None;
     }
-    let mut args = crate::services::tmux_local::local_tmux_screen_args(session);
-    args.extend(["-S".into(), "-200".into()]);
-    let output = crate::services::tmux_local::tmux_command().args(args).output().ok()?;
+    let output = TmuxMux::default().screen_command(session).args(["-S", "-200"]).output().ok()?;
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 

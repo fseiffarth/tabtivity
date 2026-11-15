@@ -800,8 +800,14 @@ export interface Settings {
   /** Persistent LOCAL (tmux) sessions (TODO #85): when true (the default on Unix),
    *  a local project's shell/script tabs run inside a tmux session on the machine,
    *  so a long run keeps going if Tabtivity crashes and the tab reattaches on restart.
-   *  `undefined`/`true` = on; `false` = off. No effect on Windows (no tmux). */
+   *  `undefined`/`true` = on; `false` = off. On Windows it applies only with
+   *  `windows_session_host` on (agent tabs then run in the session host). */
   persist_local_sessions?: boolean;
+  /** EXPERIMENTAL, default OFF, Windows only. Local agent tabs run in the native
+   *  session host (`docs/windows_session_host_plan.md`) so they outlive the
+   *  window and a phone can attach; needs `persist_local_sessions` on too. Read
+   *  through `lib/terminal/localSessions`. Never carried by Debug mode. */
+  windows_session_host?: boolean;
   /** When true (the default), remote SSH/OpenVPN connections are made headlessly
    *  in the background (Tabtivity handles the password transiently). When false, they
    *  are launched as interactive terminal tabs in the Tabtivity root scope, so the

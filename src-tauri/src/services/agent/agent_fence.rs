@@ -2416,6 +2416,7 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
         schedule_target_id: None,
         host_session: false,
         api_key: None,
+        mux_wrapped: false,
     };
     crate::services::sandbox::enforce_spawn_authority(&mut opts);
     let remote_run =
@@ -2628,6 +2629,12 @@ pub fn is_current_spawn(tab_id: &str, seq: u64) -> bool {
         .lock_ok()
         .get(tab_id)
         .is_some_and(|s| s.latest == seq)
+}
+
+/// The newest spawn begun for `tab_id` that is not torn down, if any — one
+/// still being prepared or opened included.
+pub fn latest_spawn(tab_id: &str) -> Option<u64> {
+    tab_spawns().lock_ok().get(tab_id).map(|s| s.latest)
 }
 
 /// Spawn `seq` failed before its process existed: the id falls back to the
@@ -2916,9 +2923,14 @@ pub fn live_unfenced_by_scope(pid_of: impl Fn(&str) -> Option<u32>) -> HashMap<S
         return counts;
     }
     // A tmux tab's registry pid is the tmux *client*; its agent lives under
-    // the server's pane.
-    let panes = if tabs.iter().any(|(_, t)| t.tmux_session.is_some()) {
-        crate::services::tmux_local::tmux_command()
+    // the server's pane — each session's *first* pane, the app's own, in one
+    // `list-panes -a`. tmux argv on purpose (`SessionMux::pane` reads the
+    // active pane, one call each), so it runs only where the mux is tmux.
+    let panes = if tabs.iter().any(|(_, t)| t.tmux_session.is_some())
+        && crate::services::session_mux::mux().kind() == crate::services::session_mux::MuxKind::Tmux
+    {
+        crate::services::session_mux::tmux::TmuxMux::default()
+            .command()
             .args(["list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}"])
             .output()
             .ok()

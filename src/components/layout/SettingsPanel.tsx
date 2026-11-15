@@ -94,6 +94,8 @@ import {
 export type { SettingsPanelKind } from "./settingsIndex";
 import { useUse24h } from "../../lib/timeFormat";
 import { IS_HOST_WINDOWS, IS_LINUX, IS_MAC, PLATFORM } from "../../lib/platform";
+import { localSessionBackendOn } from "../../lib/terminal/localSessions";
+import { PersistLocalSessionsToggle, WindowsSessionHostToggle } from "./WindowsSessionHostToggle";
 import { runInstallInTab } from "../../lib/installCommand";
 import { useHintsStore } from "../../stores/hints";
 import { canConnectVpnSilently } from "../../lib/remote/vpn/vpnConnect";
@@ -1342,19 +1344,9 @@ export function SettingsDialog({
               onChange={(e) => void updateSettings({ run_scripts_in_background: e.target.checked })}
             />
 
-            {!IS_HOST_WINDOWS && (
-              <ToggleCard
-                label={t("settings.persistLocal")}
-                checked={settings?.persist_local_sessions ?? true}
-                onChange={(e) => void updateSettings({ persist_local_sessions: e.target.checked })}
-                help={
-                  <>
-                    {t("settings.persistLocalHelp1")} <code>tmux</code>
-                    {t("settings.persistLocalHelp2")}
-                  </>
-                }
-              />
-            )}
+            {/* Shown wherever a local session backend exists: tmux, or on
+                Windows the experimental session host (`lib/terminal/localSessions`). */}
+            {localSessionBackendOn(settings) && <PersistLocalSessionsToggle />}
             </>)}
 
             {section === "layout" && (<>
@@ -2087,6 +2079,12 @@ export function SettingsDialog({
             {/* Linux only: WebKitGTK's DMA-BUF renderer, read by the backend at
                 launch (docs/done/gpu_compositing_plan.md). The canvas defect that
                 made it drop PDF content is avoided on every webview regardless. */}
+            {/* Windows only: agent tabs run in the native session host
+                (docs/windows_session_host_plan.md), which the backend reads per
+                call; it also needs Persistent local sessions (Terminal). Turning it
+                off asks, and ends the agents running in it. */}
+            {IS_HOST_WINDOWS && <WindowsSessionHostToggle />}
+
             {IS_LINUX && (
               <ToggleCard
                 label={<>{t("settings.gpuCompositing")} <UntestedTag id="settings.gpuCompositing" /></>}

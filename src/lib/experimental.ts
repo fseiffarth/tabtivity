@@ -73,6 +73,7 @@ export const EXPERIMENTAL_FLAGS = [
   "copilot_completion",
   "assistant",
   "voice_hands_free",
+  "windows_session_host",
 ] as const;
 
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number];
@@ -98,6 +99,9 @@ export function experimentalEnabled(
   // Same rule for the GPU renderer switch (the backend's `gpu_compositing()` is
   // a strict `unwrap_or(false)` too).
   if (flag === "gpu_compositing" && settings?.gpu_compositing == null) return false;
+  // And for the Windows session host: it moves agent tabs into another
+  // process, so unset is off everywhere (the backend's `flag_on` is strict too).
+  if (flag === "windows_session_host" && settings?.windows_session_host == null) return false;
   if (settings == null) return false;
   const explicit = settings[flag];
   if (explicit != null) return explicit;
@@ -107,8 +111,11 @@ export function experimentalEnabled(
 }
 
 /** The flags an unmarked Debug-mode profile had on without a tick: every one but
- *  `terminal_webgl` and `gpu_compositing`, which Debug mode never carried. */
-const DEBUG_CARRIED_FLAGS = EXPERIMENTAL_FLAGS.filter((f) => f !== "terminal_webgl" && f !== "gpu_compositing");
+ *  `terminal_webgl`, `gpu_compositing` and `windows_session_host`, which Debug
+ *  mode never carried. */
+const DEBUG_CARRIED_FLAGS = EXPERIMENTAL_FLAGS.filter(
+  (f) => f !== "terminal_webgl" && f !== "gpu_compositing" && f !== "windows_session_host",
+);
 
 /**
  * The one-shot patch that moves a profile onto the explicit rule without

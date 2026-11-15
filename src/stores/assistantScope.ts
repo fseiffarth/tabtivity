@@ -6,6 +6,7 @@ import { useAssistantViewStore } from "./assistantView";
 import { useOverlayAgentStore } from "./overlayAgent";
 import { onTerminalExit, onTerminalReady } from "../lib/terminal/terminalBus";
 import { IS_HOST_WINDOWS } from "../lib/platform";
+import { mobileTmuxReadiness } from "../lib/terminal/mobileTmuxReady";
 
 /**
  * The **Tabby scope** in the tabs store: the chats of the assistant
@@ -108,7 +109,12 @@ export async function switchAssistantModel(key: string, model: string): Promise<
   const tab = assistantTabs().find((c) => c.key === key);
   const launch = tab?.assistant;
   if (!tab || !launch || !model || assistantCurrentModel(launch) === model) return false;
-  if (tab.tmuxSession && !IS_HOST_WINDOWS) {
+  // A chat the host was off for when it was drawn (Windows; the slot's stamp)
+  // runs in the window: the respawn ends it, so there is no exit to wait for.
+  // Its session name is still ended, which is a no-op when there is none.
+  const wrapped = !IS_HOST_WINDOWS || mobileTmuxReadiness(ASSISTANT_SCOPE, key) === true;
+  if (tab.tmuxSession && !wrapped) void invoke("local_tmux_kill", { session: tab.tmuxSession }).catch(() => {});
+  if (tab.tmuxSession && wrapped) {
     // The old CLI's exit is waited for, so it lands before the respawn and not
     // on the new one (the chat would read as ended while it runs).
     let off = () => {};

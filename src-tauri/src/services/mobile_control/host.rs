@@ -130,7 +130,7 @@ struct HostState {
 /// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
 /// prepared tab detached under its tmux name, `installed` says which agent
 /// CLIs the ＋ sheet may offer. Production is `launch_prep::prepare` plus
-/// `tmux_local::spawn_detached_with` on the default tmux server — the same
+/// the session mux's `spawn_detached` on the default tmux server — the same
 /// launch assembly and the same server the window uses, so the window later
 /// attaches to what the sidecar started — and the registry's install probe.
 /// `new_project` makes a phone's new project
@@ -162,40 +162,82 @@ impl Default for HeadlessSpawner {
             launch: Arc::new(|opts: PtyOptions| {
                 Box::pin(async move {
                     let prepared = crate::services::launch_prep::prepare(opts, None, None).await?;
-                    #[cfg(unix)]
-                    {
-                        let check = prepared.privacy_check();
-                        let (tab, seq, session) =
-                            (prepared.opts.id.clone(), prepared.spawn_seq(), prepared.opts.tmux_session.clone());
-                        crate::services::tmux_local::spawn_detached_with(&prepared.opts, None)?;
-                        prepared.commit();
-                        // Local models only switched on while this agent was starting
-                        // (`launch_prep::recheck_privacy`): refused, its session ends here.
-                        if let Err(refusal) = crate::services::launch_prep::recheck_privacy(check).await {
-                            let sweep = app_core::rt::blocking("Local models only", move || {
-                                let sweep = crate::services::agent_privacy::end_sessions(session.as_slice());
-                                crate::services::launch_prep::on_tab_gone(&tab, seq);
-                                sweep
-                            })
-                            .await;
-                            return Err(match crate::commands::agent_privacy::unconfirmed_note(sweep) {
-                                Some(note) => format!("{refusal} {note}"),
-                                None => refusal,
-                            });
+                    let check = prepared.privacy_check();
+                    let (tab, seq, session) =
+                        (prepared.opts.id.clone(), prepared.spawn_seq(), prepared.opts.tmux_session.clone());
+                    // No local session backend (Windows with the session
+                    // host off): `Unavailable`, and the prepared spawn is
+                    // dropped. On the session host only what `prepare`'s
+                    // wrap marked runs (`headless_spawn_refused`).
+                    let mux = crate::services::session_mux::mux();
+                    if let Some(why) = headless_spawn_refused(mux.kind(), prepared.opts.mux_wrapped) {
+                        return Err(why.to_string());
+                    }
+                    // Off the async workers: the session host's connect may
+                    // start the host (a lazy start, ≤ 3 s). A launch that may
+                    // only rejoin its live session (`host_attach_only`: let
+                    // through the AI switch, or found alive in a host whose
+                    // setting is off) never goes through the create-or-attach
+                    // spawn: alive, there is nothing to start; gone meanwhile,
+                    // it is refused as the switch refuses a new agent.
+                    let opts = prepared.opts.clone();
+                    let attach_only = prepared.host_attach_only;
+                    app_core::rt::blocking("headless spawn", move || {
+                        if attach_only {
+                            let name = opts.tmux_session.as_deref().unwrap_or_default();
+                            let alive = mux.holds_sessions() && mux.has(name).unwrap_or(false);
+                            return headless_rejoin(alive);
                         }
-                        Ok(())
+                        mux.spawn_detached(&opts).map_err(|e| e.to_string())
+                    })
+                    .await??;
+                    prepared.commit();
+                    // Local models only switched on while this agent was starting
+                    // (`launch_prep::recheck_privacy`): refused, its session ends here.
+                    if let Err(refusal) = crate::services::launch_prep::recheck_privacy(check).await {
+                        let sweep = app_core::rt::blocking("Local models only", move || {
+                            let sweep = crate::services::agent_privacy::end_sessions(session.as_slice());
+                            crate::services::launch_prep::on_tab_gone(&tab, seq);
+                            sweep
+                        })
+                        .await;
+                        return Err(match crate::commands::agent_privacy::unconfirmed_note(sweep) {
+                            Some(note) => format!("{refusal} {note}"),
+                            None => refusal,
+                        });
                     }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = prepared;
-                        Err("a tab with no window needs tmux, which this platform has none of".to_string())
-                    }
+                    Ok(())
                 })
             }),
             installed: Arc::new(crate::services::agent_registry::binary_is_installed),
             new_project: Arc::new(crate::commands::projects::create_project_for_phone),
             assistant_options: Arc::new(|| Box::pin(crate::commands::assistant::assistant_options())),
         }
+    }
+}
+
+/// Why the owner's spawn may not start a prepared launch detached, or
+/// `None`. On the Windows session host only a launch `launch_prep::prepare`
+/// marked (`PtyOptions::mux_wrapped`) runs: its wrap applies the desktop's
+/// own routing rule (`session_host::route::routes_through_host`: the flag and
+/// `persist_local_sessions` on, a local AI tab with a session name, never
+/// the root scope, the Host session or a shell) and refuses a batch file
+/// (`route::host_argv`). tmux wraps every local launch with a session name,
+/// as before.
+fn headless_spawn_refused(kind: crate::services::session_mux::MuxKind, wrapped: bool) -> Option<&'static str> {
+    (kind == crate::services::session_mux::MuxKind::WinHost && !wrapped)
+        .then_some("this launch does not run in the session host (only a local agent tab does)")
+}
+
+/// The owner's answer to a launch that may only rejoin its session
+/// (`PreparedLaunch::host_attach_only`): nothing to start while it lives;
+/// ended meanwhile, refused with the AI switch's own code
+/// (`headless_create_error` reads it), never created again.
+fn headless_rejoin(alive: bool) -> Result<(), String> {
+    if alive {
+        Ok(())
+    } else {
+        Err(crate::services::ai_switch::AI_OFF.to_string())
     }
 }
 
@@ -518,7 +560,7 @@ async fn open_ticket(
 }
 
 /// Run a catalog read without holding an async worker for it. A read past the
-/// TTL forks `tmux ls` (bounded by `discovery::TMUX_LS_TIMEOUT`, but seconds
+/// TTL forks `tmux ls` (bounded by `session_mux::tmux::LIST_TIMEOUT`, but seconds
 /// against a hung tmux server) and every other read waits on the catalog mutex
 /// behind it; done inline on the workers, a few such requests parked all of
 /// them and the sidecar stopped answering anything — pings and terminal output

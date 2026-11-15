@@ -165,18 +165,6 @@ pub fn is_app_local_tmux_session(session: &str) -> bool {
     crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session).is_some()
 }
 
-/// Whether the app's own local session `session` is running: a spawn wrapped
-/// in `new-session -A` then attaches to it rather than starting anything
-/// (the AI switch lets such a reattach through, `launch_prep::prepare`).
-pub fn app_session_alive(session: &str) -> bool {
-    is_app_local_tmux_session(session)
-        && tmux_available()
-        && tmux_command()
-            .args(["has-session", "-t", &format!("={session}")])
-            .output()
-            .is_ok_and(|o| o.status.success())
-}
-
 /// The tab variables worth putting in a session's environment, sorted so the
 /// argv is deterministic (and testable).
 ///
@@ -788,6 +776,7 @@ pub fn wrap_pty_options_local(opts: &mut PtyOptions) {
     let args = local_tmux_argv(&session, opts, false);
     opts.cmd = "tmux".to_string();
     opts.args = args;
+    opts.mux_wrapped = true;
 }
 
 /// The `tmux` argv that starts (or, with `-A`, re-attaches) `session` running
@@ -852,10 +841,10 @@ fn detach(args: &mut Vec<String>, cols: u16, rows: u16) {
 }
 
 /// Whether `opts` is already the tmux client's launch — what
-/// [`wrap_pty_options_local`] (and so `launch_prep::prepare`) leaves behind:
-/// `cmd` is `tmux` and the argv creates a session.
+/// [`wrap_pty_options_local`] (and so `launch_prep::prepare`) leaves behind,
+/// marked explicitly (`PtyOptions::mux_wrapped`), never guessed from `cmd`.
 fn is_tmux_wrapped(opts: &PtyOptions) -> bool {
-    opts.cmd == "tmux" && opts.args.iter().any(|a| a == "new-session")
+    opts.mux_wrapped
 }
 
 /// The argv [`spawn_detached_with`] hands the tmux client for `session`.
@@ -1570,6 +1559,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         }
     }
 
@@ -1633,6 +1623,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         };
         wrap_pty_options_local(&mut opts);
         assert_eq!(opts.cmd, "bash");
@@ -1661,6 +1652,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         }
     }
 
@@ -1694,6 +1686,7 @@ mod tests {
         let wrapped = local_tmux_args_with(session, &opts.cmd, &opts.args, &opts.env, true);
         opts.args = wrapped.clone();
         opts.cmd = "tmux".into();
+        opts.mux_wrapped = true;
 
         let args = detached_argv(session, &opts);
         let mut expected = wrapped;

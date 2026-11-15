@@ -455,6 +455,7 @@ mod tests {
             api_key: None,
             login: None,
             assistant: None,
+            mux_wrapped: false,
         }
     }
 

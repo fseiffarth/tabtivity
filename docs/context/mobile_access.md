@@ -28,8 +28,9 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    - VM: the opted-in `mirror` only; without one the project is listed with no
      folder (`folder: false`).
 
-   **Locality rule.** The phone attaches through a tmux session on this
-   machine, so on a remote, VM or container project only tabs that run here are
+   **Locality rule.** The phone attaches through a session on this machine
+   (tmux; on Windows the native session host, behind `windows_session_host`,
+   agent tabs only), so on a remote, VM or container project only tabs that run here are
    listed (`runs_on_this_machine`, the window's `effectiveTabLocation` table;
    the fixture `tabLocality.fixture.json` pins both). `create` is `all` (local),
    `agents` (remote with a mirror; the agent runs `local_only` in the mirror and
@@ -50,7 +51,7 @@ keys, sessions, Lock down) lives in `services/mobile_control/auth.rs`.
    is listed too (`discovery::host_of_tab`, one rule with the refresher's
    targets): a resumable agent, or a shell behind `shell_tabs`, carrying its
    scope's tmux name, only while `remote.persist_sessions` is not `false`;
-   never on Windows. It is read off the session file with no mirror and no
+   never on Windows (no ControlMaster there, whatever the session host does). It is read off the session file with no mirror and no
    cwd check, and `PublicTab.on_host` is the only new fact the phone gets. The
    phone reaches it **only through the desktop's ControlMaster** for that
    host, by its literal socket path (`ssh_exec::host_mux_args`:

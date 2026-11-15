@@ -30,6 +30,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isRelaunchableLocalTab, isResumableAgentTab, isSavedWhileLive } from "../../stores/tabs";
 import { shouldPersistLocalTab, shouldPersistTab } from "../terminal/tmuxSession";
 import { IS_HOST_WINDOWS } from "../platform";
+import { mayOwnWindowsLocalSession } from "../terminal/localSessions";
 import { noteClosedAgentTab } from "../../stores/agents/closedAgentTabs";
 import { MOBILE_ACCESS_KEY } from "../brand";
 import { ROOT_SCOPE } from "../terminal/ptyId";
@@ -100,11 +101,14 @@ export function localPersistentSessionOf(scope: string, tab: TabEntry): string |
  * window onto it must not take it down.
  */
 export function mintedLocalSessionOf(scope: string, tab: TabEntry): string | null {
-  if (IS_HOST_WINDOWS || tab.tmuxAttach || !tab.tmuxSession) return null;
+  if (tab.tmuxAttach || !tab.tmuxSession) return null;
   const project = useProjectsStore.getState().projects.find((p) => p.id === scope);
   const localRunning =
     !project?.remote ||
     effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }) === "local";
+  // Windows: the tab's wrap was stamped when it was drawn, so the settings now
+  // do not say whether it owns a host session; a local agent tab may.
+  if (IS_HOST_WINDOWS) return mayOwnWindowsLocalSession(tab.kind, scope, localRunning) ? tab.tmuxSession : null;
   const enabled = useSettingsStore.getState().settings?.persist_local_sessions !== false;
   return shouldPersistLocalTab(
     tab.kind,

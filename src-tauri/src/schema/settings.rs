@@ -845,6 +845,12 @@ pub struct Settings {
     /// `services::tmux_local` no-ops there. Read via `persist_local_sessions()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persist_local_sessions: Option<bool>,
+    /// Experimental: Windows local agent tabs run in the native session host
+    /// (`services::session_host`, `docs/windows_session_host_plan.md`) so they
+    /// outlive the window and reach the phone. Unset is off; read raw by
+    /// `session_mux::winhost::flag_on` (cheap, per call). No effect elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_session_host: Option<bool>,
     /// When true (the default), remote SSH/OpenVPN connections are made headlessly
     /// in the background, with Tabtivity handling the password transiently (sshpass /
     /// askpass). When false, those connections are launched as interactive

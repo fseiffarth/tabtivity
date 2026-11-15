@@ -55,6 +55,7 @@ use crate::schema::project::TabEntry;
 use crate::schema::session::TerminalSession;
 use crate::services::agent_turn::TurnState;
 use crate::services::{agent_prompts, agent_tasks, schedule_mcp, timer_lease, workspace};
+use crate::services::session_mux::{self, tmux::TmuxMux, Key, MuxError, SessionMux};
 use crate::storage;
 
 /// How often the loop looks — the window's `AgentScheduleHost` cadence.
@@ -78,8 +79,6 @@ const RELAUNCH_BACKOFF: Duration = Duration::from_secs(60);
 /// (`settleBetweenSubmissions`): quiet for a second, or this long at most.
 const PREFACE_SETTLE_MAX: Duration = Duration::from_secs(6);
 const PREFACE_POLL: Duration = Duration::from_millis(100);
-/// The buffer name the delivery loads a submission under; deleted on paste.
-const PASTE_BUFFER: &str = concat!(crate::app_slug!(), "-schedule");
 /// The most characters one unbracketed write carries (`TYPED_CHUNK` in
 /// `shared/agentComposer.ts`): Claude Code reads a longer key event as a
 /// paste and records it as a `<pasted_content>` block, not the user's words.
@@ -332,43 +331,31 @@ pub trait Runner: Send + Sync {
     }
 }
 
-/// The production runner: the tmux server the window's and the sidecar's
-/// spawns use (the default socket; `socket` names a private one in tests).
+/// The production runner: a thin [`Runner`] over the session mux — the
+/// local tmux server the window's and the sidecar's spawns use (`socket`
+/// names a private, isolated one in tests).
 pub struct TmuxRunner {
-    pub socket: Option<String>,
-    /// Where a submission is staged for `load-buffer` — a 16 KiB message
-    /// does not fit a tmux command line. The file is private to the state
-    /// dir and overwritten per submission.
+    mux: Arc<dyn SessionMux>,
+    /// Where a submission is staged for the paste — a 16 KiB message does not
+    /// fit a tmux command line. The file is private to the state dir and
+    /// overwritten per submission.
     pub paste_file: PathBuf,
 }
 
 impl TmuxRunner {
     pub fn new(state_dir: &Path, socket: Option<String>) -> Self {
-        Self { socket, paste_file: state_dir.join("mobile-control").join("schedule-paste.txt") }
+        let paste_file = state_dir.join("mobile-control").join("schedule-paste.txt");
+        let mux: Arc<dyn SessionMux> = match socket {
+            Some(socket) => Arc::new(TmuxMux::isolated(socket).with_paste_file(paste_file.clone())),
+            None => session_mux::mux_staging_at(paste_file.clone()),
+        };
+        Self { mux, paste_file }
     }
 
-    fn tmux(&self, args: &[&str]) -> Result<std::process::Output, String> {
-        let mut cmd = crate::paths::command_no_window("tmux");
-        match &self.socket {
-            Some(socket) => {
-                cmd.args(["-L", socket, "-f", "/dev/null"]);
-            }
-            None => {
-                cmd.args(crate::services::tmux_local::socket_args());
-            }
-        }
-        cmd.args(args);
-        cmd.stdin(std::process::Stdio::null());
-        cmd.output().map_err(|e| format!("tmux: {e}"))
-    }
-
-    fn run(&self, args: &[&str]) -> Result<(), String> {
-        let out = self.tmux(args)?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(format!("tmux {}: {}", args.first().unwrap_or(&""), String::from_utf8_lossy(&out.stderr).trim()))
-        }
+    /// A runner over `mux` (a test's own session host).
+    #[cfg(all(test, windows))]
+    pub fn over(state_dir: &Path, mux: Arc<dyn SessionMux>) -> Self {
+        Self { mux, paste_file: state_dir.join("mobile-control").join("schedule-paste.txt") }
     }
 
     /// Wait for the pane to stop painting after a prefix command, capped.
@@ -388,61 +375,32 @@ impl TmuxRunner {
     }
 }
 
-/// `-t =<name>:` — the exact session, its current window.
-fn target_of(tmux: &str) -> String {
-    format!("={tmux}:")
-}
-
 impl Runner for TmuxRunner {
     fn probe(&self, tmux: &str) -> Option<SessionProbe> {
-        if cfg!(windows) {
-            return None;
-        }
-        let out = self
-            .tmux(&["display-message", "-p", "-t", &target_of(tmux), "#{session_created}\t#{window_activity}"])
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut parts = text.trim().split('\t');
-        let created = parts.next()?.parse().ok()?;
-        let activity = parts.next()?.parse().ok()?;
-        Some(SessionProbe { created, activity })
+        let pane = self.mux.pane(tmux).ok()?;
+        Some(SessionProbe { created: pane.created, activity: pane.activity })
     }
 
     fn deliver(&self, tmux: &str, submissions: &[Submission]) -> Result<(), String> {
-        let target = target_of(tmux);
         for (index, submission) in submissions.iter().enumerate() {
             // `AGENT_LINE_RESET`: to the start of the composer, drop its draft.
-            self.run(&["send-keys", "-t", &target, "C-a", "C-k"])?;
+            self.mux.send_keys(tmux, &[Key::Ctrl('a'), Key::Ctrl('k')]).map_err(|e| e.to_string())?;
             if submission.text.chars().count() == 1 {
                 // A lone character is a key press, never a paste.
-                self.run(&["send-keys", "-t", &target, "-l", "--", &submission.text])?;
+                self.mux.send_keys(tmux, &[Key::Literal(submission.text.clone())]).map_err(|e| e.to_string())?;
             } else {
-                if let Some(dir) = self.paste_file.parent() {
-                    std::fs::create_dir_all(dir).map_err(|e| format!("stage submission: {e}"))?;
-                }
                 let pieces = typed_pieces(submission);
                 for (piece_index, piece) in pieces.iter().enumerate() {
                     if piece_index > 0 {
                         std::thread::sleep(TYPED_PIECE_GAP);
                     }
-                    write_private(&self.paste_file, piece.as_bytes()).map_err(|e| format!("stage submission: {e}"))?;
-                    let file = self.paste_file.to_string_lossy().into_owned();
-                    self.run(&["load-buffer", "-b", PASTE_BUFFER, &file])?;
-                    // `-r`: the newlines stay newlines (the default would turn
-                    // each into a submit); `-p`: the pane's bracketed paste, when
-                    // it asked for one and the agent reads pastes as typed text.
-                    let mut args = vec!["paste-buffer", "-r", "-d", "-b", PASTE_BUFFER, "-t", &target];
-                    if submission.bracketed {
-                        args.insert(1, "-p");
-                    }
-                    self.run(&args)?;
+                    // Newlines stay newlines (never a submit each); bracketed
+                    // when the pane asked for it and the agent reads pastes
+                    // as typed text.
+                    self.mux.paste(tmux, piece, submission.bracketed).map_err(|e| e.to_string())?;
                 }
-                let _ = std::fs::remove_file(&self.paste_file);
             }
-            self.run(&["send-keys", "-t", &target, "Enter"])?;
+            self.mux.send_keys(tmux, &[Key::Named("Enter".into())]).map_err(|e| e.to_string())?;
             if index + 1 < submissions.len() {
                 self.settle(tmux);
             }
@@ -450,50 +408,16 @@ impl Runner for TmuxRunner {
         Ok(())
     }
 
-    /// The window's close of a local tab, done by the owner: the pane's
-    /// process subtree is walked **before** the session ends (once the leader
-    /// dies its children reparent and the tree is unreachable —
-    /// `terminal::reap_child_subtree`), then `kill-session`, then the
-    /// launcher script the session may have been started from is dropped.
+    /// The window's close of a local tab, done by the owner: the mux reaps
+    /// the pane's process subtree before the session ends (`SessionMux::kill`).
+    /// No backend on this machine (Windows with the session host off) has
+    /// nothing to end.
     fn kill(&self, tmux: &str) -> Result<(), String> {
-        if cfg!(windows) {
-            return Ok(());
+        match self.mux.kill(tmux) {
+            Ok(()) | Err(MuxError::Unavailable(_)) => Ok(()),
+            Err(error) => Err(error.to_string()),
         }
-        let target = target_of(tmux);
-        let pane_pid = self
-            .tmux(&["display-message", "-p", "-t", &target, "#{pane_pid}"])
-            .ok()
-            .filter(|out| out.status.success())
-            .and_then(|out| String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok());
-        if let Some(pid) = pane_pid {
-            crate::terminal::reap_child_subtree(pid, crate::terminal::ReapMode::Graceful);
-        }
-        let out = self.tmux(&["kill-session", "-t", &format!("={tmux}")])?;
-        crate::services::tmux_local::remove_launcher(tmux);
-        if out.status.success() {
-            return Ok(());
-        }
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        if crate::services::tmux_local::kill_failure_is_already_gone(&detail) {
-            return Ok(());
-        }
-        Err(format!("tmux kill-session: {detail}"))
     }
-}
-
-/// The staged submission, readable by this user alone: a scheduled prompt
-/// is the user's text and lands in the state dir only for the length of one
-/// `load-buffer`.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    opts.open(path)?.write_all(bytes)
 }
 
 use crate::clock::now_secs;
@@ -1393,5 +1317,65 @@ mod tests {
         again.unwrap();
         assert!(runner.probe(session).is_none(), "the session is gone");
         assert!(!alive, "the pane's process was reaped");
+    }
+
+    /// The runner over the Windows session host (a real in-process host,
+    /// ConPTY children): the probe reads the live session, a delivery types
+    /// the line reset, each submission and its Enter in order — a paste
+    /// bracketed only for an agent that takes one and only because the pane
+    /// asked for mode 2004 — and a kill ends the session (twice is fine).
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_runner_types_into_and_ends_a_session_host_tab() {
+        use crate::services::session_host::win::test_support::{echo_program, test_host, wait_until_async};
+        use crate::services::session_mux::winhost::WinHostMux;
+        let th = test_host();
+        let mux: Arc<dyn SessionMux> = Arc::new(WinHostMux::with_launch(th.launch.clone()));
+        let dir = tempfile::tempdir().unwrap();
+        let contains = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).position(|w| w == needle);
+        let read = |log: &Path| std::fs::read(log).unwrap_or_default();
+        for (cmd, name) in [("codex", concat!(crate::app_slug!(), "-p--agent-wh-codex")), ("claude", concat!(crate::app_slug!(), "-p--agent-wh-claude"))] {
+            let log = dir.path().join(format!("{cmd}.log"));
+            let (argv, env) = echo_program(&log);
+            let mut opts: crate::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
+                "id": "tab", "cmd": argv[0], "args": &argv[1..], "cwd": "", "cols": 100, "rows": 30, "tmux_session": name,
+            }))
+            .unwrap();
+            opts.env = env.into_iter().filter(|(k, _)| k.starts_with("SESSION_HOST_TEST")).collect();
+            let m = mux.clone();
+            tokio::task::spawn_blocking(move || m.spawn_detached(&opts)).await.unwrap().unwrap();
+            let m = mux.clone();
+            assert!(wait_until_async(Duration::from_secs(20), || m.screen(name).is_ok_and(|s| s.contains("ECHO-READY"))).await);
+
+            let runner = Arc::new(TmuxRunner::over(dir.path(), mux.clone()));
+            let r = runner.clone();
+            let probe = tokio::task::spawn_blocking(move || r.probe(name)).await.unwrap();
+            assert!(probe.is_some_and(|p| p.created > 1_600_000_000), "{probe:?}");
+            let mut schedule = rule_once("x");
+            schedule.preface = vec!["/model opus".into()];
+            schedule.message = "hello\nworld".into();
+            let typed = submissions(&schedule, cmd);
+            let r = runner.clone();
+            tokio::task::spawn_blocking(move || r.deliver(name, &typed)).await.unwrap().unwrap();
+            let (prefix, message): (&[u8], &[u8]) = if cmd == "codex" {
+                (b"\x01\x0b\x1b[200~/model opus\x1b[201~\r", b"\x01\x0b\x1b[200~hello\nworld\x1b[201~\r")
+            } else {
+                (b"\x01\x0b/model opus\r", b"\x01\x0bhello\nworld\r")
+            };
+            assert!(
+                wait_until_async(Duration::from_secs(10), || contains(&read(&log), message).is_some()).await,
+                "{cmd}: {:?}",
+                String::from_utf8_lossy(&read(&log))
+            );
+            let log_bytes = read(&log);
+            let (at_prefix, at_message) = (contains(&log_bytes, prefix), contains(&log_bytes, message));
+            assert!(at_prefix.is_some() && at_prefix < at_message, "{cmd}: prefix first: {:?}", String::from_utf8_lossy(&log_bytes));
+
+            let r = runner.clone();
+            let (killed, again, gone) = tokio::task::spawn_blocking(move || (r.kill(name), r.kill(name), r.probe(name))).await.unwrap();
+            killed.unwrap();
+            again.unwrap();
+            assert!(gone.is_none(), "the session is gone");
+        }
     }
 }

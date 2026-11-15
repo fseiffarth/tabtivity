@@ -21,7 +21,7 @@ import { ToggleRow } from "../layout/settingsUi";
 import { MobileAccessPicker, PhoneReachButton } from "../mobile/MobileAccessPicker";
 import { usePairedPhones } from "../mobile/usePairedPhones";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../../lib/brand";
-import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { useLocalSessionBackendOn } from "../../lib/terminal/localSessions";
 import { boxColor, isBoxColor } from "../../lib/theme/boxColor";
 import { projectHostKind } from "../../lib/projectTabHost";
 
@@ -363,7 +363,7 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
  * reused. It acts at once (the same write Settings makes), and always with the
  * box's CURRENT per-phone list — passing `null` would widen a box that reaches
  * two phones to every phone. A box's tabs reach the phone through the tmux
- * session they run in, so with no tmux (Windows) or persistent local sessions
+ * session they run in, so with no tmux (Windows without its session host) or persistent local sessions
  * switched off the row is replaced by a line saying why.
  */
 function BoxPhoneRow({
@@ -377,7 +377,8 @@ function BoxPhoneRow({
 }) {
   const t = useT();
   const persistLocal = useSettingsStore((s) => s.settings?.persist_local_sessions);
-  const blocked = IS_HOST_WINDOWS ? "NoTmux" : persistLocal === false ? "NoPersist" : null;
+  const backendOn = useLocalSessionBackendOn();
+  const blocked = !backendOn ? "NoTmux" : persistLocal === false ? "NoPersist" : null;
   const on = box[MOBILE_ACCESS_KEY] ?? false;
   // Switching ON needs tmux and persistent sessions; switching OFF never does
   // (the backend checks nothing when disabling). So a box whose access is already

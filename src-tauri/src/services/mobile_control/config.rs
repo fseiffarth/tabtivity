@@ -416,7 +416,7 @@ impl HostConfig {
                 .as_deref()
                 .ok_or("A verified Tailscale Serve origin is required")?,
         )?;
-        let control_dir = state_dir.join("mobile-control");
+        let control_dir = control_dir_for(state_dir);
         Ok(Self {
             state_dir: state_dir.to_path_buf(),
             control_dir,
@@ -424,6 +424,13 @@ impl HostConfig {
             origin,
         })
     }
+}
+
+/// `<state_dir>/mobile-control`: the sidecar's control dir, which the Windows
+/// session host shares (its copies and token live in `session-host/` there)
+/// whether or not Mobile is configured.
+pub fn control_dir_for(state_dir: &Path) -> PathBuf {
+    state_dir.join("mobile-control")
 }
 
 #[cfg(test)]

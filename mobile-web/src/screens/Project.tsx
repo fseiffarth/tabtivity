@@ -253,11 +253,13 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
     && (!folderless || detail.project.host === "remote");
   const gitOffered = !!detail && (detail.project.kind ?? "project") === "project" && !folderless;
   const divergedOffered = !!detail?.diverged && !assistantScope;
-  /** Whether the host's tabs attach through tmux (`detail.terminals`): on a
-   * host with none (Windows) nothing can be opened, scheduled or sent to from
-   * here, so the ＋ sheet keeps only its send-a-file row, each card's ◷ and
-   * Mark up's Submit stay out and one line says why. An older desktop sends
-   * no field, which means tmux. */
+  /** Whether the host's tabs attach through a local session backend
+   * (`detail.terminals`: tmux, or Windows' session host as `native`): on a
+   * host with none (Windows with the host off) nothing can be opened,
+   * scheduled or sent to from here, so the ＋ sheet keeps only its
+   * send-a-file row, each card's ◷ and Mark up's Submit stay out and one line
+   * says why. Anything but `unsupported` counts as supported; an older desktop
+   * sends no field, which means tmux. */
   const terminalsOffered = detail?.terminals !== "unsupported";
   /** What the phone may start here (`detail.create`, the host's verdict for
    * the project's type): everything; agents alone (a remote project's shell
@@ -814,9 +816,12 @@ export function Project({ id, back, terminal }: { id: string; back: () => void; 
         true while the first load was in flight, so every project opened on a
         "Desktop unavailable" notice that vanished a moment later. */}
     {detail && !detail.desktop_available && <p className="notice">{t("mobile.project.desktopUnavailable")} {isUntested("mobile.headless.tabs") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
-    {/* The host has no tmux (Windows): its tabs never reach a phone, so the
-        controls that would open, schedule or send to one are not offered. */}
+    {/* The host has no session backend (Windows with its session host off):
+        its tabs never reach a phone, so the controls that would open,
+        schedule or send to one are not offered. */}
     {!terminalsOffered && <p className="notice">{t("mobile.project.terminalsUnsupported")} {isUntested("mobile.project.terminalsUnsupported") && <span className="untested">{t("mobile.newTab.untested")}</span>}</p>}
+    {/* Windows' session host carries the tabs: experimental, so said once here. */}
+    {detail?.terminals === "native" && isUntested("mobile.windowsAgentTabs") && <p className="notice">{t("mobile.project.nativeSessions")} <span className="untested">{t("mobile.newTab.untested")}</span></p>}
     {/* Where the project runs, when that limits the phone: a remote project's
         agents are the ones on this computer, and a container's or VM's tabs are
         not on the phone yet. A project with no folder to give says so too —

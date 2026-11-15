@@ -612,6 +612,15 @@ impl AuthStore {
         Ok((token, expires_at))
     }
 
+    /// A live session for `device_id` under `token`, with no pairing (tests
+    /// elsewhere in the sidecar that need a signed-in phone).
+    #[cfg(all(test, windows))]
+    pub(super) fn insert_test_session(&mut self, token: &str, device_id: &str) {
+        let created = Instant::now();
+        let deadline = session_deadline(created, created);
+        self.sessions.insert(token.to_string(), Session { device_id: device_id.into(), created, deadline });
+    }
+
     /// The device behind a live session token, without extending it. The PTY
     /// bridge's periodic re-check uses this: a tick is not the phone speaking.
     pub fn authenticate(&mut self, token: &str) -> Option<String> {

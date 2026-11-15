@@ -34,6 +34,11 @@ describe("experimentalEnabled", () => {
     expect(experimentalEnabled(s({ gpu_compositing: true }), "gpu_compositing")).toBe(true);
   });
 
+  it("keeps the Windows session host opt-in even in debug mode", () => {
+    expect(experimentalEnabled(s({ debug: true }), "windows_session_host")).toBe(false);
+    expect(experimentalEnabled(s({ windows_session_host: true }), "windows_session_host")).toBe(true);
+  });
+
   it("lets an explicit value win over debug mode, both ways", () => {
     // Off while in debug mode — "turn this off" must work for the people most
     // likely to hit a broken experiment.
@@ -61,7 +66,9 @@ describe("experimentalEnabled", () => {
   it("applies the debug default to every flag but the GPU ones, while unmarked", () => {
     for (const flag of EXPERIMENTAL_FLAGS) {
       expect(experimentalEnabled(s({}), flag)).toBe(ON_BY_DEFAULT_FLAGS.includes(flag));
-      expect(experimentalEnabled(s({ debug: true }), flag)).toBe(flag !== "terminal_webgl" && flag !== "gpu_compositing");
+      expect(experimentalEnabled(s({ debug: true }), flag)).toBe(
+        flag !== "terminal_webgl" && flag !== "gpu_compositing" && flag !== "windows_session_host",
+      );
       expect(experimentalEnabled(s({ debug: true, [flag]: false }), flag)).toBe(false);
     }
   });

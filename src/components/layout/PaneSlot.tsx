@@ -28,6 +28,9 @@ import { paneRemoteHost } from "../../lib/tabs/remoteHold";
 import { resolveLocalMirror, resolveProjectDirectory, type ProjectBox, type ProjectEntry } from "../../types";
 import { MOBILE_ACCESS_KEY } from "../../lib/brand";
 import { ASSISTANT_SCOPE } from "../../lib/assistant";
+import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { localSessionsAvailable } from "../../lib/terminal/localSessions";
+import { useSettingsStore } from "../../stores/settings";
 
 export interface PaneSlotProps {
   tab: TabEntry;
@@ -114,16 +117,27 @@ function PaneSlotImpl({
   // it attachable from the phone — by the box's own switch. Stamped on the
   // slot's first render, before the sleeping branch: a tab that sleeps before
   // it was ever derived must not lose its first-seen answer.
+  //
+  // On Windows the same stamp is the session host's answer (Defaults 5: every
+  // restorable agent, Mobile or not): whether the host and persistent sessions
+  // were on when the tab was first drawn. A settings change then reaches new
+  // tabs only — it never respawns a live agent. It waits for settings to load,
+  // and so does the agent's spawn (below): a restored `--resume` agent started
+  // in-process before the flag is known would run beside its host session.
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
   const mobileReadyKey = mobileTmuxReadyKey(scopeKey, tab.key);
-  if (!mobileAgentTmuxReady.has(mobileReadyKey)) {
+  if (!mobileAgentTmuxReady.has(mobileReadyKey) && (!IS_HOST_WINDOWS || settingsLoaded)) {
     mobileAgentTmuxReady.set(
       mobileReadyKey,
-      // A Tabby chat is always tmux-wrapped like a Mobile-scope agent: the
-      // phone's own switch for it (`assistant_access`) is read by the backend,
-      // and the wrap is also what lets a crash leave the chat running.
-      !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY] || scopeKey === ASSISTANT_SCOPE,
+      IS_HOST_WINDOWS
+        ? localSessionsAvailable(useSettingsStore.getState().settings)
+        : // A Tabby chat is always tmux-wrapped like a Mobile-scope agent: the
+          // phone's own switch for it (`assistant_access`) is read by the backend,
+          // and the wrap is also what lets a crash leave the chat running.
+          !!paneProject?.[MOBILE_ACCESS_KEY] || !!paneBox?.[MOBILE_ACCESS_KEY] || scopeKey === ASSISTANT_SCOPE,
     );
   }
+  const holdForSettings = IS_HOST_WINDOWS && !settingsLoaded && (tab.kind === "agent" || tab.kind === "local_agent");
   // Mount-free remote, per-pane gating. A remote project's LOCAL panes run on
   // the mirror and work offline; only remote-I/O panes must wait for the pool.
   // Keyed by THIS pane's scope (not the active project) so a disconnected
@@ -248,6 +262,8 @@ function PaneSlotImpl({
 
   // Asleep: one element in place of the pane.
   if (asleep) return <SleepingPane kind={tab.kind} />;
+  // A Windows agent waits for settings (the session host stamp, above).
+  if (holdForSettings) return null;
 
   return (
     /* The shared per-tab render switch (`components/tabs/TabPane`), the SAME

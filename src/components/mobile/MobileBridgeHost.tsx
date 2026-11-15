@@ -19,7 +19,7 @@ import {
 } from "../../stores/tabs";
 import { hostTabId, workerRunnable } from "../../stores/tabs/tabLocation";
 import { markMobileTmuxReady, mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
-import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { localSessionsAvailableNow } from "../../lib/terminal/localSessions";
 import { ASSISTANT_SCOPE, type AssistantLaunch, type AssistantModelRow, assistantCurrentModel, assistantErrorCode, assistantModelRows, assistantNewChat, assistantOptions } from "../../lib/assistant";
 import { ensureAssistantScopeHydrated, mountAssistantChat, startAssistantChat, switchAssistantModel } from "../../stores/assistantScope";
 import { experimentalEnabled } from "../../lib/experimental";
@@ -1378,7 +1378,7 @@ function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string |
   // stamps the switch, which is on, and the spawn is wrapped.
   if (ready === undefined) return null;
   if (ready || (tab.kind !== "agent" && tab.kind !== "local_agent") || scope.id === ROOT_SCOPE) return "session_gone";
-  const localPersist = !IS_HOST_WINDOWS && useSettingsStore.getState().settings?.persist_local_sessions !== false;
+  const localPersist = localSessionsAvailableNow();
   if (!localPersist || tab.login) return "session_gone";
   if (!isResumableAgentTab(tab)) return "tab_not_resumable";
   if (agentTabState(`${scope.id}:${tab.key}`) !== "idle") return "agent_busy";

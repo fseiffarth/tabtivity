@@ -2477,6 +2477,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         };
         wrap_pty_options_docker(&mut opts).unwrap();
         assert_eq!(opts.cmd, "claude");
@@ -2509,6 +2510,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         };
         enforce_spawn_authority(&mut opts);
         assert!(!opts.sandbox, "box tabs must never spawn containerized");
@@ -2651,6 +2653,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         };
         enforce_spawn_authority(&mut opts);
         assert!(!opts.sandbox, "the root scope has no container");

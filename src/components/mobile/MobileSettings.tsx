@@ -131,6 +131,7 @@ function Hint({ help, children }: { help: string; children: ReactNode }) {
 export function MobileSettings() {
   const t = useT();
   const assistantOn = useExperimental("assistant");
+  const sessionHostOn = useExperimental("windows_session_host");
   const { confirmAction, dialogs } = useDialogs();
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
@@ -609,7 +610,10 @@ export function MobileSettings() {
         </div>
       </div>
       {addDevice.pairing && <AddDevicePanel pairing={addDevice.pairing} />}
-      {IS_HOST_WINDOWS && (
+      {/* Windows without the session host, or with persistent sessions off
+          (the phone then still gets `unsupported`): how to turn them on. With
+          both on the phone reaches agent tabs, so there is nothing to say. */}
+      {IS_HOST_WINDOWS && !(sessionHostOn && settings?.persist_local_sessions !== false) && (
         <p className="settings-help">
           {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />
         </p>

@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { RESUMABLE_AGENTS } from "../../lib/agents/agentClis";
 import { agentSwitchChoices, sameDir, worktreeName, type GitWorktree, type Translate } from "../../lib/agents/agentWorktrees";
-import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { onTerminalExit } from "../../lib/terminal/terminalBus";
 import { resolveProjectDirectory, type ProjectEntry } from "../../types";
 import { resumeArgsOf, useTabsStore, type TabEntry } from "../tabs";
@@ -102,7 +101,7 @@ export async function stopAgentTab(scope: string, tab: TabEntry, localSession: b
     });
   });
   try {
-    const session = !localSession || IS_HOST_WINDOWS || tab.tmuxAttach ? null : tab.tmuxSession;
+    const session = !localSession || tab.tmuxAttach ? null : tab.tmuxSession;
     if (session) await invoke("local_tmux_kill", { session });
     await invoke("pty_kill", { id: ptyId });
     await exited;

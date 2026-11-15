@@ -2311,7 +2311,7 @@ fn mobile_access_prerequisites() -> Result<(), String> {
     if !settings.persist_local_sessions() {
         return Err("Enable persistent local terminal sessions before Mobile access".into());
     }
-    if !crate::services::tmux_local::tmux_available() {
+    if !crate::services::session_mux::mux().available() {
         return Err("Mobile access requires tmux on this machine".into());
     }
     Ok(())

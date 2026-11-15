@@ -2913,8 +2913,11 @@ pub fn run() {
                 // — the dev launcher's Ctrl+C (SIGINT/SIGTERM → `app.exit`),
                 // an `app.exit()` from the backend. Idempotent: a second pass
                 // finds no server and returns.
-                if let Err(e) = services::tmux_local::kill_app_sessions() {
-                    eprintln!("tmux_local: quit reap: {e}");
+                let mux = services::session_mux::mux();
+                if mux.holds_sessions() {
+                    if let Err(e) = mux.kill_app_sessions() {
+                        eprintln!("session_mux: quit reap: {e}");
+                    }
                 }
                 // Stop the Ollama server *this run started* — the spawned
                 // `ollama serve` (with the runner child holding the weights) or

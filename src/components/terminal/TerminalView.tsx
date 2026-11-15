@@ -31,6 +31,7 @@ import {
   type TerminalOutputRange,
 } from "../../lib/terminal/terminalBus";
 import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
+import { clearSessionHostState, reportSessionHostSpawnError } from "../../lib/terminal/sessionHostNotice";
 import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
@@ -85,6 +86,7 @@ import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
+import { TerminalSessionHostCard } from "./TerminalSessionHostCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
 import { buildScaffoldFillPrompt } from "../../lib/projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
@@ -1839,6 +1841,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // stayed unstamped and never wore the running ▶.
       if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
+        // A new attempt: whatever the session host said about the last one is over.
+        clearSessionHostState(id);
         if ((kind === "agent" || kind === "local_agent") && !attachOnly && (tmuxSession || tmuxAttach)) {
           const owner = splitPtyId(id)?.scope;
           // A workspace identity is required for self-targeted MCP grants.
@@ -1852,6 +1856,23 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
           sessionName: launchName,
         });
+        // The view went while `pty_spawn` was out. Its cleanup's `pty_kill` ran
+        // before this PTY existed, so a CLOSED tab (gone from the store — not a
+        // relaunch, which reuses the id and spawns again) would leave it
+        // running: end it here, and on Windows the host session a local agent
+        // tab minted, which nothing would ever reattach. A popout taking the
+        // tab over, a dialog terminal and a sleeping pane keep theirs.
+        if (cancelled) {
+          const parts = splitPtyId(id);
+          const closed = !!parts && !(useTabsStore.getState().tabsByScope[parts.scope] ?? []).some((t) => t.key === parts.key);
+          if (closed && !attachOnly && !isDetachedPtyId(id) && !persistOnUnmount && !asleepPty(id)) {
+            invoke("pty_kill", { id }).catch(() => {});
+            if (IS_HOST_WINDOWS && (kind === "agent" || kind === "local_agent") && tmuxSession && !tmuxAttach) {
+              invoke("local_tmux_kill", { session: tmuxSession }).catch(() => {});
+            }
+          }
+          return;
+        }
         // An older backend answers nothing: `named` absent types the line as before.
         launchAttached = spawned?.attached === true;
         launchNamed = spawned?.named === true || launchAttached;
@@ -1896,6 +1917,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
               if (cancelled) return;
               if (!isAiOffRefusal(retryErr)) {
                 writeTerm(spawnErrorNote(retryErr));
+                reportSessionHostSpawnError(id, retryErr);
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, pause));
@@ -1934,13 +1956,17 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             spawnState = "spawned";
             ownsPty = true;
           } catch (retryErr) {
-            if (!cancelled) writeTerm(spawnErrorNote(retryErr));
+            if (!cancelled) {
+              writeTerm(spawnErrorNote(retryErr));
+              reportSessionHostSpawnError(id, retryErr);
+            }
           }
           return;
         }
         const refusal = hpcGuardRefusal(e);
         if (!refusal) {
           writeTerm(spawnErrorNote(e));
+          reportSessionHostSpawnError(id, e);
           return;
         }
         const ok = await useHpcGuardStore.getState().request(refusal.kind, refusal.target);
@@ -1967,7 +1993,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           spawnState = "spawned";
           ownsPty = true;
         } catch (retryErr) {
-          if (!cancelled) writeTerm(spawnErrorNote(retryErr));
+          if (!cancelled) {
+            writeTerm(spawnErrorNote(retryErr));
+            reportSessionHostSpawnError(id, retryErr);
+          }
         }
       }
     };
@@ -2331,6 +2360,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         }
       } else if (!attachOnly && !isDetachedPtyId(id) && !persistOnUnmount) {
         invoke("pty_kill", { id }).catch(() => {});
+        clearSessionHostState(id);
         // Drop the captured agent-task title so a closed tab's summary can't
         // linger against a future tab that reuses the key. Through the shared
         // parser: splitting on every colon left a box tab's key as
@@ -2846,6 +2876,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     {agentPane && !attachOnly && !signIn && !signInDone && host && (
       <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}
+    {agentPane && !attachOnly && host && <TerminalSessionHostCard host={host} ptyId={id} visible={visible} />}
     {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
       <TerminalAgentsEmptyCard
         host={host}

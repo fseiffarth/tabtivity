@@ -713,7 +713,8 @@ pub fn set_box_mobile_access(
         if !settings.persist_local_sessions() {
             return Err("Enable persistent local terminal sessions before Mobile access".into());
         }
-        if !crate::services::tmux_local::tmux_available() {
+        // The phone attaches to the box's local sessions (`SessionMux`).
+        if !crate::services::session_mux::mux().available() {
             return Err("Mobile access requires tmux on this machine".into());
         }
         ensure_box_folder(box_id.clone())?;

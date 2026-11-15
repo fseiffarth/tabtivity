@@ -6894,3 +6894,34 @@ async fn an_agent_moves_between_this_computer_and_the_projects_machines() {
     assert_eq!(asked.lock().unwrap().as_slice(), ["local".to_string()], "the window was asked once, for this computer");
     desktop.abort();
 }
+
+/// The owner's spawn on the Windows session host runs only a launch
+/// `launch_prep::prepare`'s wrap marked — the desktop's routing rule and its
+/// batch-file refusal; a launch it left unmarked (a shell, the root scope,
+/// a batch file, the flag off) is refused, never started some other way.
+/// tmux spawns as before.
+#[test]
+fn the_headless_spawn_runs_in_the_session_host_only_what_the_wrap_marked() {
+    use crate::services::session_mux::MuxKind;
+    assert_eq!(headless_spawn_refused(MuxKind::WinHost, true), None);
+    let refused = headless_spawn_refused(MuxKind::WinHost, false).expect("refused");
+    assert!(!refused.contains(crate::brand::SLUG) && !refused.contains('\\'), "names no session or path: {refused}");
+    assert_eq!(headless_spawn_refused(MuxKind::Tmux, false), None);
+    assert_eq!(headless_spawn_refused(MuxKind::Tmux, true), None);
+}
+
+/// A rejoin-only launch (the AI switch off, or a host whose setting is off)
+/// is never created by the owner: alive it is left as is, gone it is refused
+/// with the switch's code, which the create route answers as `ai_off`.
+#[test]
+fn a_rejoin_only_headless_launch_never_creates_a_session() {
+    assert_eq!(headless_rejoin(true), Ok(()));
+    let refused = headless_rejoin(false).expect_err("refused");
+    assert_eq!(refused, crate::services::ai_switch::AI_OFF);
+    assert_eq!(headless_create_error(headless::CreateRefusal::LaunchFailed(refused)).0, StatusCode::FORBIDDEN);
+    let body = include_str!("../host.rs");
+    let spawner = &body[body.find("impl Default for HeadlessSpawner").unwrap()..];
+    let spawner = &spawner[..spawner.find("\n}\n").unwrap()];
+    let (rejoin, spawn) = (spawner.find("if attach_only").unwrap(), spawner.find("mux.spawn_detached(&opts)").unwrap());
+    assert!(rejoin < spawn && spawner[rejoin..spawn].contains("return headless_rejoin("), "attach-only returns before the create-or-attach spawn");
+}

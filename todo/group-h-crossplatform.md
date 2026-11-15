@@ -1523,6 +1523,64 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+  - [~] **31g-1 — Phone agent tabs on Windows: native session host** (2026-11-14;
+    ✅ Built · 🧪 not run live; `docs/windows_session_host_plan.md`, its
+    "Defaults taken" need the user's confirmation). Experimental flag
+    `windows_session_host` (off by default) + `persist_local_sessions`: Windows
+    local agent tabs run in a `--session-host` process (ConPTY + Job Object,
+    named pipe) through a pipe-backed PTY; the phone attaches over the same
+    pipe. `session_mux` trait in front of every local tmux call.
+    - [x] P0 — attach client proven in tests but unshippable (GUI-subsystem
+      exe gets no console); replaced by the pipe-backed PTY
+    - [x] P1 trait refactor (also fixed `api_proxy::live_tmux_sessions`
+      missing `socket_args()`)
+    - [x] P2 host + desktop agent tabs, fallback / fail-closed
+    - [x] P3 phone wiring (bridge, discovery `native`, scheduler, headless)
+    - [ ] P4 shells, local Sessions view, flag default on
+    - [x] 🤖 Automated tests — `session_host` (protocol/screen/table/server,
+      real ConPTY/pipe/Job on Windows), `host_pty`, `route`, `winhost`,
+      `pty_bridge/winhost_tests.rs`, `LocalSessions.test.ts`,
+      `WindowsSessionHostStamp.test.tsx`, `TerminalSessionHostCard.test.tsx`,
+      `RemoveProjectSessions.test.ts`
+    - Deliberate Unix changes to verify on Linux CI + live: explicit close reaps
+      the tmux pane's subtree before kill-session; box dissolve and project
+      archive/forget now end their local tmux sessions.
+    - [ ] 🖐️ Windows, flag + persistent sessions on: a Claude and a Codex tab render, type, resize, paste and Ctrl+C correctly; quit and reopen Tabtivity → the agents are still running and reattach
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Windows: pair a phone, open the project → agent tabs are listed, the phone attaches, types and resizes; a scheduled prompt is delivered; Project ＋ creates an agent with the desktop closed
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Windows: close a tab, dissolve a box, archive a project, clean quit → no agent process remains (Task Manager); turning the flag or persistent sessions off asks and ends them
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Windows: kill the host process → the tab shows the fallback/Retry card; no second agent runs on the same conversation
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
 
 - [~] **31h — Mobile composer status chips** (2026-08-28; ✅ Code-complete, ⚠️
   needs live QA on a phone against a real Claude Code / Codex tab).

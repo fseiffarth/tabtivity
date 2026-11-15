@@ -254,11 +254,13 @@ export interface ProjectDetail {
   create?: CreateVerdict;
   /** The phone may open shell tabs (`shell_tabs` on the desktop); absent is off. */
   shells?: boolean;
-  /** How the host's tabs reach the phone: `tmux`, or `unsupported` on a host
-   * with no tmux (Windows), where nothing can be opened, scheduled or sent
-   * to — the project screen hides ＋, Schedule and Mark up's Submit and says
-   * so. Absent (an older desktop) is `tmux`. */
-  terminals?: "tmux" | "unsupported";
+  /** How the host's tabs reach the phone: `tmux`, `native` (Windows with its
+   * experimental session host on), or `unsupported` on a host with neither
+   * (Windows with the host off), where nothing can be opened, scheduled or
+   * sent to — the project screen hides ＋, Schedule and Mark up's Submit and
+   * says so. Anything but `unsupported` is supported, so a later value keeps
+   * working here. Absent (an older desktop) is `tmux`. */
+  terminals?: "tmux" | "native" | "unsupported";
 }
 export interface TodoColumn { id: string; name: string; position: number; done: boolean; archived: boolean; intake: boolean; overdue: boolean; due_today: boolean; color?: string }
 export interface TodoSubtask { id: string; title: string; done: boolean }

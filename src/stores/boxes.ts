@@ -425,6 +425,16 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
   },
 
   deleteBox: async (boxId) => {
+    // The box's tabs go with it, so the local sessions they minted end first
+    // (a Mobile box's agents on Unix, the session host's on Windows): nothing
+    // would be left to reattach them. Every tab's own name, wrapped or not —
+    // ending an absent session is a no-op — never one it only attached to.
+    const sessions = (useTabsStore.getState().tabsByScope[`${BOX_SCOPE_PREFIX}${boxId}`] ?? [])
+      .filter((tab) => tab.tmuxSession && !tab.tmuxAttach)
+      .map((tab) => tab.tmuxSession as string);
+    await Promise.all(
+      sessions.map((session) => invoke<void>("local_tmux_kill", { session }).catch(() => {})),
+    );
     await invoke<void>("delete_box", { boxId });
     set((state) => ({ boxes: state.boxes.filter((b) => b.id !== boxId) }));
     // Members are untouched: membership lives only in the (now-deleted) box's

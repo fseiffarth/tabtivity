@@ -87,6 +87,7 @@ pub fn command(cli: &str, args: &[String]) -> Result<std::process::Command, Stri
         schedule_target_id: None,
         host_session: false,
         api_key: None,
+        mux_wrapped: false,
     };
     let own = roots
         .iter()

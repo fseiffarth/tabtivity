@@ -60,6 +60,33 @@ fn main() {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         std::process::exit(app_lib::services::sheet_reader::child_main(&args));
     }
+    // `tabtivity --session-host`: the Windows session host
+    // (`services::session_host::win::run_host`), started detached by the
+    // first client that finds no pipe; exits once idle. A second one for the
+    // same state dir exits 0 at once.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(app_lib::services::session_host::MODE_FLAG)) {
+        #[cfg(windows)]
+        {
+            let state_dir = app_lib::storage::state_dir();
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("session host runtime");
+            let opts = app_lib::services::session_host::win::HostOptions::default();
+            match runtime.block_on(app_lib::services::session_host::win::run_host(&state_dir, opts)) {
+                Ok(_) => std::process::exit(0),
+                Err(error) => {
+                    eprintln!("{SLUG}-session-host: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            eprintln!("{SLUG}: the session host is Windows-only (tmux serves this platform)");
+            std::process::exit(2);
+        }
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--mobile-host")) {
         let state_dir = app_lib::storage::state_dir();
         let runtime = tokio::runtime::Builder::new_multi_thread()

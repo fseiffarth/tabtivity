@@ -107,12 +107,23 @@ pub async fn pty_spawn(
     let drop_dir = prepared.drop_dir.clone();
     let privacy_check = prepared.privacy_check();
     let (spawned_id, spawned_seq) = (prepared.opts.id.clone(), prepared.spawn_seq());
-    let result = crate::terminal::spawn_pty(
-        ctx.0.clone(),
-        registry.clone(),
-        prepared.opts.clone(),
-        prepared.spawn_seq(),
-    );
+    let spawn = {
+        let (core, registry, opts, seq) = (ctx.0.clone(), registry.clone(), prepared.opts.clone(), prepared.spawn_seq());
+        let attach_only = prepared.host_attach_only;
+        move || match attach_only {
+            // Let through as a rejoin only (the AI switch), or found alive in
+            // the session host: attach, never create.
+            true => crate::terminal::spawn_pty_attach_only(core, registry, opts, seq),
+            false => crate::terminal::spawn_pty(core, registry, opts, seq),
+        }
+    };
+    // A launch the Windows session host takes connects (and may start the
+    // host) before its stream exists: off the async workers.
+    let result = if cfg!(windows) && prepared.opts.mux_wrapped {
+        app_core::rt::blocking("terminal", spawn).await.and_then(|spawned| spawned)
+    } else {
+        spawn()
+    };
     if result.is_ok() {
         claim.keep();
         if let Some(target) = login {
@@ -197,7 +208,9 @@ pub async fn agent_fence_marks(
 }
 
 /// Kill a **local** tmux session (TODO #85) — the explicit-close / Sessions-view
-/// kill of a local persistent tab. No-op on Windows / without tmux.
+/// kill of a local persistent tab, through the session mux (`SessionMux::kill`,
+/// which reaps the pane's process subtree first). No-op where the machine has
+/// no local session backend (Windows today, no tmux).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill(session: String) -> Result<(), String> {
     // As its siblings: a client names a session, never a tmux pattern or a
@@ -205,100 +218,77 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
     if !crate::services::ssh_exec::valid_tmux_session_name(&session) {
         return Err(format!("invalid tmux session name '{session}'"));
     }
-    if !crate::services::tmux_local::tmux_available() {
+    let mux = crate::services::session_mux::mux();
+    if !mux.holds_sessions() {
         return Ok(());
     }
     app_core::rt::try_blocking("terminal", move || {
-        let output = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_kill_args(&session))
-            .output()
-            .map_err(|e| format!("could not run tmux: {e}"))?;
-        // Killed or already gone either way: its launcher (if the command line
-        // needed one) has nothing left to launch, and its agent's API proxy
-        // tokens nothing left to serve.
-        crate::services::tmux_local::remove_launcher(&session);
-        crate::services::api_proxy::on_tmux_session_gone(&session);
-        if !output.status.success() {
-            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            // Explicit close is idempotent: a session that already exited is
-            // already in the desired state.
-            if detail.contains("can't find session")
-                || detail.contains("no server running")
-                || detail.contains("failed to connect to server")
-            {
-                return Ok(());
-            }
-            return Err(if detail.is_empty() {
-                format!("tmux could not kill session '{session}'")
-            } else {
-                format!("tmux could not kill session '{session}': {detail}")
-            });
+        use crate::services::session_mux::MuxError;
+        // Explicit close is idempotent: a session that already exited is
+        // already in the desired state (`kill` answers `Ok` for it).
+        let killed = mux.kill(&session);
+        // Killed or already gone either way — unless the backend could not
+        // even be asked — its agent's API proxy tokens have nothing left to
+        // serve (the mux dropped its launcher).
+        if !matches!(killed, Err(MuxError::Io(_))) {
+            crate::services::api_proxy::on_tmux_session_gone(&session);
         }
-        Ok(())
+        killed.map_err(|e| match e {
+            MuxError::Refused(why) => {
+                let detail = why.strip_prefix("tmux kill-session:").unwrap_or(&why).trim();
+                if detail.is_empty() {
+                    format!("tmux could not kill session '{session}'")
+                } else {
+                    format!("tmux could not kill session '{session}': {detail}")
+                }
+            }
+            e => format!("tmux could not kill session '{session}': {e}"),
+        })
     })
     .await
 }
 
 /// End every tmux session Tabtivity created on the local machine during a clean
 /// application quit — the frontend close handler's half of
-/// `services::tmux_local::kill_app_sessions`, which owns the rule (every
-/// `tabtivity-` session, no foreign one) and is also run by `RunEvent::Exit` as
-/// the net for exits that never reach frontend code. A renderer or process
-/// crash reaches neither, leaving the sessions alive for restore.
+/// `SessionMux::kill_app_sessions` (tmux: `services::tmux_local::kill_app_sessions`),
+/// which owns the rule (every `tabtivity-` session, no foreign one) and is also
+/// run by `RunEvent::Exit` as the net for exits that never reach frontend code.
+/// A renderer or process crash reaches neither, leaving the sessions alive for
+/// restore.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
-    if !crate::services::tmux_local::tmux_available() {
+    let mux = crate::services::session_mux::mux();
+    if !mux.holds_sessions() {
         return Ok(());
     }
-    app_core::rt::try_blocking("terminal", crate::services::tmux_local::kill_app_sessions).await
+    app_core::rt::try_blocking("terminal", move || mux.kill_app_sessions().map_err(|e| e.to_string())).await
 }
 
 /// Whether a **local** tmux session's pane has ended and stays on screen — a
 /// fenced agent that quit (`remain-on-exit`, `services::tmux_local`). The pane
 /// card's Restart / Open a shell here offer reads it. `false` for a session
-/// that is not here (a remote tab, one that exited, no tmux).
+/// that is not here (a remote tab, one that exited, no local session backend).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_pane_dead(session: String) -> Result<bool, String> {
-    if !crate::services::ssh_exec::valid_tmux_session_name(&session)
-        || !crate::services::tmux_local::tmux_available()
-    {
+    let mux = crate::services::session_mux::mux();
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session) || !mux.available() {
         return Ok(false);
     }
-    app_core::rt::blocking("terminal", move || {
-        crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_pane_dead_args(&session))
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .is_some_and(|output| {
-                crate::services::tmux_local::pane_dead_answer(&String::from_utf8_lossy(&output.stdout))
-            })
-    })
-    .await
+    app_core::rt::blocking("terminal", move || mux.pane(&session).is_ok_and(|pane| pane.dead)).await
 }
 
 /// The visible screen of a **local** tmux session, as plain rows — what the
 /// model tag beside an agent tab reads the session's status line from
 /// (`stores/agents/agentModels`). `None` when the session is not here (a remote
-/// tab, one that exited, no tmux), which the caller reads as "no screen".
+/// tab, one that exited, no local session backend), which the caller reads as
+/// "no screen".
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn local_tmux_screen(session: String) -> Result<Option<String>, String> {
-    if !crate::services::ssh_exec::valid_tmux_session_name(&session)
-        || !crate::services::tmux_local::tmux_available()
-    {
+    let mux = crate::services::session_mux::mux();
+    if !crate::services::ssh_exec::valid_tmux_session_name(&session) || !mux.available() {
         return Ok(None);
     }
-    app_core::rt::blocking("terminal", move || {
-        let output = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_screen_args(&session))
-            .output()
-            .ok()?;
-        output
-            .status
-            .success()
-            .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-    })
-    .await
+    app_core::rt::blocking("terminal", move || mux.screen(&session).ok()).await
 }
 
 /// Rename a **local** tmux session (TODO #85). `new_name` must be a safe tmux name.
@@ -307,19 +297,14 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
     if !crate::services::ssh_exec::valid_tmux_session_name(&new_name) {
         return Err("a session name may only contain letters, digits, '-' and '_'".to_string());
     }
-    if !crate::services::tmux_local::tmux_available() {
+    let mux = crate::services::session_mux::mux();
+    if !mux.available() {
         return Ok(());
     }
     app_core::rt::blocking("terminal", move || {
-        let renamed = crate::services::tmux_local::tmux_command()
-            .args(crate::services::tmux_local::local_tmux_rename_args(
-                &session, &new_name,
-            ))
-            .output()
-            .is_ok_and(|o| o.status.success());
         // The agent inside keeps running: its API proxy tokens follow the
         // session's new name instead of being swept as gone.
-        if renamed {
+        if mux.rename(&session, &new_name).is_ok() {
             crate::services::api_proxy::on_tmux_renamed(&session, &new_name);
         }
     })
@@ -683,8 +668,14 @@ pub async fn pty_kill(ctx: Ctx, id: String) -> Result<(), String> {
     // respawning the id (gap 18). Nothing taken, nothing to end — the
     // reader task's end already cleaned up that spawn.
     let taken = registry.lock_ok().take(&id);
-    if let Some(taken) = taken {
-        app_core::rt::blocking("terminal", move || taken.teardown()).await?;
+    match taken {
+        Some(taken) => app_core::rt::blocking("terminal", move || taken.teardown()).await?,
+        // No PTY: a spawn of the tab may still be opening (a session host
+        // open takes seconds). Retire it, so it cannot register after the
+        // tab closed and leave its agent running with no tab.
+        None => {
+            app_core::rt::blocking("terminal", move || crate::terminal::retire_inflight_spawn(&id)).await?;
+        }
     }
     Ok(())
 }

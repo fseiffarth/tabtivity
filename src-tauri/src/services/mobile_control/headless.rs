@@ -356,7 +356,7 @@ pub fn transcript(
 // transcripts; a create is `workspace::create_tab_in` (the owner mints the
 // id, the tmux name and an agent's schedule binding) followed by a detached
 // spawn through the seam the host hands in — `launch_prep::prepare` plus
-// `tmux_local::spawn_detached_with` in production, a recorder in tests.
+// the session mux's `spawn_detached` in production, a recorder in tests.
 
 /// A built-in agent the phone may start with no window: the registry's
 /// label and binary under the opaque id the desktop mints for it
@@ -907,6 +907,7 @@ fn options_for(state_dir: &Path, project_id: &str, tab: &TabEntry, restart: bool
         host_session: false,
         // The ＋ menu's login-or-key pick, as the window would pass it.
         api_key: tab.extra.get(crate::services::terminal_service::API_KEY_KEY).and_then(serde_json::Value::as_bool),
+        mux_wrapped: false,
     })
 }
 
@@ -953,6 +954,7 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
         host_session: false,
         api_key: None,
         assistant: launch,
+        mux_wrapped: false,
     }
 }
 
@@ -2541,6 +2543,66 @@ mod tests {
         let session: crate::schema::session::TerminalSession = storage::read_json(&session_file(state.path(), "local1")).unwrap();
         // project-tree-read: ok — the state-dir session file a test just wrote, keyed by scope id.
         assert!(!session.tab_layout[0].extra.contains_key("location"));
+    }
+
+    /// With the Windows session host on (a real in-process host, ConPTY
+    /// children) a phone's agent create with no window runs detached in the
+    /// host at the headless size, through the same wrap the window's launch
+    /// takes; the catalog then lists it as live off the host's own listing,
+    /// and the scope says `native`.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_headless_create_runs_in_the_session_host_and_is_listed_native() {
+        use crate::services::session_host::win::test_support::{cmd_exe, test_host, wait_until_async};
+        use crate::services::session_mux::{winhost::WinHostMux, SessionMux};
+        use super::super::discovery::{live_on, terminals_support_of, CatalogCache, TERMINALS_NATIVE};
+        let th = test_host();
+        let mux: Arc<dyn SessionMux> = Arc::new(WinHostMux::with_launch(th.launch.clone()));
+        assert_eq!(terminals_support_of(&*mux), TERMINALS_NATIVE);
+        let state = state_dir();
+        let root = state.path().join("local1");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            state.path().join("projects.json"),
+            json!([{ "id": "local1", "name": "L", "status": "active", "directory": root, crate::brand::MOBILE_ACCESS_KEY: true }]).to_string(),
+        )
+        .unwrap();
+        let project = scope_of(ProjectHost::Local, "local1", &root, CreateVerdict::All);
+        let spawner = mux.clone();
+        let launcher: HeadlessLaunch = Arc::new(move |mut opts: PtyOptions| {
+            let mux = spawner.clone();
+            Box::pin(async move {
+                // A stand-in for the agent CLI, which `launch_prep::prepare`
+                // resolves in production; the wrap and the detached spawn are
+                // the production spawner's.
+                opts.cmd = cmd_exe();
+                opts.args = ["/q", "/k", "echo", "agent-up"].map(String::from).to_vec();
+                tokio::task::spawn_blocking(move || {
+                    mux.wrap(&mut opts);
+                    if !opts.mux_wrapped {
+                        return Err("the wrap did not mark the launch".to_string());
+                    }
+                    mux.spawn_detached(&opts).map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+            })
+        });
+        let created = create_tab(state.path(), b"k", &project, &agent_request("local1"), &[claude_choice()], &[], &launcher)
+            .await
+            .expect("create");
+        let name = created.tmux_session.clone();
+        let m = mux.clone();
+        assert!(wait_until_async(Duration::from_secs(20), || m.screen(&name).is_ok_and(|s| s.contains("agent-up"))).await);
+        assert_eq!(mux.window(&name), Ok((HEADLESS_COLS, HEADLESS_ROWS)));
+
+        let m = mux.clone();
+        let live = tokio::task::spawn_blocking(move || live_on(&*m)).await.unwrap().unwrap();
+        let catalog = CatalogCache::with_live(live).load(state.path(), b"k").unwrap();
+        let tab = catalog.projects.iter().flat_map(|p| &p.tabs).find(|t| t.tmux_name == name).expect("listed");
+        assert!(tab.public.available, "live off the host's listing");
+        let m = mux.clone();
+        tokio::task::spawn_blocking(move || m.kill(&name)).await.unwrap().unwrap();
     }
 
     /// A create the launch seam refuses is taken back out of the session file.

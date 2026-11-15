@@ -127,6 +127,7 @@ import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
 import { BRAND } from "../../lib/brand";
 import { PdfLoadWarningHost } from "./PdfLoadWarningHost";
 import { CheckIcon } from "../common/icons/Icon";
+import { startSessionHostNotices } from "../../lib/terminal/sessionHostNotice";
 
 // Dev-only perf panel (src/dev/). The ternary is statically resolved at build
 // time (`import.meta.env.DEV` → false), so in a shipped bundle the lazy() —
@@ -405,6 +406,9 @@ export function AppShell() {
     // never reaches it (and stays an unhandled rejection, as before).
     void Promise.resolve(loadSettings()).then(() => migrateExperimentalOnce());
     loadProjects();
+    // The session host's fallback event comes once per run, maybe before the
+    // tab's pane exists: record it from the start (`sessionHostNotice`).
+    startSessionHostNotices();
     // Startup window geometry — which monitor, what size, maximized or not — is
     // owned ENTIRELY by the backend now (`restore_main_window` in lib.rs), which
     // reapplies the rect saved by the effect below before the window is ever shown.

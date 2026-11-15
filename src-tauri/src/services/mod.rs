@@ -156,7 +156,15 @@ pub mod fd_limit;
 // TensorBoard event files read natively (the training-curves viewer).
 pub mod tfevents;
 pub mod terminal_service;
+// The Windows session host's cross-platform core (`docs/windows_session_host_plan.md` §2).
+pub mod session_host;
+// Same-user named-pipe IPC on Windows (protected DACL, peer SID checks, token
+// file): the admin pipe and the session host.
+pub mod local_pipe;
 pub mod tmux_local;
+// The session mux: one seam in front of every local persistent-session use
+// (tmux on Unix, the native session host on Windows).
+pub mod session_mux;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
 // (headless owner plan, H1b).
 pub mod launch_prep;
