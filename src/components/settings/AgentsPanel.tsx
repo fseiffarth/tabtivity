@@ -55,6 +55,8 @@ import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
 import { AgentDefaults } from "./AgentDefaults";
 import { RefreshIcon } from "../common/icons/Icon";
+import { useDialogs } from "../common/PromptDialogs";
+import { experimentalEnabled } from "../../lib/experimental";
 
 const NO_CUSTOM_AGENTS: CustomAgent[] = [];
 
@@ -81,6 +83,7 @@ export function AgentsPanel({
   // A hosted server: the administrator installs CLIs (#2354).
   const adminInstalls = cliInstallsByAdmin();
   const { settings, updateSettings } = useSettingsStore();
+  const { confirmAction, dialogs } = useDialogs();
   const remoteMachines = useGlobalMachinesStore((s) => s.machines);
   const remoteMachinesLoaded = useGlobalMachinesStore((s) => s.loaded);
   const loadRemoteMachines = useGlobalMachinesStore((s) => s.load);
@@ -208,11 +211,27 @@ export function AgentsPanel({
       refresh();
       notifyAgentRegistryChanged();
       loadVersions(true);
+      if (id === "copilot") void offerCopilotCompletion();
     } catch (err) {
       setErrors((e) => ({ ...e, [id]: String(err) }));
     } finally {
       setInstalling(null);
     }
+  };
+
+  // A fresh Copilot CLI install is the moment the editor's Copilot completion
+  // becomes reachable, so ask once then rather than leave it buried under
+  // Experimental. Yes switches the experiment on and picks Copilot as the
+  // provider; each project still gives its own consent on that card.
+  const offerCopilotCompletion = async () => {
+    const current = useSettingsStore.getState().settings;
+    if (experimentalEnabled(current, "copilot_completion") && current?.code_completion_provider === "copilot") return;
+    const yes = await confirmAction({
+      title: t("agents.copilotCompletionOfferTitle"),
+      body: t("agents.copilotCompletionOfferBody"),
+      confirmLabel: t("agents.copilotCompletionOfferConfirm"),
+    });
+    if (yes) void updateSettings({ copilot_completion: true, code_completion_provider: "copilot" });
   };
 
   // Ask one CLI's registry for its newest release — each card's own button, the
@@ -1018,6 +1037,7 @@ export function AgentsPanel({
         </AgentsGroup>
       </div>
       </div>
+      {dialogs}
     </>
   );
 }
