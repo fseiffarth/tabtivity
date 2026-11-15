@@ -195,6 +195,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["clipboard_has_image", "client"],
   ["copy_files_to_clipboard", "client"],
   ["copy_text_to_clipboard", "client"],
+  ["read_clipboard_text", "client"],
   ["save_clipboard_image", "client"],
   ["cockpit_result_target", "client"],
   ["cockpit_attention_dismiss", "client"],

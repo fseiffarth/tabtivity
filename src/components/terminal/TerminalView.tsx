@@ -42,7 +42,7 @@ import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 // Aliased: the component has its own `copyText` (a link copy with its toast).
-import { copyText as writeClipboard } from "../../lib/terminal/copyText";
+import { copyText as writeClipboard, readClipboardText } from "../../lib/terminal/copyText";
 import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFiles } from "../../lib/files/droppedFiles";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
@@ -1404,7 +1404,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // text may hold an image (a screenshot): that is typed the way a dropped
     // file is (`pasteClipboardImage`).
     const pasteClipboard = () => {
-      (navigator.clipboard?.readText() ?? Promise.resolve(""))
+      readClipboardText()
         .catch(() => "")
         .then((text) => {
           if (text) {

@@ -56,8 +56,9 @@
 //!   manager drop hands the window, which name files on the machine the user
 //!   sits at; a daemon would read its own disk outside the user's roots. A
 //!   browser client has no such paths and leaves the drop out.
-//! - **`pty_paste_clipboard_image` is `Client`**: it reads the OS clipboard
-//!   of the machine the user sits at; a daemon has none.
+//! - **`pty_paste_clipboard_image` and `read_clipboard_text` are `Client`**:
+//!   they read the OS clipboard of the machine the user sits at; a daemon has
+//!   none.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them.
@@ -383,6 +384,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("clipboard_has_image", Client),
     ("copy_files_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
+    ("read_clipboard_text", Client),
     ("save_clipboard_image", Client),
     // commands/cockpit_results.rs — `client` (plan decision 12): the click of the
     // window the agent's tab is shown in, judged against this machine's registry.

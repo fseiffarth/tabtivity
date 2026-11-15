@@ -195,7 +195,7 @@ function resetPaneStubs() {
   termSpy.cursorY = 0;
   termSpy.selected = null;
   invoke.mockReset();
-  invoke.mockImplementation(() => Promise.resolve(undefined));
+  invoke.mockImplementation((cmd) => Promise.resolve(cmd === "read_clipboard_text" ? "from the clipboard" : undefined));
   useProjectsStore.setState({ switchToast: null });
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
@@ -374,6 +374,19 @@ describe("agent pane mouse gestures", () => {
     // cannot overwrite the clipboard this very gesture is pasting.
     expect(termSpy.seen.some((e) => e.detail === 2)).toBe(false);
     expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it("a paste reads the clipboard through the webview when the backend has none", async () => {
+    invoke.mockImplementation((cmd) => (cmd === "read_clipboard_text" ? Promise.reject(new Error("no display")) : Promise.resolve(undefined)));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: () => Promise.resolve("from the webview"), writeText: () => Promise.resolve() },
+    });
+    const pane = await agentPane("p:dbl-fallback");
+    press(pane, 1);
+    press(pane, 2);
+    await act(async () => {});
+    expect(termSpy.paste).toHaveBeenCalledWith("from the webview");
   });
 
   it("Ctrl+Shift+V pastes once: the webview's own paste is cancelled", async () => {
