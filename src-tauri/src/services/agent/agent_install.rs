@@ -102,6 +102,9 @@ pub fn bin_dirs_for(windows: bool, state_dir: &Path) -> Vec<PathBuf> {
         let local = root.join("AppData").join("Local");
         dirs.push(local.join("agy").join("bin"));
         dirs.push(local.join("Programs").join("OpenAI").join("Codex").join("bin"));
+        // Cursor's `install?win32=true` and Meta's `install.ps1` (2442f).
+        dirs.push(local.join("cursor-agent"));
+        dirs.push(local.join("Programs").join("muse"));
     }
     dirs
 }
@@ -423,7 +426,12 @@ mod tests {
         assert!(bin_dirs_for(true, state).contains(&root.join(".local").join("bin")));
         // The `LOCALAPPDATA` installers' launchers come onto PATH from there.
         let local = root.join("AppData").join("Local");
-        for dir in [local.join("agy").join("bin"), local.join("Programs").join("OpenAI").join("Codex").join("bin")] {
+        for dir in [
+            local.join("agy").join("bin"),
+            local.join("Programs").join("OpenAI").join("Codex").join("bin"),
+            local.join("cursor-agent"),
+            local.join("Programs").join("muse"),
+        ] {
             assert!(bin_dirs_for(true, state).contains(&dir), "{}", dir.display());
             assert!(!bin_dirs_for(false, state).contains(&dir), "{}", dir.display());
         }

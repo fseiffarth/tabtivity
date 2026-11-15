@@ -168,8 +168,10 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // `--resume <live id>` once its post-agent hook has recorded a turn.
         resume: Resume::Args(&["--continue"]),
         install_cmd: "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
-        // No one-line Windows installer; the UI points at `docs`.
-        install_cmd_windows: None,
+        // Mistral's manual install, the one its docs give for Windows (2442f;
+        // `docs` → install-cli). It needs `uv`, which Mistral says to install
+        // first there; the install home's `UV_TOOL_*` put it under `.local`.
+        install_cmd_windows: Some("uv tool install mistral-vibe"),
         extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
         docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
         // `~/.vibe/.env` is loaded as environment: per scope.
@@ -187,6 +189,9 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -fsSL https://cli.kiro.dev/install | bash",
+        // Kiro documents `irm 'https://cli.kiro.dev/install.ps1' | iex` for
+        // Windows, but that script runs a per-machine MSI into Program Files
+        // (elevation, outside the install home): left to the user (2442f).
         install_cmd_windows: None,
         extra_paths: &[".local/bin/kiro-cli"],
         docs: "https://kiro.dev/docs/cli/installation/",
@@ -250,8 +255,10 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         mcp: McpWiring::None,
         resume: Resume::Args(&["--continue"]),
         install_cmd: "curl https://cursor.com/install -fsS | bash",
-        // No one-line Windows installer; the UI points at `docs`.
-        install_cmd_windows: None,
+        // Cursor's native Windows installer (its CLI install docs, 2442f): it
+        // writes `cursor-agent.*` and `agent.*` into `%LOCALAPPDATA%\cursor-agent`
+        // (`agent_install::bin_dirs_for`).
+        install_cmd_windows: Some("irm 'https://cursor.com/install?win32=true' | iex"),
         extra_paths: &[".local/bin/cursor-agent"],
         docs: "https://cursor.com/docs/cli/installation",
         auth_paths: &[auth_file(".config/cursor/auth.json")],
@@ -294,7 +301,9 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // what made the wrong one invisible: a stale 0.0.34 that keeps no
         // conversation, where the vendor CLI has shipped 1.0.x since Aug 2026.
         install_cmd: "curl -fsSL https://x.ai/cli/install.sh | bash",
-        install_cmd_windows: Some("npm install -g @xai-official/grok"),
+        // The same CLI's Windows installer (docs.x.ai/build/overview, 2442e):
+        // `%USERPROFILE%\.grok\bin\grok.exe`, the install home's `.grok/bin`.
+        install_cmd_windows: Some("irm https://x.ai/cli/install.ps1 | iex"),
         extra_paths: &[".grok/bin/grok"],
         docs: "https://docs.x.ai/build/overview",
         auth_paths: &[auth_file(".grok/auth.json")],
@@ -404,7 +413,9 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash",
-        install_cmd_windows: None,
+        // Goose's PowerShell install, as its installation docs give it (2442f):
+        // `goose.exe` lands in `%USERPROFILE%\.local\bin`, the install home's.
+        install_cmd_windows: Some("Invoke-WebRequest -Uri \"https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1\" -OutFile \"download_cli.ps1\"; .\\download_cli.ps1"),
         extra_paths: &[".local/bin/goose"],
         docs: "https://github.com/aaif-goose/goose",
         auth_paths: &[auth_file(".config/goose/secrets.yaml")],
@@ -428,6 +439,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -sL https://plandex.ai/install.sh | bash",
+        // Plandex runs on Windows only under WSL (its README).
         install_cmd_windows: None,
         extra_paths: &[],
         docs: "https://docs.plandex.ai/docs/cli-reference/",
@@ -519,7 +531,9 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // it at the Resume menu's pick, or drops it where there is none.
         resume: Resume::Args(&["resume", "--last"]),
         install_cmd: "curl -fsSL https://dev.meta.ai/install.sh | bash",
-        install_cmd_windows: None,
+        // Meta's Windows installer (dev.meta.ai/docs/muse-code, 2442f): a
+        // `muse.cmd` in `%LOCALAPPDATA%\Programs\muse` (`agent_install::bin_dirs_for`).
+        install_cmd_windows: Some("irm https://dev.meta.ai/install.ps1 | iex"),
         extra_paths: &[".local/bin/muse"],
         docs: "https://dev.meta.ai",
         auth_paths: &[auth_file(".config/muse/auth.json")],

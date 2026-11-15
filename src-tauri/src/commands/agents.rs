@@ -21,11 +21,7 @@ pub use crate::services::agent_registry::*;
 /// itself: `irm … | iex` is PowerShell-only; `npm`/`python` installs work in
 /// either PowerShell or the classic Command Prompt.
 fn windows_shell(cmd: &str) -> &'static str {
-    if cmd.contains("iex")
-        || cmd.trim_start().starts_with("irm")
-        || cmd.contains("Invoke-RestMethod")
-        || cmd.contains("Invoke-Expression")
-    {
+    if needs_powershell(cmd) {
         "PowerShell"
     } else {
         "PowerShell or Command Prompt"
@@ -33,15 +29,21 @@ fn windows_shell(cmd: &str) -> &'static str {
 }
 
 fn windows_shell_kind(cmd: &str) -> &'static str {
-    if cmd.contains("iex")
-        || cmd.trim_start().starts_with("irm")
-        || cmd.contains("Invoke-RestMethod")
-        || cmd.contains("Invoke-Expression")
-    {
+    if needs_powershell(cmd) {
         "powershell"
     } else {
         "default"
     }
+}
+
+/// A Windows install line only PowerShell runs: `irm … | iex`, its long
+/// forms, and a download with `Invoke-WebRequest` (Goose's two-step install).
+fn needs_powershell(cmd: &str) -> bool {
+    cmd.contains("iex")
+        || cmd.trim_start().starts_with("irm")
+        || cmd.contains("Invoke-RestMethod")
+        || cmd.contains("Invoke-Expression")
+        || cmd.contains("Invoke-WebRequest")
 }
 
 /// The install command + the shell it runs in, for the host OS. On Windows the
@@ -2415,6 +2417,23 @@ mod tests {
             windows_shell("npm install -g @google/gemini-cli"),
             "PowerShell or Command Prompt"
         );
+    }
+
+    /// 2442e/2442f: the Windows rows filled from the vendors' own docs run in
+    /// the shell their syntax needs; Grok's is xAI's own CLI, never the stale
+    /// npm client; Kiro (a per-machine MSI) and Plandex (WSL only) stay empty.
+    #[test]
+    fn the_vendor_windows_installers_run_in_their_shell() {
+        let win = |id: &str| find_spec(id).and_then(|s| s.install_cmd_windows);
+        assert_eq!(win("grok"), Some("irm https://x.ai/cli/install.ps1 | iex"));
+        for id in ["grok", "cursor-agent", "muse", "goose"] {
+            let cmd = win(id).unwrap_or_else(|| panic!("{id} has a Windows row"));
+            assert_eq!(windows_shell_kind(cmd), "powershell", "{id}");
+            assert!(!cmd.contains("bash") && !cmd.contains("npm"), "{id}: {cmd}");
+        }
+        assert_eq!(windows_shell_kind(win("vibe").unwrap()), "default", "uv runs in either shell");
+        assert_eq!(win("kiro"), None);
+        assert_eq!(win("plandex"), None);
     }
 
     #[test]
