@@ -1,0 +1,354 @@
+//! The macOS Seatbelt profile (2442n, 2442w): pure rendering checks that run
+//! on every OS, then `cfg(target_os = "macos")` checks that run the real
+//! `sandbox-exec` on CI's macOS runner — a profile that does not parse would
+//! start no agent on any Mac, and nobody can run one locally.
+
+use super::*;
+
+fn line_pos(profile: &str, needle: &str) -> usize {
+    profile
+        .lines()
+        .position(|l| l == needle)
+        .unwrap_or_else(|| panic!("missing: {needle}\n{profile}"))
+}
+
+fn scope_fixture() -> SeatbeltInputs {
+    SeatbeltInputs {
+        home: "/Users/a".into(),
+        roots: vec!["/Users/a/p".into()],
+        writable: vec!["/Users/a/.claude".into(), "/private/tmp".into(), "/tmp".into()],
+        readable: vec!["/Users/a/.gitconfig".into()],
+        protected: vec!["/Users/a/.claude/settings.json".into()],
+        hidden: vec!["/Users/a/state/mail".into(), "/var/folders/xy/T".into()],
+        own_home: Some("/Users/a/state/agent-homes/p".into()),
+        private_tmp: Some("/var/folders/xy/T/app-tmp/k".into()),
+        ..SeatbeltInputs::default()
+    }
+}
+
+#[test]
+fn the_profile_denies_launches_outside_the_sandbox_before_anything_else() {
+    let profile = sandbox_exec_profile(&scope_fixture());
+    let lines: Vec<&str> = profile.lines().collect();
+    assert_eq!(&lines[..4], ["(version 1)", "(allow default)", "(deny lsopen)", "(deny appleevent-send)"]);
+    // Nothing allows either again further down.
+    assert!(!profile.contains("(allow lsopen") && !profile.contains("(allow appleevent-send"), "{profile}");
+}
+
+#[test]
+fn no_socket_in_the_shared_temps_home_or_docker_is_reachable_but_the_scopes_own_are() {
+    let profile = sandbox_exec_profile(&scope_fixture());
+    let pos = |needle: &str| line_pos(&profile, needle);
+    let deny_out = |path: &str| format!("(deny network-outbound (remote unix-socket (subpath \"{path}\")))");
+    let allow_out = |path: &str| format!("(allow network-outbound (remote unix-socket (subpath \"{path}\")))");
+    for temp in ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"] {
+        let deny = pos(&deny_out(temp));
+        pos(&format!("(deny network-bind (local unix-socket (subpath \"{temp}\")))"));
+        // The shared temps stay writable for files, never for sockets.
+        assert!(!profile.contains(&allow_out(temp)), "{temp}\n{profile}");
+        assert!(deny < pos(&allow_out("/var/folders/xy/T/app-tmp/k")));
+    }
+    let home = pos(&deny_out("/Users/a"));
+    pos("(deny network-outbound (remote unix-socket (literal \"/var/run/docker.sock\")))");
+    pos("(deny network-outbound (remote unix-socket (literal \"/private/var/run/docker.sock\")))");
+    // What the fence shows anyway comes back after the home deny, the hidden
+    // paths are denied again after that, then the scope's own dirs.
+    let root = pos(&allow_out("/Users/a/p"));
+    assert!(home < root && home < pos(&allow_out("/Users/a/.claude")) && home < pos(&allow_out("/Users/a/.gitconfig")));
+    let hidden = pos(&deny_out("/Users/a/state/mail"));
+    assert!(root < hidden);
+    assert!(pos(&deny_out("/var/folders/xy/T")) < pos(&allow_out("/var/folders/xy/T/app-tmp/k")));
+    assert!(hidden < pos(&allow_out("/Users/a/state/agent-homes/p")));
+    let bind = pos("(allow network-bind (local unix-socket (subpath \"/var/folders/xy/T/app-tmp/k\")))");
+    assert!(bind > pos("(deny network-bind (local unix-socket (subpath \"/var/folders\")))"));
+    // Parentheses balance on every line (a stray one is a parse error on a Mac).
+    for line in profile.lines() {
+        assert_eq!(line.matches('(').count(), line.matches(')').count(), "{line}");
+    }
+}
+
+#[test]
+fn the_users_tmpdir_is_hidden_and_the_private_one_restored_after_it() {
+    let profile = sandbox_exec_profile(&scope_fixture());
+    let pos = |needle: &str| line_pos(&profile, needle);
+    let hidden = pos("(deny file-read* file-write* (subpath \"/var/folders/xy/T\"))");
+    let private = pos("(allow file-read* file-write* (subpath \"/var/folders/xy/T/app-tmp/k\"))");
+    assert!(hidden < private);
+    // The own home is still the last rule.
+    assert_eq!(profile.lines().last(), Some("(allow file-read* file-write* (subpath \"/Users/a/state/agent-homes/p\"))"));
+    assert_eq!(seatbelt_temp_dirs(Some("/var/folders/xy/abc/T/".into())), ["/private/tmp", "/tmp", "/var/folders/xy/abc/C"]);
+    assert_eq!(seatbelt_temp_dirs(None), ["/private/tmp", "/tmp"]);
+    assert_eq!(darwin_user_cache_dir("/tmp/T"), None, "only a per-user dir under …/folders/ has a cache sibling");
+    assert_eq!(seatbelt_user_tmp_hidden(Some("/var/folders/xy/abc/T/")), ["/var/folders/xy/abc/T"]);
+    assert!(seatbelt_user_tmp_hidden(Some("/")).is_empty());
+    assert!(seatbelt_user_tmp_hidden(Some("relative/T")).is_empty());
+    assert!(seatbelt_user_tmp_hidden(None).is_empty());
+}
+
+#[test]
+fn the_private_tmp_is_per_scope_short_and_inside_the_users_tmpdir() {
+    let t = "/var/folders/ab/cdefghijklmnopqrstuvwxyz0123/T/";
+    let stage = Path::new("/Users/a/state/sandbox-stage/p");
+    let long_scope = "7f3c2e9a-1b4d-4c8e-9f6a-2d5b8c1e0a37";
+    let dir = seatbelt_private_tmp(Some(t), stage, long_scope);
+    assert!(dir.starts_with("/var/folders/ab/cdefghijklmnopqrstuvwxyz0123/T"), "{dir:?}");
+    // Room left for a socket name under macOS's 104-byte `sun_path`.
+    assert!(dir.to_string_lossy().len() <= 80, "{dir:?}");
+    assert_eq!(dir, seatbelt_private_tmp(Some(t), stage, long_scope));
+    assert_ne!(dir, seatbelt_private_tmp(Some(t), stage, "other"));
+    assert_eq!(seatbelt_private_tmp(None, stage, long_scope), stage.join("tmp"));
+    assert_eq!(seatbelt_private_tmp(Some("relative"), stage, long_scope), stage.join("tmp"));
+}
+
+#[test]
+fn every_rule_is_rendered_under_the_resolved_spelling_too() {
+    let mut inputs = scope_fixture();
+    inputs.roots.push("/Users/a/link".into());
+    let canon = |p: &Path| (p == Path::new("/Users/a/link")).then(|| PathBuf::from("/Volumes/x/p"));
+    add_canonical_spellings(&mut inputs, &canon);
+    // A symlinked root, and macOS's /var → /private/var for a path the
+    // resolver could not see.
+    assert_eq!(inputs.canonical.get("/Users/a/link").map(String::as_str), Some("/Volumes/x/p"));
+    assert_eq!(
+        inputs.canonical.get("/var/folders/xy/T/app-tmp/k").map(String::as_str),
+        Some("/private/var/folders/xy/T/app-tmp/k")
+    );
+    assert!(!inputs.canonical.contains_key("/Users/a/p"), "no second spelling where there is none");
+    assert!(!inputs.canonical.contains_key("/private/tmp"));
+    let profile = sandbox_exec_profile(&inputs);
+    let pos = |needle: &str| line_pos(&profile, needle);
+    assert_eq!(pos("(allow file-write* (subpath \"/Volumes/x/p\"))"), pos("(allow file-write* (subpath \"/Users/a/link\"))") + 1);
+    pos("(allow network-outbound (remote unix-socket (subpath \"/Volumes/x/p\")))");
+    pos("(deny file-read* file-write* (subpath \"/private/var/folders/xy/T\"))");
+    let private = pos("(allow file-read* file-write* (subpath \"/private/var/folders/xy/T/app-tmp/k\"))");
+    assert!(private > pos("(deny file-read* file-write* (subpath \"/private/var/folders/xy/T\"))"));
+    // A trailing slash is dropped before matching and rendering.
+    assert_eq!(canonical_spelling("/tmp/", &|_| None).as_deref(), Some("/private/tmp"));
+    assert_eq!(canonical_spelling("/variable/x", &|_| None), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn canonical_spellings_follow_a_real_symlink() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let mut inputs = SeatbeltInputs { roots: vec![link.to_string_lossy().into_owned()], ..SeatbeltInputs::default() };
+    add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
+    let want = real.canonicalize().unwrap().to_string_lossy().into_owned();
+    assert_eq!(inputs.canonical.get(&*link.to_string_lossy()), Some(&want));
+}
+
+/// The env step runs here as it does inside the profile: no ssh-agent, the
+/// private `TMPDIR`, and a command path with `=` and a space kept one word.
+#[cfg(unix)]
+#[test]
+fn the_launch_step_drops_the_ssh_agent_and_sets_the_private_tmpdir() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("a=b c");
+    std::fs::create_dir(&dir).unwrap();
+    let script = dir.join("cli");
+    std::fs::write(&script, "#!/bin/sh\nprintf '%s|' \"$@\"; printf 'sock=%s|tmp=%s|pid=%s' \"${SSH_AUTH_SOCK-unset}\" \"$TMPDIR\" \"${SSH_AGENT_PID-unset}\"\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let argv = seatbelt_argv("/p/fence.sb", "/priv/tmp", &script.to_string_lossy(), &["--x".into(), "two words".into()]);
+    assert_eq!(&argv[..2], ["-f", "/p/fence.sb"]);
+    let out = std::process::Command::new(&argv[2])
+        .args(&argv[3..])
+        .env("SSH_AUTH_SOCK", "/private/tmp/com.apple.launchd.x/Listeners")
+        .env("SSH_AGENT_PID", "42")
+        .env("TMPDIR", "/var/folders/xy/T/")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "--x|two words|sock=unset|tmp=/priv/tmp|pid=unset");
+}
+
+// ── the real sandbox-exec (CI's macOS runner) ───────────────────────────
+
+#[cfg(target_os = "macos")]
+mod real {
+    use super::*;
+    use std::process::{Command, Output};
+    use std::time::{Duration, Instant};
+
+    struct Fence {
+        _base: tempfile::TempDir,
+        root: PathBuf,
+        outside: PathBuf,
+        private_tmp: String,
+        profile: PathBuf,
+    }
+
+    /// A scope profile built the way a tab's is: a fake home with a root in
+    /// it, a folder outside every root, the user's real `$TMPDIR` hidden and
+    /// the scope's private temp dir, canonical spellings added. Under the
+    /// crate dir, not `$TMPDIR` — that is what the profile hides.
+    fn fence() -> Fence {
+        let base = tempfile::Builder::new().prefix(".sbt").tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let home = base.path().join("h");
+        let root = home.join("r");
+        let outside = home.join("o");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let user_tmp = std::env::var("TMPDIR").ok();
+        let scope = format!("seatbelt-test-{}-{}", std::process::id(), base.path().display());
+        let private_tmp = seatbelt_private_tmp(user_tmp.as_deref(), &base.path().join("stage"), &scope);
+        ensure_private_tmp(&private_tmp).unwrap();
+        let mut inputs = SeatbeltInputs {
+            home: home.to_string_lossy().into_owned(),
+            roots: vec![root.to_string_lossy().into_owned()],
+            writable: seatbelt_temp_dirs(user_tmp.clone()),
+            hidden: seatbelt_user_tmp_hidden(user_tmp.as_deref()),
+            private_tmp: Some(private_tmp.to_string_lossy().into_owned()),
+            ..SeatbeltInputs::default()
+        };
+        add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
+        let profile = base.path().join("fence.sb");
+        std::fs::write(&profile, sandbox_exec_profile(&inputs)).unwrap();
+        Fence { _base: base, root, outside, private_tmp: private_tmp.to_string_lossy().into_owned(), profile }
+    }
+
+    fn wait(mut child: std::process::Child, limit: Duration) -> Option<Output> {
+        let start = Instant::now();
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                return Some(child.wait_with_output().unwrap());
+            }
+            if start.elapsed() > limit {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    impl Fence {
+        fn command(&self, cmd: &str, args: &[&str]) -> Command {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            let mut command = Command::new("/usr/bin/sandbox-exec");
+            command
+                .args(seatbelt_argv(&self.profile.to_string_lossy(), &self.private_tmp, cmd, &args))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            command
+        }
+
+        /// `None` when it was still running after `limit` (killed).
+        fn run(&self, cmd: &str, args: &[&str], limit: Duration) -> Option<Output> {
+            wait(self.command(cmd, args).spawn().unwrap(), limit)
+        }
+
+        fn sh(&self, script: &str) -> Output {
+            self.run("/bin/sh", &["-c", script], Duration::from_secs(60)).expect("sh timed out")
+        }
+    }
+
+    #[test]
+    fn the_real_profile_parses_and_runs_true() {
+        assert!(bwrap_available(), "the probe profile, escape denials included, must parse");
+        let f = fence();
+        let out = f.run("/usr/bin/true", &[], Duration::from_secs(60)).unwrap();
+        assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stderr), std::fs::read_to_string(&f.profile).unwrap());
+    }
+
+    #[test]
+    fn a_write_in_the_root_succeeds_and_one_outside_or_in_the_users_tmpdir_fails() {
+        let f = fence();
+        let inside = f.root.join("ok.txt");
+        let out = f.sh(&format!("echo ok > '{}'", inside.display()));
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(std::fs::read_to_string(&inside).unwrap(), "ok\n");
+        let outside = f.outside.join("no.txt");
+        let out = f.sh(&format!("echo no > '{}'", outside.display()));
+        assert!(!out.status.success() && !outside.exists(), "{out:?}");
+        // The user's own $TMPDIR is hidden; the agent's TMPDIR is its own.
+        if let Ok(user_tmp) = std::env::var("TMPDIR") {
+            let probe = Path::new(&user_tmp).join(format!("fence-probe-{}", std::process::id()));
+            let out = f.sh(&format!("echo no > '{}'", probe.display()));
+            assert!(!out.status.success() && !probe.exists(), "{out:?}");
+        }
+        let out = f.sh("f=$(mktemp) && echo hi > \"$f\" && echo \"$f\"");
+        assert!(out.status.success(), "{out:?}");
+        let made = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let private = Path::new(&f.private_tmp).canonicalize().unwrap();
+        assert!(Path::new(&made).canonicalize().unwrap().starts_with(&private), "{made} not in {}", private.display());
+    }
+
+    #[test]
+    fn the_ssh_agent_is_not_in_the_environment_inside() {
+        let f = fence();
+        let mut command = f.command("/bin/sh", &["-c", "test -z \"${SSH_AUTH_SOCK-}\" && test \"$TMPDIR\" = \"$0\"", &f.private_tmp]);
+        command.env("SSH_AUTH_SOCK", "/private/tmp/com.apple.launchd.test/Listeners");
+        // `sh -c` takes the private dir as $0 here; the step set TMPDIR to it.
+        let out = wait(command.spawn().unwrap(), Duration::from_secs(60)).unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+
+    /// Whether a sandboxed `nc -U` reaches a listener at `path`.
+    fn reaches(f: &Fence, path: &Path, sandboxed: bool) -> bool {
+        let listener = std::os::unix::net::UnixListener::bind(path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let path_s = path.to_string_lossy().into_owned();
+        let child = if sandboxed {
+            f.command("/usr/bin/nc", &["-U", &path_s]).spawn().unwrap()
+        } else {
+            Command::new("/usr/bin/nc").args(["-U", &path_s]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap()
+        };
+        let start = Instant::now();
+        let mut reached = false;
+        while start.elapsed() < Duration::from_secs(5) {
+            if listener.accept().is_ok() {
+                reached = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drop(listener);
+        let _ = wait(child, Duration::from_secs(5));
+        let _ = std::fs::remove_file(path);
+        reached
+    }
+
+    #[test]
+    fn a_socket_in_the_shared_tmp_is_out_of_reach_and_one_in_the_root_is_not() {
+        let f = fence();
+        let shared = PathBuf::from(format!("/private/tmp/sbt-{}.sock", std::process::id()));
+        assert!(reaches(&f, &shared, false), "control: nc reaches the socket unsandboxed");
+        assert!(!reaches(&f, &shared, true), "a fenced agent reached a socket in the shared /tmp");
+        let in_root = f.root.join("s.sock");
+        assert!(reaches(&f, &in_root, true), "a socket inside the root must stay reachable");
+    }
+
+    #[test]
+    fn open_and_apple_events_start_nothing_outside_the_sandbox() {
+        let f = fence();
+        let out = f.run("/usr/bin/open", &["-g", "-j", "-a", "Calculator"], Duration::from_secs(30));
+        let launched = out.as_ref().is_some_and(|o| o.status.success());
+        if launched {
+            let _ = Command::new("/usr/bin/pkill").args(["-x", "Calculator"]).status();
+        }
+        assert!(!launched, "LaunchServices launched an app from inside the fence: {out:?}");
+        let out = f
+            .run("/usr/bin/osascript", &["-e", "tell application \"Finder\" to get name of startup disk"], Duration::from_secs(30))
+            .expect("a denied Apple Event fails at once; a hang means it reached the consent prompt");
+        assert!(!out.status.success(), "an Apple Event left the fence: {out:?}");
+    }
+
+    /// The fence must stay usable: git (the Xcode shim) and DNS + TLS through
+    /// curl, which needs `mDNSResponder`'s socket outside the shared temps.
+    #[test]
+    fn git_and_a_network_fetch_still_work_inside() {
+        let f = fence();
+        let out = f.run("/usr/bin/git", &["--version"], Duration::from_secs(120)).unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let out = f
+            .run("/usr/bin/curl", &["-sS", "-m", "30", "-o", "/dev/null", "https://github.com"], Duration::from_secs(60))
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+}

@@ -1,7 +1,11 @@
 # Agent fence on Windows and macOS: match the Linux fence
 
 Status: plan only (2026-09-27). Not implemented; implementation waits until
-asked. Decisions the user made when this plan was written: **Windows = native sandbox accounts first, WSL2
+asked. **2026-11-15 (2442n):** the macOS profile is still `(allow default)`,
+not §5's deny-default base, but it now denies `lsopen` / `appleevent-send`,
+unix sockets in the shared temps, home and Docker, unsets `SSH_AUTH_SOCK` and
+gives each scope a private `TMPDIR`; Mach (keychain) and `launchctl` remain
+open. What is closed and what is not: `docs/context/agent_authority.md`. Decisions the user made when this plan was written: **Windows = native sandbox accounts first, WSL2
 as a later second backend**; **macOS = deny-default Seatbelt profile**.
 
 ---

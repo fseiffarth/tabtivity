@@ -838,8 +838,11 @@ pub fn bwrap_available() -> bool {
     {
         static AVAILABLE: Mutex<bool> = Mutex::new(false);
         probe_until_available(&AVAILABLE, || {
+            // With the escape denials (2442n): a Mac that refuses them starts
+            // no agent rather than one that can launch outside the fence.
+            let profile = format!("(version 1)\n(allow default)\n{SEATBELT_ESCAPE_DENIALS}");
             crate::paths::command_no_window("/usr/bin/sandbox-exec")
-                .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+                .args(["-p", &profile, "/usr/bin/true"])
                 .output()
                 .map(|o| o.status.success())
                 .unwrap_or(false)
@@ -1467,7 +1470,7 @@ pub(crate) fn private_state_paths(state_dir: &Path) -> Vec<PathBuf> {
 /// rewritten in place (`state_gc::cap_crash_log` trims without a rename; the
 /// launcher rotates its log before the app starts), so the bind stays live
 /// for the tab's lifetime.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn diagnostic_logs(state_dir: &Path) -> Vec<PathBuf> {
     ["crash.log".to_string(), format!("{}.log", crate::brand::DEV_BIN_NAME)]
         .into_iter()
@@ -1970,7 +1973,182 @@ pub(crate) struct SeatbeltInputs {
     /// The scope's own agent home, allowed last: it sits inside the hidden
     /// `agent-homes/` tree, which keeps every other scope's home unreadable.
     pub own_home: Option<String>,
+    /// The scope's private temp dir, the agent's `TMPDIR` (2442n): inside the
+    /// user's per-user temp dir, which is hidden, so it is allowed after the
+    /// hidden denials, like `own_home`. Sockets may be made and reached here.
+    pub private_tmp: Option<String>,
+    /// The resolved spelling of a path above where it differs from the
+    /// lexical one (2442w): Seatbelt matches the path the kernel resolved, so
+    /// a project reached through a symlink, or `/var` for `/private/var`,
+    /// needs a rule under both. Every rule is rendered for each spelling.
+    /// Filled by [`add_canonical_spellings`].
+    pub canonical: std::collections::BTreeMap<String, String>,
 }
+
+/// The temp trees every process of the user shares: `/tmp` and the per-user
+/// dirs under `/var/folders` (`$TMPDIR` among them), both spellings. No unix
+/// socket in them is reachable from the fence (the ssh-agent's launchd
+/// listener, the default tmux server, every other app's), as Linux's private
+/// `/tmp` reaches none (2442n).
+#[cfg(any(target_os = "macos", test))]
+const SEATBELT_SHARED_TEMPS: [&str; 4] = ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"];
+
+/// The Docker daemon's socket, which Linux's private `/run` hides too: a
+/// fenced agent that reaches it mounts the user's home into a container.
+#[cfg(any(target_os = "macos", test))]
+const SEATBELT_DOCKER_SOCKETS: [&str; 2] = ["/private/var/run/docker.sock", "/var/run/docker.sock"];
+
+/// Starting a program outside the sandbox (2442n): `open`, `open -a
+/// Terminal x.command` and every other LaunchServices launch (`lsopen`), and
+/// `osascript` / Apple Events driving another app (`appleevent-send`, e.g.
+/// Terminal's `do script`). Linux's fence reaches no display, session bus or
+/// portal, so `xdg-open` there starts nothing either: a CLI's sign-in prints
+/// its URL in the tab for the user to click, on both. Also the probe profile of
+/// [`bwrap_available`], so a Mac that refuses either rule starts no agent
+/// (fail closed) instead of one without it.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) const SEATBELT_ESCAPE_DENIALS: &str = "(deny lsopen)\n(deny appleevent-send)\n";
+
+#[cfg(any(target_os = "macos", test))]
+impl SeatbeltInputs {
+    /// `path` (trailing `/` dropped), then its resolved spelling if it has one.
+    fn spellings(&self, path: &str) -> Vec<String> {
+        let path = trim_sbpl_path(path);
+        let mut out = vec![path.to_string()];
+        if let Some(real) = self.canonical.get(path) {
+            if real != path {
+                out.push(real.clone());
+            }
+        }
+        out
+    }
+
+    /// One `(<head> (<filter> "<path>"))` line per spelling of each path; a
+    /// `head` that opens a parenthesis of its own (`… (remote unix-socket`)
+    /// gets it closed.
+    fn push_rules<'a>(&self, p: &mut String, head: &str, filter: &str, paths: impl Iterator<Item = &'a String>) {
+        let close = ")".repeat(1 + head.matches('(').count());
+        for path in paths {
+            for spelled in self.spellings(path) {
+                p.push_str(&format!("({head} ({filter} {}){close}\n", sbpl_string(&spelled)));
+            }
+        }
+    }
+}
+
+/// A rule path without its trailing `/` (`$TMPDIR` ends in one), `/` kept.
+#[cfg(any(target_os = "macos", test))]
+fn trim_sbpl_path(path: &str) -> &str {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() { "/" } else { trimmed }
+}
+
+/// The resolved spelling of `path` (2442w): `canon` (the filesystem's
+/// `canonicalize` at run time) where the path exists, else macOS's own
+/// `/var`, `/tmp`, `/etc` → `/private/…` links, so a path that does not exist
+/// yet still gets its second spelling. `None` when it has only the one.
+#[cfg(any(target_os = "macos", test))]
+fn canonical_spelling(path: &str, canon: &dyn Fn(&Path) -> Option<PathBuf>) -> Option<String> {
+    let path = trim_sbpl_path(path);
+    let real = canon(Path::new(path))
+        .map(|p| p.to_string_lossy().into_owned())
+        .or_else(|| {
+            ["/var", "/tmp", "/etc"]
+                .into_iter()
+                .find(|top| path == *top || path.strip_prefix(top).is_some_and(|rest| rest.starts_with('/')))
+                .map(|_| format!("/private{path}"))
+        })?;
+    (real != path).then_some(real)
+}
+
+/// Record the resolved spelling of every path in `inputs` (2442w).
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn add_canonical_spellings(inputs: &mut SeatbeltInputs, canon: &dyn Fn(&Path) -> Option<PathBuf>) {
+    let paths: Vec<String> = std::iter::once(&inputs.home)
+        .chain(&inputs.roots)
+        .chain(&inputs.writable)
+        .chain(&inputs.readable)
+        .chain(&inputs.protected)
+        .chain(&inputs.pinned)
+        .chain(&inputs.hidden)
+        .chain(inputs.own_home.iter())
+        .chain(inputs.private_tmp.iter())
+        .cloned()
+        .collect();
+    for path in paths {
+        if let Some(real) = canonical_spelling(&path, canon) {
+            inputs.canonical.insert(trim_sbpl_path(&path).to_string(), real);
+        }
+    }
+}
+
+/// The user's per-user cache dir (`…/C`, the sibling of `$TMPDIR`'s `…/T`):
+/// clang's module cache and other system caches are written there by path,
+/// not through `TMPDIR`, so it stays writable.
+#[cfg(any(target_os = "macos", test))]
+fn darwin_user_cache_dir(user_tmpdir: &str) -> Option<String> {
+    let t = trim_sbpl_path(user_tmpdir);
+    let parent = t.strip_suffix("/T")?;
+    parent.contains("/folders/").then(|| format!("{parent}/C"))
+}
+
+/// Where a scope's private temp dir lives (2442n): `<user $TMPDIR>/<slug>-tmp/
+/// <hash of the scope>`, so it is the user's own 0700 temp tree, cleaned by
+/// macOS like the rest of it, and short enough that a unix socket made in it
+/// stays under the 104-byte `sun_path` limit. Without a usable `$TMPDIR`
+/// (absolute), the scope's stage dir. Pure.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn seatbelt_private_tmp(user_tmpdir: Option<&str>, stage: &Path, scope_id: &str) -> PathBuf {
+    let hash: String = crate::digest::sha256_hex(scope_id.as_bytes()).chars().take(12).collect();
+    match user_tmpdir.filter(|t| t.starts_with('/')) {
+        Some(t) => Path::new(trim_sbpl_path(t)).join(format!("{}-tmp", crate::app_slug!())).join(hash),
+        None => stage.join("tmp"),
+    }
+}
+
+/// Create the private temp dir (0700) and refuse one that is not a plain
+/// directory of this user's (a link planted by an earlier, less fenced agent).
+#[cfg(target_os = "macos")]
+fn ensure_private_tmp(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|e| format!("Agent sandbox: private temp dir: {e}"))?;
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("Agent sandbox: private temp dir: {e}"))?;
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    if !meta.file_type().is_dir() || meta.uid() != uid {
+        return Err(format!("Agent sandbox: {} is not a private directory, so this agent was not started.", dir.display()));
+    }
+    Ok(())
+}
+
+/// The argv `sandbox-exec -f <profile>` runs (2442n): a `/bin/sh` step inside
+/// the sandbox drops `SSH_AUTH_SOCK` and sets `TMPDIR` to the scope's private
+/// temp dir, then execs the CLI. Inside the profile, so it holds whatever env a
+/// tmux server adds to the pane (`update-environment` carries
+/// `SSH_AUTH_SOCK`); `"$@"` keeps a path with `=` or spaces one word.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn seatbelt_argv(profile: &str, private_tmp: &str, cmd: &str, args: &[String]) -> Vec<String> {
+    let mut argv = vec![
+        "-f".to_string(),
+        profile.to_string(),
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        SEATBELT_ENV_STEP.to_string(),
+        "sh".to_string(),
+        private_tmp.to_string(),
+        cmd.to_string(),
+    ];
+    argv.extend(args.iter().cloned());
+    argv
+}
+
+/// The shell step of [`seatbelt_argv`]: `$1` is the private temp dir.
+#[cfg(any(target_os = "macos", test))]
+const SEATBELT_ENV_STEP: &str = "unset SSH_AUTH_SOCK SSH_AGENT_PID; TMPDIR=$1; export TMPDIR; shift; exec \"$@\"";
 
 /// `HOME` and the pass-throughs a fence that cannot redirect a path sets
 /// (macOS Seatbelt, Windows): the agent's home is the scope home, while git's
@@ -2054,46 +2232,87 @@ fn sbpl_string(path: &str) -> String {
 ///   terminals' `/dev/ttys*` stay denied on purpose — allowing them would let a
 ///   fenced agent write into *another* tab's terminal. The agent's own PTY is an
 ///   inherited descriptor and needs no path rule.
-/// - Network and process spawning are left at the platform default, as
-///   bubblewrap leaves them (it unshares only the pid namespace).
+/// - **Launches outside the sandbox** are denied: LaunchServices (`open`) and
+///   Apple Events (`osascript`), [`SEATBELT_ESCAPE_DENIALS`].
+/// - **Unix sockets** in the shared temp trees, the user's home and Docker's are
+///   out of reach, the ssh-agent's among them ([`seatbelt_socket_rules`]);
+///   `SSH_AUTH_SOCK` is unset and `TMPDIR` is the scope's own
+///   ([`seatbelt_argv`]), the user's `$TMPDIR` hidden.
+/// - TCP/UDP networking and process spawning are left at the platform
+///   default, as bubblewrap leaves them (it unshares only the pid namespace).
+/// - **Not mirrored:** Mach services stay reachable (the login keychain through
+///   `securityd`, the pasteboard), there is no pid namespace, and `launchctl`
+///   can still submit a job to the user's launchd domain — see
+///   `docs/context/agent_authority.md` (macOS).
 #[cfg(any(target_os = "macos", test))]
 const SEATBELT_DEVICE_WRITES: &str = "(allow file-write* (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\") (subpath \"/dev/fd\"))\n";
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn sandbox_exec_profile(inputs: &SeatbeltInputs) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");
+    p.push_str(SEATBELT_ESCAPE_DENIALS);
+    seatbelt_socket_rules(&mut p, inputs);
     // Reads: hide $HOME, then restore what the agent needs to see.
-    p.push_str(&format!(
-        "(deny file-read* (subpath {}))\n(allow file-read-metadata (literal {}))\n",
-        sbpl_string(&inputs.home),
-        sbpl_string(&inputs.home)
-    ));
-    for path in inputs.readable.iter().chain(&inputs.roots).chain(&inputs.writable) {
-        p.push_str(&format!("(allow file-read* (subpath {}))\n", sbpl_string(path)));
+    for home in inputs.spellings(&inputs.home) {
+        p.push_str(&format!(
+            "(deny file-read* (subpath {}))\n(allow file-read-metadata (literal {}))\n",
+            sbpl_string(&home),
+            sbpl_string(&home)
+        ));
     }
+    let shown = inputs.readable.iter().chain(&inputs.roots).chain(&inputs.writable);
+    inputs.push_rules(&mut p, "allow file-read*", "subpath", shown);
     // Writes: nothing, then the roots and the agent's own state.
     p.push_str("(deny file-write*)\n");
     p.push_str(SEATBELT_DEVICE_WRITES);
-    for path in inputs.roots.iter().chain(&inputs.writable) {
-        p.push_str(&format!("(allow file-write* (subpath {}))\n", sbpl_string(path)));
-    }
+    inputs.push_rules(&mut p, "allow file-write*", "subpath", inputs.roots.iter().chain(&inputs.writable));
     // Last, so they win over the directory allows above.
-    for path in &inputs.protected {
-        p.push_str(&format!(
-            "(deny file-write* (subpath {}))\n",
-            sbpl_string(path)
-        ));
-    }
-    for path in &inputs.pinned {
-        p.push_str(&format!("(deny file-write* (literal {}))\n", sbpl_string(path)));
-    }
-    for path in &inputs.hidden {
-        p.push_str(&format!("(deny file-read* file-write* (subpath {}))\n", sbpl_string(path)));
-    }
-    if let Some(home) = &inputs.own_home {
-        p.push_str(&format!("(allow file-read* file-write* (subpath {}))\n", sbpl_string(home)));
-    }
+    inputs.push_rules(&mut p, "deny file-write*", "subpath", inputs.protected.iter());
+    inputs.push_rules(&mut p, "deny file-write*", "literal", inputs.pinned.iter());
+    inputs.push_rules(&mut p, "deny file-read* file-write*", "subpath", inputs.hidden.iter());
+    inputs.push_rules(&mut p, "allow file-read* file-write*", "subpath", inputs.private_tmp.iter());
+    inputs.push_rules(&mut p, "allow file-read* file-write*", "subpath", inputs.own_home.iter());
     p
+}
+
+/// Whether `path` is one of [`SEATBELT_SHARED_TEMPS`] or inside one.
+#[cfg(any(target_os = "macos", test))]
+fn in_shared_temp(path: &str) -> bool {
+    let path = trim_sbpl_path(path);
+    SEATBELT_SHARED_TEMPS
+        .iter()
+        .any(|t| path == *t || path.strip_prefix(t).is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// Unix sockets (2442n), the twin of what Linux's private `/tmp`, `/run` and
+/// empty home leave reachable: no socket in the shared temp trees, the user's
+/// home or Docker's, except under a path the fence shows anyway (the roots,
+/// the read-only and writable support paths outside the shared temps), then
+/// the hidden paths again, then the scope's private temp dir and own home.
+/// Making a socket in a shared temp tree is denied too, so an agent cannot
+/// stand in for a server a user process will look for there (tmux's default).
+/// Local sockets the system needs (`/var/run/mDNSResponder` for DNS, syslog)
+/// are outside all of these and stay reachable.
+#[cfg(any(target_os = "macos", test))]
+fn seatbelt_socket_rules(p: &mut String, inputs: &SeatbeltInputs) {
+    const DENY_OUT: &str = "deny network-outbound (remote unix-socket";
+    const ALLOW_OUT: &str = "allow network-outbound (remote unix-socket";
+    let temps: Vec<String> = SEATBELT_SHARED_TEMPS.iter().map(|t| t.to_string()).collect();
+    let docker: Vec<String> = SEATBELT_DOCKER_SOCKETS.iter().map(|t| t.to_string()).collect();
+    inputs.push_rules(p, DENY_OUT, "subpath", temps.iter());
+    inputs.push_rules(p, "deny network-bind (local unix-socket", "subpath", temps.iter());
+    inputs.push_rules(p, DENY_OUT, "subpath", std::iter::once(&inputs.home));
+    inputs.push_rules(p, DENY_OUT, "literal", docker.iter());
+    let shown = inputs
+        .roots
+        .iter()
+        .chain(&inputs.readable)
+        .chain(&inputs.writable)
+        .filter(|path| !in_shared_temp(path));
+    inputs.push_rules(p, ALLOW_OUT, "subpath", shown);
+    inputs.push_rules(p, DENY_OUT, "subpath", inputs.hidden.iter());
+    inputs.push_rules(p, ALLOW_OUT, "subpath", inputs.private_tmp.iter().chain(inputs.own_home.iter()));
+    inputs.push_rules(p, "allow network-bind (local unix-socket", "subpath", inputs.private_tmp.iter());
 }
 
 /// The Seatbelt form of `git_guard`'s re-mounts (#158): the control files
@@ -2106,26 +2325,41 @@ fn seatbelt_git_guard(inputs: &mut SeatbeltInputs, guard: crate::services::git_g
     inputs.protected.extend(guard.read_only.into_iter().map(text));
 }
 
-/// Temp dirs a fenced process may write: macOS gives each user a private one
-/// under `/var/folders` (`$TMPDIR`), plus the shared `/tmp`.
+/// Temp dirs a fenced process may write besides its private `TMPDIR`
+/// ([`SeatbeltInputs::private_tmp`]): the shared `/tmp`, for tools that name
+/// it outright (its sockets stay out of reach, [`seatbelt_socket_rules`]), and
+/// the user's cache dir beside `$TMPDIR` (`…/C`: clang's module cache). Not
+/// the user's `$TMPDIR` itself — that is hidden ([`seatbelt_user_tmp_hidden`]),
+/// as Linux shows a fenced agent an empty `/tmp` (2442n).
 #[cfg(any(target_os = "macos", test))]
 fn seatbelt_temp_dirs(tmpdir: Option<String>) -> Vec<String> {
-    let mut dirs: Vec<String> = ["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
-    dirs.extend(tmpdir);
+    let mut dirs: Vec<String> = ["/private/tmp", "/tmp"].into_iter().map(str::to_string).collect();
+    dirs.extend(tmpdir.as_deref().and_then(darwin_user_cache_dir));
     dirs
+}
+
+/// The user's own `$TMPDIR`, hidden from the fence (2442n): other apps' and
+/// the user's temp files live there. The scope's private temp dir inside it is
+/// allowed again after the hidden denials.
+#[cfg(any(target_os = "macos", test))]
+fn seatbelt_user_tmp_hidden(tmpdir: Option<&str>) -> Vec<String> {
+    tmpdir
+        .filter(|t| t.starts_with('/') && trim_sbpl_path(t) != "/")
+        .map(|t| trim_sbpl_path(t).to_string())
+        .into_iter()
+        .collect()
 }
 
 /// The profile inputs of [`one_shot_command`] on macOS. Pure, so the Linux
 /// test run checks them. Narrower than a tab's [`sandbox_exec_inputs`] in the
 /// same way the Linux one-shot is narrower than its PTY fence: the roots
-/// read-write, the allowlist read-only, temp writable (Linux: a private
-/// `/tmp`), the git control files guarded, Cargo credentials and the **whole**
-/// state dir hidden — no tool mount has to pierce it, since no agent home,
-/// live-session record or launcher is granted (`own_home: None`).
+/// read-write, the allowlist read-only, the scope's private temp dir as
+/// `TMPDIR` and the user's own `$TMPDIR` hidden (Linux: a private `/tmp`), the
+/// git control files guarded, Cargo credentials and the **whole** state dir
+/// hidden — no tool mount has to pierce it, since no agent home, live-session
+/// record or launcher is granted (`own_home: None`).
 #[cfg(any(target_os = "macos", test))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn one_shot_seatbelt_inputs(
     home: &str,
     state_dir: &Path,
@@ -2134,16 +2368,19 @@ pub(crate) fn one_shot_seatbelt_inputs(
     guard: crate::services::git_guard::GuardPaths,
     cargo_hidden: Vec<String>,
     tmpdir: Option<String>,
+    private_tmp: &Path,
 ) -> SeatbeltInputs {
     let mut inputs = SeatbeltInputs {
         home: home.to_string(),
         roots: roots.iter().map(|r| r.to_string_lossy().into_owned()).collect(),
-        writable: seatbelt_temp_dirs(tmpdir),
+        writable: seatbelt_temp_dirs(tmpdir.clone()),
         readable,
         hidden: cargo_hidden
             .into_iter()
             .chain(private_state_paths(state_dir).into_iter().map(|p| p.to_string_lossy().into_owned()))
+            .chain(seatbelt_user_tmp_hidden(tmpdir.as_deref()))
             .collect(),
+        private_tmp: Some(private_tmp.to_string_lossy().into_owned()),
         ..SeatbeltInputs::default()
     };
     seatbelt_git_guard(&mut inputs, guard);
@@ -2197,6 +2434,7 @@ fn seatbelt_scope_inputs(
             }).map(|p| p.to_string_lossy().into_owned())
         ).chain(std::iter::once(homes_root.to_string_lossy().into_owned())).collect(),
         own_home: Some(scope_home.to_string_lossy().into_owned()),
+        ..SeatbeltInputs::default()
     }
 }
 
@@ -2221,9 +2459,10 @@ fn sandbox_exec_inputs(
     // has to be denied explicitly. The same paths `agent_state_mounts` set up.
     protected.extend(control_pins.iter().map(|pin| pin.path.to_string_lossy().into_owned()));
     protected.push(crate::services::agent_bin::bin_dir().to_string_lossy().into_owned());
-    writable.extend(seatbelt_temp_dirs(
-        std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
-    ));
+    let user_tmp = std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned());
+    writable.extend(seatbelt_temp_dirs(user_tmp.clone()));
+    // The app's own logs, read-only through the hidden state, as on Linux.
+    readable.extend(diagnostic_logs(&state_dir).into_iter().map(|p| p.to_string_lossy().into_owned()));
     readable.extend(read_only_for_scope(scope_id, configured_read_only_paths));
     readable.extend(root_project_read_only_paths_for(&opts.id, scope_id));
     readable.extend(crate::services::agent_install::fence_read_only_paths());
@@ -2255,6 +2494,11 @@ fn sandbox_exec_inputs(
     // Every local-models-only project's folder but this scope's own.
     let locked_masks = crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?;
     inputs.hidden.extend(locked_masks.iter().map(|p| p.to_string_lossy().into_owned()));
+    // The user's `$TMPDIR` hidden, the scope's own temp dir in its place.
+    inputs.hidden.extend(seatbelt_user_tmp_hidden(user_tmp.as_deref()));
+    let private_tmp = seatbelt_private_tmp(user_tmp.as_deref(), &crate::services::sandbox::stage_dir(scope_id), scope_id);
+    ensure_private_tmp(&private_tmp)?;
+    inputs.private_tmp = Some(private_tmp.to_string_lossy().into_owned());
     note_fence_view(
         &opts.id,
         crate::services::agent_privacy::FenceView {
@@ -2307,6 +2551,9 @@ pub fn wrap_pty_options_sandbox_exec(
                 .map(|m| m.path.to_string_lossy().into_owned()),
         );
     }
+    // Every path also under the spelling Seatbelt matches (2442w).
+    add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
+    let private_tmp = inputs.private_tmp.clone().ok_or("Agent sandbox: no private temp dir")?;
     let profile = sandbox_exec_profile(&inputs);
     let stage = crate::services::sandbox::stage_dir(scope_id);
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
@@ -2333,12 +2580,10 @@ pub fn wrap_pty_options_sandbox_exec(
         }
     }
     crate::services::agent_install::apply_fence_args(&agent_cmd, Some(&resolved), &mut opts.args);
-    let mut args = vec![
-        "-f".to_string(),
-        profile_path.to_string_lossy().into_owned(),
-        resolved.to_string_lossy().into_owned(),
-    ];
-    args.extend(opts.args.iter().cloned());
+    // Inside the profile: no ssh-agent, the scope's own TMPDIR (2442n).
+    let args = seatbelt_argv(&profile_path.to_string_lossy(), &private_tmp, &resolved.to_string_lossy(), &opts.args);
+    opts.env.remove("SSH_AUTH_SOCK");
+    opts.env.insert("TMPDIR".to_string(), private_tmp.clone());
     opts.cmd = "/usr/bin/sandbox-exec".to_string();
     opts.args = args;
     opts.env
@@ -2768,6 +3013,10 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
     let roots = roots_for_scope((scope_id != ROOT_SCOPE).then_some(scope_id), false)
         .ok_or_else(|| format!("Agent sandbox: unknown project or box scope '{scope_id}'"))?;
     let cargo_home = std::env::var_os("CARGO_HOME").map(PathBuf::from);
+    let user_tmp = std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned());
+    let stage = crate::services::sandbox::stage_dir(scope_id);
+    let private_tmp = seatbelt_private_tmp(user_tmp.as_deref(), &stage, scope_id);
+    ensure_private_tmp(&private_tmp)?;
     let mut inputs = one_shot_seatbelt_inputs(
         &paths::home_dir_string(),
         &storage::state_dir(),
@@ -2776,20 +3025,23 @@ pub fn one_shot_command(scope_id: &str, cmd: &str, args: &[String], cwd: &Path) 
         crate::services::git_guard::guard_paths(&roots, Some(cwd)),
         cargo_credential_paths(&paths::home_dir(), cargo_home.as_deref(), cwd,
             settings().agent_fence_cargo_credentials.unwrap_or(false)),
-        std::env::var_os("TMPDIR").map(|dir| dir.to_string_lossy().into_owned()),
+        user_tmp,
+        &private_tmp,
     );
     inputs.hidden.extend(
         crate::services::agent_privacy::mask_dirs_now((scope_id != ROOT_SCOPE).then_some(scope_id))?
             .into_iter()
             .map(|p| p.to_string_lossy().into_owned()),
     );
-    let stage = crate::services::sandbox::stage_dir(scope_id);
+    add_canonical_spellings(&mut inputs, &|p| p.canonicalize().ok());
     std::fs::create_dir_all(&stage).map_err(|e| format!("Agent sandbox: {e}"))?;
     let profile_path = stage.join("preflight.sb");
     std::fs::write(&profile_path, sandbox_exec_profile(&inputs)).map_err(|e| format!("Agent sandbox: {e}"))?;
     let mut command = crate::paths::command_no_window("/usr/bin/sandbox-exec");
     command.arg("-f").arg(&profile_path).arg(cmd).args(args).current_dir(cwd);
     command.env(crate::app_env!("AGENT_FENCE"), "1");
+    // No ssh-agent and the scope's own temp dir, as in a tab (2442n).
+    command.env_remove("SSH_AUTH_SOCK").env_remove("SSH_AGENT_PID").env("TMPDIR", &private_tmp);
     Ok(command)
 }
 
@@ -3051,3 +3303,6 @@ pub fn marks_for_scopes(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod seatbelt_tests;

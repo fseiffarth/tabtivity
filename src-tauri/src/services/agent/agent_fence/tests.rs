@@ -568,6 +568,8 @@ fn seatbelt_profile_denies_writes_then_restores_roots_and_protects_hooks() {
         pinned: Vec::new(),
         hidden: Vec::new(),
         own_home: None,
+        private_tmp: None,
+        canonical: Default::default(),
     };
     let profile = sandbox_exec_profile(&inputs);
     let lines: Vec<&str> = profile.lines().collect();
@@ -618,6 +620,7 @@ fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
         guard,
         vec!["/Users/a/.cargo/credentials.toml".into()],
         Some("/var/folders/xy/T/".into()),
+        Path::new("/var/folders/xy/T/app-tmp/k"),
     );
     assert_eq!(inputs.own_home, None);
     let profile = sandbox_exec_profile(&inputs);
@@ -632,8 +635,13 @@ fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
     assert!(pos("(deny file-write*)") < root_write);
     assert!(pos("(allow file-read* (subpath \"/Users/a/proj\"))") > pos("(deny file-read* (subpath \"/Users/a\"))"));
     pos("(allow file-read* (subpath \"/Users/a/.gitconfig\"))");
-    // Temp is writable, as the Linux one-shot's private /tmp.
-    assert!(pos("(allow file-write* (subpath \"/var/folders/xy/T/\"))") > pos("(deny file-write*)"));
+    // The user's $TMPDIR is hidden and the scope's own temp dir inside it
+    // comes back after every hidden deny, as the Linux one-shot's private
+    // /tmp (2442n); the shared /tmp and the user's cache dir stay writable.
+    assert!(!profile.contains("(allow file-write* (subpath \"/var/folders/xy/T\"))"), "{profile}");
+    let user_tmp = pos("(deny file-read* file-write* (subpath \"/var/folders/xy/T\"))");
+    assert!(pos("(allow file-read* file-write* (subpath \"/var/folders/xy/T/app-tmp/k\"))") > user_tmp);
+    pos("(allow file-write* (subpath \"/var/folders/xy/C\"))");
     pos("(allow file-write* (subpath \"/private/tmp\"))");
     // The git control files and the pinned `.git` come after the root allow.
     assert!(pos("(deny file-write* (subpath \"/Users/a/proj/.git/hooks\"))") > root_write);
@@ -650,8 +658,9 @@ fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
         sbpl_string(&state.join("settings.json").to_string_lossy())
     ));
     pos("(deny file-read* file-write* (subpath \"/Users/a/.cargo/credentials.toml\"))");
-    assert!(!profile.contains("(allow file-read* file-write*"), "{profile}");
-    assert!(lines.last().unwrap().starts_with("(deny file-read* file-write*"));
+    let restored: Vec<&&str> = lines.iter().filter(|l| l.starts_with("(allow file-read* file-write*")).collect();
+    assert_eq!(restored, [&"(allow file-read* file-write* (subpath \"/var/folders/xy/T/app-tmp/k\"))"], "{profile}");
+    assert_eq!(lines.last().unwrap(), restored[0]);
 
     // A tab's profile keeps its own home, allowed after every hidden deny.
     let tab = SeatbeltInputs {

@@ -147,7 +147,8 @@ The four items that review left open were closed on 2026-09-26 (tracked in
 The existing network/environment limits also remain: inherited API keys are
 not filtered, loopback/LAN/internet and abstract sockets are reachable, and
 X11 access is still an unaudited route to host interaction (#2321). macOS is
-a weaker filesystem-only boundary with reachable keychain services; Windows
+a weaker boundary (files, launches, unix sockets; Mach services including the
+keychain stay reachable, see "Composition" below); Windows
 has no OS fence. The review did not establish containment on either platform.
 
 Three new regressions failed on the original code (temporary-link overwrite,
@@ -615,7 +616,41 @@ Composition is explicit:
   (no rename or replace, its contents stay writable) — the Seatbelt form of
   the Linux re-mounts; the agent push preflight gets the same profile shape,
   narrower (`one_shot_command`).
-- The macOS fence is a filesystem fence only. The profile starts from
+- Beyond files, the macOS profile (2442n, 2026-11-15, **never run on a
+  Mac**; CI's macOS runner runs `agent_fence::seatbelt_tests::real`) closes
+  what Linux's private `/tmp`/`/run`, empty home and missing display close:
+  - **No launch outside the sandbox:** `(deny lsopen)` (`open`, `open -a
+    Terminal x.command`) and `(deny appleevent-send)` (`osascript`, Terminal's
+    `do script`). Linux reaches no display, session bus or portal, so
+    `xdg-open` starts nothing there either; on both, a CLI's sign-in prints
+    its URL in the tab for the user to click (the localhost callback is TCP
+    and still works). The `sandbox-exec` probe carries both rules, so a Mac
+    that refuses them starts no agent.
+  - **No ssh-agent, no shared-temp sockets:** `SSH_AUTH_SOCK` /
+    `SSH_AGENT_PID` are unset by a `/bin/sh` step *inside* the profile (it
+    holds whatever a tmux server's `update-environment` adds), and no unix
+    socket under `/tmp`, `/var/folders` (both spellings), the user's home or
+    `/var/run/docker.sock` can be connected to, nor one made in the shared
+    temps — the launchd listener the ssh-agent sits behind, the default tmux
+    server (an unfenced `tmux new-window` otherwise), Docker. Sockets under
+    the roots, the shown support paths, the scope home and the private temp
+    stay reachable; `mDNSResponder` and syslog are outside all of these.
+  - **Private temp:** `TMPDIR` is `<user $TMPDIR>/<slug>-tmp/<hash>` (0700,
+    per scope), the user's own `$TMPDIR` is hidden, `/tmp` stays writable for
+    tools that name it (files only), and the per-user cache dir (`…/C`,
+    clang's module cache) stays writable.
+  - Every rule is written under each path's resolved spelling too (2442w), so
+    a project reached through a symlink or `/var` vs `/private/var` matches.
+  - **Still open on macOS:** Mach services (keychain below, pasteboard,
+    `trustd`); `launchctl submit`/`bootstrap` into the user's launchd domain
+    (no SBPL rule found that is known to stop it — check on a Mac:
+    `launchctl submit -l x -- /usr/bin/touch /tmp/x` from a fenced tab); no
+    pid namespace; whether `lsopen` is also enforced when a client speaks to
+    `launchservicesd` directly rather than through LaunchServices is
+    unverified; a socket reached by a relative path or through a symlink
+    whose resolved target Seatbelt matches is unverified; other files in
+    `/tmp` stay readable and writable.
+- The macOS fence's other gap is Mach. The profile starts from
   `(allow default)`, so mach services stay reachable — `securityd` among them.
   A fenced agent can therefore ask the keychain for any item whose access list
   trusts the requesting tool (`/usr/bin/security` included), which is how the
