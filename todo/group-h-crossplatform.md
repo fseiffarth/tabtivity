@@ -939,40 +939,125 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
       `muse_session` test fixture writes a raw temp path into JSON
       (`muse_session.rs:357`); backslashes make it invalid. JSON-escape `root`
       in that test module. Blocks every other push.
-    - [ ] **2442b — Codex ignores its scope home** *(likely)*. Nothing sets
-      `CODEX_HOME`, and Codex takes its home from the profile Known Folder, not
-      `USERPROFILE`. Add a per-CLI home-override table beside `fence_env`.
-    - [ ] **2442c — live tabs do not redirect `APPDATA` / `LOCALAPPDATA` /
-      `HOMEDRIVE` / `HOMEPATH`.** The installer and probe redirect `APPDATA`;
-      `home_env` does not. Goose is the visible case.
-    - [ ] **2442d — a CLI typed into a shell tab is not shimmed.** The per-CLI
-      shims are extensionless POSIX scripts; write `.cmd` shims that apply the
-      home env.
-    - [ ] **2442e — Grok's Windows row installs the stale third-party client.**
-      Switch to xAI's PowerShell installer (verify the URL first).
-    - [ ] **2442f — Windows install commands for Muse, Cursor, Kiro, Goose,
-      Vibe.** All `None` today; the CLIs reportedly ship for Windows. Verify
-      each vendor command, then fill the rows. Plandex: confirm it has none.
-    - [ ] **2442g — agent `git_push` refuses a repo with a pre-push hook.**
-      Run the hook under `exec_trust` through `hardened_git_command_in`.
-    - [ ] **2442h — PowerShell session hook lacks the stray-`--resume`
-      check.** Port the "no Claude above this one" test from the POSIX hook.
-    - [ ] **2442i — TeX builds carry `\\?\` paths** *(likely)*. Run cwd,
-      `-outdir` and the returned `pdf_path` through `paths::display_path`.
-    - [ ] **2442j — sync mirror accepts Windows-hostile names** *(likely)*.
-      Reuse `mail_attach::windows_part_refusal` in `rel_components`; decide the
-      case-only collision policy.
+    - [x] **2442b — Codex ignores its scope home.** Confirmed from Codex's source (`codex-rs/utils/home-dir`: `CODEX_HOME`, else `dirs::home_dir`, which on Windows is the profile Known Folder) and that `CODEX_HOME` must exist. `agent_home::home_override_env` is the per-CLI table (Codex only so far); Windows tabs, the probe and the shell shim set `CODEX_HOME=<home>\.codex` and create it; the persisted-env deny-list drops a layout's `CODEX_HOME`. ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `codex_gets_its_home_variable_on_windows_only`, `a_live_windows_tab_moves_the_profile_set_and_keeps_user_python`
+      - [ ] 🖐️ Manual test — Windows: open a Codex tab in a project, `/status` (or `echo %CODEX_HOME%` in its shell) names `…\agent-homes\<project>\.codex`; sign in once and a second project's Codex tab is signed in too
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442c — live tabs redirect `APPDATA` / `LOCALAPPDATA` / `HOMEDRIVE` / `HOMEPATH`.** One set, `agent_home::windows_profile_env`, for the live tab (`agent_fence::home_env_for`), the probe (`probe_env_for`) and the installer (`install_env_for`). The user's per-user Python packages stay importable (`PYTHONUSERBASE` pass-through, as for `CARGO_HOME`). ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `the_windows_profile_set_moves_every_profile_variable_into_the_home`, `a_windows_home_splits_into_drive_and_path`, `a_live_windows_tab_moves_the_profile_set_and_keeps_user_python`
+      - [ ] 🖐️ Manual test — Windows: a Goose tab keeps its config in `…\agent-homes\<project>\AppData\Roaming\Block\goose`; `echo %LOCALAPPDATA% %HOMEDRIVE%%HOMEPATH%` in an agent's shell names the scope home
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442d — a CLI typed into a shell tab is shimmed on Windows.** `agent_bin` writes `<cli>.cmd` (vendor aliases too); it asks `tabtivity --agent-shim-env <cli>` (`agent_shim::run_env`) for the real CLI and the scope env (AI switch, platform acceptance, scope roots and Local models only checked as for an agent tab), sets it under `setlocal` and runs the CLI on the same console. POSIX shims unchanged. Not covered: Git Bash (it does not try `.cmd`), API-key/Claude-token injection. ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `the_cmd_shim_sets_the_scope_env_for_one_run_and_passes_the_arguments`, `the_windows_shim_env_replaces_the_profile_and_keeps_the_users_switch`, `windows_gets_cmd_shims_and_a_stale_sh_one_is_removed` (Windows CI)
+      - [ ] 🖐️ Manual test — Windows: in a project's cmd and PowerShell shell tab type `claude`: it starts signed in, `/status` shows the scope home; `exit`, then `echo %USERPROFILE%` is your own profile again; outside the project folder it refuses with "cd into the project first"
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442e — Grok's Windows row is xAI's installer.** `irm https://x.ai/cli/install.ps1 | iex`, as docs.x.ai/build/overview gives it; it installs into `%USERPROFILE%\.grok\bin` (the install home's `.grok/bin`). ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `the_vendor_windows_installers_run_in_their_shell`
+      - [ ] 🖐️ Manual test — Windows: Manage CLIs → Grok → Install opens a PowerShell tab, `grok --version` prints 1.x and the card shows it installed
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442f — Windows install commands for Muse, Cursor, Goose, Vibe.** Filled from each vendor's own docs: Muse `irm https://dev.meta.ai/install.ps1 | iex`, Cursor `irm 'https://cursor.com/install?win32=true' | iex`, Goose's two-step `Invoke-WebRequest … download_cli.ps1; .\download_cli.ps1` (now read as PowerShell), Vibe `uv tool install mistral-vibe` (needs uv). New launcher dirs `%LOCALAPPDATA%\cursor-agent`, `%LOCALAPPDATA%\Programs\muse`. Kiro left empty: its documented `install.ps1` runs a per-machine MSI into Program Files (elevation, outside the install home) — a product call. Plandex: WSL only (its README). ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `the_vendor_windows_installers_run_in_their_shell`, `the_windows_installer_env_also_moves_the_profile_and_appdata`
+      - [ ] 🖐️ Manual test — Windows: Install each of Muse, Cursor, Goose, Vibe from Manage CLIs; each card turns installed without a restart and a tab of it starts
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442g — agent `git_push` runs an approved pre-push hook on Windows.** The spawn path stamps `PushBinding::unfenced_host` for a local agent on the fence-less platform; its preflight (`HookBoundary::TrustedHost`) runs the hook on the host through Git for Windows' `sh.exe`, token removed, only while `exec_trust` holds the user's approval of the repo's hooks; otherwise `fence_unavailable` with "push once from the git bar". ssh/docker tabs never get it. `docs/context/git_push_mcp.md` updated. ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `an_unfenced_hosts_hook_runs_only_once_approved_and_without_the_token`, `only_a_fenced_local_agent_stamps_its_push_binding`, `the_proposal_carries_the_fence_scope_its_binding_recorded`
+      - [ ] 🖐️ Manual test — Windows: repo with a pre-push hook, agent asks `git_push` → refused "push once from the git bar"; push once from the git bar (approve the hooks) → the agent's next push runs the hook and goes out; edit the hook → refused again
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442h — PowerShell session hook has the stray-`--resume` check.** Windows cannot read another process's environment, so the hook walks its parent chain (one `Win32_Process` read, only for a clear/resume start) up to the app's executable and counts Claude processes (`claude.exe`, or Node/Bun running `@anthropic-ai/claude-code`); two or more refuse. Bounded at 64 hops. ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `the_powershell_hook_refuses_a_nested_claudes_resume`
+      - [ ] 🖐️ Manual test — Windows: in a Claude tab ask the agent to run `claude -p --resume <some id> hi` in its shell; the Chat view keeps the tab's own conversation; `/clear` typed in the tab still moves it
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442i — TeX builds carry no `\\?\` paths.** Every canonicalising in `commands/tex.rs` goes through `canonical` (`fs::canonicalize` + `paths::without_verbatim_prefix`): cwd, `-outdir`, format build, include/root lists, magic root, `pdf_path`. Root-map entries an older build stored verbatim are re-learned at the next compile. ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `tex_paths_never_carry_the_verbatim_prefix`, `resolve_tex_root_prefers_magic_comment`
+      - [ ] 🖐️ Manual test — Windows (MiKTeX and TeX Live): compile a `.tex` with `\input` children; the PDF tab's path matches the file tree's, Compile from a child builds the root
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
+    - [x] **2442j — sync mirror refuses Windows-hostile names.** `rel_components` refuses on Windows a reserved device name (`paths::is_windows_device_name`) and what `mail_attach::windows_part_refusal` refuses (`:`, `NAME~1`, trailing dot/space). Case policy (recorded in `refuse_case_collisions`): the spelling already in the mirror stays, a host path differing only in case (file or folder) is refused and reported, never written over it. Windows only; the same check could serve macOS (2442z). Not covered: names inside a bulk rsync directory transfer. ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `windows_hostile_mirror_names_are_refused_on_windows_only`, `a_case_only_collision_is_refused_and_the_first_spelling_stays`
+      - [ ] 🖐️ Manual test — Windows: a remote project with `aux.py`, `README.md` and `readme.md`; pull all: `aux.py` and the second spelling are reported as refused, the first stays intact
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **2442k — tab close is a hard kill, no job object.** Deferred in
       32z ("Job Object for ConPTY children").
     - [ ] **2442l — background-job lamp never lights.** Needs a reader of
       another process's environment (PEB walk) or a different tab marker.
-    - [ ] **2442m — small Windows items.** MiKTeX `latexmk` without Perl has
-      no check and no engine fallback; shell tab is always `COMSPEC`; system
-      monitor shows 0 for unreadable processes; env deny-list lacks
-      `HOMEDRIVE`/`HOMEPATH`; `C:\Windows\Fonts` literal; login keeper has no
-      file identity; no-op `prefetch_release`, `run_heartbeat`,
-      `sweep_stale_askpass`, launch-family tracking. (`restart_renderer`:
-      deferred in 32z.)
+      Still open (2026-11-15): no tmux on Windows, so a parent walk from the
+      tab's ConPTY child (ToolHelp ppid + creation-time check against pid
+      reuse) could tie a shell to its tab, but `is_background_job` also needs
+      the shell's command line (`ProcessCommandLineInformation`), which no
+      Windows reader here has yet. Not built blind.
+    - [x] **2442m — small Windows items (part).** Done: MiKTeX's `latexmk` with no Perl on PATH is passed over (MiKTeX ships no Perl, per its KB) and the build drives the engine and says why (`driver_note`); the system monitor marks a process it cannot open `unreadable` and shows — instead of 0; the env deny-list drops `HOMEDRIVE`/`HOMEPATH` (and `CODEX_HOME`); fonts come from `%WINDIR%\Fonts` and `%LOCALAPPDATA%`. Still open: shell tab always `COMSPEC`, login-keeper file identity, the no-op `prefetch_release`/`run_heartbeat`/`sweep_stale_askpass`/launch-family tracking (`restart_renderer`: 32z). ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `miktex_latexmk_without_perl_is_passed_over`, `an_unreadable_process_is_marked_and_a_readable_one_is_unchanged`, `a_persisted_env_is_matched_in_any_letter_case`, `windows_font_dirs_follow_windir_and_localappdata`
+      - [ ] 🖐️ Manual test — Windows: MiKTeX without Perl, Compile → PDF built, the note says latexmk needs Perl; System monitor → a SYSTEM process shows — with a tooltip, not 0
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
 
     *macOS*
     - [ ] **2442n — the Seatbelt fence leaves the ssh-agent, shared temp dirs
@@ -1019,9 +1104,17 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
       or NFC/NFD handling; `AGENT_FENCE_DEFAULT_PATHS` lists Linux dirs only.
 
     *Both*
-    - [ ] **2442aa — print: grayscale, two-sided and paper are ignored off
-      Linux** while the preview offers them and an approved `print_request`
-      drops them. Apply them natively, or disable the controls and say so.
+    - [x] **2442aa — print: what Windows and macOS cannot preset is said, not claimed.** `nativePresets` (frontend) says what the system dialog takes: all on Linux, none on Windows/macOS. There grayscale is baked into the PDF (`layoutPrintPdf` `bakeGrayscale`: a `Saturation` blend rectangle per sheet in an RGB transparency group, vector kept); Two-sided is disabled with a hint to set it in the system dialog; Paper says to pick the same paper there. An approved two-sided/booklet `print_request` reports `notApplied: [duplex]` in `print_status`. Platform note in `docs/context/print_mcp.md`. ⚠️ never run on macOS either. ⚠️ never run on Windows.
+      - [x] 🤖 Automated test — `bakes grayscale into every sheet only when asked to` (vitest), `nativePresets` (vitest), `a_printed_request_says_which_options_were_not_applied`
+      - [ ] 🖐️ Manual test — Windows and macOS: print a colour PDF with Grayscale on → the paper is gray, text sharp; Two-sided is greyed with its hint; an agent `print_request` with `duplex: long`, approved → `print_status` shows `notApplied`
+        - [ ] ✅ Works on Linux (X11)
+        - [ ] ❌ Doesn't work on Linux (X11)
+        - [ ] ✅ Works on Linux (Wayland)
+        - [ ] ❌ Doesn't work on Linux (Wayland)
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
+        - [ ] ✅ Works on macOS
+        - [ ] ❌ Doesn't work on macOS
     - [ ] **2442ab — platform clippy is still `continue-on-error`.** Fix what
       the Windows and macOS runners print, then make both steps blocking.
     - [ ] **2442ac — docs.** `threat_model.md`: the macOS fence escapes
