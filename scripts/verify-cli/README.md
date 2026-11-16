@@ -100,6 +100,10 @@ gives its usage.
 - **Copilot** (`copilot/`): `screens.sh <label> <bin> [port]` walks the folder
   trust question, idle, a stub-forced `create` approval at 110 and 60 columns
   and the Esc after it, BYOK against `stub_openai.py`, for `frames.probe.ts`.
+  `chat_send.py <label> <bin> [port] [case…]` sends prompts with the Chat's and
+  the phone's exact writes (one bracketed paste, Enter 200 ms later) — fresh,
+  idle, two-line, long, while a shell call runs — and reads the stub's request
+  and `user.message` for whether each arrived word for word.
   The session store is `scripts/copilot-events-probe.py` (`COPILOT_BIN=<bin>`).
   Get a binary without installing it: `npm pack @github/copilot-linux-x64@<v>`,
   unpack, `package/copilot`.

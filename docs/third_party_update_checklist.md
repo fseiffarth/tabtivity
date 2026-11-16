@@ -627,6 +627,37 @@ Claude's `/fast` — different thing.
   as the bare edge (`LABELLED_DIALOG_EDGE`, `MobileReadableScreen.test.ts`),
   and all 77 picker frames are titled. Not exercised: a live tab, the phone, a
   real sign-in.
+- **2.1.325 (2026-11-16), outside Tabtivity, beside 2.1.323** (both from the
+  agent install's `versions/`, tab variables unset; 2.1.324 has no changelog
+  entry): `hooks.sh` 19 events with the same keys (`cmp.py`), `sedcheck.py` 0
+  mismatches over 23 payloads, transcript record types and counts unchanged
+  (`meta.py`), `-p --resume` of a `plan` session still the default mode;
+  `/usage` the same envelope keys, three meters, every reset placed; `--help`
+  byte-identical; the notification-type, mode-label, cold-resume and
+  queue-hint strings count the same in both binaries. `send_now.py` with the
+  chord (tool, typed, stream, early) reads as on 2.1.323. `model.py` (both
+  widths, `expand`): rows and highlight the same; row 1's note names the
+  account's default model, so it moves with a `/model` choice, not with the
+  release. Two reader fixes. 2.1.325 keeps the pane's last column free when it
+  wraps a long option (its "long options … partly overwritten when they wrap"
+  fix): `prompt.py <label> <bin> 48 … 66` holds the prompt at each width, and
+  `… auto mode handles` / `these prompts for you` is drawn from 55 to 60
+  columns where 2.1.323 still put `these` in column 60. `wrapsLabel` read the
+  second line as the row's note; it now counts the last column as no room
+  (`MobileSelectPrompt.test.ts`). And a notice too long for the pane takes the
+  dialog's whole edge, cut with `…`, down to one `▔`
+  (` tmux focus-events off · … and rea… ▔` at 80 columns; a same-day rerun of
+  2.1.323 draws it too), so the `/model` sheet went untitled again:
+  `LABELLED_DIALOG_EDGE` takes that row as the edge
+  (`MobileReadableScreen.test.ts`), and all 77 picker frames are titled. The
+  edge also carries `You've used 88% of your weekly limit · resets …` now,
+  read as an edge. Changelog items near what Tabtivity reads, not exercised:
+  `/login` asks before it changes privacy settings (one more step in a
+  sign-in driven from the Chat or the phone); read-only git commands in a
+  repository that is not the project's now ask; `-p` with no cached account
+  data waits for it before its first request, so a warm-up or `/usage` in a
+  new home starts a few seconds later. Not exercised: a live tab, the phone, a
+  real sign-in.
 
 **Verify**
 
@@ -1372,6 +1403,28 @@ and runs no `-p --resume` beside a tab. Enter pressed twice on a permission
 prompt no longer warns. Real sign-in, model pickers and a model's own output
 were not exercised.
 
+Re-checked **1.0.112** (2026-11-16, `npm pack @github/copilot-linux-x64`, beside
+1.0.110; 1.0.111 from its changelog only): all 13 `copilot-events-probe.py`
+checks pass on both, with the same event types and keys in `events.jsonl`.
+`--help` differs only in the wording of `--allow-tool`, `--deny-tool` and
+`--disallow-temp-dir`; `login --help` is identical. The unpacked runtimes hold
+`authTokens`, `lastLoggedInUser` and `storeTokenPlaintext` in as many files.
+`screens.sh` reads the same on both, the hangless wrap included. Both releases
+rework pasted text and an Enter pressed right after it, which is how the Chat
+and the phone send a prompt. `scripts/verify-cli/copilot/chat_send.py` (new)
+writes `agentInputWrites`' own bytes (Ctrl-A Ctrl-K, the message as one
+bracketed paste, Enter 200 ms later) into a real Copilot: fresh, idle, two
+lines, over 256 characters, and while a shell call runs. Every prompt reached
+the stub model and `user.message` word for word, on both versions. A prompt
+sent while a shell call runs is taken at once on both, and the call goes on as
+a background shell (footer `Waiting for background shells`). Changelog items
+near what Tabtivity reads: a `config.json` that cannot be parsed is no longer
+replaced at startup (`copilot_auth` reads that file); follow-ups typed while
+the agent works run in the order typed; a short terminal keeps an approval's
+title and selected answer and scrolls its details with PgUp/PgDn (not
+captured: the probe's panes are 30 and 40 rows). Real sign-in, model pickers
+and a model's own output were not exercised.
+
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
 Auggie, CodeBuddy: `settings.json` `hooks.SessionStart[].hooks[]`, stdout JSON
@@ -1939,6 +1992,20 @@ Tabtivity neither reads nor sets Antigravity's mode, so a tab now asks less
 by Antigravity's own choice. 1.5.8 also adds click-to-expand in the altscreen
 rendering mode (not the default) and `agy acp` context updates. Not reached:
 swarms and a real sign-in.
+1.5.9 on 2026-11-16 (the updater manifest's tarball, sha512 checked, in a
+read-only directory, beside 1.5.8): `main.py` prints the same lines at 80 and 42
+columns, `second.py` shows the notice with the history, and `store.py` reads
+the same three turns with identical schemas. `--help` and `models --help` are
+identical. 38 of 49 frames read the same; the rest are the sign-in frames' PKCE
+state and challenge and the High stop's note, reworded to `Deeper reasoning for
+complex problems — slower but stronger`, which the reader passes on as drawn.
+The home no longer gets `bin/webm_encoder`: `/browser` recordings are `.mp4`
+files made by Chrome now. `agy changelog` for 1.5.9: a `run_workflow` tool,
+`pluginControls` admin settings, `/resume <id>` taking any unique prefix and
+naming an unknown id instead of opening the picker (Tabtivity resumes with
+`--conversation <id>`), implausible window-size reports ignored, and `agy acp`,
+Windows, macOS keychain and MCP fixes. Not reached: swarms, workflows and a
+real sign-in.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row

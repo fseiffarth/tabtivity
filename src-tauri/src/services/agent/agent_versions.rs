@@ -119,7 +119,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "claude",
-        version: "2.1.323",
+        version: "2.1.325",
         surface: "§1.1 — SessionStart/Stop hook payload, --resume, /usage envelope",
     },
     Verified {
@@ -144,12 +144,12 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "antigravity",
-        version: "1.5.8",
+        version: "1.5.9",
         surface: "§1.5 — footer model/effort and the /model dialog (antigravity.ts)",
     },
     Verified {
         agent: "copilot",
-        version: "1.0.110",
+        version: "1.0.112",
         surface: "§1.5 — -p/--session-id/--continue, session-state store, authTokens login layout",
     },
     Verified {
@@ -835,7 +835,7 @@ mod tests {
 
     #[test]
     fn matching_every_note_is_a_match_and_no_notes_is_unverified() {
-        assert_eq!(drift("claude", Some("2.1.323")).0, DriftState::Match);
+        assert_eq!(drift("claude", Some("2.1.325")).0, DriftState::Match);
         // A recipe with no recorded check — the honest answer is "nobody has
         // verified this", not a tick.
         assert_eq!(drift_in(&[], "muse", Some("1.3.0")).0, DriftState::Unverified);
