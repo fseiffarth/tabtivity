@@ -52,13 +52,30 @@ pub fn normalize_path_text(path: &str) -> String {
     s.to_lowercase()
 }
 
-/// [`normalize_path_text`] of `path` resolved as far as the filesystem allows
-/// (canonical when it exists, else absolute): the key a single-instance name
-/// hashes, so `C:\State`, `c:\state\` and a junction to it agree.
+/// [`normalize_path_text`] of `path` resolved as far as the filesystem allows:
+/// the key a single-instance name hashes, so `C:\State`, `c:\state\` and a
+/// junction to it agree. The deepest part that exists is canonicalised and
+/// the rest joined on, so a path hashes the same before it is created as
+/// after: the host makes its state dir and then names its pipe, while a
+/// client may name the pipe first. Canonicalising only a path that exists
+/// gave the two different names under a linked parent (a CI runner's 8.3
+/// `RUNNER~1` temp dir), and the client waited on a pipe nobody served.
 pub fn normalized_path_key(path: &Path) -> String {
-    let resolved = std::fs::canonicalize(path)
-        .or_else(|_| std::path::absolute(path))
-        .unwrap_or_else(|_| path.to_path_buf());
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut missing = Vec::new();
+    let mut existing = absolute.as_path();
+    let resolved = loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            break missing.iter().rev().fold(real, |path, part| path.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => break absolute.clone(),
+        }
+    };
     normalize_path_text(&resolved.to_string_lossy())
 }
 
@@ -555,6 +572,18 @@ mod tests {
         assert_eq!(normalize_path_text(r"C:\"), r"c:\");
         assert_ne!(key_hash("a"), key_hash("b"));
         assert_eq!(key_hash("a").len(), 32);
+    }
+
+    /// The host creates its state dir and then names its pipe; a client may
+    /// name the pipe first. Reached through a link, as a temp dir is on a
+    /// Windows CI runner (the 8.3 `RUNNER~1`) and on macOS (`/var`).
+    #[test]
+    fn a_path_key_does_not_change_when_the_path_comes_to_exist() {
+        let (_dir, link) = crate::test_util::tempdir_via_symlink();
+        let state = link.join("made").join("later");
+        let before = normalized_path_key(&state);
+        std::fs::create_dir_all(&state).unwrap();
+        assert_eq!(normalized_path_key(&state), before);
     }
 
     #[test]
