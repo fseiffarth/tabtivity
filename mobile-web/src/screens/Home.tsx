@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore, type ComponentType } from "r
 import { api, type ActivityTab, type MobileAlerts, type ProjectRow, type TabPlace, type AgentCounts as AgentCountsRow } from "../api";
 import { classifyUnavailable, describeUnavailable, type UnavailableReason } from "../connection";
 import { readFlag, readOrder, writeFlag, writeOrder } from "../prefs";
-import { arrangeProjects, mergeProjectOrder, scopeCaption } from "../projectOrder";
+import { arrangeProjects, mergeProjectOrder, scopeCaption, sortProjectsByAgents } from "../projectOrder";
 import { useRowDrag } from "../rowDrag";
 import { rememberScopeKind } from "../scopeKind";
 import { placeBeside } from "../tabReorder";
@@ -188,6 +188,8 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
    * dead link left — nothing else would ever ask for it again. */
   const [reload, setReload] = useState(0);
   const [alerts, setAlerts] = useState<MobileAlerts | null>(null);
+  // Reuse the Needs you feed instead of starting a second activity poll.
+  const [activityTabs, setActivityTabs] = useState<ActivityTab[]>([]);
   /** The hand-arranged project order, this phone's own (`projectOrder.ts`). It
    * is read once: nothing else on the phone writes it, and re-reading it on
    * every render would undo a drag the moment a poll came back. */
@@ -262,9 +264,9 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
     .then((body) => { if (!signal.aborted) setAlerts(body.alerts); })
     .catch(() => { if (!signal.aborted) setAlerts(null); }), 60_000, { enabled: view === "active", catchUp: false }, []);
   /** The rows as they are drawn. The active list is the reader's own order with
-   * the host's as the fallback; a search result is not arranged at all — it is
+   * the default agent order as the fallback; a search result is not arranged at all — it is
    * an answer to a query, and the best match belongs at the top of it. */
-  const listed = view === "search" ? rows : arrangeProjects(rows, (project) => project.id, order);
+  const listed = view === "search" ? rows : arrangeProjects(sortProjectsByAgents(rows, activityTabs), (project) => project.id, order);
   const firstCounted = listed.find((project) => project.agents)?.id;
   /** One row cannot be rearranged, and neither can a search result — nor the
    *  box layout, where a project can stand under more than one box. */
@@ -368,7 +370,7 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
         <span>{rows.length ? t("mobile.home.showingLast") : t("mobile.home.neverCached")}</span>
         {isUntested("mobile.home.recover") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       </p>}
-      {view === "active" && <NeedsYou alerts={alerts} onAlerts={setAlerts} seen={seen} open={openAgentTab} todo={todo} mail={mail} showAgents={() => choose("agents")} />}
+      {view === "active" && <NeedsYou onTabs={setActivityTabs} alerts={alerts} onAlerts={setAlerts} seen={seen} open={openAgentTab} todo={todo} mail={mail} showAgents={() => choose("agents")} />}
       {view === "active" && <div className="projects-row">
         <h1>{t("mobile.home.projectsTitle")}{tier !== "phone" && isUntested("mobile.tablet") && <span className="untested">{t("mobile.newTab.untested")}</span>}</h1>
         {layoutButton}
@@ -404,6 +406,7 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
       >
         <div className="tab-card-head">
           {projectCard(project)}
+          {index === 0 && isUntested("mobile.home.agentOrder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && index === 0 && isUntested("mobile.home.reorder") && <span className="untested">{t("mobile.newTab.untested")}</span>}
           {canReorder && <button
             className="tab-card-grip"

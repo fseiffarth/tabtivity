@@ -777,6 +777,7 @@ export const UNTESTED = {
   "mobile.model.claudeEffort": { area: "mobile", what: "Terminal · Claude tab: no separate Effort chip; the facts row's model chip shows a gauge and the level (the one the session names, or the one just sent), and the model sheet has a Reasoning effort row under the models (low…max, auto): a tap closes the sheet and its /model dialog, then sends /effort <level>" },
   "mobile.model.effort": { area: "mobile", what: "Terminal · Antigravity effort step in the model sheet", tested: "2026-09-23" },
   "mobile.model.cursor": { area: "mobile", what: "Terminal · Cursor tab: the model chip lists Cursor's /model rows (all of them, past its ten-row window) and a tap applies the model" },
+  "mobile.home.agentOrder": { area: "mobile", what: "Home · Projects default to their highest-priority agent in the default Agents order" },
   "mobile.home.reorder": { area: "mobile", what: "Home · Drag to reorder the project list" },
   "mobile.home.agentCounts": { area: "mobile", what: "Home · A project row counts its agent tabs that are working, waiting on a decision, or done beside its open-tab count" },
   "mobile.home.recover": { area: "mobile", what: "Home · The project list loads again on its own after a failed load (page shown again, back online, slow retry)" },

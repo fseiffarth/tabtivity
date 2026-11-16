@@ -75,7 +75,8 @@ const CONTINUE_PROMPT = "continue";
  * The agent rows are the Agents view's own list (`getActivity`), polled on its
  * cadence only while this view is mounted and the page is shown.
  */
-export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents }: {
+export function NeedsYou({ onTabs, alerts, onAlerts, seen, open, todo, mail, showAgents }: {
+  onTabs?: (tabs: ActivityTab[]) => void;
   alerts: MobileAlerts | null;
   onAlerts: (alerts: MobileAlerts) => void;
   seen: SeenDone;
@@ -106,7 +107,9 @@ export function NeedsYou({ alerts, onAlerts, seen, open, todo, mail, showAgents 
   useVisiblePoll((signal) => getActivity(signal)
     .then((body) => {
       if (signal.aborted) return;
-      setTabs(Array.isArray(body.tabs) ? body.tabs : []);
+      const nextTabs = Array.isArray(body.tabs) ? body.tabs : [];
+      setTabs(nextTabs);
+      onTabs?.(nextTabs);
       setAiOff(body.ai_off === true);
       setNow(Date.now());
     })
