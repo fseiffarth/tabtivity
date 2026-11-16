@@ -6,7 +6,9 @@ import type { FilesPanelView, Settings } from "../../types";
  *  the same entry — one of them keying differently would silently open the panel
  *  on someone else's last view. */
 export function sidePanelViewKey(activeId: string | null, scope: string): string {
-  return activeId ?? scope;
+  // Entering a box leaves `activeId` on the project it was entered from: the
+  // box is what the panel shows, so its view is the box's, never that project's.
+  return scope.startsWith("box:") ? scope : activeId ?? scope;
 }
 
 /** The settings patch that puts the panel on `view`: this scope's own entry, and

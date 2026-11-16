@@ -1094,6 +1094,10 @@ interface ProjectsStore {
   loaded: boolean;
   rootDir: string | null;
   switchToast: string | null;
+  /** One action offered on the toast that says `text` ("Undo" after a ✕ took a
+   *  project out of a box). Bound to the toast's own text, so a later toast
+   *  set by anyone else never inherits the button. */
+  switchToastAction: { text: string; label: string; run: () => void } | null;
   /** A transient one-off action notice (e.g. "VPN connected · proj", a scaffold
    *  repair summary). Kept separate from `switchToast` so a project switch
    *  doesn't clobber it (and vice-versa). */
@@ -1293,6 +1297,64 @@ export async function restoreProjectScope(project: ProjectEntry): Promise<void> 
 /** In-flight `restoreProjectScope` calls, keyed by scope. */
 const restoringScopes = new Set<string>();
 
+/**
+ * Stop the tabs of a CLOSED project that entering a box brought back
+ * (`openBox` restores closed members box-locally, their agents included). The
+ * project stays closed, as it was; what ends is what runs for it here: its
+ * local sessions, its PTYs, its panes. The layout is saved first, so the next
+ * entry into the box (or opening the project) restores the same tabs.
+ *
+ * `deactivateProject` cannot do this: it returns at once for a project that is
+ * already inactive, which is exactly this one. With `ask`, the stop dialog
+ * lists the tabs first (the pill menu's "Close project"); without, it is the
+ * box being left, which the user decided stops them (2026-11-16).
+ *
+ * `false` when there was nothing to stop or the user said no.
+ */
+export async function stopClosedProjectScope(id: string, opts: { ask: boolean }): Promise<boolean> {
+  if (deactivatingProjects.has(id)) return false;
+  const project = useProjectsStore.getState().projects.find((entry) => entry.id === id);
+  const tabsStore = useTabsStore.getState();
+  if (!project || project.status !== "inactive") return false;
+  if (!Object.prototype.hasOwnProperty.call(tabsStore.tabsByScope, id)) return false;
+  deactivatingProjects.add(id);
+  try {
+    const tabs = tabsStore.tabsByScope[id] ?? [];
+    const ptyTabs = tabs.filter((tab) => isPtyTabKind(tab.kind));
+    // Local sessions only, as closing a project: one on a remote host is left
+    // running (see `deactivateProject`).
+    const localTargets = projectTmuxTargets(project, tabs, localSessionsAvailableNow()).filter(
+      (target) => target.hostId === null,
+    );
+    if (opts.ask && (ptyTabs.length > 0 || localTargets.length > 0)) {
+      const ok = await useStopProjectStore.getState().request(
+        project.name,
+        ptyTabs.map((tab) => ({
+          key: tab.key,
+          label: tab.label,
+          kind: tab.kind,
+          location: effectiveTabLocation(tab, { hostPinned: isHostPinned(project) }),
+        })),
+        localTargets.length,
+        0,
+      );
+      if (!ok) return false;
+    }
+    // Best effort from here on: nothing may veto leaving a box.
+    await tabsStore.persistScope(id, project.local_file).catch(() => {});
+    await Promise.allSettled(
+      localTargets.map((target) => invoke<void>("local_tmux_kill", { session: target.session })),
+    );
+    await invoke<string[]>("pty_kill_scope", { scope: id }).catch(() => {});
+    await tabsStore.unloadScope(id);
+    backgroundRestored.delete(id);
+    if (project.remote) dropRemotePool(id);
+    return true;
+  } finally {
+    deactivatingProjects.delete(id);
+  }
+}
+
 /** Project scopes this session has already tried to restore in the background.
  *  Tried, not restored: a project whose saved layout held nothing restorable
  *  creates no `tabsByScope` key (see `restoreProjectScope`), so without this it
@@ -1428,6 +1490,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   loaded: false,
   rootDir: null,
   switchToast: null,
+  switchToastAction: null,
   connToast: null,
   sidePanelFolderByProject: {},
   switchGeneration: 0,
@@ -1711,7 +1774,7 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
     }
   },
 
-  clearSwitchToast: () => set({ switchToast: null }),
+  clearSwitchToast: () => set({ switchToast: null, switchToastAction: null }),
 
   clearConnToast: () => set({ connToast: null }),
 

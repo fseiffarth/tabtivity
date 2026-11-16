@@ -1734,30 +1734,45 @@ describe("box pill menu — shared checklist, dissolve, rename check (AS5a)", ()
     expect(openBox).toHaveBeenCalledWith("boxNew");
   });
 
-  it("Edit boxes… opens the box you are in, else the first, and never create mode", async () => {
+  it("each row's ⋯ opens that box's own menu; there is no Edit boxes… row", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", [], 1), box("boxB", [], 2)], openBox: vi.fn(openBoxScope) });
-    const container = await renderSwitcher();
-    let menu = await openChipMenu(container);
-    await act(async () => {
-      fireEvent.click(menuRow(menu, "Edit boxes"));
-    });
-    expect(useBoxEditorStore.getState()).toMatchObject({ open: true, boxId: "boxA" });
-
-    useBoxEditorStore.getState().close();
-    await act(async () => {
-      useBoxSliceStore.setState({ sliceBoxId: "boxB" });
-    });
-    menu = await openChipMenu(container);
-    await act(async () => {
-      fireEvent.click(menuRow(menu, "Edit boxes"));
-    });
-    expect(useBoxEditorStore.getState()).toMatchObject({ open: true, boxId: "boxB" });
-  });
-
-  it("with no box there is nothing to edit: the list has no Edit boxes… row", async () => {
     const container = await renderSwitcher();
     const menu = await openChipMenu(container);
     expect(menuRow(menu, "Edit boxes")).toBeUndefined();
+    const more = menu.querySelectorAll<HTMLElement>(".box-chip-menu-more");
+    expect(more).toHaveLength(2);
+    await act(async () => {
+      fireEvent.click(more[1]);
+    });
+    const boxMenuRow = (label: string) =>
+      [...document.querySelectorAll<HTMLElement>(".box-pill-menu button")].find((b) =>
+        b.textContent?.startsWith(label),
+      );
+    expect(boxMenuRow("Dissolve")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(boxMenuRow("Edit box")!);
+    });
+    expect(useBoxEditorStore.getState()).toMatchObject({ open: true, boxId: "boxB" });
+    useBoxEditorStore.getState().close();
+  });
+
+  it("the selected pill wears a ⋯ that opens its menu", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", [], 1)], openBox: vi.fn(openBoxScope) });
+    const container = await renderSwitcher();
+    expect(container.querySelector(".box-pill-more")).toBeNull();
+    await act(async () => {
+      useBoxSliceStore.setState({ sliceBoxId: "boxA" });
+    });
+    await act(async () => {
+      fireEvent.click(container.querySelector(".box-pill-more")!);
+    });
+    expect(document.querySelector(".box-pill-menu")).toBeTruthy();
+  });
+
+  it("with no box the list has New Box and nothing to manage", async () => {
+    const container = await renderSwitcher();
+    const menu = await openChipMenu(container);
+    expect(menu.querySelector(".box-chip-menu-more")).toBeNull();
     expect(menuRow(menu, "New Box")).toBeTruthy();
   });
 });

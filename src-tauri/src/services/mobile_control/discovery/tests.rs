@@ -2243,3 +2243,32 @@ fn live_sessions_are_listed_whenever_the_backend_may_hold_them() {
     assert!(super::lists_sessions_on(MuxKind::WinHost, || true));
     assert!(!super::lists_sessions_on(MuxKind::WinHost, || false));
 }
+
+/// Dissolving a box ends the sessions its saved tabs minted: each tab's own,
+/// never one it only attached to, never a name the app would not have given a
+/// tab of that scope and kind, and none at all for a scope with no saved tabs.
+#[test]
+fn a_scopes_saved_tabs_name_the_sessions_to_end_with_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = dir.path();
+    let sessions = state.join("sessions").join("box_b1");
+    fs::create_dir_all(&sessions).expect("sessions");
+    let own = format!("{}box_b1--agent-123456789", crate::brand::TMUX_PREFIX);
+    let shell = format!("{}box_b1--shell-123456789", crate::brand::TMUX_PREFIX);
+    let tab = |kind: &str, session: &str, attach: Option<&str>| {
+        serde_json::json!({
+            "label": kind, "cmd": "", "cwd": "/b", "kind": kind,
+            "tmuxSession": session, "tmuxAttach": attach,
+        })
+    };
+    let tabs = serde_json::json!([
+        tab("agent", &own, None),
+        tab("shell", &shell, Some("someone-elses")),
+        tab("shell", "not-ours--shell-123456789", None),
+        tab("agent", &format!("{}box_b2--agent-123456789", crate::brand::TMUX_PREFIX), None),
+        { "label": "files", "cmd": "", "cwd": "/b", "kind": "files" },
+    ]);
+    fs::write(sessions.join("terminals.json"), serde_json::json!({ "tabLayout": tabs }).to_string()).expect("session");
+    assert_eq!(saved_scope_sessions(state, "box:b1"), vec![own]);
+    assert!(saved_scope_sessions(state, "box:none").is_empty());
+}

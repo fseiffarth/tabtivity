@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ProjectPill } from "../projects/ProjectPill";
 import { BoxScopeChip } from "../projects/BoxScopeChip";
+import { BoxMemberChecklist } from "../projects/BoxMemberChecklist";
 import { barHiddenReason, setBarSolo, setProjectBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 import { dissolveBoxSpec } from "../projects/BoxEditorDialog";
 import { BoxEmptyLine } from "../projects/BoxEmptyLine";
@@ -102,6 +103,43 @@ export function ProjectSwitcher({
   // Alt-drag grouping the backend refuses says why instead of failing silently.
   const { messageOf } = useBoxNameCheck();
   const toastFailure = (error: unknown) => useProjectsStore.setState({ switchToast: messageOf(error) });
+  // A pill dragged inside a box moves in the BOX'S order (the one the side
+  // panel's sections share), never in the general strip's behind it. A pill
+  // that is not a member (the guest in scope) has no place in that order.
+  const reorderInBox = (box: ProjectBox, fromId: string, toId: string) => {
+    const order = [...box.member_ids];
+    const from = order.indexOf(fromId);
+    const to = order.indexOf(toId);
+    if (from < 0 || to < 0 || from === to) return;
+    order.splice(to, 0, ...order.splice(from, 1));
+    void useBoxesStore.getState().reorderBoxMembers(box.id, order).catch(toastFailure);
+  };
+  // ✕ on a member's pill inside its box: out at once, with one click back in
+  // (user decision 2026-11-16). Undo puts the project back where it stood in
+  // the box's order, not at the end.
+  const removeMemberWithUndo = (project: ProjectEntry, box: ProjectBox) => {
+    const order = box.member_ids;
+    void removeFromBox(project.id, box.id)
+      .then(() => {
+        const now = useBoxesStore.getState().boxes.find((b) => b.id === box.id);
+        if (!now || now.member_ids.includes(project.id)) return; // refused and reverted
+        const text = t("projectSwitcher.removedFromBox", { name: project.name, box: box.name });
+        useProjectsStore.setState({
+          switchToast: text,
+          switchToastAction: {
+            text,
+            label: t("projectSwitcher.undoRemove"),
+            run: () =>
+              void useBoxesStore
+                .getState()
+                .addToBox(project.id, box.id)
+                .then(() => useBoxesStore.getState().reorderBoxMembers(box.id, order))
+                .catch(toastFailure),
+          },
+        });
+      })
+      .catch(toastFailure);
+  };
   // The "+" menu's New Box row: name it, Enter, you are in (the one create door).
   const { quickCreateBox, dialogs: quickCreateDialogs } = useQuickCreateBox();
   const openHpcWizard = useHpcPipelineStore((s) => s.openWizard);
@@ -322,7 +360,6 @@ export function ProjectSwitcher({
   const boxFilter = useBoxSliceStore((s) => s.sliceBoxId);
   const selectBox = useBoxSliceStore((s) => s.selectBox);
   const leaveBox = useBoxSliceStore((s) => s.leaveBox);
-  const [boxCandidateFilter, setBoxCandidateFilter] = useState("");
 
   // Entering a box scope by any other door (the search popover, a restored
   // scope at launch, a popout's stream) selects its slice. One-way: leaving the
@@ -349,10 +386,6 @@ export function ProjectSwitcher({
     () => new Set(currentBox?.member_ids ?? []),
     [currentBox],
   );
-
-  useEffect(() => {
-    setBoxCandidateFilter("");
-  }, [currentBox?.id]);
 
   // Where the UNSLICED strip last stood. A slice is a detour the scope takes
   // with it (`openBox` enters the box), so leaving it by "All projects" has to
@@ -430,16 +463,6 @@ export function ProjectSwitcher({
     // linter cannot see.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [steeringOnProjects, visibleProjects]);
-
-  const boxCandidates = useMemo(() => {
-    if (!currentBox) return [];
-    const needle = boxCandidateFilter.trim().toLocaleLowerCase();
-    return activeProjects.filter(
-      (project) =>
-        !currentBoxMemberIds.has(project.id) &&
-        (!needle || project.name.toLocaleLowerCase().includes(needle)),
-    );
-  }, [activeProjects, boxCandidateFilter, currentBox, currentBoxMemberIds]);
 
   // Pointer-driven pill reorder (stores/drag/pillDrag): every OTHER visible project
   // pill "parts" to open the dragged one's landing slot — a `shiftPx` per id,
@@ -778,7 +801,7 @@ export function ProjectSwitcher({
                   }}
                   onClose={currentBox
                     ? isCurrentBoxMember
-                      ? () => removeFromBox(project.id, currentBox.id)
+                      ? () => removeMemberWithUndo(project, currentBox)
                       : undefined
                     : () => deactivateProject(project.id)}
                   closeTitle={currentBox && isCurrentBoxMember
@@ -787,7 +810,9 @@ export function ProjectSwitcher({
                         box: currentBox.name,
                       })
                     : undefined}
-                  onReorder={(fromId, toId) => void reorderProjects(fromId, toId)}
+                  onReorder={(fromId, toId) =>
+                    currentBox ? reorderInBox(currentBox, fromId, toId) : void reorderProjects(fromId, toId)
+                  }
                   onGroup={(fromId, toId) => void groupProjects(fromId, toId)}
                   onAssignToBox={(boxId) => void addToBox(project.id, boxId)}
                   boxTags={boxTags}
@@ -842,11 +867,9 @@ export function ProjectSwitcher({
           <button
             type="button"
             className="project-switcher-add-btn"
-            aria-label={t(currentBox ? "projectSwitcher.addProjectsToBox" : "projectSwitcher.addOrImport")}
+            aria-label={t("projectSwitcher.addOrImport")}
             data-hint-anchor="add-project"
-            title={t(currentBox
-              ? "projectSwitcher.addProjectsToBox"
-              : "projectSwitcher.addOrImport")}
+            title={t("projectSwitcher.addOrImport")}
             // Hover-opened, like its sibling header menus (SettingsMenu,
             // LocalModelMenu, VpnIndicator). Click reveals rather than toggling: a
             // click also fires mouseenter, so a toggle here would open on enter and
@@ -859,38 +882,23 @@ export function ProjectSwitcher({
           </button>
           {showAddMenu && (
             <div className={`project-switcher-add-menu${currentBox ? " box-membership" : ""}`}>
-              {currentBox ? (
+              {/* Inside a box the menu keeps every project action (user decision
+                  2026-11-16): it used to be the member list alone, which left New
+                  project, Import and the rest unreachable until the box was left.
+                  The members lead as a group — the one shared checklist, closed
+                  projects included, staying open across toggles. */}
+              {currentBox && (
                 <>
-                  <div className="project-switcher-box-add-title">
-                    {t("projectSwitcher.addProjectsToBox")} <UntestedTag id="projectSwitcher.addProjectsToBox" />
+                  <div className="context-menu-group">
+                    <div className="context-menu-group-label project-switcher-box-add-title">
+                      {t("projectSwitcher.addProjectsToBox")} <UntestedTag id="projectSwitcher.addProjectsToBox" />
+                    </div>
+                    <BoxMemberChecklist box={currentBox} />
                   </div>
-                  <input
-                    className="project-switcher-box-add-filter"
-                    value={boxCandidateFilter}
-                    onChange={(e) => setBoxCandidateFilter(e.target.value)}
-                    placeholder={t("projectSwitcher.filterBoxCandidates")}
-                    aria-label={t("projectSwitcher.filterBoxCandidates")}
-                    autoFocus
-                  />
-                  <div className="project-switcher-box-add-list">
-                    {boxCandidates.map((project) => (
-                      <button
-                        type="button"
-                        key={project.id}
-                        data-project-id={project.id}
-                        onClick={() => void addToBox(project.id, currentBox.id)}
-                      >
-                        {project.name}
-                      </button>
-                    ))}
-                    {boxCandidates.length === 0 && (
-                      <div className="project-switcher-box-add-empty">
-                        {t("projectSwitcher.noBoxCandidates")}
-                      </div>
-                    )}
-                  </div>
+                  <hr />
                 </>
-              ) : (
+              )}
+              {(
                 <>
                   <button onClick={() => { closeHeaderMenu(ADD_MENU_ID); setDialog("new"); }}>
                     {t("projectSwitcher.newProject")}

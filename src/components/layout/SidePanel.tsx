@@ -189,7 +189,7 @@ export function SidePanel({
       .catch(() => {});
   }, []);
   const projects = useProjectsStore((s) => s.projects);
-  const activeId = useProjectsStore((s) => s.activeId);
+  const storeActiveId = useProjectsStore((s) => s.activeId);
   const sidePanelFolderByProject = useProjectsStore((s) => s.sidePanelFolderByProject);
   const setSidePanelFolder = useProjectsStore((s) => s.setSidePanelFolder);
   const rootDir = useProjectsStore((s) => s.rootDir);
@@ -197,6 +197,11 @@ export function SidePanel({
   // When a box scope is open, the shared view shows a multi-root file view. It
   // derives that from the current tab scope, which the panel forwards.
   const scope = useTabsStore((s) => s.scope);
+  // Entering a box does not change the projects store's `activeId` (it stays on
+  // the project the box was entered from), so in a box scope the panel has NO
+  // project: handing that project on put its git history, its remembered view
+  // and its remount key under the box's header.
+  const activeId = scope.startsWith("box:") ? null : storeActiveId;
 
   const activeProject = projects.find((p) => p.id === activeId) ?? null;
   // The root scope gets the same panel, rooted at `~/tabtivity/root` — the app's

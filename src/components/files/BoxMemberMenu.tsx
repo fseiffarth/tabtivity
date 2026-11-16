@@ -14,7 +14,8 @@ import type { FileSourceSide } from "../../stores/remote/fileSourcePref";
  * project settings act on this member; Remote / Local is the same project-wide
  * side the body's switch shows (remote SSH members only, never a host-pinned
  * one, which has no Local side); "Open as tab" is the member's Files (Project)
- * tab, the one that carries the git bar and its commit row.
+ * tab, the one that carries the git bar and its commit row. The last two rows
+ * set which sections are open at once: this one alone, or every member.
  */
 export function BoxMemberMenu({
   x,
@@ -27,6 +28,8 @@ export function BoxMemberMenu({
   source,
   onSource,
   onOpenTab,
+  onOnlyThis,
+  onOpenAll,
 }: {
   x: number;
   y: number;
@@ -41,6 +44,10 @@ export function BoxMemberMenu({
   source?: FileSourceSide;
   onSource?: (side: FileSourceSide) => void;
   onOpenTab: () => void;
+  /** Fold every other member's section; absent when this is the only one open. */
+  onOnlyThis?: () => void;
+  /** Expand every member's section; absent when they all are. */
+  onOpenAll?: () => void;
 }) {
   const t = useT();
   const pick = (action: () => void) => () => {
@@ -90,6 +97,19 @@ export function BoxMemberMenu({
           {t("fileRoot.openAsTab")}
           <UntestedTag id="projectFilesPane.memberMenu" />
         </button>
+        {(onOnlyThis || onOpenAll) && <hr />}
+        {onOnlyThis && (
+          <button type="button" role="menuitem" onClick={pick(onOnlyThis)}>
+            {t("fileRoot.onlyThis")}
+            <UntestedTag id="projectFilesPane.multiOpen" />
+          </button>
+        )}
+        {onOpenAll && (
+          <button type="button" role="menuitem" onClick={pick(onOpenAll)}>
+            {t("fileRoot.openAll")}
+            <UntestedTag id="projectFilesPane.multiOpen" />
+          </button>
+        )}
       </div>
     </ContextMenuPortal>
   );

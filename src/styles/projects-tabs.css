@@ -557,7 +557,9 @@
 /* The way out: an ✕ that stays on the SELECTED box pill (never hover-only),
    "Show all projects". Muted until pointed at, so it reads as part of the pill
    and not as a second label. */
-.box-pill-leave {
+/* The selected pill's two small buttons: ⋯ (the box's menu) and ✕ (leave). */
+.box-pill-leave,
+.box-pill-more {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -573,7 +575,8 @@
   font-size: var(--text-md);
   cursor: var(--cur-pointer, pointer);
 }
-.box-pill-leave:hover {
+.box-pill-leave:hover,
+.box-pill-more:hover {
   background-color: var(--control-hover-bg);
   color: var(--text-primary);
 }
@@ -694,12 +697,18 @@
   align-items: stretch;
 }
 
-.box-chip-menu-row > button:last-child {
+.box-chip-menu-row > button[data-box-id] {
   flex: 1;
   min-width: 0;
 }
 
-.box-chip-menu button.box-chip-menu-pin {
+/* The row's ⋯ (the box's own menu): the pin's box, in the quiet text colour. */
+.box-chip-menu button.box-chip-menu-more {
+  color: var(--text-secondary);
+}
+
+.box-chip-menu button.box-chip-menu-pin,
+.box-chip-menu button.box-chip-menu-more {
   width: 22px;
   justify-content: center;
   padding: 5px 0;

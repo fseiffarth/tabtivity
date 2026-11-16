@@ -374,6 +374,9 @@ export function AppShell() {
     activeId !== null || scope.startsWith(BOX_SCOPE_PREFIX) || (scope === ROOT_SCOPE && !!rootDir);
   const switchToast = useProjectsStore((s) => s.switchToast);
   const clearSwitchToast = useProjectsStore((s) => s.clearSwitchToast);
+  const switchToastAction = useProjectsStore((s) =>
+    s.switchToastAction && s.switchToastAction.text === s.switchToast ? s.switchToastAction : null,
+  );
   const connToast = useProjectsStore((s) => s.connToast);
   const clearConnToast = useProjectsStore((s) => s.clearConnToast);
   const initTimer = useTimerStore((s) => s.init);
@@ -989,9 +992,10 @@ export function AppShell() {
 
   useEffect(() => {
     if (!switchToast) return;
-    const t = setTimeout(clearSwitchToast, 2200);
+    // A toast that offers an action stays long enough to be clicked.
+    const t = setTimeout(clearSwitchToast, switchToastAction ? 6000 : 2200);
     return () => clearTimeout(t);
-  }, [switchToast, clearSwitchToast]);
+  }, [switchToast, switchToastAction, clearSwitchToast]);
 
   useEffect(() => {
     if (!connToast) return;
@@ -1280,8 +1284,26 @@ export function AppShell() {
       {switchToast != null && (
         <div
           key={switchToast}
-          className={`project-switch-toast${switchToast.includes("\n") ? " multiline" : ""}`}
-        >{switchToast}</div>
+          className={`project-switch-toast${switchToast.includes("\n") ? " multiline" : ""}${
+            switchToastAction ? " has-action" : ""
+          }`}
+        >
+          {switchToast}
+          {switchToastAction && (
+            <button
+              type="button"
+              className="btn-quiet"
+              onClick={() => {
+                const { run } = switchToastAction;
+                clearSwitchToast();
+                run();
+              }}
+            >
+              {switchToastAction.label}
+              <UntestedTag id="projectSwitcher.undoRemove" />
+            </button>
+          )}
+        </div>
       )}
       {connToast != null && (
         <div key={connToast} className="project-switch-toast conn-toast">{connToast}</div>

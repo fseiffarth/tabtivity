@@ -3,7 +3,7 @@ import { create } from "zustand";
 /**
  * Open/closed state for the box sheet (`BoxEditorDialog`), mounted once in
  * `AppShell` (the RemoteMachines host pattern) so it can be opened from any of
- * its doors — the box chip's menu ("Edit box…", "Edit boxes…") and the empty-box
+ * its doors — the box menu ("Edit box…", behind a pill or list row's ⋯) and the empty-box
  * line's "Add projects…" button — without prop-drilling.
  *
  * The sheet edits ONE box: `boxId` is that box and there is no create mode (a

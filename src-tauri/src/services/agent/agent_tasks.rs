@@ -522,6 +522,20 @@ fn delete_locked(
     write_at(path, &file)
 }
 
+/// Drop every prompt and schedule of scope `project_id` (a dissolved box's
+/// `box:<id>`): its tabs are gone for good, so nothing is left to type them
+/// into. Answers whether there was anything to drop; nothing is written when not.
+pub fn delete_scope(project_id: &str) -> Result<bool, String> {
+    validate_id("project id", project_id)?;
+    let _guard = lock()?;
+    let mut file = read()?;
+    if file.projects.remove(project_id).is_none() {
+        return Ok(false);
+    }
+    write(&file)?;
+    Ok(true)
+}
+
 pub fn delete_target(project_id: &str, target_id: &str) -> Result<(), String> {
     validate_id("project id", project_id)?;
     validate_id("schedule target id", target_id)?;
