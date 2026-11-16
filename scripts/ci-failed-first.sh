@@ -19,6 +19,9 @@
 #                                 off: names the tests that were still running
 #                                 and records them as failed
 #
+# CI_CARGO_SPLIT_BUILD=1 (ci-cd.yml sets it on test-macos) compiles the
+# library's test harness on its own before each cargo test: see split_build.
+#
 # A suite that does not run (an earlier step failed) keeps its old list, so
 # its failures are still tried first next time. A listed test that has since
 # been renamed or deleted matches nothing and passes.
@@ -27,6 +30,17 @@ set -euo pipefail
 state="${CI_FAILED_DIR:-.ci-failed}"
 manifest="src-tauri/Cargo.toml"
 mkdir -p "$state"
+
+# The crate compiles twice for `cargo test`, as the library and as its test
+# harness, and cargo runs the two side by side: about 7 GB and 10 GB of
+# compiler memory at once (2026-11-16), on a macOS runner that has 7 GB. Built
+# first and alone, the harness is fresh when the full build compiles the rest.
+# Dependencies still build in parallel. A failure here is left to the cargo
+# test that follows, which fails the same way and is the one recorded.
+split_build() {
+  [ "${CI_CARGO_SPLIT_BUILD:-}" = 1 ] || return 0
+  cargo test --manifest-path "$manifest" --lib --no-run || true
+}
 
 previous() {
   local rc=0 files=() tests=() line
@@ -54,6 +68,7 @@ previous() {
     echo "::group::Backend tests that failed last run (${#tests[@]})"
     printf '  %s\n' "${tests[@]}"
     echo "::endgroup::"
+    split_build
     cargo test --manifest-path "$manifest" -- --exact "${tests[@]}" || rc=1
   fi
   [ "$rc" -eq 0 ] || echo "::error::Tests that failed in the last run still fail; the full suites were not run."
@@ -122,6 +137,7 @@ frontend() {
 
 backend() {
   local rc=0 log="$state/cargo-test.log"
+  split_build
   cargo test --manifest-path "$manifest" 2>&1 | tee "$log" || rc=$?
   # `test path::to::name ... FAILED`; doctest names carry spaces and are
   # left to the full run. A build failure lists nothing, which is right:
