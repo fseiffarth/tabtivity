@@ -3528,3 +3528,36 @@ unchanged; the new agents are additive.
   comes from the renderer's `local_model` flag, which is true only for
   `locked:` (unlocked `local` comes from it, by plan); add grant-matrix rows
   for remote, worker and `local_only` tabs in `root_mcp/tests.rs`.
+
+### Per-tab resume: Antigravity and Muse — `docs/agent_tab_resume_plan.md`
+
+- [x] Built 2026-11-16: a hook per CLI records each tab's own conversation
+  (`services::antigravity_session`, `services::muse_session`), and a restored
+  tab resumes it by id. Probed offline on Antigravity 1.5.2–1.5.9 and Muse
+  1.3.0 / 1.4.15; not live.
+- [ ] 🖐️ Manual test — Antigravity: open two Antigravity tabs in one project,
+  send a different prompt in each, restart the app: each tab comes back on its
+  own chat (the Chat view too). Ask one tab's agent to run `agy -p "hi"` from
+  its shell tool and restart again: that tab still comes back on its own chat.
+  A third tab opened but never prompted comes back empty, not in a sibling's
+  chat.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Muse: open two Muse tabs in one project, send a
+  different prompt in each, restart the app: each tab shows its own chat (the
+  Chat view too). A third tab with no prompt starts fresh after the restart.
+  On Windows the expected result is the folder's latest (no hook there).
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
