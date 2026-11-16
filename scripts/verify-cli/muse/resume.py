@@ -8,7 +8,11 @@ probe always loads what the app writes today) in a scratch home, and plays
 two tabs of one folder: each takes a prompt, is relaunched on the session its
 record names and must come back in its own; then a `muse exec` run from a
 tab's `!` shell escape, a tab of another CLI, a `/clear` and a launch with no
-prompt. Prints PASS/FAIL per check.
+prompt. Also the turn record (`<uid>.turn`: done after a turn, untouched by
+the nested run) and the send hint (tab A is a project tab: its session log
+must hold the hint as context, tab B's must not). The label, when it is a
+version, picks the events registered (`hook::events_for`). Prints PASS/FAIL
+per check.
 
 The tab variables are set to made-up keys for these launches (every other
 probe unsets them): the hook here writes only to the scratch home's own
@@ -42,7 +46,9 @@ script = os.path.join(hooks, f"{common.SLUG}_muse_session.sh")
 r = subprocess.run(
     ["cargo", "test", "-q", "-p", common.SLUG, "--no-default-features", "--lib", "writes_the_hook_for_a_probe", "--", "--ignored"],
     cwd=common.ROOT, capture_output=True, text=True,
-    env=common.clean_environ({"MUSE_PROBE_SCRIPT": script, "MUSE_PROBE_LIVE": live, "MUSE_PROBE_HOME": home}))
+    # The label is the release under test: it picks the events registered.
+    env=common.clean_environ({"MUSE_PROBE_SCRIPT": script, "MUSE_PROBE_LIVE": live, "MUSE_PROBE_HOME": home,
+                              **({"MUSE_PROBE_VERSION": label} if re.fullmatch(r"\d+\.\d+\.\d+", label) else {})}))
 if r.returncode != 0 or not os.path.exists(script):
     sys.exit("could not write the hook:\n" + r.stdout[-2000:] + r.stderr[-2000:])
 
@@ -63,9 +69,20 @@ def record(tab):
         return None
 
 
+def turn_word(tab):
+    """The tab's turn record: the word the hook last wrote."""
+    try:
+        return open(os.path.join(live, TABS[tab] + ".turn")).read().split()[0]
+    except (OSError, IndexError):
+        return None
+
+
 def launch(tab, args, steps, agent="muse", name=None):
     """One launch of `tab`; `steps` are prompts, or `sleep:N`. Returns the last screen."""
-    env = common.scratch_env(home, {UID_VAR: TABS[tab], AGENT_VAR: agent, "MUSE_NO_AUTO_UPDATE": "1"})
+    # Tab A is a project tab (the send hint); the others are not — set empty,
+    # since the harness keeps the rest of this shell's environment.
+    project = {common.ENV_PREFIX + "PROJECT_DIR": work if tab == "A" else ""}
+    env = common.scratch_env(home, {UID_VAR: TABS[tab], AGENT_VAR: agent, "MUSE_NO_AUTO_UPDATE": "1", **project})
     t = common.Tui(common.out_dir("muse", label, "resume", name or tab), [binp, "--provider", "echo", *args],
                    work, env, size=(110, 32), keep=20)
     try:
@@ -90,6 +107,18 @@ launch("B", [], ["beta one"])
 a, b = record("A"), record("B")
 check("each tab records its own session", bool(a and b and a != b), f"A={a} B={b}")
 check("the hook leaves its proof", os.path.exists(os.path.join(live, "muse.hook")))
+# The launch quits by closing its tmux server (no SessionEnd): the last word
+# is the turn's end.
+check("a finished turn leaves done", turn_word("A") == "done" and turn_word("B") == "done",
+      f"A={turn_word('A')} B={turn_word('B')}")
+hint = f"{common.SLUG}-send <file>"
+logs = {}
+for root, _, files in os.walk(os.path.join(home, ".local", "share", "muse", "sessions")):
+    for f in files:
+        if f == "session.jsonl":
+            logs[os.path.basename(root)] = open(os.path.join(root, f), errors="replace").read()
+check("the project tab's session gets the send hint as context", hint in logs.get(a or "-", ""))
+check("the other tab's does not", hint not in logs.get(b or "-", "-" + hint))
 
 screen = launch("A", ["resume", a or "-"], ["alpha two"], name="A2")
 check("tab A comes back in its own session", "alpha one" in screen and "beta one" not in screen)
@@ -101,6 +130,7 @@ nested = f"!{shlex.quote(binp)} exec --provider echo --disable-sandbox nested-ru
 screen = launch("A", ["--disable-sandbox", "resume", a or "-"], [nested, "sleep:6"], name="A-nested")
 check("a muse exec run in the tab ran", "nested-run" in screen)
 check("a muse exec run in the tab does not move the record", record("A") == a, f"A={record('A')}")
+check("nor the turn record", turn_word("A") == "done", f"A={turn_word('A')}")
 
 launch("C", [], ["gamma one"], agent="claude")
 check("a Muse in another CLI's tab records nothing", record("C") is None)

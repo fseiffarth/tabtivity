@@ -5,6 +5,10 @@
 # A user turn holding `STUB:CALL <tool> <json>` makes the model call that tool
 # once (a functionCall part), then answer "stub answer done" once the tool's
 # result comes back. Each request's log line lists the tools offered.
+# `STUB:FAIL` in the last user text answers HTTP 500 instead (a turn that
+# ends in an error); `STUB:SLOW <secs>` waits that long before answering (a
+# turn to interrupt). Every `STUBMARK-<WORD>` anywhere in a request is logged
+# as `marks`, to see what a hook injected into the model's context.
 import json,re,sys,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 port=int(sys.argv[1]); log=open(sys.argv[2],'a',buffering=1)
@@ -22,6 +26,10 @@ def call(req):
     try: args=json.loads(m.group(2))
     except ValueError: return None
     return {'name':m.group(1),'args':args}
+def last_text(req):
+    contents=req.get('contents') or []
+    if not contents: return ''
+    return ' '.join(p.get('text','') for p in contents[-1].get('parts') or [] if isinstance(p,dict))
 class H(BaseHTTPRequestHandler):
     protocol_version='HTTP/1.1'
     def log_message(self,*a): pass
@@ -32,7 +40,15 @@ class H(BaseHTTPRequestHandler):
         try: req=json.loads(body or b'{}')
         except ValueError: req={}
         fc=call(req) if isinstance(req,dict) else None
-        log.write(json.dumps({'POST':self.path,'n':len(body),'tools':tools(req) if isinstance(req,dict) else [],'call':fc})+'\n')
+        text=last_text(req) if isinstance(req,dict) else ''
+        marks=sorted(set(re.findall(r'STUBMARK-[A-Z0-9-]+',body.decode('utf-8','replace'))))
+        log.write(json.dumps({'POST':self.path,'n':len(body),'tools':tools(req) if isinstance(req,dict) else [],'call':fc,'marks':marks})+'\n')
+        if 'STUB:FAIL' in text and not fc:
+            b=b'{"error":{"code":500,"message":"stub failure","status":"INTERNAL"}}'
+            self.send_response(500); self.send_header('content-type','application/json'); self.send_header('content-length',str(len(b))); self.end_headers(); self.wfile.write(b)
+            return
+        slow=re.search(r'STUB:SLOW (\d+)',text)
+        if slow and not fc: time.sleep(int(slow.group(1)))
         self.send_response(200); self.send_header('content-type','text/event-stream'); self.send_header('connection','close'); self.end_headers()
         if fc:
             o={'candidates':[{'content':{'role':'model','parts':[{'functionCall':fc}]},'index':0,'finishReason':'STOP'}],

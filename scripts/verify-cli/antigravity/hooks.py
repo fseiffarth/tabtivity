@@ -1,17 +1,28 @@
 """Antigravity's user hooks and the app's conversation hook, offline.
 
     python3 scripts/verify-cli/antigravity/hooks.py events <label> <bin> <port>
+    python3 scripts/verify-cli/antigravity/hooks.py turns  <label> <bin> <port>
     python3 scripts/verify-cli/antigravity/hooks.py tabs   <label> <bin> <port>
     python3 scripts/verify-cli/antigravity/hooks.py format <label> <bin> <port>
     → tmp/verify-cli/antigravity/<label>/hooks-<mode>/ (frames, hook.log, live_sessions/)
 
 The app's hook script is rebuilt on every run from
 src-tauri/src/services/agent/antigravity_session/hook.sh, filled in the way
-`antigravity_session::posix_script_in` fills it, and registered in the scratch
-home's `.gemini/config/hooks.json` the way `register_in_home` does, beside a
-user hook of every event that dumps its stdin to `hook.log`. The tab variables
-get made-up values (a probe uid, `TAB_AGENT=agy`); the record goes to
-`<home>/live_sessions`, never the app's.
+`antigravity_session::posix_script_in` fills it (the send hint replaced by a
+mark the stub logs), and registered in the scratch home's
+`.gemini/config/hooks.json` on the events `EVENTS` names, the way
+`register_in_home` does, beside a user hook of every event that dumps its
+stdin to `hook.log` (the tool events inside a `matcher` group: flat, they
+never run). The tab variables get made-up values (a probe uid,
+`TAB_AGENT=agy`, a project dir); the records go to `<home>/live_sessions`,
+never the app's. Every step prints the session record and the turn record.
+
+`turns`: the permission prompts on — a plain turn, a `run_command` waiting on
+its approval and then approved (Enter), a second one refused (Esc), a turn
+the stub fails with HTTP 500 (`STUB:FAIL`), a slow one (`STUB:SLOW`)
+cancelled with Esc, and Ctrl+C. Prints which events each fired and the marks
+the model's requests carried (the dumping and the app's SessionStart
+injections).
 
 `events`: one tab — a turn, an `agy -p` its shell tool runs (forced through
 stub_gemini.py's `STUB:CALL run_command`), a subagent (`define_subagent` then
@@ -30,6 +41,7 @@ commands its tools run. Run it on every kept baseline.
 import json
 import os
 import re
+import shutil
 import sys
 import time
 
@@ -39,6 +51,11 @@ from agy import Agy, common  # noqa: E402
 AGENT_DIR = os.path.join(common.ROOT, "src-tauri", "src", "services", "agent")
 UIDS = ["11111111-2222-4333-8444-555555555555", "66666666-7777-4888-9999-aaaaaaaaaaaa"]
 EVENTS = ["SessionStart", "PreInvocation", "PostInvocation", "Stop", "PreToolUse", "PostToolUse"]
+TOOL_EVENTS = ("PreToolUse", "PostToolUse")
+# What the dumping SessionStart hook and the app's hint inject: the stub logs
+# each mark it finds in a model request.
+MARK = "STUBMARK-USER-SESSIONSTART"
+HINT_MARK = "STUBMARK-APP-HINT"
 
 
 def sh_quote(s):
@@ -50,13 +67,23 @@ def hook_script(live):
     src = open(os.path.join(AGENT_DIR, "antigravity_session.rs")).read()
     proof = re.search(r'pub const PROOF: &str = "([^"]+)";', src)
     name = re.search(r'const HOOK_NAME: &str = concat!\(crate::app_slug!\(\), "([^"]+)"\);', src)
-    event = re.search(r'const EVENT: &str = "([^"]+)";', src)
-    if not (proof and name and event):
+    events = re.search(r'const EVENTS: &\[&str\] = &\[([^\]]+)\];', src)
+    if not (proof and name and events):
         sys.exit("antigravity/hooks.py: antigravity_session.rs changed shape — update hook_script()")
     body = open(os.path.join(AGENT_DIR, "antigravity_session", "hook.sh")).read()
     body = (body.replace("@DISPLAY@", common.DISPLAY).replace("@ENV@", common.ENV_PREFIX)
-            .replace("@LIVE_DIR@", sh_quote(live)).replace("@PROOF@", sh_quote(proof.group(1))))
-    return body, common.SLUG + name.group(1), event.group(1), proof.group(1)
+            .replace("@LIVE_DIR@", sh_quote(live)).replace("@PROOF@", sh_quote(proof.group(1)))
+            # The hint the app fills in from agent_hint::HOOK_HINT, as a mark the stub logs.
+            .replace("@HINT@", sh_quote(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": HINT_MARK}}]}))))
+    return body, common.SLUG + name.group(1), re.findall(r'"([A-Za-z]+)"', events.group(1)), proof.group(1)
+
+
+def app_entry(script, events):
+    """The app's entry in hooks.json, as `antigravity_session::hook_entry` builds
+    it: the event's name is the script's argument (1.5.2 and 1.5.3 send none)."""
+    def handler(e):
+        return {"type": "command", "command": f"{sh_quote(script)} {e}"}
+    return {e: ([{"matcher": "*", "hooks": [handler(e)]}] if e in TOOL_EVENTS else [handler(e)]) for e in events}
 
 
 def prepare(home):
@@ -64,17 +91,23 @@ def prepare(home):
     live = os.path.join(home, "live_sessions")
     cfg = os.path.join(home, ".gemini", "config")
     os.makedirs(cfg, exist_ok=True)
-    body, name, event, proof = hook_script(live)
+    body, name, events, proof = hook_script(live)
     script = os.path.join(home, "app_agy_session.sh")
     with open(script, "w") as f:
         f.write(body)
     os.chmod(script, 0o755)
     dump = os.path.join(home, "dump.sh")
     with open(dump, "w") as f:
-        f.write('#!/bin/sh\n{ printf "=== %s agent=%s\\n" "$1" "${ANTIGRAVITY_AGENT-}"; cat; echo; } >> "$HOME/hook.log"\n')
+        f.write('#!/bin/sh\n{ printf "=== %s agent=%s\\n" "$1" "${ANTIGRAVITY_AGENT-}"; cat; echo; } >> "$HOME/hook.log"\n'
+                # What a SessionStart hook injects: the stub logs the mark if it reaches the model.
+                f'[ "$1" = SessionStart ] && printf \'%s\\n\' \'{{"injectSteps":[{{"systemMessage":{{"systemMessage":"{MARK}"}}}}]}}\'\n'
+                'exit 0\n')
     os.chmod(dump, 0o755)
-    hooks = {"userprobe": {e: [{"type": "command", "command": f"{dump} {e}"}] for e in EVENTS},
-             name: {event: [{"type": "command", "command": sh_quote(script)}]}}
+    # The tool events take handlers only inside a `matcher` group; flat ones
+    # are ignored, which is why the first probes saw them "never fire".
+    probe = {e: ([{"matcher": "*", "hooks": [{"type": "command", "command": f"{dump} {e}"}]}] if e in TOOL_EVENTS
+                 else [{"type": "command", "command": f"{dump} {e}"}]) for e in EVENTS}
+    hooks = {"userprobe": probe, name: app_entry(script, events)}
     common.write_json(os.path.join(cfg, "hooks.json"), hooks)
     return live, proof
 
@@ -82,13 +115,17 @@ def prepare(home):
 class TabAgy(Agy):
     """Agy with the made-up tab variables of tab `uid` in its environment."""
 
-    def __init__(self, label, name, port, binp, uid, args=(), home=None):
+    def __init__(self, label, name, port, binp, uid, args=(), home=None, ask=False):
+        """`ask`: leave the permission prompts on (an approval wait to probe)."""
         self._uid = uid
-        super().__init__(label, name, port, binp, args=["--dangerously-skip-permissions", *args], home=home, size=(100, 30))
+        skip = [] if ask else ["--dangerously-skip-permissions"]
+        super().__init__(label, name, port, binp, args=[*skip, *args], home=home, size=(100, 30))
 
     def __setattr__(self, key, value):
         if key == "env" and isinstance(value, dict):
-            value = {**value, common.ENV_PREFIX + "TAB_UID": self._uid, common.ENV_PREFIX + "TAB_AGENT": "agy"}
+            # A project tab: the app's SessionStart prints its hint (a mark here).
+            value = {**value, common.ENV_PREFIX + "TAB_UID": self._uid, common.ENV_PREFIX + "TAB_AGENT": "agy",
+                     common.ENV_PREFIX + "PROJECT_DIR": os.path.join(value.get("HOME", ""), "work")}
         super().__setattr__(key, value)
 
     def turn(self, text, secs=30):
@@ -118,7 +155,11 @@ def events_since(home, start):
             d = json.loads(payload)
         except ValueError:
             continue
-        out.append((head, d.get("conversationId", "?")[:8], d.get("lastUserInput") == "", d.get("parentConversationId")))
+        extra = {k: (str(d[k])[:60] if k == "error" else d[k]) for k in ("terminationReason", "fullyIdle", "error") if k in d}
+        if isinstance(d.get("toolCall"), dict):
+            extra["tool"] = d["toolCall"].get("name")
+        out.append((head, d.get("conversationId", "?")[:8], d.get("lastUserInput") == "", d.get("parentConversationId"),
+                     json.dumps(extra, sort_keys=True)))
     return out, len(text)
 
 
@@ -132,16 +173,21 @@ def log_size(home):
 def step(home, live, uid, start, what):
     evs, _ = events_since(home, start)
     rec = record(live, uid)
-    print(f"--- {what}: record={rec[:8] if rec else None}")
-    seen = {}
+    turn_rec = record(live, uid + ".turn")
+    print(f"--- {what}: record={rec[:8] if rec else None} turn={turn_rec.split()[0] if turn_rec else None}")
+    runs = []
     for e in evs:
-        seen[e] = seen.get(e, 0) + 1
-    for (head, conv, empty, parent), n in seen.items():
-        print(f"    {head:<32} conv={conv} emptyInput={empty} parent={parent} x{n}")
+        if runs and runs[-1][0] == e:
+            runs[-1][1] += 1
+        else:
+            runs.append([e, 1])
+    for (head, conv, empty, parent, extra), n in runs:
+        print(f"    {head:<26} conv={conv} emptyInput={empty} parent={parent} {extra}" + (f" x{n}" if n > 1 else ""))
     return log_size(home), rec
 
 
 def main_events(label, binp, port):
+    shutil.rmtree(common.out_dir("antigravity", label, "hooks-events"), ignore_errors=True)
     home = common.out_dir("antigravity", label, "hooks-events", "h")
     live, proof = prepare(home)
     uid = UIDS[0]
@@ -186,6 +232,77 @@ def main_events(label, binp, port):
     print("files in live_sessions", sorted(os.listdir(live)) if os.path.isdir(live) else None)
 
 
+def stub_marks(r):
+    """The marks the stub saw in model requests (what hooks injected)."""
+    try:
+        lines = [json.loads(ln) for ln in open(os.path.join(r.out, "stub.jsonl")) if ln.startswith("{")]
+    except FileNotFoundError:
+        return []
+    return sorted({m for ln in lines for m in ln.get("marks", [])})
+
+
+def main_turns(label, binp, port):
+    """Each turn ending and the approval wait, with the permission prompts on."""
+    shutil.rmtree(common.out_dir("antigravity", label, "hooks-turns"), ignore_errors=True)
+    home = common.out_dir("antigravity", label, "hooks-turns", "h")
+    live, _ = prepare(home)
+    uid = UIDS[0]
+    r = TabAgy(label, "hooks-turns", port, binp, uid, home=home, ask=True)
+    pos = 0
+    try:
+        r.first_run()
+        r.wait("? for shortcuts")
+        time.sleep(2)
+        print("turn", r.turn("plain turn"))
+        pos, _ = step(home, live, uid, pos, "a turn, no tool")
+        cmd = json.dumps({"CommandLine": "echo approved > approved.out", "toolSummary": "Approval probe",
+                          "WaitMsBeforeAsync": 5000})
+        r.type(f"STUB:CALL run_command {cmd}")
+        r.keys("Enter")
+        time.sleep(8)
+        r.cap("approval")
+        print(r.plain())
+        pos, _ = step(home, live, uid, pos, "a run_command waiting on its approval")
+        r.keys("Enter")
+        r.wait("stub answer done", 30)
+        time.sleep(3)
+        r.cap("approved")
+        print("approved command ran:", os.path.exists(os.path.join(r.work, "approved.out")))
+        pos, _ = step(home, live, uid, pos, "the approval answered (Enter)")
+        cmd = json.dumps({"CommandLine": "echo denied > denied.out", "toolSummary": "Denial probe",
+                          "WaitMsBeforeAsync": 5000})
+        r.type(f"STUB:CALL run_command {cmd}")
+        r.keys("Enter")
+        time.sleep(8)
+        pos, _ = step(home, live, uid, pos, "a second approval wait")
+        r.keys("Escape")
+        time.sleep(6)
+        r.cap("denied")
+        print("denied command ran:", os.path.exists(os.path.join(r.work, "denied.out")))
+        pos, _ = step(home, live, uid, pos, "the approval refused (Esc)")
+        r.type("STUB:FAIL turn")
+        r.keys("Enter")
+        time.sleep(30)
+        r.cap("failed")
+        pos, _ = step(home, live, uid, pos, "a turn the model endpoint fails (HTTP 500)")
+        r.type("STUB:SLOW 25 turn")
+        r.keys("Enter")
+        time.sleep(5)
+        r.keys("Escape")
+        time.sleep(6)
+        r.cap("canceled")
+        pos, _ = step(home, live, uid, pos, "a slow turn canceled with Esc")
+        r.keys("C-c")
+        time.sleep(1)
+        r.keys("C-c")
+        time.sleep(4)
+        r.cap("quit")
+        pos, _ = step(home, live, uid, pos, "Ctrl+C twice")
+    finally:
+        r.close()
+    print("marks the model saw:", stub_marks(r))
+
+
 def main_tabs(label, binp, port):
     home = common.out_dir("antigravity", label, "hooks-tabs", "h")
     live, _ = prepare(home)
@@ -215,6 +332,7 @@ def main_tabs(label, binp, port):
 
 
 def main_format(label, binp, port):
+    shutil.rmtree(common.out_dir("antigravity", label, "hooks-format"), ignore_errors=True)
     home = common.out_dir("antigravity", label, "hooks-format", "h")
     live, proof = prepare(home)
     uid = UIDS[0]
@@ -235,10 +353,11 @@ def main_format(label, binp, port):
     marker = None
     if os.path.exists(tool_env):
         marker = [ln.strip() for ln in open(tool_env) if ln.startswith("ANTIGRAVITY_AGENT=")]
-    print(label, "events", names, "| record", record(live, uid), "| proof", os.path.isfile(os.path.join(live, proof)),
-          "| tool ANTIGRAVITY_AGENT", marker)
+    print(label, "events", names, "| record", record(live, uid), "| turn", record(live, uid + ".turn"),
+          "| proof", os.path.isfile(os.path.join(live, proof)), "| tool ANTIGRAVITY_AGENT", marker,
+          "| marks", stub_marks(r))
 
 
 if __name__ == "__main__":
     mode, label, binp, port = sys.argv[1], sys.argv[2], common.binary(sys.argv[3]), int(sys.argv[4])
-    {"events": main_events, "tabs": main_tabs, "format": main_format}[mode](label, binp, port)
+    {"events": main_events, "turns": main_turns, "tabs": main_tabs, "format": main_format}[mode](label, binp, port)

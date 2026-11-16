@@ -19,7 +19,7 @@ and the new version through the same probe, then compare the two labels.
 | `flags.sh <cli> <label> <bin> [sub ...]` | `--version`, `--help`, each subcommand's `--help` → `flags/`; `diff -ru` two labels' `flags/` to see flags that moved. |
 | `tui.py <cli> <label> <name> [--step …] -- <bin> [args]` | Drives the TUI with steps (`sleep:`, `wait:TEXT[:SECS]`, `cap:`, `key:`, `type:`, `enter:`, `size:COLSxROWS`) and saves frames as `<name>/<frame>@<cols>x<rows>.esc`. `--home DIR` reuses a home (resume tests); `--env K=V`; `--stub openai\|gemini --port N` starts a stub. Default steps: one frame each at 120, 60 and 42 columns. |
 | `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several. It logs every request (offered tools, tool results), so you can force calls no real model would make. |
-| `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` makes it call that tool once first; each request's log line lists the tools offered. |
+| `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
 | `parsers/frames.probe.ts` | Replays every frame of two labels through the app's own readers (Reader live view, model pickers, decision lamp, cold-resume dialog, Antigravity picker/effort, phone sign-in) and lists the frames and fields that read differently. See below. |
 
 Replay two labels:
@@ -81,13 +81,16 @@ gives its usage.
   agy updates itself in place. `store.py <label> [<label>…]` reads `main.py`'s
   home the way the phone Chat does (`google_chat`'s queries and protobuf
   fields) and prints the schema statements that differ between labels.
-  `hooks.py events|tabs|format <label> <bin> <port>` registers the app's
-  conversation hook (rebuilt from `antigravity_session/hook.sh`) beside a
-  dumping hook of every event, with made-up tab variables, and checks what
-  it records: `events` walks a turn, an `agy -p` from the shell tool, a
-  subagent, `/clear` and relaunches; `tabs` two tabs in one folder, each
-  back on its own conversation; `format` whether a release runs the hook and
-  sets `ANTIGRAVITY_AGENT` for tool commands (run it on every baseline).
+  `hooks.py events|turns|tabs|format <label> <bin> <port>` registers the
+  app's conversation hook (rebuilt from `antigravity_session/hook.sh`, its
+  hint a stub mark) beside a dumping hook of every event, with made-up tab
+  variables, and prints the session and turn records it writes: `events`
+  walks a turn, an `agy -p` from the shell tool, a subagent, `/clear` and
+  relaunches; `turns` (permission prompts on) a turn, an approval answered
+  and one refused, a failed and a cancelled turn, and which hook injections
+  reached the model; `tabs` two tabs in one folder, each back on its own
+  conversation; `format` whether a release runs the hook and sets
+  `ANTIGRAVITY_AGENT` for tool commands (run it on every baseline).
   `stub_gemini.py` forces the tool calls (`STUB:CALL <tool> <json>`).
   A pinned build: the updater manifest (`agent_latest::Source::Manifest`)
   names the tarball and its sha512.
@@ -121,8 +124,14 @@ gives its usage.
   home and plays two tabs of one folder: each must record its own session and
   come back in it on `resume <id>`; a `muse exec` from a tab's `!` escape,
   another CLI's tab and a launch with no prompt must record nothing, and a
-  `/clear` moves the record at its first prompt. It sets made-up tab keys,
-  which the hook writes only into that home. Fetch a binary from the public
+  `/clear` moves the record at its first prompt; it also checks the turn
+  record and that the project tab's session log holds the send hint. It sets
+  made-up tab keys, which the hook writes only into that home. `turns.py
+  events <label> <bin>` registers a dumping hook on every event the binary
+  names and prints, per step, which fired with which fields: a turn, a `!`
+  shell escape, a `muse exec` from it, `/compact`, `/clear`, `/exit`, a
+  `resume` with an Esc, Ctrl+C and a `!` under `--approval-mode untrusted`.
+  `turns.py shared` checks one command on all the app's events. Fetch a binary from the public
   channel manifest (checklist §1.5, Meta Muse Code). Run the binary, not the
   launcher, and drive other checks with `tui.py … -- <bin> --provider echo`,
   which answers offline. Don't use its `meta` provider from a probe: with

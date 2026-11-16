@@ -1218,7 +1218,29 @@ each new release run `scripts/verify-cli/antigravity/hooks.py format` (and
   `conversation_summaries.parent_conversation_id` still names the parent;
 - commands Antigravity's tools run still get `ANTIGRAVITY_AGENT=1` (what keeps
   an `agy -p` from the tab's shell tool off the record), and the hook still
-  inherits the CLI's environment (`TABTIVITY_TAB_UID`, `TABTIVITY_TAB_AGENT`).
+  inherits the CLI's environment (`TABTIVITY_TAB_UID`, `TABTIVITY_TAB_AGENT`,
+  `TABTIVITY_PROJECT_DIR`).
+
+The same script writes the tab's turn record and the send hint (follow-up run,
+2026-11-16, 1.5.9; `hooks.py turns` and `events`; `format` on every kept
+baseline, each printing `turn done` and the `STUBMARK-APP-HINT` mark). Each
+event's command passes the event's name as the script's argument, because
+1.5.2 and 1.5.3 send no `hookEventName`. Also re-check:
+
+- `Stop` still fires once per turn, for a turn that ended normally
+  (`terminationReason: NO_TOOL_CALL`) and for one whose model call failed
+  (`ERROR`, an HTTP 500 from the stub), with the turn's `conversationId` and
+  `lastUserInput`; a subagent's `Stop` (empty `lastUserInput`) still comes
+  before the parent's;
+- an Esc (a running turn, or a refused approval) still fires nothing, and no
+  event fires at the approval prompt itself: `PreToolUse` comes before it,
+  `PostToolUse` after the command ran. If a release adds one, it can carry
+  `decision`;
+- `SessionStart`'s `{"injectSteps": [{"systemMessage": {"systemMessage": …}}]}`
+  still reaches the model's request (`turns` prints the stub's marks:
+  `STUBMARK-APP-HINT` is the app's hint);
+- the tool events still need a `{"matcher": "*", "hooks": […]}` group (flat,
+  they are ignored).
 
 If one moved, lower or raise `HOOKS_SINCE`: an unaccepted release gets no
 registration and keeps `--continue`.
@@ -1341,6 +1363,29 @@ Tabtivity:
   took no prompt, but `resume --last` skips it and exits when no other is
   left. Re-check with `scripts/verify-cli/muse/resume.py <label> <bin>`; the
   version gate is `FIRST_HOOKED` in `hook.rs`.
+- Turn state and the hint (follow-up run, 2026-11-16, 1.3.0 and 1.4.15,
+  `scripts/verify-cli/muse/turns.py events|shared <label> <bin>`): the same
+  command now also sits on `SessionStart`, `Stop`, `SessionEnd` and, from
+  1.4.15 (`hook::EVENTS`, `since`), `Interrupt` with `"async": true` (Muse
+  refuses a synchronous `Interrupt` or `ToolUseStart` handler with
+  `UnsupportedHandler`; 1.3.0 warns `UnsupportedEvent` for `Interrupt` at
+  every launch). One command on several events is accepted (`shared`).
+  Re-check: `Stop` fires at a turn's end with the main `session_id` (before
+  the reminder subagents run); `Interrupt` at an Esc on a running turn;
+  `SessionEnd` (`reason: other`) at `/exit`, Ctrl+C and `/clear`;
+  `SessionStart` comes with a session's first prompt and its
+  `hookSpecificOutput.additionalContext` lands in the session log as a
+  `context_block_updated` developer block (`resume.py` checks the app's hint
+  there); 1.4.15 puts the main session in the hook's `MUSE_SESSION_ID` and a
+  subagent's events carry the subagent's id. Not reached with the echo
+  provider, so not registered: `PermissionRequest`, `Notification`,
+  `StopFailure`. A `!` shell escape fires `PreToolUse`, `ToolUseStart`
+  (`post_stop: true` after a turn), `PostToolUse` / `PostToolUseFailure` and
+  no `Stop`. Muse's own bundled Herdr plugin maps `UserPromptSubmit`,
+  `ToolUseStart`, `PostToolUse`(`Failure`) to working, `PermissionRequest`
+  and `Notification` to blocked (dropping a `post_stop: true` request), `Stop`
+  and `Interrupt` to idle: once a real model can be driven, probe the first
+  two and register them as `decision`.
 
 Not verified: a session with tool calls or a real model's answers (an answer
 split around tool calls should read as several answers), a tool-approval prompt (`Would you like to allow this tool

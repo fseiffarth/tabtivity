@@ -715,7 +715,9 @@ mod tests {
         std::fs::write(&script, hook::script_body(&live, "/proc")).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let cmd = format!("\"{}\"", script.to_string_lossy());
-        assert!(hook::register_command_in(Path::new(&home), &cmd, true));
+        // The release under test decides the events, as the version store does.
+        let version = std::env::var("MUSE_PROBE_VERSION").unwrap_or_else(|_| "1.4.15".into());
+        assert!(hook::register_command_in(Path::new(&home), &cmd, &hook::events_for(&version)));
     }
 
     #[test]

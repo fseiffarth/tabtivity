@@ -184,6 +184,29 @@ container tabs write into their scope's slice like every other hook. Remote,
 local-model and assistant tabs are as before. Probed offline on 1.5.2–1.5.9
 (`scripts/verify-cli/antigravity/hooks.py`); not run live.
 
+Since the follow-up run (2026-11-16) the same script also writes the tab's
+turn record and gives a new conversation the send hint, on three events
+(`hooks.py turns` on 1.5.9, `format` on 1.5.2–1.5.9). Each event's command
+names the event as the script's argument: 1.5.2 and 1.5.3 send no
+`hookEventName`.
+
+| Event | Fires | Writes |
+| --- | --- | --- |
+| `PreInvocation` | before every model call, also after each tool | the record, `working` |
+| `Stop` | once per turn: `NO_TOOL_CALL`, `ERROR` (a failed model call), … | `done`, only for the recorded conversation |
+| `SessionStart` | a new conversation's first prompt | prints the hint as an `injectSteps` system message (project tabs only) |
+
+The same refusals hold for every event (`agy -p`, a subagent's empty
+`lastUserInput`, another tab agent); a subagent fires its own `Stop` before
+the parent's. Gaps the window covers itself: no event marks an approval wait
+(`PreToolUse` fires before the prompt for every tool alike, so the screen
+reading stays, as for Codex), and an Esc fires nothing, neither on an
+approval nor on a running turn (the window takes the Esc as the interrupt).
+Antigravity has no session-end event. The tool events take handlers only in a
+`matcher` group (`{"matcher": "*", "hooks": […]}`); the first probes
+registered them flat, which is why they seemed never to fire. Registration
+replaces an entry an earlier spawn wrote (`PreInvocation` alone) whole.
+
 OpenCode mints its own ids (`ses_…`) and has no session hook, and its old
 `--continue` put every OpenCode tab of one folder into the same newest
 session. `services::opencode_session` writes a plugin to
@@ -222,8 +245,8 @@ B; probed offline on 1.3.0 and 1.4.15, never live). Muse's settings take
 Claude-shaped hooks from 1.3.0 on, so each home's
 `.config/muse/settings.json` lists one script (`muse_session/hook.rs`) on
 `UserPromptSubmit`, which writes the prompt's `session_id` to
-`live_sessions/<uid>`, the record the Resume menu already wrote. Why it is
-built the way it is:
+`live_sessions/<uid>`, the record the Resume menu already wrote (and on the
+turn events, below). Why it is built the way it is:
 
 - **The prompt, not the start.** No hook fires before a session's first
   prompt, so a launch that never took one records nothing and is not the
@@ -254,6 +277,35 @@ built the way it is:
 - `resume --last` skips sessions that took no prompt and exits when only
   such are left, so the fallback keeps it only where a prompted session
   exists.
+
+**Turn state and the hint** (follow-up run, 2026-11-16; `turns.py`, 1.3.0
+and 1.4.15). One command, every event in `hook::EVENTS`:
+
+| Event | Fires | Writes |
+| --- | --- | --- |
+| `UserPromptSubmit` | a prompt into the session | the record, `working` |
+| `Stop` | the turn's answer is in, before the reminder subagents' "Double checking" (input typed then is queued) | `done` |
+| `Interrupt` (1.4.15, `async: true` or Muse refuses the handler; 1.3.0 warns of an unknown event) | an Esc on a running turn | `done` |
+| `SessionEnd` | `/exit`, Ctrl+C, and `/clear` too (all `reason: other`) | `idle` |
+| `SessionStart` | with a session's first prompt, not at launch (`source` startup / resume / clear) | prints the hint as `additionalContext`, which Muse keeps as a developer context block |
+
+- **Only the main session.** 1.4.15 puts `MUSE_SESSION_ID` in the hook's
+  environment; a subagent's events carry the subagent's `session_id`, so an
+  event of another session is dropped. `Stop`, `Interrupt` and `SessionEnd`
+  move the turn record only for the session recorded. The nested-run checks
+  above apply to every event.
+- **No Undo-clear records.** `SessionStart(clear)` comes with the new
+  session's first prompt, the moment that prompt withdraws the undo, so a
+  `.src` written then would offer it only to take it back. The typed `/clear`
+  already offers it, and until that prompt the record still names the
+  cleared session, so the undo's relaunch resumes it. No `.src`, `.prev` or
+  mode is written.
+- **Not reached offline** (the echo provider calls no tool and never fails),
+  so not registered: `PermissionRequest`, `Notification`, `StopFailure`. A
+  `!` shell escape fires `PreToolUse` / `ToolUseStart` (`post_stop: true`
+  after a turn) / `PostToolUse` or `PostToolUseFailure` and no `Stop`, so
+  the tool events would light a tab at rest; they are left out.
+  `/compact` fired nothing with echo.
 
 ### The phone send hint
 
