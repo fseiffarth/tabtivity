@@ -954,7 +954,8 @@ fn settings_list_each_store_and_clear_and_purge_remove_them() {
     purge_project_in(&root, "p1");
     let left = settings_view_in(&state).stores;
     assert_eq!(left.len(), 1);
-    assert_eq!(Path::new(&left[0].folder), folders[1]);
+    // Shown as the UI spells it: no `\\?\` prefix from `canonicalize` on Windows.
+    assert_eq!(left[0].folder, crate::paths::display_path(&folders[1]));
 
     clear_in(&root, Some("nonexistent-key")).unwrap();
     assert_eq!(settings_view_in(&state).stores.len(), 1);
