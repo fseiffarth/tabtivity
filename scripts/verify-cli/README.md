@@ -18,8 +18,9 @@ and the new version through the same probe, then compare the two labels.
 |------|---------------|
 | `flags.sh <cli> <label> <bin> [sub ...]` | `--version`, `--help`, each subcommand's `--help` → `flags/`; `diff -ru` two labels' `flags/` to see flags that moved. |
 | `tui.py <cli> <label> <name> [--step …] -- <bin> [args]` | Drives the TUI with steps (`sleep:`, `wait:TEXT[:SECS]`, `cap:`, `key:`, `type:`, `enter:`, `size:COLSxROWS`) and saves frames as `<name>/<frame>@<cols>x<rows>.esc`. `--home DIR` reuses a home (resume tests); `--env K=V`; `--stub openai\|gemini --port N` starts a stub. Default steps: one frame each at 120, 60 and 42 columns. |
-| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is). It logs every request (offered tools, tool results), so you can force calls no real model would make. |
+| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`). It logs every request (offered tools, tool results), so you can force calls no real model would make. |
 | `hookdump.py <log> <event>` | A hook command that appends its event, pid, environment names (and the tab, Copilot and hook-depth values) and stdin payload to a JSONL log. Register it for every event to see which fire, with what. |
+| `stub_anthropic.py <port> <log>` | Anthropic Messages API (`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`), streaming or not. `STUB:CALL`/`STUB:SEQ` as above (only in a request that offers tools), `STUB:ERR <status> <type>` answers that API error. Lets Claude run with no login and no paid turn. |
 | `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
 | `parsers/frames.probe.ts` | Replays every frame of two labels through the app's own readers (Reader live view, model pickers, decision lamp, cold-resume dialog, Antigravity picker/effort, phone sign-in) and lists the frames and fields that read differently. See below. |
 
@@ -63,6 +64,14 @@ gives its usage.
   Esc only (no turn); `expand` opens the folded `More models` row first. These need the login
   and make small paid haiku turns.
   Binaries come from the agent install's `.local/share/claude/versions/<v>`.
+  `turn_hooks.py <label> <bin> <port> [case…]` needs no login: a scratch
+  HOME, `stub_anthropic.py`, a dumping hook on every turn-relevant event. It
+  answers which event ends or opens a turn — an API error (`StopFailure`, no
+  `Stop`), a failed tool (`PostToolUseFailure`), an Esc on a running tool, a
+  permission dialog declined, an MCP elicitation (a stdio server inside the
+  script), a subagent, `/compact`, a `cd`, auto mode's classifier. Its
+  scratch work dir sits under the repo, so the TUI cases answer the repo
+  `CLAUDE.md`'s external-imports question with its default.
 - **OpenCode** (`opencode/`): `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`
   forces tool calls through the stub in a tab-like home. The session plugin
   is rebuilt from `opencode_session.rs` on every run. `hooks.py
@@ -110,9 +119,15 @@ gives its usage.
   `frames.probe.ts`. Then use
   `C2_PROBE_CODEX=<bin> cargo test -p tabtivity --lib codex_parses_the_local_catalog -- --ignored`
   (checklist §1.2) plus `flags.sh` and `tui.py`. Binaries come from the agent
-  install's `.codex/packages/standalone/releases/<v>-<triple>/`. A
-  Codex approval could now come from the stub's `/v1/responses` through a
-  custom provider, but no round has tried it yet. Give the
+  install's `.codex/packages/standalone/releases/<v>-<triple>/`.
+  `turn_hooks.py <label> <bin> <port> [phase…]` runs Codex offline against
+  the stub's `/v1/responses` (launch provider, `approval_policy =
+  "on-request"`, the call asks `require_escalated`, which forces the approval
+  dialog) with dumping hooks: `trusted` (today's events, trusted with
+  `codex_hook_hash`'s formula), `added` (a new event appended: the "Hooks
+  need review" screen, the new hook inert), `approve` (`PermissionRequest`
+  at the dialog, after accept and Esc), `extras` (`spawn_agent`, `/compact`;
+  `--dangerously-bypass-hook-trust`), `apierr` (a closed port). Give the
   work folder its own `git init`, or the trust question offers to trust
   the enclosing repo.
 
@@ -135,6 +150,13 @@ gives its usage.
   The session store is `scripts/copilot-events-probe.py` (`COPILOT_BIN=<bin>`).
   Get a binary without installing it: `npm pack @github/copilot-linux-x64@<v>`,
   unpack, `package/copilot`.
+
+- **Vibe** (`vibe/`): `turn_hooks.py <label> <bin> <port> [apierr]` gives
+  a scratch `VIBE_HOME` a provider at `stub_openai.py` and a dumping hook of
+  each of Vibe's seven hook types (with the hook's `VIBE*` environment), then
+  plays a prompt, an approval accepted and one declined, `/clear`, a `vibe -p`
+  from the bash tool and `/exit`. `apierr` points the provider at a closed
+  port. The binary is the agent install's `.local/bin/vibe`.
 
 - **Muse** (`muse/`): `resume.py <label> <bin>` writes the app's session
   hook (through the ignored test `writes_the_hook_for_a_probe`) into a scratch

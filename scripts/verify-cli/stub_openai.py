@@ -8,6 +8,7 @@
 #   STUB:CALL <tool> <json>                  makes the model call that tool, then answer "stub answer done";
 #   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step;
 #   STUB:FAIL <status>                       answers that HTTP status with an error body.
+# A Responses tool inside a namespace is named `<namespace>.<tool>`.
 # Every request is logged: offered tools, last prompt, tool results.
 import json,os,sys,re,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -90,6 +91,8 @@ class H(BaseHTTPRequestHandler):
         after=items[users[-1]+1:] if users else []
         outs=[x for x in after if x.get('type')=='function_call_output']
         tools=[t.get('name') or t.get('function',{}).get('name') or t.get('type') for t in d.get('tools',[])]
+        # A namespace (Codex's `multi_agent_v1`) lists its tools as `<ns>.<tool>`.
+        tools+=[f"{t.get('name')}.{x.get('name')}" for t in d.get('tools',[]) if t.get('type')=='namespace' for x in t.get('tools',[])]
         rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':(items[-1].get('role') or items[-1].get('type')) if items else None,
              'tool_results':[str(x.get('output'))[:700] for x in outs]}
         log.write(json.dumps(rec)+'\n')
@@ -108,7 +111,9 @@ class H(BaseHTTPRequestHandler):
         ev('response.created',response=base); ev('response.in_progress',response=base)
         if len(outs)<len(seq):
             tn,arg=seq[len(outs)]
-            item={'type':'function_call','id':'fc_'+rid,'call_id':'call_'+rid,'name':tn,'arguments':'','status':'in_progress'}
+            ns,_,inner=tn.rpartition('.')
+            item={'type':'function_call','id':'fc_'+rid,'call_id':'call_'+rid,'name':inner,'arguments':'','status':'in_progress'}
+            if ns: item['namespace']=ns
             ev('response.output_item.added',output_index=0,item=item)
             ev('response.function_call_arguments.delta',item_id=item['id'],output_index=0,delta=arg)
             ev('response.function_call_arguments.done',item_id=item['id'],output_index=0,arguments=arg)

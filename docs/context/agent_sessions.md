@@ -106,7 +106,40 @@ so a `claude -p` or `codex exec` the agent runs from its own shell tool never
 moves the tab's state. `pty_spawn` deletes the record on every spawn, so a tab
 resumed after a crash never starts out "working" from a stale file. Codex's
 new hooks need the same one-time `/hooks` trust as its `SessionStart` one;
-until then a Codex tab stays on the byte heuristic.
+until then a Codex tab stays on the byte heuristic. Adding an event to a home
+that trusted the others makes Codex (0.169.0) show "Hooks need review — 1 hook
+is new or changed" at its next start (Review / Trust all and continue /
+Continue without trusting); skipped, the new hook stays inert and the trusted
+ones keep running. The app's own trust action (`trust_codex_hooks`) covers
+every event `codex_event_label` names. `codex_hook_state` still reads only
+`SessionStart`, so a home with an untrusted `PermissionRequest` reads as
+enabled: the approval wait is then read off the screen, as before.
+
+Since 2026-11-16 (probed offline on Claude 2.1.325, Codex 0.169.0, Vibe
+3.1.2 with `scripts/verify-cli/{claude,codex,vibe}/turn_hooks.py`; never run
+live) the script also serves the events that close the gaps those probes
+showed:
+
+| CLI | Event | Word | Why |
+| --- | --- | --- | --- |
+| Claude | `StopFailure` | done | a turn the API refused (rate limit, sign-in, bad request) fires it and **no** `Stop` |
+| Claude | `PostToolUseFailure` | working, none when `is_interrupt` | a failed tool fires it instead of `PostToolUse`, so an approval it ran after was never ended |
+| Claude | `Elicitation` / `ElicitationResult` | decision / working | an MCP server's question opening and its answer; the `elicitation_dialog` notice comes 6 s late |
+| Codex | `PermissionRequest` | decision | the approval dialog opening; accepted → `PostToolUse`, declined → no hook (input retires it, as for Claude) |
+| Vibe | `pre_agent` / `post_agent` | working / done | each prompt / each turn's end; both record the session |
+| Vibe | `post_tool`, `notification` (`approval_requested`), `session_end` | working, decision, idle (not on `reason: clear`) | as for Claude |
+
+Not registered, reported only: Claude's `PermissionDenied` (auto mode's
+classifier, `reason`), `SubagentStart`/`SubagentStop` (`agent_id`,
+`agent_type`; compaction runs as a subagent with an empty type),
+`PreCompact`/`PostCompact` (`trigger`, `compact_summary`) and `CwdChanged`
+(`old_cwd`, `new_cwd`) all fire, but would need new UI; Codex's
+`SubagentStart`/`SubagentStop`/`PreCompact`/`PostCompact` likewise (its
+subagent's own `UserPromptSubmit` carries the parent's `session_id` and an
+`agent_id`, so it counts as the tab working). An interrupted Claude tool fired
+no failure event on 2.1.325 (the `is_interrupt` guard is cheap insurance). A
+Codex or Vibe turn that fails on the API was not seen to end: both retry for
+longer than the probe waited.
 
 Claude's `decision` comes from `PermissionRequest` (Claude only, since
 2026-11-10), the dialog opening: the notice alone came 6 s late, and never for
@@ -133,10 +166,20 @@ one-time trust (`/hooks` in Codex) before they run; until then
 record. Gemini and the other "continue last" agents restore on their CLI's
 continue flag, not a captured id.
 
-Vibe 2.25 has `--resume <session-id>`. Tabtivity registers a `post_agent` hook in
-the user's `~/.vibe/hooks.toml` and in each prepared local-model `VIBE_HOME`;
-after a completed turn it records Vibe's current ID under the tab's
-`TABTIVITY_TAB_UID`. A local tab with a recorded, still-present session resumes
+Vibe 2.25 has `--resume <session-id>`. Tabtivity registers its hooks
+(`VIBE_HOOK_TYPES`: `pre_agent`, `post_agent`, `post_tool`, `notification`,
+`session_end`, one name each) in the user's `~/.vibe/hooks.toml` and in each
+prepared local-model `VIBE_HOME` (rewritten to hold the app's hooks alone); at
+each prompt (`pre_agent`, since 2026-11-16; before, only after a completed
+turn) it records Vibe's current ID under the tab's `TABTIVITY_TAB_UID`, and the
+turn state as in the table above. Vibe 3.1.2's TUI fires all seven of its
+types, the "host" ones (`notification`, `session_start`, `session_end`)
+included; `session_start` is left out because it fires before a session took
+a prompt. Only the tab's own session counts: a subagent sets
+`parent_session_id`, and a `vibe -p` run from the tab's bash tool runs its
+hooks with `VIBE_SESSION=1` (set by Vibe for its tools' shells, never for its
+own hooks) — before this guard such a run took the record over. A local tab
+with a recorded, still-present session resumes
 that exact ID (including after Vibe's in-app `/resume` or `/branch`). Existing
 tabs without a record retain the prior `--continue` fallback. Remote Vibe tabs
 also retain `--continue`, since no Tabtivity hook is installed on the host. Vibe's

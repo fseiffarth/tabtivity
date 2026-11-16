@@ -142,6 +142,27 @@ fn vibe_hook_registration_preserves_existing_hooks_and_is_idempotent() {
     assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
     assert!(once.contains("name = \"mine\""));
     assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
+    for kind in VIBE_HOOK_TYPES {
+        assert_eq!(once.matches(&format!("name = \"{}\"", vibe_hook_name(kind))).count(), 1, "{kind}");
+        assert_eq!(once.matches(&format!("type = \"{kind}\"")).count(), 1 + usize::from(kind == "post_agent"), "{kind}");
+    }
+    // A file from before the turn hooks holds the post_agent one alone: it
+    // gains the others once, and that one stays where it was.
+    let old = format!(
+        "[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"true\"\n\n[[hooks]]\nname = \"{}\"\n\
+         type = \"post_agent\"\ncommand = {}\ntimeout = 10.0\n",
+        crate::brand::VIBE_SESSION_HOOK,
+        serde_json::to_string(&hook_command()).unwrap()
+    );
+    std::fs::write(&hooks, &old).unwrap();
+    register_vibe_hook_in(&home).unwrap();
+    let grown = std::fs::read_to_string(&hooks).unwrap();
+    assert!(grown.starts_with(&old), "{grown}");
+    for kind in VIBE_HOOK_TYPES {
+        assert_eq!(grown.matches(&format!("name = \"{}\"", vibe_hook_name(kind))).count(), 1, "{kind}");
+    }
+    register_vibe_hook_in(&home).unwrap();
+    assert_eq!(std::fs::read_to_string(&hooks).unwrap(), grown);
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -169,6 +190,10 @@ fn a_local_model_home_keeps_only_apps_hook() {
     let once = std::fs::read_to_string(&hooks).unwrap();
     assert!(!once.contains("planted"));
     assert_eq!(once.matches(concat!("name = \"", crate::app_slug!(), "-session\"")).count(), 1);
+    // The local-model home gets the same hooks as any other.
+    for kind in VIBE_HOOK_TYPES {
+        assert_eq!(once.matches(&format!("type = \"{kind}\"")).count(), 1, "{kind}");
+    }
     write_vibe_hooks(&file, true).unwrap();
     assert_eq!(std::fs::read_to_string(&hooks).unwrap(), once);
     std::fs::remove_dir_all(home).unwrap();
@@ -233,6 +258,78 @@ fn vibe_hook_records_only_top_level_post_agent() {
         &payload(nested, &format!("\"{own}\""), "post_agent")).0, None);
     assert_eq!(run_hook(&script, &live, uid, Some("vibe"), false,
         &payload(own, "null", "post_agent")).0.as_deref(), Some(own));
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// Vibe 3.1.2's hooks as its TUI fires them (`scripts/verify-cli/vibe/turn_hooks.py`):
+/// the prompt records the session and the turn, the approval notice is the
+/// dialog opening, a finished tool ends it, the turn's end is done, and a
+/// `/clear` ends a session without ending the CLI. A subagent (a parent set),
+/// a `vibe -p` run from the tab's bash tool (`VIBE_SESSION` set) and another
+/// session's events move nothing.
+#[cfg(unix)]
+#[test]
+fn vibe_hook_records_the_session_at_the_prompt_and_the_turn_state() {
+    let home = unique_tmp(concat!(crate::app_slug!(), "-vibe-hook-turn"));
+    let live = home.join("live");
+    std::fs::create_dir_all(&live).unwrap();
+    let script = home.join("hook.sh");
+    std::fs::write(&script, posix_hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "11111111-2222-4333-8444-555555555555";
+    let own = "c177eecf-d07d-08bc-a5ff-cba000560c35";
+    let cleared = "f93036ac-961b-1c1c-20bc-9ec675d65f26";
+    let other = "3b596e2a-0fbb-99b3-1007-fb70272bd679";
+    let turn = || {
+        std::fs::read_to_string(live.join(format!("{uid}.turn")))
+            .ok()
+            .map(|t| t.split_whitespace().next().unwrap_or("").to_string())
+    };
+    // The shapes 3.1.2 sends (paths cut).
+    let ev = |id: &str, parent: &str, event: &str, extra: &str| format!(
+        "{{\"session_id\": \"{id}\", \"transcript_path\": \"/v/logs/session/unified/{id}\", \"cwd\": \"/w\", \
+         \"parent_session_id\": {parent}, \"hook_event_name\": \"{event}\"{extra}}}"
+    );
+    let run = |env: &[(&str, &str)], payload: String| run_hook_with(&script, &live, uid, Some("vibe"), false, env, &payload).0;
+    let prompt = r#", "agent_name": "accept-edits", "turn_id": "turn-1", "prompt": "say hi""#;
+    let approval = r#", "notification_type": "approval_requested", "message": "Vibe needs your approval to run file_system.bash", "tool_name": "file_system.bash""#;
+    let tool = r#", "tool_name": "file_system.bash", "tool_status": "failure", "tool_error": "Tool execution denied by approval callback""#;
+
+    // Nothing records before a prompt: no session_start is registered.
+    assert_eq!(run(&[], ev(own, "null", "pre_agent", prompt)).as_deref(), Some(own));
+    assert_eq!(turn().as_deref(), Some("working"));
+    run(&[], ev(own, "null", "notification", approval));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run(&[], ev(own, "null", "post_tool", tool));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // A finished turn's notice is no wait.
+    run(&[], ev(own, "null", "notification", r#", "notification_type": "turn_completed""#));
+    assert_eq!(turn().as_deref(), Some("working"));
+    assert_eq!(run(&[], ev(own, "null", "post_agent", "")).as_deref(), Some(own));
+    assert_eq!(turn().as_deref(), Some("done"));
+
+    // Not the tab's own Vibe: a subagent, a nested `vibe -p` (both records
+    // and turn untouched for every event), another session's tool or end.
+    for event in ["pre_agent", "post_agent", "post_tool", "notification", "session_end"] {
+        let extra = if event == "notification" { approval } else { r#", "reason": "exit""# };
+        assert_eq!(run(&[], ev(other, &format!("\"{own}\""), event, extra)).as_deref(), Some(own), "{event}");
+        assert_eq!(run(&[("VIBE_SESSION", "1")], ev(other, "null", event, extra)).as_deref(), Some(own), "{event}");
+        assert_eq!(turn().as_deref(), Some("done"), "{event}");
+    }
+    for event in ["post_tool", "notification", "session_end"] {
+        let extra = if event == "notification" { approval } else { r#", "reason": "exit""# };
+        run(&[], ev(other, "null", event, extra));
+        assert_eq!(turn().as_deref(), Some("done"), "{event}");
+    }
+
+    // A /clear ends the session but not the CLI; the next prompt moves the
+    // record to the new session.
+    run(&[], ev(own, "null", "session_end", r#", "reason": "clear""#));
+    assert_eq!(turn().as_deref(), Some("done"));
+    assert_eq!(run(&[], ev(cleared, "null", "pre_agent", prompt)).as_deref(), Some(cleared));
+    assert_eq!(turn().as_deref(), Some("working"));
+    run(&[], ev(cleared, "null", "post_agent", ""));
+    run(&[], ev(cleared, "null", "session_end", r#", "reason": "exit""#));
+    assert_eq!(turn().as_deref(), Some("idle"));
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -816,10 +913,25 @@ fn run_hook(
     claudecode: bool,
     payload: &str,
 ) -> (Option<String>, Option<String>) {
+    run_hook_with(script, live_dir, uid, agent, claudecode, &[], payload)
+}
+
+/// [`run_hook`] with more variables in the hook's environment.
+#[cfg(unix)]
+fn run_hook_with(
+    script: &std::path::Path,
+    live_dir: &std::path::Path,
+    uid: &str,
+    agent: Option<&str>,
+    claudecode: bool,
+    extra_env: &[(&str, &str)],
+    payload: &str,
+) -> (Option<String>, Option<String>) {
     use std::io::Write as _;
     let mut cmd = std::process::Command::new("sh");
     cmd.arg(script)
         .env_clear()
+        .envs(extra_env.iter().copied())
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env(crate::app_env!("TAB_UID"), uid)
         .stdin(std::process::Stdio::piped())
@@ -1425,6 +1537,53 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
     run_hook(&script, &live, uid, claude, true, &ev(uid, "Notification", r#","notification_type":"idle_prompt""#));
     assert_eq!(turn().as_deref(), Some("done"));
 
+    // Claude 2.1.325 (`scripts/verify-cli/claude/turn_hooks.py`, the shapes
+    // it sent): a tool that fails reports PostToolUseFailure, not
+    // PostToolUse — an approval it ran after still ends there.
+    let fail = |interrupt: bool| {
+        format!(r#","tool_name":"Bash","tool_input":{{"command":"exit 3"}},"error":"Exit code 3","is_interrupt":{interrupt},"duration_ms":527"#)
+    };
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "UserPromptSubmit", ""));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PermissionRequest", r#","tool_name":"Bash""#));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUseFailure", &fail(false)));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // One the user cut off is not work going on: what the interrupt left stands.
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PermissionRequest", r#","tool_name":"Bash""#));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "PostToolUseFailure", &fail(true)));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    // An MCP server's question opens with Elicitation and is answered with
+    // ElicitationResult (the notice comes 6 s after the dialog, as for
+    // permissions).
+    let elicit = r#","mcp_server_name":"elic","message":"pick a colour","mode":"form","requested_schema":{"type":"object","properties":{"colour":{"type":"string"}}}"#;
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "Elicitation", elicit));
+    assert_eq!(turn().as_deref(), Some("decision"));
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "ElicitationResult", r#","mcp_server_name":"elic","mode":"form","action":"cancel""#));
+    assert_eq!(turn().as_deref(), Some("working"));
+    // A turn the API refused ends with StopFailure and no Stop.
+    let refused = r#","prompt_id":"p1","effort":{"level":"high"},"error":"rate_limit","last_assistant_message":"API Error: 429""#;
+    let (rec, _) = run_hook(&script, &live, uid, claude, true, &ev(uid, "StopFailure", refused));
+    assert_eq!(turn().as_deref(), Some("done"));
+    assert_eq!(rec.as_deref(), Some(uid));
+    // A nested `claude -p` (its own transcript, as Claude names it) firing
+    // any of them moves nothing.
+    let nested_ev = |event: &str, extra: &str| {
+        format!(r#"{{"session_id":"{nested}","transcript_path":"/p/-w/{nested}.jsonl","hook_event_name":"{event}"{extra}}}"#)
+    };
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "UserPromptSubmit", ""));
+    for (event, extra) in [
+        ("PostToolUseFailure", fail(false)),
+        ("Elicitation", elicit.to_string()),
+        ("ElicitationResult", r#","action":"accept""#.to_string()),
+        ("StopFailure", refused.to_string()),
+    ] {
+        let (rec, _) = run_hook(&script, &live, uid, claude, true, &nested_ev(event, &extra));
+        assert_eq!(turn().as_deref(), Some("working"), "{event}");
+        assert_eq!(rec.as_deref(), Some(uid), "{event}");
+    }
+    run_hook(&script, &live, uid, claude, true, &ev(uid, "Stop", ""));
+    assert_eq!(turn().as_deref(), Some("done"));
+
     // A nested `claude -p` under the tab fires the same events for its own
     // session: none of them may move this tab's state.
     run_hook(&script, &live, uid, claude, true, &ev(nested, "UserPromptSubmit", ""));
@@ -1451,6 +1610,16 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
     };
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "SessionStart", r#","source":"startup""#));
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", ""));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    // Codex 0.169.0's approval dialog opening (the shape it sent): decision,
+    // until the approved tool reports. A nested `codex exec`'s is somebody
+    // else's.
+    let approval = r#","turn_id":"t1","model":"stub","permission_mode":"default","tool_name":"Bash","tool_input":{"command":"touch a.txt","description":"probe"}"#;
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "PermissionRequest", approval));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PermissionRequest", approval));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", r#","tool_name":"Bash""#));
     assert_eq!(cturn().as_deref(), Some("working"));
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "Stop", ""));
     assert_eq!(cturn().as_deref(), Some("working"));
@@ -1533,7 +1702,17 @@ fn register_hook_is_idempotent_and_preserves_other_keys() {
     };
     assert!(!ours(&stop[0]) && ours(&stop[1]));
     // The turn-state events are registered too, one group each.
-    for ev in ["UserPromptSubmit", "PostToolUse", "PermissionRequest", "Notification", "SessionEnd"] {
+    for ev in [
+        "UserPromptSubmit",
+        "PostToolUse",
+        "PermissionRequest",
+        "Notification",
+        "SessionEnd",
+        "StopFailure",
+        "PostToolUseFailure",
+        "Elicitation",
+        "ElicitationResult",
+    ] {
         let groups = v["hooks"][ev].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{ev}");
         assert!(ours(&groups[0]), "{ev}");
@@ -1548,6 +1727,23 @@ fn register_hook_is_idempotent_and_preserves_other_keys() {
     )
     .unwrap();
     register_hook_in_settings(&HomeFile::open(&tmp, "settings.json").unwrap()).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    for ev in HOOK_EVENTS {
+        assert_eq!(v["hooks"][ev].as_array().unwrap().len(), 1, "{ev}");
+    }
+
+    // An install holding the seven events of before the failure and
+    // elicitation hooks gains exactly the four new ones, once.
+    let cmd = serde_json::to_string(&hook_command()).unwrap();
+    let seven: Vec<String> = HOOK_EVENTS[..7]
+        .iter()
+        .map(|ev| format!(r#""{ev}":[{{"hooks":[{{"type":"command","command":{cmd}}}]}}]"#))
+        .collect();
+    std::fs::write(&settings, format!(r#"{{"hooks":{{{}}}}}"#, seven.join(","))).unwrap();
+    for _ in 0..2 {
+        register_hook_in_settings(&HomeFile::open(&tmp, "settings.json").unwrap()).unwrap();
+    }
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     for ev in HOOK_EVENTS {
@@ -1605,6 +1801,24 @@ fn register_codex_hook_appends_once_and_preserves_toml() {
     assert_eq!(out.matches("[[hooks.SessionStart]]").count(), 1);
     assert_eq!(out.matches("[[hooks.Stop]]").count(), 1);
     assert_eq!(out.matches("[[hooks.UserPromptSubmit]]").count(), 1);
+    // An install that registered the five events of before PermissionRequest
+    // gains it once, and only it.
+    let mut five = String::from("model = \"o3\"\n");
+    for ev in &CODEX_HOOK_EVENTS[..5] {
+        five.push_str(&format!(
+            "\n[[hooks.{ev}]]\n\n[[hooks.{ev}.hooks]]\ntype = \"command\"\ncommand = '{}'\ntimeout = {}\n",
+            hook_command(),
+            if *ev == "SessionEnd" { 3 } else { 10 }
+        ));
+    }
+    std::fs::write(&config, &five).unwrap();
+    for _ in 0..2 {
+        register_codex_hook_in(&HomeFile::open(&tmp, "config.toml").unwrap()).unwrap();
+    }
+    let out = std::fs::read_to_string(&config).unwrap();
+    assert!(out.starts_with(&five), "{out}");
+    assert_eq!(out.matches("[[hooks.PermissionRequest]]").count(), 1);
+    assert_eq!(out.matches("[[hooks.").count(), five.matches("[[hooks.").count() + 2);
     // Somebody else's hook on an event we register does not count as ours.
     assert_eq!(
         codex_registered_events(
@@ -1774,7 +1988,12 @@ const LIVE_HASHES: [(&str, &str); 5] = [
     ("session_end", "sha256:0aee76ee8e8150b8b99cbacae20528f5663be4655b1590fc1749d43d6291b54b"),
 ];
 
-/// Our five hook blocks for `cmd`, exactly as registration writes them.
+/// What Codex 0.169.0 wrote for our `PermissionRequest` block (no matcher,
+/// `timeout = 10`) with that command, through "Trust all and continue"
+/// (offline, 2026-11-16).
+const LIVE_PERMISSION_REQUEST_HASH: &str = "sha256:2a8df71061d856638e087ce2c2259f9200fa7c7f9b6f9e7fd6c85c2cbc8e49c1";
+
+/// Our hook blocks for `cmd`, exactly as registration writes them.
 fn registered_codex_config(cmd: &str, before: &str) -> String {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join(".codex")).unwrap();
@@ -1789,7 +2008,7 @@ fn codex_hooks_are_trusted_with_the_hash_codex_writes() {
     let cfg = "/c/.codex/config.toml";
     let src = registered_codex_config(cmd, "model = \"o3\"\n");
     let out = trust_codex_hooks_in(&src, &[cfg.to_string()], cmd).expect("something to trust");
-    for (label, hash) in LIVE_HASHES {
+    for (label, hash) in LIVE_HASHES.into_iter().chain([("permission_request", LIVE_PERMISSION_REQUEST_HASH)]) {
         let table = format!("[hooks.state.\"{cfg}:{label}:0:0\"]\ntrusted_hash = \"{hash}\"\n");
         assert!(out.contains(&table), "{label} missing in\n{out}");
     }

@@ -151,6 +151,19 @@ Claude's `/fast` — different thing.
 
 **Assumes**
 
+- Turn hooks (2026-11-16, 2.1.325, offline: `scripts/verify-cli/claude/turn_hooks.py`,
+  no login, `stub_anthropic.py`): a turn the API refuses fires `StopFailure`
+  (`error`: `rate_limit`, `authentication_failed`, `unknown` for a 400) and
+  **no** `Stop`; a failed tool fires `PostToolUseFailure` (`error`,
+  `is_interrupt`) instead of `PostToolUse`; an MCP elicitation fires
+  `Elicitation` as its dialog opens (the `elicitation_dialog` notice 6 s
+  later) and `ElicitationResult` (`action`) when answered; an Esc on a
+  running tool fires nothing, a declined permission dialog nothing. All four
+  are registered (`HOOK_EVENTS`). Seen, not used (they need UI):
+  `PermissionDenied` (auto mode, `reason`), `SubagentStart`/`SubagentStop`,
+  `PreCompact`/`PostCompact`, `CwdChanged`. Re-run the probe on every
+  release; a `Stop` that starts firing after an error, or a failure event
+  that stops, changes what ends a working mark.
 - Root console (`services::root_mcp`): `--mcp-config <inline json>` with an
   HTTP server whose `headers` value `Bearer ${TABTIVITY_ROOT_MCP_TOKEN}` is
   **expanded from the environment** — verified on 2.1.276 against a logging
@@ -721,6 +734,19 @@ tab and resume/fork remain tagged for live verification.
 
 **Assumes**
 
+- **Turn hooks, 0.169.0 (2026-11-16, offline: `scripts/verify-cli/codex/turn_hooks.py`)**:
+  `PermissionRequest` fires as the approval dialog opens (`tool_name: Bash`,
+  `tool_input.command`); accepted → `PostToolUse`, `Stop`; declined (Esc) →
+  no hook. Registered (`CODEX_HOOK_EVENTS`), trust label
+  `permission_request`, hash reproduced against one 0.169.0 wrote. A new
+  event in a home that trusted the others brings Codex's "Hooks need review
+  — 1 hook is new or changed" screen at the next start; skipped, the new hook
+  stays inert and the old ones run. Also fire, unused: `PreToolUse`,
+  `SubagentStart`/`SubagentStop` (`agent_id`, `agent_type`; a subagent's
+  `UserPromptSubmit` carries the parent's `session_id` plus `agent_id`),
+  `PreCompact`/`PostCompact` (`trigger`). A turn against a closed port shows
+  "Reconnecting… waiting for network" and fired no `Stop` within 20 s.
+  `approval_policy = "untrusted"` is refused at config load since 0.169.0.
 - **0.169.0 (2026-11-13), outside Tabtivity, beside 0.167.2** — same setup as
   0.167.1 below; release notes of 0.168.0 and 0.169.0 read. `--help` of the top
   level, `resume`, `fork`, `mcp`, `login` and `queue` is identical; `exec` adds
@@ -1522,8 +1548,9 @@ Droid: `~/.factory/hooks.json` with the events at the top level, plain stdout.
 Cursor: `~/.cursor/hooks.json` `hooks.sessionStart[]`, `{"additional_context"}`
 (its forum reports the context dropped on some first messages). Copilot: every
 `*.json` in `~/.copilot/hooks/`, the `bash`/`powershell` command printing
-`{"additionalContext"}` — probed live on 1.0.88 (2026-10-01). Vibe (hooks are
-`pre_tool`/`post_tool`/`post_agent` only) and OpenCode (no start hook outside
+`{"additionalContext"}` — probed live on 1.0.88 (2026-10-01). Vibe (2.25 had
+`pre_tool`/`post_tool`/`post_agent` only; 3.1.2's `session_start` fires in
+the TUI, whether its output reaches the model is unchecked) and OpenCode (no start hook outside
 the experimental plugin API) get instructions instead: a marker block in
 `~/.vibe/AGENTS.md`, and for OpenCode `<state_dir>/hooks/tabtivity_agent_hint.md`
 in `~/.config/opencode/opencode.json` `instructions` (its global `AGENTS.md`
@@ -2192,7 +2219,17 @@ turned it off by default. Vibe 2.25.4 still has `-c/--continue` and
 `-p/--prompt` (read out of the wheel, 2026-09-15); 2.25.8 too (2026-09-30),
 with `--resume [SESSION_ID]`, the `post_agent` hook type in `hooks.toml` whose
 payload carries `session_id`, and `logs/session/unified/<id>/CURRENT` — what
-`resolve_vibe_session` relies on. Cursor 2026.09.28 keeps `-p/--print`,
+`resolve_vibe_session` relies on. Vibe 3.1.2 (2026-11-16, offline:
+`scripts/verify-cli/vibe/turn_hooks.py`) fires all seven hook types in its
+TUI: `session_start` (at launch and `/clear`, before any prompt),
+`pre_agent` (each prompt, `session_id`, `parent_session_id: null`),
+`pre_tool`, `notification` (`approval_requested` as the dialog opens,
+`turn_completed`), `post_tool` (also after a declined approval),
+`post_agent`, `session_end` (`reason`: `clear`, `exit`). A `vibe -p` run from
+its bash tool fires the same hooks with `VIBE_SESSION=1`; the tab's own never
+carry it. The session hook uses `pre_agent`, `post_agent`, `post_tool`,
+`notification`, `session_end` (`VIBE_HOOK_TYPES`). A turn against a closed
+port retries (still "Retrying…" after 20 s). Cursor 2026.09.28 keeps `-p/--print`,
 `--continue` and its chats under `~/.cursor`. Aider 0.86.2 (latest) needs
 only its binary name and `aider.chat/install.sh`, still served. Droid, OpenClaw and OpenCode are also `LOCAL_DRIVERS` (Ollama-backed
 tabs via `ollama launch <agent>`).
