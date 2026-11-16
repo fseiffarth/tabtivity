@@ -267,8 +267,10 @@ resume arguments; agents without a supported resume path are not restored.
 
 **Permission and activity.** Set permission mode inside the agent CLI. On Claude
 resume, Tabtivity reapplies the mode its hook recorded to preserve that choice.
-Claude/Codex turn hooks also drive working, decision-needed, and finished states;
-agents without a hook verdict use terminal-output heuristics.
+Turn hooks also drive the working, decision-needed, and finished states for
+Claude, Codex, Vibe, Copilot, OpenCode, Antigravity, and Muse (Antigravity and
+Muse without the decision state); agents without a hook verdict use
+terminal-output heuristics.
 
 **Tabtivity's tools (MCP).** Agents opened in the root console get Tabtivity's
 own tools: calendar, to-do board, project sweeps, and the

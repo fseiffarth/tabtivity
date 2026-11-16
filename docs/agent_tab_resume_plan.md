@@ -1,6 +1,6 @@
 # Per-tab resume for Antigravity and Muse
 
-Status: steps A, B and C built 2026-11-16 (probed offline, never live); the follow-up run at the end is open.
+Status: steps A, B, C and the follow-up run built 2026-11-16 (probed offline, never live).
 
 ## Why
 
@@ -284,3 +284,30 @@ Fixed decisions for the follow-up:
    reaches the model.
 7. **F2 extra**: Vibe's record moves to `pre_agent` if the probe shows it
    fires at the prompt with the session id.
+
+### Outcome of the follow-up run
+
+Built, each event probed offline first:
+
+| CLI | Turn record from | Not built |
+| --- | --- | --- |
+| Claude | `StopFailure` → done, `PostToolUseFailure` → working, `Elicitation` / `ElicitationResult` → decision / working | `PermissionDenied`, subagent, compact and `CwdChanged` events fire and are reported, no UI |
+| Codex | `PermissionRequest` → decision | a failed API call fires nothing (Codex keeps retrying) |
+| Vibe | `pre_agent`, `post_agent`, `post_tool`, `notification`, `session_end`; the session is recorded at the prompt | a failed API call was not seen to end |
+| Copilot | its own hook file, from 1.0.112 | Esc on an approval fires nothing; a retried model call reads done during the retries |
+| OpenCode | the session plugin's bus subscription | 1.x not run (its binary could not be run here) |
+| Antigravity | `PreInvocation` → working, `Stop` → done; the send hint at `SessionStart` | no approval or session-end event exists |
+| Muse | `UserPromptSubmit`, `Stop`, `Interrupt` (1.4.15), `SessionEnd`; the send hint | `PermissionRequest`, `Notification`, `StopFailure` unreachable with the echo provider; no Undo-clear record (Muse reports a clear only with the next prompt) |
+
+Found and fixed on the way: a nested `copilot -p`, `opencode run` (OpenCode 2)
+or `vibe -p` started from the tab's own shell tool took the tab's session
+record over.
+
+Open, for the user:
+
+- Adding `PermissionRequest` makes Codex show "Hooks need review" once in a
+  home that trusted the other hooks. `codex_hook_state` still reads only
+  `SessionStart`, so a home that skipped that review reports Enabled while the
+  approval wait falls back to the screen.
+- `src/stores/activity.ts` still says "Codex has no such hook" in a comment.
+- OpenCode 1.x needs a real run of the plugin's turn half.

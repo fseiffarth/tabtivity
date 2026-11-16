@@ -3561,3 +3561,115 @@ unchanged; the new agents are additive.
   - [ ] ❌ Doesn't work on Windows
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
+
+### Turn state from each CLI's own hooks — `docs/agent_tab_resume_plan.md` (follow-up run)
+
+- [x] Built 2026-11-16: Claude's failure and elicitation events, Codex's
+  `PermissionRequest`, and the turn record for Vibe, Copilot, OpenCode,
+  Antigravity and Muse. Probed offline against the real binaries (Claude
+  2.1.325, Codex 0.169.0, Vibe 3.1.2, Copilot 1.0.112, OpenCode 2.2.7 / 2.3.0,
+  Antigravity 1.5.2–1.5.9, Muse 1.3.0 / 1.4.15); not live. OpenCode 1.x was
+  not run.
+- [ ] 🖐️ Manual test — Claude: make a turn fail on the API (sign out, or hit a rate limit). The
+  tab's working mark ends as finished, not stuck on working.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Claude: approve a Bash call that then exits non-zero. The decision mark
+  ends and the tab shows working, then finished.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Claude: an MCP tool that asks a question (elicitation). The decision mark
+  lights as the dialog opens, not 6 s later; answering returns the tab to working.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Codex: after the update Codex shows "Hooks need review" once; pick Trust
+  all, or use the app's Trust action. An approval prompt then lights decision at
+  once; approving returns working; declining clears the mark.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Vibe: the working mark comes on at the prompt, decision on an approval,
+  finished at the turn's end. `/clear`, a new prompt, restart: the tab resumes
+  the new session. A `vibe -p` run from Vibe's bash tool leaves the tab's chat
+  alone after a restart.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Copilot: a prompt shows working, then finished. A file edit shows decision
+  while the approval dialog is open, working once answered; an `ask_user`
+  question shows decision too. `copilot -p hi` run from the agent's shell
+  changes neither the tab's marks nor the chat it resumes. After `/new` and a
+  prompt the marks keep working.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — OpenCode (2.x, and 1.x where installed): a prompt shows working, then
+  finished. A shell command needing permission shows decision until answered; a
+  question form shows decision. `opencode run hi` from the agent's shell
+  changes neither the tab's marks nor the session it restores.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Antigravity: a prompt shows working, then finished. A command waiting for
+  approval lights decision (read off the screen). Esc mid-turn shows
+  interrupted. In a project tab, asked how to send a file to the phone, it
+  names `tabtivity-send`.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Muse: a prompt shows working, then finished (its "Double checking"
+  spinner may still run). Esc mid-turn shows interrupted. `/exit` clears the
+  marks. In a project tab, asked how to send a file, it names `tabtivity-send`.
+  `/clear`, then Undo before another prompt: the tab reopens the cleared
+  session. On Windows there is no Muse hook: the marks come from the screen.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS

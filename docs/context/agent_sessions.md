@@ -141,6 +141,23 @@ no failure event on 2.1.325 (the `is_interrupt` guard is cheap insurance). A
 Codex or Vibe turn that fails on the API was not seen to end: both retry for
 longer than the probe waited.
 
+Four more CLIs write the same record, each from a hook of its own module and
+never from the shared script (2026-11-16, probed offline, never live):
+Antigravity (`antigravity_session`: `PreInvocation` → working, `Stop` → done),
+Muse (`muse_session/hook.rs`: `UserPromptSubmit` → working, `Stop` and, from
+1.4.15, `Interrupt` → done, `SessionEnd` → idle), Copilot from 1.0.112
+(`copilot_session/turn.sh`, its own `.copilot/hooks` file: `userPromptSubmitted`
+and `postToolUse` → working, the dialog's `notification` → decision, `agentStop`
+and a failed model call's `errorOccurred` → done, `sessionEnd` → idle) and
+OpenCode (its session plugin: the prompt → working, `permission.asked` or a
+question → decision, V2's `session.execution.*` or V1's `session.idle` → done).
+Antigravity and Muse have no approval event a probe could reach, so their
+approval wait is still read off the screen. Each counts only the session the
+tab is in and refuses a nested run of its CLI; the sections below say how.
+Nothing tells the relay which CLI a tab runs: a tab is hook-driven from its
+first `agent-turn` event, and one whose hook never fires stays on the byte
+heuristic.
+
 Claude's `decision` comes from `PermissionRequest` (Claude only, since
 2026-11-10), the dialog opening: the notice alone came 6 s late, and never for
 a dialog the user had pressed a key in (2.1.322). Answering retires the
