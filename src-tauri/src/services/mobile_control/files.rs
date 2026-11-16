@@ -619,6 +619,12 @@ pub(crate) fn file_identity(path: &Path) -> std::io::Result<(u64, u128)> {
     windows::path_identity(path).map(|(volume, id)| (volume, u128::from_le_bytes(id)))
 }
 
+/// [`file_identity`] of an already opened file, taken from its handle.
+#[cfg(windows)]
+pub(crate) fn handle_identity(file: &fs::File) -> std::io::Result<(u64, u128)> {
+    windows::identity(file).map(|(volume, id)| (volume, u128::from_le_bytes(id)))
+}
+
 pub(super) fn child(rel: &str, name: &str) -> String {
     if rel.is_empty() { name.to_string() } else { format!("{rel}/{name}") }
 }
