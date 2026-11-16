@@ -42,8 +42,9 @@ The CLIs coupled most deeply have their own scripts. Each one's docstring
 gives its usage.
 
 - **Claude** (`claude/`): `hooks.sh <label> <bin>` makes four `-p` turns
-  plus `/usage` and dumps every hook payload. `prompt.py <label> <bin>`
-  holds the permission prompt at four widths. `cmp.py <old> <new>` compares
+  plus `/usage` and dumps every hook payload. `prompt.py <label> <bin> [cols…]`
+  holds the permission prompt at four widths, and at each extra `cols` for
+  where a long option wraps. `cmp.py <old> <new>` compares
   hook events and keys. `sedcheck.py <label>…` runs the session hook's own
   `sed` extractions, read live from `agent_session.rs`, against each
   payload. `meta.py <label>…` lists the transcript record types and
