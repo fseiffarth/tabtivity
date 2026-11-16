@@ -442,7 +442,10 @@ mod tests {
         let codex_file = HomeFile::open(&home, ".codex/config.toml").expect("config");
         crate::services::agent_session::register_codex_hook_as(&codex_file, &new_hook).expect("register");
         let codex = std::fs::read_to_string(home.join(".codex").join("config.toml")).expect("read");
-        assert_eq!(codex.matches(&format!("command = '{new_hook}'")).count(), 5);
+        assert_eq!(
+            codex.matches(&format!("command = '{new_hook}'")).count(),
+            crate::services::agent_session::CODEX_HOOK_EVENTS.len()
+        );
         assert!(!codex.contains(&old_hook));
         assert!(codex.starts_with("model = \"gpt\""));
 
