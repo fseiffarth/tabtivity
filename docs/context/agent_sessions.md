@@ -238,6 +238,60 @@ from a shared background service. The Reader adapts `session_v2` and
 `session_message` on a read-only connection; no vendor data is migrated or
 rewritten. This port has fixture coverage but has not been checked live.
 
+The same plugin writes the tab's turn record, `live_sessions/<uid>.turn`
+(2026-11-16; probed offline on 2.2.7 and 2.3.0 with
+`scripts/verify-cli/opencode/hooks.py`, never live): `working` at each
+prompt, `decision` when a permission or a question is asked, `working` when
+it is answered, `done` when the run ends. V2 has no `session.idle`: a run
+ends with `session.execution.succeeded`, `.failed` (a failed model call)
+or `.interrupted` (a rejected permission), and a question is a `form`;
+the plugin reads them from `ctx.event.subscribe()`. V1 gets the same words
+from its `event` hook (`session.idle`, `session.status` idle,
+`session.error`, `permission.*`, `question.*`), read from the 1.19.5
+binary's strings and a node test of the plugin, never run. Only the session
+the tab's record names moves the turn: a subagent's child session has its
+own id, so neither its run nor a permission it asks for marks the tab (the
+terminal-output reading still sees a dialog on screen). A turn is written
+only after the tab's first prompt, since before it no session is the tab's.
+
+The probe found the claim did not hold on V2: the shell tool's environment
+is a per-session copy, not the plugin's `process.env`, so an `opencode run`
+the agent started from its shell recorded its own session under the tab
+(2.3.0). The plugin now puts the claim into each shell itself
+(`ctx.shell.hook("create.before")`, which may edit `input.env`; V1's
+`shell.env` hook too, though V1's shell already inherits `process.env`).
+
+### Copilot: the turn from its own hooks
+
+Copilot fires a hook for every edge of a turn, with the tab variables in
+its environment and the event's `sessionId` first in every payload
+(1.0.112, probed offline with `scripts/verify-cli/copilot/hooks.py`, never
+live). `services::copilot_session` writes a script of its own,
+`<state_dir>/hooks/<slug>_copilot_turn.sh` (PowerShell twin on Windows), and
+lists it in each home's `.copilot/hooks/<slug>-turn.json` — Copilot loads
+every file in that folder, so the file is Tabtivity's alone and rewritten
+whole, and taken out for a Copilot older than the probed release
+(`TURN_HOOKS_SINCE`). It writes `working` on `userPromptSubmitted`,
+`postToolUse` and `postToolUseFailure`, `decision` on a `notification` of
+type `permission_prompt` or `elicitation_dialog` (the dialog shown; the
+earlier `permissionRequest` runs before the permission rules decide, so it
+is not registered), `done` on `agentStop` and on an `errorOccurred` from a
+model call (a failed call ends the turn without `agentStop`), `idle` on
+`sessionEnd`. Gaps the probe showed: Esc on an approval ends the turn with
+no hook at all, so the record keeps `decision` until the next prompt (the
+window retires it on the keystroke); a model call Copilot retries fires
+`errorOccurred` on every attempt, so the tab reads done while it retries.
+
+Only the tab's own conversation moves it: `TAB_AGENT` must be `copilot`;
+`COPILOT_AGENT_SESSION_ID`, which Copilot sets for the commands its tools
+run, refuses a `copilot -p` the agent started from its shell (the hint's
+session record now refuses it too — before, such a run's `sessionStart`
+moved the tab onto its one-shot session); and the event's `sessionId` must
+be the session the tab is pinned to — its record, which the hint's
+`sessionStart` moves on `/new`, else its key. A subagent's prompt and stop
+carry the subagent's own id; the session `/new` left behind ends after the
+new one at `/exit`, and is refused.
+
 ### Muse: a hook that has to find its tab
 
 `services::muse_session` (2026-11-16, plan `docs/agent_tab_resume_plan.md`

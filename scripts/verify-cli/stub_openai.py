@@ -6,7 +6,8 @@
 # MCP endpoints:  /mcp/web (web_search, web_fetch), /mcp/help (the help search).
 # A user prompt holding
 #   STUB:CALL <tool> <json>                  makes the model call that tool, then answer "stub answer done";
-#   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step.
+#   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step;
+#   STUB:FAIL <status>                       answers that HTTP status with an error body.
 # Every request is logged: offered tools, last prompt, tool results.
 import json,os,sys,re,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -50,6 +51,7 @@ class H(BaseHTTPRequestHandler):
         ntool=sum(1 for m in after if m.get('role')=='tool')
         rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':last.get('role'),'tool_results':[text_of(m)[:700] for m in after if m.get('role')=='tool']}
         log.write(json.dumps(rec)+'\n')
+        if self.fail(prompt): return
         seq=[]
         m=re.search(r'STUB:(?:CALL|SEQ) (.*)',prompt,re.S)
         if m:
@@ -69,6 +71,14 @@ class H(BaseHTTPRequestHandler):
             for w in ('stub ','answer ','done'): chunk({'content':w})
             chunk({},'stop')
         self.wfile.write(b'data: [DONE]\n\n'); self.wfile.flush(); self.close_connection=True
+    def fail(self,prompt):
+        """`STUB:FAIL <status>` in the prompt: answer that HTTP status with an
+        error body instead of a turn (a model call that fails). 400 is not
+        retried by the CLIs; 429/500 usually are."""
+        m=re.search(r'STUB:FAIL (\d{3})',prompt)
+        if not m: return False
+        self._json({'error':{'message':'stub failure','type':'invalid_request_error','code':'stub_fail'}},int(m.group(1)))
+        return True
     def responses_api(self,d):
         """The Responses API (`/v1/responses`, streamed), for CLIs that speak
         it instead of chat completions (Muse, Codex): same STUB: prompts.
@@ -83,6 +93,7 @@ class H(BaseHTTPRequestHandler):
         rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':(items[-1].get('role') or items[-1].get('type')) if items else None,
              'tool_results':[str(x.get('output'))[:700] for x in outs]}
         log.write(json.dumps(rec)+'\n')
+        if self.fail(prompt): return
         seq=[]
         m=re.search(r'STUB:(?:CALL|SEQ) (.*)',prompt,re.S)
         if m:

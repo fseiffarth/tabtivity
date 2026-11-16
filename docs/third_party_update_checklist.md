@@ -1611,7 +1611,30 @@ assumes (1.0.102 and 1.0.103 pass, 2026-10-24; 1.0.105, 2026-10-30):
   first prompt. The hint script records `sessionId` under the tab's key, so a
   `/new` or an in-CLI `/resume` is followed on the next spawn. A `copilot` run
   nested under a Copilot tab inherits the tab's variables and would move the
-  record: probes unset `TABTIVITY_TAB_UID` (and the old-prefix one).
+  record: probes unset `TABTIVITY_TAB_UID` (and the old-prefix one). One the
+  tab's agent starts from its own shell tool also inherits
+  `COPILOT_AGENT_SESSION_ID` (1.0.112 sets it, to the parent's session, for
+  its tools' commands): the hint and the turn hook record nothing then.
+- **Turn hooks** (`copilot_session/turn.sh`, its own
+  `.copilot/hooks/tabtivity-turn.json`, gated on `TURN_HOOKS_SINCE`). Run
+  `python3 scripts/verify-cli/copilot/hooks.py events <label> <bin>` for
+  what fires, then `… turn <label> <bin>` for the words and the nested check.
+  1.0.112 (2026-11-16, offline): the tab variables reach hooks; every payload
+  starts with the event's `sessionId`; a prompt fires `userPromptSubmitted`
+  (`userPromptTransformed`), a tool `preToolUse`, then `postToolUse` or
+  `postToolUseFailure`; an approval `permissionRequest` then `notification`
+  `notification_type: permission_prompt`, an `ask_user` form `notification`
+  `elicitation_dialog`; a turn ends with `agentStop` (`stopReason`), or after
+  a failed model call with `errorOccurred` `errorContext: model_call` and no
+  `agentStop` (once for a 400, once per retry for a 500, all
+  `recoverable: true`); Esc on an approval fires nothing at all; a subagent
+  fires `subagentStart`/`subagentStop` with the parent's id and its own
+  `userPromptSubmitted`/`agentStop` with the subagent's id; `/compact` fires
+  `preCompact` (`trigger`) only; `/new` fires nothing until the next prompt's
+  `sessionStart`; `/exit` fires `sessionEnd` for the new session, then for
+  the one `/new` left. If a release changes a payload's first `sessionId`,
+  the notification types or the nested variable, the tab falls back to the
+  terminal-output reading or (nested) a nested run moves its marks.
 - Screen (1.0.103 drawn through xterm from a pty capture, alt screen, a
   `[Current] Sessions Issues Pull requests Gists` tab row on top): echoed
   prompt `❯ text  HH:MM`, a boxed `❯` input between two rules, the footer
@@ -1649,6 +1672,25 @@ for every prompt, a `task` subagent's too; `session.*` events carry
 session. If a release breaks one, tabs record nothing and fall back to
 `--continue` / a fresh start (no error). Check: prompt in two OpenCode tabs
 of one folder, then `cat <state_dir>/live_sessions/<project>/<uid>` per tab.
+
+**OpenCode's turn record** (the same plugin, `<uid>.turn`). Run
+`python3 scripts/verify-cli/opencode/hooks.py events <label> <bin> <port>`
+for the events, then `… turn …` for the words and the nested check.
+2.2.7 and 2.3.0 (2026-11-16, offline, `--standalone`): `ctx.event.subscribe()`
+is an async iterable of `{type, data}`; the prompt hook fires per prompt, a
+child's too (its session has a `parentID`); an approval is `permission.asked`
+then `permission.replied` (`reply: once|always|reject`), a question
+`form.created` then `form.replied` / `form.cancelled`; a run ends with
+`session.execution.succeeded`, `.failed` (a failed model call, after the
+`retry` hook) or `.interrupted` (a rejection); every event carries
+`data.sessionID`, a child's its own. The shell tool's environment is a
+per-session copy, not the plugin's `process.env`, so the claim reaches it
+only through `ctx.shell.hook("create.before")` (`input.env`); before that a
+nested `opencode run` moved the tab's session record. 1.x (from the 1.19.5
+binary's strings only, never run): `event` gets `{type, properties}` with
+`session.idle`, `session.status`, `session.error`, `permission.asked` /
+`replied`, `question.asked` / `replied` / `rejected`; the shell tool's
+environment is `process.env` plus the `shell.env` hook.
 
 **OpenCode 2 (2026-10-22).** The standalone binary installed in the fenced
 project home (not a verified host-wide installation) answers
