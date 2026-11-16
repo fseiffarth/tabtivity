@@ -420,6 +420,7 @@ export const UNTESTED = {
   "settings.browser": { area: "layout", what: "SettingsPanel · Browser" },
   "settings.calendarGlobalApp": { area: "layout", what: "SettingsPanel · Calendar in the header" },
   "settings.copilotCompletion": { area: "layout", what: "SettingsPanel · GitHub Copilot autocomplete" },
+  "settings.copilotRemoteCompletion": { area: "layout", what: "CopilotCompletionCard · per-remote-project cloud consent bound to SSH host/user/port/root; remote buffers use a local empty workspace, text files need separate consent and credentials are excluded" },
   "settings.copilotProjectText": { area: "layout", what: "CopilotCompletionCard · Text files too: Copilot also completes the project's Markdown, LaTeX and plain-text files (.env and key files never)" },
   "settings.copilotStaySignedIn": { area: "layout", what: "CopilotCompletionCard · Stay signed in (OS keychain) switch (copilot_stay_signed_in); \"remembered\" line replaces the session-only note" },
   "settings.copilotDetails": { area: "layout", what: "CopilotCompletionCard · Details fold: the project's language-server log lines (copilot_diagnostics), Refresh" },

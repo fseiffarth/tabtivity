@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { aiIsOff } from "../../aiSwitch";
-import type { Settings } from "../../../types";
+import type { RemoteSpec, Settings } from "../../../types";
 import { isProseLang } from "./autocomplete";
 import {
   CompletionAcceptance, inlineCandidate, offsetToPosition,
@@ -19,18 +19,30 @@ export function copilotSecretFile(path: string): boolean {
     || ["pem", "key", "p12", "pfx", "jks", "keystore"].includes(ext);
 }
 
+/** UI hint only; the backend also checks canonical roots and the connection. */
+export function copilotRemoteConsentMatches(identity: string | undefined, remote: RemoteSpec): boolean {
+  if (!identity) return false;
+  try {
+    const binding: unknown = JSON.parse(identity);
+    return Array.isArray(binding) && binding.length === 5
+      && binding[0] === remote.host && binding[1] === (remote.user ?? null)
+      && binding[2] === (remote.port ?? 22) && binding[3] === remote.remote_path;
+  } catch { return false; }
+}
+
 /** Copilot serves a file only when every gate agrees: the experimental flag,
- * the chosen provider, a local project that opted in, and a code language —
+ * the chosen provider, a project that opted in, and a code language —
  * or a text file (Markdown, LaTeX, plain text) when the project also opted
  * its text files in. Credential files never qualify. Anything else keeps
  * Ollama, which never leaves the machine. The backend re-checks all of it
  * (`services::copilot::policy`); this only picks the path. */
 export function copilotServes(settings: Settings | null | undefined, enabled: boolean,
-  projectId: string | null | undefined, remote: boolean, language: string, path: string): projectId is string {
-  if (!enabled || !projectId || remote || settings?.code_completion_provider !== "copilot") return false;
+  projectId: string | null | undefined, remote: RemoteSpec | false, language: string, path: string): projectId is string {
+  if (!enabled || !projectId || settings?.code_completion_provider !== "copilot") return false;
   if (!language || copilotSecretFile(path)) return false;
   const policy = settings.completion_project_policies?.[projectId];
-  if (policy?.copilot !== true || policy.local_only === true) return false;
+  if (policy?.copilot !== true || policy.local_only === true || !!remote !== !!policy.remote) return false;
+  if (remote && !copilotRemoteConsentMatches(policy.remote, remote)) return false;
   return !isProseLang(language) || policy.copilot_text === true;
 }
 

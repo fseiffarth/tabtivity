@@ -621,11 +621,11 @@ export function CodeEditor({
   // means we show the plain opaque textarea instead. A trailing newline mirrors
   // the textarea's own final empty line so scrolling stays aligned.
   const lang = useMemo(() => languageForPath(path), [path]);
-  // #45a: Copilot serves this editor only for a consented local project's code
+  // #45a: Copilot serves this editor only for a consented project's code
   // file, or its text file under the second opt-in; everything else stays on
   // Ollama. The backend enforces the same gates.
   const copilotEnabled = useExperimental("copilot_completion");
-  const acRemote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
+  const acRemote = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.remote ?? false);
   const acCopilot = useSettingsStore((s) => copilotServes(s.settings, copilotEnabled, scope, acRemote, lang, path));
   // Per mount, so a remount never inherits the previous mount's document versions.
   const [acEditorId] = useState(() => crypto.randomUUID());
