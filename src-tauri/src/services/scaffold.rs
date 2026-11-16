@@ -375,6 +375,11 @@ pub fn write_scaffold_file(path: &Path, content: &str) -> io::Result<bool> {
     match write_no_follow(path, content.as_bytes(), true) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        // Windows will not open a folder as a file at all, so a folder at the
+        // name answers "Access is denied" instead of "already exists".
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied && path.symlink_metadata().is_ok_and(|m| m.is_dir()) => {
+            Ok(false)
+        }
         Err(e) => Err(e),
     }
 }
