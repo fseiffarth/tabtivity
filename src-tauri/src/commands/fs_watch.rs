@@ -11,9 +11,11 @@
 //! ([`git_watch_paths`]), filtered down to real state changes
 //! ([`is_git_state_event`]) so git merely *reading* them can't re-trigger it.
 //!
-//! A single watcher is active at a time (one `FileTree` is mounted for the
-//! active project); `watch_dir` replaces any previous watcher, which drops and
-//! unwatches it.
+//! One watcher per folder asked for, counted per asker: several trees are
+//! mounted at once (a box's open member sections, a popout, a Files tab), and
+//! with the single slot this module started with the last `watch_dir` won and
+//! any tree's `unwatch_dir` ended the watch for all of them. `unwatch_dir`
+//! releases the caller's own folder; the last release drops the watcher.
 
 use std::path::{Path, PathBuf};
 use app_core::sync::LockExt;
@@ -31,13 +33,67 @@ use crate::tauri_host::Ctx;
 /// the frontend would receive a storm of `fs-change` events.
 const DEBOUNCE: Duration = Duration::from_millis(200);
 
-/// Currently-watched canonical directory, the path as the frontend spelled it
-/// (the `fs-change` payload), and the live watcher. `None` when nothing is
-/// being watched (panel closed / unmounted).
-pub type FsWatchState = Arc<Mutex<Option<(PathBuf, String, notify::RecommendedWatcher)>>>;
+/// One watched folder: how many trees asked for it, and the live watcher
+/// (dropping it unwatches).
+pub struct Watched {
+    askers: usize,
+    /// Insertion order, for [`MAX_WATCHES`]' eviction.
+    seq: u64,
+    _watcher: notify::RecommendedWatcher,
+}
+
+/// The watched folders, keyed by the path as the frontend spelled it (the
+/// `fs-change` payload). Empty when nothing is being watched.
+#[derive(Default)]
+pub struct Watches {
+    by_path: std::collections::HashMap<String, Watched>,
+    next_seq: u64,
+}
+
+pub type FsWatchState = Arc<Mutex<Watches>>;
 
 pub fn new_state() -> FsWatchState {
-    Arc::new(Mutex::new(None))
+    Arc::new(Mutex::new(Watches::default()))
+}
+
+/// The most folders watched at once. A tree that never released its watch (a
+/// window that died, a client whose `unwatch_dir` named another spelling) must
+/// not pin watchers forever: past this, the oldest watch goes. Far above what
+/// one window mounts.
+const MAX_WATCHES: usize = 64;
+
+impl Watches {
+    /// Count one more asker of `path`; `false` when it is not watched yet.
+    fn retain(&mut self, path: &str) -> bool {
+        match self.by_path.get_mut(path) {
+            Some(w) => {
+                w.askers += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn insert(&mut self, path: String, watcher: notify::RecommendedWatcher) {
+        while self.by_path.len() >= MAX_WATCHES {
+            let Some(oldest) = self.by_path.iter().min_by_key(|(_, w)| w.seq).map(|(k, _)| k.clone()) else {
+                break;
+            };
+            self.by_path.remove(&oldest);
+        }
+        self.next_seq += 1;
+        self.by_path.insert(path, Watched { askers: 1, seq: self.next_seq, _watcher: watcher });
+    }
+
+    /// One asker of `path` is gone; the last one takes the watcher with it.
+    fn release(&mut self, path: &str) {
+        if let Some(w) = self.by_path.get_mut(path) {
+            w.askers = w.askers.saturating_sub(1);
+            if w.askers == 0 {
+                self.by_path.remove(path);
+            }
+        }
+    }
 }
 
 /// A ref tree bigger than this is not watched recursively (the index/`HEAD`
@@ -151,15 +207,13 @@ pub fn watch_dir(
     let canonical = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
 
     let mut guard = state.lock_ok();
-    if let Some((current, spelled, _)) = guard.as_ref() {
-        if *current == canonical && *spelled == path {
-            return Ok(()); // already watching this directory
-        }
+    if guard.retain(&path) {
+        return Ok(()); // already watching this directory: one more asker
     }
 
     // The payload is the path exactly as the frontend asked for it, not the
     // canonical one: a tree compares it with its own folder to ignore events
-    // meant for another tree (the slot is shared by every window), and only
+    // meant for another tree (every window hears every watch), and only
     // the backend can canonicalize (perf plan §3.4).
     let emit_path = path.clone();
     // Trailing-edge debounce: each raw event bumps a shared generation, and ONE
@@ -251,15 +305,21 @@ pub fn watch_dir(
         let _ = watcher.watch(p, *mode);
     }
 
-    // Replacing the stored watcher drops the previous one, unwatching it.
-    *guard = Some((canonical, path, watcher));
+    guard.insert(path, watcher);
     Ok(())
 }
 
+/// Release the caller's watch of `path` (as it spelled it to `watch_dir`).
+/// Without a path — a frontend from before watches were per folder — every
+/// watch goes, which is what that frontend's one slot meant.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn unwatch_dir(ctx: Ctx) -> Result<(), String> {
+pub fn unwatch_dir(ctx: Ctx, path: Option<String>) -> Result<(), String> {
     let state = ctx.get::<FsWatchState>();
-    *state.lock_ok() = None;
+    let mut guard = state.lock_ok();
+    match path {
+        Some(path) => guard.release(&path),
+        None => *guard = Watches::default(),
+    }
     Ok(())
 }
 
@@ -267,6 +327,40 @@ pub fn unwatch_dir(ctx: Ctx) -> Result<(), String> {
 mod tests {
     use super::*;
     use notify::event::{CreateKind, ModifyKind};
+
+    fn idle_watcher() -> notify::RecommendedWatcher {
+        recommended_watcher(|_: notify::Result<notify::Event>| {}).expect("a watcher")
+    }
+
+    /// Two trees side by side each keep their watch: one releasing its own
+    /// folder leaves the other's alone, and a folder asked for twice lives
+    /// until both askers are gone.
+    #[test]
+    fn each_folder_has_its_own_watch_counted_per_asker() {
+        let mut w = Watches::default();
+        assert!(!w.retain("a"));
+        w.insert("a".into(), idle_watcher());
+        w.insert("b".into(), idle_watcher());
+        assert!(w.retain("a"), "a second tree on the same folder");
+        w.release("b");
+        assert!(w.by_path.contains_key("a") && !w.by_path.contains_key("b"));
+        w.release("a");
+        assert!(w.by_path.contains_key("a"), "one asker of a is left");
+        w.release("a");
+        assert!(w.by_path.is_empty());
+        w.release("never-watched");
+    }
+
+    #[test]
+    fn the_oldest_watch_goes_past_the_cap() {
+        let mut w = Watches::default();
+        for i in 0..=MAX_WATCHES {
+            w.insert(format!("d{i}"), idle_watcher());
+        }
+        assert_eq!(w.by_path.len(), MAX_WATCHES);
+        assert!(!w.by_path.contains_key("d0"));
+        assert!(w.by_path.contains_key(&format!("d{MAX_WATCHES}")));
+    }
 
     #[test]
     fn only_state_changes_under_the_git_dir_count() {
