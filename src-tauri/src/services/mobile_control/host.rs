@@ -5287,6 +5287,40 @@ fn mask_shell_commands(transcript: &mut crate::services::agent_transcript::Agent
     }
 }
 
+/// Each of `folders` as a command line may spell it: as given, as
+/// `canonicalize` resolves it (links followed; on Windows the long names,
+/// without the `\\?\` prefix) and, on Windows, by its 8.3 short name (a CI
+/// runner's `RUNNER~1` temp dir). A spelling none of these catches is not
+/// shown whole: `shell_mask` cuts it to its leaf like any other host path.
+fn folder_spellings(folders: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for folder in folders.iter().filter(|folder| !folder.is_empty()) {
+        out.push(folder.clone());
+        let Ok(real) = std::fs::canonicalize(folder) else { continue };
+        let real = crate::paths::without_verbatim_prefix(real);
+        #[cfg(windows)]
+        out.extend(short_path_name(&real));
+        out.push(real.to_string_lossy().into_owned());
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `path`'s 8.3 short spelling, `None` when it has none or it cannot be read.
+#[cfg(windows)]
+fn short_path_name(path: &std::path::Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: `wide` is NUL-terminated and outlives the call, which writes
+    // within the slice it is given.
+    let len = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buf)) } as usize;
+    (len > 0 && len < buf.len()).then(|| String::from_utf16_lossy(&buf[..len]))
+}
+
 /// A transcript as the phone may see it: the folders the agent and its
 /// subagents work in are paths, which do not cross the browser API. A
 /// subagent's folder in a linked worktree of the tab's project crosses as that
@@ -5311,6 +5345,7 @@ async fn phone_transcript(
             folders.push(cwd.clone());
             folders.extend(std::iter::once(&project.root).chain(&project.roots).map(|root| root.to_string_lossy().into_owned()));
         }
+        let folders = folder_spellings(&folders);
         let folders: Vec<&str> = folders.iter().map(String::as_str).collect();
         mask_shell_commands(&mut transcript, &folders);
     }
