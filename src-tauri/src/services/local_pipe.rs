@@ -431,10 +431,32 @@ mod win {
             format!(r"\\.\pipe\local-pipe-test-{tag}-{}", crate::digest::hex(&bytes))
         }
 
+        /// The DACL of a security descriptor, written as SDDL.
+        ///
+        /// # Safety
+        /// `sd` must point at a valid security descriptor.
+        unsafe fn dacl_of(sd: PSECURITY_DESCRIPTOR) -> String {
+            // SAFETY: the string the conversion allocates is LocalFree'd.
+            unsafe {
+                let mut text = PWSTR::null();
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    sd,
+                    SDDL_REVISION_1,
+                    DACL_SECURITY_INFORMATION,
+                    &mut text,
+                    None,
+                )
+                .unwrap();
+                let out = text.to_string().unwrap();
+                let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+                out
+            }
+        }
+
         /// The DACL of a pipe handle, read back as SDDL.
         pub(crate) fn dacl_sddl(handle: HANDLE) -> String {
-            // SAFETY: GetSecurityInfo allocates the descriptor (LocalFree'd
-            // below); the string the conversion allocates is freed too.
+            // SAFETY: GetSecurityInfo allocates the descriptor, read while it
+            // lives and LocalFree'd below.
             unsafe {
                 let mut sd = PSECURITY_DESCRIPTOR::default();
                 let err = GetSecurityInfo(
@@ -448,20 +470,24 @@ mod win {
                     Some(&mut sd),
                 );
                 assert_eq!(err.0, 0, "GetSecurityInfo");
-                let mut text = PWSTR::null();
-                ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                    sd,
-                    SDDL_REVISION_1,
-                    DACL_SECURITY_INFORMATION,
-                    &mut text,
-                    None,
-                )
-                .unwrap();
-                let out = text.to_string().unwrap();
-                let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+                let out = dacl_of(sd);
                 let _ = LocalFree(Some(HLOCAL(sd.0)));
                 out
             }
+        }
+
+        /// How the SDDL writer spells `sid`. It prints a SID it has an alias
+        /// for as that alias (this machine's built-in Administrator, RID 500,
+        /// reads back as `LA`), so an expected SID goes through the same
+        /// writer before it is compared with a read-back DACL. Any other SID
+        /// comes back as itself.
+        fn sddl_spelling(sid: &str) -> String {
+            let security = PipeSecurity::from_sddl(&format!("D:(A;;GA;;;{sid})")).unwrap();
+            // SAFETY: the descriptor lives as long as `security`.
+            let sddl = unsafe { dacl_of(security.sd) };
+            let mut got = aces(&sddl);
+            assert_eq!(got.len(), 1, "{sddl}");
+            got.remove(0).2
         }
 
         /// The ACEs of an SDDL DACL, `(type, rights, sid)`.
@@ -480,7 +506,7 @@ mod win {
         pub(crate) fn assert_protected_dacl(handle: HANDLE) {
             let sddl = dacl_sddl(handle);
             assert!(sddl.starts_with("D:P"), "{sddl}");
-            let me = current_user_sid().unwrap();
+            let me = sddl_spelling(&current_user_sid().unwrap());
             let got: Vec<(String, String)> = aces(&sddl).into_iter().map(|(t, _, sid)| (t, sid)).collect();
             assert_eq!(
                 got,
