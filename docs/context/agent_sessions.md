@@ -144,6 +144,46 @@ session logging must be enabled for either flag. Fenced/container tabs receive
 a per-project shadow of `hooks.toml`, like Claude/Codex hook config, so they can
 record their live ID without editing the host hook registration.
 
+Antigravity (`agy`) mints its conversation ids and resumes one with
+`--conversation <id>`; `--continue` is the folder's newest, so two tabs of one
+folder used to reopen the same chat. `services::antigravity_session` writes a
+hook script to `<state_dir>/hooks/` and registers it under its own name in each
+home's `.gemini/config/hooks.json` (format `{"<name>": {"<Event>": [{"type":
+"command", "command": …}]}}`; Claude's shape does not parse, and a file that
+does not parse runs none of its hooks, so an unparsable file is left alone).
+It runs on `PreInvocation`, before every model call, and writes the call's
+`conversationId` to `live_sessions/<uid>` — the record the Resume menu writes
+too. `SessionStart` is no use: it fires at a new conversation's first prompt
+only, not on `--conversation`, `--continue` or a resumed conversation's turns.
+Only the tab's own conversation moves the record: `TABTIVITY_TAB_AGENT=agy`
+(the resolver sets it); no `ANTIGRAVITY_AGENT`, which Antigravity sets for every
+command its tools run, so an `agy -p` from the tab's shell tool (which fires
+every hook with its own conversation and the tab's variables) is refused; and
+not a subagent's call, which fires every hook with the subagent's id, no
+`parentConversationId` and an empty `lastUserInput` (1.5.9; a set parent is
+refused too). A subagent id that gets through anyway stands for its parent:
+the resolver walks `conversation_summaries.parent_conversation_id` to the
+folder's main conversation. The first record also leaves the proof
+`agy-hook-ran` in the record directory. Registration is gated on the probed
+version (1.5.2 and later, `HOOKS_SINCE`); an older or unknown one has the entry
+taken out again. At each spawn where the hook is registered, a host-only launch
+note `live_sessions/<uid>.agy` says how that launch began. A restored tab's
+`--continue` then resolves by this table (`google_chat::tab_choice`):
+
+| Launch note from an earlier spawn | Record names a main conversation of the folder | Launch |
+| --- | --- | --- |
+| yes | yes | `--conversation <id>`, whatever began since |
+| no | yes | the Resume menu's pick, while the tab began none since |
+| yes | no, and the scope has the proof | fresh (the tab never took a prompt) |
+| otherwise | no | `--continue` |
+
+The Reader follows the same choice (`google_chat::antigravity_tab`): the
+recorded conversation where it is authoritative, nothing for a fresh tab, the
+folder's newest otherwise; the Resume menu's This chat mark too. Fenced and
+container tabs write into their scope's slice like every other hook. Remote,
+local-model and assistant tabs are as before. Probed offline on 1.5.2–1.5.9
+(`scripts/verify-cli/antigravity/hooks.py`); not run live.
+
 OpenCode mints its own ids (`ses_…`) and has no session hook, and its old
 `--continue` put every OpenCode tab of one folder into the same newest
 session. `services::opencode_session` writes a plugin to

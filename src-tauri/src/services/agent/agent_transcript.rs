@@ -372,9 +372,11 @@ pub fn agent_session_transcript(
             return AgentTranscript::unavailable("unsupported");
         }
         let home = crate::services::agent_home::scope_home(project_id);
-        let own = (cmd == "agy").then(|| crate::services::google_chat::recorded_conversation(project_id, launch_id)).flatten();
-        let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
-        return crate::services::google_chat::transcript(cmd, &home, directory, since, own, version, limit);
+        if cmd == "agy" {
+            // The tab's hook record, where it is authoritative (`google_chat::tab_choice`).
+            return crate::services::google_chat::antigravity_tab(&home, directory, project_id, launch_id, since, version, limit);
+        }
+        return crate::services::google_chat::transcript(cmd, &home, directory, since, None, version, limit);
     }
     if cmd == "muse" {
         if subagent.is_some() { return AgentTranscript::unavailable("no_subagent"); }

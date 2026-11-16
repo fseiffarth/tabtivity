@@ -1187,7 +1187,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 | Copilot | `--session-id <tab uuid>` (`copilot_session::resolve`; `--continue` only on a remote tab) | `-p` | `npm i -g @github/copilot` |
 | Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |
 | Grok | — (0.0.34 keeps no sessions; `--session` is an unknown option) | `-p` | `npm i -g @vibe-kit/grok-cli` |
-| Antigravity (`agy`) | `--continue` | — | `curl … antigravity.google/cli/install.sh` |
+| Antigravity (`agy`) | `--conversation <id>` from its hook's record (`google_chat::resolve`; `--continue` without one) | — | `curl … antigravity.google/cli/install.sh` |
 | Kimi | — | `-p` | `curl … code.kimi.com/install.sh` |
 | Pi | — | `-p` | `npm i -g @earendil-works/pi-coding-agent` |
 | Amp | — | `-x` | `npm i -g @sourcegraph/amp` |
@@ -1201,6 +1201,27 @@ Antigravity's newest release comes from the manifest its installer reads
 (`agent_install::SELF_UPDATE_ARGV`) outside the fence, because `install.sh` and
 `install.ps1` exit 0 at "already installed". Inside a fence the binary's folder
 is read-only, so neither `agy update` nor its background self-update can work.
+
+Antigravity's per-tab resume depends on its user hooks
+(`services::antigravity_session`, since 2026-11-16, probed on 1.5.2–1.5.9). On
+each new release run `scripts/verify-cli/antigravity/hooks.py format` (and
+`events`, `tabs`) and re-check:
+
+- the file is still `~/.gemini/config/hooks.json` and its shape `{"<hook
+  name>": {"<Event>": [{"type": "command", "command": …}]}}`; a file that does
+  not parse runs none of its hooks;
+- `PreInvocation` still fires before every model call, of a resumed
+  (`--conversation`, `--continue`) conversation too, and its stdin JSON still
+  carries `conversationId` (uuid) and `lastUserInput`;
+- a subagent's calls still carry an empty `lastUserInput` (no
+  `parentConversationId` in 1.5.9; the script refuses one if it appears), and
+  `conversation_summaries.parent_conversation_id` still names the parent;
+- commands Antigravity's tools run still get `ANTIGRAVITY_AGENT=1` (what keeps
+  an `agy -p` from the tab's shell tool off the record), and the hook still
+  inherits the CLI's environment (`TABTIVITY_TAB_UID`, `TABTIVITY_TAB_AGENT`).
+
+If one moved, lower or raise `HOOKS_SINCE`: an unaccepted release gets no
+registration and keeps `--continue`.
 
 Cursor is on no public registry and `cursor-agent update` asks Cursor's
 signed-in API, so its newest build is read out of the download URL in

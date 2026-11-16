@@ -2375,6 +2375,7 @@ pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Optio
 pub fn install_session_start_hook() -> std::io::Result<()> {
     write_hook_script()?;
     crate::services::opencode_session::write_plugin()?;
+    crate::services::antigravity_session::write_script()?;
     crate::services::agent_hint::write_script()
 }
 
@@ -2413,6 +2414,8 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     // OpenCode's session plugin (`services::opencode_session`).
     crate::services::opencode_session::register_in_home(home);
     crate::services::opencode_session::disable_service_in_home(home);
+    // Antigravity's conversation hook (`services::antigravity_session`).
+    crate::services::antigravity_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);

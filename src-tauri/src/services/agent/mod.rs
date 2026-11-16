@@ -85,6 +85,8 @@ pub mod muse_session;
 pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;
+// Antigravity's PreInvocation hook: which conversation is each tab's own.
+pub mod antigravity_session;
 pub mod google_chat;
 // Change notifications for the transcripts the desktop Reader shows.
 pub mod transcript_watch;
