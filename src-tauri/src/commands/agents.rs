@@ -2814,8 +2814,15 @@ mod tests {
         assert_eq!(stem(installer_command(claude).unwrap()), "powershell");
         let gemini = find_spec("gemini").unwrap(); // npm install -g …
         assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
-        let vibe = find_spec("vibe").unwrap(); // no Windows installer
-        assert!(installer_command(vibe).is_err());
+        let vibe = find_spec("vibe").unwrap(); // uv tool install …
+        assert_eq!(stem(installer_command(vibe).unwrap()), "cmd");
+        // Picked from the registry, so a CLI that gains a Windows installer
+        // later doesn't leave this pointing at one that has one.
+        let none = AGENTS
+            .iter()
+            .find(|a| a.install_cmd_windows.is_none())
+            .expect("some CLI has no one-line Windows installer");
+        assert!(installer_command(none).is_err());
     }
 
     #[test]
