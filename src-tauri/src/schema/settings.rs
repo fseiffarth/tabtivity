@@ -195,6 +195,10 @@ pub const ASSISTANT_SEARCH_KINDS: [&str; 2] = ["searxng", "ollama"];
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct CompletionProjectPolicy {
     pub directory: String,
+    /// Remote endpoint/configured root and local mirror at consent time.
+    /// Absent on existing local policies; a local consent never authorizes SSH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
     #[serde(default)]
     pub copilot: bool,
     #[serde(default)]
