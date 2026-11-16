@@ -1,7 +1,7 @@
 {
   "name": "tabtivity",
   "private": true,
-  "version": "0.2.81",
+  "version": "0.2.82",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "engines": {
