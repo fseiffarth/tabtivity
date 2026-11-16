@@ -513,6 +513,7 @@ stores stay at the top. No `index.ts` barrels.
 | `hooks/useModalFocus.ts` | Modal stack: focus containment/restoration, topmost Escape, visibility filtering and workspace shortcut guard. |
 | `hooks/useHeaderMenu.ts` | Shared single-open header menu behavior: hover grace, click/keyboard opening, arrow/Home/End navigation, Escape and natural Tab exit. |
 | `lib/useEscapeToClose.ts` | Escape closes a floating surface wherever focus is (a hover-opened menu never took focus). |
+| `lib/useHoverAnchorGuard.ts` | A portaled hover card closes once its anchor left the pointer without a mouseleave (pointer move elsewhere, pointer out of the window, window blur): status-bar and tab-strip cards. |
 | `lib/files/quickOpenIndex.ts` | The active project's file list for the palette: host-pinned guard, HPC confirm, the reason a list is empty. |
 | `common/SkeletonRows.tsx` | Placeholder rows while a surface loads: one `role="status"`, never a spinner where rows will appear. |
 | `hooks/useSessionPicker.ts` + `lib/agents/paneKeys.ts` | An agent session's own `/model` (or Codex `/permissions`) picker opened in the pane and listed off its live screen, answered with the session's keys (OpenCode's scroll-box list put together by `openCodeMini.OpenCodePickerWalk`); `CLAUDE_EFFORTS`. Shared by the Reader's facts row and steering's prompt box; `typePaneKeys` types paced user keys into a pane. |

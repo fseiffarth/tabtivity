@@ -111,6 +111,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
+import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
 import { ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
@@ -204,8 +205,8 @@ function useTabStateClass(scope: string, tab: TabEntry, isActive: boolean): stri
 interface TabItemBar {
   contextMenu: (event: React.MouseEvent, key: string, index: number) => void;
   pointerDown: (event: React.PointerEvent, tab: TabEntry) => void;
-  /** Hover card anchor (the tab's bottom-center). */
-  hoverEnter: (key: string, x: number, y: number) => void;
+  /** Hover card anchor (the tab's bottom-center) and the tab element itself. */
+  hoverEnter: (key: string, x: number, y: number, el: HTMLElement) => void;
   hoverLeave: (key: string) => void;
   commitRename: (key: string, value: string) => void;
   cancelRename: () => void;
@@ -342,7 +343,7 @@ const TabItem = memo(function TabItem({
       onMouseEnter={(e) => {
         if (editing || fastMode) return;
         const r = e.currentTarget.getBoundingClientRect();
-        bar.hoverEnter(tab.key, r.left + r.width / 2, r.bottom);
+        bar.hoverEnter(tab.key, r.left + r.width / 2, r.bottom, e.currentTarget);
       }}
       onMouseLeave={() => bar.hoverLeave(tab.key)}
       // Clear the landing once it finishes so the class doesn't linger
@@ -673,8 +674,11 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // itself already show.
   const fastMode = useFastMode();
   const [hoverTab, setHoverTab] = useState<
-    { key: string; x: number; y: number } | null
+    { key: string; x: number; y: number; el: HTMLElement } | null
   >(null);
+  // A tab that leaves the pointer without a mouseleave (the pointer left the
+  // window, the strip scrolled it away) would otherwise keep its card up.
+  useHoverAnchorGuard(hoverTab?.el ?? null, () => setHoverTab(null));
   // Right-click on a tab opens this context menu (Close / Close others / Close to
   // the left / Close to the right / Rename). Shift+right-click bypasses it and
   // goes straight to inline rename (#56). Keyed to the clicked tab + its index so
@@ -1181,7 +1185,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     latestBar.current = {
       contextMenu: onTabContextMenu,
       pointerDown: onTabPointerDown,
-      hoverEnter: (key, x, y) => setHoverTab({ key, x, y }),
+      hoverEnter: (key, x, y, el) => setHoverTab({ key, x, y, el }),
       hoverLeave: (key) => setHoverTab((h) => (h?.key === key ? null : h)),
       commitRename,
       cancelRename: () => setEditingKey(null),
@@ -1200,7 +1204,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     () => ({
       contextMenu: (e, key, index) => latestBar.current?.contextMenu(e, key, index),
       pointerDown: (e, tab) => latestBar.current?.pointerDown(e, tab),
-      hoverEnter: (key, x, y) => latestBar.current?.hoverEnter(key, x, y),
+      hoverEnter: (key, x, y, el) => latestBar.current?.hoverEnter(key, x, y, el),
       hoverLeave: (key) => latestBar.current?.hoverLeave(key),
       commitRename: (key, value) => latestBar.current?.commitRename(key, value),
       cancelRename: () => latestBar.current?.cancelRename(),

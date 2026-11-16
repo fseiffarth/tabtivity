@@ -2,7 +2,8 @@
  * A project pill's status bar opens its tab's own hover card: the state the
  * bar stands for in words (working / asking / finished), the last prompt, and
  * what a click does — and tells the pill, so the project card steps aside
- * while it is up. Leaving the bar closes the card again.
+ * while it is up. Leaving the bar closes the card again, as does the pointer
+ * ending up anywhere else without a mouseleave (`useHoverAnchorGuard`).
  */
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -79,5 +80,31 @@ describe("status bar hover card", () => {
     act(() => useActivityStore.setState({ busyByTab: {}, statusTabsByScope: {} }));
     expect(card()).toBeNull();
     expect(onBarHover).toHaveBeenLastCalledWith(false);
+  });
+
+  // The fullscreen header slides away under the pointer (or the pointer leaves
+  // the window): the bar never hears a mouseleave, and the card hung on screen.
+  it("drops the card when the pointer moves off the bar without a mouseleave", async () => {
+    seed("working");
+    const onBarHover = vi.fn();
+    render(<PillStatusBars scope="p1" onBarHover={onBarHover} />);
+    fireEvent.mouseEnter(bar());
+    await waitFor(() => expect(card()).not.toBeNull());
+    fireEvent.pointerMove(bar());
+    expect(card()).not.toBeNull();
+    fireEvent.pointerMove(document.body);
+    expect(card()).toBeNull();
+    expect(onBarHover).toHaveBeenLastCalledWith(false);
+  });
+
+  it("drops the card when the window loses focus", async () => {
+    seed("working");
+    render(<PillStatusBars scope="p1" />);
+    fireEvent.mouseEnter(bar());
+    await waitFor(() => expect(card()).not.toBeNull());
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    expect(card()).toBeNull();
   });
 });
