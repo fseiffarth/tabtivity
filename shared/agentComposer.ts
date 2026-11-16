@@ -126,12 +126,12 @@ const AGENT_FAMILIES: [RegExp, string][] = [
   [/codex/iu, "codex"],
   [/gemini/iu, "gemini"],
   [/qwen/iu, "qwen"],
-  [/opencode/iu, "opencode"],
+  [/open\s*code/iu, "opencode"],
   [/aider/iu, "aider"],
   [/kimi/iu, "kimi"],
   [/copilot/iu, "copilot"],
   [/cursor/iu, "cursor"],
-  [/antigravity/iu, "antigravity"],
+  [/antigravity|\bagy\b/iu, "antigravity"],
   // The new-tab menu labels Mistral's `vibe` "Mistral".
   [/mistral|\bvibe\b/iu, "vibe"],
 ];

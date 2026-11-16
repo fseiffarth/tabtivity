@@ -143,16 +143,12 @@ const CATALOG: Record<string, CatalogEntry[]> = {
     { command: "/help", description: "mobile.slash.cmd.help" },
     { command: "/quit", description: "mobile.slash.cmd.exit", vars: { name: "Qwen Code" } },
   ],
+  // The mini interface uses its command palette for models and sessions;
+  // full-TUI slash commands such as /models are not accepted there.
   opencode: [
     { command: "/new", description: "mobile.slash.cmd.newSession" },
-    { command: "/compact", description: "mobile.slash.cmd.compactSession" },
-    { command: "/models", description: "mobile.slash.cmd.model" },
-    { command: "/sessions", description: "mobile.slash.cmd.sessions" },
-    { command: "/undo", description: "mobile.slash.cmd.undo" },
-    { command: "/redo", description: "mobile.slash.cmd.redo" },
-    { command: "/share", description: "mobile.slash.cmd.share" },
+    { command: "/review", description: "mobile.slash.cmd.reviewTree" },
     { command: "/init", description: "mobile.slash.cmd.initAgents" },
-    { command: "/help", description: "mobile.slash.cmd.help" },
     { command: "/exit", description: "mobile.slash.cmd.exit", vars: { name: "OpenCode" } },
   ],
   aider: [
