@@ -1022,7 +1022,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       const command = completedSlashCommand(text, cli, usedSlash) ?? text;
       // A new conversation goes in as the Clear key's does, so the window
       // knows of it at once: Codex's hook says so only with the next prompt.
-      if (isNewConversationCommand(command)) {
+      if (isNewConversationCommand(command) && !(cli === "codex" && command === "/new")) {
         await backToSession();
         if (!(await startNewConversation(current))) return;
       } else if (subagent && !/^\s*\//u.test(text)) {
