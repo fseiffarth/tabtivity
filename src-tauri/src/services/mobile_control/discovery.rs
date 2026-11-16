@@ -1620,9 +1620,9 @@ fn read_session(state_dir: &Path, raw_id: &str) -> SessionFile {
 /// that scope and kind ([`expected_tmux`]). What ending a scope for good — a
 /// dissolved box — must end, including for a scope no window has loaded.
 pub(crate) fn saved_scope_sessions(state_dir: &Path, raw_id: &str) -> Vec<String> {
-    read_session(state_dir, raw_id)
-        .tab_layout
-        .into_iter()
+    // project-tree-read: ok — the state-dir terminal-session snapshot.
+    let tabs = read_session(state_dir, raw_id).tab_layout;
+    tabs.into_iter()
         .filter(|tab| tab.tmux_attach.is_none())
         .filter_map(|tab| {
             let name = tab.tmux_session?;
