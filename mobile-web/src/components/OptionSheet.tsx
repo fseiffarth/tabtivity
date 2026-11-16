@@ -1,5 +1,5 @@
 import { Fragment, useRef, type ReactNode } from "react";
-import { CloseIcon } from "../glyphs";
+import { ChevronRightIcon, CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { useBackLayer } from "../backStack";
 import { useModalFocus } from "../modalFocus";
@@ -14,6 +14,19 @@ export interface SheetOption {
   current: boolean;
   /** The option a switch is being applied to. */
   pending?: boolean;
+  /** Starts a new unlabelled run of rows (an inset group of its own) when it
+   * differs from the previous option's; `group` does the same with a heading. */
+  section?: string;
+  /** A leading glyph, drawn in the accent (or the danger colour). */
+  icon?: ReactNode;
+  /** What the row stands at, right-aligned before the chevron: a count, a swatch. */
+  trailing?: ReactNode;
+  /** The row opens another sheet: a › at its end. */
+  more?: boolean;
+  /** A destructive act (close, delete): drawn in the danger colour. */
+  danger?: boolean;
+  /** The row is shown but cannot be taken (a move the desktop would refuse). */
+  disabled?: boolean;
 }
 
 /**
@@ -26,15 +39,18 @@ export interface SheetOption {
  * choices to offer; Home's voice-language row opens the same sheet, so it sits
  * here rather than being drawn twice.
  */
-export function OptionSheet({ title, note, children, footer, options, waiting, busy, onPick, onClose }: {
+export function OptionSheet({ title, subtitle, note, children, footer, options, waiting, busy, onPick, onClose }: {
   title: string;
+  /** One line of context under the title (the model a tab runs, its colour). */
+  subtitle?: ReactNode;
   note?: { text: string; error?: boolean };
   /** What the choice is about, shown under the note and above the rows. */
   children?: ReactNode;
   /** Shown under the rows. */
   footer?: ReactNode;
   options: SheetOption[];
-  /** Shown while the list is still empty. */
+  /** Shown while the list is still empty; with no text, nothing is drawn (a
+   * sheet that is only a `note` or `children`). */
   waiting: string;
   busy: boolean;
   onPick: (key: string) => void;
@@ -49,24 +65,34 @@ export function OptionSheet({ title, note, children, footer, options, waiting, b
       <span className="sheet-grip" aria-hidden="true" />
       <header>
         <button className="sheet-close" onClick={onClose} aria-label={t("common.close")}><CloseIcon size="1em" /></button>
-        <h2>{title}</h2>
+        {subtitle ? <div className="sheet-heading"><h2>{title}</h2><p className="sheet-sub">{subtitle}</p></div> : <h2>{title}</h2>}
         <span className="sheet-close" aria-hidden="true" />
       </header>
       {note && <p className={note.error ? "sheet-note error" : "sheet-note"} role={note.error ? "alert" : undefined}>{note.text}</p>}
       {children}
       {options.length === 0
-        ? <p className="sheet-note">{waiting}</p>
-        : <ul className="option-list">{options.map((option, index) => <Fragment key={option.key}>
-            {option.group && option.group !== options[index - 1]?.group && <li className="option-list-group">{option.group}</li>}
+        ? (waiting ? <p className="sheet-note">{waiting}</p> : null)
+        : <ul className="option-list">{options.map((option, index) => {
+            const prev = options[index - 1];
+            const heading = option.group && option.group !== prev?.group;
+            const gap = !heading && index > 0 && option.section !== prev?.section;
+            const classes = [option.current ? "current" : "", option.danger ? "danger-row" : ""].filter(Boolean).join(" ");
+            return <Fragment key={option.key}>
+            {heading && <li className="option-list-group">{option.group}</li>}
+            {gap && <li className="option-list-group option-list-gap" aria-hidden="true" />}
             <li>
-            <button className={option.current ? "current" : ""} aria-current={option.current || undefined} data-steer-confirm={option.key === "confirm" ? "" : undefined} disabled={busy} onClick={() => onPick(option.key)}>
+            <button className={classes} aria-current={option.current || undefined} data-steer-confirm={option.key === "confirm" ? "" : undefined} disabled={busy || option.disabled} onClick={() => onPick(option.key)}>
+              {option.icon && <i className="option-icon" aria-hidden="true">{option.icon}</i>}
               <span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span>
+              {option.trailing !== undefined && <span className="option-trail">{option.trailing}</span>}
               {option.pending
                 ? <span className="sheet-pending" role="status">{t("mobile.optionSheet.switching")}</span>
                 : option.current && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 13 4.5 4.5L19 7" /></svg>}
+              {option.more && <ChevronRightIcon className="option-chevron" size="1em" />}
             </button>
             </li>
-          </Fragment>)}</ul>}
+          </Fragment>;
+          })}</ul>}
       {footer}
     </section>
   </div>;

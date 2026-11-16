@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../../lib/i18n";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { mobileTmuxReadiness } from "../../lib/terminal/mobileTmuxReady";
+import { startPoll } from "../../lib/usePoll";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { relaunch, runsLocally } from "../../stores/agents/agentClearUndo";
 import { useTabsStore } from "../../stores/tabs";
@@ -33,8 +35,11 @@ export function TerminalDeadPaneCard({
   const t = useT();
   const parts = splitPtyId(ptyId);
   const tab = usePaneTab(parts?.scope, parts?.key);
+  // Windows: only a tab the slot stamped for the session host (`PaneSlot`) can
+  // have a pane that outlives its agent; an in-process one is never asked.
+  const wrapped = !!parts && !!tab && (!IS_HOST_WINDOWS || mobileTmuxReadiness(parts.scope, tab.key) === true);
   const session =
-    parts && tab && tab.cmd && !tab.tmuxAttach && !IS_HOST_WINDOWS && runsLocally(parts.scope, tab)
+    parts && tab && tab.cmd && !tab.tmuxAttach && wrapped && runsLocally(parts.scope, tab)
       ? tab.tmuxSession
       : undefined;
   const [dead, setDead] = useState(false);
@@ -44,19 +49,17 @@ export function TerminalDeadPaneCard({
   useEffect(() => {
     setDead(false);
     if (!session || !visible) return;
-    let stopped = false;
-    const poll = () =>
-      void invoke<boolean>("local_tmux_pane_dead", { session })
-        .then((value) => {
-          if (!stopped) setDead(value);
-        })
-        .catch(() => {});
-    poll();
-    const timer = window.setInterval(poll, POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
+    // Each ask spawns a tmux process: not while the window is blurred or hidden.
+    const poll = startPoll(
+      (run) =>
+        invoke<boolean>("local_tmux_pane_dead", { session })
+          .then((value) => {
+            if (!run.stopped) setDead(value);
+          })
+          .catch(() => {}),
+      POLL_MS,
+    );
+    return poll.stop;
   }, [session, visible, tab?.relaunchSeq]);
 
   if (!dead || !parts || !tab) return null;

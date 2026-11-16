@@ -1,54 +1,64 @@
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { ollamaVersionStatus } from "../../lib/agents/localDrivers";
 import { loadModelsSequentially } from "./ollamaAutoload";
 
 /**
- * **Put the models back after an Ollama upgrade.**
+ * **Finish an Ollama upgrade: restart a server it left behind, and put the
+ * models back.**
  *
- * Upgrading Ollama replaces the binary and restarts the server, which drops
- * every resident model on the floor. That is invisible until the next request
- * pays a full load — tens of seconds for a 7B model, in whatever tab happened
- * to ask first — and the user's only clue is that the 🧠 menu, which said
- * "loaded" beside two models a minute ago, now says nothing. So the upgrade
- * takes a snapshot of what was in memory and warms exactly that back up once
- * the new server is running.
+ * Upgrading Ollama replaces the binary, but whether the *server* restarts is
+ * up to the installer: the Linux script restarts its systemd unit, while
+ * Windows' silent winget upgrade can leave the old `ollama serve` running —
+ * the new version is on disk and nothing runs it. And a restart, either way,
+ * drops every resident model on the floor, invisible until the next request
+ * pays a full load. So the upgrade click starts a watcher that restarts a stale
+ * server and warms exactly the snapshot of resident models back up.
  *
- * Three things decide the shape of this:
+ * Four things decide the shape of this:
  *
  * - **The upgrade is a terminal tab, not a command we await.** It needs an
  *   interactive sudo/UAC answer (`runInstallInTab`), so there is no completion
  *   callback to hang this on. The signal is therefore *observed*: poll the
  *   local `ollama --version` — no network, see `ollamaVersionStatus(false)` —
- *   and treat a **changed** version string as "the new server is up". A version
- *   that cannot be read at all (the binary is mid-replacement) is not an
- *   answer; the poll simply continues.
- * - **The wait is bounded, and running out is reported.** The user may never
- *   answer the sudo prompt, may close the tab, or may reinstall the same
- *   version — in which case the version never changes and no restart is ever
- *   observed. That ends in `timeout` with a "Reload now" button, never in a
- *   silent give-up and never in a load minutes later that nobody asked for.
- * - **It restores, it does not decide.** The models being reloaded are the
- *   ones the user had loaded thirty seconds earlier, so Energy Saver is
- *   deliberately *not* consulted here: this returns the machine to the state
- *   it was in, and that mode's rule is about the standing cost a *launch*
- *   creates unasked. What it will not do is invent models — an upgrade with
- *   nothing resident starts no watcher at all.
+ *   and treat a **changed** installed version as "the upgrade landed". A
+ *   version that cannot be read at all (the binary is mid-replacement) is not
+ *   an answer; the poll simply continues.
+ * - **A stale server is restarted only once it stays stale.** The same read
+ *   says which version the running server answers with. One reading of the old
+ *   one may be an installer still about to restart it, so it takes two polls in
+ *   a row before `restart_ollama_server` runs — otherwise the two would race
+ *   for the port. The upgrade click is the consent: upgrading means running the
+ *   new server, and the installer on Linux restarts it just the same. A
+ *   restart that fails is reported with a retry, never swallowed.
+ * - **The wait is bounded, and running out is reported** when there is
+ *   something to retry. The user may never answer the sudo prompt, may close
+ *   the tab, or may reinstall the same version — the version then never
+ *   changes. With models in the snapshot that ends in `timeout` with a "Load
+ *   back now" button; with none it simply stops watching.
+ * - **It restores, it does not decide.** The models reloaded are the ones the
+ *   user had loaded moments earlier, so Energy Saver is deliberately *not*
+ *   consulted: this returns the machine to the state it was in. It will not
+ *   invent models — an empty snapshot restarts the server and loads nothing.
  *
  * Session-scoped on purpose. The snapshot lives in memory, so quitting Tabtivity
- * mid-upgrade forgets it; persisting it would mean a launch that loads models
- * because of something that happened before the last shutdown, which is the
- * surprise this is trying to avoid in the first place.
+ * mid-upgrade forgets it; persisting it would mean a launch that restarts or
+ * loads because of something that happened before the last shutdown.
  */
 
 export type UpgradeRestorePhase =
   | "idle"
-  /** The upgrade is running somewhere; we are watching for the new server. */
+  /** The upgrade is running somewhere; we are watching for the new version. */
   | "waiting"
+  /** The new version is installed and the old server is being restarted. */
+  | "restarting"
+  /** The restart failed; `restartError` says why, and it can be retried. */
+  | "restart_failed"
   | "reloading"
   | "done"
   /** At least one model would not load back. */
   | "error"
-  /** No restart was ever observed within the window. */
+  /** No new version was ever observed within the window. */
   | "timeout";
 
 /** How often to ask the local binary its version, and for how long. Five
@@ -56,9 +66,13 @@ export type UpgradeRestorePhase =
  *  minutes: a download, an interactive sudo answer, then a service restart. */
 const POLL_MS = 5_000;
 const WAIT_TIMEOUT_MS = 15 * 60_000;
+/** Polls in a row the server must answer with the old version before it is
+ *  restarted — room for an installer that restarts it itself. */
+const STALE_POLLS = 2;
 
 let pollTimer: number | null = null;
 let deadline = 0;
+let stalePolls = 0;
 
 function stopPoll(): void {
   if (pollTimer !== null) {
@@ -69,19 +83,26 @@ function stopPoll(): void {
 
 interface OllamaUpgradeStore {
   phase: UpgradeRestorePhase;
-  /** What was resident when the upgrade started — the whole point of the store. */
+  /** What was resident when the upgrade started — loaded back afterwards. */
   models: string[];
   /** The version we are waiting to see *change*. */
   from: string;
+  /** The version the upgrade installed, once seen. */
+  to: string;
+  /** Why the restart failed: a backend code (`ollama_remote`,
+   *  `ollama_still_running`) or its message. */
+  restartError: string;
   loaded: string[];
   failed: Record<string, string>;
   dismissed: boolean;
   /**
    * Called by the upgrade click, with the version being replaced and the models
-   * resident at that moment. A snapshot of nothing is a no-op: there is nothing
-   * to put back, so nothing watches and nothing is announced.
+   * resident at that moment. Watches even with no models: the server may still
+   * need restarting. Nothing installed to compare against is a no-op.
    */
   begin: (from: string, models: string[]) => void;
+  /** Restart the server (again), then load the snapshot back. */
+  restartNow: () => Promise<void>;
   /** Reload the snapshot now, without waiting for (or having seen) a restart. */
   reloadNow: () => Promise<void>;
   /** Stop watching and forget the snapshot. */
@@ -89,72 +110,104 @@ interface OllamaUpgradeStore {
   dismiss: () => void;
 }
 
-export const useOllamaUpgradeStore = create<OllamaUpgradeStore>((set, get) => ({
-  phase: "idle",
-  models: [],
-  from: "",
-  loaded: [],
-  failed: {},
-  dismissed: false,
+export const useOllamaUpgradeStore = create<OllamaUpgradeStore>((set, get) => {
+  // The upgrade has landed and nothing needs restarting: load the snapshot
+  // back, or — with nothing to load and nothing restarted — say nothing.
+  const finish = async (restarted: boolean) => {
+    if (get().models.length > 0) await get().reloadNow();
+    else set({ phase: restarted ? "done" : "idle" });
+  };
 
-  begin: (from, models) => {
-    stopPoll();
-    if (models.length === 0) {
-      set({ phase: "idle", models: [], from, loaded: [], failed: {}, dismissed: false });
-      return;
-    }
-    set({ phase: "waiting", models, from, loaded: [], failed: {}, dismissed: false });
-    deadline = performance.now() + WAIT_TIMEOUT_MS;
-    pollTimer = window.setInterval(() => {
-      if (get().phase !== "waiting") {
-        stopPoll();
+  return {
+    phase: "idle",
+    models: [],
+    from: "",
+    to: "",
+    restartError: "",
+    loaded: [],
+    failed: {},
+    dismissed: false,
+
+    begin: (from, models) => {
+      stopPoll();
+      stalePolls = 0;
+      const base = { from, to: "", restartError: "", loaded: [], failed: {}, dismissed: false };
+      if (!from) {
+        set({ phase: "idle", models: [], ...base });
         return;
       }
-      if (performance.now() > deadline) {
-        stopPoll();
-        set({ phase: "timeout" });
-        return;
-      }
-      void ollamaVersionStatus(false)
-        .then((v) => {
-          // A blank reading is the binary being replaced under us, not an
-          // answer — keep waiting. Only a *different*, readable version means
-          // the thing now on disk is a new server.
-          if (!v.current || v.current === get().from) return;
-          if (get().phase !== "waiting") return;
+      set({ phase: "waiting", models, ...base });
+      deadline = performance.now() + WAIT_TIMEOUT_MS;
+      pollTimer = window.setInterval(() => {
+        if (get().phase !== "waiting") {
           stopPoll();
-          void get().reloadNow();
-        })
-        .catch(() => {});
-    }, POLL_MS);
-  },
+          return;
+        }
+        if (performance.now() > deadline) {
+          stopPoll();
+          // Only a snapshot has something to retry; an empty one just stops.
+          set({ phase: get().models.length > 0 ? "timeout" : "idle" });
+          return;
+        }
+        void ollamaVersionStatus(false)
+          .then((v) => {
+            // A blank reading is the binary being replaced under us, not an
+            // answer — keep waiting. Only a *different*, readable version means
+            // the upgrade landed.
+            if (!v.current || v.current === get().from) return;
+            if (get().phase !== "waiting") return;
+            set({ to: v.current });
+            const stale = !!v.server && v.server !== v.current;
+            if (stale && ++stalePolls < STALE_POLLS) return;
+            stopPoll();
+            void (stale ? get().restartNow() : finish(false));
+          })
+          .catch(() => {});
+      }, POLL_MS);
+    },
 
-  reloadNow: async () => {
-    stopPoll();
-    const models = get().models;
-    if (models.length === 0) return;
-    set({ phase: "reloading", loaded: [], failed: {}, dismissed: false });
-    const { failed } = await loadModelsSequentially(models, (loaded, failedSoFar) =>
-      set({ loaded, failed: failedSoFar }),
-    );
-    set({ phase: Object.keys(failed).length > 0 ? "error" : "done" });
-  },
+    restartNow: async () => {
+      stopPoll();
+      set({ phase: "restarting", restartError: "", dismissed: false });
+      try {
+        await invoke("restart_ollama_server");
+      } catch (e) {
+        set({ phase: "restart_failed", restartError: typeof e === "string" ? e : String(e) });
+        return;
+      }
+      await finish(true);
+    },
 
-  cancel: () => {
-    stopPoll();
-    set({ phase: "idle", models: [], loaded: [], failed: {}, dismissed: false });
-  },
+    reloadNow: async () => {
+      stopPoll();
+      const models = get().models;
+      if (models.length === 0) return;
+      set({ phase: "reloading", loaded: [], failed: {}, dismissed: false });
+      const { failed } = await loadModelsSequentially(models, (loaded, failedSoFar) =>
+        set({ loaded, failed: failedSoFar }),
+      );
+      set({ phase: Object.keys(failed).length > 0 ? "error" : "done" });
+    },
 
-  dismiss: () => set({ dismissed: true }),
-}));
+    cancel: () => {
+      stopPoll();
+      set({ phase: "idle", models: [], restartError: "", loaded: [], failed: {}, dismissed: false });
+    },
+
+    dismiss: () => set({ dismissed: true }),
+  };
+});
 
 /** Reset the module between tests. */
 export function resetOllamaUpgrade(): void {
   stopPoll();
+  stalePolls = 0;
   useOllamaUpgradeStore.setState({
     phase: "idle",
     models: [],
     from: "",
+    to: "",
+    restartError: "",
     loaded: [],
     failed: {},
     dismissed: false,

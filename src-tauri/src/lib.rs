@@ -1515,7 +1515,8 @@ pub fn run() {
     // Reports runs that died with nothing logged, then keeps this one's beat.
     services::run_heartbeat::start(storage::state_dir(), BUILD_COMMIT, crash_log_append);
 
-    // The webview's data directory is `<data dir>/<identifier>` on Linux, and
+    // The webview's data directory is `<data dir>/<identifier>` (per OS, see
+    // `webview_data_root`; only Linux's WebKitGTK keeps a `WebKitCache`), and
     // the identifier is the Tauri config's — asked for rather than hardcoded, so
     // a rename cannot leave this sweeping a directory nothing writes to any
     // more. Built here, at the top of `run`, because the cache has to be judged
@@ -1733,6 +1734,8 @@ pub fn run() {
             // Relay the turn state the agents' own hooks record per tab
             // (working / decision / done) to the window's activity store.
             services::agent_turn::start(tauri_host::system_ctx(_app.handle()));
+            // Per-turn checkpoints announce a finished snapshot as `checkpoint-added`.
+            services::checkpoints::start(tauri_host::system_ctx(_app.handle()));
             {
                 // The Reader's transcript watches (`services::transcript_watch`)
                 // announce a change as `transcript-changed` with the watch id.
@@ -1776,8 +1779,11 @@ pub fn run() {
             services::agent_install::migrate_legacy_stores();
             // Once, at the first start with per-scope homes: this computer's
             // logins and its ~/.claude, ~/.codex, ~/.gemini config, so no
-            // agent comes back signed out or without its instructions. Before
-            // the keeper and before any tab can spawn.
+            // agent comes back signed out or without its instructions — for an
+            // install that ran before. A fresh install is asked first, on a
+            // page of the first-run wizard, and nothing is copied until it
+            // answers (`services::agent_import_offer`). Before the keeper and
+            // before any tab can spawn.
             // First, drop the login paths that stopped being shared (dotenv
             // files, Cline's provider config) from the store and the Host
             // home, so neither the import nor the keeper sees them again.
@@ -1785,8 +1791,7 @@ pub fn run() {
             // Login files that fail their CLI's content check (OpenCode's
             // `wellknown` entries) go aside, before the import and the keeper.
             services::agent_auth::sweep_unadmissible();
-            services::agent_auth::import_once();
-            services::agent_global::import_once();
+            services::agent_import_offer::startup();
             services::agent_auth::start();
             // Moves a fenced Copilot's `/login` token out of its private config
             // into the keyring, for every later fenced Copilot tab (the fence
@@ -1906,6 +1911,7 @@ pub fn run() {
             commands::mobile_control::mobile_browser_client_rotate,
             commands::mobile_control::mobile_verify_tailscale_serve,
             commands::mobile_control::mobile_tailscale_serve_status,
+            commands::mobile_control::mobile_tailscale_serve_command,
             commands::mobile_control::mobile_desktop_images,
             commands::mobile_control::mobile_attach_desktop_image,
             commands::mobile_control::project_inbox_describe,
@@ -2025,6 +2031,10 @@ pub fn run() {
             commands::projects::preview_project_scaffold,
             commands::projects::project_agents_empty,
             commands::projects::project_scaffold_missing,
+            commands::project_docs::project_docs_status,
+            commands::project_docs::create_project_doc,
+            commands::project_docs::project_agent_memory,
+            commands::project_docs::project_agent_memory_read,
             commands::projects::repair_project_scaffold,
             commands::projects::repair_all_project_scaffolds,
             commands::projects::project_migration_plan,
@@ -2287,7 +2297,6 @@ pub fn run() {
             commands::power::get_power_state,
             // SSH-sync (Phase 1): selective local↔remote mirror sync.
             commands::sync::sync_pull,
-            commands::sync::sync_whole_project,
             commands::sync::sync_push,
             commands::sync::sync_mark_selected,
             commands::sync::sync_set_auto,
@@ -2371,6 +2380,7 @@ pub fn run() {
             commands::clipboard::save_clipboard_image,
             commands::clipboard::clipboard_file_paths,
             commands::clipboard::copy_text_to_clipboard,
+            commands::clipboard::read_clipboard_text,
             commands::clipboard::copy_files_to_clipboard,
             commands::connect::connect_status,
             commands::connect::connect_pair,
@@ -2417,6 +2427,12 @@ pub fn run() {
             commands::print_mcp::print_mcp_requests,
             commands::print_mcp::print_mcp_pdf,
             commands::print_mcp::print_mcp_decide,
+            commands::tabs_mcp::tabs_mcp_traffic,
+            commands::tabs_mcp::tabs_mcp_deliver,
+            commands::tabs_mcp::tabs_mcp_clear,
+            commands::tabs_mcp::tabs_mcp_wake_claim,
+            commands::tabs_mcp::tabs_mcp_human_input,
+            commands::tabs_mcp::set_project_tab_messages_wake,
             // Disk usage analyzer (commands::disk_usage)
             commands::disk_usage::disk_usage_scan,
             commands::disk_usage::disk_usage_cancel,
@@ -2455,6 +2471,7 @@ pub fn run() {
             commands::terminal::pty_watch,
             commands::terminal::pty_unwatch,
             commands::terminal::agent_tab_features,
+            commands::terminal::local_tmux_available,
             commands::terminal::local_tmux_kill,
             commands::terminal::local_tmux_kill_app_sessions,
             commands::terminal::local_tmux_rename,
@@ -2564,6 +2581,17 @@ pub fn run() {
             // Local-loss warnings (#28q): what lockstep/sync destroyed in the mirror.
             commands::local_loss::local_loss_list,
             commands::local_loss::local_loss_ack,
+            commands::checkpoints::checkpoint_list,
+            commands::checkpoints::checkpoint_diff,
+            commands::checkpoints::checkpoint_restore,
+            commands::checkpoints::checkpoint_now,
+            commands::checkpoints::checkpoint_settings_get,
+            commands::checkpoints::checkpoint_settings_set,
+            commands::checkpoints::checkpoint_clear,
+            commands::tab_archive::tab_archive_list,
+            commands::tab_archive::tab_archive_add,
+            commands::tab_archive::tab_archive_take,
+            commands::tab_archive::tab_archive_delete,
             commands::git::git_diff_file,
             commands::git::git_blame,
             commands::git::git_file_log,
@@ -2584,6 +2612,7 @@ pub fn run() {
             commands::skills::skills_get_detail,
             commands::skills::skills_install,
             commands::skills::skills_uninstall,
+            commands::skills::skills_copy,
             commands::skills::skills_list_installed,
             // Git worktrees (TODO Group E #23)
             commands::git::git_worktree_list,
@@ -2675,6 +2704,8 @@ pub fn run() {
             commands::agents::agent_api_key_clear,
             commands::agents::agent_global_status,
             commands::agents::agent_global_import,
+            commands::agents::agent_import_offer,
+            commands::agents::agent_import_offer_answer,
             commands::agents::agent_global_set_codex_auto_review,
             commands::agents::agent_global_open,
             commands::agents::agent_usage,
@@ -2730,6 +2761,7 @@ pub fn run() {
             commands::copilot::copilot_shown,
             commands::copilot::copilot_accepted,
             commands::copilot::copilot_account,
+            commands::copilot::copilot_diagnostics,
             commands::copilot::copilot_message_action,
             commands::copilot::copilot_sign_in,
             commands::copilot::copilot_finish_sign_in,
@@ -2915,8 +2947,11 @@ pub fn run() {
                 // — the dev launcher's Ctrl+C (SIGINT/SIGTERM → `app.exit`),
                 // an `app.exit()` from the backend. Idempotent: a second pass
                 // finds no server and returns.
-                if let Err(e) = services::tmux_local::kill_app_sessions() {
-                    eprintln!("tmux_local: quit reap: {e}");
+                let mux = services::session_mux::mux();
+                if mux.holds_sessions() {
+                    if let Err(e) = mux.kill_app_sessions() {
+                        eprintln!("session_mux: quit reap: {e}");
+                    }
                 }
                 // Stop the Ollama server *this run started* — the spawned
                 // `ollama serve` (with the runner child holding the weights) or
@@ -2929,6 +2964,8 @@ pub fn run() {
                 // bounded by its own wall clock, ended here so none outlives
                 // the quit.
                 services::sheet_reader::kill_all_for_exit();
+                // A checkpoint snapshot in flight finishes (bounded); no new one starts.
+                services::checkpoints::stop_for_exit();
                 // The fenced Copilot language servers (one per consented project).
                 tauri::async_runtime::block_on(commands::copilot::stop_all_for_exit());
                 // Let the machine sleep again if a talk was on: the presenter's

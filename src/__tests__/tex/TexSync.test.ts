@@ -16,6 +16,7 @@ import {
   sourceColumnFraction,
   syncNoticeKind,
   texSourceCandidates,
+  texOutputPdf,
   withUnsavedSource,
   editedAboveLine,
   type SyncRect,
@@ -583,6 +584,20 @@ describe("pdfSync store", () => {
     expect(usePdfSyncStore.getState().reloadByPath["/p/b.pdf"]).toBeUndefined();
     // A reload is not a reveal: nothing to scroll to or highlight.
     expect(usePdfSyncStore.getState().byPath["/p/a.pdf"]).toBeUndefined();
+  });
+});
+
+describe("texOutputPdf (where forward search looks for a PDF it did not build this sitting)", () => {
+  it("sits beside the main document without an output directory", () => {
+    expect(texOutputPdf("/p/paper/main.tex")).toBe("/p/paper/main.pdf");
+    expect(texOutputPdf("/p/paper/Main.TEX", "  ")).toBe("/p/paper/Main.pdf");
+  });
+
+  it("follows a relative output directory from the document's folder, or an absolute one", () => {
+    expect(texOutputPdf("/p/paper/main.tex", "build")).toBe("/p/paper/build/main.pdf");
+    expect(texOutputPdf("/p/paper/main.tex", "../out")).toBe("/p/out/main.pdf");
+    expect(texOutputPdf("/p/paper/main.tex", "/tmp/out")).toBe("/tmp/out/main.pdf");
+    expect(texOutputPdf("C:\\docs\\Paper.tex", "out")).toBe("C:\\docs\\out\\Paper.pdf");
   });
 });
 

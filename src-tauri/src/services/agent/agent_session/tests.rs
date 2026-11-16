@@ -93,6 +93,7 @@ fn opts_with_args(args: &[&str]) -> PtyOptions {
         schedule_target_id: None,
         host_session: false,
         api_key: None,
+        mux_wrapped: false,
     }
 }
 
@@ -723,6 +724,29 @@ fn hook_body_is_no_op_without_env_and_bakes_dir() {
     let twin = posix_hook_script_body(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions"));
     assert!(twin.starts_with("#!/bin/sh"));
     assert!(twin.contains(concat!("/c/Users/x/AppData/Roaming/", crate::app_slug!(), "/live_sessions")));
+}
+
+/// 2442h: the PowerShell hook takes a clear/resume start only from a Claude
+/// with no other Claude above it up to the app, like the POSIX twin; any
+/// other unknown start is still refused.
+#[test]
+fn the_powershell_hook_refuses_a_nested_claudes_resume() {
+    let body = powershell_hook_script_body(r"C:\live", "App's.exe");
+    let walk = body.find("elseif (($src -eq 'clear') -or ($src -eq 'resume'))").expect("the clear/resume arm");
+    let rest = &body[walk..];
+    assert!(rest.contains("Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine"));
+    assert!(rest.contains("$q = $procs[[int]$PID]"), "the walk starts at the hook");
+    assert!(rest.contains("($q.Name -ieq 'App''s.exe')"), "and stops at the app, quoted");
+    assert!(rest.contains("($q.Name -ieq 'claude.exe')"));
+    assert!(rest.contains(r"'@anthropic-ai[\\/]claude-code[\\/]'"), "an npm Claude runs as node");
+    assert!(rest.contains("if ($n -ge 2) { exit 0 }"));
+    assert!(rest.contains("($hops -lt 64)"), "bounded against a pid-reuse cycle");
+    let arm_end = rest.find("} else { exit 0 }").expect("other starts are refused");
+    assert!(rest[..arm_end].contains("$n -ge 2"));
+    // Balanced braces: the script still parses as one block structure.
+    let opens = body.matches('{').count();
+    let closes = body.matches('}').count();
+    assert_eq!(opens, closes);
 }
 
 /// `/fork` starts a thread with no `SessionStart` the matcher lets through, so
@@ -2513,4 +2537,62 @@ fn the_probe_home_never_counts_in_the_codex_hook_state() {
     std::fs::create_dir_all(scope.join(".codex/sessions")).unwrap();
     std::fs::write(scope.join(".codex/config.toml"), "").unwrap();
     assert_eq!(codex_hook_state_across(&[scope]), CodexHookState::NotRegistered);
+}
+
+/// A sibling tab's message (`tabs_mcp`) leaves an empty `.mail` marker; the
+/// next real prompt of a Claude tab holding the tabs lane carries the fixed
+/// notice and spends it. A session command does not; no lane, no notice.
+#[cfg(unix)]
+#[test]
+fn mail_notice_rides_the_next_prompt_once_and_spends_the_marker() {
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    std::fs::create_dir_all(&live).unwrap();
+    let script = dir.path().join("hook.sh");
+    std::fs::write(&script, posix_hook_script_body(&live.to_string_lossy())).unwrap();
+    let uid = "22222222-2222-4222-8222-222222222222";
+    let marker = live.join(format!("{uid}{}", crate::services::agent_turn::MAIL_SUFFIX));
+    let notice = crate::services::tabs_mcp::NOTICE;
+    let run = |agent: &str, lane: bool, payload: String| -> bool {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(&script).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env(crate::app_env!("TAB_UID"), uid).env(crate::app_env!("TAB_AGENT"), agent)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+        if lane { cmd.env(crate::services::root_mcp::TABS_URL_ENV, "http://127.0.0.1:1/mcp/tabs"); }
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout).contains(notice)
+    };
+    let prompt = |text: &str| format!(r#"{{"session_id":"{uid}","hook_event_name":"UserPromptSubmit","prompt":"{text}"}}"#);
+    let stop = format!(r#"{{"session_id":"{uid}","hook_event_name":"Stop"}}"#);
+
+    assert!(!run("claude", true, prompt("no mail yet")));
+    std::fs::write(&marker, b"").unwrap();
+    assert!(!run("claude", true, stop.clone()), "only a prompt carries it");
+    assert!(!run("claude", true, prompt("/clear")), "a session command does not spend it");
+    assert!(!run("claude", false, prompt("no lane")), "no lane, no notice");
+    assert!(!run("codex", true, prompt("not claude")));
+    assert!(marker.exists());
+    assert!(run("claude", true, prompt("next task")));
+    assert!(!marker.exists(), "spent");
+    assert!(!run("claude", true, prompt("and again")), "once per marker");
+}
+
+#[test]
+fn both_hook_twins_carry_the_mail_block() {
+    let src = include_str!("../agent_session.rs");
+    let posix = src.split("fn posix_hook_script_body_with").nth(1).expect("posix body");
+    let posix = posix.split("\n}\n").next().unwrap();
+    // The PowerShell twin, held to the POSIX one here.
+    let ps = src.split("fn powershell_hook_script_body").nth(1).expect("powershell body");
+    let ps = ps.split("\n}\n").next().unwrap();
+    for body in [posix, ps] {
+        assert!(body.contains("tabs_mcp::NOTICE") && body.contains("agent_turn::MAIL_SUFFIX"), "{body}");
+        assert!(body.contains("_TABS_MCP_URL") && body.contains("{mail_suffix}") && body.contains("'{notice}'"));
+    }
+    let notice = crate::services::tabs_mcp::NOTICE;
+    assert!(!notice.contains('\'') && !notice.contains('\n'));
 }

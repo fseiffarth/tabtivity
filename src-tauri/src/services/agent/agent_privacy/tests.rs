@@ -40,6 +40,7 @@ fn opts(cmd: &str, args: &[&str], project: Option<&str>, cwd: &Path) -> PtyOptio
         schedule_target_id: None,
         host_session: false,
         api_key: None,
+        mux_wrapped: false,
     }
 }
 
@@ -613,7 +614,11 @@ fn the_completion_paths_call_their_guards() {
     assert!(complete.contains("agent_privacy::completion_locked(") && complete.contains("agent_privacy::completion_refusal("));
     let copilot = source("commands/copilot.rs");
     let complete = body_of(&copilot, "pub async fn copilot_complete(");
-    assert!(complete.contains("agent_privacy::inside_locked("), "a file of a locked project opened through its parent");
+    // The document is judged by `authorize_file`, before the server starts
+    // and again after it did.
+    assert_eq!(complete.matches("authorize_file(").count(), 2, "judged before and after the launch");
+    let judge = body_of(&copilot, "fn authorize_file(");
+    assert!(judge.contains("agent_privacy::inside_locked("), "a file of a locked project opened through its parent");
 }
 
 /// `remote: null` is "not remote" everywhere else (`remote_target_for`), so the
@@ -1489,7 +1494,7 @@ fn the_headless_spawn_records_its_view_and_session_and_the_switch_sweeps_them() 
     let host = source("services/mobile_control/host.rs");
     let launch = body_of(&host, "impl Default for HeadlessSpawner");
     assert!(
-        launch.find("spawn_detached_with(").unwrap() < launch.find("prepared.commit()").unwrap(),
+        launch.find(".spawn_detached(").unwrap() < launch.find("prepared.commit()").unwrap(),
         "the headless launch commits the prepared spawn"
     );
     let command = source("commands/agent_privacy.rs");
@@ -1648,6 +1653,25 @@ fn a_session_still_listed_after_its_kill_is_unconfirmed() {
     assert!(!sweep.complete());
 }
 
+/// A dead pane (`remain-on-exit`) keeps the pid its command had, which may since be
+/// an unrelated process's: its session is ended, its stale pid never reaped.
+#[test]
+fn a_dead_panes_stale_pid_is_never_reaped() {
+    let (dead, live) = (agent_session("lock", 6), agent_session("lock", 7));
+    let table = format!("{dead}\t11\t1\n{live}\t12\t0\n");
+    let mut tmux = FakeTmux::new(move |argv: &[String], _| match argv[0].as_str() {
+        "list-panes" => ok(&table),
+        "ls" => failed(NO_SERVER),
+        _ => ok(""),
+    });
+    let mut reaped = Vec::new();
+    let sessions = vec![dead.clone(), live.clone()];
+    let sweep = end_sessions_in(&sessions, &mut |argv| tmux.call(argv), &mut |pid| reaped.push(pid));
+    assert_eq!(reaped, [12]);
+    assert_eq!(tmux.kills(), [format!("={dead}"), format!("={live}")]);
+    assert!(sweep.complete(), "{sweep:?}");
+}
+
 #[test]
 fn panes_tmux_would_not_name_or_a_confirmation_that_fails_leave_every_session_in_doubt() {
     let sessions = vec![agent_session("lock", 4), agent_session("lock", 5)];
@@ -1790,7 +1814,7 @@ fn every_registration_site_rechecks_after_it_registers() {
     let host = source("services/mobile_control/host.rs");
     let launch = body_of(&host, "impl Default for HeadlessSpawner");
     let (started, committed, rechecked) = (
-        launch.find("spawn_detached_with(").unwrap(),
+        launch.find(".spawn_detached(").unwrap(),
         launch.find("prepared.commit()").unwrap(),
         launch.find("recheck_privacy(").unwrap(),
     );

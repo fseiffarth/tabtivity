@@ -148,6 +148,30 @@ pub async fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     set_clipboard(move |set| set.text(text)).await
 }
 
+/// The system clipboard's text, for a paste into a terminal pane; empty when
+/// it holds none (an image, files, nothing), so the pane goes on to its image
+/// paste. The webview's `navigator.clipboard.readText()` is refused on
+/// Windows: WebView2 grants `clipboard-read` only to a webview built with
+/// clipboard access, and the main window is not. An `Err` (no clipboard, the
+/// X11 negotiation stalled, text past [`MAX_CLIPBOARD_TEXT`]) sends the pane
+/// back to the webview.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn read_clipboard_text() -> Result<String, String> {
+    let read = app_core::rt::spawn_blocking(|| {
+        let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        match cb.get_text() {
+            Ok(text) => check_clipboard_text(&text).map(|()| text),
+            Err(arboard::Error::ContentNotAvailable) => Ok(String::new()),
+            Err(e) => Err(e.to_string()),
+        }
+    });
+    // On X11 a clipboard with no text waits out a selection transfer timeout.
+    tokio::time::timeout(std::time::Duration::from_secs(3), read)
+        .await
+        .map_err(|_| "the clipboard did not answer".to_string())?
+        .map_err(|e| e.to_string())?
+}
+
 /// Put on the system clipboard what `fill` sets: the one thread-and-handshake
 /// behind [`copy_text_to_clipboard`] and [`copy_files_to_clipboard`]. On Linux
 /// a thread keeps the selection (`.wait()`) and reports back once it has a

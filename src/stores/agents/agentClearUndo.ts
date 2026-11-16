@@ -3,7 +3,6 @@ import { create } from "zustand";
 import { submitScheduledAgentCommand } from "../../lib/agents/scheduledAgentInput";
 import { splitPtyId, projectIdOfScope } from "../../lib/terminal/ptyId";
 import type { ClearMark } from "../../../mobile-web/src/terminal/clearedSession";
-import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { useActivityStore } from "../activity";
 import { useProjectsStore } from "../projects";
 import { isHostPinned } from "../../lib/projectTabHost";
@@ -153,7 +152,7 @@ export async function relaunch(scope: string, tab: TabEntry): Promise<UndoClearR
   // The tab's own minted session, if tmux wraps it at all (a Mobile-access
   // project or box); ending one that is not there is a no-op. Never a session
   // the tab only attached to.
-  const session = IS_HOST_WINDOWS || tab.tmuxAttach ? null : tab.tmuxSession;
+  const session = tab.tmuxAttach ? null : tab.tmuxSession;
   if (session) {
     try {
       await invoke("local_tmux_kill", { session });

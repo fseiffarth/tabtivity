@@ -15,6 +15,14 @@ export { AGENT_CLI_ROWS, type AgentCliRow };
  *  agent tab. */
 export const AGENT_BINS: ReadonlySet<string> = new Set(AGENT_CLI_ROWS.map((row) => row.bin));
 
+/** The binary a built-in agent's registry id launches (`antigravity` → `agy`);
+ *  anything else — a binary, a custom agent's command — comes back as is.
+ *  `default_agent_cmd` holds a registry id, so a reader that runs it as a tab's
+ *  `cmd` maps it through this first. */
+export function agentBinForId(idOrCmd: string): string {
+  return AGENT_CLI_ROWS.find((row) => row.id === idOrCmd)?.bin ?? idOrCmd;
+}
+
 /**
  * Agents whose prior session can be resumed, mapping `cmd` → the launch args
  * that relaunch it with that session. Two resume styles:

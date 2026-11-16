@@ -28,7 +28,7 @@ vi.mock("../../../mobile-web/src/markup/rasterize", async (original) => ({
 
 import { readMarkupQuestions } from "../../../mobile-web/src/api";
 import { MarkupView } from "../../../mobile-web/src/components/MarkupView";
-import { ARRIVAL_GUARD_MS } from "../../../mobile-web/src/components/MarkupQuestionsCard";
+import { ARRIVAL_GUARD_MS } from "../../lib/viewers/markupQuestionPicks";
 import type { MarkupSend } from "../../../mobile-web/src/components/OutboxViewer";
 import { SETTLE_MS, type AgentSignal } from "../../../mobile-web/src/markup/submitState";
 import { NAMES } from "../../lib/brand";

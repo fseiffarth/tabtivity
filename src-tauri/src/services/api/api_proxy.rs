@@ -202,13 +202,13 @@ pub fn issue(provider: Provider, admin: Option<&'static str>, scope: &str, tab: 
 }
 
 /// The tmux session a spawn's grant is bound to: the tab's `tmux_session`,
-/// but only where a local tmux runs it (`tmux_local::wrap_pty_options_local`
-/// is a no-op without one — Windows, no tmux installed). A grant bound to a
+/// but only where a local session backend runs it (`SessionMux::wrap` is a
+/// no-op without one — Windows today, no tmux installed). A grant bound to a
 /// session that never exists would outlive its tab: the sweep cannot tell
 /// "no tmux" from "tmux failed this once" and leaves such grants alone.
 pub fn tmux_binding(session: Option<&str>) -> Option<String> {
     session
-        .filter(|_| crate::services::tmux_local::tmux_available())
+        .filter(|_| crate::services::session_mux::mux().available())
         .map(str::to_string)
 }
 
@@ -284,15 +284,18 @@ fn retain_live(map: &mut HashMap<String, Held>, live: &HashSet<String>, now: Ins
     });
 }
 
+/// The live local sessions, on the app's own server (`SessionMux::list`; in
+/// server mode that is the `-L` socket, which a bare `tmux ls` missed). No
+/// server is "none"; a listing that could not be had is `None`, which leaves
+/// the grants alone, and so does a machine with no session backend (no tmux
+/// installed lists "none" to `list`, which here would revoke them all).
 fn live_tmux_sessions() -> Option<HashSet<String>> {
-    let out = crate::paths::command_no_window("tmux")
-        .args(["ls", "-F", "#{session_name}"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return Some(HashSet::new());
+    let mux = crate::services::session_mux::mux();
+    if !mux.available() {
+        return None;
     }
-    Some(String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
+    let listed = mux.list().ok()?;
+    Some(listed.into_iter().map(|session| session.name).collect())
 }
 
 fn revoke_all() {

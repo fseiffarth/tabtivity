@@ -1238,6 +1238,25 @@ fn kill_exact_args(session: &str) -> Vec<String> {
     vec!["kill-session".into(), "-t".into(), format!("={session}")]
 }
 
+/// The pane table [`end_sessions_in`] reads: session, pane pid, whether the pane is dead.
+const PANE_TABLE_FORMAT: &str = "#{session_name}\t#{pane_pid}\t#{pane_dead}";
+
+/// Each session's first pane pid from a [`PANE_TABLE_FORMAT`] table, when that pane
+/// is live. A dead pane (`remain-on-exit`) still reports the pid its command had,
+/// which may since belong to an unrelated process: it is never reaped. A row with no
+/// third field reads as live.
+fn live_pane_pids(out: &str) -> HashMap<String, u32> {
+    let mut first: HashMap<String, Option<u32>> = HashMap::new();
+    for line in out.lines() {
+        let mut fields = line.split('\t');
+        let (Some(session), Some(pid)) = (fields.next(), fields.next()) else { continue };
+        let Ok(pid) = pid.trim().parse::<u32>() else { continue };
+        let dead = fields.next().is_some_and(|d| d.trim() == "1");
+        first.entry(session.to_string()).or_insert((!dead).then_some(pid));
+    }
+    first.into_iter().filter_map(|(session, pid)| Some((session, pid?))).collect()
+}
+
 /// End `sessions`: each one's pane process with its whole subtree (`reap`, given the
 /// pane's pid, all found before any session goes), then the session itself (a kill
 /// that finds it already gone counts), then one more listing to confirm. A session is
@@ -1250,9 +1269,9 @@ pub fn end_sessions_in(sessions: &[String], tmux: &mut TmuxCall<'_>, reap: &mut 
     if sessions.is_empty() {
         return out;
     }
-    let panes_argv: Vec<String> = ["list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}"].map(String::from).to_vec();
+    let panes_argv: Vec<String> = ["list-panes", "-a", "-F", PANE_TABLE_FORMAT].map(String::from).to_vec();
     let panes = match tmux(&panes_argv) {
-        Ok(run) if run.success => Ok(crate::services::agent_fence::parse_tmux_pane_pids(&run.stdout)),
+        Ok(run) if run.success => Ok(live_pane_pids(&run.stdout)),
         // No server: no pane, and no session either (the listing below confirms it).
         Ok(run) if crate::services::mobile_control::discovery::tmux_says_no_server(&run.stderr) => Ok(HashMap::new()),
         Ok(run) => Err(tmux_why(&run)),
@@ -1347,9 +1366,17 @@ pub fn sweep_sessions_in(
     out
 }
 
-/// One call of this machine's tmux client (`tmux_local::tmux_command`). Blocking.
+/// One call of this machine's tmux client (`TmuxMux::command`: the app's server, on
+/// the app's PATH). Blocking. The sweep stays in tmux's own argv on purpose — one pane
+/// table read before any session ends, then one confirming listing, pinned call by call
+/// in its tests — so it runs only where the session mux is tmux ([`tmux_sweep_runs`]);
+/// the Windows session host will get its own over `SessionMux`.
 fn machine_tmux(argv: &[String]) -> Result<TmuxRun, String> {
-    let out = crate::services::tmux_local::tmux_command().args(argv).output().map_err(|e| e.to_string())?;
+    let out = crate::services::session_mux::tmux::TmuxMux::default()
+        .command()
+        .args(argv)
+        .output()
+        .map_err(|e| e.to_string())?;
     Ok(TmuxRun {
         success: out.status.success(),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -1371,10 +1398,17 @@ fn forget_sessions(sweep: &Sweep) {
     }
 }
 
+/// Whether this machine's sessions are tmux's and tmux runs: where [`machine_tmux`]
+/// can end them. Elsewhere (Windows, no tmux) no session exists to end.
+fn tmux_sweep_runs() -> bool {
+    let mux = crate::services::session_mux::mux();
+    mux.kind() == crate::services::session_mux::MuxKind::Tmux && mux.available()
+}
+
 /// [`end_sessions_in`] on this machine's tmux. Blocking. Without tmux (Windows, or
 /// none installed) no session exists to end.
 pub fn end_sessions(sessions: &[String]) -> Sweep {
-    if sessions.is_empty() || !crate::services::tmux_local::tmux_available() {
+    if sessions.is_empty() || !tmux_sweep_runs() {
         return Sweep::default();
     }
     let sweep = end_sessions_in(sessions, &mut machine_tmux, &mut reap_pane);
@@ -1385,7 +1419,7 @@ pub fn end_sessions(sessions: &[String]) -> Sweep {
 /// [`sweep_sessions_in`] on this machine's tmux, the live spawns' recorded sessions and
 /// the gate's record. Blocking. Without tmux no session exists to end.
 pub fn sweep_sessions(project: &str, dir: Option<&Path>, forced: &[String], held: &[String]) -> Sweep {
-    if !crate::services::tmux_local::tmux_available() {
+    if !tmux_sweep_runs() {
         return Sweep::default();
     }
     let sweep = sweep_sessions_in(

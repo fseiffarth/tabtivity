@@ -132,6 +132,7 @@ export type FilesPanelView =
   | "agents"
   | "orange"
   | "sessions"
+  | "archive"
   | "jobs"
   | "remarks"
   | "todo"
@@ -228,6 +229,13 @@ export interface Settings {
      * phone paired later starts off root. Narrows `root_access`, never opens
      * it. Carried by every writer of this block, like `assistant_devices`. */
     root_devices?: string[];
+    /** The other desktops' phone-host origins (same tailnet,
+     * `https://<machine>.<tailnet>.ts.net[:port]`) whose phone app may frame
+     * this desktop's phone UI and be framed by it
+     * (`docs/phone_multi_desktop_plan.md`). The sidecar re-validates every
+     * entry per request and drops a bad one. Carried by every writer of this
+     * block, like `root_devices`. */
+    linked_desktops?: string[];
   };
   /** Show Tabtivity Mobile's host-connection control in the desktop header. This
    * defaults to on when Mobile itself is enabled; an explicit false hides it. */
@@ -366,6 +374,10 @@ export interface Settings {
    *  project-agent tabs; every print waits for the user's Approve.
    *  **Default true** — absent means on. */
   print_mcp?: boolean;
+  /** Tab messaging (`services::tabs_mcp`, `tabs_list`/`tabs_send`/`tabs_inbox`)
+   *  between the local agent tabs of one project. **Default true** — absent
+   *  means on. */
+  tabs_mcp?: boolean;
   root_mcp_review?: "all" | "destructive" | "off";
   /** Root console: serve the MCP tools to local-model tabs only. Absent means
    *  off. On, cloud agent CLIs get no endpoint and running ones are refused. */
@@ -623,8 +635,16 @@ export interface Settings {
   ollama_roles?: Record<string, string>;
   /** Missing provider retains Ollama; prose keeps its existing Ollama role. */
   code_completion_provider?: "ollama" | "copilot";
+  /** The automatic autocomplete trigger's idle delay per provider, in ms; one
+   *  of 100/200/400/600/1200. Missing or another value: the default (600 for a
+   *  local model, 200 for Copilot). Machine-wide, every tab of that provider. */
+  autocomplete_delay_ms?: { ollama?: number; copilot?: number };
   /** Experimental entry point; this alone never authorizes cloud context. */
   copilot_completion?: boolean;
+  /** Keep the Copilot language server's GitHub token in the OS keychain (one
+   *  entry per app account) so a restart signs in by itself. Off by default;
+   *  sign-out or switching it off deletes the entry. */
+  copilot_stay_signed_in?: boolean;
   /** Tabtivity-owned consent, bound to both project id and canonical directory. */
   completion_project_policies?: Record<string, {
     directory: string;
@@ -709,6 +729,8 @@ export interface Settings {
   voice_hands_free_on?: boolean;
   /** EXPERIMENTAL: the Chat's hands-free loop (`ReaderVoice`). */
   voice_hands_free?: boolean;
+  /** EXPERIMENTAL: per-turn checkpoints of an agent tab's folder (`lib/agents/checkpoints`). */
+  turn_checkpoints?: boolean;
   /** When true (the default), Claude agent tabs are spawned with `--remote-control`
    *  so the running session can be monitored/steered from the Claude app/web. Only
    *  Claude supports this flag; other agents ignore the setting. */
@@ -800,8 +822,14 @@ export interface Settings {
   /** Persistent LOCAL (tmux) sessions (TODO #85): when true (the default on Unix),
    *  a local project's shell/script tabs run inside a tmux session on the machine,
    *  so a long run keeps going if Tabtivity crashes and the tab reattaches on restart.
-   *  `undefined`/`true` = on; `false` = off. No effect on Windows (no tmux). */
+   *  `undefined`/`true` = on; `false` = off. On Windows it applies only with
+   *  `windows_session_host` on (agent tabs then run in the session host). */
   persist_local_sessions?: boolean;
+  /** EXPERIMENTAL, default OFF, Windows only. Local agent tabs run in the native
+   *  session host (`docs/windows_session_host_plan.md`) so they outlive the
+   *  window and a phone can attach; needs `persist_local_sessions` on too. Read
+   *  through `lib/terminal/localSessions`. Never carried by Debug mode. */
+  windows_session_host?: boolean;
   /** When true (the default), remote SSH/OpenVPN connections are made headlessly
    *  in the background (Tabtivity handles the password transiently). When false, they
    *  are launched as interactive terminal tabs in the Tabtivity root scope, so the
@@ -846,6 +874,10 @@ export interface Settings {
   /** True once the first-run "Using VPN or remote machines?" prompt has been
    *  shown/answered, so it never re-asks automatically. */
   remote_features_prompted?: boolean;
+  /** True once the launch-time "Keep running when closed?" question
+   *  (`mobile/StayAfterQuitPrompt`) has been shown, so it never re-asks; the
+   *  answer itself is the Mobile host's `stay_after_quit`. */
+  stay_after_quit_prompted?: boolean;
   /** Energy-saver mode. "off" never throttles; "battery" (the default) throttles
    *  only while running on battery; "always" throttles regardless of power. When
    *  active, Tabtivity pauses the blob auto-spin, collapses idle animations, and
@@ -1390,6 +1422,9 @@ export interface AgentPrivacy {
 export interface ProjectEntry {
   agent_privacy?: AgentPrivacy;
   schedule_mcp?: "off" | "propose" | "apply";
+  /** Tab messaging's idle wake (`commands::tabs_mcp`): a tab with new unread
+   *  messages gets the host's fixed notice queued once it is idle. Absent = off. */
+  tab_messages_wake?: boolean;
   git_push_mcp?: GitPushMcpPolicy;
   id: string;
   name: string;

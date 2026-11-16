@@ -63,9 +63,13 @@ Rules every step follows:
   state dir and a project's folder are renamed (same parent, so nothing is ever
   half-moved; a failed rename changes nothing). The webview data, IndexedDB
   and git refs are copied, read back, and only then is the old copy removed.
-  The webview-data step runs on Linux only: `state_gc::webview_data_root` is
-  `None` elsewhere, so on macOS and Windows the store stays under the old
-  identifier (todo 2442q).
+  The webview-data step runs on every OS (2442q, 2026-11-15; not run on
+  macOS or Windows): `state_gc::webview_data_root` names
+  `$XDG_DATA_HOME/<identifier>` on Linux (WebKitGTK), `~/Library/WebKit/
+  <identifier>` on macOS (wry's default `WKWebsiteDataStore`; the bundle id is
+  the Tauri identifier) and `%LOCALAPPDATA%\<identifier>` on Windows (Tauri's
+  forced WebView2 user data folder, `EBWebView\` inside). Where the old folder
+  does not exist the step has nothing to do.
 - **A failed step leaves the app working.** Every folder lookup tries the
   current name and then the old one (`resolve_named_dir`), so a state dir that
   could not move (a locked executable on Windows, both names present) is simply

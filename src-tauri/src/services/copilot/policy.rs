@@ -65,6 +65,14 @@ pub fn text_consented(settings: &Settings, project_id: &str) -> bool {
         .is_some_and(|policy| policy.copilot_text)
 }
 
+/// Prose by its file name: these need the project's text consent whatever
+/// language the editor names. Judged on the path `authorize_document`
+/// returned; the renderer's language can add to it, never lift it. Pure.
+pub fn text_file(file: &Path) -> bool {
+    let extension = file.extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase();
+    matches!(extension.as_str(), "md" | "markdown" | "mdx" | "tex" | "txt" | "rst")
+}
+
 /// Files that hold credentials rather than code or prose. No consent covers
 /// them: a project's `.env` or a key file never reaches the cloud.
 fn secret_shaped(file: &Path) -> bool {
@@ -208,6 +216,16 @@ mod tests {
             "completion_project_policies":{"one":{"directory":"/p","copilot":true,"copilot_text":true}}
         })).unwrap();
         assert!(text_consented(&raw, "one"));
+    }
+
+    #[test]
+    fn prose_files_are_judged_by_their_extension() {
+        for name in ["notes.md", "README.MD", "a.markdown", "page.mdx", "paper.tex", "todo.txt", "index.rst"] {
+            assert!(text_file(Path::new(name)), "{name}");
+        }
+        for name in ["main.rs", "app.ts", "Makefile", "notes.md.rs", "tex", ".txt.py"] {
+            assert!(!text_file(Path::new(name)), "{name}");
+        }
     }
 
     #[test]

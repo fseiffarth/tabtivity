@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { ModeToggle } from "./fileViewer/toolbar";
 import { ViewerHeader } from "./fileViewer/ViewerHeader";
 import { DiffMoreRow, DiffStateNote } from "./diff/DiffStates";
@@ -86,13 +86,24 @@ export function MarkedText({ text, marks }: { text: string; marks?: readonly Wor
  *  Add/del tints come from the `.diff-line.is-add` / `.is-del` theme classes;
  *  `marks` are the word-level changes inside it (see `hunkWordMarks`). Text is
  *  rendered as React children, which auto-escapes — no raw HTML. */
-export const DiffLineRow = memo(function DiffLineRow({ line, marks }: { line: DiffLine; marks?: readonly WordMark[] }) {
+export const DiffLineRow = memo(function DiffLineRow({ line, marks, noteAt, onNote, noted, noteLabel }: {
+  line: DiffLine;
+  marks?: readonly WordMark[];
+  /** The Reader's Diffs notes: this row's index in its hunk, the gutter
+   *  button's click (with `noteLabel` as its title), and whether a note is on
+   *  the row. Body lines only. */
+  noteAt?: number;
+  onNote?: (index: number, event: MouseEvent<HTMLButtonElement>) => void;
+  noted?: boolean;
+  noteLabel?: string;
+}) {
   const muted = line.type === "hunk" || line.type === "meta" || line.type === "nonewline";
   const marker =
     line.type === "add" ? "+" : line.type === "del" ? "-" : line.type === "context" ? " " : "";
+  const canNote = onNote !== undefined && noteAt !== undefined && !muted;
   return (
     <div
-      className={line.type === "add" ? "diff-line is-add" : line.type === "del" ? "diff-line is-del" : "diff-line"}
+      className={`${line.type === "add" ? "diff-line is-add" : line.type === "del" ? "diff-line is-del" : "diff-line"}${noted ? " noted" : ""}`}
       data-type={line.type}
       style={{
         display: "flex",
@@ -100,6 +111,11 @@ export const DiffLineRow = memo(function DiffLineRow({ line, marks }: { line: Di
         whiteSpace: "pre",
       }}
     >
+      {canNote && (
+        <button type="button" className="diff-note-add" title={noteLabel} aria-label={noteLabel} onClick={(event) => onNote(noteAt, event)}>
+          +
+        </button>
+      )}
       <span
         className="diff-gutter"
         style={{
@@ -149,12 +165,26 @@ export const DiffLineRow = memo(function DiffLineRow({ line, marks }: { line: Di
  *  `data-jump` id, by the row's index in `lines`; `current` marks the one the
  *  previous / next buttons last landed on. Text is rendered as React children,
  *  which auto-escapes — no raw HTML. */
-export function SplitRows({ lines, marks, anchorOf, current }: {
+export function SplitRows({ lines, marks, anchorOf, current, notes }: {
   lines: readonly DiffLine[];
   marks: ReadonlyMap<DiffLine, readonly WordMark[]>;
   anchorOf?: (at: number) => string;
   current?: string;
+  /** The Reader's Diffs notes (`TerminalReaderChanges`): a gutter button on
+   *  each body row, a tint on the rows in `noted` (indices into `lines`), and
+   *  `under`'s content below the row whose first line has that index. */
+  notes?: {
+    label: string;
+    noted: ReadonlySet<number>;
+    onStart: (index: number, event: MouseEvent<HTMLButtonElement>) => void;
+    under: ReadonlyMap<number, ReactNode>;
+  };
 }) {
+  const indexOf = useMemo(() => {
+    const map = new Map<DiffLine, number>();
+    lines.forEach((line, index) => map.set(line, index));
+    return map;
+  }, [lines]);
   return (
     <>
       {splitDiffRows(lines).map((row, index) => {
@@ -162,16 +192,26 @@ export function SplitRows({ lines, marks, anchorOf, current }: {
           return <div className="terminal-changes-split-note" key={index}>{row.note}</div>;
         }
         const id = row.start && anchorOf ? anchorOf(row.at) : undefined;
+        const lead = row.before ?? row.after;
+        const first = notes && lead ? indexOf.get(lead) : undefined;
+        const rowNoted = !!notes && [row.before, row.after].some((line) => !!line && notes.noted.has(indexOf.get(line) ?? -1));
         return (
-          <div
-            className="terminal-changes-split-row"
-            key={index}
-            data-jump={id !== undefined ? `c:${id}` : undefined}
-            data-current={id !== undefined && current === id ? "true" : undefined}
-          >
-            <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before && <MarkedText text={row.before.text} marks={marks.get(row.before)} />}</code></div>
-            <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after && <MarkedText text={row.after.text} marks={marks.get(row.after)} />}</code></div>
-          </div>
+          <Fragment key={index}>
+            <div
+              className={rowNoted ? "terminal-changes-split-row noted" : "terminal-changes-split-row"}
+              data-jump={id !== undefined ? `c:${id}` : undefined}
+              data-current={id !== undefined && current === id ? "true" : undefined}
+            >
+              {notes && first !== undefined && (
+                <button type="button" className="diff-note-add" title={notes.label} aria-label={notes.label} onClick={(event) => notes.onStart(first, event)}>
+                  +
+                </button>
+              )}
+              <div className={row.before?.type === "del" ? "del" : ""}><span>{row.before?.oldNo}</span><code>{row.before && <MarkedText text={row.before.text} marks={marks.get(row.before)} />}</code></div>
+              <div className={row.after?.type === "add" ? "add" : ""}><span>{row.after?.newNo}</span><code>{row.after && <MarkedText text={row.after.text} marks={marks.get(row.after)} />}</code></div>
+            </div>
+            {first !== undefined && notes?.under.get(first)}
+          </Fragment>
         );
       })}
     </>

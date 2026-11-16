@@ -23,6 +23,7 @@ import { NewProjectSheet } from "./NewProjectSheet";
 import { LocalModelsSection } from "./LocalModelsSheet";
 import { CliOverviewSection } from "./CliOverviewSheet";
 import { AGENT_STATUS_GLYPH } from "../components/AgentStatusPill";
+import { DesktopSwitchButton } from "../shell/DesktopFrame";
 import { listScrollKey, useRestoreListScroll } from "../listScroll";
 import { readSpeechLang, type SpeechLang } from "../speechLang";
 import { NotificationsSheet, pushSummary } from "../components/NotificationsSheet";
@@ -341,6 +342,9 @@ export function Home({ open, openTab, tabby, todo, mail, selectedId }: {
       {offline
         ? <span className="home-offline" role="img" aria-label={connection}><span className="lamp off" aria-hidden="true" /><span aria-hidden="true">{connection}</span></span>
         : <span className="lamp" role="img" aria-label={connection} title={connection} />}
+      {/* Another linked desktop (`shell/`): shown when there is one to switch
+          to, or inside one's frame, where it asks the shell for its picker. */}
+      <DesktopSwitchButton />
       {/* The views that are no project list: a tap goes in, a second (or ‹)
           comes back. Agents is reached through Needs you's tiles. */}
       <button className="home-head-button" aria-pressed={view === "search"} aria-label={t("mobile.home.viewSearch")} title={t("mobile.home.viewSearch")} onClick={() => choose(view === "search" ? "active" : "search")}><SearchIcon size="22px" /></button>

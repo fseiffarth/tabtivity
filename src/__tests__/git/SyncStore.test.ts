@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(()
 import {
   useSyncStore,
   listenSyncProgress,
+  resetSyncStatusPasses,
   dirSyncAggregate,
   localNewPaths,
   type SyncEntryStatus,
@@ -27,6 +28,7 @@ function reset() {
   invokeMock.mockReset();
   invokeMock.mockResolvedValue([] as never);
   useSyncStore.setState({ byProject: {}, progressByProject: {} });
+  resetSyncStatusPasses();
 }
 
 describe("sync store actions", () => {
@@ -85,7 +87,7 @@ describe("sync store actions", () => {
 
   it("pull and syncWholeProject return how many files landed", async () => {
     invokeMock.mockImplementation(((cmd: string) =>
-      Promise.resolve(cmd === "sync_pull" || cmd === "sync_whole_project" ? { pulled: 2 } : [])) as never);
+      Promise.resolve(cmd === "sync_pull" ? { pulled: 2 } : [])) as never);
     expect(await useSyncStore.getState().pull("p1", "data")).toEqual({ pulled: 2 });
     expect(await useSyncStore.getState().syncWholeProject("p1")).toEqual({ pulled: 2 });
     // A bare count (an older backend) still reads.
@@ -129,10 +131,66 @@ describe("sync store actions", () => {
     expect(args).toEqual({ projectId: "p1", relPaths: ["a", "b"], selected: false, isDir: true });
   });
 
-  it("syncWholeProject calls its command", async () => {
+  it("syncWholeProject pulls the project root", async () => {
     await useSyncStore.getState().syncWholeProject("p1");
-    const calls = invokeMock.mock.calls.map((c) => c[0]);
-    expect(calls).toContain("sync_whole_project");
+    const pull = invokeMock.mock.calls.find((c) => c[0] === "sync_pull");
+    expect(pull?.[1]).toEqual({ projectId: "p1", relPath: "" });
+  });
+
+  it("a batch refreshes the status once, and asks made during a pass share the next one", async () => {
+    const statusCalls = () => invokeMock.mock.calls.filter((c) => c[0] === "sync_status").length;
+    await useSyncStore.getState().resolveAll("p1", ["a.txt", "b.txt", "c.txt"], "host");
+    expect(statusCalls()).toBe(1);
+
+    invokeMock.mockClear();
+    const { refreshStatus } = useSyncStore.getState();
+    await Promise.all([refreshStatus("p1"), refreshStatus("p1"), refreshStatus("p1"), refreshStatus("p1")]);
+    expect(statusCalls()).toBe(2);
+  });
+
+  it("a status pass that never answers stops holding the next one back", async () => {
+    vi.useFakeTimers();
+    try {
+      invokeMock.mockImplementation((() => new Promise(() => {})) as never);
+      void useSyncStore.getState().refreshStatus("p1");
+      void useSyncStore.getState().refreshStatus("p1");
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(30_000);
+      void useSyncStore.getState().refreshStatus("p1");
+      expect(invokeMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a stale status pass that answers late does not overwrite the newer one", async () => {
+    vi.useFakeTimers();
+    try {
+      let answerLate: (rows: unknown) => void = () => {};
+      invokeMock.mockImplementationOnce((() => new Promise((resolve) => (answerLate = resolve))) as never);
+      const stale = useSyncStore.getState().refreshStatus("p1");
+      vi.advanceTimersByTime(30_000);
+      invokeMock.mockResolvedValue([{ rel_path: "a.txt", is_dir: false, selected: true, state: "amber" }] as never);
+      await useSyncStore.getState().refreshStatus("p1");
+      expect(useSyncStore.getState().byProject["p1"]["a.txt"].state).toBe("amber");
+      answerLate([{ rel_path: "a.txt", is_dir: false, selected: true, state: "green" }]);
+      await stale;
+      expect(useSyncStore.getState().byProject["p1"]["a.txt"].state).toBe("amber");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a status pass that found nothing new keeps the cached map", async () => {
+    const rows = [{ rel_path: "a.txt", is_dir: false, selected: true, state: "green" }];
+    invokeMock.mockResolvedValue(rows as never);
+    await useSyncStore.getState().refreshStatus("p1");
+    const before = useSyncStore.getState().byProject["p1"];
+    await useSyncStore.getState().refreshStatus("p1");
+    expect(useSyncStore.getState().byProject["p1"]).toBe(before);
+    invokeMock.mockResolvedValue([{ ...rows[0], state: "amber" }] as never);
+    await useSyncStore.getState().refreshStatus("p1");
+    expect(useSyncStore.getState().byProject["p1"]).not.toBe(before);
   });
 
   it("push forwards force + returns conflicts", async () => {

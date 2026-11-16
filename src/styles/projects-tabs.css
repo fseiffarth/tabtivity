@@ -31,7 +31,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  height: 34px;
+  /* Its height is set with its width cap in apps.css. */
   /* Fully transparent, no shadow — the pill melts into the header bar behind
      it, so a pill and the bar are the SAME color and only the pill text (and,
      for the current project, its top accent line) tells them apart. The 3px
@@ -2313,7 +2313,9 @@
    one motion in it, an agent's working ▶ and bar breathing, is decoration with
    its own gates beside its rules above. */
 :root[data-energy-saver="on"] .tab-new-btn.empty-hint,
-:root[data-software-paint] .tab-new-btn.empty-hint {
+:root[data-software-paint] .tab-new-btn.empty-hint,
+:root[data-energy-saver="on"] .tab.install-pending::before,
+:root[data-software-paint] .tab.install-pending::before {
   animation: none;
 }
 
@@ -3488,6 +3490,13 @@ select.file-run-args-input {
     file-entry-highlight-pulse 1.3s ease-in-out 200ms infinite;
 }
 
+/* It stays up as long as the menu does, and the glow sits on the element whose
+   opacity moves: at rest on the CPU path and in Energy Saver. */
+:root[data-energy-saver="on"] .file-entry-highlight,
+:root[data-software-paint] .file-entry-highlight {
+  animation: none;
+}
+
 @keyframes file-entry-highlight-in {
   from {
     opacity: 0;
@@ -4263,9 +4272,6 @@ html:not(.show-untested-tags) .untested-tag {
 .agent-prompt-link-kind > span { color: var(--text-muted); font-size: var(--text-sm); }
 /* The toolbar's "New agent tab" picks: two compact dropdowns beside their label. */
 .agent-prompt-new-tab .dropdown { min-width: 92px; }
-.agent-prompt-new { display: grid; gap: 6px; padding: var(--space-2); border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); }
-.agent-prompt-new textarea,
-.agent-prompt-new input { width: 100%; box-sizing: border-box; }
 .agent-prompt-chart { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 360px; }
 /* Timeline hidden: the chart is the drafts alone, no reserved axis height. */
 .agent-prompt-chart.is-drafts-only { min-height: 0; }

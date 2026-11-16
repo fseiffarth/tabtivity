@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTourStore } from "../../stores/tour";
 import { useProjectsStore } from "../../stores/projects";
-import { nextEligibleIndex, rewardKey, taskClickSelector } from "../../lib/tour";
+import { nextEligibleIndex, rewardKey, stepBody, taskClickSelector } from "../../lib/tour";
 import { TourCoachmark } from "../common/TourCoachmark";
 import { useT } from "../../lib/i18n";
 
@@ -310,7 +310,7 @@ export function TourHost() {
       rect={rect}
       placement={step.placement}
       title={t(step.titleKey)}
-      body={t(step.bodyKey, step.bodyParams?.(t))}
+      body={stepBody(step, t(step.bodyKey, step.bodyParams?.(t)))}
       stepNumber={stepNumber}
       stepTotal={stepTotal}
       isFirst={isFirst}

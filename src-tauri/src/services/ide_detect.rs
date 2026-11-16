@@ -289,16 +289,16 @@ impl IdeId {
     /// editions (`jetbrains-pycharm-ce`, `jetbrains-idea-ce`).
     fn window_classes(self) -> &'static [&'static str] {
         match self {
-            IdeId::PyCharm => &["jetbrains-pycharm", "pycharm64"],
-            IdeId::CLion => &["jetbrains-clion", "clion64"],
-            IdeId::WebStorm => &["jetbrains-webstorm", "webstorm64"],
-            IdeId::PhpStorm => &["jetbrains-phpstorm", "phpstorm64"],
-            IdeId::RubyMine => &["jetbrains-rubymine", "rubymine64"],
-            IdeId::Rider => &["jetbrains-rider", "rider64"],
-            IdeId::RustRover => &["jetbrains-rustrover", "rustrover64"],
-            IdeId::GoLand => &["jetbrains-goland", "goland64"],
-            IdeId::AndroidStudio => &["jetbrains-studio", "studio64"],
-            IdeId::Idea => &["jetbrains-idea", "idea64"],
+            IdeId::PyCharm => &["jetbrains-pycharm", "pycharm64", "pycharm"],
+            IdeId::CLion => &["jetbrains-clion", "clion64", "clion"],
+            IdeId::WebStorm => &["jetbrains-webstorm", "webstorm64", "webstorm"],
+            IdeId::PhpStorm => &["jetbrains-phpstorm", "phpstorm64", "phpstorm"],
+            IdeId::RubyMine => &["jetbrains-rubymine", "rubymine64", "rubymine"],
+            IdeId::Rider => &["jetbrains-rider", "rider64", "rider"],
+            IdeId::RustRover => &["jetbrains-rustrover", "rustrover64", "rustrover"],
+            IdeId::GoLand => &["jetbrains-goland", "goland64", "goland"],
+            IdeId::AndroidStudio => &["jetbrains-studio", "studio64", "android studio"],
+            IdeId::Idea => &["jetbrains-idea", "idea64", "intellij idea"],
             IdeId::VisualStudio => &["devenv"],
             // The `code` launcher may be any of these (`path_candidates`).
             IdeId::VsCode => &["code", "code - insiders", "vscodium", "codium", "cursor"],
@@ -307,7 +307,7 @@ impl IdeId {
             IdeId::Zed => &["dev.zed.zed", "zed"],
             IdeId::Xcode => &["xcode"],
             IdeId::Eclipse => &["eclipse"],
-            IdeId::SublimeText => &["sublime_text"],
+            IdeId::SublimeText => &["sublime_text", "sublime text"],
             IdeId::RStudio => &["rstudio"],
             IdeId::Spyder => &["spyder"],
         }
@@ -1439,6 +1439,11 @@ mod tests {
             (IdeId::VsCode, "code\0Code\0", "my-app - Visual Studio Code"),
             (IdeId::VsCode, "Code.exe", "my-app (Workspace) - Visual Studio Code"),
             (IdeId::VsCode, "vscodium\0VSCodium\0", "main.py — my-app — VSCodium"),
+            // macOS: the owning app's name (2442o).
+            (IdeId::VsCode, "Code", "main.py — my-app"),
+            (IdeId::Idea, "IntelliJ IDEA", "my-app – Main.java"),
+            (IdeId::PyCharm, "PyCharm", "my-app – main.py"),
+            (IdeId::AndroidStudio, "Android Studio", "my-app – MainActivity.kt"),
         ] {
             assert!(window_shows_project(ide, class, title, &proj), "{class:?} {title:?}");
         }

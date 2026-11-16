@@ -57,6 +57,34 @@ const PERIODS: Period[] = ["day", "week", "month"];
 
 const DAY_MS = 86_400_000;
 
+/** An autocomplete key's mode segment, as the editor's length modes read. */
+function autocompleteModeLabel(mode: string, t: ReturnType<typeof useT>): string {
+  return mode === "copilot" ? t("settings.copilotProviderCopilot") : mode === "scope" ? t("projectSettings.scope")
+    : mode === "block" ? t("projectSettings.block") : t("projectSettings.sentence");
+}
+
+type OfferCounts = { shown: number; tab: number; word: number; line: number; typed: number; rejected: number };
+const OFFER_EVENTS: [string, keyof OfferCounts][] = [
+  [METRIC.AUTOCOMPLETE_SHOWN, "shown"], [METRIC.AUTOCOMPLETE_TAB, "tab"], [METRIC.AUTOCOMPLETE_WORD, "word"],
+  [METRIC.AUTOCOMPLETE_LINE, "line"], [METRIC.AUTOCOMPLETE_TYPED, "typed"], [METRIC.AUTOCOMPLETE_REJECTED, "rejected"],
+];
+
+/** The offer counters (`autocomplete.<event>.<mode>.<provider>/<model>`) per
+ * `<mode>.<provider>/<model>`. Request counters are not offers and stay out. */
+export function autocompleteOffers(counters: Record<string, number>): Map<string, OfferCounts> {
+  const rows = new Map<string, OfferCounts>();
+  for (const [key, count] of Object.entries(counters)) {
+    for (const [prefix, event] of OFFER_EVENTS) {
+      if (!key.startsWith(prefix + ".")) continue;
+      const identity = key.slice(prefix.length + 1);
+      const row = rows.get(identity) ?? { shown: 0, tab: 0, word: 0, line: 0, typed: 0, rejected: 0 };
+      row[event] += count;
+      rows.set(identity, row);
+    }
+  }
+  return rows;
+}
+
 /** One headline number. */
 function Metric({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -501,6 +529,9 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
       autocomplete.set(identity, row);
     }
   }
+  // Since the measurement rework: what became of each offer (shown, each way
+  // of taking it, rejected). The old accept/dismiss rows above stay as history.
+  const offers = autocompleteOffers(counters);
 
   // The same window as every other number in the dialog.
   const tokenRows: TokenRows | null = useMemo(
@@ -516,6 +547,7 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
   const empty =
     openedTabs + prompts + shellCommands + created + modified + deleted === 0 &&
     autocomplete.size === 0 &&
+    offers.size === 0 &&
     !tokenRows?.reported.length;
 
   return createPortal(
@@ -624,13 +656,17 @@ export function StatsRecap({ onClose, initialAnchorMs, showAutoToggle, welcome }
               />
             </div>
 
-            {autocomplete.size > 0 && <div className="stats-metrics">
+            {(autocomplete.size > 0 || offers.size > 0) && <div className="stats-metrics">
+              {[...offers].map(([identity, counts]) => {
+                const dot = identity.indexOf(".");
+                return <Metric key={`offers.${identity}`}
+                  label={t("stats.autocomplete", { mode: autocompleteModeLabel(identity.slice(0, dot), t), model: identity.slice(dot + 1) })}
+                  value={t("stats.autocompleteOffers", counts)} />;
+              })}
               {[...autocomplete].map(([identity, counts]) => {
                 const dot = identity.indexOf(".");
-                const mode = identity.slice(0, dot);
-                const modeLabel = mode === "copilot" ? t("settings.copilotProviderCopilot") : mode === "scope" ? t("projectSettings.scope") : mode === "block" ? t("projectSettings.block") : t("projectSettings.sentence");
                 return <Metric key={identity}
-                  label={t("stats.autocomplete", { mode: modeLabel, model: identity.slice(dot + 1) })}
+                  label={t("stats.autocomplete", { mode: autocompleteModeLabel(identity.slice(0, dot), t), model: identity.slice(dot + 1) })}
                   value={t("stats.autocompleteOutcomes", counts)} />;
               })}
             </div>}

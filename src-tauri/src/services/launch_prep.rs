@@ -6,7 +6,7 @@
 //! grants, Codex binding, Claude's remote-control and `--name` flags, the
 //! docker/ssh wrap and the local tmux wrap — lives here so the Mobile
 //! sidecar's headless spawn (`mobile_control::headless::create_tab`, a
-//! detached `tmux new-session` through `tmux_local::spawn_detached_with`)
+//! detached `tmux new-session` through `SessionMux::spawn_detached`)
 //! and the window's `pty_spawn` run the very same code. [`prepare`] is
 //! `AppHandle`-free; everything it calls already was. The fence stays
 //! fail-closed by construction: the same `agent_fence::decide`.
@@ -31,6 +31,9 @@ use crate::terminal::PtyOptions;
 /// carriers (`agent_exec::CARRIER_PREFIX`) count as well.
 const CONTROL_ENV: &[&str] = &[
     crate::app_env!("AGENT_FENCE"),
+    // `AGENT_FENCE`'s twin where there is no fence: planted, it makes the
+    // Windows shim hand a shell tab the real CLI in the user's own home.
+    crate::services::agent_shim::UNFENCED_ENV,
     crate::app_env!("HOST_SESSION"),
     crate::app_env!("SCOPE"),
     crate::app_env!("PROJECT_DIR"),
@@ -56,6 +59,8 @@ const CONTROL_ENV: &[&str] = &[
     crate::services::root_mcp::PRINT_URL_ENV,
     crate::services::root_mcp::WEB_TOKEN_ENV,
     crate::services::root_mcp::WEB_URL_ENV,
+    crate::services::root_mcp::TABS_TOKEN_ENV,
+    crate::services::root_mcp::TABS_URL_ENV,
 ];
 
 /// Whether `key` is one of [`CONTROL_ENV`] or a key carrier, in the current
@@ -622,9 +627,19 @@ pub struct PreparedLaunch {
     pub live_turn: Option<crate::services::agent_turn::TurnState>,
     /// The local folder the tab works in, `None` for a remote tab.
     pub drop_dir: Option<String>,
+    /// The key the window names the tab's checkpoints by
+    /// (`checkpoints::bind`), `None` when it has none. Only the window gets
+    /// it; it is never in the agent's environment.
+    pub checkpoint_key: Option<String>,
     /// The tab runs an AI ([`is_ai_spawn`]): while the AI switch is off its
     /// input is refused (`commands::terminal::pty_write`).
     pub ai: bool,
+    /// The launch may only *attach* to its live session, never create one:
+    /// let through the AI switch as a rejoin, or found alive in the Windows
+    /// session host after its setting was turned off
+    /// (`session_host::route::on_live_probe`). The Windows host spawn sends
+    /// `Attach` alone (`terminal::spawn_pty_attach_only`).
+    pub host_attach_only: bool,
     mcp_spawn_guard: Option<crate::services::root_mcp::SpawnTokenGuard>,
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     /// The fence scope the spawn runs in, `None` for an unfenced one.
@@ -714,6 +729,24 @@ fn push_fence_scope(
         crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => Some(scope_id.to_string()),
         _ => None,
     }
+}
+
+/// Mark `env` as an agent's that runs unfenced in a Tabtivity-owned home on a
+/// platform with no fence (`agent_shim::UNFENCED_ENV`; Windows only): a CLI
+/// the agent types in its own shell reaches the `.cmd` shim, which then steps
+/// aside instead of looking for Tabtivity's state under the agent home's
+/// `APPDATA`. Always Tabtivity's value, never one the tab brought.
+fn mark_unfenced_agent(env: &mut std::collections::HashMap<String, String>) {
+    env.extend(crate::services::agent_shim::unfenced_marker(cfg!(windows), &crate::services::agent_bin::bin_dir()));
+}
+
+/// Whether a Pusher binding records that its tab runs unfenced on a
+/// fence-less platform the user accepted (Windows; 2442g): only a local agent
+/// whose decision is the "platform" one. Not the Host session (it gets no
+/// Pusher), not an ssh or docker wrap, whose agent sits behind a boundary of
+/// its own a host hook run would cross.
+fn push_unfenced_host(decision: &crate::services::agent_fence::FenceDecision, local_agent: bool) -> bool {
+    matches!(decision, crate::services::agent_fence::FenceDecision::NotApplicable { reason: "platform" }) && local_agent
 }
 
 /// Whether a local agent whose fence decision no explicit arm of [`prepare`]
@@ -826,6 +859,7 @@ pub async fn prepare(
     // a running agent must stay reachable, if only to stop it. Its input is
     // gated like any agent's (`ai`).
     let ai = is_ai_spawn(&opts);
+    let mut host_attach_only = false;
     if ai && crate::services::ai_switch::is_off() {
         let (project, host, session, local_only) =
             (opts.project_id.clone(), opts.remote_host_id.clone(), opts.tmux_session.clone(), opts.local_only);
@@ -837,6 +871,9 @@ pub async fn prepare(
         if !rejoins {
             return Err(crate::services::ai_switch::AI_OFF.to_string());
         }
+        // Only the rejoin was let through: a session that ended meanwhile
+        // must not be started again by a create-or-attach.
+        host_attach_only = true;
     }
     // Resolve empty cwd to Tabtivity's root workspace directory (an assistant
     // chat's cwd is its own folder, set by the gate below).
@@ -1099,6 +1136,10 @@ pub async fn prepare(
     // the read-only help lane. All of it is decided in `grant_lanes` against
     // this process's listener (`runtime()`: the window's, or the Mobile
     // host's, which serves no root, reader or markup lane).
+    // Whether an OpenCode inline config was here before the lanes merged
+    // their MCP servers into one (below, the local-models config yields only
+    // to that earlier one).
+    let opencode_inline_before_lanes = opts.env.contains_key(crate::services::agent_api_keys::OPENCODE_INLINE_ENV);
     let root_agent = crate::services::root_mcp::grant_lanes(
         &mut opts,
         agent_spawn,
@@ -1123,18 +1164,23 @@ pub async fn prepare(
     // `services::local_drivers::opencode_loaded_models_config`) — handed over as an
     // inline config, never written into OpenCode's own. A remote run's OpenCode
     // talks to the far host's Ollama, and an inline config the user set wins.
-    const OPENCODE_INLINE: &str = "OPENCODE_CONFIG_CONTENT";
+    // The MCP servers the lanes merged into a config of their own carry over.
+    const OPENCODE_INLINE: &str = crate::services::agent_api_keys::OPENCODE_INLINE_ENV;
     // (A chat's profile builds its own config, tools off, and the user's
     // environment's never wins: `assistant::launch_line` sets it.)
     if !remote_agent_run
         && !assistant
-        && !opts.env.contains_key(OPENCODE_INLINE)
+        && !opencode_inline_before_lanes
         && std::env::var_os(OPENCODE_INLINE).is_none()
     {
         if let Some(requested) = crate::services::local_drivers::opencode_spawn_model(&opts.cmd, &opts.args) {
             if let Some(cfg) =
                 crate::services::local_drivers::opencode_loaded_models_config(requested.as_deref())
             {
+                let cfg = match opts.env.get(OPENCODE_INLINE) {
+                    Some(lanes) => crate::services::root_mcp::merge_opencode_mcp(&cfg, lanes),
+                    None => cfg,
+                };
                 opts.env.insert(OPENCODE_INLINE.into(), cfg);
             }
         }
@@ -1190,10 +1236,26 @@ pub async fn prepare(
                 }
                 _ => false,
             };
-            crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs)
+            let left = crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs);
+            // Per-turn checkpoints (`services::checkpoints`): only a local
+            // project's agent tab gets a folder; remote, root, Host-session
+            // and assistant tabs are unbound. The folder is found among the
+            // fence roots (`projects.json` / `boxes.json`), never from the tab.
+            let local_project = !project
+                .as_deref()
+                .is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
+            let checkpoint_roots = fence_roots
+                .as_deref()
+                .filter(|_| agent_spawn && !assistant && !remote_agent_run && !opts.host_session && local_project);
+            // The previous run's record shows its hooks work: no turn state
+            // then means idle (a restore needs no "can't tell" confirmation).
+            let turns_known = left.cut_off || left.resting || left.live.is_some();
+            let key = crate::services::checkpoints::bind(&uid, &opts.cwd, project.as_deref(), &opts.cmd, checkpoint_roots, turns_known);
+            (left, key)
         }
         None => Default::default(),
     };
+    let (left, checkpoint_key) = left;
     let (interrupted, resting, live_turn) = (left.cut_off, left.resting, left.live);
 
     // Codex resume, without the hook. Codex will not run Tabtivity's SessionStart
@@ -1445,6 +1507,7 @@ pub async fn prepare(
         let local_agent = opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd);
         let scope_id = crate::services::agent_home::scope_of(opts.project_id.as_deref());
         let push_scope = push_fence_scope(&decision, local_agent, &scope_id);
+        let push_unfenced_host = push_unfenced_host(&decision, local_agent);
         match decision {
             crate::services::agent_fence::FenceDecision::Fenced { .. } if local_agent => {
                 // The scope's Tabtivity-owned home (`services::agent_home`), the
@@ -1488,11 +1551,12 @@ pub async fn prepare(
                     cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
                     sandbox: crate::services::agent_features::Sandbox::HostSession,
                 });
-                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
+                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir(), &opts.cmd) {
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
                 opts.env.insert(crate::app_env!("HOST_SESSION").into(), "1".into());
+                mark_unfenced_agent(&mut opts.env);
                 // Last: it may put `agent_exec` in front of the CLI.
                 inject_api_keys(&mut opts, &scope_id)?;
             }
@@ -1509,10 +1573,11 @@ pub async fn prepare(
                     cli: agent_cli.clone(), cwd: opts.cwd.clone(), home: home.dir.clone(),
                     sandbox: crate::services::agent_features::Sandbox::Unfenced,
                 });
-                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir()) {
+                for (k, v) in crate::services::agent_fence::home_env(&home.dir, &crate::paths::home_dir(), &opts.cmd) {
                     opts.env.entry(k).or_insert(v);
                 }
                 crate::services::agent_auth::apply_fence_env(&opts.cmd, &mut opts.env);
+                mark_unfenced_agent(&mut opts.env);
                 inject_api_keys(&mut opts, &scope_id)?;
             }
             // Fail closed on a fence-less platform too: the tab that asked
@@ -1547,6 +1612,11 @@ pub async fn prepare(
         if let (Some(token), Some(scope)) = (push_token.as_deref(), push_scope.as_deref()) {
             crate::services::root_mcp::tokens().stamp_push_fence_scope(token, scope);
         }
+        // No fence on this platform: the binding says so, and the preflight
+        // runs an approved hook on the host (2442g).
+        if let (Some(token), true) = (push_token.as_deref(), push_unfenced_host) {
+            crate::services::root_mcp::tokens().stamp_push_unfenced_host(token);
+        }
     }
 
     // Before the agent process exists, so no tool call can see the default.
@@ -1574,7 +1644,38 @@ pub async fn prepare(
             }
         }
         drop_api_keys_for_old_tmux(&mut opts)?;
-        crate::services::tmux_local::wrap_pty_options_local(&mut opts);
+        crate::services::session_mux::mux().wrap(&mut opts);
+    }
+    // Windows: the session host takes what tmux would wrap on Unix, agents
+    // only (`session_host::route`). The wrap only marks the launch; the
+    // window's spawn sends this very argv and environment in a create-or-
+    // attach `Spawn`, so a live session (a restart) reattaches and its
+    // `--resume` command is ignored.
+    //
+    // A tab the host would have taken, were its setting on, first asks a
+    // running host for its session: alive, it is attached to (attach-only),
+    // never started a second time in-process. All of it reads files, the
+    // PATH or the pipe: off the async workers.
+    #[cfg(windows)]
+    {
+        let (routed, attach_only) = app_core::rt::spawn_blocking(move || {
+            let settings = storage::settings_path();
+            let persist = || {
+                storage::read_json::<crate::schema::Settings>(&settings).unwrap_or_default().persist_local_sessions()
+            };
+            let facts = host_route_facts(&opts, ai, crate::services::session_mux::winhost::flag_on(&settings), persist);
+            let via = host_launch_via(&facts, opts.tmux_session.as_deref(), crate::services::session_mux::winhost::probe_live_session)?;
+            match via {
+                HostVia::Wrap => crate::services::session_mux::mux().wrap(&mut opts),
+                HostVia::AttachOnly => opts.mux_wrapped = true,
+                HostVia::InProcess => {}
+            }
+            Ok::<_, String>((opts, via == HostVia::AttachOnly))
+        })
+        .await
+        .map_err(|e| format!("launch: {e}"))??;
+        opts = routed;
+        host_attach_only = (host_attach_only && opts.mux_wrapped) || attach_only;
     }
 
     Ok(PreparedLaunch {
@@ -1583,6 +1684,7 @@ pub async fn prepare(
         interrupted,
         resting,
         live_turn,
+        checkpoint_key,
         mcp_spawn_guard,
         resume_claim,
         fenced_scope,
@@ -1594,6 +1696,7 @@ pub async fn prepare(
         generation,
         drop_dir,
         ai,
+        host_attach_only,
     })
 }
 
@@ -1625,6 +1728,62 @@ fn is_sign_in_argv(args: &[String]) -> bool {
     }
 }
 
+/// What `session_host::route::routes_through_host` decides a resolved
+/// launch on: `ai` is [`is_ai_spawn`] of the caller's options, `persist`
+/// reads `persist_local_sessions` (only while the flag is on).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn host_route_facts(
+    opts: &PtyOptions,
+    ai: bool,
+    flag_on: bool,
+    persist: impl FnOnce() -> bool,
+) -> crate::services::session_host::route::RouteFacts {
+    crate::services::session_host::route::RouteFacts {
+        flag_on,
+        persist_local: flag_on && persist(),
+        has_session: opts.tmux_session.is_some(),
+        local: opts.cmd != "ssh" && !crate::services::sandbox::is_engine_cmd(&opts.cmd),
+        ai,
+        root_scope: opts.project_id.as_deref().is_none_or(|p| p == storage::ROOT_SCOPE),
+        host_session: opts.host_session,
+    }
+}
+
+/// How a Windows launch reaches the session host ([`host_launch_via`]).
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostVia {
+    /// Routed: the host creates or attaches (`SessionMux::wrap`).
+    Wrap,
+    /// Not routed, but its session is alive in the host: attach only.
+    AttachOnly,
+    InProcess,
+}
+
+/// The Windows host decision for a resolved launch: routed ones wrap; one
+/// the host would have taken asks `probe` (a running host's `has`, never
+/// starting one) and attaches to a live session or fails closed
+/// (`session_host::route::on_live_probe`); everything else is in-process.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn host_launch_via(
+    facts: &crate::services::session_host::route::RouteFacts,
+    session: Option<&str>,
+    probe: impl FnOnce(&str) -> Result<bool, String>,
+) -> Result<HostVia, String> {
+    use crate::services::session_host::route::{self, LaunchVia};
+    if route::routes_through_host(facts) {
+        return Ok(HostVia::Wrap);
+    }
+    let Some(session) = session.filter(|_| route::must_probe_live_session(facts)) else {
+        return Ok(HostVia::InProcess);
+    };
+    match route::on_live_probe(probe(session)) {
+        Ok(LaunchVia::AttachOnly) => Ok(HostVia::AttachOnly),
+        Ok(LaunchVia::InProcess) => Ok(HostVia::InProcess),
+        Err(failure) => Err(route::spawn_error(route::ERR_SILENT, &failure)),
+    }
+}
+
 /// Whether a spawn wrapped in the tab's tmux `session` (`new-session -A`)
 /// would only reattach it — the session still runs, here or on the tab's
 /// remote host — and so start no program. Blocking: the remote answer is one
@@ -1636,7 +1795,12 @@ fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, 
         remote::remote_target_for_host(id, host.unwrap_or(remote::PRIMARY_HOST))
     });
     match target {
-        None => crate::services::tmux_local::app_session_alive(session),
+        None => {
+            crate::services::tmux_local::is_app_local_tmux_session(session) && {
+                let mux = crate::services::session_mux::mux();
+                mux.holds_sessions() && mux.has(session).unwrap_or(false)
+            }
+        }
         Some(target) => {
             let probe = format!(
                 "tmux has-session -t {}",
@@ -1650,6 +1814,54 @@ fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, 
 
 #[cfg(test)]
 mod tests {
+    /// The facts the Windows session host route is decided on, read off a
+    /// resolved launch: a project agent with a session name goes, the root
+    /// scope, the Host session and an ssh/container launch do not, and the
+    /// setting is read only while the flag is on.
+    #[test]
+    fn the_host_route_reads_the_resolved_launch() {
+        use crate::services::session_host::route::routes_through_host;
+        let launch = |json: serde_json::Value| -> PtyOptions {
+            let mut base = serde_json::json!({ "id": "p:a", "cmd": "claude", "args": [], "cwd": "", "cols": 80, "rows": 24,
+                "project_id": "p", "tmux_session": "s" });
+            base.as_object_mut().unwrap().extend(json.as_object().unwrap().clone());
+            serde_json::from_value(base).unwrap()
+        };
+        let goes = |opts: &PtyOptions, ai: bool| routes_through_host(&host_route_facts(opts, ai, true, || true));
+        assert!(goes(&launch(serde_json::json!({})), true));
+        assert!(!goes(&launch(serde_json::json!({})), false), "a shell stays in-process");
+        assert!(!goes(&launch(serde_json::json!({ "project_id": null })), true), "root");
+        assert!(!goes(&launch(serde_json::json!({ "project_id": "root" })), true), "root by name");
+        assert!(!goes(&launch(serde_json::json!({ "project_id": null, "host_session": true })), true), "the Host session");
+        assert!(!goes(&launch(serde_json::json!({ "tmux_session": null })), true), "not persisted by the window");
+        assert!(!goes(&launch(serde_json::json!({ "cmd": "ssh" })), true), "remote");
+        assert!(!goes(&launch(serde_json::json!({ "cmd": "docker" })), true), "container");
+        let opts = launch(serde_json::json!({}));
+        assert!(!routes_through_host(&host_route_facts(&opts, true, true, || false)), "persist_local_sessions off");
+        let off = host_route_facts(&opts, true, false, || panic!("the setting is not read while the flag is off"));
+        assert!(!routes_through_host(&off));
+    }
+
+    /// A tab the host would take while its setting is off: a live session
+    /// is attached to, never duplicated; a mute host fails closed; no host
+    /// (or no session) runs in-process; a routed tab never probes.
+    #[test]
+    fn a_tab_whose_session_outlived_the_setting_reattaches_or_fails_closed() {
+        use crate::services::session_host::route::RouteFacts;
+        let on = RouteFacts {
+            flag_on: true, persist_local: true, has_session: true, local: true, ai: true, root_scope: false, host_session: false,
+        };
+        let off = RouteFacts { flag_on: false, ..on };
+        let never = |_: &str| -> Result<bool, String> { panic!("no probe") };
+        assert_eq!(host_launch_via(&on, Some("s"), never), Ok(HostVia::Wrap));
+        assert_eq!(host_launch_via(&off, Some("s"), |n| Ok(n == "s")), Ok(HostVia::AttachOnly));
+        assert_eq!(host_launch_via(&off, Some("s"), |_| Ok(false)), Ok(HostVia::InProcess));
+        let mute = host_launch_via(&off, Some("s"), |_| Err("no answer".into())).unwrap_err();
+        assert!(mute.starts_with(crate::services::session_host::route::ERR_SILENT), "{mute}");
+        assert_eq!(host_launch_via(&RouteFacts { ai: false, ..off }, Some("s"), never), Ok(HostVia::InProcess), "a shell");
+        assert_eq!(host_launch_via(&off, None, never), Ok(HostVia::InProcess));
+    }
+
     #[test]
     fn a_sign_in_is_not_an_ai_spawn() {
         let opts = |cmd: &str, args: &[&str]| PtyOptions {
@@ -1658,6 +1870,7 @@ mod tests {
             env: HashMap::new(), cwd: "/p".into(), cols: 80, rows: 24, local_only: false, sandbox: false,
             agent: true, project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None,
             host_bound_uid: None, local_model: false, schedule_target_id: None, host_session: false, api_key: None,
+            mux_wrapped: false,
         };
         assert!(is_ai_spawn(&opts("claude", &[])));
         assert!(is_ai_spawn(&opts("claude", &["--resume", "x"])));
@@ -1694,9 +1907,10 @@ mod tests {
             cols: 80, rows: 24, local_only: false, sandbox: false, agent: true, project_id: None,
             remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
             local_model: false, schedule_target_id: None, host_session: false, api_key: None,
+            mux_wrapped: false,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, live_turn: None, drop_dir: None, ai: true, mcp_spawn_guard: None,
+            opts, named: false, interrupted: false, resting: false, live_turn: None, checkpoint_key: None, drop_dir: None, ai: true, host_attach_only: false, mcp_spawn_guard: None,
             resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, privacy_check: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
@@ -1788,6 +2002,19 @@ mod tests {
             FenceDecision::Unavailable,
         ] {
             assert_eq!(push_fence_scope(&decision, true, "p1"), None, "{decision:?}");
+        }
+        // 2442g: only the fence-less platform's accepted local agent may have
+        // its approved hook run on the host.
+        assert!(push_unfenced_host(&FenceDecision::NotApplicable { reason: "platform" }, true));
+        assert!(!push_unfenced_host(&FenceDecision::NotApplicable { reason: "platform" }, false), "ssh or docker");
+        for decision in [
+            fenced,
+            FenceDecision::NotApplicable { reason: HOST_SESSION_REASON },
+            FenceDecision::NotApplicable { reason: "container" },
+            FenceDecision::PlatformUnaccepted,
+            FenceDecision::Unavailable,
+        ] {
+            assert!(!push_unfenced_host(&decision, true), "{decision:?}");
         }
     }
 
@@ -1881,6 +2108,26 @@ mod tests {
         assert_eq!(env[crate::app_env!("TAB_UID")], "uid-1");
         assert_eq!(env[crate::app_env!("LOCAL_MODEL")], "qwen3:8b");
         assert_eq!(env["VIBE_HOME"], "/home/u/.vibe-local");
+    }
+
+    /// 2442d review: the marker that makes the Windows shim step aside for a
+    /// CLI an agent starts itself is Tabtivity's alone — a planted one would
+    /// hand a shell tab the real CLI in the user's own home — and is set on
+    /// both spawns that run an agent unfenced in a home of its own (the Host
+    /// session and the fence-less platform's agent tab), on Windows only.
+    #[test]
+    fn the_unfenced_agent_marker_is_set_by_the_spawn_and_only_on_windows() {
+        let marker = crate::services::agent_shim::UNFENCED_ENV;
+        let incoming = HashMap::from([(marker.to_string(), "planted".to_string())]);
+        let mut env = own_env(incoming, "p1", None);
+        assert!(!env.contains_key(marker), "a planted marker must not survive");
+        mark_unfenced_agent(&mut env);
+        let want = cfg!(windows).then(|| crate::services::agent_bin::bin_dir().to_string_lossy().into_owned());
+        assert_eq!(env.get(marker), want.as_ref(), "the shim directory on Windows, nothing elsewhere");
+        let source = include_str!("launch_prep.rs");
+        let start = source.find("pub async fn prepare(").expect("prepare");
+        let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+        assert_eq!(body.matches("mark_unfenced_agent(&mut opts.env);").count(), 2, "the Host session arm and the platform arm");
     }
 
     #[test]
@@ -2265,6 +2512,7 @@ mod tests {
             schedule_target_id: Some("sched".into()),
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         }
     }
 

@@ -513,7 +513,9 @@ fn the_tools_lane_carries_the_cockpit_help_and_markup_and_nothing_else() {
     let has = |name: &str| seen[0].headers.iter().any(|(k, v)| k.eq_ignore_ascii_case(name) && !v.is_empty());
     assert!(has("authorization") && has("mcp-session-id") && has("accept"));
     assert!(!has("cookie"));
-    for path in ["/mcp/web", "/mcp/git", "/mcp/schedule", "/mcp", "/mcp/", "/mcp/other", "/mcp/cockpit/x", "/api/chat", "/mcp/%63ockpit"] {
+    // The tab messages lane is not carried either: a cut tab gets no grant
+    // (`root_mcp::grant_lanes`), and the relay refuses the path besides.
+    for path in ["/mcp/web", "/mcp/git", "/mcp/schedule", "/mcp/tabs", "/mcp/print", "/mcp", "/mcp/", "/mcp/other", "/mcp/cockpit/x", "/api/chat", "/mcp/%63ockpit"] {
         let a = post(rig.addr, path, "{}");
         assert!(a.status == 403 || a.status == 400, "{path}: {}", a.status);
     }
@@ -693,7 +695,8 @@ fn route_decisions() {
     assert_eq!(policy::mcp_route("POST", "/mcp/cockpit").unwrap(), "/mcp/cockpit");
     assert_eq!(policy::mcp_route("POST", "/mcp/web").unwrap_err().status, 403);
     assert_eq!(policy::mcp_route("GET", "/mcp/help").unwrap_err().status, 405);
-    assert!(!policy::MCP_ALLOWED.iter().any(|p| ["/mcp", "/mcp/web", "/mcp/git", "/mcp/schedule"].contains(p)));
+    assert_eq!(policy::mcp_route("POST", "/mcp/tabs").unwrap_err().status, 403);
+    assert!(!policy::MCP_ALLOWED.iter().any(|p| ["/mcp", "/mcp/web", "/mcp/git", "/mcp/schedule", "/mcp/tabs"].contains(p)));
 }
 
 #[test]

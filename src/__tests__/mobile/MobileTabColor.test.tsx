@@ -178,7 +178,7 @@ describe("Mobile bridge — colouring a tab", () => {
 /** Colour lives in the card's ⋯ sheet. */
 async function openColour(name: string) {
   fireEvent.click(await screen.findByRole("button", { name: `More for ${name}` }));
-  fireEvent.click(within(screen.getByRole("dialog", { name })).getByRole("button", { name: "Colour…" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name })).getByRole("button", { name: "Colour" }));
 }
 
 describe("Mobile project screen — the row's colour", () => {
@@ -222,7 +222,7 @@ describe("Mobile project screen — the row's colour", () => {
     for (const name of ["Claude", "Shell"]) {
       fireEvent.click(await screen.findByRole("button", { name: `More for ${name}` }));
       const sheet = screen.getByRole("dialog", { name });
-      expect(within(sheet).getByRole("button", { name: "Colour…" })).toBeTruthy();
+      expect(within(sheet).getByRole("button", { name: "Colour" })).toBeTruthy();
       fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
     }
     const cards = container.querySelectorAll(".tab-card");

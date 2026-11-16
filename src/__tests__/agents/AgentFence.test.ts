@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AGENT_FENCE_DEFAULT_PATHS,
+  AGENT_FENCE_MACOS_PATHS,
+  agentFenceDefaultPaths,
   agentFenceInstallCommand,
   agentFenceMarkLevel,
   agentFenceReasonKey,
@@ -78,5 +80,15 @@ describe("agent fence settings paths", () => {
       "~/.gitconfig",
       "~/.config/git",
     ]);
+  });
+
+  // 2442z: a Mac host adds its toolchain homes, in the backend's order.
+  it("adds the Mac toolchain homes on a Mac host only", () => {
+    expect(agentFenceDefaultPaths("linux")).toEqual([...AGENT_FENCE_DEFAULT_PATHS]);
+    expect(agentFenceDefaultPaths("windows")).toEqual([...AGENT_FENCE_DEFAULT_PATHS]);
+    const mac = agentFenceDefaultPaths("macos");
+    expect(mac.slice(0, AGENT_FENCE_DEFAULT_PATHS.length)).toEqual([...AGENT_FENCE_DEFAULT_PATHS]);
+    expect(mac.slice(AGENT_FENCE_DEFAULT_PATHS.length)).toEqual([...AGENT_FENCE_MACOS_PATHS]);
+    expect(mac).toContain("~/Library/pnpm");
   });
 });

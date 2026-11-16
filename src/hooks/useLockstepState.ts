@@ -37,7 +37,14 @@ export function useLockstepState(projectId: string | null | undefined, active: b
   useTauriListener(
     () =>
       listen<{ projectId: string; state: LockstepSummary }>("git-peer-status", (e) => {
-        if (active && e.payload.projectId === projectId) setState(e.payload.state);
+        if (!active || e.payload.projectId !== projectId) return;
+        const next = e.payload.state;
+        // The poll re-emits every 12 s: an unchanged answer re-renders nothing.
+        setState((prev) =>
+          prev && prev.enabled === next.enabled && prev.status === next.status && prev.detail === next.detail
+            ? prev
+            : next,
+        );
       }),
     [projectId, active],
   );

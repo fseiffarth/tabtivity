@@ -138,8 +138,11 @@ function moved(state: KeySelectState, geo: KeySelectGeometry, key: KeySelectKey)
 
 /** Apply one keydown. Movement with Shift held extends (or starts) the
  *  selection; `v` / `V` toggle a character / line selection at the cursor. */
-export function keySelectStep(state: KeySelectState, key: KeySelectKey, geo: KeySelectGeometry): KeySelectStep {
-  if (key.metaKey) return { kind: "ignore" };
+export function keySelectStep(state: KeySelectState, key: KeySelectKey, geo: KeySelectGeometry, mac = false): KeySelectStep {
+  // On a Mac ⌘ is the primary modifier (2442x): ⌘C copies and ⌘X leaves, as
+  // Ctrl does elsewhere; any other ⌘ chord is not this mode's.
+  if (key.metaKey && !(mac && /^[cCxX]$/.test(key.key))) return { kind: "ignore" };
+  const primary = key.ctrlKey || (mac && key.metaKey);
   switch (key.key) {
     case "Escape":
     case "q":
@@ -151,11 +154,11 @@ export function keySelectStep(state: KeySelectState, key: KeySelectKey, geo: Key
     case "C":
       // Ctrl+C (and Ctrl+Shift+C) copies here: nothing typed in this mode
       // reaches the program, so it cannot mean "interrupt".
-      return key.ctrlKey ? { kind: "copy" } : { kind: "ignore" };
+      return primary ? { kind: "copy" } : { kind: "ignore" };
     case "x":
     case "X":
       // The chord that entered the mode leaves it again.
-      return key.ctrlKey ? { kind: "exit" } : { kind: "ignore" };
+      return primary ? { kind: "exit" } : { kind: "ignore" };
     case "v":
       return { kind: "move", state: { ...state, anchor: state.anchor && !state.lines ? null : { ...state.cursor }, lines: false } };
     case "V":

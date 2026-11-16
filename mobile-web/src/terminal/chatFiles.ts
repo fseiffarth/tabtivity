@@ -6,8 +6,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { findPathCandidates } from "../../../src/lib/terminal/pathCandidates";
-import { describeNamedFiles, getChanges, type ChatChanges, type OutboxFile, type PhoneMarkupFile } from "../api";
+import { describeNamedFiles, getChanges, type ChatChanges, type OutboxFile, type PhoneMarkupFile, type TranscriptEntry } from "../api";
+import { inboxLeaves } from "./inboxRefs";
 import { startVisiblePoll } from "../visiblePoll";
+
+/** The inbox leaves the chat's prompts name: what the phone sent the agent. */
+export function promptLeavesOf(entries: readonly TranscriptEntry[]): string[] {
+  return [...new Set(entries.flatMap((entry) => entry.kind === "prompt" ? inboxLeaves(entry.text) : []))];
+}
+
+/** The answers whose words can name files: settled ones, not questions. */
+export function answerTextsOf(entries: readonly TranscriptEntry[]): string[] {
+  return entries.filter((entry) => entry.kind === "answer" && !entry.queued && !entry.questions?.length).map((entry) => entry.text);
+}
 
 /** Paths asked about at once: each is a line of the request's query. */
 const BATCH = 32;

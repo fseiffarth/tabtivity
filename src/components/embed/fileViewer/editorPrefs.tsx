@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { copilotServes } from "../../../lib/viewers/completion/copilotCompletionProvider";
 import { isProseLang } from "../../../lib/viewers/completion/autocomplete";
@@ -11,7 +11,7 @@ import { languageForPath } from "../../../lib/viewers/highlight";
 import { useOllamaStatus } from "../../../lib/ollamaStatus";
 import { type InternalViewer } from "../../../lib/viewers/fileUtils";
 import { UntestedTag } from "../../common/UntestedTag";
-import { type AutocompleteMode, type AutocompleteTrigger } from "../../../types";
+import { type AutocompleteMode, type AutocompleteTrigger, type Settings } from "../../../types";
 import { useFileScope } from "../../../lib/files/fileAccess";
 import { useChordHint } from "../../../lib/shortcuts/shortcutHint";
 import { useI18nStore, useT } from "../../../lib/i18n";
@@ -52,6 +52,8 @@ export function useViewerPref(type: InternalViewer) {
 export interface TabAiPrefs {
   ac: {
     enabled: boolean; preferred?: string; preferredProse?: string; mode: AutocompleteMode;
+    /** The `autocomplete` role itself (`preferred` folds the default model in). */
+    role?: string;
     /** Unset: the provider's default ({@link effectiveAcTrigger}). */
     trigger?: AutocompleteTrigger;
   };
@@ -64,6 +66,20 @@ export interface TabAiPrefs {
   toggleSpelling: () => void;
   setMode: (m: AutocompleteMode) => void;
   setTrigger: (t: AutocompleteTrigger) => void;
+}
+
+/** The automatic trigger's idle delays the AI menu offers, in ms. */
+export const AC_DELAY_CHOICES = [100, 200, 400, 600, 1200] as const;
+/** The delay when none is stored (or a stored one is not a choice). A local
+ *  model costs nothing but the machine, so it waits for a short pause; Copilot
+ *  answers fast, and its default trigger is "on request" anyway. */
+export const AC_DEFAULT_DELAY_MS = { ollama: 600, copilot: 200 } as const;
+
+/** The idle delay for the provider serving a tab, from `autocomplete_delay_ms`. */
+export function acDelayMs(stored: Settings["autocomplete_delay_ms"], copilot: boolean): number {
+  const key = copilot ? "copilot" : "ollama";
+  const value = stored?.[key];
+  return (AC_DELAY_CHOICES as readonly number[]).includes(value ?? NaN) ? value! : AC_DEFAULT_DELAY_MS[key];
 }
 
 /** A tab's trigger, or the provider's default: Copilot asks only on request
@@ -162,9 +178,16 @@ export function useTabAiPrefs(tabKey: string | undefined, type: InternalViewer):
     [persist],
   );
   const trigger = override.trigger;
+  // One object per change, not per render: the editor's request callback and
+  // its idle timer depend on it, so a fresh object restarted the debounce on
+  // every parent re-render.
+  const ac = useMemo(
+    () => ({ enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, role: acRole, mode, trigger }),
+    [autocomplete, acPreferred, acProseRole, acRole, mode, trigger],
+  );
 
   return {
-    ac: { enabled: autocomplete, preferred: acPreferred, preferredProse: acProseRole, mode, trigger },
+    ac,
     sc: { enabled: spelling, language: spellLanguage },
     autocomplete,
     spelling,
@@ -215,6 +238,8 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
   const provider = useSettingsStore((s) => s.settings?.code_completion_provider ?? "ollama");
   const policy = useSettingsStore((s) => (scope ? s.settings?.completion_project_policies?.[scope] : undefined));
   const trigger = effectiveAcTrigger(ai.trigger, copilot);
+  const delays = useSettingsStore((s) => s.settings?.autocomplete_delay_ms);
+  const delay = acDelayMs(delays, copilot);
   // Why the chosen provider is silent here; the backend gates the same way.
   const note = !ai.autocomplete ? null
     : enabled && provider === "copilot" && !copilot
@@ -279,6 +304,22 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
               { value: "manual", label: t("fileViewer.autocompleteTriggerManual") },
             ]}
           />
+          {trigger === "auto" && (
+            <>
+              <Dropdown
+                className="file-viewer-ai-mode"
+                value={String(delay)}
+                title={t("fileViewer.autocompleteDelayTitle")}
+                onChange={(v) => void useSettingsStore.getState().updateSettings({
+                  autocomplete_delay_ms: { ...delays, [copilot ? "copilot" : "ollama"]: Number(v) },
+                })}
+                options={AC_DELAY_CHOICES.map((ms) => ({
+                  value: String(ms), label: t("fileViewer.autocompleteDelayOption", { ms }),
+                }))}
+              />
+              <UntestedTag id="fileViewer.autocompleteDelay" />
+            </>
+          )}
           {!copilot && (
             <Dropdown
               className="file-viewer-ai-mode"

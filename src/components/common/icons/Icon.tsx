@@ -474,6 +474,16 @@ export function WindowIcon(p: IconProps) {
   );
 }
 
+/** A window with its left column marked off — show or hide a side list. */
+export function SidebarIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="1.5" />
+      <path d="M9.5 4.5v15" />
+    </Frame>
+  );
+}
+
 /** A screen with an arrow leaving it to the right — "move to the next monitor". */
 export function NextScreenIcon(p: IconProps) {
   return (
@@ -998,6 +1008,28 @@ export function RingIcon(p: IconProps) {
   return (
     <Frame {...p}>
       <circle cx="12" cy="12" r="4.4" />
+    </Frame>
+  );
+}
+
+/** ⓘ — information: a ring with an "i". */
+export function InfoIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5.2" />
+      <circle cx="12" cy="7.9" r="1.05" fill="currentColor" stroke="none" />
+    </Frame>
+  );
+}
+
+/** Two sliders — filters. */
+export function FilterIcon(p: IconProps) {
+  return (
+    <Frame {...p}>
+      <path d="M4 8h9M17 8h3M4 16h3M11 16h9" />
+      <circle cx="15" cy="8" r="2" />
+      <circle cx="9" cy="16" r="2" />
     </Frame>
   );
 }

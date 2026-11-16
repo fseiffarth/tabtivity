@@ -3,7 +3,10 @@
  *
  * Every experimental feature is **off until someone ticks it**, except the few
  * in `ON_BY_DEFAULT_FLAGS` (mail, Tabby, project remarks; user decision
- * 2026-10-26, so a fresh install shows them): the flag is a tri-state, an
+ * 2026-10-26, so a fresh install shows them). Mail and Tabby are no longer
+ * experiments at all (user decision 2026-11-15): their switches live on their
+ * own Settings pages (Mail, Tabby), not under Experimental, and they stay in
+ * this list only so the one tri-state rule reads them. The flag is a tri-state, an
  * explicit value is the answer, and an unset flag is its default — Debug mode
  * included. A feature that is still moving needs to be invisible to someone
  * using Tabtivity to work, and Debug mode is now just Debug mode: turning it on
@@ -22,7 +25,7 @@
  * on, the legacy branch is dead.
  *
  * `terminal_webgl` was never carried by Debug mode (it rides the GPU/driver path
- * and is opt-in everywhere), so the migration leaves it unset. `gpu_compositing`
+ * and is opt-in everywhere but Windows, where it is always on), so the migration leaves it unset. `gpu_compositing`
  * is held to the same rule: it switches WebKit's renderer and has crash history.
  *
  * An explicit value always wins, in both directions: a user can opt into one
@@ -56,6 +59,7 @@
  * (`stores/tabs`'s `loadFromLayout`).
  */
 
+import { IS_WINDOWS } from "./platform";
 import { useSettingsStore } from "../stores/settings";
 import type { Settings } from "../types";
 import type { TabKind } from "../stores/tabs";
@@ -73,6 +77,8 @@ export const EXPERIMENTAL_FLAGS = [
   "copilot_completion",
   "assistant",
   "voice_hands_free",
+  "windows_session_host",
+  "turn_checkpoints",
 ] as const;
 
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number];
@@ -92,12 +98,19 @@ export function experimentalEnabled(
   flag: ExperimentalFlag,
 ): boolean {
   // WebGL can fall back to software rendering (notably while DMABUF is disabled),
-  // which makes a visible terminal slower rather than faster. Keep the renderer
-  // opt-in until that platform path is dependable; an explicit true still wins.
+  // which makes a visible terminal slower rather than faster. That is the Linux
+  // WebKitGTK path, so the renderer stays opt-in there (and on macOS, unverified);
+  // an explicit true still wins. A Windows webview (WebView2) renders WebGL
+  // dependably, so there it is always on and Settings shows no switch — a
+  // terminal whose WebGL fails still demotes itself (TerminalView's ladder).
+  if (flag === "terminal_webgl" && IS_WINDOWS) return true;
   if (flag === "terminal_webgl" && settings?.terminal_webgl == null) return false;
   // Same rule for the GPU renderer switch (the backend's `gpu_compositing()` is
   // a strict `unwrap_or(false)` too).
   if (flag === "gpu_compositing" && settings?.gpu_compositing == null) return false;
+  // And for the Windows session host: it moves agent tabs into another
+  // process, so unset is off everywhere (the backend's `flag_on` is strict too).
+  if (flag === "windows_session_host" && settings?.windows_session_host == null) return false;
   if (settings == null) return false;
   const explicit = settings[flag];
   if (explicit != null) return explicit;
@@ -107,8 +120,11 @@ export function experimentalEnabled(
 }
 
 /** The flags an unmarked Debug-mode profile had on without a tick: every one but
- *  `terminal_webgl` and `gpu_compositing`, which Debug mode never carried. */
-const DEBUG_CARRIED_FLAGS = EXPERIMENTAL_FLAGS.filter((f) => f !== "terminal_webgl" && f !== "gpu_compositing");
+ *  `terminal_webgl`, `gpu_compositing` and `windows_session_host`, which Debug
+ *  mode never carried. */
+const DEBUG_CARRIED_FLAGS = EXPERIMENTAL_FLAGS.filter(
+  (f) => f !== "terminal_webgl" && f !== "gpu_compositing" && f !== "windows_session_host",
+);
 
 /**
  * The one-shot patch that moves a profile onto the explicit rule without

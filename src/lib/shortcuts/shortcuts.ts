@@ -565,7 +565,9 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
  */
 export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
   if (isLoneModifier(e.key)) return null;
-  const chord: ChordDescriptor = { key: normalizeKey(eventKey(e)) };
+  // ⌥ + a letter on a Mac: store the letter, not the character Option typed.
+  const optionLetter = IS_MAC && e.altKey && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : null;
+  const chord: ChordDescriptor = { key: optionLetter ?? normalizeKey(eventKey(e)) };
   // AltGr: Windows adds Ctrl+Alt to it, which `chordMatches` ignores for an
   // AltGr chord — so they are not stored either.
   if (e.getModifierState?.("AltGraph")) {
@@ -596,7 +598,9 @@ export function chordFromEvent(e: KeyboardEvent): ChordDescriptor | null {
  */
 export function chordMatches(chord: ChordDescriptor, e: ChordKeyEvent): boolean {
   if (!chord.key || chord.key === LONE_SUPER.key) return false;
-  if (normalizeKey(eventKey(e)) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e)) return false;
+  if (normalizeKey(eventKey(e)) !== normalizeKey(chord.key) && !isDigitKeyOf(chord.key, e) && !isOptionLetterOf(chord.key, e)) {
+    return false;
+  }
   if (e.shiftKey !== !!chord.shift) return false;
   // AltGr chords: only Shift besides AltGr counts (see `ChordDescriptor.altGr`).
   if (chord.altGr) return !!e.getModifierState?.("AltGraph");
@@ -614,6 +618,13 @@ export function chordMatches(chord: ChordDescriptor, e: ChordKeyEvent): boolean 
  *  would make Ctrl+1 unreachable there. */
 function isDigitKeyOf(key: string, e: ChordKeyEvent): boolean {
   return /^[0-9]$/.test(key) && (e.code === `Digit${key}` || e.code === `Numpad${key}`);
+}
+
+/** macOS Option turns a letter into another character (⌥Q types "œ", ⌥⇧W
+ *  "„"), so an Alt+letter chord would never see its letter in `e.key` there:
+ *  with Option held on a Mac a letter chord matches by physical key (2442x). */
+export function isOptionLetterOf(key: string, e: ChordKeyEvent, mac: boolean = IS_MAC): boolean {
+  return mac && e.altKey && /^[a-z]$/.test(normalizeKey(key)) && e.code === `Key${key.toUpperCase()}`;
 }
 
 /** The fields a chord match reads — a DOM event or a React one both fit. */
@@ -679,6 +690,15 @@ function prettyKey(key: string): string {
  *  go through `useChordHint` instead, so a rebinding shows up there. */
 export function modifierLabel(): string {
   return IS_MAC ? "⌘" : "Ctrl";
+}
+
+/** Prose that names the primary modifier the way Linux and Windows print it
+ *  ("Ctrl+click", German "Strg+C"), shown as a Mac user presses it (2442x):
+ *  on macOS each standalone "Ctrl"/"Strg" becomes "⌘", the key `chordMatches`
+ *  takes for it there. Unchanged elsewhere. For fixed copy that cannot go
+ *  through `chordLabel`; a rebindable chord should use `useChordHint`. */
+export function forPlatformKeys(text: string, mac: boolean = IS_MAC): string {
+  return mac ? text.replace(/\b(?:Ctrl|Strg)\b/g, "⌘") : text;
 }
 
 /** The default project-cycle chords as prose names them ({cycle} /
@@ -1202,6 +1222,7 @@ export const STEERING_KEYS: SteeringKeyDef[] = [
   { actions: ["viewMode"], labelKey: "steering.changes.layout.label", descKey: "steering.changes.layout.desc", levels: ["scroll"], when: "inChanges", group: "act" },
   { actions: ["viewOpen"], labelKey: "steering.changes.open.label", descKey: "steering.changes.open.desc", levels: ["scroll"], when: "inChanges", group: "act" },
   { actions: ["viewOpenAlt"], labelKey: "steering.changes.openDiff.label", descKey: "steering.changes.openDiff.desc", levels: ["scroll"], when: "inChanges", group: "act" },
+  { actions: ["viewNote"], labelKey: "steering.changes.note.label", descKey: "steering.changes.note.desc", levels: ["scroll"], when: "inChanges", group: "act" },
   // -- inside Diffs: end
   // Inside the Reader's Files view (`when: "inFiles"`, levels ["scroll"]); the
   // Files step fills this block.

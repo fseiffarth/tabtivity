@@ -66,6 +66,28 @@ describe(`${BRAND.display} Mobile setup guide`, () => {
     expect(dialog.querySelectorAll(".how-to-start-step")).toHaveLength(6);
   });
 
+  // 2442s: on a Mac the CLI is inside Tailscale.app, on no PATH — the button
+  // runs the line the backend resolved, the guide still shows the plain one.
+  it("runs the Tailscale CLI the backend resolved", async () => {
+    const bundled = "'/Applications/Tailscale.app/Contents/MacOS/Tailscale' serve --bg http://127.0.0.1:8742";
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "mobile_tailscale_serve_command") {
+        expect(args).toEqual({ port: 8742 });
+        return bundled;
+      }
+      return undefined;
+    });
+    const user = userEvent.setup();
+    render(<MobileIndicator />);
+    await user.click(screen.getByRole("button", { name: `${BRAND.display} Mobile is not set up` }));
+    expect(screen.getByText("tailscale serve --bg http://127.0.0.1:8742")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Set up in terminal" }));
+    const question = await screen.findByRole("dialog", { name: "Set up in terminal" });
+    expect(question.textContent).toContain(bundled);
+    await user.click(within(question).getByRole("button", { name: "Set up in terminal" }));
+    expect((useTabsStore.getState().tabsByScope.root ?? [])[0].initialInput).toBe(bundled);
+  });
+
   it("is hidden entirely when the header widget is switched off", () => {
     useSettingsStore.setState({ settings: { mobile_indicator: false } as Settings, loaded: true });
     render(<MobileIndicator />);

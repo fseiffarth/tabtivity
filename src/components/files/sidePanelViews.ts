@@ -3,6 +3,7 @@ import type { TranslationKey } from "../../lib/i18n";
 import {
   RailAgentsIcon,
   RailAppsIcon,
+  RailArchiveIcon,
   RailAssistantIcon,
   RailClisIcon,
   RailDivergedIcon,
@@ -34,6 +35,7 @@ export const SIDE_PANEL_VIEWS: ReadonlyArray<SidePanelViewDef> = [
   { view: "clis", labelKey: "cliOverview.tab", Icon: RailClisIcon },
   { view: "orange", labelKey: "projectFilesView.tabDiverged", Icon: RailDivergedIcon },
   { view: "sessions", labelKey: "projectFilesView.tabSessions", Icon: RailSessionsIcon },
+  { view: "archive", labelKey: "tabArchive.tab", Icon: RailArchiveIcon },
   { view: "jobs", labelKey: "projectFilesView.tabJobs", Icon: RailJobsIcon },
   { view: "remarks", labelKey: "projectFilesView.tabRemarks", Icon: RailRemarksIcon },
   { view: "todo", labelKey: "projectFilesView.tabTodo", Icon: RailTodoIcon },

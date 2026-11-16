@@ -91,3 +91,71 @@ describe("visibleRuns", () => {
     expect(visibleRuns([shown], pixels, 0)).toEqual([]);
   });
 });
+
+describe("visibleRuns, buffers reused between runs", () => {
+  /** The check as it was written with fresh buffers per run and `indexOf` of
+   *  the maximum: the background is each channel's first commonest value. */
+  function reference(run: TextRun, { width, height, data }: PagePixels, scale: number): boolean {
+    if (!(run.h >= MIN_VISIBLE_EM) || !(run.w > 0)) return false;
+    const x0 = Math.max(0, Math.floor(run.x * scale));
+    const x1 = Math.min(width, Math.ceil((run.x + run.w) * scale));
+    const y0 = Math.max(0, Math.floor((run.y + 0.1 * run.h) * scale));
+    const y1 = Math.min(height, Math.ceil((run.y + 0.95 * run.h) * scale));
+    if (!(x1 > x0 && y1 > y0)) return false;
+    const counts = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
+    for (let y = y0; y < y1; y++) {
+      for (let i = (y * width + x0) * 4, end = (y * width + x1) * 4; i < end; i += 4) {
+        counts[0][data[i]]++;
+        counts[1][data[i + 1]]++;
+        counts[2][data[i + 2]]++;
+      }
+    }
+    const bg = counts.map((count) => count.indexOf(Math.max(...count)));
+    const needed = Math.max(2, Math.ceil(0.02 * (x1 - x0) * (y1 - y0)));
+    let ink = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let i = (y * width + x0) * 4, end = (y * width + x1) * 4; i < end; i += 4) {
+        const off = Math.max(Math.abs(data[i] - bg[0]), Math.abs(data[i + 1] - bg[1]), Math.abs(data[i + 2] - bg[2]));
+        if (off > 40 && ++ink >= needed) return true;
+      }
+    }
+    return false;
+  }
+
+  it("decides every run as the per-run buffers did, ties between backgrounds included", () => {
+    let state = 5;
+    const rand = () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 4294967296;
+    };
+    // Few colours in stripes, so a box often holds two equally common ones.
+    const palette = [0, 30, 70, 255];
+    let kept = 0;
+    let dropped = 0;
+    for (let round = 0; round < 40; round++) {
+      const pixels = blank();
+      const runs: TextRun[] = [];
+      for (let k = 0; k < 16; k++) {
+        const r = run(k % 2 ? "ab" : "cde", 5 + (k % 4) * 70, 5 + Math.floor(k / 4) * 40, { w: 60, h: 12 });
+        runs.push(r);
+        const colours = [0, 1, 2].map(() => palette[Math.floor(rand() * 4)]);
+        const stripe = [2, 3, 4][Math.floor(rand() * 3)];
+        for (let y = 0; y < 40; y++) {
+          for (let x = 0; x < 70; x++) {
+            const v = colours[x % stripe === 0 ? 0 : x % stripe === 1 ? 1 : 2];
+            const i = ((5 + Math.floor(k / 4) * 40 + y) * pixels.width + 5 + (k % 4) * 70 + x) * 4;
+            pixels.data[i] = v;
+            pixels.data[i + 1] = v;
+            pixels.data[i + 2] = v;
+          }
+        }
+      }
+      const got = visibleRuns(runs, pixels, 1);
+      expect(got).toEqual(runs.filter((r) => reference(r, pixels, 1)));
+      kept += got.length;
+      dropped += runs.length - got.length;
+    }
+    expect(kept).toBeGreaterThan(20);
+    expect(dropped).toBeGreaterThan(20);
+  });
+});

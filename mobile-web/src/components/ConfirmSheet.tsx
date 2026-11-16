@@ -1,20 +1,31 @@
 import { useState } from "react";
+import { useT } from "../../../src/lib/i18n";
 import { OptionSheet } from "./OptionSheet";
 
 /** A destructive act waiting on a second tap: the shared option sheet, with
  * one option, in place of `window.confirm` — the same sheet the composer's
  * choices and the calendar's edits use, so a delete looks like the rest of
  * the phone and cannot be reached by a stray tap. */
-export type Confirm = { title: string; note?: string; label: string; run: () => Promise<void> | void };
+export type Confirm = {
+  title: string; note?: string; label: string; run: () => Promise<void> | void;
+  /** `false` for a confirm that loses nothing (sharing a big file): its act is
+   * drawn plain instead of in the danger colour. */
+  danger?: boolean;
+};
 
+/** The act first, in the danger colour; Cancel in a run of its own under it. */
 export function ConfirmSheet({ confirm, busy, onClose }: { confirm: Confirm; busy: boolean; onClose: () => void }) {
+  const t = useT();
   return <OptionSheet
     title={confirm.title}
     note={confirm.note ? { text: confirm.note } : undefined}
-    options={[{ key: "confirm", label: confirm.label, current: false }]}
+    options={[
+      { key: "confirm", label: confirm.label, current: false, danger: confirm.danger !== false, section: "act" },
+      { key: "cancel", label: t("common.cancel"), current: false, section: "cancel" },
+    ]}
     waiting=""
     busy={busy}
-    onPick={() => { void Promise.resolve(confirm.run()).finally(onClose); }}
+    onPick={(key) => { if (key === "cancel") onClose(); else void Promise.resolve(confirm.run()).finally(onClose); }}
     onClose={onClose}
   />;
 }

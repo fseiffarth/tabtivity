@@ -24,6 +24,12 @@ fn main() {
         };
         std::process::exit(app_lib::services::agent_shim::run(cli, rest));
     }
+    // `tabtivity --agent-shim-env <cli>`: the Windows `.cmd` shim's question
+    // — the real CLI and the scope's environment, printed for it to apply.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--agent-shim-env")) {
+        let cli = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(app_lib::services::agent_shim::run_env(&cli));
+    }
     // `tabtivity --local-relay PORT=SOCKET… -- <cli> [args…]`: the command of a
     // fence with no network (`services::local_lane::relay`) — listens on the
     // loopback ports the CLI was configured with, pumps them to the app over
@@ -59,6 +65,33 @@ fn main() {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(app_lib::services::sheet_reader::MODE_FLAG)) {
         let args: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         std::process::exit(app_lib::services::sheet_reader::child_main(&args));
+    }
+    // `tabtivity --session-host`: the Windows session host
+    // (`services::session_host::win::run_host`), started detached by the
+    // first client that finds no pipe; exits once idle. A second one for the
+    // same state dir exits 0 at once.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(app_lib::services::session_host::MODE_FLAG)) {
+        #[cfg(windows)]
+        {
+            let state_dir = app_lib::storage::state_dir();
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("session host runtime");
+            let opts = app_lib::services::session_host::win::HostOptions::default();
+            match runtime.block_on(app_lib::services::session_host::win::run_host(&state_dir, opts)) {
+                Ok(_) => std::process::exit(0),
+                Err(error) => {
+                    eprintln!("{SLUG}-session-host: {error}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            eprintln!("{SLUG}: the session host is Windows-only (tmux serves this platform)");
+            std::process::exit(2);
+        }
     }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--mobile-host")) {
         let state_dir = app_lib::storage::state_dir();

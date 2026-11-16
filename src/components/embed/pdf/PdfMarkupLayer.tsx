@@ -16,20 +16,21 @@
  * of the selection moves them; a lone mark takes a comment in a card). A pen
  * stroke held still at its end snaps to a line or an ellipse (`snapStroke`).
  */
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useT, type TranslationKey } from "../../../lib/i18n";
 import { textMarks } from "../../../../mobile-web/src/markup/anchors";
 import {
-  clampToPage,
+  boxBetween,
   selectionBox,
   eraseAlong,
   eraseAt,
   eraseRect,
   finishStroke,
-  inkWidth,
   markAt,
   markBox,
   marksIn,
+  noteSize,
+  pagePoint,
   marksInLoop,
   MAX_COMMENT,
   moveMarks,
@@ -42,24 +43,19 @@ import {
   straightenStroke,
   stampSize,
   stylusErases,
-  type BoxMark,
   type InkMark,
   type Mark,
-  type MarkColor,
-  type PageLayer,
   PEN_STYLES,
   type PenStyle,
   type StampMark,
   type TextMark,
 } from "../../../../mobile-web/src/markup/layer";
-import { drawMark, drawPage, INK, type Paint } from "../../../../mobile-web/src/markup/rasterize";
+import { CommittedMarks, drawMark, INK, paintLayer, paintStrokePiece } from "../../../../mobile-web/src/markup/rasterize";
 import { colorsFor, eraserPx, inkStyle, penCursor, SNAP_HOLD_MS, SNAP_SLOP_PX, strokePressure, strokeWidth } from "../../../../mobile-web/src/markup/pen";
 import { selectionColors } from "./PdfMarkupBar";
 import { PEN_STYLE_KEYS, SwatchButtons } from "./PdfMarkupDock";
 import type { CommentDraft, MarkupEdit, NoteDraft } from "./usePdfMarkup";
 
-/** How strongly the marks of earlier rounds show — sent, never sent again. */
-export const SENT_ALPHA = 0.35;
 /** The widest the layer canvas is backed at, in device pixels. */
 const MAX_BACKING = 8192;
 /** How far a pointer travels on a note before it is a drag, not a click. */
@@ -120,76 +116,39 @@ type Gesture =
       moved: boolean;
     };
 
-/** The sent marks dimmed, then the unsent ones over them. */
-function paintLayer(ctx: Paint, page: PageLayer | undefined, sent: PageLayer | undefined, scale: number) {
-  if (sent) {
-    ctx.save();
-    ctx.globalAlpha = SENT_ALPHA;
-    drawPage(ctx, sent, scale);
-    ctx.restore();
-  }
-  if (page) drawPage(ctx, page, scale);
-}
 
-function boxOf(a: [number, number], b: [number, number], color: MarkColor): BoxMark {
-  const x = Math.min(a[0], b[0]);
-  const y = Math.min(a[1], b[1]);
-  return { kind: "box", color, rect: [round(x), round(y), round(Math.abs(a[0] - b[0])), round(Math.abs(a[1] - b[1]))] };
-}
 
-/** A pointer's spot on the page, in page units, kept on the page. Measured off
- *  the layer's own box, so it holds at any zoom; `scale` stands in where the
- *  box has no size yet. */
-export function pagePoint(
-  box: { left: number; top: number; width: number; height: number },
-  size: Size,
-  scale: number,
-  clientX: number,
-  clientY: number,
-): [number, number] {
-  const width = box.width || size[0] * scale;
-  const height = box.height || size[1] * scale;
-  return clampToPage(((clientX - box.left) * size[0]) / width, ((clientY - box.top) * size[1]) / height, size);
-}
-
-/** The marks at `indices` of `page` boxed together `[x0, y0, x1, y1]`, or `null`. */
-const boxAround = selectionBox;
-
-/** A dashed outline, white under dark so it shows on any page — the area
- *  eraser's rectangle, the select tool's box and its selection. */
-function dashedRect(ctx: CanvasRenderingContext2D, rect: readonly number[], k: number, dpr: number) {
-  const [x0, y0, x1, y1] = rect.map((v) => v * k);
+/** A dashed outline, white under dark so it shows on any page: `stroke` draws
+ *  the shape with whatever line is set (twice — the white line, then the
+ *  dashed dark one over it). */
+function dashedStroke(ctx: CanvasRenderingContext2D, dpr: number, stroke: () => void, join?: CanvasLineJoin) {
   ctx.save();
+  if (join) ctx.lineJoin = join;
   ctx.lineWidth = 2 * dpr;
   ctx.strokeStyle = "white";
-  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  stroke();
   ctx.setLineDash([4 * dpr, 3 * dpr]);
   ctx.lineWidth = dpr;
   ctx.strokeStyle = "#333";
-  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+  stroke();
   ctx.restore();
+}
+
+/** The area eraser's rectangle, the select tool's box and its selection. */
+function dashedRect(ctx: CanvasRenderingContext2D, rect: readonly number[], k: number, dpr: number) {
+  const [x0, y0, x1, y1] = rect.map((v) => v * k);
+  dashedStroke(ctx, dpr, () => ctx.strokeRect(x0, y0, x1 - x0, y1 - y0));
 }
 
 /** The lasso's loop as it is drawn, dashed like the select tool's box. */
 function dashedLoop(ctx: CanvasRenderingContext2D, loop: readonly [number, number][], k: number, dpr: number) {
   if (loop.length < 2) return;
-  const trace = () => {
+  dashedStroke(ctx, dpr, () => {
     ctx.beginPath();
     ctx.moveTo(loop[0][0] * k, loop[0][1] * k);
     for (const [x, y] of loop.slice(1)) ctx.lineTo(x * k, y * k);
-  };
-  ctx.save();
-  ctx.lineJoin = "round";
-  ctx.lineWidth = 2 * dpr;
-  ctx.strokeStyle = "white";
-  trace();
-  ctx.stroke();
-  ctx.setLineDash([4 * dpr, 3 * dpr]);
-  ctx.lineWidth = dpr;
-  ctx.strokeStyle = "#333";
-  trace();
-  ctx.stroke();
-  ctx.restore();
+    ctx.stroke();
+  }, "round");
 }
 
 /** The selection's resize handle at its bottom-right corner. */
@@ -228,49 +187,22 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   const sent = edit.showSent ? edit.layer.sent?.pages[n] : undefined;
   const selection = edit.selection?.n === n ? edit.selection : null;
   /** The selection's outline, following a move in flight. */
-  const selBox = selection ? boxAround(page, selection.indices) : null;
+  const selBox = selection ? selectionBox(page, selection.indices) : null;
   /** The selection's outline as drawn, padded a little off the marks. */
   const selPad = 3 / scale;
   const selKey = selBox?.join(",") ?? "";
 
   /** The committed marks drawn once, for the length of a gesture that repaints
-   *  the layer on every pointer move (a box, an arrow, a stamp, an area): each
-   *  move then copies this instead of redrawing every mark. Dropped as the
-   *  gesture ends, so it holds no second backing store at rest. */
-  const committed = useRef<{ page: PageLayer | undefined; sent: PageLayer | undefined; w: number; h: number; canvas: HTMLCanvasElement } | null>(null);
-  const dropCommitted = () => {
-    const held = committed.current;
-    if (held) {
-      held.canvas.width = 0;
-      held.canvas.height = 0;
-    }
-    committed.current = null;
-  };
-  /** Paints the committed marks onto `ctx`, from the copy while a gesture is
-   *  in flight. */
-  const paintCommitted = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, k: number, gesturing: boolean) => {
-    if (!gesturing) {
-      dropCommitted();
-      paintLayer(ctx, page, sent, k);
-      return;
-    }
-    let held = committed.current;
-    if (!held || held.page !== page || held.sent !== sent || held.w !== canvas.width || held.h !== canvas.height) {
-      dropCommitted();
-      const copy = document.createElement("canvas");
-      copy.width = canvas.width;
-      copy.height = canvas.height;
-      const copyCtx = copy.getContext("2d");
-      if (!copyCtx) {
-        paintLayer(ctx, page, sent, k);
-        return;
-      }
-      paintLayer(copyCtx, page, sent, k);
-      held = { page, sent, w: canvas.width, h: canvas.height, canvas: copy };
-      committed.current = held;
-    }
-    ctx.drawImage(held.canvas, 0, 0);
-  };
+   *  the layer on every pointer move (a box, an arrow, a stamp, an area, a
+   *  move, a resize, the eraser): each move then copies this and draws only the
+   *  marks the gesture changed. Dropped as the gesture ends, so it holds no
+   *  second backing store at rest. */
+  const committed = useRef(new CommittedMarks());
+  /** The page and its sent marks as they stood before a gesture changed them. */
+  const basePage = edit.base.pages[n];
+  const baseSent = edit.showSent ? edit.base.sent?.pages[n] : undefined;
+  /** A gesture is changing this page: it repaints from the copy. */
+  const repainting = preview.length > 0 || area !== null || loop !== null || page !== basePage || sent !== baseSent;
 
   const redraw = () => {
     const canvas = canvasRef.current;
@@ -278,7 +210,12 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     if (!canvas || !ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const k = canvas.width / size[0];
-    paintCommitted(ctx, canvas, k, preview.length > 0 || area !== null || loop !== null);
+    if (repainting) {
+      committed.current.paint(ctx, canvas, page, basePage, sent, k);
+    } else {
+      committed.current.drop();
+      paintLayer(ctx, page, sent, k);
+    }
     if (preview.length) {
       ctx.save();
       ctx.scale(k, k);
@@ -296,18 +233,24 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = pixelW;
-    canvas.height = pixelH;
+    // Setting a size reallocates the backing store even when unchanged:
+    // only on a resize, not on every preview move (`redraw` clears).
+    if (canvas.width !== pixelW) canvas.width = pixelW;
+    if (canvas.height !== pixelH) canvas.height = pixelH;
     redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, sent, preview, area, loop, selKey, pixelW, pixelH]);
+  // A committed gesture leaves the page as it was drawn last: only the copy goes.
+  useEffect(() => {
+    if (!repainting) committed.current.drop();
+  }, [repainting]);
   // A canvas gives its backing store back the moment it goes; a snap's timer
   // goes with the layer.
   useEffect(
     () => () => {
       const g = gesture.current;
       if (g?.kind === "ink" && g.timer !== null) window.clearTimeout(g.timer);
-      dropCommitted();
+      committed.current.drop();
       const canvas = canvasRef.current;
       if (canvas) {
         canvas.width = 0;
@@ -326,38 +269,11 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
     return size[0] / width;
   };
 
-  /** The newest piece of the stroke in progress, straight onto the canvas:
-   *  the curve from the midpoint before the last sample, through it, to the
-   *  midpoint after it — the curves `rasterize.ts` draws the finished stroke
-   *  with, so nothing jumps when the pen lifts. The first sample is a dot. */
+  /** The newest piece of the stroke in progress, straight onto the canvas. */
   const paintPiece = (mark: InkMark) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
-    const points = mark.points;
-    if (!canvas || !ctx || !points.length) return;
-    const k = canvas.width / size[0];
-    const at = points.length - 1;
-    const mid = (a: readonly number[], b: readonly number[]): [number, number] => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    ctx.save();
-    ctx.scale(k, k);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = INK[mark.color];
-    ctx.beginPath();
-    if (at === 0) {
-      ctx.lineWidth = inkWidth(mark.width, points[0][2]);
-      ctx.moveTo(points[0][0], points[0][1]);
-      ctx.lineTo(points[0][0], points[0][1]);
-    } else {
-      const control = points[at - 1];
-      const from = at >= 2 ? mid(points[at - 2], control) : [control[0], control[1]];
-      const to = mid(control, points[at]);
-      ctx.lineWidth = inkWidth(mark.width, control[2]);
-      ctx.moveTo(from[0], from[1]);
-      ctx.quadraticCurveTo(control[0], control[1], to[0], to[1]);
-    }
-    ctx.stroke();
-    ctx.restore();
+    if (canvas && ctx) paintStrokePiece(ctx, canvas.width / size[0], mark);
   };
 
   /** A real pen's reading bends by the pressure curve; a mouse or a finger
@@ -377,7 +293,9 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
    *  strokes for the area mode. */
   const eraseHow = () => ({ sent: edit.showSent, whole: edit.pen.eraser !== "partial", highlights: edit.pen.eraseHighlights });
   /** A highlighter stroke with Straight lines on is shown — and kept — as its
-   *  straight line. */
+   *  straight line. The preview shows the stroke in progress itself, its
+   *  points still growing: it is painted by the effect right after the move
+   *  and never kept (`finishStroke` builds the mark that is). */
   const straight = edit.tool === "highlight" && edit.pen.straight;
   const shaped = (mark: InkMark): InkMark => (straight ? straightenStroke(mark) : mark);
   const areaOf = (a: [number, number], b: [number, number]): [number, number, number, number] =>
@@ -464,7 +382,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       gesture.current = g;
       if (!straight) holdFor(g);
       if (piecewise) paintPiece(mark);
-      else setPreview([shaped({ ...mark, points: mark.points.slice() })]);
+      else setPreview([shaped(mark)]);
     } else if (edit.tool === "box") {
       gesture.current = { kind: "box", pointerId: event.pointerId, start: at };
     } else if (edit.tool === "textmark") {
@@ -534,11 +452,11 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
         if (pieces && !g.snapped) paintPiece(g.mark);
         g.last = at;
       }
-      if (!pieces && !g.snapped) setPreview([shaped({ ...g.mark, points: g.mark.points.slice() })]);
+      if (!pieces && !g.snapped) setPreview([shaped(g.mark)]);
     } else if (g.kind === "area") {
       setArea(areaOf(g.start, toPage(event.clientX, event.clientY)));
     } else if (g.kind === "box") {
-      setPreview([boxOf(g.start, toPage(event.clientX, event.clientY), edit.color)]);
+      setPreview([boxBetween(g.start, toPage(event.clientX, event.clientY), edit.color)]);
     } else if (g.kind === "textmark") {
       setPreview(textMarksTo(g.start, toPage(event.clientX, event.clientY)));
     } else if (g.kind === "stamp") {
@@ -598,7 +516,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
       if (next !== edit.base) edit.commit(next);
     } else if (g.kind === "box") {
       setPreview([]);
-      const box = boxOf(g.start, toPage(event.clientX, event.clientY), edit.color);
+      const box = boxBetween(g.start, toPage(event.clientX, event.clientY), edit.color);
       if (box.rect[2] >= 2 && box.rect[3] >= 2) edit.add(n, size, box);
     } else if (g.kind === "textmark") {
       setPreview([]);
@@ -646,7 +564,7 @@ export function PdfMarkupLayer({ n, size, scale, edit }: { n: number; size: Size
             index: null,
             text: "",
             color: edit.color,
-            size: Math.min(200, Math.max(4, Math.round(size[0] / 40))),
+            size: noteSize(size[0]),
           };
       edit.openNote(draft);
     }
@@ -758,29 +676,83 @@ function MarkupSelectionBar({ box, scale, pageWidth, edit }: { box: [number, num
 /** The width of the note card, CSS pixels — the remark card's. */
 const CARD_W = 260;
 
-/** The typed note, edited where it sits on the page — the remark card's chrome. */
-function MarkupNoteEditor({ note, scale, pageWidth, edit }: { note: NoteDraft; scale: number; pageWidth: number; edit: MarkupEdit }) {
-  const t = useT();
+/** The card the note and the comment are typed in, on the remark card's
+ *  chrome: where it sits, the keys it keeps from the viewer (Escape lets the
+ *  text be, Enter alone saves it), and the row of actions under `children`. */
+function MarkupCard({ kind, label, left, top, onEscape, onEnter, children, actions }: {
+  kind: "note" | "comment";
+  label: string;
+  left: number;
+  top: number;
+  onEscape: () => void;
+  onEnter: () => void;
+  children: ReactNode;
+  actions: ReactNode;
+}) {
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // The viewer's own keys (undo, page steps, leaving markup) stay out of a
-    // note being typed.
+    // The viewer's own keys (undo, page steps, Delete, leaving markup) stay out
+    // of a card being typed in.
     event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      edit.cancelNote();
+      onEscape();
     } else if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
       event.preventDefault();
-      if (note.text.trim()) edit.saveNote(note.text);
+      onEnter();
     }
   };
   return (
     <div
-      className="file-viewer-pdf-note-card file-viewer-pdf-markup-note"
-      style={{ left: Math.max(0, Math.min(note.at[0] * scale, pageWidth * scale - CARD_W)), top: note.at[1] * scale }}
+      className={`file-viewer-pdf-note-card file-viewer-pdf-markup-${kind}`}
+      style={{ left, top }}
       role="group"
-      aria-label={t("pdfMarkup.noteLabel")}
+      aria-label={label}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={onKeyDown}
+    >
+      {children}
+      <div className="file-viewer-pdf-note-actions">{actions}</div>
+    </div>
+  );
+}
+
+/** The typed note, edited where it sits on the page — the remark card's chrome. */
+function MarkupNoteEditor({ note, scale, pageWidth, edit }: { note: NoteDraft; scale: number; pageWidth: number; edit: MarkupEdit }) {
+  const t = useT();
+  return (
+    <MarkupCard
+      kind="note"
+      label={t("pdfMarkup.noteLabel")}
+      left={Math.max(0, Math.min(note.at[0] * scale, pageWidth * scale - CARD_W))}
+      top={note.at[1] * scale}
+      onEscape={edit.cancelNote}
+      onEnter={() => {
+        if (note.text.trim()) edit.saveNote(note.text);
+      }}
+      actions={
+        <>
+          <button
+            type="button"
+            className="file-viewer-zoom-btn file-viewer-zoom-text"
+            onClick={() => edit.saveNote(note.text)}
+            disabled={!note.text.trim()}
+          >
+            {t("mobile.markup.noteDone")}
+          </button>
+          <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelNote}>
+            {t("mobile.markup.noteCancel")}
+          </button>
+          {note.index !== null && (
+            <button
+              type="button"
+              className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
+              onClick={() => edit.saveNote(null)}
+            >
+              {t("mobile.markup.noteDelete")}
+            </button>
+          )}
+        </>
+      }
     >
       <textarea
         autoFocus
@@ -797,29 +769,7 @@ function MarkupNoteEditor({ note, scale, pageWidth, edit }: { note: NoteDraft; s
       <div className="file-viewer-pdf-markup-colors file-viewer-pdf-markup-note-colors" role="group" aria-label={t("mobile.markup.noteColor")}>
         <SwatchButtons colors={colorsFor("text", "pen")} chosen={note.color} onPick={edit.editNoteColor} />
       </div>
-      <div className="file-viewer-pdf-note-actions">
-        <button
-          type="button"
-          className="file-viewer-zoom-btn file-viewer-zoom-text"
-          onClick={() => edit.saveNote(note.text)}
-          disabled={!note.text.trim()}
-        >
-          {t("mobile.markup.noteDone")}
-        </button>
-        <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelNote}>
-          {t("mobile.markup.noteCancel")}
-        </button>
-        {note.index !== null && (
-          <button
-            type="button"
-            className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
-            onClick={() => edit.saveNote(null)}
-          >
-            {t("mobile.markup.noteDelete")}
-          </button>
-        )}
-      </div>
-    </div>
+    </MarkupCard>
   );
 }
 
@@ -841,25 +791,38 @@ function MarkupCommentEditor({
   const t = useT();
   const [x, y, , h] = markBox(mark);
   const had = mark.kind !== "text" && !!mark.comment;
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // The viewer's own keys (Delete deletes the selection) stay out of it.
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      event.preventDefault();
-      edit.cancelComment();
-    } else if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
-      event.preventDefault();
-      edit.saveComment(comment.text);
-    }
-  };
   return (
-    <div
-      className="file-viewer-pdf-note-card file-viewer-pdf-markup-comment"
-      style={{ left: Math.max(0, Math.min(x * scale, pageWidth * scale - CARD_W)), top: (y + h) * scale + 6 }}
-      role="group"
-      aria-label={t("mobile.markup.comment")}
-      onPointerDown={(event) => event.stopPropagation()}
-      onKeyDown={onKeyDown}
+    <MarkupCard
+      kind="comment"
+      label={t("mobile.markup.comment")}
+      left={Math.max(0, Math.min(x * scale, pageWidth * scale - CARD_W))}
+      top={(y + h) * scale + 6}
+      onEscape={edit.cancelComment}
+      onEnter={() => edit.saveComment(comment.text)}
+      actions={
+        <>
+          <button
+            type="button"
+            className="file-viewer-zoom-btn file-viewer-zoom-text"
+            onClick={() => edit.saveComment(comment.text)}
+            disabled={!comment.text.trim() && !had}
+          >
+            {t("mobile.markup.commentSave")}
+          </button>
+          <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelComment}>
+            {t("mobile.markup.noteCancel")}
+          </button>
+          {had && (
+            <button
+              type="button"
+              className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
+              onClick={() => edit.saveComment(null)}
+            >
+              {t("mobile.markup.commentRemove")}
+            </button>
+          )}
+        </>
+      }
     >
       <textarea
         autoFocus
@@ -871,28 +834,6 @@ function MarkupCommentEditor({
         aria-label={t("mobile.markup.commentPlaceholder")}
         onChange={(event) => edit.editComment(event.target.value)}
       />
-      <div className="file-viewer-pdf-note-actions">
-        <button
-          type="button"
-          className="file-viewer-zoom-btn file-viewer-zoom-text"
-          onClick={() => edit.saveComment(comment.text)}
-          disabled={!comment.text.trim() && !had}
-        >
-          {t("mobile.markup.commentSave")}
-        </button>
-        <button type="button" className="file-viewer-zoom-btn file-viewer-zoom-text" onClick={edit.cancelComment}>
-          {t("mobile.markup.noteCancel")}
-        </button>
-        {had && (
-          <button
-            type="button"
-            className="file-viewer-zoom-btn file-viewer-zoom-text file-viewer-pdf-note-del"
-            onClick={() => edit.saveComment(null)}
-          >
-            {t("mobile.markup.commentRemove")}
-          </button>
-        )}
-      </div>
-    </div>
+    </MarkupCard>
   );
 }

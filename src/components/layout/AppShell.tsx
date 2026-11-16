@@ -58,6 +58,7 @@ import { PrintRequestsHost } from "../printing/PrintRequests";
 import { AgentContinueHost } from "./AgentContinueHost";
 import { AgentCronHost } from "./AgentCronHost";
 import { AgentScheduleHost } from "./AgentScheduleHost";
+import { TabMessagesHost } from "./TabMessagesHost";
 import { TimerLeaseHost } from "./TimerLeaseHost";
 import { WorkspacePatchHost } from "./WorkspacePatchHost";
 import { CalDavConflictDialog } from "../calendar/CalDavConflictDialog";
@@ -96,7 +97,6 @@ import {
   listenDetachedHost,
   shutdownDetachedWindows,
 } from "../../stores/detached";
-import { listenPdfReveal } from "../../stores/viewers/pdfSync";
 import { listenSyncProgress } from "../../stores/remote/sync";
 import { autoConnectVpnOnLaunch } from "../../lib/remote/vpn/vpnAutoConnect";
 import { initRemoteAutoReconnect } from "../../lib/remote/remoteAutoReconnect";
@@ -104,9 +104,7 @@ import { initExperimentalSweep } from "../../lib/experimentalSweep";
 import { migrateExperimentalOnce, useExperimental } from "../../lib/experimental";
 import { initMachineSync } from "../../lib/remote/machineSync";
 import { installWindowsEvents } from "../../stores/windows";
-import { listenEditorJump } from "../../stores/viewers/editorJump";
-import { listenTexCenter } from "../../stores/viewers/texCenter";
-import { listenSourceJump } from "../embed/fileViewer/sourceJump";
+import { listenSourceJump, listenTexPdfChannels } from "../embed/fileViewer/sourceJump";
 import { BOX_SCOPE_PREFIX, useBoxesStore } from "../../stores/boxes";
 import { listenSettingsChanged, useSettingsStore } from "../../stores/settings";
 import { ROOT_SCOPE, activeLayoutPersistTarget, useTabsStore } from "../../stores/tabs";
@@ -124,9 +122,11 @@ import { RailAiSwitch } from "./RailAiSwitch";
 import { sidePanelViewKey, sidePanelViewPatch } from "../../lib/projects/sidePanelView";
 import type { FilesPanelView } from "../../types";
 import { noteTerminalOutputChars } from "../../dev/terminalOutputRate";
-import { BRAND } from "../../lib/brand";
+import { BRAND, MOBILE_HOST_KEY } from "../../lib/brand";
+import { isServerClient } from "../../lib/transport/linkState";
 import { PdfLoadWarningHost } from "./PdfLoadWarningHost";
 import { CheckIcon } from "../common/icons/Icon";
+import { startSessionHostNotices } from "../../lib/terminal/sessionHostNotice";
 
 // Dev-only perf panel (src/dev/). The ternary is statically resolved at build
 // time (`import.meta.env.DEV` → false), so in a shipped bundle the lazy() —
@@ -153,6 +153,9 @@ const HpcPipelineWizardHost = lazy(() =>
 const HowToStart = lazy(() => import("./HowToStart").then((m) => ({ default: m.HowToStart })));
 const RemoteFeaturesPrompt = lazy(() =>
   import("./RemoteFeaturesPrompt").then((m) => ({ default: m.RemoteFeaturesPrompt })),
+);
+const StayAfterQuitPrompt = lazy(() =>
+  import("../mobile/StayAfterQuitPrompt").then((m) => ({ default: m.StayAfterQuitPrompt })),
 );
 const LessonsMenu = lazy(() => import("./LessonsMenu").then((m) => ({ default: m.LessonsMenu })));
 
@@ -327,6 +330,14 @@ export function AppShell() {
   const remoteFeaturesPrompted = useSettingsStore(
     (s) => s.settings?.remote_features_prompted ?? false,
   );
+  // The "keep running when closed?" ask: only with Mobile on (the Mobile host
+  // is what stays running; without it the switch does nothing), only once.
+  const stayAfterQuitAsk = useSettingsStore(
+    (s) =>
+      !!s.settings?.[MOBILE_HOST_KEY]?.enabled &&
+      !s.settings[MOBILE_HOST_KEY]?.stay_after_quit &&
+      !s.settings.stay_after_quit_prompted,
+  );
   const loadBoxes = useBoxesStore((s) => s.load);
   const activeId = useProjectsStore((s) => s.activeId);
   const rootDir = useProjectsStore((s) => s.rootDir);
@@ -395,6 +406,7 @@ export function AppShell() {
   // first — this defers the remote-features ask until HowToStart closes
   // instead of stacking two modals on the very first launch.
   const [pendingRemoteFeaturesPrompt, setPendingRemoteFeaturesPrompt] = useState(false);
+  const [showStayAfterQuitPrompt, setShowStayAfterQuitPrompt] = useState(false);
   const [showLessons, setShowLessons] = useState(false);
   const panelCloseTimer = useRef<number | null>(null);
 
@@ -405,6 +417,9 @@ export function AppShell() {
     // never reaches it (and stays an unhandled rejection, as before).
     void Promise.resolve(loadSettings()).then(() => migrateExperimentalOnce());
     loadProjects();
+    // The session host's fallback event comes once per run, maybe before the
+    // tab's pane exists: record it from the start (`sessionHostNotice`).
+    startSessionHostNotices();
     // Startup window geometry — which monitor, what size, maximized or not — is
     // owned ENTIRELY by the backend now (`restore_main_window` in lib.rs), which
     // reapplies the rect saved by the effect below before the window is ever shown.
@@ -529,6 +544,14 @@ export function AppShell() {
     if (!remoteFeaturesPrompted) {
       setShowRemoteFeaturesPrompt(true);
       void updateSettings({ remote_features_prompted: true });
+      return;
+    }
+    // Last in line, so it never stacks on the asks above: a launch that showed
+    // one of them leaves this one to the next launch. Not in a browser client,
+    // which has no window to close.
+    if (stayAfterQuitAsk && !isServerClient()) {
+      setShowStayAfterQuitPrompt(true);
+      void updateSettings({ stay_after_quit_prompted: true });
     }
   }, [
     settingsLoaded,
@@ -536,6 +559,7 @@ export function AppShell() {
     onboardingSeen,
     projectCount,
     remoteFeaturesPrompted,
+    stayAfterQuitAsk,
     updateSettings,
   ]);
 
@@ -700,25 +724,13 @@ export function AppShell() {
   // write would silently spread its stale copy back over the popout's change.
   useTauriListener(listenSettingsChanged, []);
 
-  // #42: SyncTeX forward search may reveal a PDF that's popped out into a detached
-  // window (a separate webview/store). Listen for cross-window reveal broadcasts
-  // so this window's PdfCanvas reveals the box even when the TeX editor that asked
-  // lives in another window. (The detached window registers its own listener.)
-  useTauriListener(listenPdfReveal, []);
+  // #42: the TeX ↔ PDF channels cross windows (a PDF or an editor may be popped
+  // out into its own webview): apply here what another window broadcast.
+  useTauriListener(listenTexPdfChannels, []);
 
-  // #42: the mirror image — SyncTeX reverse search (Ctrl+click in a popped-out
-  // PDF) lands the source-line jump here, the window that owns the editor layout.
+  // #42: SyncTeX reverse search (Ctrl+click in a popped-out PDF) whose source no
+  // window has open lands here, the window that owns the editor layout.
   useTauriListener(listenSourceJump, []);
-
-  // #42: a reverse-search jump applied in another window (e.g. a detached PDF
-  // that owns its source editor) broadcasts here so an editor for that path in
-  // THIS window scrolls too. Mirror image of the detached window's listener.
-  useTauriListener(listenEditorJump, []);
-
-  // #42: a reverse-search center switch aimed at a TeX workspace mounted in THIS
-  // window (e.g. a popped-out PDF's click resolved in its own window, which does
-  // not render the workspace). The registry-side twin of the two listeners above.
-  useTauriListener(listenTexCenter, []);
 
   useEffect(() => {
     const win = getCurrentWindow();
@@ -1508,6 +1520,7 @@ export function AppShell() {
           <AgentContinueHost />
           <AgentCronHost />
           <AgentScheduleHost />
+          <TabMessagesHost />
       {/* The root console (Ctrl+Shift+R): the root scope as a floating subwindow
           instead of a scope to switch to, and the one overlay onto the root
           terminal — a one-click install (`runInstallInTab`) and a parked login
@@ -1591,6 +1604,9 @@ export function AppShell() {
       </LazyWhen>
       <LazyWhen when={showRemoteFeaturesPrompt}>
         <RemoteFeaturesPrompt onClose={() => setShowRemoteFeaturesPrompt(false)} />
+      </LazyWhen>
+      <LazyWhen when={showStayAfterQuitPrompt}>
+        <StayAfterQuitPrompt onClose={() => setShowStayAfterQuitPrompt(false)} />
       </LazyWhen>
       <LazyWhen when={showLessons}>
         <LessonsMenu onClose={() => setShowLessons(false)} />

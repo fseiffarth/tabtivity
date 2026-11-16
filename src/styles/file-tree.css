@@ -1406,6 +1406,109 @@
   opacity: 0.65;
 }
 
+/* "Project docs" group (FileTree + projectDocsGroup.ts). Only a doc that still
+   holds Tabtivity's untouched text is dimmed; an edited doc looks like any file.
+   Its own class: `.scaffold` above is shared with the gitignored and
+   hidden-by-extension sections. Static — no animation. */
+.file-entry.doc-template {
+  opacity: 0.65;
+}
+
+/* A pointer file (CLAUDE.md / GEMINI.md) nests one level under AGENTS.md. */
+.file-entry.doc-nested {
+  padding-left: calc(var(--space-2) + 16px);
+}
+
+/* A creatable doc that is not there. A button, not a file row. */
+.file-entry.doc-ghost {
+  width: 100%;
+  box-sizing: border-box;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.file-entry.doc-ghost:hover {
+  color: var(--text-primary);
+}
+
+.file-entry.doc-ghost:disabled {
+  cursor: var(--cur-default, default);
+  opacity: 0.6;
+}
+
+.doc-ghost-plus {
+  width: 1em;
+  text-align: center;
+}
+
+/* "Agent memory (n)" at the end of the Project docs group: a quiet sub-header
+   (no divider rule) over read-only rows. Static. */
+.file-tree-memory-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px var(--space-2);
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  color: var(--text-secondary);
+  cursor: var(--cur-pointer, pointer);
+}
+
+.file-tree-memory-toggle:hover {
+  color: var(--text-primary);
+}
+
+.file-entry.doc-memory {
+  width: 100%;
+  box-sizing: border-box;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  padding-left: calc(var(--space-2) + 16px);
+}
+
+.agent-memory-body {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.file-docs-summary {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+}
+
+/* A small state pill after a doc's name: template / pointer / create. */
+.file-doc-badge {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 0 5px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+}
+
+.file-doc-badge--create {
+  color: var(--text-secondary);
+}
+
 .file-tree-hidden-toggle {
   width: 100%;
   background: none;
@@ -1887,4 +1990,23 @@
   overflow-y: auto;
   font-size: var(--text-sm);
   word-break: break-all;
+}
+
+/* The tab archive's list (`tabs/TabArchiveList`): the Sessions view's rows,
+   under a filter row. Shown in the side panel's Archive view and the + menu's
+   Archived tabs dialog. */
+.tab-archive-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.tab-archive-head input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-archive-dialog {
+  width: min(560px, 92vw);
 }

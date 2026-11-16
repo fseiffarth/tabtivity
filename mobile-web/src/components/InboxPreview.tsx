@@ -5,6 +5,7 @@ import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { inboxFileUrl, isMedia, sentName, type OutboxFile, type ViewerScope } from "../api";
+import { openingOutsideStrands } from "../platform";
 import { formatBytes } from "../../../src/lib/formatBytes";
 
 /** Picture tiles an album shows before the last one reads "+N" (as `OutboxPost`). */
@@ -30,6 +31,12 @@ export function fileBadge(kind: string): string {
  * text, a PDF, or a film or sound the phone's player plays. */
 export const viewableFile = (file: OutboxFile) => file.kind.startsWith("image/") || file.kind.startsWith("text/") || file.kind === "application/pdf" || isMedia(file.kind);
 
+/** Whether a tap on `file`'s tile opens the viewer rather than downloading.
+ * Every file does in the installed app on an iPhone or iPad: a download there
+ * puts the bytes over the whole screen with no way back into the app, so the
+ * viewer's Save or share… (the share sheet's Save to Files) keeps it instead. */
+export const openableFile = (file: OutboxFile) => viewableFile(file) || openingOutsideStrands();
+
 /** Where an album gets its bytes and what a tap on a file does. The phone's
  * is its HTTP route; the desktop Chat (`ReaderInbox`) reads the project's
  * folder itself, so its pictures may still be on their way (`picture` is
@@ -49,7 +56,7 @@ export function phoneInboxSource(tabId: string): InboxSource {
   return {
     scope: { inbox: tabId },
     picture: (file) => inboxFileUrl(tabId, file.name),
-    openable: viewableFile,
+    openable: openableFile,
     download: (file) => inboxFileUrl(tabId, file.name, true),
   };
 }

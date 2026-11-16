@@ -433,6 +433,35 @@ pub fn install_skill(target: &SkillTarget, source_id: &str, rel_path: &str) -> R
     copy_skill(&src, &dest).map_err(|e| e.to_string())
 }
 
+/// Copy one installed skill, `<from>/.claude/skills/<folder>/`, into `<to>`'s
+/// `.claude/skills/<folder>/` — the Installed view's "Copy to…" and "Copy
+/// here". The folder keeps its name, so the copy is what a later uninstall in
+/// `to` addresses. Both ends go through [`installed_skill_dir`], so neither a
+/// planted `.claude/skills` link nor a `..` folder name leaves its target; the
+/// skill folder itself must be a real folder (a project's `skills/foo ->
+/// ~/.ssh` is refused, not copied), and links inside it are skipped by
+/// [`copy_skill`]. An existing copy in `to` is replaced only with `overwrite`:
+/// the caller showed the user that it is there, and one that appeared since is
+/// refused rather than silently replaced.
+pub fn copy_installed(from: &SkillTarget, folder: &str, to: &SkillTarget, overwrite: bool) -> Result<(), String> {
+    let src = installed_skill_dir(from, folder)?;
+    let meta = fs::symlink_metadata(&src).map_err(|_| format!("'{folder}' is not installed there"))?;
+    if !meta.is_dir() || !src.join("SKILL.md").is_file() {
+        return Err(format!("'{folder}' is not a skill folder (no SKILL.md)"));
+    }
+    let dest = installed_skill_dir(to, folder)?;
+    if dest == src {
+        return Err(format!("'{folder}' is already there"));
+    }
+    if fs::symlink_metadata(&dest).is_ok() {
+        if !overwrite {
+            return Err(format!("'{folder}' is already installed there"));
+        }
+        fs::remove_dir_all(&dest).map_err(|e| e.to_string())?;
+    }
+    copy_skill(&src, &dest).map_err(|e| e.to_string())
+}
+
 /// Delete `<target>/.claude/skills/<folder>/` — the folder
 /// [`InstalledSkill::folder`] reported, never the frontmatter name.
 pub fn uninstall_skill(target: &SkillTarget, folder: &str) -> Result<(), String> {
@@ -714,6 +743,61 @@ mod tests {
         assert!(installed_skill_dir(&target, "id_key").is_err());
         assert!(uninstall_skill(&target, "id_key").is_err());
         assert!(secret.join("id_key").is_file());
+    }
+
+    #[test]
+    fn copy_installed_copies_a_skill_between_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        let skill = a.join(".claude").join("skills").join("pdf-fill");
+        fs::create_dir_all(skill.join("scripts")).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\nname: pdf-fill\ndescription: d\n---\nv1\n").unwrap();
+        fs::write(skill.join("scripts").join("run.py"), "x").unwrap();
+        fs::create_dir_all(&b).unwrap();
+        let from = SkillTarget::Project { dir: a.to_string_lossy().into_owned() };
+        let to = SkillTarget::Project { dir: b.to_string_lossy().into_owned() };
+
+        copy_installed(&from, "pdf-fill", &to, false).unwrap();
+        let copied = b.join(".claude").join("skills").join("pdf-fill");
+        assert!(copied.join("scripts").join("run.py").is_file());
+        assert_eq!(list_installed(&to)[0].folder, "pdf-fill");
+        assert!(skill.join("SKILL.md").is_file(), "the source keeps its copy");
+
+        // A second copy needs `overwrite`, and then replaces the old folder whole.
+        fs::write(skill.join("SKILL.md"), "---\nname: pdf-fill\ndescription: d\n---\nv2\n").unwrap();
+        fs::write(copied.join("stale.txt"), "old").unwrap();
+        assert!(copy_installed(&from, "pdf-fill", &to, false).is_err());
+        assert!(copied.join("stale.txt").is_file(), "a refused copy leaves the old one alone");
+        copy_installed(&from, "pdf-fill", &to, true).unwrap();
+        assert!(fs::read_to_string(copied.join("SKILL.md")).unwrap().contains("v2"));
+        assert!(!copied.join("stale.txt").exists());
+
+        // Onto itself, a missing skill, or a folder name that climbs: refused.
+        assert!(copy_installed(&from, "pdf-fill", &from, true).is_err());
+        assert!(copy_installed(&from, "nope", &to, true).is_err());
+        for bad in ["..", "../a", ""] {
+            assert!(copy_installed(&from, bad, &to, true).is_err(), "{bad:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_installed_never_follows_a_linked_skill_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secret = tmp.path().join("secret");
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(secret.join("SKILL.md"), "x").unwrap();
+        let a = tmp.path().join("a");
+        let skills = a.join(".claude").join("skills");
+        fs::create_dir_all(&skills).unwrap();
+        std::os::unix::fs::symlink(&secret, skills.join("keys")).unwrap();
+        let b = tmp.path().join("b");
+        fs::create_dir_all(&b).unwrap();
+        let from = SkillTarget::Project { dir: a.to_string_lossy().into_owned() };
+        let to = SkillTarget::Project { dir: b.to_string_lossy().into_owned() };
+        assert!(copy_installed(&from, "keys", &to, true).is_err());
+        assert!(!b.join(".claude").join("skills").join("keys").exists());
     }
 
     #[test]

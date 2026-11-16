@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useAgentTaskStore } from "../../stores/agents/agentTask";
 import { splitPtyId } from "../../stores/activity";
+import { clearSessionHostState } from "./sessionHostNotice";
 
 /**
  * Sleeping terminal panes (performance plan §5.3, terminal kinds).
@@ -90,6 +91,7 @@ export function takeAsleepPty(id: string): ParkedPty | undefined {
 export function killAsleepPty(id: string): boolean {
   if (!takeAsleepPty(id)) return false;
   invoke("pty_kill", { id }).catch(() => {});
+  clearSessionHostState(id);
   useAgentTaskStore.getState().clearTabTitle(splitPtyId(id)?.key ?? id);
   return true;
 }

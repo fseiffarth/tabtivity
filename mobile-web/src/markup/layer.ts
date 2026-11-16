@@ -77,6 +77,11 @@ export function stampSize(pageWidth: number): number {
   return Math.min(200, Math.max(4, Math.round(pageWidth / 30)));
 }
 
+/** A new typed note's text size on a page `pageWidth` units wide. */
+export function noteSize(pageWidth: number): number {
+  return Math.min(200, Math.max(4, Math.round(pageWidth / 40)));
+}
+
 /** A stamp's polylines in page units. */
 export function stampLines(mark: StampMark): [number, number][][] {
   return STAMP_SHAPES[mark.symbol].map((line) => line.map(([x, y]): [number, number] => [mark.at[0] + x * mark.size, mark.at[1] + y * mark.size]));
@@ -163,7 +168,32 @@ export function clampToPage(x: number, y: number, size: [number, number]): [numb
   return [Math.min(size[0], Math.max(0, x)), Math.min(size[1], Math.max(0, y))];
 }
 
-function distanceToSegment(p: [number, number], a: [number, number], b: [number, number]): number {
+/** A pointer's spot on the page, in page units, kept on the page. Measured off
+ * the layer canvas's own box, so it holds at any zoom; `scale` (CSS pixels per
+ * page unit) stands in where the box has no size yet. */
+export function pagePoint(
+  box: { left: number; top: number; width: number; height: number },
+  size: [number, number],
+  scale: number,
+  clientX: number,
+  clientY: number,
+): [number, number] {
+  const width = box.width || size[0] * scale;
+  const height = box.height || size[1] * scale;
+  return clampToPage(((clientX - box.left) * size[0]) / width, ((clientY - box.top) * size[1]) / height, size);
+}
+
+/** The box mark spanning corners `a` and `b`, either way round. */
+export function boxBetween(a: [number, number], b: [number, number], color: MarkColor): BoxMark {
+  const x = Math.min(a[0], b[0]);
+  const y = Math.min(a[1], b[1]);
+  return { kind: "box", color, rect: [round(x), round(y), round(Math.abs(a[0] - b[0])), round(Math.abs(a[1] - b[1]))] };
+}
+
+/** How far `p` lies from the segment `a`–`b`; each is read as `[x, y, …]`,
+ * so a stroke's samples go in as they are — the eraser calls this per
+ * segment per step, and builds no arrays for it. */
+function distanceToSegment(p: readonly number[], a: readonly number[], b: readonly number[]): number {
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
   const length = dx * dx + dy * dy;
@@ -184,7 +214,7 @@ export function simplify(points: [number, number, number][], tolerance: number):
     let worst = -1;
     let at = -1;
     for (let i = first + 1; i < last; i++) {
-      const d = distanceToSegment([points[i][0], points[i][1]], [points[first][0], points[first][1]], [points[last][0], points[last][1]]);
+      const d = distanceToSegment(points[i], points[first], points[last]);
       if (d > worst) { worst = d; at = i; }
     }
     if (at > 0 && worst > tolerance) {
@@ -233,13 +263,57 @@ export function moveNote(mark: TextMark, at: [number, number], size: [number, nu
   return { ...mark, at: [round(x), round(y)] };
 }
 
-export function markCount(layer: Layer): { marks: number; points: number } {
-  let marks = 0;
-  let points = 0;
-  for (const page of Object.values(layer.pages)) {
-    marks += page.marks.length;
+type Count = { marks: number; points: number };
+/** Marks and points per page, and per `pages` record: layers are never
+ * changed in place, so a count stays true for the object it was made for —
+ * and `withPage` derives the next record's count from the one before it, so
+ * the eraser's every step no longer recounts every page. */
+const pageCounts = new WeakMap<PageLayer, Count>();
+const recordCounts = new WeakMap<Record<number, PageLayer>, Count>();
+const NO_MARKS: Count = { marks: 0, points: 0 };
+
+function countPage(page: PageLayer): Count {
+  let count = pageCounts.get(page);
+  if (!count) {
+    let points = 0;
     for (const mark of page.marks) if (mark.kind === "ink") points += mark.points.length;
+    count = { marks: page.marks.length, points };
+    pageCounts.set(page, count);
   }
+  return count;
+}
+
+function countPages(pages: Record<number, PageLayer>): Count {
+  let count = recordCounts.get(pages);
+  if (!count) {
+    count = { marks: 0, points: 0 };
+    for (const page of Object.values(pages)) {
+      const of = countPage(page);
+      count.marks += of.marks;
+      count.points += of.points;
+    }
+    recordCounts.set(pages, count);
+  }
+  return count;
+}
+
+/** `pages` with page `n` put to `page` — or taken away, for `null` — and the
+ * count of the result derived from the count of `pages`, when it has one. */
+function replacePage(pages: Record<number, PageLayer>, n: number, page: PageLayer | null): Record<number, PageLayer> {
+  const next = { ...pages };
+  if (page) next[n] = page;
+  else delete next[n];
+  const before = recordCounts.get(pages);
+  if (before) {
+    const old = pages[n] ? countPage(pages[n]) : NO_MARKS;
+    const now = page ? countPage(page) : NO_MARKS;
+    recordCounts.set(next, { marks: before.marks - old.marks + now.marks, points: before.points - old.points + now.points });
+  }
+  return next;
+}
+
+export function markCount(layer: Layer): { marks: number; points: number } {
+  const { marks, points } = countPages(layer.pages);
   return { marks, points };
 }
 
@@ -301,26 +375,45 @@ export function replaceMark(layer: Layer, n: number, index: number, mark: Mark |
 }
 
 function withPage(layer: Layer, n: number, page: PageLayer): Layer {
-  const pages = { ...layer.pages };
-  if (page.marks.length) pages[n] = page;
-  else delete pages[n];
-  return { ...layer, pages };
+  return { ...layer, pages: replacePage(layer.pages, n, page.marks.length ? page : null) };
+}
+
+/** A mark's `markBox`, made once: the eraser asks it of every mark on every
+ * step. Marks are never changed in place; the array is not handed out. */
+const markBoxes = new WeakMap<Mark, [number, number, number, number]>();
+function boxOf(mark: Mark): [number, number, number, number] {
+  let box = markBoxes.get(mark);
+  if (!box) {
+    box = markBox(mark);
+    markBoxes.set(mark, box);
+  }
+  return box;
+}
+/** Slack on the culling tests below: only a mark clearly out of reach is
+ * skipped, so rounding at the edge is left to the exact test. */
+const CULL_EPS = 1e-6;
+/** Whether `(x, y)` lies clear of `box` grown by `radius`. */
+function clearOf(box: readonly number[], x: number, y: number, radius: number): boolean {
+  return x < box[0] - radius - CULL_EPS || x > box[0] + box[2] + radius + CULL_EPS
+    || y < box[1] - radius - CULL_EPS || y > box[1] + box[3] + radius + CULL_EPS;
 }
 
 /** Whether a mark lies within `radius` of `(x, y)`. */
 export function touches(mark: Mark, x: number, y: number, radius: number): boolean {
   if (mark.kind === "ink") {
+    // The box holds half the stroke's width around its samples: a point clear
+    // of it grown by the eraser's radius is out of reach of every segment.
+    if (clearOf(boxOf(mark), x, y, radius)) return false;
     const reach = radius + inkWidth(mark.width, 1) / 2;
     if (mark.points.length === 1) return Math.hypot(mark.points[0][0] - x, mark.points[0][1] - y) <= reach;
+    const at = [x, y];
     for (let i = 1; i < mark.points.length; i++) {
-      const a = mark.points[i - 1];
-      const b = mark.points[i];
-      if (distanceToSegment([x, y], [a[0], a[1]], [b[0], b[1]]) <= reach) return true;
+      if (distanceToSegment(at, mark.points[i - 1], mark.points[i]) <= reach) return true;
     }
     return false;
   }
   // A box, a note or a stamp is touched anywhere over its box.
-  const [bx, by, bw, bh] = markBox(mark);
+  const [bx, by, bw, bh] = boxOf(mark);
   return x >= bx - radius && x <= bx + bw + radius && y >= by - radius && y <= by + bh + radius;
 }
 
@@ -424,6 +517,7 @@ function cutWith(
  * reach, each cut end on the reach's edge so the ink stops where the eraser
  * began. `null` when the eraser misses it; `[]` when it took all of it. */
 export function cutStroke(mark: InkMark, x: number, y: number, radius: number): InkMark[] | null {
+  if (clearOf(boxOf(mark), x, y, radius)) return null;
   const reach = radius + inkWidth(mark.width, 1) / 2;
   return cutWith(mark, (p) => Math.hypot(p[0] - x, p[1] - y) > reach, (a, b) => spanWithin(a, b, x, y, reach));
 }
@@ -432,6 +526,9 @@ export function cutStroke(mark: InkMark, x: number, y: number, radius: number): 
  * (`[x0, y0, x1, y1]`), grown by half the stroke's width so no edge of ink
  * stays standing inside. */
 export function cutStrokeByRect(mark: InkMark, rect: [number, number, number, number]): InkMark[] | null {
+  const [bx, by, bw, bh] = boxOf(mark);
+  // The box holds the half width the rectangle is grown by below.
+  if (bx > rect[2] + CULL_EPS || bx + bw < rect[0] - CULL_EPS || by > rect[3] + CULL_EPS || by + bh < rect[1] - CULL_EPS) return null;
   const half = inkWidth(mark.width, 1) / 2;
   const grown: [number, number, number, number] = [rect[0] - half, rect[1] - half, rect[2] + half, rect[3] + half];
   return cutWith(mark, (p) => !inRect(p, grown), (a, b) => spanInRect(a, b, grown));
@@ -468,9 +565,24 @@ function eraseMarks(marks: Mark[], x: number, y: number, radius: number, whole: 
  * and are never trimmed, so it only keeps the record finite. */
 export const SENT_LIMITS = { marks: LIMITS.marks * 4, points: LIMITS.points * 4 } as const;
 
-function within(pages: Record<number, PageLayer>, limits: { marks: number; points: number }): boolean {
-  const { marks, points } = markCount({ pages });
+/** Whether `pages` stay under `limits`' mark and point ceilings. */
+export function within(pages: Record<number, PageLayer>, limits: { marks: number; points: number }): boolean {
+  const { marks, points } = countPages(pages);
   return marks <= limits.marks && points <= limits.points;
+}
+
+/** The skeleton of every eraser: page `n`'s marks through `erase` — tried as
+ * cuts first (`force` false), then whole when the cuts would pass the
+ * ceilings (`force` true) — and, with `sent`, the shown sent marks too. */
+function eraseThrough(layer: Layer, n: number, erase: (marks: Mark[], force: boolean) => Mark[] | null, sent: boolean | undefined): Layer {
+  const page = layer.pages[n];
+  let next = layer;
+  const cut = page && erase(page.marks, false);
+  if (page && cut) {
+    next = withPage(layer, n, { ...page, marks: cut });
+    if (!within(next.pages, LIMITS)) next = withPage(layer, n, { ...page, marks: erase(page.marks, true) ?? page.marks });
+  }
+  return sent ? eraseSent(next, n, erase) : next;
 }
 
 /** The eraser at `(x, y)` on page `n`: it takes the part of every pen stroke
@@ -482,14 +594,7 @@ function within(pages: Record<number, PageLayer>, limits: { marks: number; point
 export function eraseAt(layer: Layer, n: number, x: number, y: number, radius: number, options: boolean | EraseOptions = false): Layer {
   const { sent, whole = false, highlights: onlyHighlights } = eraseOptions(options);
   const only = onlyHighlights ? highlights : undefined;
-  const page = layer.pages[n];
-  let next = layer;
-  const cut = page && eraseMarks(page.marks, x, y, radius, whole, only);
-  if (page && cut) {
-    next = withPage(layer, n, { ...page, marks: cut });
-    if (!within(next.pages, LIMITS)) next = withPage(layer, n, { ...page, marks: eraseMarks(page.marks, x, y, radius, true, only) ?? page.marks });
-  }
-  return sent ? eraseSent(next, n, (marks, all) => eraseMarks(marks, x, y, radius, whole || all, only)) : next;
+  return eraseThrough(layer, n, (marks, force) => eraseMarks(marks, x, y, radius, whole || force, only), sent);
 }
 
 /** The eraser dragged from `from` to `to`: applied at steps of half its
@@ -524,19 +629,12 @@ export function eraseRect(layer: Layer, n: number, from: [number, number], to: [
           changed = true;
           if (!whole) kept.push(...runs);
         }
-      } else if (overlaps(markBox(mark))) changed = true;
+      } else if (overlaps(boxOf(mark))) changed = true;
       else kept.push(mark);
     }
     return changed ? kept : null;
   };
-  const page = layer.pages[n];
-  let next = layer;
-  const cut = page && erase(page.marks, false);
-  if (page && cut) {
-    next = withPage(layer, n, { ...page, marks: cut });
-    if (!within(next.pages, LIMITS)) next = withPage(layer, n, { ...page, marks: erase(page.marks, true) ?? page.marks });
-  }
-  return sent ? eraseSent(next, n, erase) : next;
+  return eraseThrough(layer, n, erase, sent);
 }
 
 /** Whether a pointer is a pen's eraser end — Windows Ink and Wacom report it
@@ -599,12 +697,7 @@ export function markAnchors(layer: Layer, sent = false): MarkAnchor[] {
 function eraseSent(layer: Layer, n: number, erase: (marks: Mark[], whole: boolean) => Mark[] | null): Layer {
   const page = layer.sent?.pages[n];
   if (!layer.sent || !page) return layer;
-  const place = (marks: Mark[]) => {
-    const pages = { ...layer.sent!.pages };
-    if (marks.length) pages[n] = { ...page, marks };
-    else delete pages[n];
-    return pages;
-  };
+  const place = (marks: Mark[]) => replacePage(layer.sent!.pages, n, marks.length ? { ...page, marks } : null);
   const cut = erase(page.marks, false);
   if (!cut) return layer;
   let pages = place(cut);
@@ -874,6 +967,20 @@ export const TICK_GROUP_GAP = 0.01;
 /** Ticked marks of one page that sit together — one remark, often written in
  * many strokes — badged and approved as one (`tickGroups`). `box` is their
  * marks' boxes together, `marks` in page order. */
+/** A mark's identity as a React key — not its index, so a badge or an
+ * editor goes with its mark, and a second tap never lands on the next mark
+ * that slides into its place. */
+const markIds = new WeakMap<Mark, number>();
+let nextMarkId = 0;
+export function markKey(mark: Mark): number {
+  let id = markIds.get(mark);
+  if (id === undefined) {
+    id = ++nextMarkId;
+    markIds.set(mark, id);
+  }
+  return id;
+}
+
 export type TickGroup = { page: number; marks: TickedMark[]; box: [number, number, number, number] };
 
 /** Which of one page's marks sit together: any two whose boxes come within
@@ -1201,6 +1308,12 @@ export function copyMarks(layer: Layer, n: number, indices: readonly number[], d
   return { layer: withPage(layer, n, { ...page, marks }), indices: copies.map((_, i) => page.marks.length + i) };
 }
 
+/** A typed note's text as stored: control characters other than line breaks
+ * dropped, the ends trimmed — the desktop refuses the rest. */
+export function cleanNote(text: string | null | undefined): string {
+  return (text ?? "").replace(/(?!\n)\p{Cc}/gu, "").trim();
+}
+
 /** A comment as stored: one plain line — control characters (line breaks
  * among them) become spaces, the ends trimmed — cut to `MAX_COMMENT`
  * characters. The desktop refuses anything else (`markup::validate_body`). */
@@ -1267,7 +1380,7 @@ export function snapStroke(mark: InkMark): InkMark | null {
     }
     return { ...mark, points: ring };
   }
-  const worst = points.reduce((most, p) => Math.max(most, distanceToSegment([p[0], p[1]], [first[0], first[1]], [last[0], last[1]])), 0);
+  const worst = points.reduce((most, p) => Math.max(most, distanceToSegment(p, first, last)), 0);
   return worst <= Math.max(1, 0.07 * chord) ? line() : null;
 }
 
@@ -1292,6 +1405,13 @@ const MAX_UNDO = 200;
  * never kept. */
 export function startHistory(layer: Layer = EMPTY_LAYER, past?: readonly Layer[]): History {
   return { past: past ? past.slice(-MAX_UNDO) : [], present: layer, future: [] };
+}
+
+/** `forgetRound` over every step of `history`: an undone round's ticks mean
+ * nothing on any of them (the marks stay). */
+export function forgetRoundInHistory(history: History, roundId: string): History {
+  const forget = (entry: Layer) => forgetRound(entry, roundId);
+  return { past: history.past.map(forget), present: forget(history.present), future: history.future.map(forget) };
 }
 
 export function commit(history: History, next: Layer): History {

@@ -54,6 +54,8 @@ const BG_SUFFIX: &str = ".bg";
 /// (`<uid>.from`): `phone` or `desktop`, written by [`note_input_from`] and
 /// read by `tabtivity-send`, which sends a file to that screen.
 pub const FROM_SUFFIX: &str = ".from";
+/// The marker a sibling's message leaves (`note_mail`), spent by the hook.
+pub const MAIL_SUFFIX: &str = ".mail";
 
 /// The most task ids [`note_background_tasks`] takes from a record.
 const BG_TASKS_MAX: usize = 32;
@@ -237,6 +239,7 @@ pub fn on_tab_gone(pty_id: &str) {
     let mut bg = bg_tasks().lock_ok();
     let mut projects = bound_projects().lock_ok();
     for uid in gone {
+        crate::services::checkpoints::unbind(&uid);
         projects.remove(&uid);
         states.remove(&uid);
         jobs.remove(&uid);
@@ -302,6 +305,58 @@ fn note_input_from_in(live_root: &Path, pty_id: &str, from: InputFrom) -> std::i
         }
     }
     Ok(())
+}
+
+/// Leave PTY `pty_id`'s agent the empty `<uid>.mail` marker beside its turn
+/// record (`services::tabs_mcp`: a sibling tab sent it a message): the agent
+/// hook prints `tabs_mcp::NOTICE` beside the next prompt and removes it, as it
+/// does the naming reminder. Written where [`note_input_from`] writes, through
+/// a directory handle (the slice is agent-writable), and empty: what a forged
+/// or deleted marker costs is a spurious or missed notice, nothing else.
+pub fn note_mail(pty_id: &str) -> std::io::Result<()> {
+    note_mail_in(&live_sessions_dir(), pty_id)
+}
+
+fn note_mail_in(live_root: &Path, pty_id: &str) -> std::io::Result<()> {
+    for rel in mail_marker_rels(pty_id) {
+        home_io::HomeFile::open(live_root, &rel)
+            .ok_or_else(|| std::io::Error::other(format!("{rel}: not a plain folder")))?
+            .write(b"")?;
+    }
+    Ok(())
+}
+
+/// Remove PTY `pty_id`'s `<uid>.mail` markers, in the root and the project
+/// slice alike (`services::tabs_mcp`: the tab read its inbox, so the notice is
+/// moot). The hook removes only the copy it sees — a fenced agent sees the
+/// slice at the root's path — so without this the other copy would stay. A
+/// link at the name is removed, never followed; a missing marker is fine.
+pub fn clear_mail(pty_id: &str) {
+    clear_mail_in(&live_sessions_dir(), pty_id);
+}
+
+fn clear_mail_in(live_root: &Path, pty_id: &str) {
+    for rel in mail_marker_rels(pty_id) {
+        if let Some(file) = home_io::HomeFile::open_existing(live_root, &rel) {
+            let _ = file.remove();
+        }
+    }
+}
+
+/// Where PTY `pty_id`'s mail markers go, relative to the live-sessions root:
+/// `<uid>.mail` for each uid bound to it, and again in its project's slice.
+fn mail_marker_rels(pty_id: &str) -> Vec<String> {
+    let uids: Vec<String> =
+        bindings().lock_ok().iter().filter(|(_, v)| v.as_str() == pty_id).map(|(k, _)| k.clone()).collect();
+    let mut rels = Vec::new();
+    for uid in uids {
+        let name = format!("{uid}{MAIL_SUFFIX}");
+        if let Some(pid) = bound_projects().lock_ok().get(&uid) {
+            rels.push(format!("{}/{name}", crate::storage::project_key(pid)));
+        }
+        rels.push(name);
+    }
+    rels
 }
 
 fn record_paths(uid: &str, project_id: Option<&str>) -> Vec<PathBuf> {
@@ -518,15 +573,24 @@ fn boot_ticks_now() -> Option<u64> {
     Some((secs * crate::sysstat::clk_tck() as f64) as u64)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: microseconds since the epoch, the clock `sysstat::process_start`
+/// (`pbi_start_tvsec`/`usec`) reads a shell's start on (2442z).
+#[cfg(target_os = "macos")]
+fn boot_ticks_now() -> Option<u64> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(now.as_micros()).ok()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn boot_ticks_now() -> Option<u64> {
     None
 }
 
-/// Whether a shell that started at `start` (ticks since boot, `0` = unknown)
-/// was already running when the turn ended at `ended`. Unknown on either side
-/// reads as yes: the plain `done` reading, as before the start was compared.
-#[cfg(any(target_os = "linux", test))]
+/// Whether a shell that started at `start` (on [`boot_ticks_now`]'s clock,
+/// `0` = unknown) was already running when the turn ended at `ended`. Unknown
+/// on either side reads as yes: the plain `done` reading, as before the start
+/// was compared.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn outlived_turn(start: u64, ended: Option<u64>) -> bool {
     start == 0 || ended.is_none_or(|end| start <= end)
 }
@@ -537,17 +601,29 @@ fn last_scan() -> &'static Mutex<Option<Instant>> {
     L.get_or_init(|| Mutex::new(None))
 }
 
-/// Record what the hooks just said about `uid`. `Idle` is the session's end:
-/// its state and job flag go with it.
-fn note_state(uid: &str, state: TurnState) {
+/// The state `uid`'s hooks last reported, if the tab has spoken and not ended.
+pub fn state_of(uid: &str) -> Option<TurnState> {
+    states().lock_ok().get(uid).copied()
+}
+
+/// When the turn record at `path` was written, in milliseconds since the
+/// epoch (never read through a link: the agent can write the record's folder).
+fn record_written_ms(path: &Path) -> Option<u64> {
+    let modified = std::fs::symlink_metadata(path).ok()?.modified().ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
+}
+
+/// Record what the hooks just said about `uid`; the state it had before.
+/// `Idle` is the session's end: its state and job flag go with it.
+fn note_state(uid: &str, state: TurnState) -> Option<TurnState> {
     // Whatever the agent just did, the next timer tick must look again.
     settled().lock_ok().remove(uid);
     if state == TurnState::Idle {
-        states().lock_ok().remove(uid);
+        let prev = states().lock_ok().remove(uid);
         jobs().lock_ok().remove(uid);
         turn_ends().lock_ok().remove(uid);
         bg_tasks().lock_ok().remove(uid);
-        return;
+        return prev;
     }
     let mut states = states().lock_ok();
     let prev = states.insert(uid.to_string(), state);
@@ -562,6 +638,7 @@ fn note_state(uid: &str, state: TurnState) {
             None => ends.remove(uid),
         };
     }
+    prev
 }
 
 /// Whether a shell of `uid`'s agent was running at the last scan.
@@ -802,6 +879,8 @@ trait ProcProbe {
     fn comm_ppid(&self, pid: u32) -> Option<(String, u32)>;
     fn environ(&self, pid: u32) -> Option<Vec<u8>>;
     fn cmdline(&self, pid: u32) -> Option<String>;
+    /// When `pid` started, on [`boot_ticks_now`]'s clock; `0` = unknown.
+    fn start(&self, pid: u32) -> u64;
 }
 
 /// The walk behind [`tool_shell_uids`], over whatever process table `probe`
@@ -811,6 +890,7 @@ trait ProcProbe {
 #[cfg(any(target_os = "macos", test))]
 fn background_job_uids(
     want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
     pids: impl IntoIterator<Item = u32>,
     probe: &impl ProcProbe,
 ) -> std::collections::HashSet<String> {
@@ -831,9 +911,10 @@ fn background_job_uids(
         }
         let cmdline = probe.cmdline(pid).unwrap_or_default();
         let parent_comm = probe.comm_ppid(ppid).map(|(c, _)| c).unwrap_or_default();
-        // No start time is read here: a shell still running after the Stop
-        // counts, as it did before Linux compared the two.
-        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, true, false) {
+        // As on Linux (2442z): a shell started after the Stop is a tool call
+        // something woken later waits on, not the turn's background job.
+        let outlived = outlived_turn(probe.start(pid), ends.get(&uid).copied());
+        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, outlived, false) {
             out.insert(uid);
         }
     }
@@ -851,7 +932,7 @@ fn background_job_uids(
 #[cfg(target_os = "macos")]
 fn tool_shell_uids(
     want: &HashMap<&str, TurnState>,
-    _ends: &HashMap<String, u64>,
+    ends: &HashMap<String, u64>,
     _bg: &HashMap<String, HashSet<String>>,
     _max_age: Duration,
 ) -> std::collections::HashSet<String> {
@@ -867,13 +948,16 @@ fn tool_shell_uids(
         fn cmdline(&self, pid: u32) -> Option<String> {
             crate::sysstat::cmdline(pid)
         }
+        fn start(&self, pid: u32) -> u64 {
+            crate::sysstat::process_start(pid).unwrap_or(0)
+        }
     }
     if want.is_empty() {
         return std::collections::HashSet::new();
     }
     let probe = Proc(crate::sysstat::parent_map());
     let pids: Vec<u32> = probe.0.keys().copied().collect();
-    background_job_uids(want, pids, &probe)
+    background_job_uids(want, ends, pids, &probe)
 }
 
 /// Windows: no tab ever reports a job — there is no reader of another
@@ -944,7 +1028,10 @@ pub fn start(ctx: CoreCtx) {
                         continue;
                     }
                     if let (Some((id, state)), Some(uid)) = (resolve_event(&path), uid_of(&path)) {
-                        note_state(&uid, state);
+                        let prev = note_state(&uid, state);
+                        // A turn's edges are checkpointed (`services::checkpoints`),
+                        // queued on its folder's worker: no lock is held here.
+                        crate::services::checkpoints::on_turn(&uid, prev, state, record_written_ms(&path));
                         if let Some(dir) = path.parent() {
                             note_background_tasks(&uid, dir);
                         }
@@ -1059,6 +1146,48 @@ mod tests {
         assert!(!root.join(&name).exists());
         assert_eq!(InputFrom::parse("phone"), Some(InputFrom::Phone));
         assert_eq!(InputFrom::parse("tablet"), None);
+    }
+
+    /// A sibling's message leaves the empty `<uid>.mail` marker where
+    /// `<uid>.from` goes: the root and the project slice, never through a link.
+    #[test]
+    fn mail_marker_lands_empty_in_the_root_and_the_slice_and_never_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("live_sessions");
+        let uid = "mail-test-uid-1";
+        let pty = "proj-mail:agent-mail-1";
+        bindings().lock().unwrap().insert(uid.to_string(), pty.to_string());
+        bound_projects().lock().unwrap().insert(uid.to_string(), "proj/mail".to_string());
+        let name = format!("{uid}{MAIL_SUFFIX}");
+        let slice = root.join(crate::storage::project_key("proj/mail"));
+        note_mail_in(&root, pty).unwrap();
+        assert_eq!(std::fs::read(root.join(&name)).unwrap(), b"");
+        assert_eq!(std::fs::read(slice.join(&name)).unwrap(), b"");
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::fs::write(&target, "keep").unwrap();
+            std::fs::remove_file(slice.join(&name)).unwrap();
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            note_mail_in(&root, pty).unwrap();
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+            assert!(!std::fs::symlink_metadata(slice.join(&name)).unwrap().file_type().is_symlink());
+        }
+        // Reading the inbox clears both copies; the hook only reaches one.
+        clear_mail_in(&root, pty);
+        assert!(!root.join(&name).exists() && !slice.join(&name).exists(), "both markers go");
+        clear_mail_in(&root, pty);
+        #[cfg(unix)]
+        {
+            let target = dir.path().join("users-file");
+            std::os::unix::fs::symlink(&target, slice.join(&name)).unwrap();
+            clear_mail_in(&root, pty);
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep", "the link goes, not its target");
+            assert!(std::fs::symlink_metadata(slice.join(&name)).is_err());
+        }
+        on_tab_gone(pty);
+        note_mail_in(&root, pty).unwrap();
+        assert!(!root.join(&name).exists(), "an unbound PTY gets nothing");
     }
 
     #[test]
@@ -1306,7 +1435,7 @@ mod tests {
     /// A process table for [`background_job_uids`]: pid → (comm, ppid, the
     /// raw `KERN_PROCARGS2` buffer, as macOS hands it over). The command line
     /// is the buffer's argv, as `sysstat::cmdline` reads it.
-    struct FakeTable(HashMap<u32, (&'static str, u32, Vec<u8>, String)>);
+    struct FakeTable(HashMap<u32, (&'static str, u32, Vec<u8>, String)>, HashMap<u32, u64>);
     impl ProcProbe for FakeTable {
         fn comm_ppid(&self, pid: u32) -> Option<(String, u32)> {
             self.0.get(&pid).map(|(c, p, _, _)| (c.to_string(), *p))
@@ -1316,6 +1445,9 @@ mod tests {
         }
         fn cmdline(&self, pid: u32) -> Option<String> {
             Some(self.0.get(&pid)?.3.clone())
+        }
+        fn start(&self, pid: u32) -> u64 {
+            self.1.get(&pid).copied().unwrap_or(0)
         }
     }
 
@@ -1350,16 +1482,23 @@ mod tests {
         table.insert(31, entry("zsh", 30, &["/bin/zsh", spoof.as_str(), bg], &[]));
         let want: HashMap<&str, TurnState> =
             [("t-bg", TurnState::Working), ("t-fg", TurnState::Working), ("t-argv", TurnState::Working)].into();
-        let probe = FakeTable(table);
+        let probe = FakeTable(table, [(21, 500)].into());
         let mut pids: Vec<u32> = probe.0.keys().copied().collect();
         pids.sort();
-        let found = background_job_uids(&want, pids.clone(), &probe);
+        let none = HashMap::new();
+        let found = background_job_uids(&want, &none, pids.clone(), &probe);
         assert_eq!(found, ["t-bg".to_string()].into());
         // Once the foreground tab's turn is over, its shell outlived it.
         let done: HashMap<&str, TurnState> = [("t-fg", TurnState::Done)].into();
-        assert_eq!(background_job_uids(&done, pids.clone(), &probe), ["t-fg".to_string()].into());
+        assert_eq!(background_job_uids(&done, &none, pids.clone(), &probe), ["t-fg".to_string()].into());
+        // 2442z: the turn ended (at 400) before the shell started (500) — a
+        // tool call something woken later waits on, not the turn's job.
+        let ended: HashMap<String, u64> = [("t-fg".to_string(), 400)].into();
+        assert!(background_job_uids(&done, &ended, pids.clone(), &probe).is_empty());
+        let ended_after: HashMap<String, u64> = [("t-fg".to_string(), 600)].into();
+        assert_eq!(background_job_uids(&done, &ended_after, pids.clone(), &probe), ["t-fg".to_string()].into());
         // Nobody asked: nothing is read.
-        assert!(background_job_uids(&HashMap::new(), pids, &probe).is_empty());
+        assert!(background_job_uids(&HashMap::new(), &none, pids, &probe).is_empty());
     }
 
     /// Force the next `refresh_jobs` to walk `/proc` rather than reuse the last

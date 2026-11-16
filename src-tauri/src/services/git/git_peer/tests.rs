@@ -2386,6 +2386,33 @@ fn the_remote_peer_runs_git_hardened_with_hooks_off() {
     assert_eq!(args, crate::services::git_hardened::hardened_git_args(&["merge", "--ff-only", "-q", "abc123"]));
 }
 
+/// The probe runs `git status` on the host every poll. Sent through
+/// [`hardened_remote_script`] it never rewrites the host's index (no `index.lock`
+/// for the user's own `git add` there to trip on), though a tracked file's stat
+/// data went stale, which is exactly what makes a plain `git status` refresh it.
+#[cfg(unix)]
+#[test]
+fn the_host_probe_leaves_the_index_alone() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping the_host_probe_leaves_the_index_alone");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    repo_behind_by_one(&dir);
+    // Same bytes, another mtime: clean, but the index's stat data no longer matches.
+    let file = std::fs::File::options().write(true).open(dir.join("base.txt")).unwrap();
+    file.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000)).unwrap();
+    drop(file);
+    let index = dir.join(".git").join("index");
+    let before = std::fs::read(&index).unwrap();
+
+    let snap = parse_probe_block(&run_sh(&dir, &hardened_remote_script(PROBE_SCRIPT))).expect("parses");
+    assert!(snap.is_repo && !snap.dirty_tracked && !snap.probe_error, "{snap:?}");
+    assert!(std::fs::read(&index).unwrap() == before, "the probe rewrote the host's index");
+}
+
 /// The batched scripts run `git status` / `merge-base` on the host every poll. Run
 /// through [`hardened_remote_script`] (as `probe` and `ancestry_map` send them), a
 /// repo's `core.fsmonitor` program and its `post-index-change` hook never run.

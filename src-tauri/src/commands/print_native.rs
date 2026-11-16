@@ -58,6 +58,9 @@ pub enum Duplex {
 /// which skip the dialog), and PDFKit's print operation takes the shared
 /// `NSPrintInfo`, whose duplex lives in an opaque Core Printing dictionary.
 /// The pages are imposed either way; the user turns the sheet over there.
+/// The same holds for the paper, and for colour, which the frontend bakes
+/// into the PDF on those two instead (`layoutPrintPdf`'s `bakeGrayscale`); the
+/// preview says what it cannot preset (`nativePresets`, 2442aa).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrintSetup {

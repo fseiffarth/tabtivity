@@ -15,6 +15,11 @@ import { useMediaQuery } from "./useMediaQuery";
  */
 export const TABLET_QUERY = "(min-width:700px) and (min-height:600px)";
 export const SPLIT_QUERY = "(min-width:1000px) and (min-height:600px) and (orientation:landscape)";
+/** A phone held sideways: no tier of its own (it stays `phone`), but the agent
+ * chat spends the width and docks its composer on the right. The height cap
+ * keeps it apart from the tablet tiers; the width floor keeps a portrait phone
+ * whose keyboard shrank the viewport out. `style.css` spells it once too. */
+export const PHONE_LANDSCAPE_QUERY = "(orientation:landscape) and (min-width:560px) and (max-height:599px)";
 
 export type Tier = "phone" | "tablet" | "split";
 

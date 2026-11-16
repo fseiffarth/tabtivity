@@ -476,12 +476,12 @@ mod tests {
             ("the window's keystrokes", body(terminal, "pub async fn pty_write("), "assistant_attach::note_tab_input"),
             ("a drop on the tab", body(terminal, "pub async fn pty_drop_files("), "assistant_attach::note_tab_file"),
             ("a pasted picture", body(terminal, "pub async fn pty_paste_clipboard_image("), "assistant_attach::note_tab_file"),
-            ("the phone's bytes", body(bridge, "pub async fn attach("), "assistant_attach::note_input_in"),
+            ("the phone's bytes", body(bridge, "async fn attach_with<"), "assistant_attach::note_input_in"),
             ("the phone's upload", body(host, "async fn inbox_upload("), "note_chat_file("),
             ("the phone's desktop picture", body(host, "async fn attach_desktop_image("), "assistant_attach::note_attachment_in"),
             ("the spawn that ties a tab to its chat", body(launch, "fn assistant_gate("), "assistant_attach::note_chat"),
             ("the window's keystrokes, for pictures", body(terminal, "pub async fn pty_write("), "assistant_attach::tab_picture_pastes"),
-            ("the phone's bytes, for pictures", body(bridge, "pub async fn attach("), "assistant_attach::picture_pastes_in"),
+            ("the phone's bytes, for pictures", body(bridge, "async fn attach_with<"), "assistant_attach::picture_pastes_in"),
         ] {
             assert!(text.contains(needle), "{what} no longer calls {needle}");
         }

@@ -64,10 +64,11 @@ const MAX_EXPANSIONS: usize = 3;
 pub const MAX_TOPICS: usize = 200;
 const TRUNCATED: &str = "\n\n[… truncated — read one section at a time with `section`]";
 
-/// The agent CLIs the help server is named to on their own command line
-/// (`root_mcp::apply_help_to_spawn_with`); tool-tagged local Vibe models get
-/// it through Vibe's env layer. Every other agent CLI gets the env pair only.
-pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
+/// The agent CLIs every lane names its server to for one launch
+/// (`root_mcp::WIRED_CLIS`); tool-tagged local Vibe models get it through
+/// Vibe's env layer. Every other agent CLI gets the env pair, which the
+/// `<slug>-mcp` command reads.
+pub const WIRED_CLIS: &[&str] = crate::services::root_mcp::WIRED_CLIS;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Section {

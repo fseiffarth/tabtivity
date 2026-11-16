@@ -133,6 +133,14 @@ the *why*.
   staged beside the mirror destination before rename, matching the push side's
   temp-and-rename rule. A crash therefore leaves an old or new complete mirror
   file, not a truncated file that masquerades as a divergence.
+- **Byte transfers overlap, their bookkeeping does not** (`remote/sync_pool`).
+  `run_ordered` runs the transfers four at a time within a 128 MiB listed-size
+  budget, while the record, progress and failure half stays sequential in file
+  order; a halt (stall, stop, a manual action waiting) starts no further file and
+  lets those in flight finish, so a file is never cut off mid-write. `RecordBatch`
+  keeps `sync.json` writes to one per batch, flushed before the caller reports; a
+  cut-off run leaves a base that reads as moved, never as clean. `sync_task` is
+  the one lifecycle for the auto loop and the lockstep poll.
 - **A commit is not a checkout** (`head_target_moved`). Head-move detection
   compares the checkout *target* — branch name, or the sha while detached — not
   the whole `HeadRef`. Comparing shas made every commit on the mirror replay as

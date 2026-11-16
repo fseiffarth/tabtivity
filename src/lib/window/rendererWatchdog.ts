@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 import { isPtyTabKind, useTabsStore } from "../../stores/tabs";
 import { BRAND, storageColonKey } from "../brand";
+import { currentWindowLabel } from "./crossWindow";
 
 /**
  * Renderer memory watchdog.
@@ -327,14 +327,6 @@ function writeSessionNumber(key: string, n: number): void {
   }
 }
 
-function currentLabel(): string {
-  try {
-    return getCurrentWindow().label;
-  } catch {
-    return "";
-  }
-}
-
 async function report(message: string): Promise<void> {
   try {
     // Land the reason in crash.log, so a user asking "why did my window
@@ -426,7 +418,7 @@ export async function ensureOwnRendererPid(): Promise<number | null> {
         await claim(cached);
         return cached;
       }
-      const label = currentLabel();
+      const label = currentWindowLabel();
       const claimed = label ? live.find((r) => r.label === label) : undefined;
       let pid: number | null = claimed?.pid ?? null;
       if (pid === null && live.length === 1) pid = live[0].pid;
@@ -469,7 +461,7 @@ export function useRendererWatchdog(): void {
     let stopped = false;
     let tripped = false;
     let heldReported = false;
-    const label = currentLabel();
+    const label = currentWindowLabel();
     const foreignReported = new Set<number>();
 
     const check = async (): Promise<void> => {

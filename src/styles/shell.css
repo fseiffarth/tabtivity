@@ -60,7 +60,10 @@ select option {
   display: flex;
   position: relative;
   overflow: hidden;
-  transition: padding-right var(--transition-slow), padding-left var(--transition-slow);
+  /* The docked insets below are not eased: the panel itself lands at once
+     (files-panel.css), and an eased inset re-laid out the workspace every frame
+     for 240 ms — each pane re-measured and each terminal refitted (a PTY resize
+     apiece) a dozen times per open, close or pin. */
 }
 
 /* When the panel is pinned it docks into layout: inset the body by the panel

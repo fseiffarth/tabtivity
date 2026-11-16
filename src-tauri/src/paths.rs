@@ -250,6 +250,10 @@ const MACOS_EXTRA_DIRS: &[&str] = &[
     "/Library/TeX/texbin",
 ];
 
+/// Where Ollama.app (ollama.com's `install.sh`, the download, Homebrew's
+/// cask) keeps the `ollama` CLI on macOS.
+pub const MACOS_OLLAMA_CLI_DIR: &str = "/Applications/Ollama.app/Contents/Resources";
+
 fn supplemental_path_dirs_for(
     os: OsKind,
     home: &Path,
@@ -278,6 +282,10 @@ fn supplemental_path_dirs_for(
             dirs.push(PathBuf::from(
                 "/Applications/Docker.app/Contents/Resources/bin",
             ));
+            // Ollama's own `install.sh` on macOS puts Ollama.app here and links
+            // its CLI into /usr/local/bin only through `sudo` when that dir is
+            // not the user's — which a headless install has no terminal for.
+            dirs.push(PathBuf::from(MACOS_OLLAMA_CLI_DIR));
         }
         OsKind::Windows => {
             if let Some(local) = local_app_data {
@@ -340,6 +348,25 @@ fn supplemental_path_dirs_for(
     dirs
 }
 
+/// Directories searched *after* the inherited PATH: install dirs whose tools
+/// a version manager on PATH must keep shadowing. `%ProgramFiles%\nodejs` is
+/// where winget's `OpenJS.NodeJS.LTS` (the setup wizard's Node install) puts
+/// `node.exe`/`npm.cmd`; its MSI adds that dir to the machine PATH for *new*
+/// processes only, so without this every npm-based CLI install failed with
+/// "npm not found" until Tabtivity was relaunched. Behind PATH, not ahead of
+/// it: nvm-windows, Volta or fnm on the inherited PATH still pick the Node.
+fn fallback_path_dirs_for(os: OsKind, program_files: Option<&OsStr>) -> Vec<PathBuf> {
+    match (os, program_files) {
+        (OsKind::Windows, Some(pf)) => vec![PathBuf::from(pf).join("nodejs")],
+        _ => Vec::new(),
+    }
+}
+
+/// [`fallback_path_dirs_for`] this host.
+fn fallback_path_dirs() -> Vec<PathBuf> {
+    fallback_path_dirs_for(OsKind::current(), std::env::var_os("ProgramFiles").as_deref())
+}
+
 /// Directories prepended to every child process PATH. GUI-launched applications
 /// commonly miss per-user package directories on every supported OS.
 pub fn extra_path_dirs() -> Vec<PathBuf> {
@@ -356,6 +383,43 @@ pub fn extra_path_dirs() -> Vec<PathBuf> {
     if OsKind::current() != OsKind::Windows {
         dirs.extend(nvm_default_node_bin());
     }
+    if OsKind::current() == OsKind::Macos {
+        dirs.extend(version_manager_dirs(&home_dir(), &|var| std::env::var_os(var)));
+    }
+    dirs
+}
+
+/// The bin and shim dirs of the common version managers (2442y), which a
+/// Finder-launched app never sees because only the user's shell rc adds them:
+/// Volta, bun, pnpm, fnm's default alias, mise, asdf, pyenv, rbenv. Each
+/// honours the manager's own home variable. After Homebrew and the rest of
+/// the fixed list, so a tool found there keeps winning; a dir that does not
+/// exist costs one failed lookup. macOS only, like the rest of the Mac list
+/// (on Linux an extra dir would change which binary wins). Login-shell PATH
+/// import, the full fix, is deferred (32z). Pure over `env`.
+fn version_manager_dirs(home: &Path, env: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let var = |name: &str, default: PathBuf| env(name).filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or(default);
+    let mut dirs = vec![
+        var("VOLTA_HOME", home.join(".volta")).join("bin"),
+        var("BUN_INSTALL", home.join(".bun")).join("bin"),
+        var("PNPM_HOME", home.join("Library").join("pnpm")),
+    ];
+    match env("FNM_DIR").filter(|v| !v.is_empty()) {
+        Some(dir) => dirs.push(PathBuf::from(dir).join("aliases").join("default").join("bin")),
+        None => {
+            for base in [
+                home.join("Library").join("Application Support").join("fnm"),
+                home.join(".local").join("share").join("fnm"),
+                home.join(".fnm"),
+            ] {
+                dirs.push(base.join("aliases").join("default").join("bin"));
+            }
+        }
+    }
+    dirs.push(var("MISE_DATA_DIR", home.join(".local").join("share").join("mise")).join("shims"));
+    dirs.push(var("ASDF_DATA_DIR", home.join(".asdf")).join("shims"));
+    dirs.push(var("PYENV_ROOT", home.join(".pyenv")).join("shims"));
+    dirs.push(var("RBENV_ROOT", home.join(".rbenv")).join("shims"));
     dirs
 }
 
@@ -442,6 +506,7 @@ pub fn effective_path() -> Option<std::ffi::OsString> {
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = extra_path_dirs();
     paths.extend(std::env::split_paths(&current));
+    paths.extend(fallback_path_dirs());
     std::env::join_paths(&paths).ok()
 }
 
@@ -532,6 +597,7 @@ fn executable_search_dirs() -> Vec<PathBuf> {
     let shims = crate::services::agent_bin::bin_dir();
     let mut dirs: Vec<PathBuf> = extra_path_dirs().into_iter().filter(|d| *d != shims).collect();
     dirs.extend(std::env::split_paths(&current).filter(|d| *d != shims));
+    dirs.extend(fallback_path_dirs());
     dirs
 }
 
@@ -545,6 +611,25 @@ pub fn resolve_executable(bin: &str) -> Option<PathBuf> {
         std::env::var_os("PATHEXT").as_deref(),
         &|path| path.is_file(),
     )
+}
+
+/// The first `bin` in the directories of `path` (a `PATH` value) other than
+/// `skip`, by `os`'s rules ([`resolve_executable`]'s: PATHEXT first on
+/// Windows). Only `path` is walked, none of the directories this process
+/// would add itself: what `command -v` finds for a shell that dropped one
+/// directory from its PATH. For the agent shim's own lookup past the shim
+/// directory (`services::agent_shim::nested_real_cli`), where the caller's
+/// environment is an agent's and the added directories would be read off it.
+pub(crate) fn resolve_on_path_skipping(
+    os: OsKind,
+    path: &OsStr,
+    skip: &Path,
+    bin: &str,
+    pathext: Option<&OsStr>,
+    exists: &impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let dirs: Vec<PathBuf> = std::env::split_paths(path).filter(|d| d != skip).collect();
+    resolve_executable_in_dirs(os, &dirs, bin, pathext, exists)
 }
 
 /// One pass over the search path, for a caller asking about many binaries at
@@ -1326,6 +1411,43 @@ mod tests {
         assert_eq!(resolve_nvm_version(None, &aliases, &[]), None);
     }
 
+    /// 2442y: the version managers a Finder-launched app cannot see, each at
+    /// its default home or the one its variable names.
+    #[test]
+    fn version_manager_dirs_follow_each_managers_home() {
+        let home = Path::new("/Users/alice");
+        let none = version_manager_dirs(home, &|_| None);
+        for rel in [
+            ".volta/bin",
+            ".bun/bin",
+            "Library/pnpm",
+            "Library/Application Support/fnm/aliases/default/bin",
+            ".local/share/fnm/aliases/default/bin",
+            ".fnm/aliases/default/bin",
+            ".local/share/mise/shims",
+            ".asdf/shims",
+            ".pyenv/shims",
+            ".rbenv/shims",
+        ] {
+            let want = rel.split('/').fold(home.to_path_buf(), |p, c| p.join(c));
+            assert!(none.contains(&want), "{rel}: {none:?}");
+        }
+        let set = |name: &str| match name {
+            "VOLTA_HOME" => Some(std::ffi::OsString::from("/v")),
+            "FNM_DIR" => Some(std::ffi::OsString::from("/f")),
+            "PYENV_ROOT" => Some(std::ffi::OsString::from("/py")),
+            "ASDF_DATA_DIR" => Some(std::ffi::OsString::new()),
+            _ => None,
+        };
+        let custom = version_manager_dirs(home, &set);
+        assert!(custom.contains(&Path::new("/v").join("bin")));
+        assert!(custom.contains(&Path::new("/py").join("shims")));
+        assert!(custom.contains(&Path::new("/f").join("aliases").join("default").join("bin")));
+        assert!(!custom.iter().any(|d| d.starts_with(home.join(".fnm"))), "FNM_DIR replaces the defaults");
+        // An empty variable is the default, not the current directory.
+        assert!(custom.contains(&home.join(".asdf").join("shims")));
+    }
+
     #[test]
     fn supplemental_paths_cover_all_supported_os_families() {
         let home = Path::new("/home/alice");
@@ -1341,6 +1463,8 @@ mod tests {
         assert!(mac.contains(&home.join(".docker").join("bin")));
         assert!(mac.contains(&home.join(".orbstack").join("bin")));
         assert!(mac.contains(&PathBuf::from("/Applications/Docker.app/Contents/Resources/bin")));
+        assert!(mac.contains(&PathBuf::from(MACOS_OLLAMA_CLI_DIR)));
+        assert!(!unix.contains(&PathBuf::from(MACOS_OLLAMA_CLI_DIR)));
         // The container dirs are the Mac's alone: Linux keeps its list unchanged.
         assert!(!unix.contains(&home.join(".docker").join("bin")));
         assert!(!unix.contains(&home.join(".orbstack").join("bin")));
@@ -1372,6 +1496,21 @@ mod tests {
         assert!(windows.iter().any(|path| path.ends_with(Path::new("Microsoft/WinGet/Links"))));
         assert!(windows.iter().any(|path| path.ends_with(Path::new("Docker/Docker/resources/bin"))));
         assert!(windows.iter().any(|path| path.ends_with(Path::new("OpenVPN/bin"))));
+    }
+
+    #[test]
+    fn winget_node_is_searched_after_path_on_windows_only() {
+        let pf = OsStr::new(r"C:\Program Files");
+        assert_eq!(
+            fallback_path_dirs_for(OsKind::Windows, Some(pf)),
+            vec![PathBuf::from(pf).join("nodejs")]
+        );
+        assert!(fallback_path_dirs_for(OsKind::Windows, None).is_empty());
+        assert!(fallback_path_dirs_for(OsKind::Macos, Some(pf)).is_empty());
+        assert!(fallback_path_dirs_for(OsKind::Unix, Some(pf)).is_empty());
+        // Never ahead of PATH: a version manager's Node keeps winning.
+        let ahead = supplemental_path_dirs_for(OsKind::Windows, Path::new(r"C:\Users\alice"), None, None, Some(pf));
+        assert!(!ahead.iter().any(|d| d.ends_with("nodejs")));
     }
 
     #[test]
@@ -1452,17 +1591,21 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
         let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
-        // Dead: gone from the table, or a zombie waiting for its new parent.
-        let gone = |pid: u32| {
+        // Dead: gone from the table, or a zombie (`Z`) or dying (`X`) task
+        // waiting for its new parent. A loaded CI runner (the whole suite
+        // in parallel) can take seconds to schedule the killed task's exit,
+        // so the wait is generous; a live state is reported on failure.
+        let state = |pid: u32| {
             std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .map(|stat| stat.rsplit(") ").next().is_some_and(|rest| rest.starts_with('Z')))
-                .unwrap_or(true)
+                .ok()
+                .and_then(|stat| stat.rsplit(") ").next().and_then(|rest| rest.chars().next()))
         };
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let gone = |pid: u32| state(pid).is_none_or(|s| matches!(s, 'Z' | 'X' | 'x'));
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !gone(pid) && std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline");
+        assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline (state {:?})", state(pid));
     }
 
     /// A process that leaves the group and keeps a pipe open cannot hold a

@@ -111,10 +111,17 @@ export function rememberFilesSide(projectId: string, side: FilesSide, storage?: 
  * (`place`), and `folder` is the token its folder was listed by, for a fresh
  * row later. A file the agent sent (`from: "outbox"`) is known by its leaf
  * name, which is also its `token`, the key the outbox is read by.
+ *
+ * A PDF only read and a markup are capped apart: opening papers from the
+ * library never pushes a markup's card out (`capTabs`).
  */
 const TABS_KEY = storageKey("mobile.fileTabs");
-/** Cards per project; the oldest-opened falls off. */
+/** Cards per project for PDFs only read; the oldest-opened falls off. */
 const TABS_CAP = 12;
+/** Cards per project for marked-up files, kept apart from `TABS_CAP`; past
+ * it the last of them falls off (its marks stay, and `recoverCards.ts` brings
+ * the card back once there is room). */
+export const MARKED_TABS_CAP = 60;
 
 export type FileTab = {
   token: string;
@@ -135,7 +142,21 @@ export type FileTab = {
   /** The agent tab the file's markup rounds went to, which the next Submit
    * from the card goes to as well; absent before one was sent. */
   tab?: string;
+  /** The file was marked up here (`keepMarkupTab`): its card is capped with
+   * the markups', never pushed out by PDFs only read. */
+  marked?: true;
 };
+
+/** A markup's card: marked, or — a card written before `marked` — one whose
+ * rounds went to a tab. */
+export const isMarkupTab = (tab: FileTab) => tab.marked === true || tab.tab !== undefined;
+
+/** Each kind of card kept to its own cap, the order otherwise unchanged. */
+function capTabs(tabs: FileTab[]): FileTab[] {
+  let read = 0;
+  let marked = 0;
+  return tabs.filter((tab) => isMarkupTab(tab) ? ++marked <= MARKED_TABS_CAP : ++read <= TABS_CAP);
+}
 
 /** What tells two cards' files apart: where they are read from, their folder
  * and their name — never a token, which a new listing seals afresh. */
@@ -151,7 +172,8 @@ function validTab(value: unknown): value is FileTab {
     && typeof tab.place === "string" && tab.place.length <= 4096
     && (tab.from === undefined || tab.from === "outbox")
     && (tab.label === undefined || (typeof tab.label === "string" && tab.label.length > 0 && tab.label.length <= 1024))
-    && (tab.tab === undefined || (typeof tab.tab === "string" && tab.tab.length > 0 && tab.tab.length <= 256));
+    && (tab.tab === undefined || (typeof tab.tab === "string" && tab.tab.length > 0 && tab.tab.length <= 256))
+    && (tab.marked === undefined || tab.marked === true);
 }
 
 const sameFile = (a: FileTabFile, b: FileTabFile) => a.from === b.from && a.place === b.place && a.name === b.name;
@@ -162,8 +184,8 @@ function loadTabs(storage?: FilesPlaceStorage): Record<string, FileTab[]> {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return out;
     for (const [projectId, tabs] of Object.entries(parsed)) {
       if (!Array.isArray(tabs)) continue;
-      const kept = tabs.filter(validTab).slice(0, TABS_CAP)
-        .map(({ token, name, kind, size, modified, folder, place, from, label, tab }) => ({ token, name, kind, size, modified, folder, place, from, label, tab }));
+      const kept = capTabs(tabs.filter(validTab))
+        .map(({ token, name, kind, size, modified, folder, place, from, label, tab, marked }) => ({ token, name, kind, size, modified, folder, place, from, label, tab, marked }));
       if (kept.length) out[projectId] = kept;
     }
     return out;
@@ -181,7 +203,7 @@ export function onFileTabs(listener: () => void): () => void {
 function writeTabs(projectId: string, change: (tabs: FileTab[]) => FileTab[], storage?: FilesPlaceStorage): void {
   // See rememberFilesPlace: without storage there are no file tabs.
   const saved = loadTabs(storage);
-  const next = change(saved[projectId] ?? []).slice(0, TABS_CAP);
+  const next = capTabs(change(saved[projectId] ?? []));
   if (next.length) saved[projectId] = next;
   else delete saved[projectId];
   writeJson(TABS_KEY, Object.keys(saved).length ? saved : undefined, storage);
@@ -194,12 +216,18 @@ export function readFileTabs(projectId: string, storage?: FilesPlaceStorage): Fi
 }
 
 /** Put `tab` first among `projectId`'s file tabs, in place of an older card
- * for the same file — whose markup's agent tab it keeps. */
+ * for the same file — whose markup (agent tab, `marked`) it keeps. */
 export function openFileTab(projectId: string, tab: FileTab, storage?: FilesPlaceStorage): void {
   writeTabs(projectId, (tabs) => {
     const known = tabs.find((other) => sameFile(other, tab));
-    return [{ ...tab, tab: tab.tab ?? known?.tab }, ...tabs.filter((other) => !sameFile(other, tab))];
+    return [keepMarkup(tab, known), ...tabs.filter((other) => !sameFile(other, tab))];
   }, storage);
+}
+
+/** `tab` with the markup `known` (the same file's older card) carries. */
+function keepMarkup(tab: FileTab, known: FileTab | undefined): FileTab {
+  const marked = tab.marked ?? known?.marked;
+  return { ...tab, tab: tab.tab ?? known?.tab, ...(marked ? { marked } : {}) };
 }
 
 /** `projectId`'s card for `file`, if it has one. */
@@ -213,18 +241,31 @@ export function findFileTab(projectId: string, file: FileTabFile, storage?: File
  * changed, since the markup view calls this as each mark is saved. */
 export function keepMarkupTab(projectId: string, tab: FileTab, storage?: FilesPlaceStorage): void {
   const known = readFileTabs(projectId, storage).find((other) => sameFile(other, tab));
-  const next: FileTab = { ...known, ...tab, tab: tab.tab ?? known?.tab };
+  const next: FileTab = { ...known, ...tab, tab: tab.tab ?? known?.tab, marked: true };
   if (!validTab(next)) return;
-  const fields: (keyof FileTab)[] = ["token", "kind", "size", "modified", "folder", "label", "tab"];
+  const fields: (keyof FileTab)[] = ["token", "kind", "size", "modified", "folder", "label", "tab", "marked"];
   if (known && fields.every((field) => known[field] === next[field])) return;
   writeTabs(projectId, (tabs) => known
     ? tabs.map((other) => sameFile(other, next) ? next : other)
     : [next, ...tabs], storage);
 }
 
+/** Cards for markups that had lost theirs (`markup/recoverCards.ts`), put
+ * after the cards there are — they were the oldest when they fell off. A
+ * file that has a card meanwhile is left as it is. */
+export function restoreMarkupTabs(projectId: string, found: FileTab[], storage?: FilesPlaceStorage): void {
+  const known = readFileTabs(projectId, storage);
+  const fresh: FileTab[] = [];
+  for (const tab of found) {
+    const next: FileTab = { ...tab, marked: true };
+    if (validTab(next) && ![...known, ...fresh].some((other) => sameFile(other, next))) fresh.push(next);
+  }
+  if (fresh.length) writeTabs(projectId, (tabs) => [...tabs, ...fresh.filter((tab) => !tabs.some((other) => sameFile(other, tab)))], storage);
+}
+
 /** Replace a card's row with a fresher listing of the same file. */
 export function refreshFileTab(projectId: string, tab: FileTab, storage?: FilesPlaceStorage): void {
-  writeTabs(projectId, (tabs) => tabs.map((other) => sameFile(other, tab) ? tab : other), storage);
+  writeTabs(projectId, (tabs) => tabs.map((other) => sameFile(other, tab) ? keepMarkup(tab, other) : other), storage);
 }
 
 /** Forget one card. */

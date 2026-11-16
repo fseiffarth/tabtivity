@@ -56,7 +56,7 @@ describe("Mobile project screen — a host with no tmux", () => {
     vi.stubGlobal("fetch", fetch);
     render(<Project id="p1" back={() => {}} terminal={() => {}} />);
     await screen.findByText("Claude");
-    expect(screen.getByText(/attach through tmux, which it does not have/)).toBeTruthy();
+    expect(screen.getByText(/attach through persistent local sessions/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Scheduled prompts for Claude" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "More for Claude" }));
     const more = screen.getByRole("dialog", { name: "Claude" });
@@ -91,12 +91,14 @@ describe("Mobile project screen — a host with no tmux", () => {
     expect(within(viewer).getByText("Save")).toBeTruthy();
   });
 
-  it("is unchanged when the host sends no field (an older desktop) or says tmux", async () => {
-    for (const extra of [{}, { terminals: "tmux" }]) {
+  it("is unchanged when the host sends no field (an older desktop), says tmux, or says native (Windows' session host)", async () => {
+    for (const extra of [{}, { terminals: "tmux" }, { terminals: "native" }]) {
       vi.stubGlobal("fetch", host(detail(extra)));
       render(<Project id="p1" back={() => {}} terminal={() => {}} />);
       await screen.findByText("Claude");
-      expect(screen.queryByText(/attach through tmux/)).toBeNull();
+      expect(screen.queryByText(/attach through persistent local sessions/)).toBeNull();
+      // Only the Windows session host says, while untested, that it carries the tabs.
+      expect(!!screen.queryByText(/experimental Windows session host/)).toBe("terminals" in extra && extra.terminals === "native");
       expect(screen.getByRole("button", { name: "New tab" })).toBeTruthy();
       // The card has no schedules, so its ◷ is the ⋯ sheet's row.
       fireEvent.click(screen.getByRole("button", { name: "More for Claude" }));

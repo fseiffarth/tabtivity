@@ -57,10 +57,12 @@ use super::{
         MAX_TAB_LABEL,
     },
     presence,
+    project_docs,
     pty_bridge::{self, TerminalRegistry},
     remarks,
     scheduler,
     serve,
+    shell_mask,
     uploads,
     push::{AgentTabRef, PushPrefs},
     sign_in,
@@ -88,6 +90,64 @@ const PDF_FRAME_PATH: &str = "/pdf-frame.html";
 
 const MOBILE_PERMISSIONS_POLICY: &str =
     "camera=(), microphone=(self), on-device-speech-recognition=(self), geolocation=(), payment=(), usb=()";
+
+/// The phone page's policy with no linked desktop, and the one spelling of
+/// it: `phone_csp` widens this text for the linked ones.
+const PHONE_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+
+/// The phone page's CSP for these linked desktops
+/// (`docs/phone_multi_desktop_plan.md`): each may frame this page
+/// (`frame-ancestors`), this page may frame each (`frame-src`) and probe its
+/// `/healthz` (`connect-src`). None linked: `PHONE_CSP` itself. The widened
+/// policy is `PHONE_CSP` with those directives replaced; one the replace no
+/// longer finds, or a value that is no header, stays closed.
+fn phone_csp(linked: &[String]) -> HeaderValue {
+    if linked.is_empty() {
+        return HeaderValue::from_static(PHONE_CSP);
+    }
+    let list = linked.join(" ");
+    let widened = PHONE_CSP
+        .replace("connect-src 'self';", &format!("connect-src 'self' {list}; frame-src 'self' {list};"))
+        .replace("frame-ancestors 'none';", &format!("frame-ancestors {list};"));
+    HeaderValue::from_str(&widened).unwrap_or_else(|_| HeaderValue::from_static(PHONE_CSP))
+}
+
+/// `MOBILE_PERMISSIONS_POLICY` with the features it grants this page
+/// (`(self)`: the microphone and speech recognition) delegable to the linked
+/// desktops' frames: an `allow=` attribute on the frame cannot widen what
+/// this header grants. None linked: the constant itself.
+fn permissions_policy(linked: &[String]) -> HeaderValue {
+    if linked.is_empty() {
+        return HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY);
+    }
+    let quoted: String = linked.iter().map(|origin| format!(" \"{origin}\"")).collect();
+    let widened = MOBILE_PERMISSIONS_POLICY.replace("(self)", &format!("(self{quoted})"));
+    HeaderValue::from_str(&widened).unwrap_or_else(|_| HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY))
+}
+
+/// The linked desktops of a host (`linked::linked_desktops`), none behind
+/// the server gateway (`secure`), where a link has no meaning.
+fn linked_for(secure: bool, state_dir: &std::path::Path, origin: &str) -> Vec<String> {
+    if secure {
+        return Vec::new();
+    }
+    super::linked::linked_desktops(state_dir, origin)
+}
+
+/// [`linked_for`] of the host serving a request.
+fn linked(state: &HostState) -> Vec<String> {
+    linked_for(state.web.secure(), &state.config.state_dir, &state.config.origin)
+}
+
+/// What the header middleware needs: whether the host is behind the gateway
+/// (its socket is `wss:`, and nothing is linked), and where to read the
+/// linked desktops from. Shared behind an `Arc`: the middleware's state is
+/// cloned for every request.
+struct HeaderState {
+    secure: bool,
+    state_dir: PathBuf,
+    origin: String,
+}
 
 #[derive(Clone)]
 struct HostState {
@@ -130,7 +190,7 @@ struct HostState {
 /// The owner's spawn seam (headless owner plan, H1b): `launch` starts a
 /// prepared tab detached under its tmux name, `installed` says which agent
 /// CLIs the ＋ sheet may offer. Production is `launch_prep::prepare` plus
-/// `tmux_local::spawn_detached_with` on the default tmux server — the same
+/// the session mux's `spawn_detached` on the default tmux server — the same
 /// launch assembly and the same server the window uses, so the window later
 /// attaches to what the sidecar started — and the registry's install probe.
 /// `new_project` makes a phone's new project
@@ -162,40 +222,82 @@ impl Default for HeadlessSpawner {
             launch: Arc::new(|opts: PtyOptions| {
                 Box::pin(async move {
                     let prepared = crate::services::launch_prep::prepare(opts, None, None).await?;
-                    #[cfg(unix)]
-                    {
-                        let check = prepared.privacy_check();
-                        let (tab, seq, session) =
-                            (prepared.opts.id.clone(), prepared.spawn_seq(), prepared.opts.tmux_session.clone());
-                        crate::services::tmux_local::spawn_detached_with(&prepared.opts, None)?;
-                        prepared.commit();
-                        // Local models only switched on while this agent was starting
-                        // (`launch_prep::recheck_privacy`): refused, its session ends here.
-                        if let Err(refusal) = crate::services::launch_prep::recheck_privacy(check).await {
-                            let sweep = app_core::rt::blocking("Local models only", move || {
-                                let sweep = crate::services::agent_privacy::end_sessions(session.as_slice());
-                                crate::services::launch_prep::on_tab_gone(&tab, seq);
-                                sweep
-                            })
-                            .await;
-                            return Err(match crate::commands::agent_privacy::unconfirmed_note(sweep) {
-                                Some(note) => format!("{refusal} {note}"),
-                                None => refusal,
-                            });
+                    let check = prepared.privacy_check();
+                    let (tab, seq, session) =
+                        (prepared.opts.id.clone(), prepared.spawn_seq(), prepared.opts.tmux_session.clone());
+                    // No local session backend (Windows with the session
+                    // host off): `Unavailable`, and the prepared spawn is
+                    // dropped. On the session host only what `prepare`'s
+                    // wrap marked runs (`headless_spawn_refused`).
+                    let mux = crate::services::session_mux::mux();
+                    if let Some(why) = headless_spawn_refused(mux.kind(), prepared.opts.mux_wrapped) {
+                        return Err(why.to_string());
+                    }
+                    // Off the async workers: the session host's connect may
+                    // start the host (a lazy start, ≤ 3 s). A launch that may
+                    // only rejoin its live session (`host_attach_only`: let
+                    // through the AI switch, or found alive in a host whose
+                    // setting is off) never goes through the create-or-attach
+                    // spawn: alive, there is nothing to start; gone meanwhile,
+                    // it is refused as the switch refuses a new agent.
+                    let opts = prepared.opts.clone();
+                    let attach_only = prepared.host_attach_only;
+                    app_core::rt::blocking("headless spawn", move || {
+                        if attach_only {
+                            let name = opts.tmux_session.as_deref().unwrap_or_default();
+                            let alive = mux.holds_sessions() && mux.has(name).unwrap_or(false);
+                            return headless_rejoin(alive);
                         }
-                        Ok(())
+                        mux.spawn_detached(&opts).map_err(|e| e.to_string())
+                    })
+                    .await??;
+                    prepared.commit();
+                    // Local models only switched on while this agent was starting
+                    // (`launch_prep::recheck_privacy`): refused, its session ends here.
+                    if let Err(refusal) = crate::services::launch_prep::recheck_privacy(check).await {
+                        let sweep = app_core::rt::blocking("Local models only", move || {
+                            let sweep = crate::services::agent_privacy::end_sessions(session.as_slice());
+                            crate::services::launch_prep::on_tab_gone(&tab, seq);
+                            sweep
+                        })
+                        .await;
+                        return Err(match crate::commands::agent_privacy::unconfirmed_note(sweep) {
+                            Some(note) => format!("{refusal} {note}"),
+                            None => refusal,
+                        });
                     }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = prepared;
-                        Err("a tab with no window needs tmux, which this platform has none of".to_string())
-                    }
+                    Ok(())
                 })
             }),
             installed: Arc::new(crate::services::agent_registry::binary_is_installed),
             new_project: Arc::new(crate::commands::projects::create_project_for_phone),
             assistant_options: Arc::new(|| Box::pin(crate::commands::assistant::assistant_options())),
         }
+    }
+}
+
+/// Why the owner's spawn may not start a prepared launch detached, or
+/// `None`. On the Windows session host only a launch `launch_prep::prepare`
+/// marked (`PtyOptions::mux_wrapped`) runs: its wrap applies the desktop's
+/// own routing rule (`session_host::route::routes_through_host`: the flag and
+/// `persist_local_sessions` on, a local AI tab with a session name, never
+/// the root scope, the Host session or a shell) and refuses a batch file
+/// (`route::host_argv`). tmux wraps every local launch with a session name,
+/// as before.
+fn headless_spawn_refused(kind: crate::services::session_mux::MuxKind, wrapped: bool) -> Option<&'static str> {
+    (kind == crate::services::session_mux::MuxKind::WinHost && !wrapped)
+        .then_some("this launch does not run in the session host (only a local agent tab does)")
+}
+
+/// The owner's answer to a launch that may only rejoin its session
+/// (`PreparedLaunch::host_attach_only`): nothing to start while it lives;
+/// ended meanwhile, refused with the AI switch's own code
+/// (`headless_create_error` reads it), never created again.
+fn headless_rejoin(alive: bool) -> Result<(), String> {
+    if alive {
+        Ok(())
+    } else {
+        Err(crate::services::ai_switch::AI_OFF.to_string())
     }
 }
 
@@ -325,27 +427,63 @@ fn exact_origin(headers: &HeaderMap, state: &HostState) -> bool {
     headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == Some(state.config.origin.as_str())
 }
 
-fn cookie_token(headers: &HeaderMap) -> Option<&str> {
-    session_cookie_in(&crate::brand::PAIR, headers.get(header::COOKIE)?.to_str().ok()?)
+fn cookie_token<'a>(headers: &'a HeaderMap, state: &HostState) -> Option<&'a str> {
+    device_session_cookie(headers, &crate::services::server::host_of(&state.config.origin))
 }
 
-/// The phone store's session token in a request, for the browser transport
-/// behind the gateway (`web_client::ServerLink`).
-pub fn device_session_cookie(headers: &HeaderMap) -> Option<&str> {
-    cookie_token(headers)
+/// The phone store's session token in a request to the host whose origin's
+/// `host[:port]` is `authority` — the browser transport behind the gateway
+/// (`web_client::ServerLink`) asks with its public host.
+pub fn device_session_cookie<'a>(headers: &'a HeaderMap, authority: &str) -> Option<&'a str> {
+    session_cookie_in(&crate::brand::PAIR, cookie_port(authority), headers.get(header::COOKIE)?.to_str().ok()?)
+}
+
+/// The explicit port of `host[:port]`, `None` on the default one.
+///
+/// Cookies ignore ports: a phone host on `HOST:10000` and the server
+/// gateway on `HOST` (`docs/context/server_gateway.md`, one shared Tailscale
+/// Serve) share one cookie jar, so under one name each sign-in overwrote the
+/// other's. A host on an explicit port names its cookie after it
+/// (`session_cookie_name`). `validate_origin` drops a default port, so the
+/// plain name stays the one a host on 443 always used.
+fn cookie_port(authority: &str) -> Option<&str> {
+    let (_, port) = authority.rsplit_once(':')?;
+    (!port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())).then_some(port)
+}
+
+/// The session cookie's name under `base` (`brand::SESSION_COOKIE` or a
+/// pair's name) for a host on `port`.
+fn session_cookie_name(base: &str, port: Option<&str>) -> String {
+    match port {
+        Some(port) => format!("{base}_{port}"),
+        None => base.to_string(),
+    }
+}
+
+/// The name this host sets its session cookie under.
+fn own_session_cookie(state: &HostState) -> String {
+    session_cookie_name(
+        crate::brand::SESSION_COOKIE,
+        cookie_port(&crate::services::server::host_of(&state.config.origin)),
+    )
 }
 
 /// The session token in a `Cookie` header: the cookie under its current name,
 /// else under the name an older build's host set (counted as a legacy hit).
-fn session_cookie_in<'a>(pair: &crate::brand::Pair, cookies: &'a str) -> Option<&'a str> {
+/// A host on an explicit port reads only its own name: the old names never
+/// carried a port, so one could be the default port's host's cookie.
+fn session_cookie_in<'a>(pair: &crate::brand::Pair, port: Option<&str>, cookies: &'a str) -> Option<&'a str> {
     let named = |wanted: &str| {
         cookies.split(';').find_map(|part| {
             let (name, value) = part.trim().split_once('=')?;
             (name == wanted).then_some(value)
         })
     };
-    if let Some(token) = named(&pair.cur(crate::brand::Name::SESSION_COOKIE)) {
+    if let Some(token) = named(&session_cookie_name(&pair.cur(crate::brand::Name::SESSION_COOKIE), port)) {
         return Some(token);
+    }
+    if port.is_some() {
+        return None;
     }
     let token = named(&pair.legacy(crate::brand::Name::SESSION_COOKIE)?)?;
     crate::brand::legacy_hit("session-cookie");
@@ -388,7 +526,7 @@ fn authenticate(
     headers: &HeaderMap,
     state: &HostState,
 ) -> Result<Phone, (StatusCode, Json<serde_json::Value>)> {
-    let token = cookie_token(headers)
+    let token = cookie_token(headers, state)
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     state
         .auth
@@ -500,7 +638,7 @@ async fn open_ticket(
     if let Err(error) = mutation_guard(&headers, &state) {
         return error;
     }
-    let Some(token) = cookie_token(&headers) else {
+    let Some(token) = cookie_token(&headers, &state) else {
         return api_error(StatusCode::UNAUTHORIZED, "authentication_required");
     };
     let uri = match body.url.parse::<Uri>() {
@@ -518,7 +656,7 @@ async fn open_ticket(
 }
 
 /// Run a catalog read without holding an async worker for it. A read past the
-/// TTL forks `tmux ls` (bounded by `discovery::TMUX_LS_TIMEOUT`, but seconds
+/// TTL forks `tmux ls` (bounded by `session_mux::tmux::LIST_TIMEOUT`, but seconds
 /// against a hung tmux server) and every other read waits on the catalog mutex
 /// behind it; done inline on the workers, a few such requests parked all of
 /// them and the sidecar stopped answering anything — pings and terminal output
@@ -698,12 +836,21 @@ fn catalog_stale(state: &HostState) {
         .invalidate();
 }
 
-async fn security_headers(State(secure): State<bool>, request: Request<Body>, next: Next) -> Response<Body> {
+async fn security_headers(State(header_state): State<Arc<HeaderState>>, request: Request<Body>, next: Next) -> Response<Body> {
+    let secure = header_state.secure;
     let sensitive = request.uri().path().starts_with("/api/") || request.uri().path() == "/healthz";
     let frame = request.uri().path() == PDF_FRAME_PATH;
     // The browser desktop client's pages get the desktop's CSP with its
     // socket allowed (`web_client::page_csp`), not the phone's.
     let desktop = request.uri().path() == "/desktop" || request.uri().path().starts_with("/desktop/");
+    // The phone's documents are what a linked desktop frames; scripts and
+    // styles under `/assets/` are never framed and keep the closed policy.
+    let document = !sensitive && !frame && !desktop && !request.uri().path().starts_with("/assets/");
+    let linked = if document {
+        linked_for(secure, &header_state.state_dir, &header_state.origin)
+    } else {
+        Vec::new()
+    };
     let host = request
         .headers()
         .get(header::HOST)
@@ -718,7 +865,9 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    if !framed {
+    // `X-Frame-Options` cannot name several origins; with desktops linked a
+    // document leaves it to `frame-ancestors`, which outranks it anyway.
+    if !framed && linked.is_empty() {
         headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     }
     headers.insert(
@@ -729,10 +878,7 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
     if sensitive && !headers.contains_key(header::CACHE_CONTROL) {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
-    headers.insert(
-        "permissions-policy",
-        HeaderValue::from_static(MOBILE_PERMISSIONS_POLICY),
-    );
+    headers.insert("permissions-policy", permissions_policy(&linked));
     if desktop {
         let hashes = headers
             .remove(web_client::INLINE_SCRIPT_HASHES)
@@ -745,7 +891,7 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
     } else if !framed {
         // `img-src blob:`: the files library's covers are drawn on the phone
         // and shown as object URLs (`mobile-web/src/thumbs.ts`).
-        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"));
+        headers.insert(header::CONTENT_SECURITY_POLICY, phone_csp(&linked));
     }
     response
 }
@@ -754,7 +900,7 @@ async fn security_headers(State(secure): State<bool>, request: Request<Body>, ne
 /// opaque, and whether `'self'` still matches the server it came from differs
 /// between engines — so the server is also named outright, from the `Host`
 /// the request came in on (a host name, nothing else, or it is left out).
-fn pdf_frame_policy(host: Option<&HeaderValue>) -> String {
+fn pdf_frame_policy(host: Option<&HeaderValue>, linked: &[String]) -> String {
     let named = host
         .and_then(|value| value.to_str().ok())
         .filter(|host| {
@@ -764,30 +910,54 @@ fn pdf_frame_policy(host: Option<&HeaderValue>) -> String {
         })
         .map(|host| format!(" https://{host}"))
         .unwrap_or_default();
+    // `frame-ancestors` checks every ancestor: under a linked desktop's
+    // frame the PWA's own pdf.js frame has that desktop above it too.
+    let ancestors: String = linked.iter().map(|origin| format!(" {origin}")).collect();
     format!(
-        "default-src 'none'; script-src 'self'{named}; style-src 'unsafe-inline'; img-src blob: data:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'{named}"
+        "default-src 'none'; script-src 'self'{named}; style-src 'unsafe-inline'; img-src blob: data:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'{named}{ancestors}"
     )
 }
 
 /// `GET /pdf-frame.html` — the sealed frame (`PDF_FRAME_PATH`), with its own
 /// framing rules. Only the frame's own bytes: a bundle without it is a 404,
 /// never the app shell under a framable policy.
-async fn pdf_frame(headers: HeaderMap) -> Response<Body> {
+async fn pdf_frame(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
+    pdf_frame_response(&headers, &linked(&state))
+}
+
+/// [`pdf_frame`]'s answer for these linked desktops.
+fn pdf_frame_response(headers: &HeaderMap, linked: &[String]) -> Response<Body> {
     let Some((bytes, mime)) = embedded_asset(PDF_FRAME_PATH) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    Response::builder()
+    let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime)
         .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::X_FRAME_OPTIONS, "SAMEORIGIN")
-        .header(header::CONTENT_SECURITY_POLICY, pdf_frame_policy(headers.get(header::HOST)))
+        .header(header::CONTENT_SECURITY_POLICY, pdf_frame_policy(headers.get(header::HOST), linked));
+    // `SAMEORIGIN` would refuse it under a linked desktop's frame.
+    if linked.is_empty() {
+        response = response.header(header::X_FRAME_OPTIONS, "SAMEORIGIN");
+    }
+    response
         .body(Body::from(bytes))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-async fn health() -> impl IntoResponse {
-    Json(json!({ "ok": true }))
+/// `GET /healthz`. A linked desktop's phone app reads it cross-origin for its
+/// switcher's lamp (`credentials: "omit"`): only a linked origin is answered
+/// with CORS, and the body says nothing but that the host is up.
+async fn health(State(state): State<HostState>, headers: HeaderMap) -> Response<Body> {
+    let mut response = Json(json!({ "ok": true })).into_response();
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    if let Some(origin) = origin.filter(|origin| linked(&state).iter().any(|entry| entry == origin)) {
+        if let Ok(value) = HeaderValue::from_str(origin) {
+            let headers = response.headers_mut();
+            headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+            headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+        }
+    }
+    response
 }
 
 async fn pair(
@@ -855,7 +1025,7 @@ async fn login(
         Ok((token, expires_at)) => {
             let mut response =
                 Json(json!({ "ok": true, "expires_at": expires_at })).into_response();
-            let cookie = format!("{}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", crate::brand::SESSION_COOKIE);
+            let cookie = format!("{}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200", own_session_cookie(&state));
             response
                 .headers_mut()
                 .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
@@ -869,19 +1039,21 @@ async fn logout(State(state): State<HostState>, headers: HeaderMap) -> Response<
     if !exact_origin(&headers, &state) {
         return api_error(StatusCode::FORBIDDEN, "invalid_origin").into_response();
     }
-    if let Some(token) = cookie_token(&headers) {
+    if let Some(token) = cookie_token(&headers, &state) {
         state.auth.lock_ok().logout(token);
     }
     let mut response = Json(json!({ "ok": true })).into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_static(
-            concat!("__Host-", crate::app_slug!(), "_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"),
-        ),
-    );
+    if let Ok(expired) = HeaderValue::from_str(&format!(
+        "{}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0",
+        own_session_cookie(&state)
+    )) {
+        response.headers_mut().insert(header::SET_COOKIE, expired);
+    }
     // A cookie an older build's host set is expired as well; there is none
-    // to name while the name is unchanged.
-    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::SESSION_COOKIE) {
+    // to name while the name is unchanged. Not on an explicit port: the old
+    // name carried none, so it would expire the default port's host's cookie.
+    let ported = cookie_port(&crate::services::server::host_of(&state.config.origin)).is_some();
+    if let Some(old) = crate::brand::PAIR.legacy(crate::brand::Name::SESSION_COOKIE).filter(|_| !ported) {
         if let Ok(expired) =
             HeaderValue::from_str(&format!("{old}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"))
         {
@@ -915,10 +1087,18 @@ async fn status(State(state): State<HostState>, headers: HeaderMap) -> impl Into
         .filter(|scheme| scheme.len() <= 32 && scheme.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
         .unwrap_or("light_lavender")
         .to_string();
+    // From the settings read above, not a second read (`linked`).
+    let linked_desktops: Vec<_> = match &settings {
+        Some(settings) if !state.web.secure() => super::linked::linked_in(settings, &state.config.origin),
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(|origin| json!({ "origin": origin }))
+    .collect();
     (
         StatusCode::OK,
         Json(
-            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state) }),
+            json!({ "desktop_available": desktop_available, "host": state.config.host.display_name, "show_untested_tags": show_untested_tags, "color_scheme": color_scheme, "hidden_sections": hidden_sections(&state, &phone), "ai_off": ai_is_off(&state), "linked_desktops": linked_desktops }),
         ),
     )
 }
@@ -1270,6 +1450,7 @@ async fn project(
     // agent: the ＋ sheet's agent list would only offer what the create refuses.
     let agents = if public.kind == ScopeKind::Assistant { Vec::new() } else { agents };
     let closed = closed_tab_rows(closed);
+    let archived = archived_tab_rows(&state.config.state_dir, &project.raw_id, project.public.kind == ScopeKind::Assistant);
     let mut timings = timings
         .into_iter()
         .map(|timing| (timing.tmux_session.clone(), timing))
@@ -1339,7 +1520,7 @@ async fn project(
     (
         StatusCode::OK,
         Json(
-            json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed,
+            json!({ "project": public, "tabs": tabs, "desktop_available": desktop_available, "agents": agents, "closed": closed, "archived": archived,
                 // Whether this project's 📁 answers (`files.rs`): the host-wide
                 // switch, and a project with a folder rather than a box, the
                 // root console or a project the phone has no folder of.
@@ -1400,6 +1581,44 @@ fn closed_tab_rows(rows: Vec<super::protocol::ClosedAgentTab>) -> Vec<serde_json
                 "label": clean(&row.label),
                 "agent": clean(&row.agent),
                 "closed_at": row.closed_at,
+            })
+        })
+        .collect()
+}
+
+/// How many archived tabs the project detail lists: the newest. The archive
+/// itself keeps more (`services::tab_archive`); the desktop lists them all.
+const MAX_ARCHIVED_ROWS: usize = 100;
+
+/// The project's archived tabs (`services::tab_archive`) for the phone's
+/// Archived fold, read off the state dir so they show with no window too:
+/// the opaque id, the label, the tab kind, the agent CLI for an agent tab and
+/// when it was archived. No folder, command line or session id crosses. The
+/// assistant's scope has no archive.
+fn archived_tab_rows(state_dir: &std::path::Path, raw_id: &str, assistant: bool) -> Vec<serde_json::Value> {
+    use crate::services::tab_archive;
+    if assistant {
+        return Vec::new();
+    }
+    let clean = |text: &str| -> String { text.chars().filter(|c| !c.is_control()).take(MAX_TAB_LABEL).collect() };
+    tab_archive::list_at(&tab_archive::archive_path_in(state_dir, raw_id))
+        .into_iter()
+        .filter(|entry| tab_archive::archive_id_ok(&entry.id))
+        .take(MAX_ARCHIVED_ROWS)
+        .map(|entry| {
+            let kind = entry.tab.extra.get("kind").and_then(serde_json::Value::as_str).unwrap_or("shell");
+            let kind = match kind {
+                "agent" | "local_agent" => "agent",
+                "shell" => "shell",
+                _ => "other",
+            };
+            let agent = if kind == "agent" { clean(&entry.tab.cmd) } else { String::new() };
+            json!({
+                "id": entry.id,
+                "label": clean(&entry.tab.label),
+                "kind": kind,
+                "agent": agent,
+                "archived_at": entry.archived_at,
             })
         })
         .collect()
@@ -1840,6 +2059,59 @@ async fn reopen_tab(
         };
     }
     answer_created(&state, &phone, &project_id, response).await
+}
+
+/// `POST /api/v1/projects/{project_id}/tabs/archived/{archive_id}/restore` —
+/// bring an archived tab back in the desktop window (`stores/tabArchive`),
+/// built the way a restart builds it. Answers like a create, with the tab's
+/// row, when it came back as a terminal the phone can attach to; `200
+/// { restored, on_desktop }` when it opened on the desktop only; `409
+/// nothing_to_restore` once the entry is gone. Needs the window: with none,
+/// `503 desktop_unavailable`.
+async fn restore_archived_tab(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path((project_id, archive_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let phone = match mutation_guard(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !crate::services::tab_archive::archive_id_ok(&archive_id) {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    let Ok(catalog_snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some(project) = catalog_snapshot.project(&project_id) else {
+        return api_error(StatusCode::NOT_FOUND, "project_not_found");
+    };
+    if project.public.kind == ScopeKind::Assistant {
+        return api_error(StatusCode::NOT_FOUND, "nothing_to_restore");
+    }
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::RestoreArchivedTab {
+            request_id: new_request_id(),
+            project_id: project.raw_id.clone(),
+            archive_id,
+        },
+    )
+    .await;
+    if desktop_down(&response) {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+    }
+    match response {
+        Ok(DesktopResponse::Activated) => {
+            catalog_stale(&state);
+            (StatusCode::OK, Json(json!({ "restored": true, "on_desktop": true })))
+        }
+        Ok(DesktopResponse::Error { code, .. }) if code == "nothing_to_restore" => {
+            api_error(StatusCode::CONFLICT, "nothing_to_restore")
+        }
+        other => answer_created(&state, &phone, &project_id, other).await,
+    }
 }
 
 /// The linked worktree each of the project's tabs works in, in tab order, for
@@ -4419,6 +4691,53 @@ fn schedule_desktop_error(
 /// prompt-send and rename routes need — those surfaces exist for agent tabs
 /// alone — while the close route serves every tab the phone lists, shell
 /// included. Neither value is ever serialized back to the phone.
+/// `POST /api/v1/tabs/{tab_id}/archive` — put one tab into its project's
+/// archive, as the desktop's tab menu Archive does: kept there, and ended.
+/// Needs the window (it writes the archive from the tab it holds); with none,
+/// `503 desktop_unavailable`.
+async fn archive_tab(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !exact_origin(&headers, &state) {
+        return api_error(StatusCode::FORBIDDEN, "invalid_origin");
+    }
+    let (project_id, tmux_session) = match tab_target(&state, &phone, &tab_id, false) {
+        Ok(target) => target,
+        Err(error) => return error,
+    };
+    let desktop_socket = state.config.control_dir.join("desktop-control.sock");
+    let response = admin::desktop_call(
+        &desktop_socket,
+        &DesktopRequest::ArchiveTab { request_id: new_request_id(), project_id, tmux_session },
+    )
+    .await;
+    if desktop_down(&response) {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable");
+    }
+    match response {
+        Ok(DesktopResponse::Closed) => {
+            catalog_stale(&state);
+            (StatusCode::OK, Json(json!({ "archived": true })))
+        }
+        Ok(DesktopResponse::Error { code, .. }) => api_error(
+            match code.as_str() {
+                "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                "tab_not_found" => StatusCode::NOT_FOUND,
+                "not_archivable" => StatusCode::CONFLICT,
+                _ => StatusCode::BAD_REQUEST,
+            },
+            &code,
+        ),
+        _ => api_error(StatusCode::SERVICE_UNAVAILABLE, "desktop_unavailable"),
+    }
+}
+
 fn tab_target(
     state: &HostState,
     phone: &Phone,
@@ -4953,43 +5272,93 @@ async fn tab_named_files(
     (StatusCode::OK, Json(json!({ "files": found })))
 }
 
-/// The running shells keep what the agent said they do and whether they run
-/// in the background; the command line, and that it was cut, stay on the
-/// desktop. A command line carries absolute host paths and whatever the agent
-/// put inline (a token in a header, a password), and `AGENTS.md` says commands
-/// never cross the browser API (threat model gap 79).
-fn empty_shell_commands(transcript: &mut crate::services::agent_transcript::AgentTranscript) {
+/// The running shells cross masked (`shell_mask`, threat model gap 79): the
+/// command line and the agent's description of it with the tab's own folders
+/// made project-relative, every other host path cut to its leaf and anything
+/// secret-shaped hidden. `folders` are the scope's roots, the tab's and the
+/// session's cwd. The masked line may be longer or shorter than the desktop's
+/// cut; `cut` still says the desktop cut it.
+fn mask_shell_commands(transcript: &mut crate::services::agent_transcript::AgentTranscript, folders: &[&str]) {
     for shell in &mut transcript.shells {
-        shell.command.clear();
-        shell.cut = false;
+        shell.command = shell_mask::mask_command(&shell.command, folders);
+        if let Some(description) = shell.description.as_mut() {
+            *description = shell_mask::mask_command(description, folders);
+        }
     }
+}
+
+/// Each of `folders` as a command line may spell it: as given, as
+/// `canonicalize` resolves it (links followed; on Windows the long names,
+/// without the `\\?\` prefix) and, on Windows, by its 8.3 short name (a CI
+/// runner's `RUNNER~1` temp dir). A spelling none of these catches is not
+/// shown whole: `shell_mask` cuts it to its leaf like any other host path.
+fn folder_spellings(folders: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for folder in folders.iter().filter(|folder| !folder.is_empty()) {
+        out.push(folder.clone());
+        let Ok(real) = std::fs::canonicalize(folder) else { continue };
+        let real = crate::paths::without_verbatim_prefix(real);
+        #[cfg(windows)]
+        out.extend(short_path_name(&real));
+        out.push(real.to_string_lossy().into_owned());
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `path`'s 8.3 short spelling, `None` when it has none or it cannot be read.
+#[cfg(windows)]
+fn short_path_name(path: &std::path::Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: `wide` is NUL-terminated and outlives the call, which writes
+    // within the slice it is given.
+    let len = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buf)) } as usize;
+    (len > 0 && len < buf.len()).then(|| String::from_utf16_lossy(&buf[..len]))
 }
 
 /// A transcript as the phone may see it: the folders the agent and its
 /// subagents work in are paths, which do not cross the browser API. A
 /// subagent's folder in a linked worktree of the tab's project crosses as that
 /// worktree's name and branch instead (`worktree` on its `agent` entry), as the
-/// tab cards name it. The running shells cross without their command lines
-/// ([`empty_shell_commands`]).
+/// tab cards name it. The running shells cross masked
+/// ([`mask_shell_commands`]).
 async fn phone_transcript(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
-    empty_shell_commands(&mut transcript);
+    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
+    let wants_tab = !transcript.shells.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
+    let found = wants_tab
+        .then(|| catalog(state, phone).ok())
+        .flatten()
+        .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone())));
+    if !transcript.shells.is_empty() {
+        let mut folders: Vec<String> = transcript.cwd.iter().cloned().collect();
+        if let Some((project, cwd)) = &found {
+            folders.push(cwd.clone());
+            folders.extend(std::iter::once(&project.root).chain(&project.roots).map(|root| root.to_string_lossy().into_owned()));
+        }
+        let folders = folder_spellings(&folders);
+        let folders: Vec<&str> = folders.iter().map(String::as_str).collect();
+        mask_shell_commands(&mut transcript, &folders);
+    }
     transcript.context_card = None;
     transcript.cwd = None;
     transcript.running_cwds.clear();
     if let Some(prompt) = transcript.cut_prompt.as_mut() {
         prompt.cwd = None;
     }
-    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
     let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
-    let project = (entry_cwds.iter().any(|cwd| !cwd.is_empty()))
-        .then(|| catalog(state, phone).ok())
-        .flatten()
-        .and_then(|catalog| catalog.tab(tab_id).map(|(project, _)| project.clone()))
+    let project = found
+        .filter(|_| entry_cwds.iter().any(|cwd| !cwd.is_empty()))
+        .map(|(project, _)| project)
         .filter(is_git_project);
     if let Some(project) = project {
         let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();
@@ -6026,7 +6395,7 @@ async fn terminal(
     };
     let registry = state.terminal_registry.clone();
     let auth = state.auth.clone();
-    let token = cookie_token(&headers).unwrap_or_default().to_string();
+    let token = cookie_token(&headers, &state).unwrap_or_default().to_string();
     let state_dir = state.config.state_dir.clone();
     let catalog = state.catalog.clone();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
@@ -7671,12 +8040,21 @@ async fn project_files_list(
     };
     let key = state.auth.lock_ok().host_key().to_vec();
     let accepts = uploads::accepts(&rel);
+    // The root also says where its catalog docs stand (the "Project docs"
+    // group): names and states, read under the same deadline. A stalled read
+    // leaves the array out, which the phone shows as the plain group.
+    let docs_root = rel.is_empty().then(|| root.clone());
     // A directory walk that opens every kept file to type it: off the
     // executor, under the local deadline (a stalled mount answers `timeout`).
     let listed = deadline::local(move || files::list(&root, &rel, &key, &raw_id)).await;
     match listed {
         Ok(listing) => {
             let mut answer = json!(listing);
+            if let Some(root) = docs_root {
+                if let Ok(docs) = deadline::local(move || Ok(project_docs::status(&root))).await {
+                    answer["docs"] = json!(docs);
+                }
+            }
             answer["uploads"] = json!(accepts && uploads::uploads_open(&state.config.state_dir));
             answer["remarks"] = json!(remarks::remarks_open(&state.config.state_dir));
             (StatusCode::OK, Json(answer))
@@ -8052,6 +8430,46 @@ async fn project_files_folder(
     }
 }
 
+/// `POST /api/v1/projects/{project_id}/files/docs?name=<leaf>` — a ghost row's
+/// **Create** in the "Project docs" group: the catalog doc `name` written into
+/// the project root from its template, behind the upload guards (session,
+/// exact origin, both switches). Create-new: a taken name is `already_exists`
+/// and nothing is touched; a name outside the catalog's creatable docs is
+/// `invalid_request`. No upload-log entry and no Undo — it is a template file
+/// the user can delete. The answer is the new file's listing row.
+async fn project_files_docs_create(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(project_id): Path<String>,
+    Query(query): Query<UploadQuery>,
+) -> impl IntoResponse {
+    let (_, root, raw_id) = match upload_scope(&state, &headers, &project_id) {
+        Ok(scope) => scope,
+        Err(error) => return error,
+    };
+    let key = state.auth.lock_ok().host_key().to_vec();
+    let name = query.name;
+    // Creates a file (and opens the new one to type it): off the executor,
+    // under the local deadline.
+    let made = deadline::local(move || {
+        Ok(project_docs::create(&root, &name).map(|()| files::lookup(&root, &name, &key, &raw_id)))
+    })
+    .await;
+    match made {
+        Ok(Ok(Some(entry))) => (StatusCode::CREATED, Json(json!({ "entry": entry }))),
+        Ok(Ok(None)) => api_error(StatusCode::NOT_FOUND, "file_not_found"),
+        Ok(Err(error)) => api_error(
+            match error {
+                project_docs::CreateError::NotCreatable => StatusCode::BAD_REQUEST,
+                project_docs::CreateError::Exists => StatusCode::CONFLICT,
+                project_docs::CreateError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            },
+            error.code(),
+        ),
+        Err(error) => files_error(error),
+    }
+}
+
 /// `DELETE /api/v1/projects/{project_id}/files/folder?f=<token>` — **Undo** of
 /// a **New folder**: only a folder the phone made within the hour, and only
 /// while it is still empty (`uploads::remove_made_folder`).
@@ -8324,7 +8742,11 @@ where
 /// through the same middleware stack the sidecar serves.
 fn router(state: HostState) -> Router {
     // Behind the gateway the socket is `wss:`; the CSP names it so.
-    let secure = state.web.secure();
+    let header_state = Arc::new(HeaderState {
+        secure: state.web.secure(),
+        state_dir: state.config.state_dir.clone(),
+        origin: state.config.origin.clone(),
+    });
     Router::new()
         .route("/healthz", get(health))
         .route("/api/v1/pair", post(pair))
@@ -8374,6 +8796,7 @@ fn router(state: HostState) -> Router {
         )
         .route("/api/v1/projects/{project_id}/tabs", post(create_tab))
         .route("/api/v1/projects/{project_id}/tabs/reopen", post(reopen_tab))
+        .route("/api/v1/projects/{project_id}/tabs/archived/{archive_id}/restore", post(restore_archived_tab))
         .route(
             "/api/v1/projects/{project_id}/launch-options",
             get(launch_options),
@@ -8399,6 +8822,7 @@ fn router(state: HostState) -> Router {
             "/api/v1/tabs/{tab_id}",
             get(tab).put(rename_tab).delete(close_tab),
         )
+        .route("/api/v1/tabs/{tab_id}/archive", post(archive_tab))
         .route("/api/v1/tabs/{tab_id}/color", put(color_tab))
         .route("/api/v1/tabs/{tab_id}/order", put(order_tab))
         .route("/api/v1/tabs/{tab_id}/prompt", post(sent_prompt))
@@ -8490,6 +8914,10 @@ fn router(state: HostState) -> Router {
             "/api/v1/projects/{project_id}/files/folder",
             delete(project_files_folder_undo).merge(post(project_files_folder).layer(DefaultBodyLimit::max(1024))),
         )
+        .route(
+            "/api/v1/projects/{project_id}/files/docs",
+            post(project_files_docs_create).layer(DefaultBodyLimit::max(1024)),
+        )
         .route("/api/v1/projects/{project_id}/files/zip", get(project_files_zip))
         .route(
             "/api/v1/projects/{project_id}/files/remarks",
@@ -8513,7 +8941,7 @@ fn router(state: HostState) -> Router {
         .merge(web_client::routes(state.web))
         .layer(DefaultBodyLimit::max(MAX_CONTROL_MESSAGE))
         .layer(middleware::from_fn(feature_gate))
-        .layer(middleware::from_fn_with_state(secure, security_headers))
+        .layer(middleware::from_fn_with_state(header_state, security_headers))
 }
 
 /// The phone's mail, calendar and todo routes answer `403 feature_off` while
@@ -8659,6 +9087,7 @@ fn start_background_relays(core_ctx: &app_core::CoreCtx, state_dir: &std::path::
     }
     if browser_clients || server {
         crate::services::agent_turn::start(core_ctx.clone());
+        crate::services::checkpoints::start(core_ctx.clone());
         // The browser Reader's transcript watches (`transcript-changed`), as
         // the window installs its own: this process's `agent_tab_transcript`
         // arms them, and without a sink the panel would only poll.
@@ -9023,7 +9452,7 @@ mod embedded_bundle_tests {
             assert_eq!(body(asset_response(path)).await, (StatusCode::OK, shell.clone()), "{path}");
         }
         assert_eq!(body(asset_response("/assets/index-planted.js")).await.0, StatusCode::NOT_FOUND);
-        let frame = body(pdf_frame(HeaderMap::new()).await).await;
+        let frame = body(pdf_frame_response(&HeaderMap::new(), &[])).await;
         match embedded(PDF_FRAME_PATH) {
             Some(bytes) => assert_eq!(frame, (StatusCode::OK, bytes)),
             None => assert_eq!(frame.0, StatusCode::NOT_FOUND),

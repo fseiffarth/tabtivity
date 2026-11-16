@@ -909,7 +909,7 @@ describe("spreadsheet request ownership", () => {
 
 it("does not repaint an offscreen PDF thumbnail after reload", async () => {
   cleanup();
-  const { PdfThumb } = await import("../../components/embed/pdf/PdfViewer");
+  const { PdfThumb } = await import("../../components/embed/pdf/PdfThumb");
   let intersect!: (entries: { isIntersecting: boolean }[]) => void;
   vi.stubGlobal("IntersectionObserver", class {
     constructor(callback: typeof intersect) { intersect = callback; }

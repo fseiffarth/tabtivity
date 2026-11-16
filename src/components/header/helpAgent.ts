@@ -38,7 +38,7 @@ export type HelpAgentChoice =
   | { kind: "none" };
 
 /** The CLIs named the help server when the backend does not say (`help_mcp::WIRED_CLIS`). */
-const FALLBACK_WIRED_CLIS = ["claude", "codex"];
+const FALLBACK_WIRED_CLIS = ["claude", "codex", "copilot", "opencode"];
 /** Mistral Vibe: a cloud agent of its own and the Local Model tab's runner. */
 const VIBE_BIN = "vibe";
 

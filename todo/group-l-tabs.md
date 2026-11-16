@@ -1255,3 +1255,41 @@ correctness/UX work atop the same layout model #42 detaches.*
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+- [ ] Tab archive per project (2026-11-14; untested ids `tabArchive.archive`,
+  `tabArchive.list`, `mobile.project.archive`; ✅ automated:
+  `TabArchive.test.ts`, `services::tab_archive` tests,
+  `archived_tabs_list_without_a_window_and_their_verbs_need_one`; ⚠️ never
+  run live; needs a rebuilt backend — `npm run backend:stale` — and the PWA
+  rebuilt for the phone half). Follow-ups: the root console's own tab menu
+  (`RootView`) has no Archive yet; with no desktop window the phone can list
+  the archive but not archive or restore.
+  - [ ] 🖐️ Manual test — desktop: right-click a Claude tab → Archive: the tab
+    closes. + menu → Archived tabs (1)… opens the list; the side panel's
+    Archive view shows the same row with a count on its tab. Click the row:
+    the tab comes back in the focused subwindow and resumes its conversation.
+    Archive a shell and a PDF viewer tab too, quit and relaunch Tabtivity:
+    both are still listed, and restore (the shell fresh in its folder, the PDF
+    on its file). × on a row asks, then deletes it. Archive the other tabs on
+    a subwindow with a file that has unsaved edits: it asks Save / Discard /
+    Cancel first, and Cancel stops the rest.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manual test — phone: on a project with Mobile access, card ⋯ →
+    Archive tab: the card goes and the desktop's archive lists it. The
+    Archived (n) fold under the cards lists it too (also with the desktop
+    closed); a tap with the desktop open brings the agent tab back on the
+    desktop and its card returns here.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS

@@ -14,21 +14,22 @@ use app_lib::commands::projects::{
     set_project_auto_connect, set_project_description, set_project_git_push_mcp, set_project_remote_control,
     set_project_schedule_mcp,
     set_project_git_disabled_blocking, set_project_sandbox_blocking, set_project_sandbox_spec, CreateProjectRequest, ImportProjectRequest,
-    CLAUDE_SETTINGS, GITIGNORE_DEFAULT, SCAFFOLD_FILES,
+    GITIGNORE_DEFAULT,
 };
 use app_lib::schema::project::{
     ComputeHost, RemoteSpec, SandboxScope, SandboxSourceDecision, SandboxSpec, SandboxToggleOutcome,
 };
 use tempfile::{Builder, TempDir};
 
-/// The backend's own scaffold table plus the two pieces `scaffold_project`
-/// writes separately. Derived from the constants rather than copied, so a
-/// change to a scaffold template can't leave these assertions asserting text
-/// nothing writes any more.
+/// The backend's own default scaffold plus the `.gitignore` `scaffold_project`
+/// writes separately. Derived from the catalog rather than copied, so a change
+/// to a scaffold template can't leave these assertions asserting text nothing
+/// writes any more.
 fn scaffolds() -> Vec<(&'static str, &'static str)> {
-    let mut v: Vec<(&str, &str)> = SCAFFOLD_FILES.to_vec();
+    let mut v: Vec<(&str, &str)> = app_lib::services::scaffold::defaults()
+        .map(|doc| (doc.name, doc.template))
+        .collect();
     v.push((".gitignore", GITIGNORE_DEFAULT));
-    v.push((".claude/settings.json", CLAUDE_SETTINGS));
     v
 }
 
@@ -147,12 +148,20 @@ fn assert_scaffold_state(dir: &Path, tag: &str) {
         let actual = fs::read_to_string(&path).expect("read scaffold");
         let expected = match name {
             "AGENTS.md" => format!("{tag}:agents\n"),
-            "TODO.md" => format!("{tag}:todo\n"),
             ".gitignore" => format!("{tag}:gitignore\n"),
-            ".claude/settings.json" => format!(r#"{{"marker":"{tag}"}}"#),
             _ => default_content.to_string(),
         };
         assert_eq!(actual, expected, "unexpected contents for {name}");
+    }
+    // Files the seed holds that are not in the default set are the user's:
+    // kept byte for byte, and nothing outside the lean set is added.
+    assert_eq!(fs::read_to_string(dir.join("TODO.md")).unwrap(), format!("{tag}:todo\n"));
+    assert_eq!(
+        fs::read_to_string(dir.join(".claude/settings.json")).unwrap(),
+        format!(r#"{{"marker":"{tag}"}}"#)
+    );
+    for name in ["CLAUDE.md", "GEMINI.md", "PROJECT.md", "ROADMAP.md", "STATUS.md", "DOCUMENTATION.md", "REMARKS.md"] {
+        assert!(!dir.join(name).exists(), "{name} is not scaffolded any more");
     }
 }
 

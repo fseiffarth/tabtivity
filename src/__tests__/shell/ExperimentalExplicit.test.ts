@@ -53,11 +53,12 @@ describe("explicitExperimentalPatch", () => {
     const patch = explicitExperimentalPatch(s({ debug: true }));
     const expected: Partial<Settings> = { experimental_explicit: true };
     for (const flag of EXPERIMENTAL_FLAGS) {
-      if (flag !== "terminal_webgl" && flag !== "gpu_compositing") expected[flag] = true;
+      if (flag !== "terminal_webgl" && flag !== "gpu_compositing" && flag !== "windows_session_host") expected[flag] = true;
     }
     expect(patch).toEqual(expected);
     expect(patch).not.toHaveProperty("terminal_webgl");
     expect(patch).not.toHaveProperty("gpu_compositing");
+    expect(patch).not.toHaveProperty("windows_session_host");
   });
 
   it("writes the marker alone outside Debug mode", () => {

@@ -1137,16 +1137,14 @@ fn normalize_entry_canonicalizes_legacy_git_type() {
 fn migration_plan_lists_one_step_per_missing_piece() {
     let tmp = tempfile::tempdir().unwrap();
     let steps = migration_steps_at(tmp.path(), true).unwrap();
-    // Every scaffold file + .claude/settings.json as createFile, plus the
-    // gitignore and git-init steps.
+    // Each default doc as createFile, plus the gitignore and git-init steps.
     let create: Vec<&str> = steps
         .iter()
         .filter(|s| s.kind == "createFile")
         .filter_map(|s| s.path.as_deref())
         .collect();
-    assert_eq!(create.len(), SCAFFOLD_FILES.len() + 1);
-    assert!(create.contains(&"AGENTS.md"));
-    assert!(create.contains(&".claude/settings.json"));
+    assert_eq!(create, ["AGENTS.md", "README.md"]);
+    assert!(!steps.iter().any(|s| s.id == "claude_settings"), "the step is gone");
     let gitignore = steps.iter().find(|s| s.id == "gitignore").unwrap();
     assert!(gitignore.details.contains(&"project.json".to_string()));
     assert!(steps.iter().any(|s| s.id == "git_init"));
@@ -1156,18 +1154,28 @@ fn migration_plan_lists_one_step_per_missing_piece() {
 fn migration_plan_offers_a_stub_upgrade_not_a_create_for_a_legacy_doc() {
     let tmp = tempfile::tempdir().unwrap();
     scaffold_project(tmp.path(), false).unwrap();
-    std::fs::write(tmp.path().join("CLAUDE.md"), "# Claude Context\n").unwrap();
+    std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n").unwrap();
     let steps = migration_steps_at(tmp.path(), false).unwrap();
     assert_eq!(
         steps,
         vec![MigrationStep {
-            id: "stub:CLAUDE.md".to_string(),
+            id: "stub:AGENTS.md".to_string(),
             kind: "upgradeStub".to_string(),
-            path: Some("CLAUDE.md".to_string()),
+            path: Some("AGENTS.md".to_string()),
             details: vec![],
         }],
         "a complete no-git scaffold with one legacy stub has exactly that one step"
     );
+}
+
+/// A pointer file (`CLAUDE.md`, `GEMINI.md`) an older build wrote is no step:
+/// the pointers are never rewritten, and a missing one is never offered.
+#[test]
+fn migration_plan_leaves_pointer_files_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    scaffold_project(tmp.path(), false).unwrap();
+    std::fs::write(tmp.path().join("CLAUDE.md"), "# Claude Context\n").unwrap();
+    assert!(migration_steps_at(tmp.path(), false).unwrap().is_empty());
 }
 
 #[test]
@@ -1182,11 +1190,8 @@ fn migration_apply_honours_declines_step_by_step() {
     assert_eq!(report.created_files, vec!["AGENTS.md"]);
     assert!(!report.gitignore_lines_added.is_empty());
     assert!(tmp.path().join(".gitignore").exists());
-    assert!(!tmp.path().join("TODO.md").exists(), "declined file created");
-    assert!(
-        !tmp.path().join(".claude/settings.json").exists(),
-        "declined settings created"
-    );
+    assert!(!tmp.path().join("README.md").exists(), "declined file created");
+    assert!(!tmp.path().join(".claude").exists(), "no settings step any more");
     assert!(!report.git_initialized);
     assert!(!tmp.path().join(".git").exists(), "declined git init ran");
 }
@@ -1233,17 +1238,22 @@ fn entry_migration_details_previews_the_normalize_diff() {
 // ── scaffold_project ───────────────────────────────────────────────────
 
 #[test]
-fn scaffold_project_creates_all_files() {
+fn scaffold_project_creates_the_lean_default_set() {
     let tmp = tempfile::tempdir().unwrap();
     scaffold_project(tmp.path(), true).unwrap();
 
-    // Derived from SCAFFOLD_FILES rather than a hand-kept copy, so a file
-    // added to the scaffold later is covered here without an edit.
-    for (name, _) in SCAFFOLD_FILES {
-        assert!(tmp.path().join(name).exists(), "missing: {name}");
+    // Exactly AGENTS/README/.gitignore/.git: no pointer files, no on-demand
+    // docs, no `.claude/` — whatever the catalog says is not a default.
+    let mut names: Vec<String> = fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, [".git", ".gitignore", "AGENTS.md", "README.md"]);
+    for doc in scaffold::defaults() {
+        assert!(tmp.path().join(doc.name).is_file(), "missing: {}", doc.name);
     }
-    assert!(tmp.path().join(".gitignore").exists());
-    assert!(tmp.path().join(".claude/settings.json").exists());
+    assert!(!scaffold_is_missing_at(tmp.path(), true));
 }
 
 /// A screen grab holds whatever was on the screen, and a project with a
@@ -1385,9 +1395,9 @@ fn a_fifo_gitignore_is_left_alone_without_blocking() {
 }
 
 /// A linked `.gitignore` is left alone like every scaffold path, not a
-/// failure of the whole repair or migration plan: the other steps
-/// (`.claude/settings.json`) still run, and the project stops reading as
-/// missing its scaffold once they have.
+/// failure of the whole repair or migration plan: the other steps (a missing
+/// default doc) still run, and the project stops reading as missing its
+/// scaffold once they have.
 #[cfg(unix)]
 #[test]
 fn a_linked_gitignore_does_not_stop_the_rest_of_the_scaffold() {
@@ -1400,25 +1410,20 @@ fn a_linked_gitignore_does_not_stop_the_rest_of_the_scaffold() {
 
     let steps = migration_steps_at(&dir, true).unwrap();
     assert!(!steps.iter().any(|step| step.id == "gitignore"));
-    assert!(steps.iter().any(|step| step.id == "claude_settings"));
+    assert!(steps.iter().any(|step| step.id == "file:AGENTS.md"));
 
     let report = repair_project_scaffold_at(&dir, true).unwrap();
     assert!(report.gitignore_lines_added.is_empty());
-    assert!(dir.join(".claude").join("settings.json").is_file());
+    assert!(dir.join("AGENTS.md").is_file() && dir.join("README.md").is_file());
     assert!(!elsewhere.exists());
     assert!(!scaffold_is_missing_at(&dir, true), "a dangling link counts as present");
 
-    // A dangling `.claude` or `settings.json` link is left alone by the
-    // repair, so it must not read as missing for good either.
-    fs::remove_dir_all(dir.join(".claude")).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, dir.join(".claude")).unwrap();
+    // A dangling link at a default doc's name is left alone by the repair, so
+    // it must not read as missing for good either.
+    fs::remove_file(dir.join("README.md")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, dir.join("README.md")).unwrap();
     repair_project_scaffold_at(&dir, true).unwrap();
-    assert!(!scaffold_is_missing_at(&dir, true), "a linked .claude is left alone");
-    fs::remove_file(dir.join(".claude")).unwrap();
-    fs::create_dir(dir.join(".claude")).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, dir.join(".claude").join("settings.json")).unwrap();
-    repair_project_scaffold_at(&dir, true).unwrap();
-    assert!(!scaffold_is_missing_at(&dir, true), "a dangling settings.json is left alone");
+    assert!(!scaffold_is_missing_at(&dir, true), "a dangling README.md is left alone");
     assert!(!elsewhere.exists());
 }
 
@@ -1538,24 +1543,30 @@ fn write_no_follow_refuses_a_fifo_without_blocking() {
 }
 
 /// The project list asks every project whether its scaffold is complete,
-/// reading its agent docs: a FIFO planted as `CLAUDE.md` must not hang it,
-/// nor the migration plan or the repair.
+/// reading its agent docs: a FIFO planted as `AGENTS.md` (or a pointer file)
+/// must not hang it, nor the migration plan, the repair or the empty-agents
+/// check, and is never written through.
 #[cfg(unix)]
 #[test]
 fn a_fifo_agent_doc_does_not_block_the_scaffold_checks() {
     let dir = tempfile::tempdir().unwrap();
+    crate::services::home_io::mkfifo(&dir.path().join("AGENTS.md"));
     crate::services::home_io::mkfifo(&dir.path().join("CLAUDE.md"));
     let root = dir.path().to_path_buf();
-    crate::services::home_io::within_deadline(move || scaffold_is_missing_at(&root, false));
+    // README.md is missing here; the point is the check returns at all.
+    assert!(crate::services::home_io::within_deadline(move || scaffold_is_missing_at(&root, false)));
+    let root = dir.path().to_path_buf();
+    assert!(crate::services::home_io::within_deadline(move || agents_empty_at(&root)));
     let root = dir.path().to_path_buf();
     let steps = crate::services::home_io::within_deadline(move || migration_steps_at(&root, false)).unwrap();
-    assert!(!steps.iter().any(|step| step.path.as_deref() == Some("CLAUDE.md")), "the FIFO is left alone");
+    assert!(!steps.iter().any(|step| step.path.as_deref() == Some("AGENTS.md")), "the FIFO is left alone");
     let root = dir.path().to_path_buf();
-    let accepted: HashSet<String> = ["stub:CLAUDE.md".to_string()].into();
+    let accepted: HashSet<String> = ["stub:AGENTS.md".to_string(), "file:AGENTS.md".to_string()].into();
     crate::services::home_io::within_deadline(move || apply_migration_steps_at(&root, false, &accepted)).unwrap();
     let root = dir.path().to_path_buf();
     let report = crate::services::home_io::within_deadline(move || repair_project_scaffold_at(&root, false)).unwrap();
-    assert!(!report.updated_files.iter().any(|f| f == "CLAUDE.md"));
+    assert!(!report.updated_files.iter().any(|f| f == "AGENTS.md"));
+    assert!(!report.created_files.iter().any(|f| f == "AGENTS.md"));
 }
 
 /// Detach removes the state-dir `project.json` only once the registry
@@ -1628,20 +1639,22 @@ fn scaffold_project_gitignores_project_json() {
 #[test]
 fn scaffold_project_does_not_overwrite_existing_files() {
     let tmp = tempfile::tempdir().unwrap();
-    let todo_path = tmp.path().join("TODO.md");
-    std::fs::write(&todo_path, "original content").unwrap();
+    let readme_path = tmp.path().join("README.md");
+    std::fs::write(&readme_path, "original content").unwrap();
 
     scaffold_project(tmp.path(), true).unwrap();
 
-    let content = std::fs::read_to_string(&todo_path).unwrap();
+    let content = std::fs::read_to_string(&readme_path).unwrap();
     assert_eq!(
         content, "original content",
         "existing file must not be overwritten"
     );
 }
 
+/// An imported tree's own `.claude/settings.json` (and any other doc the
+/// catalog knows) is the user's: the scaffold neither touches nor adds to it.
 #[test]
-fn scaffold_project_does_not_overwrite_claude_settings() {
+fn scaffold_project_leaves_an_existing_claude_folder_alone() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join(".claude")).unwrap();
     let cs = tmp.path().join(".claude/settings.json");
@@ -1650,19 +1663,17 @@ fn scaffold_project_does_not_overwrite_claude_settings() {
     scaffold_project(tmp.path(), true).unwrap();
 
     let content = std::fs::read_to_string(&cs).unwrap();
-    assert!(
-        content.contains("custom"),
-        "custom settings must not be overwritten"
-    );
+    assert!(content.contains("custom"), "custom settings must not be overwritten");
+    assert_eq!(fs::read_dir(tmp.path().join(".claude")).unwrap().count(), 1, "nothing added");
 }
 
 #[test]
 fn scaffold_project_keeps_every_existing_scaffold_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut ours: Vec<String> = SCAFFOLD_FILES.iter().map(|(n, _)| n.to_string()).collect();
+    // Every doc the catalog knows (defaults and not), so a new default is
+    // covered without an edit, plus the .gitignore.
+    let mut ours: Vec<String> = scaffold::DOCS.iter().map(|d| d.name.to_string()).collect();
     ours.push(".gitignore".to_string());
-    ours.push(".claude/settings.json".to_string());
-    std::fs::create_dir_all(tmp.path().join(".claude")).unwrap();
     for name in &ours {
         std::fs::write(tmp.path().join(name), format!("user's own {name}")).unwrap();
     }
@@ -1687,23 +1698,19 @@ fn scaffold_project_never_writes_through_a_shipped_symlink() {
     // A tree can ship a dangling link: `exists()` says false, and a plain
     // write would create the link's target outside the project.
     let outside = tmp.path().join("outside.md");
-    std::os::unix::fs::symlink(&outside, project.join("CLAUDE.md")).unwrap();
-    let elsewhere = tmp.path().join("elsewhere");
-    std::fs::create_dir(&elsewhere).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, project.join(".claude")).unwrap();
+    std::os::unix::fs::symlink(&outside, project.join("AGENTS.md")).unwrap();
 
     scaffold_project(&project, false).unwrap();
 
     assert!(!outside.exists(), "the link's target must not be created");
-    assert!(!elsewhere.join("settings.json").exists());
-    assert!(std::fs::symlink_metadata(project.join("CLAUDE.md"))
+    assert!(std::fs::symlink_metadata(project.join("AGENTS.md"))
         .unwrap()
         .file_type()
         .is_symlink());
-    assert!(project.join("AGENTS.md").is_file(), "the rest is still scaffolded");
+    assert!(project.join("README.md").is_file(), "the rest is still scaffolded");
     let preview = scaffold_preview(&project);
-    let claude = preview.iter().find(|i| i.path == "CLAUDE.md").unwrap();
-    assert!(claude.exists, "the preview must call the kept link present");
+    let agents = preview.iter().find(|i| i.path == "AGENTS.md").unwrap();
+    assert!(agents.exists, "the preview must call the kept link present");
 }
 
 #[test]
@@ -1745,7 +1752,7 @@ fn scaffold_project_idempotent() {
     let tmp = tempfile::tempdir().unwrap();
     scaffold_project(tmp.path(), true).unwrap();
     scaffold_project(tmp.path(), true).unwrap(); // second call must not error
-    assert!(tmp.path().join("TODO.md").exists());
+    assert!(tmp.path().join("AGENTS.md").exists());
 }
 
 #[test]
@@ -1764,9 +1771,9 @@ fn scaffold_project_commits_scaffold_files() {
         "scaffold must create an initial commit"
     );
 
-    // The .claude settings and docs are TRACKED, not just present on disk — that
-    // is what lets `extend` seed them onto the remote via the lockstep bundle.
-    for path in &[".claude/settings.json", "CLAUDE.md", ".gitignore"] {
+    // The docs are TRACKED, not just present on disk — that is what lets
+    // `extend` seed them onto the remote via the lockstep bundle.
+    for path in &["AGENTS.md", "README.md", ".gitignore"] {
         let tracked = crate::paths::command_no_window("git")
             .args(["ls-files", "--error-unmatch", path])
             .current_dir(tmp.path())
@@ -1785,8 +1792,7 @@ fn scaffold_project_without_git_skips_init() {
     let tmp = tempfile::tempdir().unwrap();
     scaffold_project(tmp.path(), false).unwrap();
     // Scaffold files are still written, but no git repo is initialized.
-    assert!(tmp.path().join("TODO.md").exists());
-    assert!(tmp.path().join(".claude/settings.json").exists());
+    assert!(tmp.path().join("AGENTS.md").exists());
     assert!(
         !tmp.path().join(".git").exists(),
         "git must not be initialized when with_git is false"
@@ -1797,14 +1803,27 @@ fn scaffold_project_without_git_skips_init() {
 fn scaffold_project_without_git_skips_gitignore() {
     let tmp = tempfile::tempdir().unwrap();
     scaffold_project(tmp.path(), false).unwrap();
-    // No git → no `.gitignore` (it's a git-axis artifact), but the docs and
-    // .claude settings are still written.
+    // No git → no `.gitignore` (it's a git-axis artifact), but the docs are
+    // still written.
     assert!(
         !tmp.path().join(".gitignore").exists(),
         ".gitignore must not be written for a no-git project"
     );
-    assert!(tmp.path().join("TODO.md").exists());
-    assert!(tmp.path().join(".claude/settings.json").exists());
+    assert!(tmp.path().join("AGENTS.md").exists());
+}
+
+/// The import dialog lists exactly the lean default set, `.gitignore` and
+/// `.git`: no pointer file, no on-demand doc, no `.claude/settings.json`.
+#[test]
+fn scaffold_preview_lists_only_the_default_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("README.md"), "mine\n").unwrap();
+    let items = scaffold_preview(tmp.path());
+    let seen: Vec<(&str, bool)> = items.iter().map(|i| (i.path.as_str(), i.exists)).collect();
+    assert_eq!(
+        seen,
+        [("AGENTS.md", false), ("README.md", true), (".gitignore", false), (".git", false)]
+    );
 }
 
 #[test]
@@ -1830,22 +1849,20 @@ fn scaffold_preview_reports_git_directory_status() {
 // ── repair_project_scaffold_at ─────────────────────────────────────────
 
 #[test]
-fn repair_fills_missing_scaffold_docs_and_settings() {
+fn repair_fills_missing_default_docs() {
     let tmp = tempfile::tempdir().unwrap();
-    // Simulate a project scaffolded before DOCUMENTATION.md / .claude
-    // settings existed: only a couple of the current scaffold files.
+    // A project that kept only a couple of files: the lean defaults that are
+    // missing are filled in, the user's own TODO.md is neither touched nor
+    // counted, and no `.claude/` appears.
     std::fs::write(tmp.path().join("TODO.md"), "# TODO\n").unwrap();
     std::fs::write(tmp.path().join(".gitignore"), "node_modules/\n").unwrap();
 
     let report = repair_project_scaffold_at(tmp.path(), false).unwrap();
 
-    assert!(report.created_files.contains(&"AGENTS.md".to_string()));
-    assert!(report
-        .created_files
-        .contains(&".claude/settings.json".to_string()));
+    assert_eq!(report.created_files, ["AGENTS.md", "README.md"]);
     assert!(!report.created_files.contains(&"TODO.md".to_string()));
-    assert!(tmp.path().join("DOCUMENTATION.md").exists());
-    assert!(tmp.path().join(".claude/settings.json").exists());
+    assert!(!tmp.path().join("DOCUMENTATION.md").exists(), "on-demand docs are not repaired in");
+    assert!(!tmp.path().join(".claude").exists());
 }
 
 #[test]
@@ -1877,9 +1894,9 @@ fn repair_without_git_does_not_touch_gitignore() {
         "no-git repair must not create a .gitignore"
     );
     assert!(report.gitignore_lines_added.is_empty());
-    // Docs/settings are still filled in as usual.
-    assert!(tmp.path().join("DOCUMENTATION.md").exists());
-    assert!(tmp.path().join(".claude/settings.json").exists());
+    // The default docs are still filled in as usual.
+    assert!(tmp.path().join("AGENTS.md").exists());
+    assert!(tmp.path().join("README.md").exists());
 }
 
 #[test]
@@ -1904,10 +1921,12 @@ fn agents_empty_at_matches_missing_empty_stub_and_guidance() {
     std::fs::write(tmp.path().join("AGENTS.md"), "  \n").unwrap();
     assert!(agents_empty_at(tmp.path()));
 
-    // Untouched legacy stub and an untouched earlier template.
+    // Untouched legacy stub, an untouched earlier template and the current one.
     std::fs::write(tmp.path().join("AGENTS.md"), "# Agents\n").unwrap();
     assert!(agents_empty_at(tmp.path()));
-    std::fs::write(tmp.path().join("AGENTS.md"), AGENTS_HISTORY[0]).unwrap();
+    std::fs::write(tmp.path().join("AGENTS.md"), scaffold::AGENTS_HISTORY[1]).unwrap();
+    assert!(agents_empty_at(tmp.path()));
+    std::fs::write(tmp.path().join("AGENTS.md"), scaffold::AGENTS_SCAFFOLD).unwrap();
     assert!(agents_empty_at(tmp.path()));
 
     // Real project guidance is not empty.
@@ -1915,112 +1934,181 @@ fn agents_empty_at_matches_missing_empty_stub_and_guidance() {
     assert!(!agents_empty_at(tmp.path()));
 }
 
-/// PROJECT.md is the navigation hub: a scaffold file it does not link is
-/// unreachable by walking the map. Checked against `SCAFFOLD_FILES` rather
-/// than a hand-kept list, so adding a scaffold file (REMARKS.md was the
-/// one that slipped through) fails here until the map links it too.
+/// `AGENTS.md` that is a link is never read through: a link to a file with
+/// real guidance (or to a secret) reads as missing, so the empty-agents card
+/// is shown rather than the target's text being consulted.
+#[cfg(unix)]
 #[test]
-fn project_map_links_every_scaffold_file() {
+fn agents_empty_at_never_follows_a_link() {
     let tmp = tempfile::tempdir().unwrap();
-    scaffold_project(tmp.path(), true).unwrap();
+    let guidance = tmp.path().join("guidance.md");
+    std::fs::write(&guidance, "# Agents\n\nReal guidance.\n").unwrap();
+    let project = tmp.path().join("p");
+    std::fs::create_dir(&project).unwrap();
+    std::os::unix::fs::symlink(&guidance, project.join("AGENTS.md")).unwrap();
+    assert!(agents_empty_at(&project), "a link is not a stub and not guidance: missing");
+    assert_eq!(std::fs::read_to_string(&guidance).unwrap(), "# Agents\n\nReal guidance.\n");
+}
+
+/// PROJECT.md (made on demand) is the navigation hub: it links the docs the
+/// catalog can make and the `.gitignore`, and nothing the scaffold no longer
+/// writes (the pointer files, `.claude/settings.json`).
+#[test]
+fn project_map_links_the_docs_the_scaffold_can_make() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_md = scaffold::doc("PROJECT.md").unwrap();
+    assert!(scaffold::create_doc_at(tmp.path(), project_md).unwrap());
 
     let map = std::fs::read_to_string(tmp.path().join("PROJECT.md")).unwrap();
-    for (name, _) in SCAFFOLD_FILES {
-        if *name == "PROJECT.md" {
-            continue; // the map does not link itself
-        }
-        assert!(
-            map.contains(&format!("(./{name})")),
-            "PROJECT.md missing link to {name}"
-        );
+    for doc in scaffold::DOCS.iter().filter(|d| d.creatable && d.name != "PROJECT.md") {
+        assert!(map.contains(&format!("(./{})", doc.name)), "PROJECT.md missing link to {}", doc.name);
     }
-    // The config files are scaffolded outside SCAFFOLD_FILES but belong on
-    // the map all the same.
-    for link in &["(./.claude/settings.json)", "(./.gitignore)"] {
-        assert!(map.contains(link), "PROJECT.md missing link {link}");
+    assert!(map.contains("(./.gitignore)"));
+    for gone in ["CLAUDE.md", "GEMINI.md", ".claude", "REMARKS.md"] {
+        assert!(!map.contains(gone), "PROJECT.md still names {gone}");
     }
 }
 
 #[test]
-fn agent_docs_point_at_agents_md_and_link_each_other() {
+fn a_new_project_writes_no_pointer_files() {
     let tmp = tempfile::tempdir().unwrap();
     scaffold_project(tmp.path(), false).unwrap();
-
-    let agents = std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
-    // AGENTS.md carries the instructions and points at the map; it is
-    // loaded every session, so it doesn't repeat the map's links.
-    assert!(agents.contains("(./PROJECT.md)"), "AGENTS.md must link PROJECT.md");
-    for link in &["(./README.md)", "(./TODO.md)", "(./AGENTS.md)"] {
-        assert!(!agents.contains(link), "AGENTS.md repeats the map: {link}");
-    }
-    assert!(!agents.contains(concat!(crate::app_slug!(), "-send")), concat!(crate::app_name!(), "'s own hint is not the project's"));
-
-    // The agent-specific docs carry no instructions of their own: each
-    // imports AGENTS.md and links the other agent files.
-    for (name, sibling) in &[
-        ("CLAUDE.md", "(./GEMINI.md)"),
-        ("GEMINI.md", "(./CLAUDE.md)"),
-    ] {
-        let doc = std::fs::read_to_string(tmp.path().join(name)).unwrap();
-        assert!(
-            doc.lines().any(|l| l.trim() == "@AGENTS.md"),
-            "{name} must import AGENTS.md"
-        );
-        assert!(doc.contains("(./AGENTS.md)"), "{name} must link AGENTS.md");
-        assert!(doc.contains(sibling), "{name} must link {sibling}");
+    assert!(!tmp.path().join("CLAUDE.md").exists());
+    assert!(!tmp.path().join("GEMINI.md").exists());
+    for doc in scaffold::DOCS.iter().filter(|d| d.pointer) {
+        assert!(!doc.default && !doc.creatable, "{} must never be written", doc.name);
     }
 }
 
+/// A project scaffolded by an older build holds the untouched stubs the old
+/// agent docs were scaffolded with: the tag stays quiet (nothing is missing,
+/// whatever the stubs say), the repair rewrites `AGENTS.md` only.
 #[test]
-fn legacy_stub_detection_only_matches_untouched_agent_docs() {
-    assert!(is_legacy_agent_stub("CLAUDE.md", "# Claude Context\n"));
-    assert!(is_legacy_agent_stub("AGENTS.md", "# Agents\n"));
-    assert!(is_legacy_agent_stub("GEMINI.md", "   \n"));
-    // Real content, a non-agent doc, and the current template all fail.
-    assert!(!is_legacy_agent_stub(
-        "CLAUDE.md",
-        "# Claude Context\n\nRun `make test`.\n"
-    ));
-    assert!(!is_legacy_agent_stub("TODO.md", "# TODO\n"));
-    assert!(!is_legacy_agent_stub("AGENTS.md", AGENTS_SCAFFOLD));
-}
-
-#[test]
-fn legacy_agent_stubs_mark_an_otherwise_complete_scaffold_missing() {
+fn legacy_agent_stubs_do_not_raise_the_tag_and_only_agents_is_upgraded() {
     let tmp = tempfile::tempdir().unwrap();
     scaffold_project(tmp.path(), true).unwrap();
     assert!(!scaffold_is_missing_at(tmp.path(), true));
 
     // Die Crew predates AGENTS.md being canonical and has exactly these
-    // untouched placeholders. They must keep the visible warning on until
-    // the user repairs the project scaffold.
-    for (name, content) in LEGACY_AGENT_STUBS {
+    // untouched placeholders.
+    for (name, content) in [("AGENTS.md", "# Agents\n"), ("CLAUDE.md", "# Claude Context\n"), ("GEMINI.md", "# Gemini Context\n")] {
         std::fs::write(tmp.path().join(name), content).unwrap();
     }
+    assert!(!scaffold_is_missing_at(tmp.path(), true), "templates are never 'missing'");
+    assert!(agents_empty_at(tmp.path()));
 
-    assert!(scaffold_is_missing_at(tmp.path(), true));
-    repair_project_scaffold_at(tmp.path(), true).unwrap();
-    assert!(!scaffold_is_missing_at(tmp.path(), true));
+    let report = repair_project_scaffold_at(tmp.path(), true).unwrap();
+    assert_eq!(report.updated_files, ["AGENTS.md"]);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(),
+        scaffold::AGENTS_SCAFFOLD
+    );
+    assert_eq!(std::fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap(), "# Claude Context\n");
+    assert_eq!(std::fs::read_to_string(tmp.path().join("GEMINI.md")).unwrap(), "# Gemini Context\n");
 }
 
 #[test]
 fn untouched_earlier_agents_templates_are_upgraded_and_edited_ones_kept() {
-    for old in AGENTS_HISTORY {
-        assert_ne!(*old, AGENTS_SCAFFOLD);
+    for old in scaffold::AGENTS_HISTORY {
+        assert_ne!(*old, scaffold::AGENTS_SCAFFOLD);
         let tmp = tempfile::tempdir().unwrap();
         scaffold_project(tmp.path(), false).unwrap();
         std::fs::write(tmp.path().join("AGENTS.md"), old.replace('\n', "\r\n")).unwrap();
-        assert!(scaffold_is_missing_at(tmp.path(), false));
+        assert!(!scaffold_is_missing_at(tmp.path(), false), "a template-state AGENTS.md is not missing");
+        let steps = migration_steps_at(tmp.path(), false).unwrap();
+        assert_eq!(steps.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["stub:AGENTS.md"]);
         let report = repair_project_scaffold_at(tmp.path(), false).unwrap();
         assert_eq!(report.updated_files, vec!["AGENTS.md".to_string()]);
-        assert_eq!(std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(), AGENTS_SCAFFOLD);
+        assert_eq!(std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(), scaffold::AGENTS_SCAFFOLD);
 
         let edited = format!("{old}\n## Mine\n");
         std::fs::write(tmp.path().join("AGENTS.md"), &edited).unwrap();
         assert!(!scaffold_is_missing_at(tmp.path(), false));
-        repair_project_scaffold_at(tmp.path(), false).unwrap();
+        let report = repair_project_scaffold_at(tmp.path(), false).unwrap();
+        assert!(report.is_empty());
         assert_eq!(std::fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(), edited);
     }
+}
+
+/// Every pre-lean project holds all ten stubs plus `.claude/settings.json`:
+/// none of it may raise the "no scaffold" tag or be rewritten (but for
+/// `AGENTS.md`), and every stub reads as `template` (the pointers as
+/// `pointer`) — decision 4, existing projects keep their files.
+#[test]
+fn a_project_holding_all_ten_old_files_reports_nothing_missing() {
+    use scaffold::DocState;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::create_dir(dir.join(".git")).unwrap();
+    std::fs::create_dir(dir.join(".claude")).unwrap();
+    std::fs::write(dir.join(".claude").join("settings.json"), r#"{"permissions":{"allow":[],"deny":[]}}"#).unwrap();
+    std::fs::write(dir.join(".gitignore"), GITIGNORE_DEFAULT).unwrap();
+    for doc in scaffold::DOCS {
+        // The text an older build wrote: the newest earlier template, else today's.
+        let old = if doc.name == "AGENTS.md" {
+            scaffold::AGENTS_HISTORY.last().copied().unwrap()
+        } else {
+            doc.history.first().copied().unwrap_or(doc.template)
+        };
+        std::fs::write(dir.join(doc.name), old).unwrap();
+    }
+    let before = |name: &str| std::fs::read(dir.join(name)).unwrap();
+    let snapshot: Vec<(&str, Vec<u8>)> = scaffold::DOCS.iter().map(|d| (d.name, before(d.name))).collect();
+
+    assert!(!scaffold_is_missing_at(dir, true));
+    assert!(agents_empty_at(dir));
+    let status = scaffold::docs_status_at(dir);
+    assert_eq!(status.len(), scaffold::DOCS.len());
+    for entry in &status {
+        let want = if scaffold::doc(entry.name).unwrap().pointer { DocState::Pointer } else { DocState::Template };
+        assert_eq!(entry.state, want, "{}", entry.name);
+    }
+    let steps = migration_steps_at(dir, true).unwrap();
+    assert!(steps.iter().all(|s| s.kind == "upgradeStub" && s.path.as_deref() == Some("AGENTS.md")), "{steps:?}");
+
+    let report = repair_project_scaffold_at(dir, true).unwrap();
+    assert!(report.created_files.is_empty());
+    assert!(report.updated_files.iter().all(|f| f == "AGENTS.md"));
+    for (name, bytes) in snapshot {
+        if name != "AGENTS.md" {
+            assert_eq!(before(name), bytes, "{name} must stay byte for byte");
+        }
+    }
+}
+
+/// An edited doc reads as `edited`; a link, a FIFO or a dangling link as
+/// `missing` — never followed, never counted as a stub.
+#[cfg(unix)]
+#[test]
+fn doc_states_follow_the_capped_no_follow_read() {
+    use scaffold::DocState;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("p");
+    std::fs::create_dir(&dir).unwrap();
+    let outside = tmp.path().join("outside.md");
+    std::fs::write(&outside, "# TODO\n").unwrap();
+    std::fs::write(dir.join("README.md"), "# My project\n\nReal text.\n").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("TODO.md")).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("nowhere"), dir.join("STATUS.md")).unwrap();
+    crate::services::home_io::mkfifo(&dir.join("ROADMAP.md"));
+
+    let dir2 = dir.clone();
+    let status = crate::services::home_io::within_deadline(move || scaffold::docs_status_at(&dir2));
+    let state = |name: &str| status.iter().find(|s| s.name == name).map(|s| s.state);
+    assert_eq!(state("README.md"), Some(DocState::Edited));
+    // Present but not readable as a plain file: `edited` (never a ghost row),
+    // and never read through.
+    assert_eq!(state("TODO.md"), Some(DocState::Edited), "a link is never read through");
+    assert_eq!(state("STATUS.md"), Some(DocState::Edited));
+    assert_eq!(state("ROADMAP.md"), Some(DocState::Edited));
+    assert_eq!(scaffold::state_at(&dir, scaffold::doc("TODO.md").unwrap()), DocState::Missing);
+    assert_eq!(state("AGENTS.md"), Some(DocState::Missing));
+    assert_eq!(state("CLAUDE.md"), None, "an absent pointer has no row");
+    assert_eq!(state("REMARKS.md"), None);
+    // Creating over any of them is refused, the link's target is untouched.
+    let todo = scaffold::doc("TODO.md").unwrap();
+    assert!(!scaffold::create_doc_at(&dir, todo).unwrap());
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "# TODO\n");
 }
 
 /// Pins the shipped `AGENTS.md` template. When this fails, the template
@@ -2029,14 +2117,35 @@ fn untouched_earlier_agents_templates_are_upgraded_and_edited_ones_kept() {
 /// update the pin — otherwise every project scaffolded with it keeps it.
 #[test]
 fn the_agents_template_is_pinned_so_its_predecessor_stays_upgradable() {
-    let fnv1a = AGENTS_SCAFFOLD.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+    let fnv1a = scaffold::AGENTS_SCAFFOLD.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
         (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     });
-    assert_eq!(fnv1a, 0x75197758527454ff, "AGENTS_SCAFFOLD changed; see this test's doc");
+    assert_eq!(fnv1a, 0xa764492c21a88621, "AGENTS_SCAFFOLD changed; see this test's doc");
+
+    // The text shipped before this one is kept byte for byte (its hash is what
+    // the pin above held until 2026-11-13).
+    let previous = scaffold::AGENTS_HISTORY.last().unwrap();
+    let old = previous.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    assert_eq!(old, 0x75197758527454ff, "scaffold_history/AGENTS.2026-11-13.md drifted");
+}
+
+/// The lean template names no other file: nothing it points at is
+/// scaffolded any more, and it asks for the two sections agents need most.
+#[test]
+fn the_agents_template_names_no_pointer_or_map_and_has_boundaries_and_verify() {
+    let t = scaffold::AGENTS_SCAFFOLD;
+    for gone in ["CLAUDE.md", "GEMINI.md", "PROJECT.md", "import this file"] {
+        assert!(!t.contains(gone), "template still mentions {gone}");
+    }
+    for section in ["## Project", "## Running", "## Conventions", "## Boundaries", "## Verify"] {
+        assert!(t.lines().any(|l| l == section), "missing {section}");
+    }
 }
 
 #[test]
-fn repair_upgrades_untouched_legacy_agent_stubs() {
+fn repair_upgrades_only_agents_md_never_the_pointer_files() {
     let tmp = tempfile::tempdir().unwrap();
     // A project scaffolded before AGENTS.md became canonical: three stubs,
     // one of which the user has since written real content into.
@@ -2046,19 +2155,9 @@ fn repair_upgrades_untouched_legacy_agent_stubs() {
 
     let report = repair_project_scaffold_at(tmp.path(), false).unwrap();
 
-    assert!(report.updated_files.contains(&"AGENTS.md".to_string()));
-    assert!(report.updated_files.contains(&"CLAUDE.md".to_string()));
-    assert!(
-        !report.updated_files.contains(&"GEMINI.md".to_string()),
-        "a doc the user wrote must never be overwritten"
-    );
-    assert_eq!(
-        std::fs::read_to_string(tmp.path().join("GEMINI.md")).unwrap(),
-        "# Gemini Context\n\nMine.\n"
-    );
-    assert!(std::fs::read_to_string(tmp.path().join("CLAUDE.md"))
-        .unwrap()
-        .contains("@AGENTS.md"));
+    assert_eq!(report.updated_files, ["AGENTS.md"]);
+    assert_eq!(std::fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap(), "# Claude Context\n");
+    assert_eq!(std::fs::read_to_string(tmp.path().join("GEMINI.md")).unwrap(), "# Gemini Context\n\nMine.\n");
 }
 
 #[test]
@@ -2549,4 +2648,36 @@ fn a_failed_host_git_init_downgrades_the_label() {
     downgrade_project_git_label(&mut project);
     assert_eq!(project.git_type.as_deref(), Some("none"));
     assert_eq!(project.git_provider, None);
+}
+
+/// A LaTeX folder's new `.gitignore` is the generic list plus the LaTeX
+/// section; an empty folder's is the generic list alone.
+#[test]
+fn a_latex_folder_gets_the_latex_section_on_top_of_the_defaults() {
+    let empty = tempfile::tempdir().unwrap();
+    assert_eq!(gitignore_for(empty.path()), GITIGNORE_DEFAULT);
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("paper.tex"), "\\documentclass{article}").unwrap();
+    scaffold_project(dir.path(), true).unwrap();
+    let written = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    assert!(written.starts_with(GITIGNORE_DEFAULT), "the generic list stays whole");
+    assert!(written.contains("\n# LaTeX build files\n*.aux\n"));
+    assert!(written.lines().any(|l| l == "*.synctex.gz"));
+}
+
+/// Repair appends a detected section's missing patterns to an existing
+/// `.gitignore`, without its heading, and reports only those.
+#[test]
+fn repair_appends_the_missing_latex_patterns_only() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("thesis.tex"), "").unwrap();
+    fs::write(dir.path().join(".gitignore"), format!("{GITIGNORE_DEFAULT}*.aux\n")).unwrap();
+    let added = ensure_gitignore_defaults(dir.path()).unwrap();
+    assert!(!added.contains(&"*.aux".to_string()));
+    assert!(added.contains(&"*.synctex.gz".to_string()));
+    assert!(!added.iter().any(|l| l.starts_with('#')));
+    let after = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+    assert_eq!(after.matches("*.aux").count(), 1);
+    assert!(ensure_gitignore_defaults(dir.path()).unwrap().is_empty(), "a second repair adds nothing");
 }

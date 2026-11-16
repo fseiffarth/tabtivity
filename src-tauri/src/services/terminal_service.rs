@@ -646,6 +646,10 @@ pub(crate) fn persisted_env_denied(key: &str) -> bool {
         // Windows' counterparts of the above: the command search, the
         // shells' startup and module autoload, the user's home and config homes.
         "PATHEXT", "COMSPEC", "PSMODULEPATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+        "HOMEDRIVE", "HOMEPATH",
+        // A CLI's own home, which an agent tab points into its scope home
+        // (`agent_home::home_override_env`).
+        "CODEX_HOME",
     ];
     const PREFIXES: &[&str] = &["LD_", "DYLD_", "GIT_", "SSH_ASKPASS"];
     // Any letter case: Windows environment names are case-insensitive
@@ -1215,6 +1219,9 @@ mod tests {
                 "PsModulePath": "C:\\evil\\modules",
                 "PATHEXT": ".EVIL",
                 "UserProfile": "C:\\evil",
+                "HomeDrive": "D:",
+                "homepath": "\\evil",
+                "Codex_Home": "C:\\evil\\.codex",
                 "xdg_config_home": "/tmp/cfg",
                 crate::app_env!("HOST_SESSION").to_ascii_lowercase(): "1",
                 "Keep_Me": "yes",

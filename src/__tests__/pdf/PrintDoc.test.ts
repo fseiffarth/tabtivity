@@ -15,6 +15,9 @@ import {
   parsePageRange,
   selectedPages,
   printSequence,
+  formatPageRange,
+  spliceSelection,
+  paperSheets,
   withCopies,
   clampCopies,
   thumbSizePx,
@@ -35,6 +38,7 @@ import {
   initialPages,
   movePages,
   deletePages,
+  duplicatePages,
   type PageList,
 } from "../../lib/viewers/pageModel";
 import { storageKey } from "../../lib/brand";
@@ -481,5 +485,68 @@ describe("imposed sheets", () => {
   it("sizes a booklet's page cards upright", () => {
     const [w, h] = thumbSizePx({ ...PAGED_PRINT_OPTIONS, booklet: true });
     expect(h).toBeGreaterThan(w);
+  });
+});
+
+describe("custom-range strip edits (spliceSelection)", () => {
+  const pagesOf = (list: PageList) => list.map((r) => r.page);
+  const ten = initialPages(10);
+
+  it("writes positions back as a page spec", () => {
+    expect(formatPageRange([7, 2, 3, 4])).toBe("2-4, 7");
+    expect(formatPageRange([5])).toBe("5");
+    expect(formatPageRange([])).toBe("");
+  });
+
+  it("puts a reordered selection back into its own slots", () => {
+    const opts = withOpts({ pages: "custom", range: "6-" });
+    const shown = printSequence(ten, opts);
+    const edited = movePages(shown, [shown[4].id], 0); // page 10 to the front
+    const out = spliceSelection(ten, opts, edited);
+    expect(pagesOf(out.pages)).toEqual([1, 2, 3, 4, 5, 10, 6, 7, 8, 9]);
+    expect(out.range).toBe("6-");
+  });
+
+  it("keeps an open range open when a page is deleted", () => {
+    const opts = withOpts({ pages: "custom", range: "6-" });
+    const shown = printSequence(ten, opts);
+    const out = spliceSelection(ten, opts, deletePages(shown, [shown[1].id]));
+    expect(pagesOf(out.pages)).toEqual([1, 2, 3, 4, 5, 6, 8, 9, 10]);
+    expect(out.range).toBe("6-");
+    expect(pagesOf(printSequence(out.pages, { ...opts, range: out.range }))).toEqual([6, 8, 9, 10]);
+  });
+
+  it("narrows a closed range rather than pulling the next page in", () => {
+    const opts = withOpts({ pages: "custom", range: "3-5" });
+    const shown = printSequence(ten, opts);
+    const out = spliceSelection(ten, opts, deletePages(shown, [shown[0].id]));
+    expect(out.range).toBe("3-4");
+    expect(pagesOf(printSequence(out.pages, { ...opts, range: out.range }))).toEqual([4, 5]);
+  });
+
+  it("widens the range over a duplicate", () => {
+    const opts = withOpts({ pages: "custom", range: "2, 5" });
+    const shown = printSequence(ten, opts);
+    const out = spliceSelection(ten, opts, duplicatePages(shown, [shown[1].id]));
+    expect(pagesOf(printSequence(out.pages, { ...opts, range: out.range }))).toEqual([2, 5, 5]);
+  });
+});
+
+describe("paperSheets", () => {
+  it("counts sheets, not pages, at several pages to a sheet", () => {
+    expect(paperSheets(10, withOpts({ nup: 2 }), false)).toBe(5);
+    expect(paperSheets(10, withOpts({ nup: 4 }), false)).toBe(3);
+    expect(paperSheets(10, withOpts({ nup: 1 }), false)).toBe(10);
+  });
+
+  it("halves the sides when the printer prints both", () => {
+    expect(paperSheets(10, withOpts({ nup: 2, duplex: "long" }), true)).toBe(3);
+    expect(paperSheets(10, withOpts({ nup: 1, duplex: "long" }), true)).toBe(5);
+    // No native path: the duplex request goes nowhere, so the paper is not halved.
+    expect(paperSheets(10, withOpts({ nup: 1, duplex: "long" }), false)).toBe(10);
+  });
+
+  it("counts a booklet's padded sides", () => {
+    expect(paperSheets(10, withOpts({ booklet: true, duplex: "short" }), true)).toBe(3);
   });
 });

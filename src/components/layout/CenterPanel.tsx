@@ -72,7 +72,7 @@ import {
   type WindowFrame,
 } from "../../lib/window/coords";
 import { dragPlatform } from "../../lib/window/dragPlatform";
-import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { useLocalSessionsAvailable } from "../../lib/terminal/localSessions";
 import { restoreProjectScope, useProjectsStore } from "../../stores/projects";
 import { BOX_SCOPE_PREFIX, boxFolderOfScope, restoreBoxScope, useBoxesStore } from "../../stores/boxes";
 import { useRemoteMachinesStore } from "../../stores/remote/remoteMachines";
@@ -203,11 +203,10 @@ function CenterPanelImpl() {
   // Worker-host lamps (multi-host remote): a pane on a worker holds iff THAT
   // worker is down, independent of the primary (plan §4.5).
   const remoteSshByHost = useRemoteStatusStore((s) => s.byHost);
-  // Persistent LOCAL (tmux) sessions (TODO #85): default ON on Unix (no tmux on
-  // Windows). Folded here so the per-pane decision below is a cheap boolean AND.
-  const localPersistEnabled = useSettingsStore(
-    (s) => !IS_HOST_WINDOWS && s.settings?.persist_local_sessions !== false,
-  );
+  // Persistent LOCAL sessions (TODO #85): default ON on Unix (tmux); on Windows
+  // only with the experimental session host (`lib/terminal/localSessions`).
+  // Folded here so the per-pane decision below is a cheap boolean AND.
+  const localPersistEnabled = useLocalSessionsAvailable();
   // Sleeping tabs (performance plan §5.3): how long a hidden viewer pane stays
   // mounted, null when the setting turns sleeping off. A scalar per slot.
   const sleepAfterMs = useSettingsStore((s) => sleepTabsAfterMs(s.settings?.sleep_tabs_after_min));

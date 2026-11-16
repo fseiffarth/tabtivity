@@ -112,6 +112,8 @@ describe("the CPU path's rules", () => {
     ".tour-target",
     ".tour-hint-btn.nudge",
     ".tab-new-btn.empty-hint",
+    ".tab.install-pending::before",
+    ".file-entry-highlight",
     ".skeleton-row",
   ])("%s stops looping", (loop) => {
     expect(bodyOf(`${SOFTWARE} ${loop}`)).toMatch(/animation: none/);

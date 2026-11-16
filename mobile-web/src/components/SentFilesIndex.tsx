@@ -4,7 +4,8 @@ import { inboxFileUrl, outboxFileUrl, sentName, viewerFileUrl, type OutboxFile }
 import { fileKey } from "../terminal/chatFiles";
 import { ageLabel } from "../terminal/fileLabels";
 import { formatBytes } from "../../../src/lib/formatBytes";
-import { fileBadge, viewableFile } from "./InboxPreview";
+import { openableFile } from "./InboxPreview";
+import { CAPTION_CHARS, FileName, FileNameCover } from "./FileName";
 
 /** How a file came into the conversation: the agent sent it (`tabtivity-send`
  * from this tab, the project outbox), the phone did (a prompt's inbox
@@ -72,7 +73,8 @@ export function sentFiles(
  * into groups (`GROUPS`) — sent by the agent, changed by it, mentioned in its
  * answers (the desktop's Files menu), sent by you — each headed by a line
  * saying what it holds, its tiles rimmed in its colour, a grid of tiles: the
- * file's picture or badge, its name, when and how big. A tap opens the file
+ * file's picture with its name under it — or, for a file with no picture, the
+ * name itself as the cover (`FileNameCover`) — then when and how big. A tap opens the file
  * full screen (the chat's own viewer for its side), or saves bytes the phone
  * cannot show. The pictures stay where they were sent in the chat; this is the
  * way to one without scrolling the conversation for it. `more`: Diffs holds
@@ -90,50 +92,71 @@ export function SentFilesIndex({ tabId, project, files, more = false, open, onTo
 }) {
   const t = useT();
   const untested = isUntested("mobile.chat.sentIndex");
-  const now = Math.floor(Date.now() / 1000);
-  const urlOf = ({ file, from }: SentFile, download = false) => from === "agent"
-    ? outboxFileUrl({ tab: tabId }, file, download)
-    : from === "phone"
-      ? inboxFileUrl(tabId, file.name, download)
-      : viewerFileUrl({ files: project ?? "" }, file, download);
   return <nav className={`sent-index${open ? " open" : ""}`} aria-label={t("mobile.sentIndex.region")}>
     <button type="button" className="subagent-index-toggle" aria-expanded={open} aria-controls="mobile-sent-list" onClick={onToggle}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8" /></svg>
       <span>{t("mobile.sentIndex.toggle", { count: files.length })}{untested && <em> · {t("mobile.focus.untested")}</em>}</span>
       <svg className={open ? "expanded" : ""} viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
     </button>
-    {open && <div id="mobile-sent-list" className="sent-index-groups">
-      {GROUPS.map(([side, heading, hint]) => {
-        const rows = files.filter((row) => row.from === side);
-        if (rows.length === 0) return null;
-        const title = t(heading, { count: rows.length });
-        return <section key={side} className={`sent-index-group ${side}`} aria-label={title}>
-          <h3 className="sent-index-head">{title}{(side === "changed" || side === "named") && isUntested("mobile.chat.changedFiles") && <em> · {t("mobile.focus.untested")}</em>}</h3>
-          <p className="sent-index-hint">{t(hint)}</p>
-          <ul className="sent-index-list">
-            {rows.map((row) => {
-              const { file, from } = row;
-              const name = sentName(file);
-              const content = <>
-                <span className="sent-index-thumb">
-                  {file.kind.startsWith("image/")
-                    ? <img src={urlOf(row)} alt="" loading="lazy" decoding="async" />
-                    : <span aria-hidden="true">{fileBadge(file.kind)}</span>}
-                </span>
-                <span className="sent-index-name">{name}</span>
-                <small>{ageLabel(Math.max(0, now - file.modified))} · {formatBytes(file.size)}</small>
-              </>;
-              const label = `${t("mobile.outbox.open", { name })} · ${t(FROM_LABEL[from])}`;
-              return <li key={file.name}>
-                {viewableFile(file)
-                  ? <button type="button" onClick={() => onOpen(row)} aria-label={label} title={name}>{content}</button>
-                  : <a href={urlOf(row, true)} download={name} aria-label={label} title={name}>{content}</a>}
-              </li>;
-            })}
-          </ul>
-        </section>;
-      })}
-      {more && <small className="sent-index-more">{t("mobile.sentIndex.moreInDiffs")}</small>}
-    </div>}
+    {open && <SentFilesGroups id="mobile-sent-list" tabId={tabId} project={project} files={files} more={more} onOpen={onOpen} />}
   </nav>;
+}
+
+/**
+ * The conversation's files in their groups (`GROUPS`), each headed by a line
+ * saying what it holds, its tiles rimmed in its colour — the open chat strip
+ * (`SentFilesIndex`) and a tab card's Files sheet (`TabFilesSheet`) alike. A
+ * tile the phone can show opens through `onOpen`; anything else saves.
+ */
+export function SentFilesGroups({ id, tabId, project, files, more = false, onOpen }: {
+  id?: string;
+  tabId: string;
+  project?: string;
+  files: readonly SentFile[];
+  more?: boolean;
+  onOpen: (row: SentFile) => void;
+}) {
+  const t = useT();
+  const now = Math.floor(Date.now() / 1000);
+  const urlOf = ({ file, from }: SentFile, download = false) => from === "agent"
+    ? outboxFileUrl({ tab: tabId }, file, download)
+    : from === "phone"
+      ? inboxFileUrl(tabId, file.name, download)
+      : viewerFileUrl({ files: project ?? "" }, file, download);
+  return <div id={id} className="sent-index-groups">
+    {GROUPS.map(([side, heading, hint]) => {
+      const rows = files.filter((row) => row.from === side);
+      if (rows.length === 0) return null;
+      const title = t(heading, { count: rows.length });
+      return <section key={side} className={`sent-index-group ${side}`} aria-label={title}>
+        <h3 className="sent-index-head">{title}{(side === "changed" || side === "named") && isUntested("mobile.chat.changedFiles") && <em> · {t("mobile.focus.untested")}</em>}</h3>
+        <p className="sent-index-hint">{t(hint)}</p>
+        <ul className="sent-index-list">
+          {rows.map((row) => {
+            const { file, from } = row;
+            const name = sentName(file);
+            // A picture keeps its square, its name under it on up to two
+            // lines; anything else has no picture to show, so its name
+            // takes the square instead of one glyph and a cut-off line.
+            const content = <>
+              {file.kind.startsWith("image/")
+                ? <>
+                  <span className="sent-index-thumb"><img src={urlOf(row)} alt="" loading="lazy" decoding="async" /></span>
+                  <FileName name={name} max={CAPTION_CHARS} className="sent-index-name" />
+                </>
+                : <FileNameCover name={name} className="sent-index-thumb" nameClass="sent-index-name" />}
+              <small>{ageLabel(Math.max(0, now - file.modified))} · {formatBytes(file.size)}</small>
+            </>;
+            const label = `${t("mobile.outbox.open", { name })} · ${t(FROM_LABEL[from])}`;
+            return <li key={file.name}>
+              {openableFile(file)
+                ? <button type="button" onClick={() => onOpen(row)} aria-label={label} title={name}>{content}</button>
+                : <a href={urlOf(row, true)} download={name} aria-label={label} title={name}>{content}</a>}
+            </li>;
+          })}
+        </ul>
+      </section>;
+    })}
+    {more && <small className="sent-index-more">{t("mobile.sentIndex.moreInDiffs")}</small>}
+  </div>;
 }

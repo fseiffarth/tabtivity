@@ -234,22 +234,23 @@
   font-size: var(--text-sm);
 }
 
-/* A flat 2px bar: width/opacity only, no blur. */
+/* A flat 2px bar breathing between 8% and 82% of the pane: scaled, not
+   resized, so a loading page costs no layout per frame. No blur. */
 .browser-progress {
   height: 2px;
+  width: 82%;
+  transform-origin: left center;
   background: var(--accent);
   opacity: 0.85;
   animation: browser-progress 1.1s ease-in-out infinite;
 }
 @keyframes browser-progress {
-  0% {
-    width: 8%;
+  0%,
+  100% {
+    transform: scaleX(0.0976);
   }
   50% {
-    width: 82%;
-  }
-  100% {
-    width: 8%;
+    transform: scaleX(1);
   }
 }
 

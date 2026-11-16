@@ -16,26 +16,26 @@ describe("scaffold repair summaries", () => {
 
   it("summarizes created files, gitignore lines, and git init together", () => {
     const report = {
-      createdFiles: ["DOCUMENTATION.md", ".claude/settings.json"],
+      createdFiles: ["AGENTS.md", "README.md"],
       gitignoreLinesAdded: ["project.json"],
       gitInitialized: true,
     };
     expect(scaffoldRepairIsEmpty(report)).toBe(false);
     expect(summarizeScaffoldRepair(report)).toBe(
-      "added DOCUMENTATION.md, .claude/settings.json; .gitignore +project.json; git init",
+      "added AGENTS.md, README.md; .gitignore +project.json; git init",
     );
   });
 
-  it("reports upgraded legacy agent stubs separately from created files", () => {
+  it("reports an upgraded AGENTS.md separately from created files", () => {
     const report = {
-      createdFiles: ["DOCUMENTATION.md"],
-      updatedFiles: ["AGENTS.md", "CLAUDE.md"],
+      createdFiles: ["README.md"],
+      updatedFiles: ["AGENTS.md"],
       gitignoreLinesAdded: [],
       gitInitialized: false,
     };
     expect(scaffoldRepairIsEmpty(report)).toBe(false);
     expect(summarizeScaffoldRepair(report)).toBe(
-      "added DOCUMENTATION.md; updated AGENTS.md, CLAUDE.md",
+      "added README.md; updated AGENTS.md",
     );
   });
 
@@ -46,12 +46,12 @@ describe("scaffold repair summaries", () => {
     ).toBe(true);
     const updatesOnly = {
       createdFiles: [],
-      updatedFiles: ["GEMINI.md"],
+      updatedFiles: ["AGENTS.md"],
       gitignoreLinesAdded: [],
       gitInitialized: false,
     };
     expect(scaffoldRepairIsEmpty(updatesOnly)).toBe(false);
-    expect(summarizeScaffoldRepair(updatesOnly)).toBe("updated GEMINI.md");
+    expect(summarizeScaffoldRepair(updatesOnly)).toBe("updated AGENTS.md");
   });
 
   it("prefixes the project name for a multi-project toast", () => {
@@ -59,8 +59,8 @@ describe("scaffold repair summaries", () => {
       projectId: "abc",
       name: "MyProject",
       targetDir: `/home/u/${BRAND.slug}/projects/myproject`,
-      report: { createdFiles: ["TODO.md"], gitignoreLinesAdded: [], gitInitialized: false },
+      report: { createdFiles: ["README.md"], gitignoreLinesAdded: [], gitInitialized: false },
     };
-    expect(describeScaffoldRepair(repair)).toBe("MyProject: added TODO.md");
+    expect(describeScaffoldRepair(repair)).toBe("MyProject: added README.md");
   });
 });

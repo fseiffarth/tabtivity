@@ -17,6 +17,9 @@ pub(crate) struct AgentSpec {
     /// Also the agent tab's `cmd`, which is how a restored tab is known to be
     /// an agent (the frontend's generated `agentCliTable.ts`).
     pub(crate) bin: &'static str,
+    /// How a launch of this CLI is told about Tabtivity's MCP lanes
+    /// (`root_mcp::wire_named_cli`).
+    pub(crate) mcp: McpWiring,
     /// How a restarted tab of this CLI gets its conversation back.
     pub(crate) resume: Resume,
     /// Official non-interactive install command (Linux/macOS, run in `sh`).
@@ -62,6 +65,34 @@ pub(crate) enum Resume {
     Args(&'static [&'static str]),
 }
 
+/// How one launch of a CLI names an MCP server of Tabtivity's
+/// (`root_mcp::wire_named_cli`): always per launch, never in the CLI's own
+/// config, and always naming the token's variable, never its value — the
+/// argv and env end up in a launcher script on disk. A form is listed only
+/// once the real binary was seen connecting with the token filled in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum McpWiring {
+    /// No per-launch way the CLI takes (or one not verified yet): the tab gets
+    /// each lane's token/URL env pair, which the `<slug>-mcp` command reads.
+    None,
+    /// `--mcp-config <json>` last in argv, `${VAR}` in the header (Claude).
+    ClaudeFlag,
+    /// `-c mcp_servers.<name>.…` overrides first in argv (Codex).
+    CodexOverrides,
+    /// `--additional-mcp-config <json>` first in argv, once per server,
+    /// `${VAR}` in the header (Copilot 1.0.110, 2026-11-14).
+    CopilotFlag,
+    /// An `mcp` entry merged into the `OPENCODE_CONFIG_CONTENT` inline config,
+    /// `{env:VAR}` in the header (OpenCode 2.3.0's TUI, 2026-11-14).
+    OpenCodeInline,
+}
+
+/// How `bin` takes an MCP server for one launch; [`McpWiring::None`] for a
+/// binary the registry does not know.
+pub(crate) fn mcp_wiring(bin: &str) -> McpWiring {
+    AGENTS.iter().find(|a| a.bin == bin).map_or(McpWiring::None, |a| a.mcp)
+}
+
 /// The placeholder a [`Resume::Args`] entry uses for the tab's session id.
 pub(crate) const SESSION_ID: &str = "{sessionId}";
 
@@ -76,6 +107,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "claude",
         label: "Claude",
         bin: "claude",
+        mcp: McpWiring::ClaudeFlag,
         // `--resume <launch id>`; the backend upgrades the id to the live one
         // after `/clear` (`launch_prep`).
         resume: Resume::Args(&["--resume", SESSION_ID]),
@@ -89,6 +121,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "codex",
         label: "Codex",
         bin: "codex",
+        mcp: McpWiring::CodexOverrides,
         // Codex mints its own session id: the tab's id is only the
         // `<APP>_TAB_UID` key, and `terminal::resolve_codex_session` injects
         // `codex resume <live id>` at spawn — no args from here.
@@ -103,6 +136,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "antigravity",
         label: "Google Antigravity",
         bin: "agy",
+        mcp: McpWiring::None,
         // `-c`/`--continue` resumes the most recent conversation.
         resume: Resume::Args(&["--continue"]),
         install_cmd: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
@@ -115,6 +149,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "gemini",
         label: "Google Gemini",
         bin: "gemini",
+        mcp: McpWiring::None,
         // `--resume` takes "latest" (or an index), not the uuid its launch
         // `--session-id` minted: continue-last like the others.
         resume: Resume::Args(&["--resume", "latest"]),
@@ -128,12 +163,15 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "vibe",
         label: "Mistral",
         bin: "vibe",
+        mcp: McpWiring::None,
         // Vibe mints its own id; the backend replaces this fallback with
         // `--resume <live id>` once its post-agent hook has recorded a turn.
         resume: Resume::Args(&["--continue"]),
         install_cmd: "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
-        // No one-line Windows installer; the UI points at `docs`.
-        install_cmd_windows: None,
+        // Mistral's manual install, the one its docs give for Windows (2442f;
+        // `docs` → install-cli). It needs `uv`, which Mistral says to install
+        // first there; the install home's `UV_TOOL_*` put it under `.local`.
+        install_cmd_windows: Some("uv tool install mistral-vibe"),
         extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
         docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
         // `~/.vibe/.env` is loaded as environment: per scope.
@@ -148,8 +186,12 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // installed Kiro as missing, and launched a tab on a command that is
         // not there.
         bin: "kiro-cli",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -fsSL https://cli.kiro.dev/install | bash",
+        // Kiro documents `irm 'https://cli.kiro.dev/install.ps1' | iex` for
+        // Windows, but that script runs a per-machine MSI into Program Files
+        // (elevation, outside the install home): left to the user (2442f).
         install_cmd_windows: None,
         extra_paths: &[".local/bin/kiro-cli"],
         docs: "https://kiro.dev/docs/cli/installation/",
@@ -159,6 +201,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "cline",
         label: "Cline",
         bin: "cline",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "npm install -g cline",
         install_cmd_windows: Some("npm install -g cline"),
@@ -172,6 +215,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "aider",
         label: "Aider",
         bin: "aider",
+        mcp: McpWiring::None,
         // No per-session resume (only `--restore-chat-history`).
         resume: Resume::No,
         // Use Aider's official uv-based one-liners. Unlike the pip bootstrap,
@@ -192,6 +236,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "opencode",
         label: "OpenCode",
         bin: "opencode",
+        mcp: McpWiring::OpenCodeInline,
         resume: Resume::Args(&["--continue"]),
         // OpenCode 2: `opencode.ai/install` and npm `opencode-ai` only ever
         // serve OpenCode 1. The V2 script replaces a V1 binary in place
@@ -207,10 +252,13 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "cursor-agent",
         label: "Cursor",
         bin: "cursor-agent",
+        mcp: McpWiring::None,
         resume: Resume::Args(&["--continue"]),
         install_cmd: "curl https://cursor.com/install -fsS | bash",
-        // No one-line Windows installer; the UI points at `docs`.
-        install_cmd_windows: None,
+        // Cursor's native Windows installer (its CLI install docs, 2442f): it
+        // writes `cursor-agent.*` and `agent.*` into `%LOCALAPPDATA%\cursor-agent`
+        // (`agent_install::bin_dirs_for`).
+        install_cmd_windows: Some("irm 'https://cursor.com/install?win32=true' | iex"),
         extra_paths: &[".local/bin/cursor-agent"],
         docs: "https://cursor.com/docs/cli/installation",
         auth_paths: &[auth_file(".config/cursor/auth.json")],
@@ -219,6 +267,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "copilot",
         label: "Copilot",
         bin: "copilot",
+        mcp: McpWiring::CopilotFlag,
         resume: Resume::Args(&["--continue"]),
         install_cmd: "npm install -g @github/copilot",
         install_cmd_windows: Some("npm install -g @github/copilot"),
@@ -230,6 +279,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "droid",
         label: "Droid",
         bin: "droid",
+        mcp: McpWiring::None,
         // `--resume` with no id loads the cwd's most recent session.
         resume: Resume::Args(&["--resume"]),
         install_cmd: "curl -fsSL https://app.factory.ai/cli | sh",
@@ -242,6 +292,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "grok",
         label: "Grok",
         bin: "grok",
+        mcp: McpWiring::None,
         // Grok Build: `-c/--continue` takes the cwd's most recent session;
         // its `--resume <id>` wants Grok's own id, which a launch cannot supply.
         resume: Resume::Args(&["--continue"]),
@@ -250,7 +301,9 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // what made the wrong one invisible: a stale 0.0.34 that keeps no
         // conversation, where the vendor CLI has shipped 1.0.x since Aug 2026.
         install_cmd: "curl -fsSL https://x.ai/cli/install.sh | bash",
-        install_cmd_windows: Some("npm install -g @xai-official/grok"),
+        // The same CLI's Windows installer (docs.x.ai/build/overview, 2442e):
+        // `%USERPROFILE%\.grok\bin\grok.exe`, the install home's `.grok/bin`.
+        install_cmd_windows: Some("irm https://x.ai/cli/install.ps1 | iex"),
         extra_paths: &[".grok/bin/grok"],
         docs: "https://docs.x.ai/build/overview",
         auth_paths: &[auth_file(".grok/auth.json")],
@@ -259,6 +312,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "qwen",
         label: "Qwen",
         bin: "qwen",
+        mcp: McpWiring::None,
         resume: Resume::Args(&["--continue"]),
         install_cmd: "npm install -g @qwen-code/qwen-code",
         install_cmd_windows: Some("npm install -g @qwen-code/qwen-code"),
@@ -270,6 +324,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "openclaw",
         label: "OpenClaw",
         bin: "openclaw",
+        mcp: McpWiring::None,
         resume: Resume::No,
         // OpenClaw's own local-prefix installer, not `npm install -g openclaw`:
         // the package demands Node >=24.16, newer than most distro Node, and a
@@ -293,6 +348,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "auggie",
         label: "Auggie",
         bin: "auggie",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "npm install -g @augmentcode/auggie",
         install_cmd_windows: Some("npm install -g @augmentcode/auggie"),
@@ -304,6 +360,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "kilo",
         label: "Kilo Code",
         bin: "kilo",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -fsSL https://kilo.ai/cli/install | bash",
         install_cmd_windows: Some("npm install -g @kilocode/cli"),
@@ -317,6 +374,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // `cn`, not `continue`: the package is @continuedev/cli and the
         // executable it installs is the two-letter one.
         bin: "cn",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "npm install -g @continuedev/cli",
         install_cmd_windows: Some("npm install -g @continuedev/cli"),
@@ -328,6 +386,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "junie",
         label: "JetBrains Junie",
         bin: "junie",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -fsSL https://junie.jetbrains.com/install.sh | bash",
         install_cmd_windows: Some("npm install -g @jetbrains/junie-cli"),
@@ -339,6 +398,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "codebuddy",
         label: "CodeBuddy",
         bin: "codebuddy",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "npm install -g @tencent-ai/codebuddy-code",
         install_cmd_windows: Some("npm install -g @tencent-ai/codebuddy-code"),
@@ -350,9 +410,12 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "goose",
         label: "Goose",
         bin: "goose",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | bash",
-        install_cmd_windows: None,
+        // Goose's PowerShell install, as its installation docs give it (2442f):
+        // `goose.exe` lands in `%USERPROFILE%\.local\bin`, the install home's.
+        install_cmd_windows: Some("Invoke-WebRequest -Uri \"https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1\" -OutFile \"download_cli.ps1\"; .\\download_cli.ps1"),
         extra_paths: &[".local/bin/goose"],
         docs: "https://github.com/aaif-goose/goose",
         auth_paths: &[auth_file(".config/goose/secrets.yaml")],
@@ -361,6 +424,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "pi",
         label: "Pi",
         bin: "pi",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "npm install -g @earendil-works/pi-coding-agent",
         install_cmd_windows: Some("npm install -g @earendil-works/pi-coding-agent"),
@@ -372,8 +436,10 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "plandex",
         label: "Plandex",
         bin: "plandex",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -sL https://plandex.ai/install.sh | bash",
+        // Plandex runs on Windows only under WSL (its README).
         install_cmd_windows: None,
         extra_paths: &[],
         docs: "https://docs.plandex.ai/docs/cli-reference/",
@@ -383,6 +449,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "swe-agent",
         label: "SWE-agent",
         bin: "sweagent",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "pip install swe-agent",
         install_cmd_windows: Some("pip install swe-agent"),
@@ -394,6 +461,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "mini-swe-agent",
         label: "mini-SWE-agent",
         bin: "mini",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "pip install mini-swe-agent",
         install_cmd_windows: Some("pip install mini-swe-agent"),
@@ -406,6 +474,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "crush",
         label: "Crush",
         bin: "crush",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "npm install -g @charmland/crush",
         install_cmd_windows: Some("npm install -g @charmland/crush"),
@@ -417,6 +486,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "amp",
         label: "Amp",
         bin: "amp",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "npm install -g @ampcode/cli",
         install_cmd_windows: Some("npm install -g @ampcode/cli"),
@@ -428,6 +498,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "kimi",
         label: "Kimi Code",
         bin: "kimi",
+        mcp: McpWiring::None,
         resume: Resume::No,
         // `/kimi-code/`, not the bare host path: that one serves the
         // deprecated Python `kimi-cli` (whose own installer renames it to
@@ -443,6 +514,7 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "qoder",
         label: "Qoder",
         bin: "qoder",
+        mcp: McpWiring::None,
         resume: Resume::No,
         install_cmd: "curl -fsSL https://qoder.com/install | bash",
         install_cmd_windows: Some("irm https://qoder.com/install.ps1 | iex"),
@@ -454,11 +526,14 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         id: "muse",
         label: "Meta Muse Code",
         bin: "muse",
+        mcp: McpWiring::None,
         // The folder's latest session (1.4.15); `muse_session::resolve` aims
         // it at the Resume menu's pick, or drops it where there is none.
         resume: Resume::Args(&["resume", "--last"]),
         install_cmd: "curl -fsSL https://dev.meta.ai/install.sh | bash",
-        install_cmd_windows: None,
+        // Meta's Windows installer (dev.meta.ai/docs/muse-code, 2442f): a
+        // `muse.cmd` in `%LOCALAPPDATA%\Programs\muse` (`agent_install::bin_dirs_for`).
+        install_cmd_windows: Some("irm https://dev.meta.ai/install.ps1 | iex"),
         extra_paths: &[".local/bin/muse"],
         docs: "https://dev.meta.ai",
         auth_paths: &[auth_file(".config/muse/auth.json")],

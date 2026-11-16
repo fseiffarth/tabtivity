@@ -34,7 +34,7 @@ import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
-import { agentTabLabel, agentTabModelTag, useAgentModelsStore } from "../../stores/agents/agentModels";
+import { agentTabLabel, useAgentTabModelTag } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
@@ -52,6 +52,7 @@ import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
 import { TerminalReaderChanges } from "./TerminalReaderChanges";
+import { useCheckpointNow, useReaderCheckpoints } from "./ReaderCheckpoints";
 import { TerminalReaderFiles, type ReaderFile } from "./TerminalReaderFiles";
 import { inboxLeaves } from "../../../mobile-web/src/terminal/inboxRefs";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
@@ -510,7 +511,11 @@ const PromptText = memo(function PromptText({ text, unlinked = false }: { text: 
 /** What a subagent's card or list row opens: its handle and what it says. */
 type SubagentPick = Pick<TranscriptTurn, "subagent" | "text" | "role" | "workflow">;
 
-function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action }: {
+/** Memoised: the Reader re-renders on every live-screen tick while an agent
+ * streams, and a turn already drawn has nothing new to say then. */
+const Turn = memo(function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h, onOpenAgent, action, restore }: {
+  /** A prompt bubble's "Restore files to before this" (`ReaderCheckpoints`). */
+  restore?: ReactNode;
   action?: ReactNode;
   turn: TranscriptTurn;
   cutLabel: string;
@@ -568,7 +573,7 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
     return (
       <div className={withFiles ? "terminal-reader-turn user with-files" : "terminal-reader-turn user"} data-prompt={turn.text}>
         <ReaderPromptBody text={turn.text}>{(words) => <PromptText text={words} />}</ReaderPromptBody>
-        {cut}{time}
+        {cut}{time}{restore}
       </div>
     );
   }
@@ -582,7 +587,7 @@ function Turn({ turn, cutLabel, planLabel, interruptedLabel, agentLabel, use24h,
       {time}
     </div>
   );
-}
+});
 
 /**
  * The Reader's composer, holding its own draft: a keystroke re-renders this
@@ -1129,6 +1134,8 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
   const clearChat = () => void runChip(startNewConversation);
   // Shown as sending by the Reader's `onSentPrompt` listener, like any prompt.
   const commit = (choice: CommitChoice) => void runChip((current) => sendSteeringPrompt(current, COMMIT_PROMPTS[choice]));
+  /** Per-turn checkpoints (experimental): the chip takes one now. */
+  const checkpointNow = useCheckpointNow(tabRef.current?.sessionId, visible);
 
   /** ↑ on the composer's first line recalls the previous prompt, ↓ on its
    * last line the next one and, past the newest, the draft set aside — the
@@ -1262,6 +1269,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     onPrefix={togglePrefix}
     onClear={clearChat}
     onCommit={assistantChat ? undefined : commit}
+    onCheckpoint={assistantChat ? undefined : checkpointNow.run}
+    checkpointNote={checkpointNow.done ? "done" : checkpointNow.failed ? "failed" : undefined}
+    checkpointError={checkpointNow.error}
     extra={voice.button ? voiceLoop.chips : null}
   />;
   return <>
@@ -1393,6 +1403,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // sending marks and the model/effort chips all go through it.
   const paneTab = usePaneTab(scope, tabKey);
   const tab = useMemo(() => withAssistantPromptTarget(scope, paneTab), [scope, paneTab]);
+  /** Per-turn checkpoints (experimental): a prompt bubble's restore action. */
+  const checkpoints = useReaderCheckpoints({ uid: tab?.sessionId, ptyId, visible });
   const [transcript, setTranscript] = useState<SessionTranscript | null>(null);
   const [limit, setLimit] = useState(READER_STEP);
   // Every prompt sent to this tab — this composer's or steering's prompt box —
@@ -1484,9 +1496,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
   const agentLabel = tab ? agentTabLabel(tab) : "";
   const use24h = useUse24h();
-  const modelsByTab = useAgentModelsStore((state) => state.byTab);
-  const screenModels = useAgentModelsStore((state) => state.screenByTab);
-  const modelTag = tab ? agentTabModelTag(scope, tab, modelsByTab, screenModels) : undefined;
+  const modelTag = useAgentTabModelTag(scope, tab);
   /** The working row's name for the agent, as the phone's says it: the model
    * the session prints, its first word (`Opus is working…`). */
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
@@ -2615,7 +2625,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
                     <span>{chatDayLabel(moment, now, dayLabels)}</span>
                   </div>
                 )}
-                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} action={
+                <Turn turn={turn} cutLabel={cutLabel} planLabel={planLabel} interruptedLabel={t("tabBar.statusInterrupted")} agentLabel={subagentLabel} use24h={use24h} onOpenAgent={openAgent} restore={turn.kind === "prompt" ? checkpoints.restoreFor(turn.stamp) : undefined} action={
                   !browsed && !openStep && canLogIn
                   && index === turns.length - 1 && turn.kind === "answer"
                   && readSignedOut(turn.text.split(/\r?\n/u).map((text) => ({ text }))) ? (
@@ -2810,9 +2820,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       {subagentsMenu}
       {workspacesMenu}
     </>, navigationSlot)}
+    {checkpoints.dialog}
     {changesOpen && shown && tab && (
       <TerminalReaderChanges
         scope={scope}
+        ptyId={ptyId}
         tab={tab}
         cwd={cwd}
         visible={visible}

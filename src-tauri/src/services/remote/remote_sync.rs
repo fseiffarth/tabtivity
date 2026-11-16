@@ -32,7 +32,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::services::sftp::{self, SyncKind};
+use crate::services::sftp;
 
 /// Largest single file the sync moves whole in RAM (64 MiB). A read through `read_file_up_to` buffers the
 /// whole file and holds the SFTP channel (G8), so auto-sync and every push refuse a
@@ -106,6 +106,25 @@ pub struct SyncEntry {
     /// git, and this flag lives on the byte side of that line.
     #[serde(default)]
     pub excluded: bool,
+}
+
+impl SyncEntry {
+    /// Whether bytes ever crossed for this path, in either direction.
+    pub fn ever_synced(&self) -> bool {
+        self.last_pull_ts.is_some() || self.last_push_ts.is_some()
+    }
+}
+
+/// One side's `(size, mtime)` of a file, mtime in unix seconds when known.
+pub type Stat = (u64, Option<u64>);
+
+/// Which way a transfer moved a file's bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transfer {
+    /// Host → mirror.
+    Pull,
+    /// Mirror → host.
+    Push,
 }
 
 /// A project's manifest: project-relative path → record.
@@ -243,20 +262,85 @@ fn lexically_confined_rel(rel: &str) -> PathBuf {
 
 /// The name components of project-relative `rel`, or why it may not be written:
 /// a `..`, root or prefix component, or a NUL. A leading `/` is tolerated (the
-/// same "project-relative" reading [`mirror_local_path`] always gave it).
+/// same "project-relative" reading [`mirror_local_path`] always gave it). On
+/// Windows also a name the filesystem would read as something else
+/// ([`windows_name_refusal`]).
 fn rel_components(rel: &str) -> Result<Vec<&std::ffi::OsStr>, String> {
+    rel_components_for(cfg!(windows), rel)
+}
+
+/// [`rel_components`] with the OS as a parameter, so the Windows rules run on
+/// every OS's tests.
+fn rel_components_for(windows: bool, rel: &str) -> Result<Vec<&std::ffi::OsStr>, String> {
     if rel.contains('\0') {
         return Err(format!("refusing '{rel}': the path holds a NUL byte"));
     }
     let mut parts = Vec::new();
     for c in Path::new(rel.trim_start_matches('/')).components() {
         match c {
-            Component::Normal(name) => parts.push(name),
+            Component::Normal(name) => {
+                if windows {
+                    if let Some(reason) = name.to_str().and_then(windows_name_refusal) {
+                        return Err(format!("refusing '{rel}': {reason}"));
+                    }
+                }
+                parts.push(name)
+            }
             Component::CurDir => {}
             _ => return Err(format!("refusing '{rel}': it steps outside the local mirror")),
         }
     }
     Ok(parts)
+}
+
+/// Why Windows would not keep a mirror name as itself (2442j): a reserved
+/// device name (`aux.py`, `nul`, `COM1`), or what mail attachments already
+/// refuse (`mail_attach::windows_part_refusal`) — a `:` (a drive or a hidden
+/// stream), a short alias (`NAME~1`), a trailing dot or space. A host file
+/// named so is left on the host, never written under another name.
+fn windows_name_refusal(name: &str) -> Option<String> {
+    if crate::paths::is_windows_device_name(name) {
+        return Some(format!("'{name}' is a reserved device name on Windows"));
+    }
+    crate::services::mail_attach::windows_part_refusal(name)
+        .map(|why| format!("'{name}' cannot be kept as itself on Windows ({})", why.trim_start_matches("`path` ")))
+}
+
+/// Refuse a write whose path matches an EXISTING mirror entry that differs
+/// only in case (2442j). The policy: on a case-insensitive filesystem
+/// (Windows) the first spelling written stays and the other is refused and
+/// reported — never one host file overwriting another (`README.md` and
+/// `readme.md`), nor two host folders merged into one. `real_name` answers
+/// how the filesystem spells an existing path's last component (`None`: not
+/// there, or not asked); off Windows it is never asked.
+fn refuse_case_collisions(
+    root: &Path,
+    parts: &[&std::ffi::OsStr],
+    rel: &str,
+    real_name: &dyn Fn(&Path) -> Option<std::ffi::OsString>,
+) -> Result<(), String> {
+    let mut cur = root.to_path_buf();
+    for part in parts {
+        cur.push(part);
+        let Some(real) = real_name(&cur) else { return Ok(()) };
+        if real.as_os_str() != *part {
+            return Err(format!(
+                "refusing '{rel}': the local mirror already holds '{}', which differs only in case, and Windows cannot keep both",
+                real.to_string_lossy()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// How the filesystem spells `path`'s last component, if it exists: Windows
+/// only (the case-insensitive filesystem the collision check is for).
+fn real_name_on_disk(path: &Path) -> Option<std::ffi::OsString> {
+    // A link names itself, not its target: nothing to compare.
+    if !cfg!(windows) || !std::fs::symlink_metadata(path).is_ok_and(|m| !m.file_type().is_symlink()) {
+        return None;
+    }
+    std::fs::canonicalize(path).ok()?.file_name().map(|n| n.to_os_string())
 }
 
 /// Refuse when any EXISTING path among `root/parts[0]`, `root/parts[0]/parts[1]`,
@@ -303,6 +387,7 @@ pub fn confined_mirror_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
         return Err(format!("refusing '{rel}': no file name inside the local mirror"));
     };
     refuse_symlinked_components(root, dirs, rel)?;
+    refuse_case_collisions(root, &parts, rel, &real_name_on_disk)?;
     Ok(parts.iter().fold(root.to_path_buf(), |p, part| p.join(part)))
 }
 
@@ -312,6 +397,7 @@ pub fn confined_mirror_path(root: &Path, rel: &str) -> Result<PathBuf, String> {
 pub fn confined_mirror_dir(root: &Path, rel: &str) -> Result<PathBuf, String> {
     let parts = rel_components(rel)?;
     refuse_symlinked_components(root, &parts, rel)?;
+    refuse_case_collisions(root, &parts, rel, &real_name_on_disk)?;
     Ok(parts.iter().fold(root.to_path_buf(), |p, part| p.join(part)))
 }
 
@@ -641,7 +727,7 @@ pub fn divergence(
     let local_diverged = match local {
         Some((size, mtime)) => entry.local_size != size || entry.local_mtime != mtime,
         // Mirror gone but we had synced it before → deleted locally = diverged.
-        None => entry.last_pull_ts.is_some() || entry.last_push_ts.is_some(),
+        None => entry.ever_synced(),
     };
     (host_diverged, local_diverged)
 }
@@ -661,8 +747,7 @@ pub fn should_prune(
     host: &Result<Option<(u64, Option<u64>)>, String>,
     local: &Result<Option<(u64, Option<u64>)>, String>,
 ) -> bool {
-    let ever_synced = entry.last_pull_ts.is_some() || entry.last_push_ts.is_some();
-    !entry.is_dir && ever_synced && matches!(host, Ok(None)) && matches!(local, Ok(None))
+    !entry.is_dir && entry.ever_synced() && matches!(host, Ok(None)) && matches!(local, Ok(None))
 }
 
 /// Whether an amber verdict is worth confirming against the actual bytes rather
@@ -684,6 +769,45 @@ pub fn content_verify_worth_it(
     host_mtime.is_some() && local_mtime.is_some() && host_size == local_size && host_size <= cutoff
 }
 
+/// The same-size pairs a status refresh read and found to DIFFER, by the stats
+/// both sides had then. A pair whose bytes match is re-based once and stays
+/// green, but a real same-size conflict stays amber, and without this every
+/// refresh (one per 15 s tick) read it from the host again, up to the content
+/// cutoff per file. Unchanged stats mean unchanged bytes, as everywhere in
+/// byte-sync; a stat that moves makes the entry miss and the next read replaces
+/// it. Memory only: a restart costs one read per such file.
+#[derive(Default)]
+pub struct KnownDifferent(std::sync::Mutex<HashMap<(String, String), (Stat, Stat)>>);
+
+impl KnownDifferent {
+    /// Past this many pairs the cache starts over (it is a saving, not a record).
+    const CAP: usize = 4096;
+
+    /// The process's one cache.
+    pub fn shared() -> &'static Self {
+        static SHARED: std::sync::LazyLock<KnownDifferent> = std::sync::LazyLock::new(KnownDifferent::default);
+        &SHARED
+    }
+
+    fn pairs(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), (Stat, Stat)>> {
+        self.0.lock_ok()
+    }
+
+    /// Whether `rel` was read with exactly these stats and differed.
+    pub fn holds(&self, project_id: &str, rel: &str, host: Stat, local: Stat) -> bool {
+        self.pairs().get(&(project_id.to_string(), rel.to_string())) == Some(&(host, local))
+    }
+
+    /// Record that `rel`'s two copies, with these stats, hold different bytes.
+    pub fn note(&self, project_id: &str, rel: &str, host: Stat, local: Stat) {
+        let mut pairs = self.pairs();
+        if pairs.len() >= Self::CAP {
+            pairs.clear();
+        }
+        pairs.insert((project_id.to_string(), rel.to_string()), (host, local));
+    }
+}
+
 /// Whether `rel` auto-syncs, by **nearest explicit marker wins**. A marker is an
 /// entry carrying `auto_sync` (on) or `auto_off` (excluded). We consult, closest
 /// first: the path's own entry, then each ancestor **directory** marker, ending at
@@ -693,33 +817,54 @@ pub fn content_verify_worth_it(
 /// marker only applies to descendants when it is `is_dir`. Pure.
 pub fn is_auto(manifest: &Manifest, rel: &str) -> bool {
     // The path's own entry decides for itself regardless of is_dir.
-    if let Some(e) = manifest.get(rel) {
-        if e.auto_off || e.excluded {
-            return false;
-        }
-        if e.auto_sync {
-            return true;
-        }
+    manifest
+        .get(rel)
+        .and_then(auto_marker)
+        .or_else(|| inherited_auto(manifest, ancestors(rel)))
+        .unwrap_or(false)
+}
+
+/// What one entry says about auto-sync, when it says anything.
+fn auto_marker(e: &SyncEntry) -> Option<bool> {
+    if e.auto_off || e.excluded {
+        Some(false)
+    } else {
+        e.auto_sync.then_some(true)
     }
-    // Ancestor directory markers, nearest first, finally the root "" marker (which
-    // `rfind('/')` never reaches on its own).
+}
+
+/// The nearest **directory** marker's word among `dirs` (nearest first).
+fn inherited_auto<'a>(manifest: &Manifest, mut dirs: impl Iterator<Item = &'a str>) -> Option<bool> {
+    dirs.find_map(|dir| manifest.get(dir).filter(|e| e.is_dir).and_then(auto_marker))
+}
+
+/// `rel`'s ancestor folders, nearest first, ending at the project root `""`
+/// (nothing for the root itself).
+fn ancestors(rel: &str) -> impl Iterator<Item = &str> {
     let mut cur = rel;
-    loop {
-        cur = match cur.rfind('/') {
-            Some(idx) => &cur[..idx],
-            None if !cur.is_empty() => "", // consult the project root last
-            None => return false,          // consumed the root: no decision
-        };
-        if let Some(e) = manifest.get(cur) {
-            if e.is_dir {
-                if e.auto_off || e.excluded {
-                    return false;
-                }
-                if e.auto_sync {
-                    return true;
-                }
-            }
+    std::iter::from_fn(move || {
+        if cur.is_empty() {
+            return None;
         }
+        cur = cur.rfind('/').map_or("", |idx| &cur[..idx]);
+        Some(cur)
+    })
+}
+
+/// The folders a walk for auto-sync candidates need not enter: a folder is
+/// skipped when no file below it can be auto ([`is_auto`]), i.e. no marker
+/// below it turns auto on and what it inherits (its own directory marker, then
+/// its ancestors') is not on. Lets a project-wide auto-sync with `data/`
+/// excluded stay out of `data/` instead of listing it and dropping every file.
+pub fn auto_walk_skip(manifest: &Manifest) -> impl Fn(&str) -> bool + Sync + '_ {
+    let auto_below: HashSet<&str> = manifest
+        .iter()
+        .filter(|(_, e)| e.auto_sync)
+        .flat_map(|(rel, _)| ancestors(rel))
+        .collect();
+    move |dir: &str| {
+        !auto_below.contains(dir)
+            && !inherited_auto(manifest, std::iter::once(dir).chain(ancestors(dir))).unwrap_or(false)
     }
 }
 
@@ -735,29 +880,20 @@ pub fn is_auto(manifest: &Manifest, rel: &str) -> bool {
 /// pull is not. Exclusions nested *below* `under` still hold. Pass `""` for a
 /// project-root pull to honour every exclusion.
 pub fn is_excluded(manifest: &Manifest, rel: &str, under: &str) -> bool {
-    let mut cur = rel;
-    loop {
-        if cur == under {
-            return false;
-        }
-        if let Some(e) = manifest.get(cur) {
+    std::iter::once(rel)
+        .chain(ancestors(rel))
+        .take_while(|cur| *cur != under)
+        .find_map(|cur| {
             // A directory marker rules its subtree; a file's own entry rules
-            // only itself (`cur == rel` on the first pass).
-            if e.is_dir || cur == rel {
-                if e.excluded {
-                    return true;
-                }
-                if e.auto_sync {
-                    return false;
-                }
+            // only itself.
+            let e = manifest.get(cur).filter(|e| e.is_dir || cur == rel)?;
+            if e.excluded {
+                Some(true)
+            } else {
+                e.auto_sync.then_some(false)
             }
-        }
-        cur = match cur.rfind('/') {
-            Some(idx) => &cur[..idx],
-            None if !cur.is_empty() => "",
-            None => return false,
-        };
-    }
+        })
+        .unwrap_or(false)
 }
 
 /// Which mirror files count as **new local files** for the status view — files
@@ -890,7 +1026,7 @@ pub fn local_size_mtime(meta: Option<std::fs::Metadata>) -> (u64, Option<u64>) {
     }
 }
 
-/// Join a remote project root with a project-relative path (mirrors
+/// Join a remote project root with a project-relative path (also
 /// `commands::fs::join_remote_dir`). Pure.
 pub fn join_remote(remote_root: &str, rel: &str) -> String {
     let base = remote_root.trim_end_matches('/');
@@ -910,7 +1046,7 @@ pub fn join_remote(remote_root: &str, rel: &str) -> String {
 
 /// Append a child segment to a project-relative path (`""`+`a` → `a`, `a`+`b` →
 /// `a/b`). Pure.
-fn join_rel(parent: &str, child: &str) -> String {
+pub(crate) fn join_rel(parent: &str, child: &str) -> String {
     if parent.is_empty() {
         child.to_string()
     } else {
@@ -949,6 +1085,13 @@ pub async fn walk_host_files(
 /// (project-relative) and stops once `cap` files are collected. The bool is
 /// whether the cap cut the walk short — the explicit host scans' bound on a
 /// tree that turns out to hold a venv or a dataset.
+///
+/// Depth-first in listing order, as it always was; up to
+/// [`LIST_CONCURRENCY`](crate::services::remote::sync_pool::LIST_CONCURRENCY)
+/// of the next folders are listed ahead at once (`sync_pool::walk_listed`,
+/// which holds the walk's rules: `.git` and the runtime dir skipped, nested
+/// repos and worktrees left alone, links and special files never followed,
+/// any listing error the walk reaches fails it).
 pub async fn walk_host_files_bounded(
     sftp: &openssh_sftp_client::Sftp,
     remote_root: &str,
@@ -956,63 +1099,9 @@ pub async fn walk_host_files_bounded(
     skip_dir: &(dyn Fn(&str) -> bool + Sync),
     cap: usize,
 ) -> Result<(Vec<HostFile>, bool), String> {
-    let mut out = Vec::new();
-    let truncated = walk_inner(sftp, remote_root, rel, skip_dir, cap, &mut out).await?;
-    Ok((out, truncated))
-}
-
-/// Walks `rel` into `out`; true once `cap` stopped it.
-async fn walk_inner(
-    sftp: &openssh_sftp_client::Sftp,
-    remote_root: &str,
-    rel: &str,
-    skip_dir: &(dyn Fn(&str) -> bool + Sync),
-    cap: usize,
-    out: &mut Vec<HostFile>,
-) -> Result<bool, String> {
-    let abs = join_remote(remote_root, rel);
-    let entries = sftp::list_dir_raw_on(sftp, &abs).await?;
-    // #23 D2: a directory holding a `.git` entry of EITHER kind is somebody else's
-    // repo — a nested clone, or a linked worktree, whose `.git` is a *file*. Skipping
-    // the entry named `.git` (below) covers the file but not the checkout around it,
-    // so a worktree inside the project used to be walked and mirrored as a second full
-    // copy of the source tree: doubling every pass, counted in the big-folder census,
-    // and landing on the peer as a plain directory with no `.git` at all. The project
-    // root itself of course has one, so this is a check on *sub*directories only.
-    if !rel.is_empty() && entries.iter().any(|e| e.name == ".git") {
-        return Ok(false);
-    }
-    for entry in entries {
-        // Skip Tabtivity's internal runtime dir, mirroring the local/remote listers.
-        // `.git` is likewise never byte-mirrored: git state is kept in step
-        // *semantically* by `services::git_peer` (lockstep), so copying its bytes
-        // would fight that layer and risk corrupting a repo mid-write.
-        if crate::brand::is_project_dir(&entry.name) || entry.name == ".git" {
-            continue;
-        }
-        if out.len() >= cap {
-            return Ok(true);
-        }
-        let child_rel = join_rel(rel, &entry.name);
-        match entry.kind {
-            SyncKind::Dir => {
-                if !skip_dir(&child_rel)
-                    && Box::pin(walk_inner(sftp, remote_root, &child_rel, skip_dir, cap, out)).await?
-                {
-                    return Ok(true);
-                }
-            }
-            SyncKind::File => out.push(HostFile {
-                rel: child_rel,
-                size: entry.size,
-                mtime: entry.modified_secs,
-                mode: entry.mode,
-            }),
-            // G3: symlinks and special files are never mirrored.
-            SyncKind::Symlink | SyncKind::Other => {}
-        }
-    }
-    Ok(false)
+    use crate::services::remote::sync_pool;
+    let list = move |dir: String| async move { sftp::list_dir_raw_on(sftp, &join_remote(remote_root, &dir)).await };
+    sync_pool::walk_listed(list, rel, skip_dir, cap, sync_pool::LIST_CONCURRENCY).await
 }
 
 /// Pull one host file into the mirror: read it over SFTP (size-guarded, G8) and
@@ -1070,13 +1159,7 @@ where
     }
     let local = write_mirror_file_with_mode(mirror_root, rel, &bytes, host_mode)?;
     let meta = std::fs::metadata(&local).map_err(|e| e.to_string())?;
-    let local_size = meta.len();
-    let local_mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-    Ok((local_size, local_mtime))
+    Ok(local_meta(&meta))
 }
 
 /// [`pull_file`] for a manual pull, which takes a file of any size: one within
@@ -1261,25 +1344,114 @@ pub async fn stat_or_zero(sftp: &openssh_sftp_client::Sftp, host_abs: &str) -> (
     sftp::metadata_on(sftp, host_abs).await.unwrap_or((0, None))
 }
 
-/// Record a freshly-pulled file in the manifest: mark it selected and stamp the
-/// host + local bases and the pull timestamp. Mutates `manifest` in place; the
-/// caller persists under the single-writer lock.
-pub fn record_pull(
-    manifest: &mut Manifest,
-    rel: &str,
-    host_size: u64,
-    host_mtime: Option<u64>,
-    local_size: u64,
-    local_mtime: Option<u64>,
-) {
+/// Record a freshly transferred file in the manifest: mark it selected and
+/// stamp the `host` + `local` bases and `dir`'s timestamp. Mutates `manifest`
+/// in place; the caller persists under the single-writer lock.
+pub fn record_transfer(manifest: &mut Manifest, rel: &str, dir: Transfer, host: Stat, local: Stat) {
     let entry = manifest.entry(rel.to_string()).or_default();
     entry.selected = true;
     entry.is_dir = false;
-    entry.host_size = host_size;
-    entry.host_mtime = host_mtime;
-    entry.local_size = local_size;
-    entry.local_mtime = local_mtime;
-    entry.last_pull_ts = Some(now_secs());
+    (entry.host_size, entry.host_mtime) = host;
+    (entry.local_size, entry.local_mtime) = local;
+    match dir {
+        Transfer::Pull => entry.last_pull_ts = Some(now_secs()),
+        Transfer::Push => entry.last_push_ts = Some(now_secs()),
+    }
+}
+
+/// [`record_transfer`] for a pull.
+pub fn record_pull(manifest: &mut Manifest, rel: &str, host: Stat, local: Stat) {
+    record_transfer(manifest, rel, Transfer::Pull, host, local);
+}
+
+/// [`record_transfer`] for a push.
+pub fn record_push(manifest: &mut Manifest, rel: &str, host: Stat, local: Stat) {
+    record_transfer(manifest, rel, Transfer::Push, host, local);
+}
+
+/// How many records a [`RecordBatch`] holds before it saves them.
+const RECORD_BATCH_FILES: usize = 64;
+/// How long a [`RecordBatch`] holds a record before the next one saves it.
+const RECORD_BATCH_AGE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The files whose record a [`RecordBatch`] could not save, and why. Their
+/// bytes moved; their bases are forgotten ([`save_manifest_or_mark_stale`]).
+#[derive(Debug)]
+pub struct Unrecorded {
+    pub paths: Vec<String>,
+    pub error: String,
+}
+
+/// The records of a transfer's files, saved in batches: writing `sync.json`
+/// (the whole manifest, fsynced twice) and the usage counter once per file made
+/// a folder transfer quadratic in its size. Each record lands in the cache at
+/// once, so every reader of this process sees the new base; the file is written
+/// every [`RECORD_BATCH_FILES`] records or [`RECORD_BATCH_AGE`], and by
+/// [`Self::flush`], which the caller runs before it reports. A save that fails
+/// forgets the bases of exactly the records it held and names them: a manual
+/// caller reports that, a background one logs it. A transfer cut off before its
+/// flush leaves at most one batch unsaved, which reads as moved, never as clean.
+pub struct RecordBatch<'a> {
+    manifest: &'a SyncManifestState,
+    project_id: &'a str,
+    pending: std::sync::Mutex<PendingRecords>,
+}
+
+struct PendingRecords {
+    records: Vec<(String, Transfer, Stat, Stat)>,
+    since: std::time::Instant,
+}
+
+impl<'a> RecordBatch<'a> {
+    pub fn new(manifest: &'a SyncManifestState, project_id: &'a str) -> Self {
+        let pending = PendingRecords { records: Vec::new(), since: std::time::Instant::now() };
+        Self { manifest, project_id, pending: std::sync::Mutex::new(pending) }
+    }
+
+    /// Record one file a transfer just moved ([`record_transfer`]), saving the
+    /// batch when it is due.
+    pub async fn record(&self, rel: &str, dir: Transfer, host: Stat, local: Stat) -> Result<(), Unrecorded> {
+        {
+            let mut guard = self.manifest.lock().await;
+            record_transfer(ensure_loaded(&mut guard, self.project_id), rel, dir, host, local);
+        }
+        let due = {
+            let mut pending = self.pending.lock_ok();
+            pending.records.push((rel.to_string(), dir, host, local));
+            pending.records.len() >= RECORD_BATCH_FILES || pending.since.elapsed() >= RECORD_BATCH_AGE
+        };
+        if due {
+            self.flush().await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Save what is pending and count it in the project's network usage.
+    pub async fn flush(&self) -> Result<(), Unrecorded> {
+        let records = {
+            let mut pending = self.pending.lock_ok();
+            pending.since = std::time::Instant::now();
+            std::mem::take(&mut pending.records)
+        };
+        if records.is_empty() {
+            return Ok(());
+        }
+        let paths: Vec<String> = records.iter().map(|(rel, ..)| rel.clone()).collect();
+        let saved = {
+            let mut guard = self.manifest.lock().await;
+            let m = ensure_loaded(&mut guard, self.project_id);
+            // Recorded again, on the manifest as it is now: a version the app's
+            // other process wrote since was re-read without these.
+            for (rel, dir, host, local) in &records {
+                record_transfer(m, rel, *dir, *host, *local);
+            }
+            save_manifest_or_mark_stale(self.project_id, m, &paths)
+        };
+        let pulled = records.iter().filter(|(_, dir, ..)| *dir == Transfer::Pull).count();
+        crate::schema::net_usage::record_files(self.project_id, pulled as u64, (records.len() - pulled) as u64);
+        saved.map_err(|error| Unrecorded { paths, error })
+    }
 }
 
 // ── rsync fast-path (Phase 3) ──────────────────────────────────────────────
@@ -1484,7 +1656,7 @@ fn rsync_literal_host_path(path: &str) -> String {
         .join("/")
 }
 
-/// What a `sync_pull` / `sync_whole_project` did. A manual pull takes files of
+/// What a `sync_pull` did. A manual pull takes files of
 /// any size ([`pull_file_any_size`]), so nothing is left on the host for size.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1688,7 +1860,7 @@ pub enum PushDecision {
 /// only over-reports the touch case as a conflict the user clears with "keep
 /// local".)
 pub fn push_decision(entry: &SyncEntry, host: Option<(u64, Option<u64>)>) -> PushDecision {
-    let ever_synced = entry.last_pull_ts.is_some() || entry.last_push_ts.is_some();
+    let ever_synced = entry.ever_synced();
     match host {
         // Host gone: a change (deletion) if we'd synced it before; a plain create
         // otherwise.
@@ -1982,31 +2154,21 @@ pub async fn push_file_atomic(
     Ok(PushedFile { host, local })
 }
 
-/// Record a freshly-pushed file in the manifest: keep it selected and stamp the
-/// new host + local bases and the push timestamp.
-pub fn record_push(
-    manifest: &mut Manifest,
-    rel: &str,
-    host_size: u64,
-    host_mtime: Option<u64>,
-    local_size: u64,
-    local_mtime: Option<u64>,
-) {
-    let entry = manifest.entry(rel.to_string()).or_default();
-    entry.selected = true;
-    entry.is_dir = false;
-    entry.host_size = host_size;
-    entry.host_mtime = host_mtime;
-    entry.local_size = local_size;
-    entry.local_mtime = local_mtime;
-    entry.last_push_ts = Some(now_secs());
-}
-
 /// Recursively collect the project-relative paths of regular FILES in the local
 /// mirror under `rel` (lstat-typed; symlinks skipped, mirroring the host walker's
 /// G3 stance). `rel` "" walks the whole mirror. Returns paths relative to the
 /// mirror root with forward slashes.
 pub fn walk_mirror_files(project_id: &str, rel: &str) -> Result<Vec<String>, String> {
+    walk_mirror_files_skipping(project_id, rel, &|_| false)
+}
+
+/// [`walk_mirror_files`] that never descends into a folder `skip_dir` names
+/// (project-relative), as [`walk_host_files_bounded`] does on the host.
+pub fn walk_mirror_files_skipping(
+    project_id: &str,
+    rel: &str,
+    skip_dir: &dyn Fn(&str) -> bool,
+) -> Result<Vec<String>, String> {
     let root = mirror_dir(project_id);
     let start = mirror_local_path(project_id, rel);
     let mut out = Vec::new();
@@ -2020,7 +2182,7 @@ pub fn walk_mirror_files(project_id: &str, rel: &str) -> Result<Vec<String>, Str
             Ok(out)
         }
         Ok(m) if m.file_type().is_dir() => {
-            walk_mirror_inner(&root, &start, &mut out)?;
+            walk_mirror_inner(&root, &start, skip_dir, &mut out)?;
             Ok(out)
         }
         // Missing / symlink / special → nothing to push.
@@ -2028,7 +2190,12 @@ pub fn walk_mirror_files(project_id: &str, rel: &str) -> Result<Vec<String>, Str
     }
 }
 
-fn walk_mirror_inner(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), String> {
+fn walk_mirror_inner(
+    root: &Path,
+    dir: &Path,
+    skip_dir: &dyn Fn(&str) -> bool,
+    out: &mut Vec<String>,
+) -> Result<(), String> {
     // #23 D2, the mirror side of the same boundary: a subdirectory holding a `.git`
     // entry of either kind (a nested repo's directory, a linked worktree's *file*) is
     // not this project's bytes to push. `symlink_metadata` so a `.git` symlink counts
@@ -2052,7 +2219,9 @@ fn walk_mirror_inner(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(
             continue;
         }
         if ft.is_dir() {
-            walk_mirror_inner(root, &path, out)?;
+            if !rel_under(root, &path).is_some_and(|rel| skip_dir(&rel)) {
+                walk_mirror_inner(root, &path, skip_dir, out)?;
+            }
         } else if ft.is_file() {
             if let Some(r) = rel_under(root, &path) {
                 out.push(r);

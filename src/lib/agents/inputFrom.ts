@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { noteTabMessagesHumanInput } from "../window/tabsMcp";
 
 /**
  * Where the user typed into a tab from — the screen `tabtivity-send` puts a
@@ -18,6 +19,9 @@ export type InputFrom = "phone" | "desktop";
 const reported = new Map<string, InputFrom>();
 
 export function noteInputFrom(ptyId: string, from: InputFrom): void {
+  // Every person's input, not only a change of screen: tab messaging's idle
+  // wake ends a tab's wake-started turn on it.
+  noteTabMessagesHumanInput(ptyId);
   if (reported.get(ptyId) === from) return;
   reported.set(ptyId, from);
   invoke("pty_input_from", { id: ptyId, from }).catch(() => {

@@ -165,18 +165,6 @@ pub fn is_app_local_tmux_session(session: &str) -> bool {
     crate::services::brand_migration::compat::tmux_session_rest(&crate::brand::PAIR, session).is_some()
 }
 
-/// Whether the app's own local session `session` is running: a spawn wrapped
-/// in `new-session -A` then attaches to it rather than starting anything
-/// (the AI switch lets such a reattach through, `launch_prep::prepare`).
-pub fn app_session_alive(session: &str) -> bool {
-    is_app_local_tmux_session(session)
-        && tmux_available()
-        && tmux_command()
-            .args(["has-session", "-t", &format!("={session}")])
-            .output()
-            .is_ok_and(|o| o.status.success())
-}
-
 /// The tab variables worth putting in a session's environment, sorted so the
 /// argv is deterministic (and testable).
 ///
@@ -242,20 +230,42 @@ fn version_supports_session_env(v_output: &str) -> bool {
     (major, minor) >= (3, 2)
 }
 
-/// Whether a usable `tmux` is on `PATH`. Cached after the first probe (the answer
-/// cannot change within a run). Always `false` on Windows, which is what makes
-/// every wrap here a no-op there.
+/// Whether a usable `tmux` is on `PATH`. A found tmux is cached for the run; a
+/// missing one is probed again at most every [`TMUX_REPROBE`], so installing it
+/// (the one-click install a Mac without tmux is offered, 2442r) takes effect
+/// without a restart. Always `false` on Windows, which is what makes every wrap
+/// here a no-op there.
 #[cfg(unix)]
 pub fn tmux_available() -> bool {
-    use std::sync::OnceLock;
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        crate::paths::command_no_window("tmux")
-            .arg("-V")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    use app_core::sync::LockExt;
+    static PROBE: std::sync::Mutex<Option<(bool, std::time::Instant)>> = std::sync::Mutex::new(None);
+    let mut probe = PROBE.lock_ok();
+    let now = std::time::Instant::now();
+    if let Some(answer) = cached_probe(*probe, now, TMUX_REPROBE) {
+        return answer;
+    }
+    let found = crate::paths::command_no_window("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    *probe = Some((found, now));
+    found
+}
+
+/// How long a "no tmux" answer stands before [`tmux_available`] asks again.
+#[cfg(unix)]
+const TMUX_REPROBE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The cached answer still standing at `now`: a `true` forever, a `false`
+/// until `ttl` has passed. Pure.
+#[cfg(any(unix, test))]
+fn cached_probe(cached: Option<(bool, std::time::Instant)>, now: std::time::Instant, ttl: std::time::Duration) -> Option<bool> {
+    match cached {
+        Some((true, _)) => Some(true),
+        Some((false, at)) if now.duration_since(at) < ttl => Some(false),
+        _ => None,
+    }
 }
 
 #[cfg(not(unix))]
@@ -474,6 +484,8 @@ pub(crate) const SECRET_ENV: &[&str] = &[
     crate::services::root_mcp::PRINT_TOKEN_ENV,
     // Claude's long-lived token under its carrier (`claude_token`), slot 8642.
     crate::services::claude_token::CARRIER,
+    // The tab messages lane's token (`Caller::Tabs`), slot 8643 — appended.
+    crate::services::root_mcp::TABS_TOKEN_ENV,
 ];
 
 /// First `update-environment` array slot Tabtivity claims for [`SECRET_ENV`] (one
@@ -788,6 +800,7 @@ pub fn wrap_pty_options_local(opts: &mut PtyOptions) {
     let args = local_tmux_argv(&session, opts, false);
     opts.cmd = "tmux".to_string();
     opts.args = args;
+    opts.mux_wrapped = true;
 }
 
 /// The `tmux` argv that starts (or, with `-A`, re-attaches) `session` running
@@ -852,10 +865,10 @@ fn detach(args: &mut Vec<String>, cols: u16, rows: u16) {
 }
 
 /// Whether `opts` is already the tmux client's launch — what
-/// [`wrap_pty_options_local`] (and so `launch_prep::prepare`) leaves behind:
-/// `cmd` is `tmux` and the argv creates a session.
+/// [`wrap_pty_options_local`] (and so `launch_prep::prepare`) leaves behind,
+/// marked explicitly (`PtyOptions::mux_wrapped`), never guessed from `cmd`.
 fn is_tmux_wrapped(opts: &PtyOptions) -> bool {
-    opts.cmd == "tmux" && opts.args.iter().any(|a| a == "new-session")
+    opts.mux_wrapped
 }
 
 /// The argv [`spawn_detached_with`] hands the tmux client for `session`.
@@ -965,6 +978,19 @@ pub(crate) fn launcher_text(session: &str) -> Option<String> {
 mod tests {
     use crate::brand::SLUG;
     use super::*;
+
+    /// 2442r: a found tmux stands for the run, a missing one is asked again
+    /// after the TTL, so an install is noticed without a restart.
+    #[test]
+    fn a_missing_tmux_is_probed_again_after_the_ttl() {
+        let t0 = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(30);
+        let later = t0 + std::time::Duration::from_secs(31);
+        assert_eq!(cached_probe(None, t0, ttl), None);
+        assert_eq!(cached_probe(Some((true, t0)), later, ttl), Some(true));
+        assert_eq!(cached_probe(Some((false, t0)), t0 + std::time::Duration::from_secs(5), ttl), Some(false));
+        assert_eq!(cached_probe(Some((false, t0)), later, ttl), None);
+    }
 
     fn env_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -1250,12 +1276,14 @@ mod tests {
             let at = SECRET_ENV.iter().position(|k| k == carrier).unwrap();
             assert_eq!(SECRET_UPDATE_ENV_SLOT + at, if i < 2 { 8636 + i } else { 8639 }, "{carrier}");
         }
-        assert_eq!(SECRET_ENV.len(), 13);
-        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8642);
+        assert_eq!(SECRET_ENV.len(), 14);
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + SECRET_ENV.len() - 1, 8643);
         let print = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::PRINT_TOKEN_ENV).unwrap();
         assert_eq!(SECRET_UPDATE_ENV_SLOT + print, 8641, "the print token is appended, slot 8641");
         let claude = SECRET_ENV.iter().position(|k| *k == crate::services::claude_token::CARRIER).unwrap();
         assert_eq!(SECRET_UPDATE_ENV_SLOT + claude, 8642);
+        let tabs = SECRET_ENV.iter().position(|k| *k == crate::services::root_mcp::TABS_TOKEN_ENV).unwrap();
+        assert_eq!(SECRET_UPDATE_ENV_SLOT + tabs, 8643, "the tab messages token is appended, slot 8643");
         for var in crate::services::agent_api_keys::ENV_VARS {
             assert!(!SECRET_ENV.contains(var), "{var}");
         }
@@ -1570,6 +1598,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         }
     }
 
@@ -1633,6 +1662,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         };
         wrap_pty_options_local(&mut opts);
         assert_eq!(opts.cmd, "bash");
@@ -1661,6 +1691,7 @@ mod tests {
             schedule_target_id: None,
             host_session: false,
             api_key: None,
+            mux_wrapped: false,
         }
     }
 
@@ -1694,6 +1725,7 @@ mod tests {
         let wrapped = local_tmux_args_with(session, &opts.cmd, &opts.args, &opts.env, true);
         opts.args = wrapped.clone();
         opts.cmd = "tmux".into();
+        opts.mux_wrapped = true;
 
         let args = detached_argv(session, &opts);
         let mut expected = wrapped;

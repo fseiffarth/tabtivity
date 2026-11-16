@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storageKey } from "../../lib/brand";
 import { HintMessage, HintQueue, resetTips } from "../../../mobile-web/src/components/HintMessage";
@@ -20,7 +20,9 @@ afterEach(() => {
 });
 
 describe("phone hint messages", () => {
-  it("points at a visible control, follows scrolling, and removes the pointer on dismissal", () => {
+  it("points at a visible control, follows scrolling, and removes the pointer on dismissal", async () => {
+    // Scrolls are measured once per frame, not once per event.
+    const nextFrame = () => act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
     const rect = (top: number) => ({ top, bottom: top + 44, left: 20, right: 100, width: 80, height: 44, x: 20, y: top, toJSON: () => ({}) });
     let targetTop = 300;
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
@@ -30,9 +32,11 @@ describe("phone hint messages", () => {
     expect(container.querySelector(".phone-hint-ring")?.getAttribute("y")).toBe("297");
     targetTop = -60;
     fireEvent.scroll(window);
+    await nextFrame();
     expect(container.querySelector(".phone-hint-pointer")).toBeNull();
     targetTop = 400;
     fireEvent.scroll(window);
+    await nextFrame();
     expect(container.querySelector(".phone-hint-ring")?.getAttribute("y")).toBe("397");
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
     expect(container.querySelector(".phone-hint-pointer")).toBeNull();
@@ -82,6 +86,13 @@ describe("phone hint messages", () => {
     halfHourLater();
     render(<HintMessage hint="agentHold" floating />);
     expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("lays its actions out as one text row: Turn off tips, then Skip and Read in the accent", () => {
+    const { container } = render(<HintMessage hint="agentHold" />);
+    const row = [...container.querySelectorAll(".hint-message-actions > button")];
+    expect(row.map((b) => b.textContent)).toEqual(["Turn off tips", "Skip", "Read"]);
+    expect(row.map((b) => b.className)).toEqual(["hint-message-off", "hint-message-skip", "hint-message-read"]);
   });
 
   it("Skip closes the tip for this visit without counting a read", () => {

@@ -5,7 +5,7 @@ pub mod agent;
 pub use agent::{
     agent_api_keys, agent_auth, agent_bin, agent_changes, agent_chats, agent_defaults, agent_exec,
     agent_features, agent_fence, agent_global, agent_hint, agent_history, agent_home,
-    agent_install, agent_latest, agent_privacy, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
+    agent_import_offer, agent_install, agent_latest, agent_privacy, agent_prompts, agent_registry, agent_relocate, agent_session, agent_shim,
     agent_sqlite, agent_tasks, agent_transcript, agent_turn, agent_versions, assistant,
     assistant_attach, assistant_model_probe, claude_token, cli_overview, codex_bind, codex_store, copilot_auth, copilot_session, google_chat,
     model_rows, muse_session, opencode_models, opencode_session, opencode_store, transcript_watch,
@@ -25,7 +25,7 @@ pub use mail::{
     mail_thunderbird,
 };
 pub mod mcp;
-pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, schedule_mcp, web_lane};
+pub use mcp::{cockpit_mcp, git_push_mcp, help_mcp, markup_mcp, print_mcp, schedule_mcp, tabs_mcp, web_lane};
 // One shared, at-most-a-second-old reading of the process table for the
 // background loops that each walked `/proc` on their own timer.
 pub mod proc_table;
@@ -75,6 +75,11 @@ pub mod port_forward;
 // and which installed program opens it — never one named inside the tree.
 pub mod ide_detect;
 pub mod local_loss;
+// Per-turn checkpoints: a snapshot of an agent tab's folder as each turn begins and
+// ends, in a store of its own under the state dir, and a restore with its own undo.
+pub mod checkpoints;
+// The per-scope tab archive: tabs put away on purpose, beside the saved layout.
+pub mod tab_archive;
 // The way a fenced agent with no network reaches the local Ollama and a few of
 // Tabtivity's tools (Local models only + Cut network, docs/context/local_models_only.md).
 #[cfg(unix)]
@@ -118,6 +123,12 @@ pub mod process_lease;
 pub mod project_runtime;
 // The projects.json write side: serialized read-modify-write + entry patches.
 pub mod project_registry;
+// The project scaffold catalog: the root docs a project can hold, their
+// templates and their three states (missing / template / edited).
+pub mod scaffold;
+// The agent CLIs' own per-project memories (Claude's auto memory, Codex's
+// memories), listed and read through agent-home handles, read-only.
+pub mod agent_memory;
 // The boxes.json store and the box tab scope (`box:<id>`, its allowed roots).
 pub mod box_store;
 // Which roots the absolute-path file commands may touch, and the
@@ -125,7 +136,7 @@ pub mod box_store;
 pub mod fs_confine;
 pub mod prompt_blame;
 pub mod remote;
-pub use remote::{agent_host_move, remote_credentials, remote_scaffold, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, sync_take_newer, tar_stream, worker_sync};
+pub use remote::{agent_host_move, remote_credentials, remote_scaffold, remote_sync, remote_transcript, remote_usage, sftp, ssh_common, ssh_exec, sync_auto, sync_op, sync_take_newer, sync_task, tar_stream, worker_sync};
 pub use app_core::services::remote_agents;
 pub mod restore_service;
 pub mod root_mcp;
@@ -156,7 +167,15 @@ pub mod fd_limit;
 // TensorBoard event files read natively (the training-curves viewer).
 pub mod tfevents;
 pub mod terminal_service;
+// The Windows session host's cross-platform core (`docs/windows_session_host_plan.md` §2).
+pub mod session_host;
+// Same-user named-pipe IPC on Windows (protected DACL, peer SID checks, token
+// file): the admin pipe and the session host.
+pub mod local_pipe;
 pub mod tmux_local;
+// The session mux: one seam in front of every local persistent-session use
+// (tmux on Unix, the native session host on Windows).
+pub mod session_mux;
 // The launch assembly `pty_spawn` and the sidecar's headless spawn share
 // (headless owner plan, H1b).
 pub mod launch_prep;

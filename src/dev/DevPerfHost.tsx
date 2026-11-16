@@ -50,12 +50,21 @@ import { UntestedTag } from "../components/common/UntestedTag";
 import "./devPerf.css";
 import { TimerIcon } from "../components/common/icons/Icon";
 import { storageKey } from "../lib/brand";
+import {
+  COMPLETION_TIMINGS_CAP, clearCompletionTimings, completionTimings, type CompletionTiming,
+} from "../lib/viewers/completion/completionTimings";
 
 const RATE_WINDOW_MS = 60_000;
 const STALL_WINDOW_MS = 60_000;
 const IPC_ROWS_SHOWN = 14;
 const RESOURCE_POLL_MS = 2000;
 const FAB_HIDDEN_KEY = storageKey("devPerf.fabHidden");
+const COMPLETION_ROWS_SHOWN = 12;
+
+/** A completion milestone in ms after its request, blank until it happened. */
+function since(c: CompletionTiming, mark: number | undefined): string {
+  return mark === undefined ? "" : fmtMs(mark - c.request);
+}
 
 const readFabHidden = () => {
   try {
@@ -195,6 +204,7 @@ export function DevPerfHost() {
   const recentStalls = st.stalls.slice(-8).reverse();
   const slowCalls = st.slow.slice(-10).reverse();
   const commits = st.commits.slice(-8).reverse();
+  const completions = completionTimings().slice(-COMPLETION_ROWS_SHOWN).reverse();
   const scanOn = scanState === "on" || scanState === "on-late";
   // Read on each 1s tick rather than tracked: the widget can be mounted by a
   // path this component never hears about (the boot arm, a hot update).
@@ -212,7 +222,7 @@ export function DevPerfHost() {
           Perf monitor <UntestedTag id="devPerfHost.1" />
         </span>
         <span className="dev-perf-head-actions">
-          <button onClick={() => resetPerf()} title="Clear all buffers">
+          <button onClick={() => { resetPerf(); clearCompletionTimings(); }} title="Clear all buffers">
             Reset
           </button>
           {fabHidden ? (
@@ -352,6 +362,46 @@ export function DevPerfHost() {
                     <td>{fmtMs(r.maxMs)}</td>
                     <td>{fmtMs(r.totalMs)}</td>
                     <td>{r.errors > 0 ? r.errors : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section>
+          <h4>
+            Completions <small>(last {COMPLETION_TIMINGS_CAP} requests, newest first; ms from the request)</small>
+          </h4>
+          {completions.length === 0 ? (
+            <div className="dev-perf-empty">no completion requests yet</div>
+          ) : (
+            <table className="dev-perf-table">
+              <thead>
+                <tr>
+                  <th>model</th>
+                  <th>trig</th>
+                  <th>path</th>
+                  <th>ctx</th>
+                  <th>first</th>
+                  <th>done</th>
+                  <th>key→done</th>
+                  <th>prompt</th>
+                  <th>result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {completions.map((c, i) => (
+                  <tr key={i} title={fmtClock(c.at)}>
+                    <td className="mono">{c.provider}/{c.model ?? "none"}</td>
+                    <td>{c.trigger}</td>
+                    <td>{c.stats ? `${c.stats.endpoint}${c.stats.referencesDropped ? " −ref" : ""}` : ""}</td>
+                    <td>{since(c, c.contextReady)}</td>
+                    <td>{since(c, c.firstEvent)}</td>
+                    <td>{since(c, c.done)}</td>
+                    <td>{c.keystroke !== undefined && c.done !== undefined ? fmtMs(c.done - c.keystroke) : ""}</td>
+                    <td>{c.stats?.promptEvalCount ?? ""}</td>
+                    <td>{c.outcome ?? "…"}</td>
                   </tr>
                 ))}
               </tbody>

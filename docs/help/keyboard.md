@@ -89,7 +89,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | E / ↑ | Up a level: tabs → subwindows → projects → the top bar (the subwindow level only exists with two or more subwindows; with one, ↑/↓ skip it) |
 | D / ↓ | Back down a level |
 | 1–9 | Tabs: new agent tab — or, on a tab that is asking, pick that option of its question at once (the free-text option opens the Chat view's field, or on the Terminal view moves the highlight there and hands you the terminal). Projects: jump to a station (1 = root, 2 = first pill) |
-| K / L | On an agent tab whose Chat shows prompts still queued behind a busy turn: **K** Send now (stops the turn so the queue goes at once; steering stays on), **L** Cancel and edit (takes the queued prompts back into the text box and hands you the keyboard). Shown only while the bubbles' buttons are |
+| K / L | On an agent tab whose Chat shows prompts still queued behind a busy turn: **K** Send now (a Claude tab sends the queue into the turn with Claude's own Ctrl+X Ctrl+S, so a running command moves to the background; the other CLIs stop the turn so the queue goes at once; steering stays on), **L** Cancel and edit (takes the queued prompts back into the text box and hands you the keyboard). Shown only while the bubbles' buttons are |
 | N / M | New shell / System Monitor tab (projects: new project / mail) |
 | + | The new-tab menu, walked with E/D; **/** types into its search |
 | , | Jump to a project: before you type, your other open and recently used projects sit round the field (1 = the one you came from); type a name to narrow them. With ten or fewer on the wheel, their digit (1–9, 0) opens one at once |
@@ -135,6 +135,7 @@ highlighted card is the cursor:
 | U | Switch between split and unified |
 | O | Open the file in a tab (Shift+O: in a new subwindow) |
 | V | Open the card's whole file in the diff viewer |
+| C | Start a note to the agent on the card's first changed line (the box takes the keyboard; Ctrl+Enter saves, Esc cancels) |
 | Enter / Space | Work here (leave navigation, the keys stay in the view) / the Chat's input field (else the prompt box) |
 
 Dialogs and menus don't end the mode. Whatever comes up on top — a confirm, the
@@ -201,7 +202,7 @@ digits to answer an agent): see "Steering with a keyboard" in the Mobile topic.
 Each Tabtivity navigation action takes up to two keys (a letter and its arrow, say),
 rebound in the same settings page under *Inside Tabtivity navigation*, one list per
 level (*Inside a view* holds the letters that act once you are inside a Diffs or Files
-view: fold, layout, open, other view, next new). A letter can mean one thing on the
+view: fold, layout, open, other view, next new, add a note). A letter can mean one thing on the
 projects level and another inside a pane; the bar, the caps and the cheat sheet always show the keys you have.
 
 ## In editors and viewers

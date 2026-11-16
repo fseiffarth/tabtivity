@@ -1,28 +1,49 @@
 # Structure budget — plan
 
 Status: plan only (2026-10-26), reviewed by two plan reviewers the same day.
-No code changed. Builds on `docs/code_screen_plan.md` section S, which owns
-the file splits (another session runs S5 and S7 first, 2026-10-26; see
-"Sequencing with code screen S5/S7"); this plan adds the guard that keeps the result from
+Revised 2026-11-14, not re-reviewed: step 4 is an import-boundary gate
+instead of per-add-on Cargo features; raising a baseline number needs the
+user's say-so; a new plan declares core or add-on; the numbers are
+re-counted. No code changed and no step has landed. Builds on
+`docs/code_screen_plan.md` section S, which owns the file splits; its S5 and
+S7 landed on 2026-10-26 (`docs/code_screen_handoff.md`), so nothing here
+waits for them any more. This plan adds the guard that keeps the result from
 regrowing, a boundary for the optional features, and the process rules
-around them. U1–U3 decided 2026-10-26 (see "User decisions"); U4 is
-approved at step 5. Step 3 now only picks stub vs gate per add-on.
+around them. U1–U3 decided 2026-10-26, U5 and U6 on 2026-11-14 (see "User
+decisions"); U4 is approved at step 5.
 
 ## Why
 
-The tree is ~870k lines (desktop TS 490k, Rust 340k, phone 37k) written in five
-months, mostly by agents, with one human maintainer. 99 non-test source files
-are over 1,500 lines (113k lines over that limit); the largest are `src/components/embed/FileViewerPane.tsx`
-(10,870), `src-tauri/src/services/mobile_control/host.rs` (7,942),
-`src/stores/tabs.ts` (6,888), `src-tauri/src/commands/mail.rs` (5,760),
-`src/components/embed/pdf/PdfViewer.tsx` (5,526). Agents grow big files
-fastest, because a big file is where the code they need already is. Two goals:
+The tree was ~870k lines on 2026-10-26 (desktop TS 490k, Rust 340k, phone
+37k), written in five months, mostly by agents, with one human maintainer.
+By decision 1's count (tests and dictionaries left out) it is 716k lines in
+1,756 files on 2026-11-14; 104 of them are over 1,500 lines (107k lines over
+that limit). The largest are `src-tauri/src/services/mobile_control/host.rs`
+(9,220), `src-tauri/src/commands/mail.rs` (5,849),
+`src-tauri/src/commands/projects.rs` (5,640), `src/stores/tabs.ts` (4,665),
+`src-tauri/src/terminal/mod.rs` (4,440). Agents grow big files fastest,
+because a big file is where the code they need already is.
+
+Splits alone do not hold. In the 19 days after this plan was written, S7
+took `FileViewerPane.tsx` from 10,870 lines to 406 and the tab store from
+6,888 to 4,665, and the number of oversize files still rose from 99 to 104:
+`mobile_control/host.rs` 7,952 → 9,220, `commands/project_transfer.rs`
+3,091 → 3,945, and two files created on 2026-10-26 passed 3,000 lines
+(`services/mcp/git_push_mcp.rs` 2,457 → 3,107, `services/mail/mail_pgp.rs`
+2,111 → 3,613). Step 1 is the one step that stops this, so it lands first
+and alone. Two goals:
 
 1. **Maintainability:** every file small enough to read whole; a split that
    lands stays split.
 2. **Scope:** the three pillars (project desktop, remote/HPC, phone) are the
-   core; the workspace apps around them are add-ons that can be frozen or
-   compiled out without touching the core.
+   core; the workspace apps around them are add-ons that can be frozen and
+   that the core does not depend on.
+
+The add-ons are about a tenth of the tree (appendix: ~47k Rust, ~38k TS) and
+hold 63 of the 1,019 open untested pills (`npm run untested -- list`,
+2026-11-14: mobile 326, agents 141, layout 112, projects 90, embed 75,
+files 64; mail 46, calendar 17). Freezing add-ons bounds little by itself;
+the size gate and step 5's rules are what act on the core.
 
 ## Fixed decisions
 
@@ -45,8 +66,9 @@ fastest, because a big file is where the code they need already is. Two goals:
    maps each oversize path to its current line count. A listed file may not
    exceed its number. `--update` only lowers numbers and drops entries that
    fell under the limit; raising one is a hand edit, visible in the diff, and
-   needs a reason in the commit message. A file moved by an S step takes its
-   entry along in the same commit.
+   needs the user's say-so, named in the commit message (2026-11-14: a
+   reason alone is not enough, an agent can always supply one). A file moved
+   by an S step takes its entry along in the same commit.
 4. **One node script, no dependency.** `scripts/size-budget.mjs`, not ESLint
    `max-lines` (ESLint never sees the Rust half, and ~100 per-file overrides
    would swamp `eslint.config.js`) and not clippy `too_many_lines` (pedantic,
@@ -54,12 +76,9 @@ fastest, because a big file is where the code they need already is. Two goals:
 5. **Add-ons reuse what exists.** Runtime switch: the existing
    `useExperimental` flags (`src/lib/experimental.ts`) and the plain settings
    toggles that already gate an add-on (`todo_board`, `daily_stats_recap`, …).
-   Build switch: Cargo features in `src-tauri/Cargo.toml` on the `voice`
-   precedent — **on by default**, so every package and the frozen dev build
-   stay as they are. (`default` does not reach the daemon: `src-serverd`
-   takes the library with `default-features = false`, so it names the
-   add-ons it serves itself — step 4.) No new add-on framework, no
-   per-add-on frontend bundle.
+   Boundary: an import check in the size budget's shape (step 4), for Rust
+   and TypeScript alike. No new Cargo feature (`voice` keeps its own), no
+   add-on framework, no per-add-on frontend bundle.
 6. **Nothing is deleted by this plan.** Freezing or removing an add-on is the
    user's call (U2, decided: four frozen, none removed). Frozen = bug and
    security fixes only.
@@ -70,43 +89,60 @@ fastest, because a big file is where the code they need already is. Two goals:
    screen's E rule (re-check with `rg`, delete together with their tests).
 9. Hot shared files (`AGENTS.md`, the filemaps, `src/lib/untested.ts`,
    `services::command_class` + `commandClasses.ts`, `src/lib/i18n/`,
-   `src-tauri/Cargo.toml` `[features]`, `lib.rs`'s `generate_handler!`) are
-   edited by one step at a time; parallel implementers list their edits in
-   the handoff and the main agent applies them at merge.
+   `lib.rs`'s `generate_handler!`, `scripts/gates.sh`, `ci-cd.yml`,
+   `scripts/ci-local.sh`) are edited by one step at a time; parallel
+   implementers list their edits in the handoff and the main agent applies
+   them at merge.
 
-## User decisions (2026-10-26)
+## User decisions
+
+U1–U3 decided 2026-10-26, U5 and U6 on 2026-11-14; the Cargo-feature
+column of U2 was dropped on 2026-11-14 with step 4's change.
 
 - **U1 Core — decided:** project desktop + boxes, agents and terminals,
   files/viewers/editors (incl. PDF and LaTeX), Git, remote/HPC/sync, phone
-  app, the fence. Never frozen, never compiled out. Everything else is an
-  add-on.
+  app, the fence. Never frozen. Everything else is an add-on; U5 says
+  where the subsystems this list does not name belong.
 - **U2 Add-on fate — decided:**
 
-  | Add-on | Frozen (fixes only) | Own Cargo feature (step 4, default on) |
-  |---|---|---|
-  | Print manager | yes | yes |
-  | Deck presenter | yes | yes |
-  | Daily recap | yes | — (frontend only) |
-  | Web browser | yes | — |
-  | Mail (+ mail AI, OpenPGP) | no, active | yes |
-  | Calendar/CalDAV + to-do board | no, active | yes, **one** feature (shared store) |
-  | Tabby assistant, Copilot completion | no, active (not asked: default) | — |
-  | Voice | no, active | already has `voice` |
+  | Add-on | Frozen (fixes only) |
+  |---|---|
+  | Print manager (+ the print MCP lane) | yes |
+  | Deck presenter | yes |
+  | Daily recap | yes |
+  | Web browser | yes |
+  | Mail (+ mail AI, OpenPGP) | no, active |
+  | Calendar/CalDAV + to-do board | no, active; **one** add-on (shared store) |
+  | Tabby assistant, Copilot completion | no, active (not asked: default) |
+  | Voice | no, active |
 
-  Nothing is removed. Freezing the web browser also freezes what Tabby's
-  web lane can gain through `browser_engine::fetch_for_agent`; a fix there
-  is still allowed. Step 4 covers print manager, deck presenter,
-  calendar + to-do and mail, in that order.
-  Couplings this respects: calendar and to-do share one store
-  (`calendar_load`/`_save` carry both; `services::server::features_of`) —
-  one feature, or to-do requires calendar; Tabby's web lane fetches through
-  the browser's `browser_engine::fetch_for_agent` and sanitises with mail's
-  `mail_sanitize`; voice already has its feature; mail, calendar and to-do
-  are also served by the daemon and already have a runtime switch there
-  (gateway `policy.json` `features`, the user's `disabled_features`).
+  Nothing is removed. Every row is an add-on in step 4's boundary table.
+  Freezing the web browser also freezes what Tabby's web lane can gain
+  through `browser_engine::fetch_for_agent`; a fix there is still allowed.
+  Couplings the boundary baseline starts with: calendar and to-do share one
+  store (`calendar_load`/`_save` carry both; `services::server::features_of`);
+  Tabby's web lane fetches through the browser's
+  `browser_engine::fetch_for_agent` and sanitises with mail's
+  `mail_sanitize`; mail, calendar and to-do are also served by the daemon
+  and have a runtime switch there (gateway `policy.json` `features`, the
+  user's `disabled_features`).
 - **U3 Limit — decided:** 1,500 lines.
-- **U4 Wording** of the two AGENTS.md rules in step 5 — still open; the
+- **U4 Wording** of the three AGENTS.md rules in step 5 — still open; the
   step-5 implementer drafts it and the user approves before it lands.
+- **U5 Subsystems U1 does not name — decided 2026-11-14: all core.** The
+  hosted server (gateway, daemon, sharing), the root console and cockpit,
+  the agent MCP lanes (cockpit, git push, markup, help), checkpoints and
+  diff notes, the localhost and TensorBoard viewers and scaffold files each
+  extend a pillar U1 names, so they are core and never frozen. Only the
+  print MCP lane is an add-on (part of the print manager, above). So that
+  the list cannot go stale again, a new plan states its class (step 5,
+  rule c).
+- **U6 Form of step 5's rule (b) — decided 2026-11-14: ratchet with the
+  user's say-so.** As written on 2026-10-26 ("a new feature in an active
+  area lands with, or after, a fix or a verified item in the same area") the
+  rule could not fail: some fix always came before. It becomes a per-area
+  cap on the open untested pills, raised only with the user's say-so
+  (step 5).
 
 ## Steps
 
@@ -140,8 +176,8 @@ New `scripts/size-budget.mjs`:
   baseline JSON, which is plain paths. `scripts/lib/brand.sh` is not needed.
 
 New `scripts/size-budget-baseline.json`: `--init`, refused once the file
-exists, writes it from the current tree (99 entries on 2026-10-26, 113k lines
-over the limit; 153 files would have been over 1,000). After that only
+exists, writes it from the current tree (104 entries on 2026-11-14, 107k
+lines over the limit; 175 files would be over 1,000). After that only
 `--update` and hand edits change it.
 
 Wire it in:
@@ -159,7 +195,8 @@ Wire it in:
 - `AGENTS.md` Gates block: one line,
   `scripts/size-budget.mjs   # files ≤ 1,500 lines; oversize ones only shrink`,
   plus "over the budget: split the file or move its inline tests to a
-  sibling `tests.rs`, never delete tests".
+  sibling `tests.rs`, never delete tests; raising a baseline number needs
+  the user's say-so".
 - Filemap: a row after `../../scripts/gates.sh` in `docs/filemap_backend.md`
   (the scripts' rows live there; `brand-check` has none).
 
@@ -176,156 +213,207 @@ A later change to the script alone selects no vitest in gates.sh
 
 ### Step 2 — Burn-down order (extends code screen S7)
 
-Runs after S5 and S7 have landed (another session runs them first). The
-S7b list goes into `docs/code_screen_plan.md` only then, so this plan never
-edits that file while the other session works from it.
-Rank the baseline by lines over the limit. Code screen S7 covers
-`FileViewerPane.tsx`, `SettingsSubPanels.tsx`, `stores/tabs.ts`, `FileTree()`,
-mobile `Terminal.tsx`, `git_peer.rs`'s apply loops and three long functions
-(`launch_prep.rs` `prepare`, `pty_bridge.rs` `attach`, `sync_auto.rs`
-`reconcile_pass`); S5 thins `commands/{projects,ollama,git,mail,fs}.rs` (and
-moves only `agent_bins` out of `commands/agents.rs`).
+S5 and S7 landed on 2026-10-26 and several files they touched are still
+among the largest (`commands/mail.rs` 5,849, `commands/projects.rs` 5,640,
+`stores/tabs.ts` 4,665, `commands/ollama.rs` 4,227, `git_peer.rs` 4,167,
+`FileTree.tsx` 4,053, mobile `Terminal.tsx` 3,223; S7's Rust function
+splits were not done). So the order is taken fresh from `--report` on the
+day this step starts, never from a list in this file.
 
-First, cheapest: the 24 Rust files over only because of an inline
-`mod tests { … }` (`--report` lists them) get S1's move to a sibling
-`tests.rs` — mechanical, check `include_str!` source-scan tests first. Then
-an **S7b** list in `docs/code_screen_plan.md` for the top 15 that neither S5
-nor S7 covers (2026-10-26; `*` = has an inline test module to move first):
-`services/mobile_control/host.rs` 7,942 · `embed/pdf/PdfViewer.tsx` 5,526 ·
-`terminal/mod.rs` 4,302 · `services/mail/mail_store.rs` 4,100 ·
-`lib/viewers/tex/tex.ts` 3,951 · `services/root_mcp.rs` 3,789 ·
-`sysstat.rs`\* 3,621 · `mobile/MobileBridgeHost.tsx` 3,174 ·
-`commands/project_transfer.rs`\* 3,091 · `commands/agents.rs`\* 3,088 ·
-`services/agent/agent_session.rs` 3,041 · `commands/apps.rs`\* 3,011 ·
-`files/ProjectFilesView.tsx` 2,906 · `services/openvpn.rs` 2,893 ·
-`services/sandbox.rs` 2,864. (`src-tauri/src/lib.rs`\*, 2,928, is left
-out: ~850 of its lines are the one `generate_handler!` list, which cannot
-be split.) An add-on's file (`mail_store.rs`) waits
-until step 4's mail gating (4m2) has landed, so the two do not fight.
+First, cheapest: the Rust files over only because of an inline
+`mod tests { … }` (24 by a rough recount on 2026-11-14; `--report` lists
+them) get S1's move to a sibling `tests.rs` — mechanical, check
+`include_str!` source-scan tests first.
+
+Then an **S7b** list in `docs/code_screen_plan.md`: the 15 oversize files
+with the most commits in the last 30 days (`git log --since=30.days
+--format= --name-only | sort | uniq -c`, joined with the baseline), ties
+broken by lines over the limit. That is round 2's criterion
+(`docs/structure_split_plan.md`: a file's size costs something only when
+someone has to open it); size alone would put rarely edited files first.
+Left out: `src-tauri/src/lib.rs` (3,188; ~850 of its lines are the one
+`generate_handler!` list, which cannot be split) and files that have their
+own plan (`PdfViewer.tsx`: `docs/pdf_viewer_split_plan.md`; the phone
+composer, `AgentsPanel`, `TexView`: `docs/structure_split_plan.md`).
+
+For scale, the 15 largest on 2026-11-14:
+`services/mobile_control/host.rs` 9,220 · `commands/mail.rs` 5,849 ·
+`commands/projects.rs` 5,640 · `stores/tabs.ts` 4,665 ·
+`terminal/mod.rs` 4,440 · `commands/ollama.rs` 4,227 ·
+`services/git/git_peer.rs` 4,167 · `commands/apps.rs` 4,151 ·
+`services/mail/mail_store.rs` 4,111 · `services/root_mcp.rs` 4,083 ·
+`files/FileTree.tsx` 4,053 · `lib/viewers/tex/tex.ts` 4,041 ·
+`commands/project_transfer.rs` 3,945 · `sysstat.rs` 3,621 ·
+`services/mail/mail_pgp.rs` 3,613.
+
 One file per commit, each running `--update <old> <new…>` so the baseline
 shrinks with the split; a moved file takes its entry along (decision 3).
+A split of `mobile_control/host.rs` puts each add-on's routes (mail,
+calendar, to-do) in a module of their own, as `mobile_control/assistant.rs`
+already is, and names that module in step 4's table.
 Code screen rules: quiet tree, the user's go-ahead per S step, `git mv` of
 the original to the part that keeps most of it, for blame.
 
 ### Step 3 — Add-on inventory (read-only)
 
-For each step-4 add-on (print manager, deck presenter, calendar + to-do,
-mail), one row in the appendix (a head start is there):
+For each add-on of U2, one row in the appendix (a head start is there):
 
-| Add-on | Runtime gate | Entry points (desktop / phone / MCP) | Rust modules + commands (class) | Core → add-on calls | Crates only it pulls in | Lines (TS / Rust) | Daemon? |
+| Add-on | Runtime gate | Its paths (Rust / desktop TS / phone) | Rust module names | Wiring files | Core → add-on crossings | Lines (TS / Rust) | Daemon? |
 
 Sources: `src/lib/experimental.ts`, `src-tauri/src/schema/settings.rs`, the
 filemaps, `services::command_class`, `services::server::features_of`,
-`commands/mod.rs` (which modules are already `desktop`-only),
-`mobile_control/host.rs`'s `/api/v1/*` routes, the root MCP tool families
-(`root_mcp_security.rs`). "Crates only it pulls in": `cargo tree -i` shows
-reverse edges only; compute the set difference from `cargo metadata
---offline` (crates reachable from all direct deps minus those reachable
-without the add-on's). "Core → add-on calls": code outside the add-on that
-calls into it — each is cut (moved to a shared module) before the add-on
-can be gated. Ends with the pattern per add-on (stub or gate, step 4),
-recorded in the appendix; no user question (U2 is decided).
+`commands/mod.rs`, `mobile_control/host.rs`'s `/api/v1/*` routes, the root
+MCP tool families (`root_mcp_security.rs`). "Its paths" and "Rust module
+names" become step 4's `addons` table. "Wiring files" are the places where
+an add-on is registered, listed, migrated or exported, and nothing else is
+done with it; step 4 allows those. "Core → add-on crossings" is everything
+else outside the add-on that reaches into it; step 4 records those as the
+baseline and 4.1 cuts the cheap ones. No user question (U2 is decided).
 
-### Step 4 — Add-on Cargo features (one add-on per commit)
+### Step 4 — Add-on boundary gate
 
-What exists (verified 2026-10-26): `voice` does **not** cfg its commands
-out. They stay registered; `services::voice::{stt,capture}::BUILT =
-cfg!(feature)` swaps in a stub that answers `VoiceError::NotBuilt`, and
-`voice_status().listen` tells the frontend. `commands/{presenter,printing,
-print_native,voice}` are already `#[cfg(feature = "desktop")]` in
-`commands/mod.rs`, so they are not in the daemon. Two patterns, picked per
-add-on in step 3:
+The boundary is a rule on imports, checked in both languages: **code outside
+an add-on does not reach into it**, except from a wiring file. An add-on may
+use the core freely. One add-on reaching into another is a crossing too
+(Tabby → browser → mail's sanitiser), so those couplings stay visible.
 
-- **Stub** (the voice way): commands stay; their bodies answer a named
-  "not built" error; only the optional deps and the code using them go.
-  Nothing in `lib.rs`, `build.rs`, `command_class` or `commandClasses.ts`
-  changes. For small command surfaces.
-- **Gate**: the module and its commands go. Constraints of today's code:
-  - `build.rs` (the core dispatcher) copies to the wrappers only a
-    *single-line* `#[cfg(…)]` directly above `pub mod x;` in
-    `commands/mod.rs` (a second stacked `#[cfg]` overwrites the first; any
-    other attribute in between drops it) and `#[cfg]`s on the command fn
-    itself; an inner `#![cfg]` in the file is invisible to it. A
-    desktop-only add-on's feature therefore implies `desktop`
-    (`print-manager = ["desktop"]`) so one `#[cfg(feature = "…")]` line
-    suffices.
-  - `generate_handler!` (tauri-macros 2.7.2) accepts `#[cfg(feature =
-    "…")]` per entry, but `command_class::tests::registered_commands()`
-    asserts every comma-split token starts with `commands::` — teach it
-    to strip a leading `#[cfg(…)]` (one feature, no comma inside: it
-    splits on commas).
-  - `command_class::TABLE` rows stay unconditional, so
-    `commandClasses.ts` is identical in every build and its test stays
-    green in all of them. `services::server::feature_on` answers false for
-    a feature not compiled in (`Feature` already has Mail, Calendar,
-    Todo), so `server_capabilities` reports `FeatureOff` rather than
-    "no wrapper was generated".
+New `scripts/addon-boundary.mjs`, no dependency, the size budget's shape:
 
-Step 4.0, once, before the first add-on (its own commit):
+- File list and exclusions as in decision 1 (a test may import anything).
+- **TypeScript** (`src/`, `mobile-web/`, `shared/`): every `from "…"` and
+  `import("…")` specifier that is relative (the repo has no path alias) is
+  resolved against the file list (`.ts`, `.tsx`, `/index.ts(x)`); a
+  specifier that lands in an add-on's paths from a file outside them is a
+  crossing.
+- **Rust** (`src-tauri/`, `src-core/`, `src-serverd/`, `src-gateway/`): a
+  non-comment line outside the add-on's paths that names one of its modules
+  as a path segment (`mail_engine::`, `::mail_sanitize`, `services::mail`,
+  `commands::calendar`) is a crossing. Text match, no parser: the module
+  names are distinctive, and a generic one (`mail`, `calendar`, `voice`)
+  counts only next to `::`.
+- Default mode: exit 1 listing every crossing that is neither in a wiring
+  file nor in the baseline (`file → add-on  (line)`), else one line
+  (`add-on boundary: ok, N crossings on the baseline`). A baseline entry
+  that no longer crosses is noted (`K entries can go: --update`), never a
+  failure.
+- `--update [<path>…]`: drops baseline entries that no longer cross; never
+  adds one. With paths, touches only those files' entries (the shared tree
+  holds other sessions' edits, as in step 1).
+- `--init`: writes the baseline from the current tree; refused once the
+  file has one.
+- `--report`: crossings per add-on, most first — the list 4.1 and the S7b
+  splits work down.
+- Spells no brand name (`scripts/brand-check.sh` reads `.mjs` and the JSON).
 
-- the `registered_commands()` parser change and the `feature_on` check
-  above;
-- one Tauri-free command `built_addons` (class `core`, so the browser
-  client gets it too; row + regenerated `commandClasses.ts`), read once
-  at boot and cached in `src/lib/experimental.ts` the way
-  `lib/shortcuts/superKey.ts` caches `desktop_owns_super_key` — the
-  desktop window has no general payload for it (`app_build_commit` is a
-  bare string, `workspace_capabilities` the window backend's,
-  `server_capabilities` browser-only). Not loaded yet = built, so the
-  default build never flickers or withdraws anything;
-- an all-off gate: `cargo clippy -p tabtivity --no-default-features
-  --features desktop --all-targets -- -D warnings` in `scripts/gates.sh`
-  (src-tauri group), `ci-cd.yml` and `ci-local.sh`, plus its `AGENTS.md`
-  Gates line (zero warnings: helpers only an add-on used get gated with it).
+New `scripts/addon-boundary.json`, three parts:
 
-Per add-on:
+- `addons`: name → `paths` (path prefixes and files) and `rust` (module
+  names), from step 3. A new add-on file outside the listed paths counts as
+  core, so a new add-on, or a new folder of an old one, gets its row in the
+  commit that creates the file.
+- `wiring`: file → role, the files step 3 found. Candidates (step 3
+  confirms each): Rust `lib.rs` (command registration), `commands/mod.rs`,
+  `services/mod.rs`, `services/command_class.rs`, `schema/` (types never
+  move), `services/server/mod.rs` (`features_of`),
+  `root_mcp/root_mcp_security.rs` (tool families), and the code that
+  migrates, exports or re-keys add-on state (`brand_migration`,
+  `project_transfer`, `server/vault/rotation.rs`); TS the tab-kind switch
+  (`tabs/TabPane.tsx`, `layout/AppShell.tsx`, `layout/DetachedApp.tsx`,
+  `fileViewer/lazyViewers.ts`), `layout/SettingsPanel.tsx`,
+  `lib/experimentalSweep.ts`, `src/App.tsx`, `mobile-web/src/App.tsx`.
+  `mobile_control/host.rs` is **not** wiring: its add-on routes go on the
+  baseline and leave with its split (step 2).
+- `baseline`: file → the add-ons it reaches today. Only shrinks. Adding an
+  entry or a wiring file is a hand edit, visible in the diff, and needs the
+  user's say-so, named in the commit message.
 
-- `src-tauri/Cargo.toml`: `<addon> = [<its optional deps>]`, in `default`.
-  No add-on lives in `app-core` today (its `web_safety` is shared by mail
-  and the browser and stays), so no `src-core` feature.
-- Cut the "core → add-on calls" from step 3 first, in their own commit
-  (mail: `mail_engine::install_crypto_provider` has ~20 callers outside
-  mail; `browser_engine` and the web lane call
-  `mail_sanitize::sanitize_message_html`).
-- Code that migrates, exports, imports or re-keys an add-on's state stays
-  compiled in every build: `brand_migration`, `project_transfer`, and the
-  vault rotation's `mail_crypt` key-file calls — a mail-off daemon that
-  rotates the vault without re-keying `<state_dir>/mail` loses the mail
-  store. Never cfg a `schema/` field or type: `Settings` round-trips
-  through `extra`, but a typed field moved there is invisible to its
-  readers (`the_browser_settings_are_real_fields_and_not_extra_passengers`).
-- Every surface hides it: desktop entry points (`experimentalEnabled` for
-  the experimental ones — `mail_client`, `deck_presenter`, `web_browser`,
-  `copilot_completion`, `assistant`; the readers of `todo_board`,
-  `calendar_global_app`, `daily_stats_recap`; the `print_manager` tab
-  kind in `stores/tabs.ts`), the phone (`GET /api/v1/status`, the
-  `/api/v1/{mail,calendar,todo}` routes answering a named
-  `mobile.failure.*`, screens `Mail`/`Calendar`/`Todo`/`TabbyOpen`), and
-  the root MCP tool families (`root_mcp_security.rs`: mail, calendar,
-  board). A compiled-out tab kind is skipped on restore but not put
-  through the withdrawal sweep, which drops it at the next layout write.
-- Daemon: an add-on it serves (mail, calendar, to-do) goes into
-  `src-serverd/Cargo.toml`'s `features = [...]`, and the
-  `--no-default-features --lib` gates (`gates.sh` `clippy-dlib`/`test-dlib`,
-  `ci-cd.yml`) get the same `--features`, or they check a build the daemon
-  never runs.
-- `scripts/ci-local.sh` `CROSS_FEATURES` (`--no-default-features --features
-  desktop,voice-io`) gets the new feature, or the Windows/macOS
-  cross-checks silently drop it.
-- Order: the print manager or the deck presenter first (desktop-only, no
-  phone, no crates of their own: proves the cfg pattern); then
-  calendar + to-do (3 crates: `psl`, `psl-types`, `roxmltree`; phone and
-  daemon); mail last (~63 crates of its own, most reverse edges, touches
-  `mobile_control/host.rs`). Sequential: every add-on edits `Cargo.toml`,
-  `lib.rs` and `command_class.rs`.
+Head start, rough counts on 2026-11-14 (step 3 re-checks; wiring files not
+yet taken out). Rust files outside the add-on that name one of its modules:
+mail 38 (most only for `install_crypto_provider`), calendar + to-do 19,
+browser ~12, Tabby ~8. TS files outside that import from it: calendar +
+to-do 30, mail 19, voice 17, Tabby 6, presenter 5, browser 4, recap 3,
+print 2.
 
-### Step 5 — Freeze rule and backlog triage
+Wire it in, as step 1 does for the size budget:
 
-- `AGENTS.md` Conventions, wording per U4: (a) *Frozen add-ons (print
-  manager, deck presenter, daily recap, web browser): bug
-  and security fixes only; a new feature there needs the user's say-so.*
-  (b) *A new feature in an active area lands with, or after, a fix or a
-  verified item in the same area.*
+- `scripts/gates.sh`: `gate boundary 1 node scripts/addon-boundary.mjs`
+  after `gate size`; the `--list` heredoc row and the header comment's
+  `always` line.
+- `.github/workflows/ci-cd.yml`: a step in the `lint` job beside the size
+  budget's; `scripts/ci-local.sh`: its `STEPS` row
+  (`boundary|lint|<exact step name>|ci|always`).
+- `AGENTS.md` Gates block: one line,
+  `scripts/addon-boundary.mjs   # core never imports an add-on; listed crossings only shrink`.
+- Filemap: a row beside the size budget's in `docs/filemap_backend.md`.
+
+Tests: vitest with throwaway repos, like step 1's
+(`src/__tests__/shell/AddonBoundary.test.ts`, run by hand after a change to
+the script alone). Cases: a new core → add-on import fails, in TS and in
+Rust; add-on → core passes; a wiring file passes; a baselined crossing
+passes and `--update` drops it once it is gone; `--update` never adds; a
+Rust mention in a comment and an import from a test file are ignored; an
+add-on → add-on import fails.
+
+#### 4.1 — Cuts (optional, one per commit)
+
+Each is a pure move that empties part of the baseline; the commit runs
+`--update <its files>`.
+
+- `install_crypto_provider` (the process-wide rustls provider, nothing in
+  it is mail's) moves out of `services/mail/mail_engine.rs` into a shared
+  module; 22 references outside mail follow it. This clears most of mail's
+  Rust entries.
+- `mail_sanitize::sanitize_message_html` is called by
+  `services/browser_engine.rs` for the web lane. It moves beside the parts
+  `app-core`'s `web_safety` already took from `mail_sanitize` (if `ammonia`
+  may live in `app-core`; else a shared module in `services/`), and
+  `mail_sanitize` re-exports it as it does for those.
+- Shared date and alert helpers that sit in an add-on's folder but are used
+  across the core (`common/DateField.tsx` and the prompt charts import from
+  the calendar's; `lib/alerts.ts` from mail's and the calendar's): step 3
+  names which are helpers that belong in `src/lib/` and which are real
+  uses of the add-on.
+
+No Cargo feature is added by this plan; why, and when mail's comes back,
+is under "Later".
+
+### Step 5 — Process rules and backlog triage
+
+- `AGENTS.md` Conventions, wording per U4:
+  (a) *Frozen add-ons (print manager, deck presenter, daily recap, web
+  browser): bug and security fixes only; a new feature there needs the
+  user's say-so.*
+  (b) *An area's open untested pills never exceed its number in
+  `scripts/untested-baseline.json`: a new pill needs one of that area
+  stamped tested first, or the user's say-so to raise the number.*
+  (c) *A new `docs/*_plan.md` states `Class: core` or `Class: add-on
+  (<name>)` in its status block; a new add-on gets its row in
+  `scripts/addon-boundary.json` in the commit that creates its first file.*
+- Untested ratchet (rule b, U6): a `budget` command in
+  `scripts/untested.mjs` beside `check`, and
+  `scripts/untested-baseline.json` mapping each `area` of
+  `src/lib/untested.ts` to its count of open rows (no `tested`) on the day
+  it lands — 1,019 in all on 2026-11-14: mobile 326, agents 141, layout
+  112, projects 90, embed 75, files 64, lib 59, mail 46, shell 36, header
+  28, tabs 25, calendar 17, the rest smaller.
+  - `npm run untested -- budget`: exit 1 naming each area whose open count
+    is over its number, or that has no number; else one line with the
+    total.
+  - Stamping a row tested (`-- tested <id>`, the user's step) lowers the
+    area's open count and so leaves room for one new pill. The number
+    itself moves only by `-- budget --update`, which lowers each to the
+    current count and never raises; run it when the gained ground should
+    stay gained.
+  - Raising a number, or adding an area, is a hand edit of the JSON,
+    visible in the diff, with the user's say-so named in the commit
+    message. An agent asks before it adds the pill, not after.
+  - `area` is free text: a pill filed under a roomier area to get past the
+    cap is a review finding, and the rule's wording says so.
+  - Wired like `npm run lint`: `gate untested` in `scripts/gates.sh` on a
+    frontend change, a step in ci-cd.yml's `lint` job, its `STEPS` row in
+    `scripts/ci-local.sh`, one line in the AGENTS.md Gates block. Tests in
+    `src/__tests__/shell/UntestedRegistry.test.ts`: over the number fails,
+    an unknown area fails, `--update` lowers and never raises.
 - Backlog: the unit is an *entry* — a numbered item (`15. **Title.** …`,
   the backlog's main form) with its indented lines and child bullets, or a
   top-level `- [ ]` task. An entry is stale when its *newest* line is over 60
@@ -380,98 +468,91 @@ pointing rather than repeating: build from source (README "Building from
 source"), `git config core.hooksPath .githooks` once per clone, commits
 under the GitHub `noreply` address (`privacy-check.sh` runs on every PR and
 refuses any other author/committer email), the gates (`scripts/gates.sh`,
-the size budget; `scripts/ci-local.sh` before a push), `AGENTS.md`
+the size budget and the add-on boundary; `scripts/ci-local.sh` before a
+push), `AGENTS.md`
 invariants for anyone using an agent, the brand check, `develop` as the PR
 target (`main` releases), the file maps, the frozen add-ons, how to pick an
 issue. The plan proposes five good-first-issue
 candidates (small, one subsystem, testable without a live window); labelling
 them on GitHub is the user's step.
 
-### Later — crate extraction (not scheduled)
+### Later — mail as a Cargo feature or its own crate (not scheduled)
 
-After code screen S5 (services no longer reach into commands) and S9
-(`schema/` in `app-core`), the largest add-on (mail) can move into its own
-workspace crate. Criterion: its Cargo feature from step 4 compiles cleanly on
-and off for a month. Planned separately when that holds.
-
-S5 is being run by another session; S9 is still shelved and needs the
-user's go-ahead. Both are necessary, not
+Per-add-on Cargo features were step 4 until 2026-11-14 and were dropped
+(see "Not done"). Mail's comes back when something needs a build without
+mail — a mail-free daemon or package — or as the first move of a crate
+extraction. Preconditions: mail's boundary baseline is empty (the core
+reaches mail through wiring files only) and has stayed empty for a month;
+and code screen S9 (`schema/` in `app-core`), which is still shelved and
+needs the user's go-ahead. Both are necessary, not
 sufficient: mail also reaches `services::server` (vault/secrets, 17 refs),
 `root_mcp`, `agent_fence`, `openvpn`, `vm_proxy`, `ai_switch` and `storage`,
 which must sit in `app-core` or behind a trait first; and its commands stay
 in `tabtivity` (`build.rs` reads only `src-tauri/src/commands/*.rs`, the
-`command_class` test only `commands::…` paths), so the crate holds the
+`command_class` test only `commands::…` paths), so a crate holds the
 services alone.
+
+The cfg-gating constraints verified on 2026-10-26 are step 4 of this file
+at commit 22ded3530 — `build.rs` copying only a single-line `#[cfg]`,
+`generate_handler!`'s per-entry cfg against the `command_class` test,
+`command_class` rows staying unconditional, migration and re-key code
+staying compiled, never a cfg on a `schema/` field, the daemon's and the
+cross-OS feature lists. Re-verify them before use.
 
 ## Organisation
 
-Shape: **mixed risk**, mostly small.
+Shape: **small, low risk**. No step changes behaviour; 4.1's cuts are pure
+moves.
 
-- Steps 1, 5, 7: small → one implementer each, covered by the final review.
-- Step 3: one read-only investigator; its table picks stub vs gate.
-- Step 4: 4.0 then one implementer per add-on, sequentially, each with a
-  per-step reviewer — cfg-gating can silently drop a command, desync
-  `command_class`, or drop a feature from the daemon. Mail is too big for
-  one agent step (≤ ~3 large files): 4m1 cut the core → mail calls; 4m2
-  Rust gate (`services/mail/`, `commands/mail.rs`, `lib.rs`); 4m3 phone
-  routes in `mobile_control/host.rs` + root MCP mail tools; 4m4 frontend.
+- Step 1: one implementer, first and alone; covered by the final review.
+- Step 3: one read-only investigator; its table is step 4's input.
+- Step 4: one implementer (script, table, baseline, gate wiring) with a
+  per-step reviewer who checks the `addons` paths against the tree — a
+  missing path makes an add-on's file count as core, and the gate then
+  guards nothing there. 4.1: one implementer per cut, sequentially (each
+  edits the baseline).
+- Step 5: one implementer for the untested ratchet, one for the rules and
+  the backlog triage; step 7: one implementer. All covered by the final
+  review.
 - Step 2: rides code screen S, sequential, user go-ahead per file.
 - Step 6: one implementer; deletions reviewed by the final review.
 
 Bound: ≤ 5 subagents at once, ≤ 3 running cargo. Dependencies: 1 → 2;
-3 → 4.0 → print manager → deck presenter → calendar + to-do → mail
-(4m1–4m4); 5(a) waits for the user's U4 approval; 5(b), 6, 7 independent.
-Waves against S5/S7: see the section below. 4m3 and an S7b split of
-`mobile_control/host.rs` never run together; whichever lands second
-rebases on the first.
+3 → 4 → 4.1; 1 and 4 run one after the other (both edit `gates.sh`,
+`ci-cd.yml`, `ci-local.sh` and the AGENTS.md Gates block), and so does
+step 5's untested ratchet; step 5's three rules wait for the user's U4
+approval, and rule (c) for step 4's table; the backlog triage and step 6
+are independent; 7 goes last (it names the gates of steps 1, 4 and 5).
 
-### Sequencing with code screen S5/S7
+### Order
 
-Another session runs code screen S5 (services → commands inversion, thins
-`commands/{projects,ollama,git,mail,fs}.rs`) and S7 (giant-file splits:
-`FileViewerPane.tsx`, `SettingsSubPanels.tsx`, `stores/tabs.ts`, `FileTree`,
-mobile `Terminal.tsx`, `git_peer.rs`, three long functions) first. Both move
-code this plan's steps 1–4 point at, so the steps run in two waves:
+1. **Step 1, now.** Every week before `--init` raises the numbers it
+   freezes (five more oversize files and 1,268 more lines in `host.rs`
+   between 2026-10-26 and 2026-11-14).
+2. Step 3, then step 4. `--init` of the boundary baseline has the same
+   urgency in small: each new crossing before it is one more entry.
+3. Step 5: the untested ratchet as soon as steps 1 and 4 are out of the
+   gate files (its baseline grows with every new pill, too), the rules once
+   U4's wording is approved; step 2's S7b list any time after step 1.
+4. 4.1's cuts, step 6 and step 7 as time allows.
 
-- **Wave A — now, alongside S5/S7** (no file overlap with them): step 5(b)
-  backlog triage (`todo/` only), step 6 (`scripts/dead-code.sh` and the
-  knip config; its *first deletion run* waits for wave B, so it never
-  deletes code S5/S7 is moving), step 7 (`CONTRIBUTING.md`, frozen-add-on
-  list taken from "User decisions"; the size-budget line is added by step 1
-  in wave B). Not in wave A: anything touching
-  `src-tauri/src/commands/`, `services/`, `src/components/`, `src/stores/`,
-  `mobile-web/src/`, or the filemaps (S moves rewrite their rows).
-- **Wave B — after S5 and S7 have landed on develop:**
-  - step 1, so `--init` records the post-split tree (fewer, smaller
-    entries) and S7's own splits never have to carry baseline entries
-    they do not know about;
-  - step 3 against the moved code (S5 moves mail/calendar helpers into
-    `services/`; the appendix paths are re-checked, not trusted);
-  - step 4.0 and the add-ons (4m2 and 4m4 edit `commands/mail.rs`,
-    `SettingsSubPanels`' successors and `stores/tabs/` — S5/S7's files);
-  - step 2 (S7b), which extends the code screen list once S7 is done;
-  - step 5(a) once the user approved the U4 wording.
-
-The main agent checks before wave B: the code screen handoff
-(`docs/code_screen_handoff.md`) lists S5 and S7 as landed, `git log`
-shows their ranges on develop, and no S5/S7 worktree or uncommitted S
-edit is left in the shared tree. If S5/S7 are still running when wave A is
-done, wave B waits; it never runs beside them.
+A split that is running in the shared tree (`docs/pdf_viewer_split_plan.md`
+on 2026-11-14) is not waited for: `--init` records whatever the files
+measure that day, and the split's own commits lower the numbers with
+`--update <paths>`.
 
 ### Agent steps
 
 | Agent step | Plan steps | Main files | Review |
 |---|---|---|---|
-| 1 | 1 | scripts/size-budget.mjs, size-budget-baseline.json, gates.sh, ci-cd.yml, ci-local.sh | final |
+| 1 | 1 | scripts/size-budget.mjs, size-budget-baseline.json, gates.sh, ci-cd.yml, ci-local.sh, AGENTS.md | final |
 | 2 | 3 | read-only; appendix of this plan | main agent |
-| 3 | 5 + 7 | AGENTS.md, todo/*.md, todo/someday.md, CONTRIBUTING.md | final |
-| 4 | 6 | scripts/dead-code.sh, package.json | final |
-| 5 | 4.0 | command_class.rs (test parser + `built_addons` row), services/server/mod.rs, experimental.ts, gates.sh, ci-cd.yml, ci-local.sh | per-step + final |
-| 6…n | 4 | one add-on each (mail: 4m1–4m4): Cargo.toml, commands/mod.rs, lib.rs, its modules, its frontend gates; src-serverd/Cargo.toml if the daemon serves it | per-step + final |
+| 3 | 4 | scripts/addon-boundary.mjs, addon-boundary.json, gates.sh, ci-cd.yml, ci-local.sh, AGENTS.md | per-step + final |
+| 4…n | 4.1 | one cut each: the moved helper, its callers, the baseline | final |
+| n+1 | 5 (ratchet) | scripts/untested.mjs, untested-baseline.json, gates.sh, ci-cd.yml, ci-local.sh, AGENTS.md | final |
+| n+2 | 5 (rules, backlog) + 7 | AGENTS.md, todo/*.md, todo/someday.md, CONTRIBUTING.md | final |
+| n+3 | 6 | scripts/dead-code.sh, package.json | final |
 | S7b | 2 | per file | code screen rules |
-
-Five agent steps before the add-on features; step 4 adds one per add-on
-(four for mail).
 
 ## Verification
 
@@ -481,21 +562,36 @@ Five agent steps before the add-on features; step 4 adds one per add-on
   and `--list` lists it; `ci-local.sh --check-drift` and `brand-check.sh`
   pass; `--update` right after `--init` leaves the baseline byte-identical
   (`cmp` against a copy).
-- Add-on features: the all-off clippy gate from step 4.0, the
-  `--no-default-features --lib` gates with the daemon's `--features`, the
-  command-class test,
-  `scripts/gates.sh --all`; the default build behaves exactly as before.
-  `npm run backend:stale` after Rust edits.
+- Add-on boundary: its tests (in their temp repos); `scripts/gates.sh -n`
+  shows `run boundary` and `--list` lists it; `ci-local.sh --check-drift`
+  and `brand-check.sh` pass; `--update` right after `--init` leaves the
+  baseline byte-identical; the reviewer's spot check: for each add-on, one
+  file picked from the tree is inside its `paths`, and a scratch import of
+  it from a core file (in a temp copy, never the shared tree) fails.
+- 4.1's cuts: `scripts/gates.sh` for the touched crates; the moved function
+  is byte-identical; `npm run backend:stale` after Rust edits.
+- Untested ratchet: its tests; `npm run untested -- budget` passes on the
+  day's tree and `-- check` still does; `scripts/gates.sh -n` shows it on a
+  frontend change; `ci-local.sh --check-drift` passes.
 - Backlog: across `todo/*.md` (with `someday.md`), numbered entries and
   `- [ ]`/`- [x]` boxes before = after (moved, not lost); `rg -c '🖐️'
   todo/group-*.md` unchanged per file.
 - Dead-code report: exits 0 with a tool missing and names it.
-- Nothing here is run live; the user's click-through for step 4 is "every
-  add-on still opens in the frozen dev build".
+- Nothing here is run live, and nothing needs to be: no step changes what
+  the app does.
 
 ## Not done
 
 - Deleting or disabling any feature (U2 removes nothing).
+- Per-add-on Cargo features, a `built_addons` command and an all-off clippy
+  gate (step 4 until 2026-11-14). Dropped because the features would be on
+  by default, so no package changes and the off build is one nobody ships or
+  runs; they need a "not built" path on four surfaces (desktop, phone, root
+  MCP, daemon) and one more clippy variant in every gate run; and they guard
+  only the Rust half — the TypeScript side has no per-add-on bundle to
+  compile out. Print manager, deck presenter and calendar have 0–3 crates of
+  their own, so nothing is saved there either. Mail's (~63 crates) is under
+  "Later".
 - ESLint `max-lines`, clippy `too_many_lines`, function-length gates.
 - Splitting `src/styles/*.css` (`@import` order is load-bearing; code screen
   decision 5), regrouping `commands/*.rs` (`build.rs` parses the flat list).
@@ -504,7 +600,9 @@ Five agent steps before the add-on features; step 4 adds one per add-on
 ## Appendix — add-on inventory (step 3)
 
 Head start from the plan review (2026-10-26, rough; step 3 re-checks every
-cell and adds the entry-point and line columns; `?` = not checked).
+cell and adds the paths, module-name, wiring and line columns; `?` = not
+checked). The "Own crates" column is kept for "Later"; step 4 does not use
+it. Crossing counts from 2026-11-14 are in step 4.
 Crates are Linux, of ~800 in the tree. Rough lines: mail ~26k Rust / ~12k TS,
 calendar ~6k / ~6k, to-do ~4k TS, presenter 0.8k / ~11k (deck files, some
 may be core viewer), print 1.5k / 2.4k, Tabby 3.8k / 0.8k, browser 3.3k /

@@ -681,6 +681,13 @@ system voice and rate with step 2c, and so does the stop-speaking shortcut
 settle: whisper's finals are per segment, so "Heard:" only ever shows the
 open segment's partial. Like the phone, a send ends the dictation.
 
+**Update (2026-11-13/14, never run live):** a partial no longer stays on the "Heard:"
+line: it is written into the Chat draft as provisional text and the final
+replaces it in place (`lib/voice/provisionalDraft.ts`, `terminal/useLiveDictation.ts`;
+held back to "Heard:" while it may be a spoken edit, a send, or a stop word). The
+phone composer does the same (`mobile-web/src/voiceInput.ts`). Partials now
+transcribe the whole open segment (`docs/context/voice.md`, "Live preview").
+
 - `src/lib/voice/desktopVoice.ts` — the renderer side of the session:
   - Start, stop, event subscription and owner tracking.
   - Shaped like the phone's `DictationSession` (`onStart`, `onResult`,

@@ -66,6 +66,7 @@ import { connectionStillOpen, openConnectionInRoot } from "../lib/remote/remoteC
 import { loginDedupeKey, sshLogin, vpnLogin } from "../lib/remote/loginTarget";
 import { describeScaffoldRepair, type ProjectScaffoldRepair } from "../lib/projects/scaffold";
 import type { SavedPasswordState } from "../lib/projects/useSavedCredential";
+import { localSessionsAvailableNow, mayOwnWindowsLocalSession } from "../lib/terminal/localSessions";
 import { IS_HOST_WINDOWS } from "../lib/platform";
 import { shouldPersistLocalTab, shouldPersistTab } from "../lib/terminal/tmuxSession";
 import { translate, useI18nStore, translateNow } from "../lib/i18n";
@@ -938,14 +939,18 @@ export function projectTmuxTargets(
     const persistent =
       !!tab.tmuxSession &&
       (shouldPersistTab(tab.kind, hostId, project.remote, tab.ephemeral) ||
-        shouldPersistLocalTab(
+        // Windows: whatever the settings say now, a local agent tab may own a
+        // host session (its wrap was stamped when it was drawn).
+        (IS_HOST_WINDOWS
+          ? mayOwnWindowsLocalSession(tab.kind, project.id, localRunning)
+          : shouldPersistLocalTab(
           tab.kind,
           project.id,
           localRunning,
           localPersistenceEnabled,
           !!project[MOBILE_ACCESS_KEY],
           isResumableAgentTab(tab) || isRelaunchableLocalTab(tab) || isSavedWhileLive(tab),
-        ));
+        )));
     const session = tab.tmuxAttach ?? (persistent ? tab.tmuxSession : undefined);
     if (!session) continue;
     const targetHost = localRunning ? null : (hostId ?? "primary");
@@ -1148,6 +1153,7 @@ interface ProjectsStore {
    *  `agent_remote_control` setting. */
   setProjectRemoteControl: (id: string, remoteControl: boolean | null) => Promise<void>;
   setProjectScheduleMcp: (id: string, level: "off" | "propose" | "apply") => Promise<void>;
+  setProjectTabMessagesWake: (id: string, on: boolean) => Promise<void>;
   /** Local models only / Cut network (`services::agent_privacy`). The backend
    *  refuses (rejects with a message naming the project) when the project
    *  cannot be covered, and ends the running agent tabs that are not a verified
@@ -1374,6 +1380,17 @@ async function removeProjectVia(id: string, unregister: () => Promise<unknown>):
   // kept the tunnel up for projects that weren't even connected. `releaseVpn`
   // counts actual holders.)
   releaseVpn(id, entry.remote?.openvpn?.config);
+  // End the LOCAL sessions its tabs own first, as `deactivateProject` does:
+  // closing a tab only detaches it (a pty_kill ends the client), and with the
+  // project gone no tab would ever reattach — a host agent would run on,
+  // orphaned. Best effort: ending an absent session is a no-op, and a failure
+  // must not keep the project from being removed. Remote sessions are left,
+  // as a stop leaves them.
+  {
+    const tabs = useTabsStore.getState().tabsByScope[id] ?? [];
+    const local = projectTmuxTargets(entry, tabs, localSessionsAvailableNow()).filter((target) => target.hostId === null);
+    await Promise.allSettled(local.map((target) => invoke<void>("local_tmux_kill", { session: target.session })));
+  }
   // Drop its tabs/PTYs/sessions (in memory; the backend discards the file).
   useTabsStore.getState().closeAllTabs(id);
   backgroundRestored.delete(id);
@@ -1750,9 +1767,8 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       const loaded = Object.prototype.hasOwnProperty.call(tabsStore.tabsByScope, id);
       const tabs = tabsStore.tabsByScope[id] ?? [];
       const ptyTabs = tabs.filter((tab) => isPtyTabKind(tab.kind));
-      const localPersistenceEnabled =
-        !IS_HOST_WINDOWS &&
-        useSettingsStore.getState().settings?.persist_local_sessions !== false;
+      const localPersistenceEnabled = localSessionsAvailableNow();
+      // (Read on Unix only: Windows targets key on the tab, see projectTmuxTargets.)
       const tmuxTargets = projectTmuxTargets(project, tabs, localPersistenceEnabled);
       // Closing a project stops what runs HERE. A persistent session on a remote
       // host is left running: surviving the desktop going away is what it is for,
@@ -1980,6 +1996,11 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
   setProjectScheduleMcp: async (id, level) => {
     await invoke("set_project_schedule_mcp", { projectId: id, level });
     patchProject(id, (project) => ({ ...project, schedule_mcp: level }));
+  },
+
+  setProjectTabMessagesWake: async (id, on) => {
+    await invoke("set_project_tab_messages_wake", { projectId: id, on });
+    patchProject(id, (project) => ({ ...project, tab_messages_wake: on || undefined }));
   },
 
   setProjectAgentPrivacy: async (id, localModelsOnly, cutNetwork) => {

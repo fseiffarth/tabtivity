@@ -169,6 +169,33 @@ export function agentTabModelTag(
   return tab.kind === "local_agent" ? tab.env?.[envName("LOCAL_MODEL")] : undefined;
 }
 
+/** `agentTabModelTag` for a component, woken only by this tab's own readings:
+ * the maps are replaced whole, so a subscription to one would re-render on
+ * every other tab's turn too. */
+export function useAgentTabModelTag(scope: string, tab: TabEntry | undefined): string | undefined {
+  const ptyId = tab ? `${scope}:${tab.key}` : "";
+  useAgentModelsStore((state) => state.byTab[ptyId]);
+  useAgentModelsStore((state) => state.screenByTab[ptyId]);
+  if (!tab) return undefined;
+  const { byTab, screenByTab } = useAgentModelsStore.getState();
+  return agentTabModelTag(scope, tab, byTab, screenByTab);
+}
+
+/** `map` with `key` set to `value`, or dropped when there is none — the same
+ * object when that changes nothing, so its subscribers are not woken. */
+function withEntry<T>(
+  map: Record<string, T>,
+  key: string,
+  value: T | undefined,
+  same: (a: T | undefined, b: T | undefined) => boolean = Object.is,
+): Record<string, T> {
+  if (same(map[key], value)) return map;
+  const next = { ...map };
+  if (value === undefined) delete next[key];
+  else next[key] = value;
+  return next;
+}
+
 /** Prompts only ever arrive at the end of the tail (and fall off its front),
  * so length plus the newest entry settles whether a read brought news. */
 function sameRecent(a: TranscriptPrompt[] | undefined, b: TranscriptPrompt[] | undefined): boolean {
@@ -282,18 +309,12 @@ export const useAgentModelsStore = create<AgentModelsStore>((set, get) => ({
     // restored tab) is a baseline, not news: only a change from a known one
     // is a submission.
     if (!timed && turnStarted && text && known !== undefined && known !== text && !isDetachedWindow()) void adoptTypedPrompt(scope, tab, text);
-    set((state) => {
-      const byTab = { ...state.byTab };
-      if (label) byTab[ptyId] = label;
-      else delete byTab[ptyId];
-      const promptByTab = { ...state.promptByTab };
-      if (text) promptByTab[ptyId] = text;
-      else delete promptByTab[ptyId];
-      const recentByTab = { ...state.recentByTab };
-      if (nextRecent?.length) recentByTab[ptyId] = nextRecent;
-      else delete recentByTab[ptyId];
-      return { byTab, promptByTab, recentByTab };
-    });
+    // Only what changed gets a new map: a new prompt must not wake the model's readers.
+    set((state) => ({
+      byTab: withEntry(state.byTab, ptyId, label || undefined),
+      promptByTab: withEntry(state.promptByTab, ptyId, text || undefined),
+      recentByTab: withEntry(state.recentByTab, ptyId, nextRecent?.length ? nextRecent : undefined, sameRecent),
+    }));
   },
 }));
 

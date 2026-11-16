@@ -23,6 +23,7 @@ import { anchorOnScreen, firstVisibleAnchor } from "../../lib/shortcuts/hintAnch
 import { HintBubble } from "../common/HintBubble";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT } from "../../lib/i18n";
+import { startPoll } from "../../lib/usePoll";
 
 /** Handlers for hints that carry a one-click action (`HintDef.action`). */
 const HINT_ACTIONS: Record<HintActionId, () => void> = {
@@ -109,8 +110,8 @@ export function HintHost() {
 
   useEffect(() => {
     if (!hintsEnabled) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), TICK_MS);
-    return () => window.clearInterval(id);
+    // No hint surfaces in a window nobody is looking at.
+    return startPoll(() => setTick((n) => n + 1), TICK_MS, { immediate: false }).stop;
   }, [hintsEnabled]);
 
   const def = active ? HINTS.find((h) => h.id === active) ?? null : null;

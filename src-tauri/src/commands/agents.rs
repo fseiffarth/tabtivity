@@ -21,11 +21,7 @@ pub use crate::services::agent_registry::*;
 /// itself: `irm … | iex` is PowerShell-only; `npm`/`python` installs work in
 /// either PowerShell or the classic Command Prompt.
 fn windows_shell(cmd: &str) -> &'static str {
-    if cmd.contains("iex")
-        || cmd.trim_start().starts_with("irm")
-        || cmd.contains("Invoke-RestMethod")
-        || cmd.contains("Invoke-Expression")
-    {
+    if needs_powershell(cmd) {
         "PowerShell"
     } else {
         "PowerShell or Command Prompt"
@@ -33,15 +29,21 @@ fn windows_shell(cmd: &str) -> &'static str {
 }
 
 fn windows_shell_kind(cmd: &str) -> &'static str {
-    if cmd.contains("iex")
-        || cmd.trim_start().starts_with("irm")
-        || cmd.contains("Invoke-RestMethod")
-        || cmd.contains("Invoke-Expression")
-    {
+    if needs_powershell(cmd) {
         "powershell"
     } else {
         "default"
     }
+}
+
+/// A Windows install line only PowerShell runs: `irm … | iex`, its long
+/// forms, and a download with `Invoke-WebRequest` (Goose's two-step install).
+fn needs_powershell(cmd: &str) -> bool {
+    cmd.contains("iex")
+        || cmd.trim_start().starts_with("irm")
+        || cmd.contains("Invoke-RestMethod")
+        || cmd.contains("Invoke-Expression")
+        || cmd.contains("Invoke-WebRequest")
 }
 
 /// The install command + the shell it runs in, for the host OS. On Windows the
@@ -526,12 +528,14 @@ fn manual_install_cmd(spec: &AgentSpec) -> &'static str {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    let running = crate::services::agent_install::begin_install(spec.id, spec.label)?;
 
     if spec_is_installed(spec) {
         return Ok(format!("{} is already installed.", spec.label));
     }
     prefetch_release(&ctx.0, spec).await;
-    run_installer(ctx.0.clone(), spec, installer_command)
+    let ctx = ctx.0;
+    running.run(move || run_installer(ctx, spec, installer_command)).await
 }
 
 /// Update an installed agent CLI: its official installer run again, which
@@ -542,11 +546,13 @@ pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    let running = crate::services::agent_install::begin_install(spec.id, spec.label)?;
     if !spec_is_installed(spec) {
         return Err(format!("{} is not installed.", spec.label));
     }
     prefetch_release(&ctx.0, spec).await;
-    run_installer(ctx.0.clone(), spec, update_command)
+    let ctx = ctx.0;
+    running.run(move || run_installer(ctx, spec, update_command)).await
 }
 
 /// Get Codex's package down before its installer runs, whose own download gives
@@ -803,6 +809,15 @@ fn npm_uninstall_command(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn uninstall_agent(id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    // The install lock: a removal never races an install or update of it.
+    crate::services::agent_install::run_locked(spec.id, spec.label, move || {
+        uninstall_agent_blocking(spec)
+    })
+    .await
+}
+
+/// The blocking body of [`uninstall_agent`] (npm runs, files go).
+fn uninstall_agent_blocking(spec: &'static AgentSpec) -> Result<String, String> {
     server_installs_are_the_helpers(spec.id)?;
 
     let cmd_for_platform = if cfg!(windows) {
@@ -2175,6 +2190,25 @@ pub async fn agent_global_import() -> Result<crate::services::agent_global::Impo
         .map_err(|e| e.to_string())
 }
 
+/// The first-start question of a fresh install (`services::agent_import_offer`):
+/// whether it is open, and which logins and config folders this computer
+/// holds to import. Names only, never a login's content.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_import_offer() -> Result<crate::services::agent_import_offer::Offer, String> {
+    app_core::rt::blocking("agent", crate::services::agent_import_offer::offer).await
+}
+
+/// The user's answer to it: import the ticked logins (registry ids) and, with
+/// `config`, the config layer. Closes the question whatever was ticked.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_import_offer_answer(
+    logins: Vec<String>,
+    config: bool,
+) -> Result<crate::services::agent_import_offer::Outcome, String> {
+    app_core::rt::try_blocking("agent", move || crate::services::agent_import_offer::answer(&logins, config))
+        .await
+}
+
 /// The Manage CLIs switch for Codex auto-review in the Tabtivity-wide layer;
 /// every Codex tab picks it up at its next start.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2415,6 +2449,23 @@ mod tests {
             windows_shell("npm install -g @google/gemini-cli"),
             "PowerShell or Command Prompt"
         );
+    }
+
+    /// 2442e/2442f: the Windows rows filled from the vendors' own docs run in
+    /// the shell their syntax needs; Grok's is xAI's own CLI, never the stale
+    /// npm client; Kiro (a per-machine MSI) and Plandex (WSL only) stay empty.
+    #[test]
+    fn the_vendor_windows_installers_run_in_their_shell() {
+        let win = |id: &str| find_spec(id).and_then(|s| s.install_cmd_windows);
+        assert_eq!(win("grok"), Some("irm https://x.ai/cli/install.ps1 | iex"));
+        for id in ["grok", "cursor-agent", "muse", "goose"] {
+            let cmd = win(id).unwrap_or_else(|| panic!("{id} has a Windows row"));
+            assert_eq!(windows_shell_kind(cmd), "powershell", "{id}");
+            assert!(!cmd.contains("bash") && !cmd.contains("npm"), "{id}: {cmd}");
+        }
+        assert_eq!(windows_shell_kind(win("vibe").unwrap()), "default", "uv runs in either shell");
+        assert_eq!(win("kiro"), None);
+        assert_eq!(win("plandex"), None);
     }
 
     #[test]
@@ -2763,8 +2814,15 @@ mod tests {
         assert_eq!(stem(installer_command(claude).unwrap()), "powershell");
         let gemini = find_spec("gemini").unwrap(); // npm install -g …
         assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
-        let vibe = find_spec("vibe").unwrap(); // no Windows installer
-        assert!(installer_command(vibe).is_err());
+        let vibe = find_spec("vibe").unwrap(); // uv tool install …
+        assert_eq!(stem(installer_command(vibe).unwrap()), "cmd");
+        // Picked from the registry, so a CLI that gains a Windows installer
+        // later doesn't leave this pointing at one that has one.
+        let none = AGENTS
+            .iter()
+            .find(|a| a.install_cmd_windows.is_none())
+            .expect("some CLI has no one-line Windows installer");
+        assert!(installer_command(none).is_err());
     }
 
     #[test]

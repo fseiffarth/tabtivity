@@ -1,6 +1,6 @@
 [package]
 name = "tabtivity"
-version = "0.2.73"
+version = "0.2.82"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
@@ -334,6 +334,9 @@ tokio-tungstenite = "0.29"
 # ephemeral key, never a counter. Already in the tree transitively.
 aes-gcm = "0.10"
 subtle = "2"
+# The Windows session host's per-session screen (`services::session_host::screen`):
+# capture with wrapped rows joined, scrollback, mode 2004, full repaints.
+vt100 = "0.18.1"
 # Reader mode fetches pages in the BACKEND, so the unsanitized bytes never exist
 # in a webview process (the mail client's structural argument, applied to the web).
 # `default-features = false` drops native-tls (no OpenSSL anywhere in the bundle,
@@ -406,7 +409,12 @@ windows = { version = "0.62", features = [
     "Win32_NetworkManagement_Ndis",
     "Win32_Storage_FileSystem",
     "Win32_Security",
+    # The session host's pipe DACL (SDDL in and out, `GetSecurityInfo`) and
+    # peer SIDs (`services::local_pipe`).
+    "Win32_Security_Authorization",
     "Win32_System_Com",
+    # The session host's own ConPTY spawn (`session_host/win/conpty.rs`).
+    "Win32_System_Console",
     # SEH unhandled-exception filter → crash.log line (`install_seh_filter`).
     # Debug owns the module; Kernel gates EXCEPTION_POINTERS itself and IO gates
     # the WriteFile the filter logs with.
@@ -416,6 +424,8 @@ windows = { version = "0.62", features = [
     # Per-process CPU/memory sampling + process-tree walk for the project resource
     # readout (the Windows analogue of Linux's `/proc` parsing in `sysstat.rs`).
     "Win32_System_Diagnostics_ToolHelp",
+    # A session's whole subtree in one Job Object (`session_host/win/job.rs`).
+    "Win32_System_JobObjects",
     "Win32_System_ProcessStatus",
     # Keep the projector awake during a deck talk: `SetThreadExecutionState`
     # (`commands/presenter.rs`), the Windows spelling of `systemd-inhibit`.

@@ -1388,6 +1388,24 @@ in `~/.config/opencode/opencode.json` `instructions` (its global `AGENTS.md`
 would shadow the `~/.claude/CLAUDE.md` fallback). All but Copilot are from the vendors'
 docs, not live.
 
+"Reads the project's `AGENTS.md`" (new projects scaffold no `CLAUDE.md` /
+`GEMINI.md` pointer; re-check yes/no per CLI on update, table in
+`docs/scaffold_files_plan.md` §3a). Two CLIs do not by default, so
+`agent_hint::register_in_home` sets it in Tabtivity's own agent homes, after
+the global layer: **Gemini** `~/.gemini/settings.json` `context.fileName`
+(string or array; `["GEMINI.md","AGENTS.md"]` union, the user's entries kept,
+the first name is where `save_memory` writes), **Aider** `~/.aider.conf.yml`
+`read:` (string or list, resolved against the cwd; a project without
+`AGENTS.md` only prints "Read-only file … does not exist. Skipping." per
+`aider/coders/base_coder.py`, read 2026-11-13, not live: no real Aider is
+installed here to run `verify-cli` on). Re-check the key names and that the
+default file lists did not change. Native readers (nothing to set): Codex,
+Antigravity, Vibe, Kiro, Cline, OpenCode, Cursor, Copilot, Droid, Grok, Qwen
+(since 0.11.1), Auggie, Kilo, Junie, Goose, Pi, Crush, Amp, Kimi, Qoder; Claude
+only when no `CLAUDE.md` sits in or above the project; CodeBuddy only without a
+`CODEBUDDY.md`. No way found: Plandex, SWE-agent, mini-SWE-agent, Continue,
+OpenClaw (own workspace file by design); Muse unverified.
+
 The `tabtivity-send` skill (`agent_hint::SKILL_DIRS`, 2026-11-08) leans on
 each CLI's user-skill folder, found by searching the installed builds, not
 live: Claude 2.1.319 `~/.claude/skills`, OpenCode 2.2.6 `~/.claude` and
@@ -2097,8 +2115,14 @@ agent CLI. Behind the `copilot_completion` experimental flag; the pinned version
 is `services/copilot/process.rs` `SERVER_VERSION` (install dir and npm spec follow it).
 
 **Protocol reference** [GitHub's official server](https://github.com/github/copilot-language-server-release).
-Inspected/probed **1.547.0**, Linux x64, 2026-09-18. Native npm packages list
-Linux/macOS/Windows x64/arm64; upstream also documents Node >=20.8.
+Inspected/probed **1.565.6**, Linux x64, 2026-11-14 (before: 1.547.0,
+2026-09-18). Pick a release at least a week old (1.567.5 was one day old then).
+The installer takes the native package alone,
+`@github/copilot-language-server-linux-<x64|arm64>@<version>` (159 MB): the
+umbrella package's optional dependencies pull every platform's build plus, since
+1.56x, the Copilot CLI and SDK (about 600 MB on Linux x64). The probe passes
+against the native package alone. Native npm packages list Linux/macOS/Windows
+x64/arm64; upstream also documents Node >=20.8.
 
 **Assumes** stdio Content-Length framing; initialize/initialized; incremental
 didOpen/didChange/didClose plus didFocus; inlineCompletion includes document
@@ -2112,20 +2136,37 @@ plaintext writer. Do not infer keychain protection from its keytar dependency.
 The synthetic probe blocks that file and exercises the in-memory fallback;
 authenticated behavior and production credential policy are still unverified.
 
-**Unverified calls** `signIn` (→ `userCode`, `verificationUri`, `command`),
-finishing it via `workspace/executeCommand`, `signOut` and `checkStatus`
-(→ `status`, `user`) are written from upstream's README and tested only
-against a fake server. `didChangeStatus` `kind`/`message` likewise.
+**Unverified calls** finishing `signIn` via `workspace/executeCommand`,
+`signOut` and `checkStatus` (→ `status`, `user`) are written from upstream's
+README and tested only against a fake server. `didChangeStatus`
+`kind`/`message` likewise. `signIn` itself is probed anonymously (1.565.6:
+`status: PromptUserDeviceFlow`, `userCode`, `verificationUri`
+`https://github.com/login/device`, `command.command`
+`github.copilot.finishDeviceFlow`). Stay signed in (`credentials.rs`) uses
+`auth/getGitHubToken` (`{}` → `{credentialType, resource, token, scopes?}` or
+null) and `signInWithGithubToken` (`{githubToken, user, githubAppId?}` →
+the `checkStatus`-like `{status, user}`), read from 1.565.6's `dist/main.js`
+handler table and schemas (the umbrella package's `dist/`; the native binary
+carries the bundle compressed); neither ran against a live account. Error codes
+from the same bundle: 1000 NoCopilotToken, 1001 DeviceFlowFailed, 1002
+CopilotNotAvailable, 1004 CodeFlowFailed, 1005 NoBrowserAvailable, 1006
+AuthEnvVarConflict; LSP -32800/-32801/-32802.
 
 **Verify** after bumping `SERVER_VERSION`, the real server inside the real fence:
-`TABTIVITY_COPILOT_INSTALL=<npm prefix> cargo test --manifest-path src-tauri/Cargo.toml --lib copilot -- --ignored`
-(initialize + unauthenticated error 1000 through `session.rs`). Also
-`python3 scripts/copilot-probe.py /absolute/path/to/copilot-language-server`
-without launching Tabtivity. It currently verifies initialization, unsaved document
-sync, unauthenticated error 1000 and cancellation -32800 only. Before release,
-also verify device sign-in/sign-out, credential persistence policy, exclusions,
-workspace filesystem reads, quota messages and accepted-item offsets against a
-real signed-in session. Never capture tokens or raw protocol logs.
+`TABTIVITY_COPILOT_INSTALL=<npm prefix> cargo test --manifest-path src-tauri/Cargo.toml --lib copilot -- --ignored --nocapture`
+(initialize, unauthenticated error 1000, then an anonymous `signIn` that stops
+at the user code — it proves DNS, TLS, the CA bundle and the fence's `/etc`
+binds; a failure prints the server's stderr, e.g. bwrap's). It needs
+unprivileged user namespaces: inside an agent fence bwrap cannot nest, so run it
+from a normal shell. Also
+`python3 scripts/copilot-probe.py [--sign-in] /absolute/path/to/copilot-language-server`
+without launching Tabtivity (unfenced; HOME, XDG and the Copilot home in a
+temporary directory). It verifies initialization, unsaved document sync,
+unauthenticated error 1000, cancellation -32800 and, with `--sign-in`, the
+device-code reply. Before release, also verify device sign-in/sign-out, stay
+signed in, exclusions, workspace filesystem reads, quota messages and
+accepted-item offsets against a real signed-in session. Never capture tokens or
+raw protocol logs.
 
 ---
 

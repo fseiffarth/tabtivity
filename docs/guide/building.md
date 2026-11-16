@@ -113,14 +113,15 @@ Global Tabtivity state lives in `~/.local/share/tabtivity/`:
 
 Project-local state lives in each project's `project.json` (project identity,
 remote specs, runtime/container settings, per-project viewer settings),
-alongside scaffolded files (created when missing): `AGENTS.md`, `CLAUDE.md`,
-`GEMINI.md`, `TODO.md`, `ROADMAP.md`, `STATUS.md`, `README.md`,
-`DOCUMENTATION.md`, plus `.gitignore` and `.claude/settings.json`. **`AGENTS.md`
-is the canonical one** — it carries the actual template, and `CLAUDE.md` /
-`GEMINI.md` are pointers that import it, so guidance is written once instead of
-drifting across three files. A scaffold repair upgrades an agent doc still
-holding its untouched pre-`AGENTS.md` stub and never touches anything a human
-or agent wrote.
+alongside the scaffolded files, created only when missing: `AGENTS.md`,
+`README.md` and, in a git project, `.gitignore`. **`AGENTS.md` is the canonical
+agent doc** — every agent CLI Tabtivity wraps reads it directly (no `CLAUDE.md` /
+`GEMINI.md` pointer files are written any more), so guidance is written once. The
+other docs (`PROJECT.md`, `TODO.md`, `ROADMAP.md`, `STATUS.md`, `DOCUMENTATION.md`)
+are created on demand from the file tree's *Project docs* group; the catalog and
+its template/edited states live in `services/scaffold.rs`. A scaffold repair
+upgrades an `AGENTS.md` still holding an untouched earlier template and never
+touches anything a human or agent wrote.
 
 See [DOCUMENTATION.md](../../DOCUMENTATION.md) for the detailed architecture, data
 schemas, behavior notes, and known limitations.

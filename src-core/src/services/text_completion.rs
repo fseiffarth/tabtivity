@@ -89,6 +89,38 @@ pub fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Ollama's own accounting from a stream's final (`done`) record. Durations
+/// are Ollama's nanoseconds; a field the record left out stays `None`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FinalRecord {
+    pub prompt_eval_count: Option<u64>,
+    pub prompt_eval_duration: Option<u64>,
+    pub eval_count: Option<u64>,
+    pub eval_duration: Option<u64>,
+    pub load_duration: Option<u64>,
+}
+
+impl FinalRecord {
+    fn read(v: &serde_json::Value) -> Self {
+        let field = |key: &str| v[key].as_u64();
+        Self {
+            prompt_eval_count: field("prompt_eval_count"),
+            prompt_eval_duration: field("prompt_eval_duration"),
+            eval_count: field("eval_count"),
+            eval_duration: field("eval_duration"),
+            load_duration: field("load_duration"),
+        }
+    }
+}
+
+/// A finished stream: the text, and Ollama's final record when the stream
+/// reached it (a caller's semantic stop drops the socket before it does).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Streamed {
+    pub text: String,
+    pub record: Option<FinalRecord>,
+}
+
 /// Read NDJSON across arbitrary HTTP chunk / UTF-8 boundaries. Ignore thinking
 /// fields and metadata; require an explicit done record or caller-requested
 /// semantic stop (update returns true), never accept a disconnected response.
@@ -97,7 +129,7 @@ pub async fn stream(
     url: &str,
     body: &serde_json::Value,
     mut update: impl FnMut(&str, bool) -> Result<bool, String>,
-) -> Result<String, String> {
+) -> Result<Streamed, String> {
     let mut response = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -143,14 +175,15 @@ pub async fn stream(
                 return Err("ollama completion too large".into());
             }
             let done = v["done"].as_bool() == Some(true);
+            let record = done.then(|| FinalRecord::read(&v));
             if !token.is_empty() || done {
                 // A caller's semantic stop drops the response/socket immediately.
                 if update(&raw, done)? {
-                    return Ok(raw);
+                    return Ok(Streamed { text: raw, record });
                 }
             }
             if done {
-                return Ok(raw);
+                return Ok(Streamed { text: raw, record });
             }
         }
         if eof {
@@ -270,8 +303,40 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(result, "grün");
+        assert_eq!(result.text, "grün");
+        assert_eq!(result.record, Some(FinalRecord::default()), "a final record without counts");
         assert_eq!(seen, vec![("grü".into(), false), ("grün".into(), true)]);
+        peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_finished_stream_returns_ollamas_final_record() {
+        let (url, listener) = server().await;
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_request(&mut socket).await;
+            socket.write_all(concat!(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+                "{\"response\":\"a + b\",\"done\":false}\n",
+                "{\"response\":\"\",\"done\":true,\"done_reason\":\"stop\",\"total_duration\":9,",
+                "\"load_duration\":1200,\"prompt_eval_count\":37,\"prompt_eval_duration\":4500000,",
+                "\"eval_count\":3,\"eval_duration\":900000}\n",
+            ).as_bytes()).await.unwrap();
+        });
+        let streamed = stream(&client().unwrap(), &url, &serde_json::json!({}), |_, _| Ok(false))
+            .await
+            .unwrap();
+        assert_eq!(streamed.text, "a + b");
+        assert_eq!(
+            streamed.record,
+            Some(FinalRecord {
+                prompt_eval_count: Some(37),
+                prompt_eval_duration: Some(4_500_000),
+                eval_count: Some(3),
+                eval_duration: Some(900_000),
+                load_duration: Some(1200),
+            })
+        );
         peer.await.unwrap();
     }
 
@@ -290,7 +355,7 @@ mod tests {
             assert!(!done);
             Ok(text.contains(". "))
         }).await.unwrap();
-        assert_eq!(raw, "One sentence. Next");
+        assert_eq!(raw, Streamed { text: "One sentence. Next".into(), record: None });
         peer.await.unwrap();
     }
 

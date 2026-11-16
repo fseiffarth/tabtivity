@@ -16,7 +16,7 @@
 import { useT } from "../../../lib/i18n";
 import { wordsIn } from "../../../../mobile-web/src/markup/anchors";
 import type { TextRun } from "../../../../mobile-web/src/markup/findText";
-import { markBox, tickBadgeSpot, type Layer, type Mark, type TickGroup } from "../../../../mobile-web/src/markup/layer";
+import { markBox, markKey, tickBadgeSpot, type Layer, type Mark, type TickGroup } from "../../../../mobile-web/src/markup/layer";
 import { UntestedTag } from "../../common/UntestedTag";
 import { CheckIcon } from "../../common/icons/Icon";
 
@@ -77,20 +77,6 @@ export function tickCaption(layer: Layer, group: TickGroup, runs: readonly TextR
   return was && was !== now ? { before: was, after: now } : null;
 }
 
-/** A badge's React key: its first mark's identity, not an index — an
- *  approved group's button goes with it, so focus and a held Enter never land
- *  on the next group that slides into its place. */
-const markIds = new WeakMap<Mark, number>();
-let nextMarkId = 0;
-function badgeKey(mark: Mark): number {
-  let id = markIds.get(mark);
-  if (id === undefined) {
-    id = ++nextMarkId;
-    markIds.set(mark, id);
-  }
-  return id;
-}
-
 /** A badge's size (CSS px) — the question pin's. */
 const BADGE = 22;
 /** The widest a before/after caption grows, CSS px (`.file-viewer-pdf-tick-diff`). */
@@ -117,7 +103,7 @@ export function PdfTickBadges({
     <>
       {badges.map(({ marks, box, caption }) => {
         const [left, top] = tickBadgeSpot(box, scale, page, BADGE);
-        const key = `${badgeKey(marks[0])}:${marks.length}`;
+        const key = `${markKey(marks[0])}:${marks.length}`;
         const said = caption ? t("mobile.markup.tickDiff", { before: caption.before, after: caption.after }) : "";
         return [
           <button

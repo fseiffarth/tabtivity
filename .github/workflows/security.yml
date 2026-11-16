@@ -49,16 +49,20 @@ jobs:
       #
       # Ignored, each with its reason — add one only with a comment like these:
       # - RUSTSEC-2023-0071 `rsa` Marvin timing oracle: `pgp` pulls `rsa` in
-      #   unconditionally and no patched version exists. Mitigated by defaulting
-      #   key generation to Curve25519; see the note on `pgp` in Cargo.toml.
+      #   unconditionally, and even `pgp` 0.21.1 still requires `rsa` ^0.9, so
+      #   the fixed `rsa` 0.10 (stable since 2026-11-08) cannot be reached
+      #   without a `[patch]` that its API change would break. Mitigated by
+      #   defaulting key generation to Curve25519; see the note on `pgp` in
+      #   Cargo.toml. Drop this once a `pgp` release moves to `rsa` 0.10.
       # - RUSTSEC-2026-0387 `crypto-bigint` 0.5.5 timing variability in its
       #   "constant-time" arithmetic (published 2026-10-23; patched in 0.7.6):
       #   the RustCrypto 0.13 curve crates (`elliptic-curve`, `p256`, `k256`, …)
-      #   pin 0.5, as do `pgp` 0.20 and our own `p256` 0.13. The fix is a
-      #   RustCrypto generation bump (`pgp` 0.21, `p256` 0.14), which moves mail
-      #   encryption and phone pairing and needs a live check of both. A local
-      #   timing side channel on our ECC secret operations; drop this once that
-      #   bump has landed.
+      #   pin 0.5, as do `pgp` (0.21.1 still requires `elliptic-curve` and
+      #   `p256` ^0.13) and our own `p256` 0.13. The fix is a RustCrypto
+      #   generation bump (the 0.14 crates) that `pgp` has to follow first; it
+      #   moves mail encryption and phone pairing and needs a live check of
+      #   both. A local timing side channel on our ECC secret operations; drop
+      #   this once that bump has landed.
       - name: Audit Rust dependencies
         run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387
 

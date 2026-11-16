@@ -57,6 +57,12 @@ pub struct ProcSample {
     /// uid falls back to `#<uid>` rather than an empty string.
     #[serde(default)]
     pub user: String,
+    /// Its usage could not be read: Windows refuses `OpenProcess` for a
+    /// protected or elevated process. `rss_kib` and `cpu_jiffies` are then 0
+    /// placeholders the pane must not show as a reading (2442m). Left out of
+    /// the JSON when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
 }
 
 /// One interactive login session on the sampled host, from `who`. Mirrors the
@@ -1329,6 +1335,7 @@ pub fn parse_remote_snapshot(raw: &str) -> SystemSnapshot {
             cpu_jiffies,
             threads,
             user: String::new(),
+            unreadable: false,
         });
         proc_uid.push(acc.uid);
     }
@@ -1790,6 +1797,7 @@ mod platform {
                     cpu_jiffies,
                     threads,
                     user,
+                    unreadable: false,
                 });
             }
         }
@@ -2148,8 +2156,8 @@ mod platform {
 
         // One ToolHelp walk for identity fields (pid/ppid/name/threads), then
         // per-pid CPU/RSS queries. A pid we cannot open (system/elevated)
-        // keeps its identity row with zeroed usage, matching the Linux
-        // behavior of unreadable /proc entries as closely as possible.
+        // keeps its identity row, marked `unreadable`: the pane shows no
+        // usage for it rather than a zero one (2442m).
         let mut processes = Vec::new();
         // SAFETY: snapshot is closed before returning; the entry is fully
         // initialized (dwSize set) before Process32First reads it.
@@ -2163,18 +2171,21 @@ mod platform {
                     loop {
                         let pid = entry.th32ProcessID;
                         let comm = super::decode_ansi_nul(&entry.szExeFile);
+                        let (rss, ticks) = (rss_kib(pid), proc_ticks(pid));
                         processes.push(ProcSample {
                             pid,
                             ppid: entry.th32ParentProcessID,
                             cmdline: format!("[{comm}]"),
                             comm,
                             state: String::new(),
-                            rss_kib: rss_kib(pid).unwrap_or(0),
-                            cpu_jiffies: proc_ticks(pid).unwrap_or(0),
+                            rss_kib: rss.unwrap_or(0),
+                            cpu_jiffies: ticks.unwrap_or(0),
                             threads: entry.cntThreads,
                             // No cheap per-process owner lookup here; the pane hides
                             // the per-user section when no process reports one.
                             user: String::new(),
+                            // A pid this user cannot open: no reading, not a zero one.
+                            unreadable: rss.is_none() || ticks.is_none(),
                         });
                         if Process32Next(snapshot, &mut entry).is_err() {
                             break;
@@ -2662,6 +2673,7 @@ mod platform {
                 // are visible anyway); the pane hides the per-user section when no
                 // process reports one.
                 user: String::new(),
+                unreadable: false,
             });
         }
 
@@ -3617,5 +3629,20 @@ mod thread_count_tests {
     fn absent_or_unparseable_is_none() {
         assert_eq!(parse_threads("Name:\tx\nVmRSS:\t1 kB\n"), None);
         assert_eq!(parse_threads("Threads:\tmany\n"), None);
+    }
+}
+
+/// 2442m: a process whose usage could not be read says so to the pane
+/// instead of passing its zero placeholders off as a reading.
+#[cfg(test)]
+mod unreadable_tests {
+    use super::ProcSample;
+
+    #[test]
+    fn an_unreadable_process_is_marked_and_a_readable_one_is_unchanged() {
+        let readable = serde_json::to_value(ProcSample { pid: 4, ..Default::default() }).unwrap();
+        assert!(readable.get("unreadable").is_none(), "the JSON of a readable row is as before");
+        let blocked = serde_json::to_value(ProcSample { pid: 4, unreadable: true, ..Default::default() }).unwrap();
+        assert_eq!(blocked["unreadable"], serde_json::json!(true));
     }
 }

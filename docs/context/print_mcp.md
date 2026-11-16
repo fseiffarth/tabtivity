@@ -30,10 +30,10 @@ eight pending in the process.
   level.
 - **PDF only.** One render path (pdf.js preview + `layoutPrintPdf` vector
   job), the smallest surface.
-- **Every CLI on a local project** gets the token; only Claude, Codex and
-  tool-tagged local Vibe can use it today, because only they get an MCP
-  server written into their launch (`root_mcp::wire_named_cli_args`). Wiring
-  the other CLIs is a follow-up for all lanes (`todo/agents.md`).
+- **Every CLI on a local project** gets the token. Claude, Codex, Copilot,
+  OpenCode and tool-tagged local Vibe see the tools as their own (the server
+  is named at launch, `root_mcp::wire_named_cli`); every other CLI calls them
+  through the `tabtivity-mcp` command (`docs/context/agent_mcp_wiring.md`).
 
 ## Invariants
 
@@ -69,6 +69,30 @@ eight pending in the process.
   preflight's scrub list.
 - Not on the local-models-only lane allowlist (`local_lane::MCP_ALLOWED`):
   a cut tab gets no print tools.
+
+## Platforms (2442aa)
+
+What the system print dialog can be opened preset to differs
+(`nativePresets` in `lib/window/printing.ts`, `print_mcp::native_presets_duplex`):
+
+| | Linux (GTK) | Windows (WebView2 `ShowPrintUI`) | macOS (PDFKit) |
+|---|---|---|---|
+| Paper | preset | not preset: the PDF is laid out on it, the user picks it in the dialog | same as Windows |
+| Grayscale | preset (colour off) | baked into the PDF (`layoutPrintPdf` `bakeGrayscale`: a `Saturation` blend rectangle per sheet over an opaque white one, vector kept) | same as Windows |
+| Two-sided | preset | not preset: the control is disabled with a hint, the user sets it in the dialog | same as Windows |
+| Copies, range, N-up, booklet | in the PDF | in the PDF | in the PDF |
+
+The preview says so (the paper and two-sided hints) instead of claiming a
+preset. An approved `print_request` that asked for two-sided (or a booklet)
+on Windows or macOS reports `notApplied: ["duplex"]` and a message in
+`print_status`, so the agent does not report a two-sided print it cannot
+vouch for. Not verified on a real Windows or macOS printer: whether Edge's
+preview and PDFKit render the `Saturation` blend as gray (both implement the
+non-separable blend modes; a printer driver could still rasterise oddly).
+The white rectangle beneath the document is load-bearing: a page is an
+isolated transparency group, so without it the blend paints its own 50 % gray
+on every part of the sheet the document leaves unpainted (rendered so by
+Ghostscript, MuPDF and Poppler).
 
 ## State
 

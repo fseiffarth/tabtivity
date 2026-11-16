@@ -2,12 +2,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { aiIsOff } from "../../aiSwitch";
 import { listen } from "@tauri-apps/api/event";
 import type { AutocompleteMode } from "../../../types";
-import { CompletionCache, completionModels, completionModelOrder, completionWindow, pickCompletionModel } from "./autocomplete";
-import type { CompletionReference } from "./completionContext";
-import { offsetToPosition, type CompletionCandidate, type CompletionDocument, type CompletionProvider } from "./completionProvider";
+import { CompletionCache, completionModels, completionModelOrder, completionWindow, missingRoleModel, pickCompletionModel, type CompletionModel } from "./autocomplete";
+import type { CompletionTiming } from "./completionTimings";
+import { referenceBudget, referenceSetId, trimReferences, type CompletionReference } from "./completionContext";
+import {
+  offsetToPosition, type CompletionCandidate, type CompletionDocument, type CompletionProvider, type CompletionStats,
+} from "./completionProvider";
 
 /** Ollama keeps its bounded context and stream/cache behavior behind the same
- * candidate interface as language-server providers. One adapter per editor. */
+ * candidate interface as language-server providers. One adapter per request;
+ * the cache belongs to the editor. */
+/** How long a finished request still listens for its stats event. */
+const STATS_GRACE_MS = 500;
+
 export class OllamaCompletionProvider implements CompletionProvider {
   readonly id = "ollama";
   readonly capabilities = { streaming: true, lengthModes: true, references: true };
@@ -18,9 +25,27 @@ export class OllamaCompletionProvider implements CompletionProvider {
     scope?: string;
     preferred?: string;
     preferredProse?: string;
+    /** The `autocomplete` role itself, without the default model folded in:
+     * an automatic request never falls back from it to another resident
+     * model (`missingRoleModel`). */
+    role?: string;
     mode: AutocompleteMode;
     candidate: number;
+    /** Sent to `complete_text`: an automatic request may be cut at a time
+     * budget once it holds a complete line. Unset means manual. */
+    trigger?: "auto" | "manual";
+    /** The edited file's project-relative path, for the backend's reference
+     * layout. */
+    fileName?: string;
+    /** References gathered for this request's scope, before the model's
+     * budget is applied. Starts together with the model lookup. */
     context: (signal: AbortSignal) => Promise<CompletionReference[]>;
+    /** Whether a stats event already said this model drops references. */
+    referencesDropped?: (model: string) => boolean;
+    /** The request's `text-completion-stats-<id>` payload, when one arrives. */
+    onStats?: (stats: CompletionStats, model: string) => void;
+    /** The request's record in the timings ring, filled in as it goes. */
+    timing?: CompletionTiming;
   }, cache?: CompletionCache) {
     if (cache) this.cache = cache;
   }
@@ -30,26 +55,48 @@ export class OllamaCompletionProvider implements CompletionProvider {
     // The AI switch (`lib/aiSwitch.ts`): no suggestion while AI is off.
     if (aiIsOff()) return [];
     let requestId: string | undefined;
-    let unlisten: (() => void) | undefined;
+    let finished = false;
+    const unlisteners: (() => void)[] = [];
+    let dropStats: (() => void) | undefined;
+    let answered = false;
+    let statsSeen = false;
     const cancel = () => {
       if (requestId) void invoke("cancel_text_completion", { requestId }).catch(() => {});
-      unlisten?.();
-      unlisten = undefined;
+      for (const unlisten of unlisteners.splice(0)) unlisten();
+      dropStats?.();
+      dropStats = undefined;
     };
     signal.addEventListener("abort", cancel, { once: true });
     try {
       signal.throwIfAborted();
-      const detailed = await completionModels(this.options.endpoint, () => invoke("list_ollama_models_detailed"));
+      const explicit = this.options.trigger !== "auto";
+      // Model lookup, reference gathering and the reservation run together.
+      const lookup = completionModels(this.options.endpoint, () => invoke<CompletionModel[]>("list_ollama_models_detailed"));
+      const gathering = this.options.context(signal);
+      const reserving = invoke<string>("prepare_text_completion").then((id) => {
+        // Arrived after Escape, an error or a cache hit: never leave it reserved.
+        if (finished || signal.aborted) void invoke("cancel_text_completion", { requestId: id }).catch(() => {});
+        else requestId = id;
+      });
+      const [detailed, gathered] = await Promise.all([lookup, gathering, reserving]);
+      const timing = this.options.timing;
+      if (timing) timing.contextReady = performance.now();
       signal.throwIfAborted();
       const loaded = detailed.filter((m) => m.running && (!m.capabilities?.length || m.capabilities.includes("completion")));
+      if (!explicit) {
+        const missing = missingRoleModel(loaded, document.language, this.options.role, this.options.preferredProse);
+        if (missing) throw new Error(`role_not_loaded:${missing}`);
+      }
       const model = pickCompletionModel(loaded, completionModelOrder(document.language, this.options.preferred, this.options.preferredProse));
       if (!model) throw new Error("not_running");
-      const context = await this.options.context(signal);
-      signal.throwIfAborted();
+      if (timing) timing.model = model.name;
+      const insert = model.capabilities?.includes("insert") === true;
+      const context = this.options.referencesDropped?.(model.name)
+        ? [] : trimReferences(gathered, referenceBudget(explicit, model.context_length));
       const { prefix, suffix } = completionWindow(document.text, document.caret);
       const { mode, candidate } = this.options;
       const key = JSON.stringify([this.id, document.path, this.options.scope, this.options.endpoint,
-        prefix, suffix, model, document.language, mode, context, candidate]);
+        prefix, suffix, model.name, insert, document.language, mode, referenceSetId(context), candidate]);
       const position = offsetToPosition(document.text, document.caret);
       if (!position) return [];
       const candidates = (text: string): CompletionCandidate[] => text ? [{
@@ -58,28 +105,49 @@ export class OllamaCompletionProvider implements CompletionProvider {
       }] : [];
       const cached = this.cache.get(key);
       if (cached !== undefined) {
+        if (timing) { timing.cached = true; timing.firstEvent = performance.now(); }
         const result = candidates(cached);
         publish(result);
         return result;
       }
-      requestId = await invoke<string>("prepare_text_completion");
-      if (signal.aborted) { cancel(); signal.throwIfAborted(); }
-      unlisten = await listen<string>(`text-completion-${requestId}`, (event) => {
-        if (!signal.aborted) publish(candidates(event.payload));
-      });
+      unlisteners.push(await listen<string>(`text-completion-${requestId}`, (event) => {
+        if (signal.aborted) return;
+        if (timing && timing.firstEvent === undefined) timing.firstEvent = performance.now();
+        publish(candidates(event.payload));
+      }));
       signal.throwIfAborted();
+      const onStats = this.options.onStats;
+      if (onStats) {
+        dropStats = await listen<CompletionStats>(`text-completion-stats-${requestId}`, (event) => {
+          statsSeen = true;
+          if (event.payload && typeof event.payload === "object") onStats(event.payload, model.name);
+        });
+        if (signal.aborted) cancel();
+        signal.throwIfAborted();
+      }
       const text = await invoke<string>("complete_text", {
         prefix, suffix, model: model.name, language: document.language === "plain" ? "" : document.language,
-        mode, candidate, insert: model.capabilities?.includes("insert") === true,
+        mode, candidate, insert,
+        trigger: this.options.trigger ?? "manual",
+        ...(this.options.fileName ? { fileName: this.options.fileName } : {}),
         requestId, context: context.length ? context : undefined,
         projectId: document.projectId ?? this.options.scope,
       });
       signal.throwIfAborted();
+      answered = true;
+      if (timing && timing.firstEvent === undefined) timing.firstEvent = performance.now();
       this.cache.set(key, text);
       const result = candidates(text);
       publish(result);
       return result;
     } finally {
+      finished = true;
+      // The stats event is sent just before the command answers, but events
+      // and answers travel separately: one that loses the race still counts.
+      if (answered && !statsSeen && dropStats) {
+        setTimeout(dropStats, STATS_GRACE_MS);
+        dropStats = undefined;
+      }
       cancel();
       signal.removeEventListener("abort", cancel);
     }

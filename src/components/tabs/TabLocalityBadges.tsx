@@ -20,6 +20,7 @@ import { ChevronLeftIcon, CloudIcon, DotIcon, HomeIcon, PlayMark } from "../comm
 import { useAgentModelsStore, agentTabLabel, tabModeMarks } from "../../stores/agents/agentModels";
 import { screenModeMarks } from "../../lib/agents/agentModel";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
+import { startPoll } from "../../lib/usePoll";
 import { sendSteeringPrompt } from "../../lib/shortcuts/steeringAgent";
 import { useAiOff } from "../../lib/aiSwitch";
 
@@ -548,9 +549,11 @@ export function TabAgentModeMarks({ scope, tab, isActive }: { scope: string; tab
   const t = useT();
   const agent = tab.kind === "agent" || tab.kind === "local_agent";
   const ptyId = `${scope}:${tab.key}`;
-  const modeByTab = useAgentModelsStore((state) => state.modeByTab);
-  const goalByTab = useAgentModelsStore((state) => state.goalByTab);
-  const marks = tabModeMarks({ modeByTab, goalByTab }, ptyId);
+  // Subscribed to this tab's own readings (the maps are replaced whole, so
+  // every tab's change would re-render every strip's marks), read in render.
+  useAgentModelsStore((state) => state.modeByTab[ptyId]);
+  useAgentModelsStore((state) => state.goalByTab[ptyId]);
+  const marks = tabModeMarks(useAgentModelsStore.getState(), ptyId);
   useEffect(() => {
     if (!agent) return;
     const readXterm = () => {
@@ -563,9 +566,8 @@ export function TabAgentModeMarks({ scope, tab, isActive }: { scope: string; tab
       else if (!useAgentModelsStore.getState().modeByTab[ptyId]) readXterm();
       return;
     }
-    readXterm();
-    const timer = window.setInterval(readXterm, MODE_TICK_MS);
-    return () => window.clearInterval(timer);
+    // Nobody reads a strip in a blurred window; the read on return catches up.
+    return startPoll(readXterm, MODE_TICK_MS).stop;
     // `tab` is read for its cmd/label/tmux session, which a respawn changes
     // along with the key; re-running on every new tab object would restart
     // the timer on each store write.

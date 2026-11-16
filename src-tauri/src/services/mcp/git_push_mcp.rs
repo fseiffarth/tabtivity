@@ -730,6 +730,13 @@ enum HookBoundary<'a> {
     /// The fence scope recorded on the tab's Pusher binding at spawn
     /// ([`PushBinding::fence_scope`](crate::services::root_mcp::PushBinding)).
     Fence(&'a str),
+    /// No fence on this platform (Windows) and the tab is a local agent the
+    /// user accepted running with their own rights: the hook runs on the
+    /// host, without the token, and only while `exec_trust` holds the user's
+    /// approval of the repo's hooks (2442g). The agent already runs there
+    /// with those rights, so this gives it nothing it lacks; what it must not
+    /// get is a hook nobody approved run by the app on its word.
+    TrustedHost,
     /// No scope was recorded: the hook is not run and the push is refused.
     /// The hook is agent-writable, so a missing record never means "run it
     /// on the host".
@@ -740,28 +747,44 @@ enum HookBoundary<'a> {
 }
 
 impl<'a> HookBoundary<'a> {
-    fn of(fence_scope: Option<&'a str>) -> Self {
-        fence_scope.map_or(Self::Unrecorded, Self::Fence)
+    fn of(fence_scope: Option<&'a str>, unfenced_host: bool) -> Self {
+        match fence_scope {
+            Some(scope) => Self::Fence(scope),
+            None if unfenced_host => Self::TrustedHost,
+            None => Self::Unrecorded,
+        }
     }
 }
 
 /// The command that runs `hook` on the tab's behalf, inside the fence its
 /// tab was spawned into. Never carries a token. A Pusher exists only for a
 /// local project agent, which is always fenced on Linux and macOS, so an
-/// unrecorded scope fails closed rather than falling back to the host; on
-/// Windows (no fence) a repo with a `pre-push` hook is pushed from the git
-/// bar.
-fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote: &str, url: &str) -> Result<std::process::Command, Failure> {
+/// unrecorded scope fails closed rather than falling back to the host. On
+/// Windows (no fence) an accepted unfenced tab's hook runs on the host once
+/// the user approved the repo's hooks (`exec_trust`, the git bar's own
+/// gate); `trust` is that check, a parameter for the tests.
+fn preflight_command(
+    boundary: HookBoundary<'_>,
+    hook: &Path,
+    dir: &Path,
+    remote: &str,
+    url: &str,
+    trust: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<std::process::Command, Failure> {
     let args = vec![remote.to_string(), url.to_string()];
     let mut cmd = match boundary {
         HookBoundary::Fence(scope) => crate::services::agent_fence::one_shot_command(scope, &hook.to_string_lossy(), &args, dir)
             .map_err(|e| Failure::new(Category::FenceUnavailable, format!("The tab is fenced but the fence cannot run the pre-push hook: {e}")))?,
+        HookBoundary::TrustedHost => {
+            if trust(dir).is_err() {
+                return Err(Failure::new(Category::FenceUnavailable, "This repo's hooks have not been approved to run, or changed since they were, so the pre-push hook did not run and nothing was pushed. Ask the user to push once from the git bar, which asks to approve them, then ask again."));
+            }
+            let mut cmd = crate::services::git_hardened::hook_command(hook);
+            cmd.args(&args).current_dir(dir);
+            cmd
+        }
         HookBoundary::Unrecorded => {
-            return Err(Failure::new(Category::FenceUnavailable, if cfg!(windows) {
-                "pre-push hooks are not run for agent pushes on Windows; the user can push from the git bar."
-            } else {
-                "This tab has no recorded sandbox to run the repo's pre-push hook in, so nothing was pushed. Ask the user to restart the tab, or to push from the git bar."
-            }));
+            return Err(Failure::new(Category::FenceUnavailable, "This tab has no recorded sandbox to run the repo's pre-push hook in, so nothing was pushed. Ask the user to restart the tab, or to push from the git bar."));
         }
         #[cfg(all(test, unix))]
         HookBoundary::Host => {
@@ -790,11 +813,22 @@ fn preflight_command(boundary: HookBoundary<'_>, hook: &Path, dir: &Path, remote
 /// (a privacy scan) then covers every commit that leaves, including any that
 /// landed on the branch while it ran. A hook that still adds commits on that
 /// second run is refused rather than run again.
-fn preflight(dir: &Path, boundary: HookBoundary<'_>, mut plan: Plan) -> Result<(Plan, String), Failure> {
+fn preflight(dir: &Path, boundary: HookBoundary<'_>, plan: Plan) -> Result<(Plan, String), Failure> {
+    let trust = |dir: &Path| crate::services::exec_trust::require(crate::services::exec_trust::TrustKind::GitHooks, dir);
+    preflight_with(dir, boundary, plan, &trust)
+}
+
+/// [`preflight`] with the host-hook trust check as a parameter.
+fn preflight_with(
+    dir: &Path,
+    boundary: HookBoundary<'_>,
+    mut plan: Plan,
+    trust: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(Plan, String), Failure> {
     let Some(hook) = resolve_pre_push_hook(dir) else { return Ok((plan, String::new())) };
     let mut outputs: Vec<String> = Vec::new();
     for round in 0..2 {
-        let mut cmd = preflight_command(boundary, &hook, dir, &plan.remote, &plan.url)?;
+        let mut cmd = preflight_command(boundary, &hook, dir, &plan.remote, &plan.url, trust)?;
         let line = format!("refs/heads/{b} {h} refs/heads/{b} {r}\n", b = plan.branch, h = plan.head, r = plan.remote_sha);
         // Drained, not stopped, past the cap: a hook's log is only shown (its
         // tail), so a chatty but passing hook (a test run) never blocks the push.
@@ -908,6 +942,11 @@ pub struct Proposal {
     /// Pusher binding; where the preflight runs the hook.
     #[serde(skip)]
     fence_scope: Option<String>,
+    /// The requesting tab runs unfenced on a fence-less platform the user
+    /// accepted (Windows), copied from its Pusher binding: the preflight may
+    /// run an approved hook on the host ([`HookBoundary::TrustedHost`]).
+    #[serde(skip)]
+    unfenced_host: bool,
     pub kind: Kind,
     /// The release tag (`Kind::Release` only).
     pub tag: Option<String>,
@@ -990,6 +1029,7 @@ fn new_proposal(session: &Session, project: &str, dir: &Path, note: String) -> P
         id: proposal_id("push"),
         session: session.id.clone(), tab: session.identity.tab.clone(), project: project.to_string(), dir: dir.to_path_buf(),
         fence_scope: session.identity.push.as_ref().and_then(|b| b.fence_scope.clone()),
+        unfenced_host: session.identity.push.as_ref().is_some_and(|b| b.unfenced_host),
         kind: Kind::Push, tag: None, repo: None, branch: None, remote: None, url: None, head: None, remote_sha: None, commits: Vec::new(), diffstat: String::new(), files: Vec::new(), files_total: 0, note,
         needs_url_confirm: false, to_default: false, created_at: chrono::Local::now().to_rfc3339(), created: Instant::now(), status: Status::Running,
         dismissed_by: None, category: None, message: String::new(), output: String::new(), state: RepoState::default(), preflight_output: String::new(),
@@ -1298,7 +1338,7 @@ fn run_request(id: String, level: Level, requested: Option<String>) {
     };
     update(&id, |p| apply_plan(p, &plan));
     let planned_head = plan.head.clone();
-    let (plan, preflight_output) = match preflight(&p.dir, HookBoundary::of(p.fence_scope.as_deref()), plan) {
+    let (plan, preflight_output) = match preflight(&p.dir, HookBoundary::of(p.fence_scope.as_deref(), p.unfenced_host), plan) {
         Ok(done) => done,
         Err(failure) => { fail(&id, failure); return; }
     };
@@ -1942,7 +1982,7 @@ mod tests {
     fn session(tab: &str, dir: &Path) -> Session {
         let (_, mut s) = crate::services::root_mcp::test_session_for_tab(Caller::Pusher, tab, Path::new("/nonexistent"));
         s.identity.project = Some("p".into());
-        s.identity.push = Some(crate::services::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: None, git_at_spawn: git_entry_identity(dir) });
+        s.identity.push = Some(crate::services::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: None, unfenced_host: false, git_at_spawn: git_entry_identity(dir) });
         s
     }
     fn test_proposal(session: &Session, dir: &Path) -> String {
@@ -2377,7 +2417,7 @@ mod tests {
         let id = test_proposal(&s, &work);
         let p = get(&id).unwrap();
         assert_eq!(p.fence_scope, None);
-        let failure = preflight(&work, HookBoundary::of(p.fence_scope.as_deref()), plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
+        let failure = preflight(&work, HookBoundary::of(p.fence_scope.as_deref(), p.unfenced_host), plan(&work, &policy, None, None, &[]).unwrap()).unwrap_err();
         assert_eq!(failure.category, Category::FenceUnavailable, "{}", failure.message);
         assert!(!marker.exists(), "the hook ran with no fence scope recorded");
         // A scope the fence cannot build (an unknown one, or no fence on this
@@ -2388,15 +2428,50 @@ mod tests {
         proposals().lock().unwrap().retain(|p| p.id != id);
     }
 
+    /// 2442g: an accepted unfenced tab (Windows) runs the hook on the host
+    /// only while the user's approval of the repo's hooks holds, and never
+    /// with the token; an unapproved or changed hook refuses and never runs.
+    #[cfg(unix)]
+    #[test]
+    fn an_unfenced_hosts_hook_runs_only_once_approved_and_without_the_token() {
+        if !have_git() { eprintln!("git not on PATH — skipping"); return; }
+        use std::os::unix::fs::PermissionsExt;
+        let (_root, remote, work) = pair();
+        commit(&work, "b.txt");
+        let hooks = work.join(".githooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-push");
+        let marker = work.join(".git").join("hook-ran");
+        std::fs::write(&hook, format!(concat!("#!/bin/sh\nprintf '%s' \"tok=${{", crate::app_upper!(), "_GIT_TOKEN:-unset}}\" > '{}'\n"), marker.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        sh(&work, &["config", "core.hooksPath", ".githooks"]);
+        let policy = ProjectPolicy { confirmed_url: Some(format!("file://{}", remote.display())), ..propose_policy() };
+        let refuse = |_: &Path| Err::<(), String>("not approved".into());
+        let failure = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, None, &[]).unwrap(), &refuse).unwrap_err();
+        assert_eq!(failure.category, Category::FenceUnavailable, "{}", failure.message);
+        assert!(failure.message.contains("git bar"), "{}", failure.message);
+        assert!(!marker.exists(), "an unapproved hook ran on the host");
+        let approve = |_: &Path| Ok::<(), String>(());
+        std::env::set_var(crate::app_env!("GIT_TOKEN"), "leak-me-not");
+        let ran = preflight_with(&work, HookBoundary::TrustedHost, plan(&work, &policy, None, None, &[]).unwrap(), &approve);
+        std::env::remove_var(crate::app_env!("GIT_TOKEN"));
+        ran.map_err(|f| f.message).expect("an approved hook lets the push go on");
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "tok=unset");
+    }
+
     #[test]
     fn the_proposal_carries_the_fence_scope_its_binding_recorded() {
         let dir = Path::new("/nonexistent/gp-scope");
         let mut s = session("tab:recorded", dir);
-        s.identity.push = Some(crate::services::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: Some("p".into()), git_at_spawn: git_entry_identity(dir) });
+        s.identity.push = Some(crate::services::root_mcp::PushBinding { dir: dir.to_path_buf(), fence_scope: Some("p".into()), unfenced_host: false, git_at_spawn: git_entry_identity(dir) });
         let p = new_proposal(&s, "p", dir, String::new());
         assert_eq!(p.fence_scope.as_deref(), Some("p"));
-        assert!(matches!(HookBoundary::of(p.fence_scope.as_deref()), HookBoundary::Fence("p")));
-        assert!(matches!(HookBoundary::of(None), HookBoundary::Unrecorded));
+        assert!(matches!(HookBoundary::of(p.fence_scope.as_deref(), p.unfenced_host), HookBoundary::Fence("p")));
+        assert!(matches!(HookBoundary::of(None, false), HookBoundary::Unrecorded));
+        // 2442g: a recorded fence always wins; the host only for an accepted unfenced tab.
+        assert!(matches!(HookBoundary::of(Some("p"), true), HookBoundary::Fence("p")));
+        assert!(matches!(HookBoundary::of(None, true), HookBoundary::TrustedHost));
+        assert!(!p.unfenced_host, "a binding nobody stamped runs no hook on the host");
     }
 
     #[cfg(target_os = "linux")]
@@ -2635,12 +2710,15 @@ mod tests {
         // CI on every branch names no branch.
         let ci = pats("on:\n  push:\n    branches: ['**', '!dependabot/**']\n");
         assert!(ci.iter().all(|p| !pattern_names_branch(p, "develop") && !pattern_names_branch(p, "release/1")), "{ci:?}");
-        // An alias bomb in 64 KiB is refused or finishes at once, never hangs.
+        // An alias bomb in 64 KiB is refused, never expanded: the parser stops
+        // after 100 alias jumps per event, so the work is bounded by the input
+        // size. Asserted on that refusal, not on wall-clock time, which a
+        // loaded test machine stretches past any fixed bound.
         let mut bomb = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
         for i in 1..9 { bomb.push_str(&format!("a{i}: &a{i} [{}]\n", vec![format!("*a{}", i - 1); 10].join(", "))); }
-        let started = Instant::now();
+        let refused = serde_norway::from_str::<serde_norway::Value>(&bomb).expect_err("an alias bomb is refused");
+        assert!(refused.to_string().contains("repetition limit exceeded"), "{refused}");
         assert!(pats(&bomb).is_empty());
-        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     fn commit_files(work: &Path, files: &[(&str, &str)]) -> String {
@@ -3058,7 +3136,7 @@ mod tests {
         sh(&sub, &["init", "-q"]);
         assert_eq!(repo_changed(&sub_binding).unwrap()["category"], "repo_changed", "a nearer .git planted after spawn");
         // No git dir at spawn and none now: still refused.
-        let bare = PushBinding { dir: root.path().join("none"), fence_scope: None, git_at_spawn: None };
+        let bare = PushBinding { dir: root.path().join("none"), fence_scope: None, unfenced_host: false, git_at_spawn: None };
         assert_eq!(repo_changed(&bare).unwrap()["category"], "repo_changed");
     }
 

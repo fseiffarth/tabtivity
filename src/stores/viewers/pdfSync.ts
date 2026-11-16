@@ -1,11 +1,10 @@
 import { create } from "zustand";
-import { emit, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { broadcast, listenOtherWindows } from "../../lib/window/crossWindow";
 import type { SyncRect, CaretPhrase } from "../../lib/viewers/tex/tex";
 
 /**
  * Cross-tab "reveal + highlight this PDF box" channel for SyncTeX forward
- * search. After a compile, `synctex view` maps the source caret to a page + box
+ * search. After a compile, SyncTeX maps the source caret to a page + box
  * in the PDF; the PDF tab is a separate component (often already open), so the
  * TeX side posts the request here keyed by the absolute PDF path and `PdfCanvas`
  * for that path consumes it — scrolling the page into view and flashing a
@@ -13,10 +12,9 @@ import type { SyncRect, CaretPhrase } from "../../lib/viewers/tex/tex";
  *
  * #42 cross-window: the PDF may be popped out into a detached OS window, which is
  * a SEPARATE webview with its own Zustand heap — a local store write would never
- * reach it. So `requestReveal` also broadcasts the request over a global Tauri
- * event; every window registers `listenPdfReveal` and applies an incoming reveal
- * to its own store, so whichever window hosts the PDF reveals it. The originating
- * window stamps `from` and skips its own echo (it already applied it locally).
+ * reach it. So `requestReveal` also broadcasts the request (`lib/window/
+ * crossWindow`); every window registers `listenPdfReveal` and applies an incoming
+ * reveal to its own store, so whichever window hosts the PDF reveals it.
  */
 export interface RevealRequest {
   rect: SyncRect;
@@ -29,47 +27,18 @@ export interface RevealRequest {
   afterReload?: boolean;
 }
 
-/** Tauri event carrying a reveal across the main/detached window boundary. */
+/** A reveal as the PDF view holds it once the bytes it names are loaded: the box
+ *  to scroll to and flash. */
+export type PdfHighlight = Omit<RevealRequest, "afterReload">;
+
+/** Tauri events carrying a reveal, a plain re-read request and a compile's start
+ *  or end across the main/detached window boundary. */
 export const PDF_REVEAL_EVENT = "pdf-sync-reveal";
-
-/** Envelope for a cross-window reveal (the request plus the originating window's
- *  label, so a window ignores the echo of its own broadcast). */
-export interface PdfRevealEnvelope {
-  pdf: string;
-  rect: SyncRect;
-  phrase?: CaretPhrase;
-  afterReload?: boolean;
-  from: string;
-}
-
-/** Tauri event carrying a plain re-read request across the window boundary. */
 export const PDF_RELOAD_EVENT = "pdf-sync-reload";
-
-/** Envelope for a cross-window reload: just the PDF and the origin label. */
-export interface PdfReloadEnvelope {
-  pdf: string;
-  from: string;
-}
-
-/** Tauri event carrying a compile's start or end across the window boundary. */
 export const PDF_COMPILE_EVENT = "pdf-sync-compile";
 
-/** Envelope for a cross-window compile notice: the PDF the build will rewrite,
- *  whether it is starting or over, and the origin label. */
-export interface PdfCompileEnvelope {
-  pdf: string;
-  compiling: boolean;
-  from: string;
-}
-
-/** The current window's Tauri label, or "" outside a Tauri context (tests). */
-function currentLabel(): string {
-  try {
-    return getCurrentWindow().label;
-  } catch {
-    return "";
-  }
-}
+/** A reveal as broadcast: the request without its per-window nonce. */
+type PdfRevealPayload = Omit<RevealRequest, "nonce"> & { pdf: string };
 
 interface PdfSyncStore {
   byPath: Record<string, RevealRequest>;
@@ -142,23 +111,11 @@ export const usePdfSyncStore = create<PdfSyncStore>((set, get) => ({
     }),
   beginCompile: (pdf) => {
     get().applyCompile(pdf, true);
-    try {
-      emit(PDF_COMPILE_EVENT, { pdf, compiling: true, from: currentLabel() } satisfies PdfCompileEnvelope).catch(
-        () => {},
-      );
-    } catch {
-      /* no Tauri event bus available (synchronous failure) */
-    }
+    broadcast(PDF_COMPILE_EVENT, { pdf, compiling: true });
   },
   endCompile: (pdf) => {
     get().applyCompile(pdf, false);
-    try {
-      emit(PDF_COMPILE_EVENT, { pdf, compiling: false, from: currentLabel() } satisfies PdfCompileEnvelope).catch(
-        () => {},
-      );
-    } catch {
-      /* no Tauri event bus available (synchronous failure) */
-    }
+    broadcast(PDF_COMPILE_EVENT, { pdf, compiling: false });
   },
   applyReload: (pdf) =>
     set((s) => ({
@@ -166,13 +123,7 @@ export const usePdfSyncStore = create<PdfSyncStore>((set, get) => ({
     })),
   requestReload: (pdf) => {
     get().applyReload(pdf);
-    try {
-      emit(PDF_RELOAD_EVENT, { pdf, from: currentLabel() } satisfies PdfReloadEnvelope).catch(
-        () => {},
-      );
-    } catch {
-      /* no Tauri event bus available (synchronous failure) */
-    }
+    broadcast(PDF_RELOAD_EVENT, { pdf });
   },
   applyReveal: (pdf, rect, phrase, afterReload) =>
     set((s) => ({
@@ -183,19 +134,8 @@ export const usePdfSyncStore = create<PdfSyncStore>((set, get) => ({
     })),
   requestReveal: (pdf, rect, phrase, afterReload) => {
     get().applyReveal(pdf, rect, phrase, afterReload);
-    // Broadcast to the other window(s) in case the PDF is popped out there (#42).
-    // Best-effort: a non-Tauri env (tests) simply skips the broadcast.
-    try {
-      emit(PDF_REVEAL_EVENT, {
-        pdf,
-        rect,
-        phrase,
-        afterReload,
-        from: currentLabel(),
-      } satisfies PdfRevealEnvelope).catch(() => {});
-    } catch {
-      /* no Tauri event bus available (synchronous failure) */
-    }
+    // In case the PDF is popped out into another window (#42).
+    broadcast(PDF_REVEAL_EVENT, { pdf, rect, phrase, afterReload } satisfies PdfRevealPayload);
   },
   consume: (pdf) =>
     set((s) => {
@@ -214,32 +154,18 @@ export const usePdfSyncStore = create<PdfSyncStore>((set, get) => ({
  * editor lives in. Returns an unlisten. No-ops outside a Tauri context.
  */
 export async function listenPdfReveal(): Promise<() => void> {
-  const self = currentLabel();
-  try {
-    const unReveal = await listen<PdfRevealEnvelope>(PDF_REVEAL_EVENT, (ev) => {
-      const { pdf, rect, phrase, afterReload, from } = ev.payload;
-      if (from === self) return; // we already applied our own reveal locally
-      usePdfSyncStore.getState().applyReveal(pdf, rect, phrase, afterReload);
-    });
-    // The reload channel rides the same registration: one call per window.
-    const unReload = await listen<PdfReloadEnvelope>(PDF_RELOAD_EVENT, (ev) => {
-      const { pdf, from } = ev.payload;
-      if (from === self) return;
-      usePdfSyncStore.getState().applyReload(pdf);
-    });
-    // And the compile notices: a PDF popped out into its own window must hold
-    // its poll for a build running in the main window's editor.
-    const unCompile = await listen<PdfCompileEnvelope>(PDF_COMPILE_EVENT, (ev) => {
-      const { pdf, compiling, from } = ev.payload;
-      if (from === self) return;
-      usePdfSyncStore.getState().applyCompile(pdf, compiling);
-    });
-    return () => {
-      unReveal();
-      unReload();
-      unCompile();
-    };
-  } catch {
-    return () => {};
-  }
+  const store = usePdfSyncStore.getState;
+  // The reload channel and the compile notices ride the same registration, one
+  // call per window: a PDF popped out into its own window must hold its poll for
+  // a build running in the main window's editor.
+  const unlisten = await Promise.all([
+    listenOtherWindows<PdfRevealPayload>(PDF_REVEAL_EVENT, ({ pdf, rect, phrase, afterReload }) =>
+      store().applyReveal(pdf, rect, phrase, afterReload),
+    ),
+    listenOtherWindows<{ pdf: string }>(PDF_RELOAD_EVENT, ({ pdf }) => store().applyReload(pdf)),
+    listenOtherWindows<{ pdf: string; compiling: boolean }>(PDF_COMPILE_EVENT, ({ pdf, compiling }) =>
+      store().applyCompile(pdf, compiling),
+    ),
+  ]);
+  return () => unlisten.forEach((off) => off());
 }

@@ -1188,27 +1188,43 @@ pub fn import_from_user_home(cli: &str) -> Result<usize, String> {
 /// Marks that the first start of the login store has run.
 const IMPORTED_MARKER: &str = ".agent_logins_imported";
 
+/// Whether the first start of the login store has run, or the user answered
+/// the first-start question (`services::agent_import_offer`).
+pub(crate) fn import_marked_in(state_dir: &Path) -> bool {
+    state_dir.join(IMPORTED_MARKER).exists()
+}
+
+pub(crate) fn mark_imported_in(state_dir: &Path) {
+    let _ = std::fs::write(state_dir.join(IMPORTED_MARKER), b"");
+}
+
+/// The CLIs whose login this computer holds and the store does not: what a
+/// first-start import takes. Judged by the files' presence only; nothing of
+/// a login is read.
+pub(crate) fn import_candidates_in(state_dir: &Path, user_home: &Path) -> Vec<String> {
+    status_in(state_dir, user_home)
+        .into_iter()
+        .filter(|login| login.shared && login.importable && !login.signed_in)
+        .map(|login| login.id)
+        .collect()
+}
+
 /// Import, once, every login this computer holds for a CLI the store has no
 /// login for yet, so the upgrade to per-scope homes keeps every agent signed
 /// in without a trip to Settings. Never repeated: a later Sign out stays
-/// signed out. Run before the keeper starts and before any tab spawns.
+/// signed out. Run before the keeper starts and before any tab spawns, and
+/// only for an install that ran before: a fresh one is asked first
+/// (`services::agent_import_offer`).
 pub fn import_once_in(state_dir: &Path, user_home: &Path) {
-    let marker = state_dir.join(IMPORTED_MARKER);
-    if marker.exists() {
+    if import_marked_in(state_dir) {
         return;
     }
-    for login in status_in(state_dir, user_home) {
-        if login.shared && login.importable && !login.signed_in {
-            if let Err(e) = import_from_user_home_in(state_dir, user_home, &login.id) {
-                eprintln!("agent_auth: first import of {}: {e}", login.id);
-            }
+    for id in import_candidates_in(state_dir, user_home) {
+        if let Err(e) = import_from_user_home_in(state_dir, user_home, &id) {
+            eprintln!("agent_auth: first import of {id}: {e}");
         }
     }
-    let _ = std::fs::write(&marker, b"");
-}
-
-pub fn import_once() {
-    import_once_in(&storage::state_dir(), &crate::paths::home_dir());
+    mark_imported_in(state_dir);
 }
 
 /// Login files that left the shared set on 2026-10-08 (threat recheck,

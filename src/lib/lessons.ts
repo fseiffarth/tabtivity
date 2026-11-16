@@ -717,6 +717,8 @@ export const LESSONS: Lesson[] = [
         placement: "bottom",
         titleKey: "lessons.runPython.runFileTitle",
         bodyKey: "lessons.runPython.runFileBody",
+        // Its Ctrl+C interrupts the running program, on a Mac too.
+        terminalKeys: true,
       },
       {
         id: "breakpoints",

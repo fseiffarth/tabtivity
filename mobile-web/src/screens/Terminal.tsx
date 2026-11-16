@@ -60,7 +60,8 @@ import {
 import { describeFailure } from "../connection";
 import { readDraft } from "../drafts";
 import { readFlag, readTerminalView, writeFlag, writeTerminalView, type TerminalViewChoice } from "../prefs";
-import { useTier } from "../useTier";
+import { PHONE_LANDSCAPE_QUERY, useTier } from "../useTier";
+import { useMediaQuery } from "../useMediaQuery";
 import { readSpeechLang, speechTag, type SpeechLang } from "../speechLang";
 import { readableText, type ReadableLine } from "../terminal/readableScreen";
 import { type HistoryChunk } from "../terminal/readableHistory";
@@ -88,7 +89,7 @@ import {
   type SelectStep,
 } from "../terminal/selectPrompt";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../terminal/openCodeMini";
-import { groupOpenCodeModels, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
+import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
 import { isAntigravityTab } from "../terminal/antigravity";
 import { isCursorTab } from "../terminal/cursorAgent";
 import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../terminal/agentModes";
@@ -1199,6 +1200,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const tier = useTier();
   const tablet = tier !== "phone";
   const splitTier = tier === "split";
+  /** A phone on its side: the Chat view reads at the whole width with the
+   * composer docked on the right (style.css); here only for its untested pill. */
+  const phoneLandscape = useMediaQuery(PHONE_LANDSCAPE_QUERY);
   const splitRef = useRef(splitTier);
   splitRef.current = splitTier;
   /** The project's name, for the tablet header's line over the tab's. */
@@ -2359,7 +2363,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     description: option.description,
     current: option.number === shownAt,
   }));
-  const pickerOptions = openCode && shownStep?.title === "Select model"
+  const pickerOptions = tab.kind === "agent" && isOpenCodeModelList(agentLabel, shownStep?.title)
     ? groupOpenCodeModels(pickerOptionsRaw).flatMap((group) => group.options.map((option) => ({
       ...option, group: openCodeModelGroupTitle(group, t),
     })))
@@ -2585,6 +2589,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       {/* A tablet has the width to keep the model and the queue in the header
           (a phone has them in the facts row and under the queued bubbles). */}
       {tablet && isUntested("mobile.tablet") && <span className="untested">{t("mobile.newTab.untested")}</span>}
+      {!tablet && phoneLandscape && view === "focus" && tab.kind === "agent" && isUntested("mobile.phoneLandscape") && <span className="untested">{t("mobile.newTab.untested")}</span>}
       {modelPill && <button type="button" className="header-pill header-model" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")} aria-label={chipEffort ? `${chipModel} · ${t("terminal.reader.effort", { effort: chipEffort })}` : chipModel}><span className="fact-action-label">{chipModel}</span>{chipEffort && <span className="fact-effort" aria-hidden="true"><MeterIcon size="1em" />{chipEffort}</span>}<span className="view-caret" aria-hidden="true" /></button>}
       {queuePill && <button type="button" className="header-pill header-queue" onClick={() => setQueueSheet(true)} aria-haspopup="dialog" aria-expanded={queueSheet} title={t("mobile.queue.title")} aria-label={queuedCount > 0 ? t("mobile.queue.count", { count: queuedCount }) : t("mobile.queue.title")}><ListIcon size="1em" />{queuedCount > 0 && <span className="header-count" aria-hidden="true">{queuedCount}</span>}</button>}
       {/* The project's drawer, the ☰ the project screen carries too: what a

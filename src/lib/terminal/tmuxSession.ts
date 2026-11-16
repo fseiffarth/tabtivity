@@ -12,6 +12,7 @@
 import type { RemoteSpec } from "../../types";
 import { NAMES } from "../brand";
 import { tmuxSessionRest } from "../brandMigration";
+import { HOST_OS, type OsName } from "../platform";
 import { ROOT_SCOPE } from "./ptyId";
 
 /**
@@ -136,9 +137,10 @@ export function shouldPersistTab(
  * Whether THIS tab should be tmux-wrapped **locally** (TODO #85): a **shell** tab
  * (interactive shells + Python/script runs) that runs on the **local machine** —
  * a local project's tab, or a remote project's local (mirror) tab. `localEnabled`
- * folds the `persist_local_sessions` setting **and** the platform check (off on
- * Windows, where there is no tmux). Keeps the run alive across a Tabtivity crash
- * and reattaches on restart.
+ * folds the `persist_local_sessions` setting **and** the platform check
+ * (`localSessionsAvailable`: on Windows only with the experimental session
+ * host, which takes agent tabs alone — see the Windows branch). Keeps the run
+ * alive across a Tabtivity crash and reattaches on restart.
  *
  * The **root** scope is included, and the `scopeKey !== "root"` gate that used to
  * exclude it was left over from when root tabs were not persisted at all: with
@@ -163,7 +165,25 @@ export function shouldPersistLocalTab(
   localEnabled: boolean,
   mobileAccess = false,
   resumableAgent = false,
+  hostOs: OsName = HOST_OS,
 ): boolean {
+  if (hostOs === "windows") {
+    // Windows has no tmux: the experimental session host carries agent tabs
+    // only — shells stay in the window until phase 4 — and every restorable
+    // one, Mobile or not: the host is independent of Mobile
+    // (docs/windows_session_host_plan.md, Defaults 1 and 5). Never root's.
+    // `mobileAccess` is the slot's stamp here (`PaneSlot`): whether the host
+    // was on (`localSessionsAvailable`) when the tab was first drawn, so a
+    // settings change applies to new tabs and never respawns a live agent;
+    // `localEnabled` is not read.
+    return (
+      (kind === "agent" || kind === "local_agent") &&
+      resumableAgent &&
+      scopeKey !== ROOT_SCOPE &&
+      localRunning &&
+      mobileAccess
+    );
+  }
   return (
     (kind === "shell" ||
       ((kind === "agent" || kind === "local_agent") && mobileAccess && resumableAgent)) &&

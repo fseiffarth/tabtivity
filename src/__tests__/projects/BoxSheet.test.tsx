@@ -411,7 +411,7 @@ describe("phone row", () => {
     useBoxesStore.setState({ boxes: [box("boxA", [])] });
     const { dialog } = await openSheet("boxA");
     expect(dialog.querySelector(".box-editor-phone")).toBeNull();
-    expect(dialog.textContent).toContain("needs persistent local sessions (tmux)");
+    expect(dialog.textContent).toContain("needs persistent local sessions.");
   });
 });
 

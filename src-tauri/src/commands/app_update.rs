@@ -61,12 +61,14 @@ pub fn app_update_releases_url() -> String {
     app_update::RELEASES_PAGE.to_string()
 }
 
-/// An update already downloaded in this session, if any.
+/// A verified download from this session or an earlier launch, if any.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn app_update_staged() -> Option<StagedInfo> {
-    app_update::staged()
-        .filter(|staged| staged.path.is_file())
-        .map(|staged| describe(&staged))
+pub async fn app_update_staged() -> Result<Option<StagedInfo>, String> {
+    app_core::rt::try_blocking("staged update", || {
+        Ok(app_update::staged()
+            .filter(|staged| staged.path.is_file())
+            .map(|staged| describe(&staged)))
+    }).await
 }
 
 /// Download the artifact for this platform, emitting [`EV_PROGRESS`] as it goes.

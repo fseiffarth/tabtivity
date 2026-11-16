@@ -71,7 +71,9 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
   const [history, setHistory] = useState<string[]>([]);
   const [future, setFuture] = useState<string[]>([]);
   const [showHidden, setShowHidden] = useState(false);
-  const [showStandardFiles, setShowStandardFiles] = useState(true);
+  // The project's own `panel_separate_scaffold` (Project Settings), the same
+  // switch the file tree honours: on collects the root's project docs under a
+  // divider, off sorts them into the normal list. Nothing is ever hidden.
   const [separateScaffold, setSeparateScaffold] = useState(true);
   const [showUserHidden, setShowUserHidden] = useState(false);
   const [hiddenEndings, setHiddenEndings] = useState<string[]>([]);
@@ -101,6 +103,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
       setHiddenEndings([]);
       setHiddenPaths([]);
       setShownPaths([]);
+      setSeparateScaffold(true);
       return;
     }
     invoke<ProjectJson>("get_project_panel_prefs", { localFile })
@@ -108,11 +111,13 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
         setHiddenEndings(readStringList(project, "panel_hidden_endings"));
         setHiddenPaths(readStringList(project, "panel_hidden_paths"));
         setShownPaths(readStringList(project, "panel_shown_paths"));
+        setSeparateScaffold(project?.panel_separate_scaffold !== false);
       })
       .catch(() => {
         setHiddenEndings([]);
         setHiddenPaths([]);
         setShownPaths([]);
+        setSeparateScaffold(true);
       });
   }, [localFile]);
 
@@ -124,7 +129,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
   const displayed = useMemo(
     () => visibleEntries(entries, {
       showHidden,
-      showStandardFiles,
+      showStandardFiles: true,
       query,
       sortKey,
       descending,
@@ -133,7 +138,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
       hiddenPaths: showUserHidden ? [] : hiddenPaths,
       shownPaths: showUserHidden ? [] : shownPaths,
     }),
-    [entries, showHidden, showStandardFiles, query, sortKey, descending, relPath, showUserHidden, hiddenEndings, hiddenPaths, shownPaths],
+    [entries, showHidden, query, sortKey, descending, relPath, showUserHidden, hiddenEndings, hiddenPaths, shownPaths],
   );
 
   async function load(nextRel: string, options: { replace?: boolean } = {}) {
@@ -455,8 +460,6 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
         <button onClick={copySelectedPaths} disabled={!canMutate}>{t("fileBrowser.copyPath")}</button>
         <button onClick={revealSelected} disabled={!canMutate}>{t("fileBrowser.reveal")}</button>
         <label><Toggle size="sm" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> {t("fileBrowser.hidden")}</label>
-        <label><Toggle size="sm" checked={showStandardFiles} onChange={(e) => setShowStandardFiles(e.target.checked)} /> {t("fileBrowser.scaffold")}</label>
-        <label><Toggle size="sm" checked={separateScaffold} onChange={(e) => setSeparateScaffold(e.target.checked)} /> {t("fileBrowser.separateScaffold")}</label>
         <label><Toggle size="sm" checked={showUserHidden} onChange={(e) => setShowUserHidden(e.target.checked)} /> {t("fileBrowser.userHidden")}</label>
         <Dropdown
           title={t("fileBrowser.sortByTitle")}
@@ -484,7 +487,7 @@ export function FileBrowser({ projectDir, projectId, active }: Props) {
           {error && <ErrorNote className="file-browser-error" error={error} />}
           {!loading && displayed.length === 0 && <div className="file-browser-message">{t("fileBrowser.noFiles")}</div>}
           {(() => {
-            const splitScaffold = !relPath && showStandardFiles && separateScaffold;
+            const splitScaffold = !relPath && separateScaffold;
             const regular = splitScaffold ? displayed.filter((e) => !STANDARD_PROJECT_FILES.has(e.name)) : displayed;
             const scaffold = splitScaffold ? displayed.filter((e) => STANDARD_PROJECT_FILES.has(e.name)) : [];
 

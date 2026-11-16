@@ -8,6 +8,8 @@ import { MIN_NEW_PIN, configureLocalUnlock, platformBiometricAvailable, validPin
 import { appleTouchDevice } from "../platform";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
+import { shellOrigin } from "../shell/frameBridge";
+import { firstLabel } from "../shell/linkedDesktops";
 
 /**
  * What to say when pairing fails. The sidecar answers a bad or expired code
@@ -80,7 +82,14 @@ const linkedPairingCode = takeLinkedPairingCode();
 export function Pair({ setupLock, onDone }: { setupLock: boolean; onDone: () => void }) {
   const t = useT();
   const [code, setCode] = useState(linkedPairingCode);
-  const [name, setName] = useState(() => appleTouchDevice() ?? t("mobile.pair.defaultName"));
+  const [name, setName] = useState(() => {
+    const device = appleTouchDevice() ?? t("mobile.pair.defaultName");
+    // Inside another desktop's frame (iOS pairs again there): the name says
+    // which app this pairing lives in, so the desktop's device list tells it
+    // from the same phone's own pairing.
+    const shell = shellOrigin();
+    return shell ? t("mobile.shell.pairName", { device, home: firstLabel(shell) }).slice(0, 64) : device;
+  });
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState(() => {

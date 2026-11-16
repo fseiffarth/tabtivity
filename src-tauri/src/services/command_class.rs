@@ -56,8 +56,9 @@
 //!   manager drop hands the window, which name files on the machine the user
 //!   sits at; a daemon would read its own disk outside the user's roots. A
 //!   browser client has no such paths and leaves the drop out.
-//! - **`pty_paste_clipboard_image` is `Client`**: it reads the OS clipboard
-//!   of the machine the user sits at; a daemon has none.
+//! - **`pty_paste_clipboard_image` and `read_clipboard_text` are `Client`**:
+//!   they read the OS clipboard of the machine the user sits at; a daemon has
+//!   none.
 //! - `system_monitor_snapshot` is host-aware (a project's remote host, else the
 //!   daemon's), so it is `Core`; the bare this-machine `monitor` readings are
 //!   `Client` as §3.3 lists them.
@@ -219,6 +220,8 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_global_open", Client),
     ("agent_global_set_codex_auto_review", Core),
     ("agent_global_status", Core),
+    ("agent_import_offer", Off(OffReason::LocalCliFiles)),
+    ("agent_import_offer_answer", Off(OffReason::LocalCliFiles)),
     ("agent_is_installed", Core),
     ("agent_login_import", Off(OffReason::LocalCliFiles)),
     ("agent_logins", Core),
@@ -383,6 +386,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("clipboard_has_image", Client),
     ("copy_files_to_clipboard", Client),
     ("copy_text_to_clipboard", Client),
+    ("read_clipboard_text", Client),
     ("save_clipboard_image", Client),
     // commands/cockpit_results.rs — `client` (plan decision 12): the click of the
     // window the agent's tab is shown in, judged against this machine's registry.
@@ -406,6 +410,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("copilot_cancel", Core),
     ("copilot_close_editor", Core),
     ("copilot_complete", Core),
+    ("copilot_diagnostics", Core),
     ("copilot_finish_sign_in", Core),
     ("copilot_message_action", Core),
     ("copilot_prepare", Core),
@@ -578,6 +583,19 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("detect_project_ides", Client),
     ("open_project_in_ide", Client),
     ("set_ide_launcher", Client),
+    // commands/checkpoints.rs
+    ("checkpoint_clear", Core),
+    ("checkpoint_diff", Core),
+    ("checkpoint_list", Core),
+    ("checkpoint_now", Core),
+    ("checkpoint_restore", Core),
+    ("checkpoint_settings_get", Core),
+    ("checkpoint_settings_set", Core),
+    // commands/tab_archive.rs
+    ("tab_archive_add", Core),
+    ("tab_archive_delete", Core),
+    ("tab_archive_list", Core),
+    ("tab_archive_take", Core),
     // commands/local_loss.rs
     ("local_loss_ack", Core),
     ("local_loss_list", Core),
@@ -683,6 +701,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("mobile_host_status", Admin),
     ("mobile_opaque_id", Core),
     ("mobile_paired_devices", Core),
+    ("mobile_tailscale_serve_command", Admin),
     ("mobile_tailscale_serve_status", Admin),
     ("mobile_verify_tailscale_serve", Admin),
     ("phone_upload_undo", Core),
@@ -789,6 +808,15 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("print_mcp_decide", Client),
     ("print_mcp_pdf", Client),
     ("print_mcp_requests", Client),
+    // commands/tabs_mcp.rs — tab messaging is served by the window alone
+    // (`Runtime::serves_tabs`); its state, the Deliver button and the idle
+    // wake live where the window runs. Nothing crosses the phone.
+    ("set_project_tab_messages_wake", Client),
+    ("tabs_mcp_clear", Client),
+    ("tabs_mcp_deliver", Client),
+    ("tabs_mcp_human_input", Client),
+    ("tabs_mcp_traffic", Client),
+    ("tabs_mcp_wake_claim", Client),
     // commands/project_runtime.rs
     ("load_side_panel_folder", Core),
     ("save_side_panel_folder", Core),
@@ -818,7 +846,11 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("patch_compute_host", Core),
     ("plan_project_dir_rename", Core),
     ("preview_project_scaffold", Core),
+    ("create_project_doc", Core),
+    ("project_agent_memory", Core),
+    ("project_agent_memory_read", Core),
     ("project_agents_empty", Core),
+    ("project_docs_status", Core),
     ("project_folder_exists", Core),
     ("project_generated_dir", Core),
     ("project_migration_apply", Core),
@@ -914,6 +946,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("read_spreadsheet", Core),
     // commands/skills.rs
     ("skills_add_source", Core),
+    ("skills_copy", Core),
     ("skills_get_detail", Core),
     ("skills_install", Core),
     ("skills_list_catalog", Core),
@@ -992,13 +1025,13 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("sync_set_excluded", Core),
     ("sync_status", Core),
     ("sync_transfer_preview", Core),
-    ("sync_whole_project", Core),
     // commands/terminal.rs
     ("agent_fence_marks", Core),
     ("agent_fence_status", Core),
     ("agent_tab_features", Core),
     ("copilot_fence_auth_status", Core),
     ("copilot_fence_sign_out", Core),
+    ("local_tmux_available", Core),
     ("local_tmux_kill", Core),
     ("local_tmux_kill_app_sessions", Core),
     ("local_tmux_pane_dead", Core),

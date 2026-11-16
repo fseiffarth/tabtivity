@@ -277,11 +277,10 @@ interface SyncStore {
   /** Resolve a batch of diverged files by taking one side for every path at once:
    *  "host" pulls each (host overwrites the mirror), "local" force-pushes each
    *  (the mirror overwrites the host). Refreshes the status once at the end rather
-   *  than per file. Backs the orange view's "…for all" buttons. Resolves to the
-   *  files over the cap a "host" batch left on the host (gap 35), for the view
-   *  to name (empty for "local"), and the files that failed with the first
-   *  reason — a failed file is skipped, never the whole batch. `force: false`
-   *  pushes without overwriting a host copy that moved: such a file fails. */
+   *  than per file. Backs the orange view's "…for all" buttons. Resolves to how
+   *  many files failed and the first reason — a failed file is skipped, never
+   *  the whole batch. `force: false` pushes without overwriting a host copy that
+   *  moved: such a file fails. */
   resolveAll: (
     projectId: string,
     relPaths: string[],
@@ -374,6 +373,73 @@ function patchMarkers(
     };
   }
   return out;
+}
+
+/**
+ * `next` with every unchanged row's object taken from `prev`, or `prev` itself
+ * when no row changed: a status pass that found nothing new (most of them, on
+ * the 15 s tick) then re-renders nothing and recomputes none of the lists
+ * derived from the map.
+ */
+function keepUnchanged(
+  prev: Record<string, SyncEntryStatus> | undefined,
+  next: Record<string, SyncEntryStatus>,
+): Record<string, SyncEntryStatus> {
+  if (!prev) return next;
+  const paths = Object.keys(next);
+  let changed = paths.length !== Object.keys(prev).length;
+  for (const rel of paths) {
+    const before = prev[rel];
+    const now = next[rel];
+    if (before && (Object.keys(now) as (keyof SyncEntryStatus)[]).every((k) => before[k] === now[k])) {
+      next[rel] = before;
+    } else {
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
+}
+
+interface StatusPass {
+  running: Promise<void>;
+  /** The single pass that follows this one, once asked for meanwhile. */
+  next: Promise<void> | null;
+  started: number;
+}
+
+/** projectId → the status pass reading the host now. */
+const statusPasses = new Map<string, StatusPass>();
+
+/** A pass still out after this long (queued behind a transfer on the same
+ *  session, or hung on a dead one) no longer holds the next ask back. */
+const STATUS_PASS_STALE_MS = 30_000;
+
+/** Forget the passes and transfers in flight (tests). */
+export function resetSyncStatusPasses() {
+  statusPasses.clear();
+  ownTransfers.clear();
+}
+
+/** projectId → this window's transfers in flight, each of which refreshes the
+ *  status itself when it ends. */
+const ownTransfers = new Map<string, number>();
+
+/**
+ * Run a transfer (or a batch of them) and refresh the status once when it ends,
+ * however it ends. Meanwhile the `sync-progress` "done" of each backend command
+ * inside it starts no pass of its own: a batch of N files used to cost N + 1
+ * status passes, each re-stat'ing the whole selection.
+ */
+async function transferring<T>(projectId: string, run: () => Promise<T>): Promise<T> {
+  ownTransfers.set(projectId, (ownTransfers.get(projectId) ?? 0) + 1);
+  try {
+    return await run();
+  } finally {
+    const left = (ownTransfers.get(projectId) ?? 1) - 1;
+    if (left > 0) ownTransfers.set(projectId, left);
+    else ownTransfers.delete(projectId);
+    await useSyncStore.getState().refreshStatus(projectId);
+  }
 }
 
 function indexStatus(rows: SyncStatusEntry[]): Record<string, SyncEntryStatus> {
@@ -518,32 +584,48 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
     set((s) => ({ takeNewerByProject: { ...s.takeNewerByProject, [projectId]: on } }));
   },
 
-  refreshStatus: async (projectId) => {
-    try {
-      const rows = await invoke<SyncStatusEntry[]>("sync_status", { projectId });
-      set((s) => ({
-        byProject: { ...s.byProject, [projectId]: indexStatus(rows) },
-      }));
-    } catch (e) {
-      // A disconnected/local project just has no sync status — don't surface it.
-      console.debug("sync_status failed", e);
+  refreshStatus: (projectId) => {
+    // One pass per project at a time. Every ask that arrives while one runs
+    // (each mounted tree's tick and focus, each transfer's end, each auto-sync
+    // pass) shares the single pass that follows it, which reads whatever those
+    // asks were about.
+    const pass = statusPasses.get(projectId);
+    if (pass && Date.now() - pass.started < STATUS_PASS_STALE_MS) {
+      return (pass.next ??= pass.running.then(() => get().refreshStatus(projectId)));
     }
+    const entry: StatusPass = { running: Promise.resolve(), next: null, started: Date.now() };
+    entry.running = (async () => {
+      try {
+        const rows = await invoke<SyncStatusEntry[]>("sync_status", { projectId });
+        // A pass given up on as stale that answers after all is older than the
+        // one that replaced it: its rows are dropped.
+        if (statusPasses.get(projectId) !== entry) return;
+        set((s) => {
+          const prev = s.byProject[projectId];
+          const next = keepUnchanged(prev, indexStatus(rows));
+          return next === prev ? s : { byProject: { ...s.byProject, [projectId]: next } };
+        });
+      } catch (e) {
+        // A disconnected/local project just has no sync status — don't surface it.
+        console.debug("sync_status failed", e);
+      } finally {
+        if (statusPasses.get(projectId) === entry) statusPasses.delete(projectId);
+      }
+    })();
+    statusPasses.set(projectId, entry);
+    return entry.running;
   },
 
   fileMeta: async (projectId, relPath) =>
     invoke<SyncFileMeta>("sync_file_meta", { projectId, relPath }),
 
-  pull: async (projectId, relPath) => {
-    const outcome = toPullOutcome(await invoke<unknown>("sync_pull", { projectId, relPath }));
-    await get().refreshStatus(projectId);
-    return outcome;
-  },
+  pull: (projectId, relPath) =>
+    transferring(projectId, async () =>
+      toPullOutcome(await invoke<unknown>("sync_pull", { projectId, relPath })),
+    ),
 
-  syncWholeProject: async (projectId) => {
-    const outcome = toPullOutcome(await invoke<unknown>("sync_whole_project", { projectId }));
-    await get().refreshStatus(projectId);
-    return outcome;
-  },
+  // The whole project is `pull` of the root ("").
+  syncWholeProject: (projectId) => get().pull(projectId, ""),
 
   // Whole-mirror push counterpart to `syncWholeProject`. Reuses `push` with an
   // empty rel (the whole mirror) and force=false, so host-diverged (amber) files
@@ -551,75 +633,68 @@ export const useSyncStore = create<SyncStore>((set, get) => ({
   // fires it and lets the tree overlay show what stayed orange.
   pushWholeProject: async (projectId) => get().push(projectId, "", false),
 
-  push: async (projectId, relPath, force = false) => {
-    const result = await invoke<SyncPushResult>("sync_push", {
-      projectId,
-      relPath,
-      force,
-    });
-    if (result?.skipped_unsafe) {
-      const skips = result.skipped_unsafe;
-      set((s) => ({ skippedUnsafeByProject: { ...s.skippedUnsafeByProject, [projectId]: skips } }));
-    }
-    await get().refreshStatus(projectId);
-    return result;
-  },
+  push: (projectId, relPath, force = false) =>
+    transferring(projectId, async () => {
+      const result = await invoke<SyncPushResult>("sync_push", { projectId, relPath, force });
+      if (result?.skipped_unsafe) noteSkippedUnsafe(projectId, result.skipped_unsafe);
+      return result;
+    }),
 
-  applyDelete: async (projectId, relPath, side) => {
-    await invoke("sync_apply_delete", { projectId, relPath, side });
-    await get().refreshStatus(projectId);
-  },
+  applyDelete: (projectId, relPath, side) =>
+    transferring(projectId, async () => {
+      await invoke("sync_apply_delete", { projectId, relPath, side });
+    }),
 
-  applyDeleteAll: async (projectId, relPaths, side) => {
-    const failedPaths: string[] = [];
-    let firstError: string | null = null;
-    for (const rel of relPaths) {
-      try {
-        await invoke("sync_apply_delete", { projectId, relPath: rel, side });
-      } catch (e) {
-        console.error(`applyDeleteAll: ${side} failed for ${rel}`, e);
-        failedPaths.push(rel);
-        firstError ??= e instanceof Error ? e.message : String(e);
+  applyDeleteAll: (projectId, relPaths, side) =>
+    transferring(projectId, async () => {
+      const failedPaths: string[] = [];
+      let firstError: string | null = null;
+      for (const rel of relPaths) {
+        try {
+          await invoke("sync_apply_delete", { projectId, relPath: rel, side });
+        } catch (e) {
+          console.error(`applyDeleteAll: ${side} failed for ${rel}`, e);
+          failedPaths.push(rel);
+          firstError ??= e instanceof Error ? e.message : String(e);
+        }
       }
-    }
-    await get().refreshStatus(projectId);
-    return { skipped: [], failed: failedPaths.length, firstError, failedPaths };
-  },
+      return { failed: failedPaths.length, firstError, failedPaths };
+    }),
 
   scanHostNew: (projectId, confirmed) => invoke<HostNewScan>("sync_scan_host_new", { projectId, confirmed }),
 
-  resolveAll: async (projectId, relPaths, side, force = true) => {
+  resolveAll: (projectId, relPaths, side, force = true) =>
     // Iterate per path (each side has its own single-file command) but refresh
-    // the cached status only once at the end — refreshing per file would re-stat
-    // the whole selection N times. A single failed file is logged and skipped so
-    // one bad path doesn't abort the rest of the batch.
+    // the cached status only once at the end (`transferring`) — refreshing per
+    // file would re-stat the whole selection N times. A single failed file is
+    // logged and skipped so one bad path doesn't abort the rest of the batch.
     // The failures are returned too: logging them only made a batch the backend
     // refused file by file look exactly like one that went through.
-    let failed = 0;
-    let firstError: string | null = null;
-    const fail = (rel: string, e: unknown) => {
-      console.error(`resolveAll: ${side} failed for ${rel}`, e);
-      failed += 1;
-      firstError ??= e instanceof Error ? e.message : String(e);
-    };
-    for (const rel of relPaths) {
-      try {
-        if (side === "host") {
-          await invoke<unknown>("sync_pull", { projectId, relPath: rel });
-        } else {
-          const result = await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force });
-          const why = pushFailure(result);
-          if (why) fail(rel, why);
-          // Unforced, a host copy that moved blocks the file: nothing went.
-          else if (result?.conflicts?.length) fail(rel, "changed on the host");
+    transferring(projectId, async () => {
+      let failed = 0;
+      let firstError: string | null = null;
+      const fail = (rel: string, e: unknown) => {
+        console.error(`resolveAll: ${side} failed for ${rel}`, e);
+        failed += 1;
+        firstError ??= e instanceof Error ? e.message : String(e);
+      };
+      for (const rel of relPaths) {
+        try {
+          if (side === "host") {
+            await invoke<unknown>("sync_pull", { projectId, relPath: rel });
+          } else {
+            const result = await invoke<SyncPushResult>("sync_push", { projectId, relPath: rel, force });
+            const why = pushFailure(result);
+            if (why) fail(rel, why);
+            // Unforced, a host copy that moved blocks the file: nothing went.
+            else if (result?.conflicts?.length) fail(rel, "changed on the host");
+          }
+        } catch (e) {
+          fail(rel, e);
         }
-      } catch (e) {
-        fail(rel, e);
       }
-    }
-    await get().refreshStatus(projectId);
-    return { failed, firstError };
-  },
+      return { failed, firstError };
+    }),
 
   markSelected: async (projectId, relPaths, selected, isDir) => {
     await invoke("sync_mark_selected", { projectId, relPaths, selected, isDir });
@@ -684,6 +759,13 @@ interface AutoSyncEvent {
   skipped_unsafe?: SyncMirrorSkips;
 }
 
+/** Replace the project's notice of mirror files the pushes left alone. */
+function noteSkippedUnsafe(projectId: string, skips: SyncMirrorSkips) {
+  useSyncStore.setState((s) => ({
+    skippedUnsafeByProject: { ...s.skippedUnsafeByProject, [projectId]: skips },
+  }));
+}
+
 let progressUnlisten: Promise<() => void> | null = null;
 
 /**
@@ -702,7 +784,9 @@ export function listenSyncProgress(): Promise<() => void> {
         useSyncStore.setState((s) => ({
           progressByProject: { ...s.progressByProject, [p.project_id]: null },
         }));
-        void useSyncStore.getState().refreshStatus(p.project_id);
+        // A transfer this window started refreshes when it ends (`transferring`);
+        // another window's or the phone's is only known by this event.
+        if (!ownTransfers.has(p.project_id)) void useSyncStore.getState().refreshStatus(p.project_id);
         return;
       }
       useSyncStore.setState((s) => ({
@@ -714,12 +798,7 @@ export function listenSyncProgress(): Promise<() => void> {
     }),
     listen<AutoSyncEvent>("auto-sync", (ev) => {
       const skips = ev.payload.skipped_unsafe;
-      if (skips) {
-        const projectId = ev.payload.project_id;
-        useSyncStore.setState((s) => ({
-          skippedUnsafeByProject: { ...s.skippedUnsafeByProject, [projectId]: skips },
-        }));
-      }
+      if (skips) noteSkippedUnsafe(ev.payload.project_id, skips);
       void useSyncStore.getState().refreshStatus(ev.payload.project_id);
     }),
   ]).then((unlisteners) => () => unlisteners.forEach((u) => u()));

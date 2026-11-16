@@ -22,6 +22,27 @@ pub const DEFAULT_AGENT_FENCE_PATHS: &[&str] = &[
     "~/.config/git",
 ];
 
+/// The macOS toolchain homes added to [`DEFAULT_AGENT_FENCE_PATHS`] on a Mac
+/// (2442z): pnpm's and fnm's Mac locations and the version managers
+/// `paths::version_manager_dirs` puts on PATH, whose shims a fenced CLI must be
+/// able to run. Mirrors `AGENT_FENCE_MACOS_PATHS` in `src/lib/agents/agentFence.ts`.
+pub const MACOS_AGENT_FENCE_PATHS: &[&str] = &[
+    "~/Library/pnpm",
+    "~/Library/Application Support/fnm",
+    "~/.local/share/fnm",
+    "~/.fnm",
+    "~/.volta",
+    "~/.asdf",
+    "~/.local/share/mise",
+    "~/.rbenv",
+];
+
+/// The default fence paths for `os` (unset setting). Pure.
+pub fn default_agent_fence_paths(os: crate::paths::OsKind) -> Vec<String> {
+    let mac: &[&str] = if os == crate::paths::OsKind::Macos { MACOS_AGENT_FENCE_PATHS } else { &[] };
+    DEFAULT_AGENT_FENCE_PATHS.iter().chain(mac).map(|path| (*path).to_string()).collect()
+}
+
 /// One entry in `settings["global_apps"]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalAppEntry {
@@ -116,6 +137,13 @@ pub struct AppMobileHostSettings {
     /// settings patch does not drop it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_client: Option<bool>,
+    /// The other desktops' phone-host origins (`https://<machine>.<tailnet>.ts.net[:port]`)
+    /// whose phone app may frame this desktop's phone UI and be framed by it
+    /// (`docs/phone_multi_desktop_plan.md`). Read and re-validated by the
+    /// sidecar per request (`mobile_control::linked`); named here so a
+    /// settings patch does not drop it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_desktops: Option<Vec<String>>,
     /// Keys a newer build writes into this block survive a patch from this one.
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -305,6 +333,12 @@ pub struct Settings {
     /// getting it and makes `print_request` answer `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub print_mcp: Option<bool>,
+    /// The tab messages server (`services::tabs_mcp`) handed to every local
+    /// project-agent tab the window spawns. **Absent means on**; a stored
+    /// `false` stops new tabs getting it and makes every call answer `off`
+    /// (`initialize` and `tools/list` still answer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabs_mcp: Option<bool>,
     /// Root-agent write review: absent/unknown = all, or destructive / off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_mcp_review: Option<String>,
@@ -503,6 +537,18 @@ pub struct Settings {
     pub copilot_completion: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_project_policies: Option<HashMap<String, CompletionProjectPolicy>>,
+    /// The editor's automatic-trigger idle delay per completion provider, in
+    /// milliseconds. Frontend logic only (missing: 600 local, 200 Copilot);
+    /// named here so it round-trips. Not a Copilot policy: changing it stops
+    /// no server (`commands::settings::copilot_invalidated`).
+    #[serde(default, deserialize_with = "lenient_autocomplete_delays", skip_serializing_if = "Option::is_none")]
+    pub autocomplete_delay_ms: Option<AutocompleteDelays>,
+    /// Keep the Copilot language server's GitHub sign-in in the OS keychain
+    /// (`services::copilot::credentials`), one entry per app account, so a
+    /// restarted server signs in by itself. Opt-in; absent is off. Turning it
+    /// off, or signing out, deletes the entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot_stay_signed_in: Option<bool>,
     /// Hunspell dictionary code (e.g. `en_US`) for the editors' dictionary
     /// spell check (`services::spell`). Unset means the default — an installed
     /// English variant when there is one, else the first dictionary found.
@@ -747,6 +793,12 @@ pub struct Settings {
     /// listen mode is the same session as dictation's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_hands_free: Option<bool>,
+    /// EXPERIMENTAL, default OFF. Per-turn checkpoints of an agent tab's
+    /// folder (`services::checkpoints`). The frontend gate for the controls;
+    /// the capture switch itself is the backend's `checkpoints.json`, which
+    /// the Settings card sets in the same click.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_checkpoints: Option<bool>,
     /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the
@@ -845,6 +897,12 @@ pub struct Settings {
     /// `services::tmux_local` no-ops there. Read via `persist_local_sessions()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persist_local_sessions: Option<bool>,
+    /// Experimental: Windows local agent tabs run in the native session host
+    /// (`services::session_host`, `docs/windows_session_host_plan.md`) so they
+    /// outlive the window and reach the phone. Unset is off; read raw by
+    /// `session_mux::winhost::flag_on` (cheap, per call). No effect elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_session_host: Option<bool>,
     /// When true (the default), remote SSH/OpenVPN connections are made headlessly
     /// in the background, with Tabtivity handling the password transiently (sshpass /
     /// askpass). When false, those connections are launched as interactive
@@ -1108,6 +1166,36 @@ fn rev_is_zero(rev: &u64) -> bool {
     *rev == 0
 }
 
+/// `Settings::autocomplete_delay_ms`: milliseconds per provider; a missing
+/// one is the editor's default. Unknown keys survive a patch. A value that is
+/// not a whole number of milliseconds reads as missing ([`lenient_ms`]): the
+/// editor falls back to its default for anything but its own choices anyway,
+/// and a strict field would fail the whole settings file over it.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AutocompleteDelays {
+    #[serde(default, deserialize_with = "lenient_ms", skip_serializing_if = "Option::is_none")]
+    pub ollama: Option<u32>,
+    #[serde(default, deserialize_with = "lenient_ms", skip_serializing_if = "Option::is_none")]
+    pub copilot: Option<u32>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+/// `deserialize_with` for one delay: a whole number that fits is the value,
+/// anything else (negative, fractional, a string, `null`) is absent.
+fn lenient_ms<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<u32>, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_u64().and_then(|ms| u32::try_from(ms).ok()))
+}
+
+/// `deserialize_with` for `Settings::autocomplete_delay_ms`: only an object
+/// holds delays; any other value is absent, never a failed settings load.
+fn lenient_autocomplete_delays<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AutocompleteDelays>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(if value.is_object() { serde_json::from_value(value).ok() } else { None })
+}
+
 /// Last-known geometry of the MAIN window, in PHYSICAL desktop pixels — the
 /// canonical cross-window coordinate space (see `src/lib/window/coords.ts`). Tauri's
 /// `outerPosition`/`outerSize`/`set_position`/`set_size` are all physical; only a
@@ -1256,12 +1344,9 @@ impl Settings {
     /// The configured read-only toolchain/config allowlist, or the documented
     /// defaults when the key has never been written.
     pub fn agent_fence_paths(&self) -> Vec<String> {
-        self.agent_fence_paths.clone().unwrap_or_else(|| {
-            DEFAULT_AGENT_FENCE_PATHS
-                .iter()
-                .map(|path| (*path).to_string())
-                .collect()
-        })
+        self.agent_fence_paths
+            .clone()
+            .unwrap_or_else(|| default_agent_fence_paths(crate::paths::OsKind::current()))
     }
 
     /// Whether the usage recap auto-opens once a day. Defaults ON when unset, so
@@ -1309,6 +1394,12 @@ impl Settings {
     /// separately.
     pub fn copilot_completion(&self) -> bool {
         self.experimental(self.copilot_completion)
+    }
+
+    /// Whether per-turn checkpoints' window flag is on; the backend takes
+    /// them only with its own switch on too (`services::checkpoints::capturing_in`).
+    pub fn turn_checkpoints(&self) -> bool {
+        self.experimental(self.turn_checkpoints)
     }
 
     /// Whether the experimental Python Run/Debug buttons and breakpoint gutter are
@@ -1362,6 +1453,12 @@ impl Settings {
     /// switched off.
     pub fn print_mcp(&self) -> bool {
         self.print_mcp.unwrap_or(true)
+    }
+
+    /// Whether the tab messages MCP is handed to agent tabs. On unless
+    /// switched off.
+    pub fn tabs_mcp(&self) -> bool {
+        self.tabs_mcp.unwrap_or(true)
     }
 
     /// The agent CLIs [`Self::root_mcp_agents`] names, with its `root_agents`
@@ -1604,6 +1701,73 @@ mod tests {
         assert_eq!(s.extra.get("cockpit"), Some(&serde_json::json!(true)));
     }
 
+    /// The autocomplete delays round-trip, and a file without them loads and
+    /// writes back without the key.
+    #[test]
+    fn autocomplete_delays_round_trip_and_stay_absent_when_unset() {
+        let old: Settings = serde_json::from_str(r#"{"language":"de"}"#).expect("an older file loads");
+        assert_eq!(old.autocomplete_delay_ms, None);
+        let written = serde_json::to_value(&old).unwrap();
+        assert!(written.get("autocomplete_delay_ms").is_none(), "{written}");
+        assert_eq!(written["language"], "de");
+
+        let json = r#"{"autocomplete_delay_ms":{"ollama":400,"copilot":100,"later":1}}"#;
+        let s: Settings = serde_json::from_str(json).expect("settings parse");
+        let delays = s.autocomplete_delay_ms.clone().unwrap();
+        assert_eq!((delays.ollama, delays.copilot), (Some(400), Some(100)));
+        assert!(s.extra.is_empty(), "a real field, not an `extra` passenger");
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["autocomplete_delay_ms"], serde_json::json!({"ollama":400,"copilot":100,"later":1}));
+        // One provider alone keeps the other absent.
+        let one: Settings = serde_json::from_str(r#"{"autocomplete_delay_ms":{"copilot":200}}"#).unwrap();
+        assert_eq!(serde_json::to_value(&one).unwrap()["autocomplete_delay_ms"], serde_json::json!({"copilot":200}));
+    }
+
+    /// A delay that is not a whole number of milliseconds (hand-edited, or
+    /// written by another client) is dropped, never a reason to fail the
+    /// whole file: `get_settings` would return an error and every reader that
+    /// falls back to defaults would run without the user's other settings.
+    #[test]
+    fn a_malformed_autocomplete_delay_is_dropped_not_fatal() {
+        for bad in [
+            r#"{"ollama":-5}"#,
+            r#"{"ollama":600.5}"#,
+            r#"{"copilot":"200"}"#,
+            r#"{"ollama":99999999999}"#,
+            r#"{"ollama":null,"copilot":true}"#,
+            r#""fast""#,
+            "7",
+            "[600]",
+            "null",
+        ] {
+            let json = format!(r#"{{"language":"de","autocomplete_delay_ms":{bad},"copilot_stay_signed_in":true}}"#);
+            let s: Settings = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{bad} failed the whole file: {e}"));
+            assert_eq!(s.language.as_deref(), Some("de"), "{bad}");
+            assert_eq!(s.copilot_stay_signed_in, Some(true), "{bad}");
+            let delays = s.autocomplete_delay_ms.unwrap_or_default();
+            assert_eq!((delays.ollama, delays.copilot), (None, None), "{bad}");
+        }
+        // The good half of a half-bad object stays, with its passengers.
+        let s: Settings = serde_json::from_str(r#"{"autocomplete_delay_ms":{"ollama":-5,"copilot":400,"later":1}}"#).unwrap();
+        let delays = s.autocomplete_delay_ms.clone().unwrap();
+        assert_eq!((delays.ollama, delays.copilot), (None, Some(400)));
+        assert_eq!(serde_json::to_value(&s).unwrap()["autocomplete_delay_ms"], serde_json::json!({"copilot":400,"later":1}));
+        // The patch path (`merge_settings_patch`) parses a `Value`, not text.
+        let patched: Settings = serde_json::from_value(serde_json::json!({"autocomplete_delay_ms":{"ollama":1.5,"copilot":100}})).unwrap();
+        assert_eq!(patched.autocomplete_delay_ms.unwrap().copilot, Some(100));
+    }
+
+    /// "Stay signed in" is off unless written, and a real field.
+    #[test]
+    fn copilot_stay_signed_in_is_off_by_default_and_round_trips() {
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.copilot_stay_signed_in, None);
+        assert!(serde_json::to_value(&old).unwrap().get("copilot_stay_signed_in").is_none());
+        let on: Settings = serde_json::from_str(r#"{"copilot_stay_signed_in":true}"#).unwrap();
+        assert!(on.extra.is_empty());
+        assert_eq!(serde_json::to_value(&on).unwrap()["copilot_stay_signed_in"], true);
+    }
+
     /// The browser's settings must be **named fields**, not `extra` passengers.
     /// A key that only exists in the `#[serde(flatten)]` catch-all round-trips
     /// perfectly and is invisible to `Settings::experimental()` and to every
@@ -1788,13 +1952,13 @@ mod tests {
         assert!(serde_json::to_value(&defaults).unwrap().get("root_fence_projects_readable").is_none());
         let reading: Settings = serde_json::from_str(r#"{"root_fence_projects_readable":true}"#).unwrap();
         assert!(reading.root_fence_projects_readable());
-        assert_eq!(
-            defaults.agent_fence_paths(),
-            super::DEFAULT_AGENT_FENCE_PATHS
-                .iter()
-                .map(|path| (*path).to_string())
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(defaults.agent_fence_paths(), super::default_agent_fence_paths(crate::paths::OsKind::current()));
+        // A Mac adds its toolchain homes (2442z); elsewhere the shared list.
+        let shared: Vec<String> = super::DEFAULT_AGENT_FENCE_PATHS.iter().map(|path| (*path).to_string()).collect();
+        assert_eq!(super::default_agent_fence_paths(crate::paths::OsKind::Unix), shared);
+        assert_eq!(super::default_agent_fence_paths(crate::paths::OsKind::Windows), shared);
+        let mac = super::default_agent_fence_paths(crate::paths::OsKind::Macos);
+        assert!(mac.starts_with(&shared) && mac.contains(&"~/Library/pnpm".to_string()) && mac.contains(&"~/.volta".to_string()));
 
         let off: Settings =
             serde_json::from_str(r#"{"agent_fence":false,"agent_fence_paths":[]}"#)

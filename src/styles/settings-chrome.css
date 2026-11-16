@@ -775,11 +775,9 @@ label.settings-toggle-card-row {
 .settings-row > input,
 .settings-row > select,
 .settings-row > .dropdown,
-.settings-row > .password-input,
 .settings-card-row > input,
 .settings-card-row > select,
-.settings-card-row > .dropdown,
-.settings-card-row > .password-input {
+.settings-card-row > .dropdown {
   flex: 0 1 200px;
   width: 200px;
 }
@@ -955,8 +953,7 @@ label.settings-toggle-card-row {
    `.agent-list-entry` was a second, near-identical card that used
    --bg-elevated / --border-subtle instead; all three are one surface now. */
 .settings-card,
-.settings-toggle-card,
-.agent-list-entry {
+.settings-toggle-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1082,17 +1079,7 @@ label.settings-toggle-card-row {
   padding-top: 2px;
 }
 
-/* Sub-panel navigation menu at the foot of the main settings panel. Mirrors the
-   Lessons / How-to-start card menu (.lesson-item) so the whole app's "pick a
-   destination" lists read as one style. */
-.settings-nav-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.settings-nav-item,
+/* The Lessons / How-to-start card menu: a "pick a destination" list. */
 .lesson-item {
   display: flex;
   flex-direction: column;
@@ -1107,19 +1094,16 @@ label.settings-toggle-card-row {
   transition: border-color var(--transition), background var(--transition);
 }
 
-.settings-nav-item:hover,
 .lesson-item:hover {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
 }
 
-.settings-nav-item-title,
 .lesson-item-title {
   font-weight: 600;
   font-size: var(--text-base);
 }
 
-.settings-nav-item-blurb,
 .lesson-item-blurb {
   color: var(--text-secondary);
   font-size: var(--text-md);
@@ -1162,36 +1146,6 @@ label.settings-toggle-card-row {
   line-height: 1.4;
 }
 
-.mobile-phone-install {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin: 6px 0;
-  padding: 10px var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border-subtle));
-  border-radius: var(--radius-sm);
-  background: linear-gradient(110deg, color-mix(in srgb, var(--accent) 11%, var(--control-bg)), var(--control-bg));
-}
-
-.mobile-phone-install strong {
-  color: var(--text-primary);
-  font-size: var(--text-md);
-}
-
-.mobile-phone-install p {
-  max-width: 530px;
-  margin: 3px 0 0;
-  color: var(--text-secondary);
-  font-size: var(--text-md);
-  line-height: 1.4;
-}
-
-/* Chrome comes from `.settings-btn.primary`; only the layout role is local. */
-.mobile-phone-install-button {
-  flex: 0 0 auto;
-}
-
 /* A compact, actionable summary of the checks Tabtivity itself can make. It does
    not pretend to verify tailnet account policy or the physical phone. */
 .mobile-security-health {
@@ -1226,11 +1180,6 @@ label.settings-toggle-card-row {
 }
 
 @media (max-width: 560px) {
-  .mobile-phone-install {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .mobile-security-health {
     align-items: flex-start;
     flex-direction: column;

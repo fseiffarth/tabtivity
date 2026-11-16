@@ -1,5 +1,153 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
+- [ ] **Continue work with another CLI** — planned, not implemented.
+  `docs/cli_session_handoff_plan.md`: manual Claude ↔ Codex handoff in local
+  project tabs, usable after a quota limit without another source-model call;
+  durable context, linked sessions, safe stop/delivery and retry recovery.
+  - [ ] Context collector and preview with explicit history coverage.
+  - [ ] Persisted lifecycle, source stop/continuation hold and crash recovery.
+  - [ ] Destination adapters, prompt receipts and linked-session restore.
+  - [ ] Shared desktop picker, i18n, untested register and regression coverage.
+
+- [ ] **Notes on diff lines, added to the Chat draft** (implemented 2026-11-13, never
+  live; frontend only). Plan `docs/diff_notes_plan.md`, handoff
+  `docs/diff_notes_handoff.md`; pill `diff-notes`, steering key `C` (`viewNote`).
+  Open: the phone's `ChatChanges` and the git-panel `DiffView` (plan "Later").
+  - [x] 🤖 Automated test (`DiffNotes.test.ts`, `ReaderDiffNotes.test.tsx`)
+  - [ ] 🖐️ Manual QA: in a Claude tab with a few edits open Diffs; click the **+**
+    on an added range (Shift+click extends) and on a deleted line in two files,
+    in split, then unified; **Add to draft**: the Chat composer holds the prompt
+    (file:lines, the quoted diff, your note) and the notes are gone; nothing was
+    sent. Check the **+** button over the first line-number gutter and the note
+    box on a horizontally scrolled diff on the real paint path; **C** inside
+    Diffs starts a note on the cursor card's first changed line. Repeat on a
+    subagent's Diffs.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **Per-turn checkpoints** (implemented 2026-11-13, never live; experimental
+  `turn_checkpoints`). Plan `docs/turn_checkpoints_plan.md`, handoff
+  `docs/turn_checkpoints_handoff.md`, design `docs/context/checkpoints.md`,
+  help topic `checkpoints`; pills `settings.turnCheckpoints`, `checkpoints.now`,
+  `checkpoints.bubble`, `checkpoints.restore`, `checkpoints.scope`. After
+  `npm run backend:stale` is clear:
+  - [ ] 🖐️ Manual QA: switch Settings → Experimental → Per-turn checkpoints on.
+    In a test project (a git repo) let a Claude tab edit two files and create
+    one; Diffs → *Since checkpoint* lists the three; Restore → files back, the
+    new one gone, the note in the composer; *Undo restore* → all three back.
+    Same in a folder that is not a repo, and in a Codex tab. Hover an old prompt
+    → *Restore files to before this* appears only on checkpointed prompts. The
+    Checkpoint chip beside Commit saves a manual one. Restore refuses while the
+    agent works. Check the Settings card's sizes after a day of normal use and
+    that Clear empties a folder's store.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] **Agent-tab and CLI polish, 2026-11-13/14** (implemented, never live; one
+  pill each: `tabBar.markUnread`, `desktop.intro.agents`, `agents.updateAll`,
+  `agents.dailyReleaseCheck`, `agents.autoTabName`,
+  `terminal.reader.sendNowHint`). Help: `tabs-and-panels`, `agent-clis`,
+  `gemini-cli`, `keyboard`. Open: the Chat's `terminal.reader.sendNowHint` line
+  still tells a Claude tab that Esc sends the queue (now Ctrl+X Ctrl+S).
+  - [x] 🤖 Automated tests (`AgentMarkUnread.test.ts`, `IntroAgentsDefault.test.tsx`,
+    `MobileQueuePull.test.ts`, `agent_hint` and `agent_latest` unit tests,
+    `agent_transcript` unknown-command test)
+  - [ ] 🖐️ Mark as unread: right-click a read Claude tab → **Mark as unread**; once
+    another tab is in front it lights as finished (bar, project pill, cockpit,
+    phone Agents list); opening it or typing into it clears it; the entry is
+    absent while the tab already shows unread, and on a shell tab. Also from a
+    popout.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Claude's **Send now** (Chat bubble, desktop K key and the phone's button):
+    while Claude runs a long Bash command, queue a prompt and press Send now:
+    the prompt goes into the turn, the command moves to the background instead
+    of being killed, and nothing is handed back into Claude's box.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Manage CLIs: **Check all for updates**, then **Update all (N)** runs the
+    installers one after another with each card's log, a failure staying on its
+    card; Cursor shows `current → latest` and updates through its installer; a
+    fenced Cursor tab starts with `--disable-auto-update` first in its argv.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ How to start → Agent CLIs: the page opens on the current default CLI;
+    clicking an installed chip, Install, or a Recheck that finds the CLI saves
+    it as the default (Manage CLIs' Default chip follows); clicking an
+    uninstalled chip saves nothing.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ How to start → Already on this computer (fresh profile on a computer
+    that holds a Claude or Codex login): the page is step 2; before an answer
+    Settings → Agent logins shows the CLI not signed in. Untick one card, page
+    away and back (it stays unticked), Import the ticked ones: only the ticked
+    logins are signed in, the config lands in Global agent config. A second
+    fresh profile with Don't import: nothing is copied, and the next start
+    still copies nothing.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Gemini and Aider read `AGENTS.md`: in a project with only `AGENTS.md`, a
+    fresh Gemini tab lists it among its loaded context files; Aider's start shows
+    it as a read-only file. Your own `context.fileName` / `read:` entries stay.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+  - [ ] 🖐️ Type a misspelled slash command in a Claude tab (`/simplity foo`): the Chat
+    shows the command with its words and Claude's "Unknown command" answer
+    instead of waiting for a turn.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [ ] **Cockpit MCP: rename the calling tab** (implemented 2026-11-06, never live).
   Plan: `docs/cockpit_mcp_plan.md`. Begin with self-only `tab_rename` on a
   separate authenticated lane, using versioned workspace edits; later consider
@@ -3100,6 +3248,27 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+- [x] Live dictation (built 2026-11-13/14, not run live): partials are written
+  into the Chat draft as provisional text and the final replaces them in place
+  (`lib/voice/provisionalDraft.ts`, `terminal/useLiveDictation.ts`); partials
+  transcribe the whole open segment (`services/voice/session.rs`, `vad.rs`); the
+  phone composer does the same (`mobile-web/src/voiceInput.ts`). Pill
+  `terminal.reader.voice.liveDraft`.
+- [ ] 🖐️ Live dictation — desktop Chat, mic on, speak a long sentence with a
+  pause in it: the words appear in the text box while you talk and are rewritten
+  as the sentence grows, with no doubled text when the final lands. Say "Tabby
+  scratch that" / "go on": those words never show in the box. Type inside the
+  provisional words: they become yours and are not typed again. Ctrl+Z only
+  undoes settled sentences. Then the same on the phone's Focus composer. Judge
+  the latency of the first words on CPU and on the GPU.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
 - [ ] Phone: probe whether a headset's media button reaches the page through
   the Media Session API (plan step 5); if it does, it toggles talk/stop.
 - [ ] `voice_voices` and a system-voice picker in Settings → Voice (needs a
@@ -3199,14 +3368,44 @@ unchanged; the new agents are additive.
 
 ### Agent print MCP — `docs/context/print_mcp.md`
 
-- [ ] Wire every agent CLI into the MCP lanes, not only Claude, Codex and
-  tool-tagged Vibe: `root_mcp::wire_named_cli_args` writes a server only for
-  those, so Gemini, Qwen, OpenCode, Copilot, Droid, Cursor, Auggie, CodeBuddy
-  get the `*_MCP_TOKEN`/`_URL` env pair and no config. One change for all lanes
-  (git, markup, help, cockpit, print): each CLI's own MCP config format
-  (Gemini/Qwen `settings.json` `mcpServers`, OpenCode `opencode.json` `mcp`,
-  Copilot, Droid/Cursor), checked against the real CLI version (`verify-cli`).
-  User decision 2026-11-10: print first, all-CLI wiring as this follow-up.
+- [x] Wire every agent CLI into the MCP lanes (`docs/context/agent_mcp_wiring.md`):
+  a per-CLI `McpWiring` row in the registry (Copilot and OpenCode added,
+  verified on 1.0.110 / 2.3.0 against a loopback stub), and the
+  `tabtivity-mcp` command for every other CLI, announced by the session-start hint.
+- [ ] Give Gemini and Qwen a verified `McpWiring` form: a settings file named by
+  `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` (Qwen: its own variable) with `mcpServers`
+  and `${VAR}` headers, written per tab outside the shared home. Run each
+  binary against the stub first (not done: running freshly downloaded
+  packages needed the user's go-ahead). Then Droid, Cursor, Auggie,
+  CodeBuddy, Kimi as each gets installed and verified.
+- [ ] Tell the CLIs without a hint route (Antigravity, Kiro, Cline, Aider,
+  Goose, …) about `tabtivity-mcp`; they get the env pairs but no line.
+- [ ] 🖐️ Copilot and OpenCode see the tools as their own — a fresh Copilot tab
+  and a fresh OpenCode tab in a local project: ask each to list its
+  `tabtivity-print` and `tabtivity-help` tools, then to print a PDF; the print
+  popup appears as with Claude. OpenCode with a local Ollama model: its
+  model picker still lists the loaded models, and the tools are there too.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ `tabtivity-mcp` from a CLI that is not wired (e.g. Gemini or Droid)
+  — a fresh tab in a local project: the start hint mentions `tabtivity-mcp`; ask the
+  agent to print a PDF; it runs `tabtivity-mcp call print print_request …`
+  and the print popup appears. `tabtivity-mcp` alone lists the lanes the tab
+  holds (print, git, markup, help, cockpit, tabs, schedule).
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 - [ ] 🖐️ Agent print request — fresh Claude tab in a local project with a PDF:
   ask it to print the PDF, 2 copies, pages 1-2, with a note. A bottom-left popup
   ("An agent asks to print") and a row in the Print Manager tab's "Agent print
@@ -3224,3 +3423,108 @@ unchanged; the new agents are additive.
     - [ ] ❌ Doesn't work on Windows
     - [ ] ✅ Works on macOS
     - [ ] ❌ Doesn't work on macOS
+
+### Tab messaging MCP — `docs/context/tab_messaging_mcp.md`
+
+- [ ] 🖐️ Tab messaging lane (`tabs.mcp.lane`) — Manage CLIs → Tools: "Let agent
+  tabs of a project message each other" is on. Open two fresh Claude tabs and
+  one Codex tab in a local project. In tab A: "list the other tabs and send
+  the Codex tab 'ping'". Type a prompt into a Claude tab you sent a message:
+  the read-your-inbox hint appears beside it. From another project, sending
+  to a handle copied from the first answers `not_found`. Tabby and a root
+  console agent do not list the tools. Restart one tab: its unread is still
+  there. Turn the switch off: a send answers `off`.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Tab messaging and Local models only (`tabs.mcp.lane`) — mark the
+  project Local models only: its messages disappear from the cockpit and
+  cloud tabs close; two local tabs can message each other. In an unlocked
+  project a local-model tab and a Claude tab do not list each other.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Messages fold and hover card (`tabs.mcp.traffic`) — after a send,
+  open the recipient's row in the cockpit (Now): Messages lists it with
+  sender, time and "unread", the text exactly as sent (send `<b>x</b>
+  **y**` and it stays literal). Hovering the recipient's tab shows
+  "messages: 1 unread". After the recipient acks, it reads "read" and the
+  hover line goes. Clear asks first, then empties the project's messages.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Deliver (`tabs.mcp.deliver`) — with a message unread for the Codex
+  tab, press Deliver in its Messages fold: once the tab is idle the fixed
+  read-your-inbox notice is typed as its prompt (never the message text) and
+  the agent reads its inbox. Deliver is greyed out with nothing unread.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Idle wake (`tabs.mcp.wake`) — Manage CLIs → Tools: turn on the
+  project's wake switch under the tab messaging switch. Send a busy tab two
+  messages: the notice is typed once it finishes, once for both. Its reply
+  to the sender does not wake the sender; after you type into it, its next
+  message does. With the switch off nothing is typed by itself.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
+
+#### Follow-ups from the review (`docs/tab_messaging_mcp_handoff.md`, "Flagged for user")
+
+- [x] **Wake notices stack up** (`tabs.mcp.wake`; blocks the "once for that
+  batch" box above). A message that arrives while an earlier notice is still
+  queued counts as a new batch, so a busy tab collects up to 6 notices and
+  runs empty turns; Deliver plus a wake can double up too. Fix on the host
+  in `services::mcp::tabs_mcp` (`wake_claims_in`, the deliver path in
+  `commands/tabs_mcp.rs`): a claimed wake or Deliver covers every later
+  message until the recipient next calls `tabs_inbox`. Regression test: two
+  sends while busy → one claim.
+- [x] **Two opted-in tabs can wake each other in a loop** (design). Each
+  reply is a new batch for the other side; only 6 wakes and 30 sends per tab
+  per hour stop it. Decide first: no wake for a message sent during a
+  wake-started turn, or a per-pair cooldown that a user prompt resets.
+- [x] **Wake and Deliver ignore class.** `wake_claim_in` and Deliver's
+  `nothing_unread` check count messages the recipient can no longer read
+  after a local ↔ cloud change, so they wake a tab to an empty inbox. Use
+  the class-filtered `unread_for`, as the inbox and its cap already do.
+- [x] **The wake skips the liveness check.** `wake_claims_in` trusts
+  `members` and never asks `session_alive`, so a tab whose spawn failed
+  (token revoked by `SpawnTokenGuard`, no PTY exit, so no sweep) can still
+  be claimed and sent a notice. Check liveness in the claim; add a test.
+- [x] **One malformed `projects.json` entry turns the lane off everywhere.**
+  A whole-registry parse failure reads as `Unreadable`, so every call in
+  every project answers `unavailable`. Keep failing closed for the caller's
+  own entry, but read the other entries tolerantly so unlocked projects keep
+  working.
+- [x] **Small cleanups:** remove the uncalled `tabs_mcp::unread_count` and
+  `tabs_mcp::wake_claim` (the forms without `_in`); have the hook remove the
+  `<uid>.mail` marker in both the root and the project slice (`note_mail`
+  writes both); `docs/context/local_models_only.md` says the class never
+  comes from the renderer's `local_model` flag, which is true only for
+  `locked:` (unlocked `local` comes from it, by plan); add grant-matrix rows
+  for remote, worker and `local_only` tabs in `root_mcp/tests.rs`.

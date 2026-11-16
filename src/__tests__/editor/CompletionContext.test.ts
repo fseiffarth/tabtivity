@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { completionContext, completionImports } from "../../lib/viewers/completion/completionContext";
+import {
+  AUTO_REFERENCE_BYTES, ReferenceReads, completionContext, completionImports, referenceBudget, referenceSetId, trimReferences,
+} from "../../lib/viewers/completion/completionContext";
 import { CompletionCache, completionLineLength, modelLookupCache } from "../../lib/viewers/completion/autocomplete";
 
 describe("completion references", () => {
@@ -17,7 +19,8 @@ describe("completion references", () => {
     const result = await completionContext({
       path: "/p/a.ts", root: "/p", draft: "", signal: new AbortController().signal,
       manual: [{ name: "manual", content: "ü".repeat(4000) }],
-      openPaths: ["/elsewhere/private", "/p/a.ts", "/p/b.ts", "/p/b.ts", "/p/c.ts", "/p/d.ts", "/p/e.ts"], read,
+      openPaths: ["/elsewhere/private", "/p/e.ts", "/p/a.ts", "/p/b.ts", "/p/b.ts", "/p/d.ts", "/p/c.ts"], read,
+      explicit: true,
     });
     expect(result[0].name).toBe("manual");
     expect(result.map((f) => new TextEncoder().encode(f.content).length)).toEqual([6000, 6000, 6000, 6000]);
@@ -43,6 +46,75 @@ describe("completion references", () => {
     read.mockClear();
     await completionContext(opts);
     expect(read).not.toHaveBeenCalled();
+  });
+
+  const base = (read: (path: string) => Promise<string>) => ({
+    path: "/p/src/a.ts", root: "/p", signal: new AbortController().signal, manual: [],
+    draft: "import x from './x';\nimport y from './y.ts';", openPaths: ["/p/tab2.ts", "/p/tab1.ts"], read,
+  });
+
+  it("automatic requests take imports only, 4 KB in all, in source order", async () => {
+    const read = vi.fn(async (path: string) => {
+      if (["/p/src/x.ts", "/p/src/y.ts", "/p/tab1.ts", "/p/tab2.ts"].includes(path)) return "z".repeat(3000);
+      throw new Error("missing");
+    });
+    const result = await completionContext(base(read));
+    expect(result.map((r) => r.name)).toEqual(["src/x.ts", "src/y.ts"]);
+    expect(result.reduce((n, r) => n + r.content.length, 0)).toBe(AUTO_REFERENCE_BYTES);
+    expect(read.mock.calls.flat().some((p) => p.includes("tab"))).toBe(false);
+    // Explicit: open tabs too, sorted by path, after the imports.
+    const explicit = await completionContext({ ...base(read), explicit: true });
+    expect(explicit.map((r) => r.name)).toEqual(["src/x.ts", "src/y.ts", "tab1.ts", "tab2.ts"]);
+  });
+
+  it("freezes reads per editor until the import list changes or the user asks", async () => {
+    const read = vi.fn(async (path: string) => {
+      if (path === "/p/src/x.ts") return "export const x = 1;";
+      throw new Error("missing");
+    });
+    const reads = new ReferenceReads();
+    const first = await completionContext({ ...base(read), reads });
+    const tried = read.mock.calls.length;
+    expect(tried).toBeGreaterThan(0);
+    // A second automatic gathering reads nothing, missing candidates included.
+    expect(await completionContext({ ...base(read), reads })).toEqual(first);
+    expect(read).toHaveBeenCalledTimes(tried);
+    // An explicit request reads afresh.
+    await completionContext({ ...base(read), reads, explicit: true });
+    expect(read.mock.calls.length).toBeGreaterThan(tried);
+    // A changed import list reads afresh too.
+    read.mockClear();
+    await completionContext({ ...base(read), reads, draft: "import z from './z';" });
+    expect(read).toHaveBeenCalled();
+  });
+
+  it("counts files that exist against the cap, not candidate paths", async () => {
+    const draft = Array.from({ length: 20 }, (_, i) => `import m${i} from './m${i}';`).join("\n");
+    // Only the `/index.ts` candidate of each import exists: four paths per file.
+    const read = vi.fn(async (path: string) => {
+      if (path.endsWith("/index.ts")) return "x";
+      throw new Error("missing");
+    });
+    const result = await completionContext({ ...base(read), draft, explicit: true });
+    expect(result).toHaveLength(16);
+  });
+
+  it("budgets explicit requests by the model's context, else like automatic ones", () => {
+    expect(referenceBudget(false, 262144)).toBe(AUTO_REFERENCE_BYTES);
+    expect(referenceBudget(true, 262144)).toBe(24000);
+    expect(referenceBudget(true, 8192)).toBe(6144);
+    expect(referenceBudget(true, null)).toBe(AUTO_REFERENCE_BYTES);
+    expect(referenceBudget(true, undefined)).toBe(AUTO_REFERENCE_BYTES);
+  });
+
+  it("trims in order and ids a set by names and contents", () => {
+    const set = [{ name: "a", content: "ü".repeat(10) }, { name: "b", content: "bbbb" }];
+    expect(trimReferences(set, 20)).toEqual([{ name: "a", content: "ü".repeat(10) }]);
+    expect(trimReferences(set, 22)).toEqual([...set.slice(0, 1), { name: "b", content: "bb" }]);
+    expect(referenceSetId(set)).toBe(referenceSetId(set.map((r) => ({ ...r }))));
+    expect(referenceSetId(set)).not.toBe(referenceSetId([set[1], set[0]]));
+    expect(referenceSetId([{ name: "a", content: "x" }])).not.toBe(referenceSetId([{ name: "a", content: "y" }]));
+    expect(referenceSetId([])).toBe("");
   });
 });
 

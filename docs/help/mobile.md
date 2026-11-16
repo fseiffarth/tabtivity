@@ -1,7 +1,7 @@
 ---
 id: mobile
 title: Tabtivity Mobile (phone companion)
-keywords: [mobile, phone, files, browse, project files, read-only, upload, search files, find a file, mark up, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, tailnet, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, not connecting, stuck, force stop, version]
+keywords: [mobile, phone, linked desktops, several computers, project docs, send now, files, project files, read-only, upload, search files, markup, annotate, pdf, markup_ask, questions about marks, markup_done, tailscale, pair, pairing, remote control, pwa, revoke, push, notifications, reminders, agent, question, not connecting, stuck, force stop, version]
 related: [pdf-and-markup, scheduled-prompts, server, local-models]
 ---
 
@@ -153,14 +153,19 @@ is refused. Works with the desktop window closed.
 - In a project, **＋ New tab** floats above the bottom bar. Tap a tab card to
   open it; its model opens the model picker, ◷ (shown once the tab has
   scheduled prompts) lists them, ✕ closes the tab — as does swiping the card
-  to the left — and ⋯ holds **Rename**, **Colour…**, **Scheduled prompts**,
+  to the left — and ⋯ holds **Rename**, **Colour**, **Scheduled prompts**,
   **Subagents** and **Close tab**. Under the cards, **Recently closed (n)**
   unfolds to reopen one, and **◷ Collected prompts** opens the project's
   prompts. The hint line under the cards goes for good once you tap its ×.
 - Attaching to a running tab keeps working while the desktop Tabtivity is closed
   or restarting.
-- Creating a new tab from the phone goes through the running desktop, so
-  Tabtivity must be up.
+- **Keep running when Tabtivity is closed** (off unless you turn it on) leaves
+  the Mobile host up after you quit, so the phone, scheduled prompts and
+  reminders go on with no window; open tabs still close on quit. Tabtivity
+  asks once, at the first start with Mobile on; the switch is in the header's
+  phone menu and in Settings → Mobile.
+- Creating a new tab from the phone needs Tabtivity up, or the switch above
+  on.
 - A paired phone types into a terminal exactly like your keyboard: keep agent
   approval modes conservative while Mobile is on.
 - An agent tab opens as a **Chat**: the conversation as messages, a text box
@@ -172,6 +177,15 @@ is refused. Works with the desktop window closed.
   tab has no conversation, so its pill offers **Reader** (the screen as text)
   and **Terminal**. The desktop offers the same chat on its agent tabs (help
   topic `agent-clis`).
+- A prompt sent while Claude Code, Codex or OpenCode's mini view is still busy
+  waits in the agent's queue, and its bubble offers **Send now** and **Cancel
+  and edit** (the keyboard's K and L). **Cancel and edit** takes the queued
+  prompts back into the text box. **Send now** on Claude Code presses Claude's
+  own send-now keys (Ctrl+X Ctrl+S): the queue joins the running turn at once, a
+  command still running moves to the background instead of being killed, and a
+  turn that has not answered yet keeps its prompt. On Codex and OpenCode it
+  stops the turn so the queue goes at once. It does nothing once the agent has
+  already taken the queue up.
 - Over the chat, **Files (n)** lists every file this conversation carried, in
   groups: **Sent by the agent**, **Changed by the agent** and **Mentioned in
   its answers** (with Project files on the phone on), then **Sent by you** —
@@ -272,8 +286,8 @@ in the desktop's settings does not reach it.
 ## The agent's questions about your marks
 
 When a mark is ambiguous ("does this arrow move the paragraph or the
-figure?"), a local Claude or Codex tab (or a Local Model tab with the
-**MCP** chip on) can ask you with its `markup_ask` tool instead of in its
+figure?"), a local agent tab (a Local Model tab only with the **MCP**
+chip on) can ask you with its `markup_ask` tool instead of in its
 chat. The questions show in the markup view of that tab's PDF:
 
 - On the desktop, as a card under the **Mark up** bar while marking is on.
@@ -363,9 +377,20 @@ then stands in that file's folder — or a folder to walk into it. In a git
 project, what git ignores (`target/`, `node_modules/`, …) is not searched.
 
 As in the desktop's file tree, the project root's standard files (README,
-AGENTS.md, .gitignore, …) fold into a **scaffold** row and what git ignores
-folds into a **gitignored** row below the rest of each folder; both start
-collapsed — tap one to open it.
+AGENTS.md, .gitignore, …) fold into a **Project docs** group at the top, with
+template badges and ghost rows whose menu offers **Create** for a doc the
+project lacks, and what git ignores folds into a **gitignored** row below the
+rest of each folder; both start collapsed — tap one to open it.
+
+The **Project docs** group's header reads `present/total`, plus `· n template`
+while a doc is still the text Tabtivity wrote; such a doc carries a **template**
+pill, and an old `CLAUDE.md` or `GEMINI.md` sits under `AGENTS.md` with a
+**pointer** pill. The phone remembers per project whether you opened the group.
+**Create** appears only with **Phone may add files to projects** on (see Upload
+here below): it writes that one standard doc into the project root from its
+template, never over anything, and opens it. It has no Undo — delete the file on
+the desktop if you did not want it. A remote project's remote-computer side shows
+the group read-only.
 
 - It covers the projects switched on for Mobile, not boxes or the root
   console.
@@ -426,7 +451,8 @@ switched or created from there:
 
 It works with the desktop closed, refreshes when you come back to the app or
 tap **↻ Refresh**, and covers projects only, not boxes or the root console.
-The ＋ sheet's **Agents start in** row lists the same worktrees.
+The ＋ sheet's **Agents start in** dropdown, under **Runs on**, lists the same
+worktrees; it takes one row however many there are, and its list scrolls.
 
 To move a running agent to another of these worktrees, tap the **⎇ branch**
 chip in its chat's facts row, as on the desktop (see `agent-clis`). The row
@@ -553,6 +579,32 @@ computer other people use. A project's container or VM, and a remote
 project's background sync, are shared sensibly between the window and the
 browser: a container stays up while either uses it, and a VM opened in one
 is refused in the other until it is shut down there.
+
+## Linking several computers
+
+**Settings → Mobile → Linked desktops** (under This computer) prepares one
+installed phone app to show more than one computer. A link lets another
+computer's phone pages appear inside this computer's phone app, and the other
+way round. It shows this computer's own address with **Copy address**; to link,
+type the other computer's phone address (`https://<machine>.<same
+tailnet>.ts.net`, with a port if it serves on one) and press **Link**, and add
+this computer's address in the other computer's Settings → Mobile too — each
+must list the other. It is refused, with the reason, for an address that is not
+one exact `https://` address without a path, another tailnet (or a `*.c.ts.net`
+name), this computer itself, one already linked, or a ninth. It needs this
+computer's Tailscale Serve address saved as the **Verified Serve origin**
+(under Set up Tailscale Serve), and applies at once.
+
+A link is only permission to be shown inside each other: the phone still pairs
+with and signs in to each computer on its own, and each keeps its own lock,
+settings and access (a project's phone list is never shared). In the phone app,
+the switch button in the header (also on the lock, pairing and setup screens)
+lists the linked computers; picking one shows that computer's phone pages inside
+the app, where you pair with and unlock it as usual. The app remembers the
+computer you picked. Notifications from a computer shown this way need that
+computer opened in the browser on its own. A phone that has the app open takes
+up a change at the app's next update.
+
 ## One phone at a time
 
 Under **Settings → Mobile → Paired devices** each phone has its own controls

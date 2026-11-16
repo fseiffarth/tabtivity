@@ -23,6 +23,7 @@ import {
   orphanJobs,
   printerStateKey,
   printerStateLabelKey,
+  nativePresets,
   printerTone,
   printPdfNative,
 } from "../../lib/window/printing";
@@ -252,5 +253,16 @@ describe("printPdfNative", () => {
   it("surfaces a real print failure", async () => {
     mocked.mockRejectedValueOnce("this printer does not accept PDF documents");
     await expect(printPdfNative(new Uint8Array([1]), "a.pdf")).rejects.toThrow(/accept PDF/);
+  });
+});
+
+// 2442aa: only Linux's dialog takes the paper, grayscale and two-sided presets;
+// the preview must not claim them on Windows or macOS.
+describe("nativePresets", () => {
+  it("presets everything on Linux and nothing on Windows or macOS", () => {
+    expect(nativePresets("linux")).toEqual({ paper: true, grayscale: true, duplex: true });
+    for (const os of ["windows", "macos"] as const) {
+      expect(nativePresets(os)).toEqual({ paper: false, grayscale: false, duplex: false });
+    }
   });
 });

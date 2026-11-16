@@ -7,6 +7,8 @@
  * cmd-only classification would file every local model under "Mistral".
  */
 import { describe, expect, it } from "vitest";
+// @ts-expect-error node:fs has no type declarations in this project (no @types/node)
+import { readFileSync } from "node:fs";
 import { METRIC, agentLabel, agentMetricLeaf, agentPromptLeaf, sub } from "../../lib/usageMetrics";
 import { BRAND, envName, tabCommand } from "../../lib/brand";
 
@@ -107,5 +109,26 @@ describe("sub", () => {
   it("composes dotted metric keys", () => {
     expect(sub(METRIC.AGENT_PROMPT, "claude")).toBe("agent.prompt.claude");
     expect(sub(METRIC.AGENT_ACTIVE, "local.qwen3:8b")).toBe("agent.active.local.qwen3:8b");
+  });
+});
+
+describe("METRIC and the backend's mirror", () => {
+  // The two sides are built separately; nothing but this test keeps
+  // `schema::usage_stats::metric` and `METRIC` the same strings. A key counted
+  // under one spelling and read under another shows as a zero in the recap.
+  it("names the same keys with the same strings as schema/usage_stats.rs", () => {
+    // vitest runs from the repo root, as the other source-reading tests assume.
+    const source: string = readFileSync("src-tauri/src/schema/usage_stats.rs", "utf8");
+    const start = source.indexOf("pub mod metric {");
+    const end = source.indexOf("pub fn sub(", start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const rust: Record<string, string> = {};
+    for (const m of source.slice(start, end).matchAll(/pub const (\w+): &str = "([^"]*)";/g)) rust[m[1]] = m[2];
+    expect(rust).toEqual({ ...METRIC });
+    // The autocomplete prefixes of the offer and request counters, by name.
+    for (const event of ["shown", "tab", "word", "line", "typed", "rejected", "request"]) {
+      expect(Object.values(rust)).toContain(`autocomplete.${event}`);
+    }
   });
 });

@@ -82,7 +82,9 @@ async function freshStatus(projectId: string): Promise<Record<string, SyncEntryS
  *  the desktop has no status for gets one for the next answer. */
 export function divergedCount(projectId: string | undefined, now = Date.now()): number | undefined {
   if (!projectId) return undefined;
-  if (now - (lastProbe.get(projectId) ?? 0) >= MOBILE_SYNC_PROBE_MS) {
+  // No timed pass on an HPC-tagged host (`hpc_hosts` gates background work, as
+  // for the desktop tree's tick): opening the list still asks, by gesture.
+  if (!onHpcHost(projectId) && now - (lastProbe.get(projectId) ?? 0) >= MOBILE_SYNC_PROBE_MS) {
     lastProbe.set(projectId, now);
     void useSyncStore.getState().refreshStatus(projectId);
   }
@@ -126,6 +128,13 @@ export async function divergedList(projectId: string) {
 export function syncWritesOpen(): boolean {
   const host = useSettingsStore.getState().settings?.[MOBILE_HOST_KEY];
   return host?.project_files === true && host?.project_sync === true;
+}
+
+/** Whether the project's primary host is HPC-tagged. */
+function onHpcHost(projectId: string): boolean {
+  const settings = useSettingsStore.getState().settings;
+  const target = primaryTargetOf(useProjectsStore.getState().projects.find((entry) => entry.id === projectId));
+  return !!settings && !!target && isHpcHost(settings, target);
 }
 
 /** Whether a delete (of the host account's copy or the mirror's) from the

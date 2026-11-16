@@ -17,7 +17,7 @@ import {
   type PrintOptions,
 } from "./print";
 import { NUP_CHOICES, type NUp } from "./printImposition";
-import { printPdfNative } from "../window/printing";
+import { nativePresets, printPdfNative } from "../window/printing";
 import {
   decidePrintRequest,
   printRequestPdf,
@@ -66,7 +66,7 @@ export async function reviewPrintRequest(request: PrintRequest, requester: strin
     const body = images.map((src) => `<div class="print-page"><img src="${src}" alt=""></div>`).join("");
     const title = basename(request.file);
     const native: NativePrint = async (sequence, opts) => {
-      const laidOut = await layoutPrintPdf(bytes, sequence, opts);
+      const laidOut = await layoutPrintPdf(bytes, sequence, opts, { bakeGrayscale: !nativePresets().grayscale });
       return printPdfNative(laidOut, title, { paper: opts.paper, grayscale: opts.grayscale, duplex: opts.duplex });
     };
     await printHtmlBody(body, PDF_PRINT_CSS, title, native, {

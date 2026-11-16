@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() =
 
 import { boxMembership, useBoxesStore } from "../../stores/boxes";
 import { useProjectsStore } from "../../stores/projects";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
 
 function proj(id: string): ProjectEntry {
   return {
@@ -233,6 +234,36 @@ describe("boxes store — deleteBox", () => {
     expect(useBoxesStore.getState().boxes).toEqual([]);
     expect(invoke).toHaveBeenCalledWith("delete_box", { boxId: "boxA" });
     expect(invoke).not.toHaveBeenCalledWith("save_projects", expect.anything());
+  });
+
+  it("ends the local sessions its tabs minted, before the box goes, never an attached one", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
+    useProjectsStore.setState({ projects: [proj("p1")] });
+    useTabsStore.setState((state) => ({
+      tabsByScope: {
+        ...state.tabsByScope,
+        "box:boxA": [
+          { key: "a1", kind: "agent", cmd: "claude", label: "claude", cwd: "/b", tmuxSession: "s-agent" },
+          { key: "s1", kind: "shell", cmd: "", label: "shell", cwd: "/b", tmuxSession: "s-shell" },
+          { key: "t1", kind: "shell", cmd: "", label: "attached", cwd: "/b", tmuxSession: "s-own", tmuxAttach: "s-foreign" },
+          { key: "f1", kind: "files", cmd: "", label: "files", cwd: "/b" },
+        ] as TabEntry[],
+      },
+    }));
+    const calls: string[] = [];
+    invoke.mockImplementation((cmd: string, args?: { session?: string }) => {
+      calls.push(args?.session ? `${cmd} ${args.session}` : cmd);
+      return Promise.resolve(undefined);
+    });
+
+    await useBoxesStore.getState().deleteBox("boxA");
+
+    expect(calls.filter((c) => c.startsWith("local_tmux_kill")).sort()).toEqual([
+      "local_tmux_kill s-agent",
+      "local_tmux_kill s-shell",
+    ]);
+    expect(calls.indexOf("delete_box")).toBeGreaterThan(calls.indexOf("local_tmux_kill s-agent"));
+    invoke.mockReset();
   });
 });
 

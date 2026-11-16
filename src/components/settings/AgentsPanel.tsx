@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Toggle } from "../common/Toggle";
 import { SettingsCard, SettingsHeader, SettingsList } from "../layout/settingsUi";
@@ -31,7 +31,7 @@ import {
 } from "../../lib/shortcuts/shortcuts";
 import { useShortcutOverrides } from "../../lib/shortcuts/shortcutHint";
 import { NAMES } from "../../lib/brand";
-import { runWithProgress } from "../../lib/runWithProgress";
+import { useAgentInstaller } from "../../hooks/useAgentInstaller";
 import type { SubPanelProps } from "./subPanelProps";
 import type {
   AgentVersionStale,
@@ -55,6 +55,8 @@ import { AgentCronSection } from "./AgentCronSection";
 import { AgentComposerCard } from "./AgentComposerCard";
 import { AgentDefaults } from "./AgentDefaults";
 import { RefreshIcon } from "../common/icons/Icon";
+import { useDialogs } from "../common/PromptDialogs";
+import { experimentalEnabled } from "../../lib/experimental";
 
 const NO_CUSTOM_AGENTS: CustomAgent[] = [];
 
@@ -81,6 +83,7 @@ export function AgentsPanel({
   // A hosted server: the administrator installs CLIs (#2354).
   const adminInstalls = cliInstallsByAdmin();
   const { settings, updateSettings } = useSettingsStore();
+  const { confirmAction, dialogs } = useDialogs();
   const remoteMachines = useGlobalMachinesStore((s) => s.machines);
   const remoteMachinesLoaded = useGlobalMachinesStore((s) => s.loaded);
   const loadRemoteMachines = useGlobalMachinesStore((s) => s.load);
@@ -92,14 +95,13 @@ export function AgentsPanel({
     void updateSettings({ disabled_agents: next });
   };
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
-  // The agent id whose installer is currently running (only one at a time).
-  const [installing, setInstalling] = useState<string | null>(null);
+  // The headless installer, its live per-agent logs and errors — shared with
+  // the intro's Agent CLIs page. `installing` holds the one running id.
+  const installer = useAgentInstaller();
+  const { installing, logs, errors, logRef, setError } = installer;
   // The agent id currently being removed (Remove, or the first half of
   // Reinstall) — disjoint from `installing` so the two actions never overlap.
   const [removing, setRemoving] = useState<string | null>(null);
-  // Per-agent live install log, keyed by agent id.
-  const [logs, setLogs] = useState<Record<string, string>>({});
-  const [errors, setErrors] = useState<Record<string, string>>({});
   // Per-agent target selection and failure for explicit installs on a global
   // remote machine. This is independent of local `installed`: each machine has
   // its own CLI state.
@@ -136,7 +138,6 @@ export function AgentsPanel({
       cancelled = true;
     };
   }, [loginsVersion]);
-  const logRef = useRef<HTMLPreElement>(null);
   const shortcutOverrides = useShortcutOverrides();
   const customAgents = settings?.custom_agents ?? NO_CUSTOM_AGENTS;
   // Custom agents whose command is on PATH — the + menu's own probe, so a
@@ -187,36 +188,27 @@ export function AgentsPanel({
     if (!remoteMachinesLoaded) void loadRemoteMachines();
   }, [loadRemoteMachines, remoteMachinesLoaded]);
 
-  // Keep the live install log pinned to its latest line.
-  useEffect(() => {
-    const el = logRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [logs, installing]);
-
-  const appendAgentLog = (id: string, p: { id: string; line: string }) => {
-    if (p.id !== id) return;
-    setLogs((l) => ({ ...l, [id]: l[id] ? `${l[id]}\n${p.line}` : p.line }));
+  const installAgent = async (id: string) => {
+    // The hook broadcasts the registry change; this panel re-reads its own.
+    if (!(await installer.install(id))) return;
+    refresh();
+    loadVersions(true);
+    if (id === "copilot") void offerCopilotCompletion();
   };
 
-  const installAgent = async (id: string) => {
-    setInstalling(id);
-    setErrors(({ [id]: _drop, ...rest }) => rest);
-    setLogs((l) => ({ ...l, [id]: "" }));
-    try {
-      // Stream the installer's output, filtering to this agent's events.
-      await runWithProgress<{ id: string; line: string }, string>(
-        "agent-install-progress",
-        (p) => appendAgentLog(id, p),
-        () => invoke<string>("install_agent", { id }),
-      );
-      refresh();
-      notifyAgentRegistryChanged();
-      loadVersions(true);
-    } catch (err) {
-      setErrors((e) => ({ ...e, [id]: String(err) }));
-    } finally {
-      setInstalling(null);
-    }
+  // A fresh Copilot CLI install is the moment the editor's Copilot completion
+  // becomes reachable, so ask once then rather than leave it buried under
+  // Experimental. Yes switches the experiment on and picks Copilot as the
+  // provider; each project still gives its own consent on that card.
+  const offerCopilotCompletion = async () => {
+    const current = useSettingsStore.getState().settings;
+    if (experimentalEnabled(current, "copilot_completion") && current?.code_completion_provider === "copilot") return;
+    const yes = await confirmAction({
+      title: t("agents.copilotCompletionOfferTitle"),
+      body: t("agents.copilotCompletionOfferBody"),
+      confirmLabel: t("agents.copilotCompletionOfferConfirm"),
+    });
+    if (yes) void updateSettings({ copilot_completion: true, code_completion_provider: "copilot" });
   };
 
   // Ask one CLI's registry for its newest release — each card's own button, the
@@ -283,24 +275,9 @@ export function AgentsPanel({
   // in the installed list throughout. Returns whether it succeeded; the caller
   // re-reads the list and versions (once, for a whole "Update all" queue).
   const runAgentUpdate = async (id: string): Promise<boolean> => {
-    setInstalling(id);
-    setErrors(({ [id]: _drop, ...rest }) => rest);
-    setLogs((l) => ({ ...l, [id]: "" }));
-    try {
-      await runWithProgress<{ id: string; line: string }, string>(
-        "agent-install-progress",
-        (p) => appendAgentLog(id, p),
-        () => invoke<string>("update_agent", { id }),
-      );
-      setUpdates(({ [id]: _drop, ...rest }) => rest);
-      setLogs(({ [id]: _drop, ...rest }) => rest);
-      return true;
-    } catch (err) {
-      setErrors((e) => ({ ...e, [id]: String(err) }));
-      return false;
-    } finally {
-      setInstalling(null);
-    }
+    const ok = await installer.update(id);
+    if (ok) setUpdates(({ [id]: _drop, ...rest }) => rest);
+    return ok;
   };
   const afterUpdates = () => {
     refresh();
@@ -330,7 +307,7 @@ export function AgentsPanel({
   // Returns whether it succeeded, so `reinstallAgent` knows whether to proceed.
   const removeAgent = async (id: string): Promise<boolean> => {
     setRemoving(id);
-    setErrors(({ [id]: _drop, ...rest }) => rest);
+    setError(id, null);
     try {
       await invoke<string>("uninstall_agent", { id });
       refresh();
@@ -338,7 +315,7 @@ export function AgentsPanel({
       loadVersions(true);
       return true;
     } catch (err) {
-      setErrors((e) => ({ ...e, [id]: String(err) }));
+      setError(id, String(err));
       return false;
     } finally {
       setRemoving(null);
@@ -352,22 +329,13 @@ export function AgentsPanel({
     if (await removeAgent(id)) await installAgent(id);
   };
 
+  // The hook re-detects, broadcasts and leaves "still not detected" on a miss.
   const recheck = (id: string) => {
-    void invoke<boolean>("agent_is_installed", { id })
-      .then((ok) => {
-        setAgents((prev) =>
-          prev?.map((a) => (a.id === id ? { ...a, installed: ok } : a)) ?? prev,
-        );
-        notifyAgentRegistryChanged();
-        loadVersions(true);
-        if (!ok) {
-          setErrors((e) => ({
-            ...e,
-            [id]: t("agents.stillNotDetected"),
-          }));
-        }
-      })
-      .catch(() => {});
+    void installer.recheck(id).then((ok) => {
+      if (ok === null) return;
+      setAgents((prev) => prev?.map((a) => (a.id === id ? { ...a, installed: ok } : a)) ?? prev);
+      loadVersions(true);
+    });
   };
 
   // Install a CLI on a remote machine, watched: the backend hands back an
@@ -1130,6 +1098,7 @@ export function AgentsPanel({
         </AgentsGroup>
       </div>
       </div>
+      {dialogs}
     </>
   );
 }

@@ -1061,6 +1061,7 @@ fn local_opts(cwd: &str, project_id: Option<&str>) -> PtyOptions {
         schedule_target_id: None,
         host_session: false,
         api_key: None,
+        mux_wrapped: false,
     }
 }
 

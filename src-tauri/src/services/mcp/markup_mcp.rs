@@ -58,10 +58,11 @@ pub const SERVER_NAME: &str = concat!(crate::app_slug!(), "-markup");
 /// Rung (no payload) whenever an ask opens, closes or expires, and whenever
 /// a tick lands or goes.
 pub const CHANGED_EVENT: &str = "markup-mcp-changed";
-/// The agent CLIs named the server on their own command line
-/// (`root_mcp::apply_markup_to_spawn_with`); tool-tagged local Vibe models get
-/// it through Vibe's env layer. Every other agent CLI gets the env pair only.
-pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
+/// The agent CLIs every lane names its server to for one launch
+/// (`root_mcp::WIRED_CLIS`); tool-tagged local Vibe models get it through
+/// Vibe's env layer. Every other agent CLI gets the env pair, which the
+/// `<slug>-mcp` command reads.
+pub const WIRED_CLIS: &[&str] = crate::services::root_mcp::WIRED_CLIS;
 
 pub const TOOL_ASK: &str = "markup_ask";
 pub const TOOL_WITHDRAW: &str = "markup_withdraw";

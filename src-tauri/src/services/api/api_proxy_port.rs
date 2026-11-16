@@ -102,28 +102,19 @@ pub fn names_port(text: &str, port: u16) -> bool {
     })
 }
 
-/// The app's local tmux sessions whose environment names `port`.
+/// The app's local sessions whose environment (`SessionMux::env_text`: tmux's
+/// session environment and the session's launcher script) names `port`.
 fn keyed_sessions(port: u16) -> Vec<String> {
-    use crate::services::tmux_local;
-    if !tmux_local::tmux_available() {
+    let mux = crate::services::session_mux::mux();
+    if !mux.available() {
         return Vec::new();
     }
-    let Ok(listed) = tmux_local::tmux_command().args(["ls", "-F", "#{session_name}"]).output() else { return Vec::new() };
-    if !listed.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&listed.stdout)
-        .lines()
-        .filter(|name| tmux_local::is_app_local_tmux_session(name))
-        .filter(|name| {
-            let environment = tmux_local::tmux_command()
-                .args(["show-environment", "-t", name])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                .unwrap_or_default();
-            names_port(&environment, port) || tmux_local::launcher_text(name).is_some_and(|t| names_port(&t, port))
-        })
-        .map(str::to_string)
+    let Ok(listed) = mux.list() else { return Vec::new() };
+    listed
+        .into_iter()
+        .map(|session| session.name)
+        .filter(|name| crate::services::tmux_local::is_app_local_tmux_session(name))
+        .filter(|name| mux.env_text(name).is_some_and(|text| names_port(&text, port)))
         .collect()
 }
 
@@ -143,13 +134,11 @@ pub fn on_fallback(port: u16, new_port: u16) {
     let Some(holder) = holder else { return };
     let (mut ended, mut failed) = (Vec::new(), Vec::new());
     if holder != Holder::Unknown {
+        let mux = crate::services::session_mux::mux();
         for name in keyed_sessions(port) {
-            let killed = crate::services::tmux_local::tmux_command()
-                .args(crate::services::tmux_local::local_tmux_kill_args(&name))
-                .output()
-                .is_ok_and(|o| o.status.success());
-            crate::services::tmux_local::remove_launcher(&name);
-            if killed {
+            // The mux reaps the pane's subtree, ends the session and drops
+            // its launcher.
+            if mux.kill(&name).is_ok() {
                 crate::services::api_proxy::on_tmux_session_gone(&name);
                 ended.push(name);
             } else {

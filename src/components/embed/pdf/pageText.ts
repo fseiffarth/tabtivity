@@ -13,6 +13,12 @@ import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from "pdfjs-dist";
 import type { TextItemBox } from "../../../lib/viewers/tex/tex";
 
+/** Each document's page reads, by page and turn: a document object never
+ * changes its bytes (a reload makes a new one), so the markup tools and the
+ * question pins share one read of a page instead of one each. The arrays are
+ * shared: callers read them. */
+const reads = new WeakMap<PDFDocumentProxy, Map<string, Promise<TextItemBox[]>>>();
+
 /**
  * Extract a PDF page's positioned text runs as {@link TextItemBox}es in big
  * points (scale-1 viewport, top-left origin). Each box hugs the glyph band
@@ -21,15 +27,38 @@ import type { TextItemBox } from "../../../lib/viewers/tex/tex";
  * refinement, Ctrl+F search and the link layer so all three box the text
  * identically.
  *
+ * The read is made once per document, page and turn (`reads`); the result is
+ * shared, never changed by a caller.
+ *
  * `rot` is the turn the viewer has applied to this sheet. The boxes are measured in
  * the SAME rotated space the canvas is painted in, so a search hit still lands on its
  * word after the page has been turned.
  */
-export async function pageTextItemBoxes(
+export function pageTextItemBoxes(
   doc: PDFDocumentProxy,
   pageNumber: number,
   rot = 0,
 ): Promise<TextItemBox[]> {
+  let entries = reads.get(doc);
+  if (!entries) {
+    entries = new Map();
+    reads.set(doc, entries);
+  }
+  const key = `${pageNumber}:${rot}`;
+  let work = entries.get(key);
+  if (!work) {
+    work = readBoxes(doc, pageNumber, rot);
+    entries.set(key, work);
+    const mine = work;
+    // A failed read is asked again next time.
+    mine.catch(() => {
+      if (entries.get(key) === mine) entries.delete(key);
+    });
+  }
+  return work;
+}
+
+async function readBoxes(doc: PDFDocumentProxy, pageNumber: number, rot: number): Promise<TextItemBox[]> {
   const page = await doc.getPage(pageNumber);
   return boxesIn(
     page,

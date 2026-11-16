@@ -146,6 +146,17 @@ export function RailDivergedIcon({ className }: IconProps) {
   );
 }
 
+/** Archived tabs: a lidded box. */
+export function RailArchiveIcon({ className }: IconProps) {
+  return (
+    <Frame className={className}>
+      <rect x="3.5" y="4.5" width="17" height="4.5" rx="1" />
+      <path d="M5 9v9.5a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V9" />
+      <path d="M10 13h4" />
+    </Frame>
+  );
+}
+
 /** Persistent host sessions (tmux): a terminal window with a prompt. */
 export function RailSessionsIcon({ className }: IconProps) {
   return (

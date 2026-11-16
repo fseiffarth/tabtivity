@@ -29,6 +29,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { tabTaskName } from "../../lib/agents/autoTabName";
 import { DotIcon } from "../common/icons/Icon";
 import { tabMemberInfo, tabMemberTitle, useScopeMemberTable, type MemberTable } from "./TabMemberChip";
+import { unreadFor, useTabMessages } from "../../stores/tabMessages";
 
 /** Friendly, human-readable name for a tab kind, shown as the card's muted
  *  sub-line. Falls back to the raw kind for anything unmapped. */
@@ -263,6 +264,9 @@ export function TabHoverCard({
     void models.refreshScreen(scope, tab);
   }, [isAgent, scope, tab]);
   const facts = isAgent ? agentRosterFacts(scope, tab, now, { reread: false }) : null;
+  // Messages sibling agent tabs left this one (`services::tabs_mcp`): only
+  // the count, never their text, which the cockpit's Messages fold shows.
+  const unreadMessages = unreadFor(useTabMessages(scope, isAgent && !!tab.id), tab.id);
   const turnText = facts
     ? turnLabel(
         turnDurationOf({
@@ -427,7 +431,7 @@ export function TabHoverCard({
       top = Math.max(MARGIN, anchorY - height - GAP);
     }
     setPos({ left, top });
-  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features, memberInfo?.kind, memberInfo?.name, facts?.model, lastPrompt, hint]);
+  }, [anchorX, anchorY, tab, summary, fileSource, activity, restart, path, cost, launch.program, launch.input, features, memberInfo?.kind, memberInfo?.name, facts?.model, lastPrompt, hint, unreadMessages]);
 
   return createPortal(
     <div
@@ -490,6 +494,14 @@ export function TabHoverCard({
             {!facts?.model && <> <UntestedTag id="tabHoverCard.agentTurn" /></>}
           </span>
           <span className="tab-popup-prompt">{lastPrompt}</span>
+        </span>
+      )}
+      {unreadMessages > 0 && (
+        <span className="pill-popup-path-row">
+          <span className="pill-popup-path-label">
+            {t("tabsMcp.hoverLabel")} <UntestedTag id="tabs.mcp.traffic" />
+          </span>
+          <span className="tab-popup-meta">{t("tabsMcp.unreadCount", { count: unreadMessages })}</span>
         </span>
       )}
       {restart && (

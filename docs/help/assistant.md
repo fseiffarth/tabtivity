@@ -14,8 +14,8 @@ that need no project ("what does this error mean", "find me the paper on X",
 
 ## Turn it on
 
-1. Tabby is on in a new install. If it was switched off, switch **Tabby** on
-   again in **Settings → System → Experimental**.
+1. Tabby is on in a new install. If it was switched off, switch it on
+   again at the top of **Settings → Agents → Tabby**.
 2. A small Tabtivity-mark icon (a ring with a tree and two hexagons) appears
    on the side panel's edge bar, below Files, Git, Apps and Agents (and as a
    button in the panel's own row of views), and **Settings → Agents** gets a
@@ -115,7 +115,7 @@ off removes the button. There is no phone chat on Windows (it needs tmux).
 
 ## Troubleshooting
 
-- **No Tabby icon on the side panel's edge bar**: the Experimental switch was
+- **No Tabby icon on the side panel's edge bar**: its switch (Settings → Agents → Tabby) was
   turned off. With no project open the side panel (and its bar) is not shown at all;
   open a project or the root folder first.
 - **A model says it cannot search**: local models need a search service set up.

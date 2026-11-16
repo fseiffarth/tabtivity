@@ -14,9 +14,14 @@ The phone's Focus view can do the same with the phone's own speech.
 The mic button beside **Send** (or **Ctrl+Shift+D**) starts dictation on this
 computer's own speech engine: nothing you say leaves the machine. The first
 time, it offers to install a speech model (Settings → Voice picks which one:
-base, small or large) in a tab, one click. While you speak, **Heard:** shows
-what it understood; each finished sentence lands in the text box, where
-Ctrl+Z takes it back. End with **"go on"** (German **"los"**) to send without
+base, small or large) in a tab, one click. Your words appear in the text box
+as you speak them, at the end of the draft, and are corrected as you go on
+(a sentence you are still saying is rewritten until it is finished);
+**Heard:** shows what it understood, and holds back words that may be a
+spoken correction, a send or a stop word until they are settled. Each finished
+sentence stays in the text box, where Ctrl+Z takes it back. Words you change by hand
+while they are still provisional become yours and are not typed again.
+End with **"go on"** (German **"los"**) to send without
 those words, or press Send.
 
 ### Correcting what you said
@@ -90,7 +95,7 @@ listening: a small mic on the steering badge says so.
 ## On the phone
 
 The Focus view's mic dictates with the phone's speech (on the device where it
-can). Its menu holds **Read answers aloud**, the voice language and
+can), and the words show in its text box live, as on the desktop. Its menu holds **Read answers aloud**, the voice language and
 **Hands-free**: the same pause, chime and "stop" window, then the answer is
 read and the mic opens again. Ending with **"go on"** sends and leaves the
 mic open, so the next prompt can follow straight away; with Hands-free on,

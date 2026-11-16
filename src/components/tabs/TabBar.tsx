@@ -91,6 +91,8 @@ import { useExperimental } from "../../lib/experimental";
 import { closeTabWithConfirm, closeTabsWithConfirm } from "../../lib/remote/closeRemoteTab";
 import { closedTabSlotHeld, noteTabClose, useClosedTabSlot } from "../../lib/tabs/closedTabSlot";
 import { reopenClosedAgentTab, useClosedAgentTabs } from "../../stores/agents/closedAgentTabs";
+import { archiveTabs, canArchiveTab, useTabArchive } from "../../stores/tabArchive";
+import { TabArchiveDialog } from "./TabArchiveList";
 import { registerHostBoundTab } from "../../lib/remote/hostBound";
 import { localLaunchTabSpec, vibeLocalTabSpec } from "../../lib/agents/localTabSpec";
 import {
@@ -109,7 +111,7 @@ import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
-import { ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
+import { ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
 
 /** Default fly-out card size when no live pane thumbnail is available. */
 const DETACH_CARD_W = 240;
@@ -504,6 +506,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Agent tabs closed in this scope, newest first — what "Reopen closed agent
   // tab" (the tab menu, the + menu's Recently closed) brings back.
   const closedAgentTabs = useClosedAgentTabs(scope);
+  // The scope's archived tabs, counted only while the + menu is open (its
+  // Archived tabs entry); the dialog lists them.
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const hasProjects = useProjectsStore((s) => s.projects.length > 0);
   const showBlobItem = scope === ROOT_SCOPE && hasProjects;
   const focusGroup = useTabsStore((s) => s.focusGroup);
@@ -645,6 +650,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   });
 
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const archivedCount = useTabArchive(scope, menuPos !== null).length;
   // Steering's new tabs land right of the active tab (`besideActive` on its
   // request): true while a direct request's handler runs, and for as long as a
   // + menu steering opened stays up. A launch that awaits (worktree question,
@@ -1297,6 +1303,10 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }
   function closeOthers(key: string) {
     void closeTabsWithConfirm(tabs.filter((tb) => tb.key !== key).map((tb) => tb.key));
+  }
+  // Archive (`stores/tabArchive`): the tab is kept for later and ends now.
+  function archiveOthers(key: string) {
+    void archiveTabs(scope, tabs.filter((tb) => tb.key !== key && canArchiveTab(scope, tb)).map((tb) => tb.key));
   }
 
   // Start a pointer-based tab drag once the pointer crosses a 5px threshold.
@@ -2095,6 +2105,19 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
                     setMenuPos(null);
                   },
                 }, {
+                  key: "archived-tabs",
+                  label: archivedCount > 0
+                    ? t("tabArchive.menuEntryCount", { count: archivedCount })
+                    : t("tabArchive.menuEntry"),
+                  dot: <ArchiveIcon />,
+                  color: "var(--text-secondary)",
+                  disabled: false,
+                  untested: "tabArchive.list",
+                  onPick: () => {
+                    setMenuPos(null);
+                    setArchiveOpen(true);
+                  },
+                }, {
                   key: "close-all",
                   label: t("newTabMenu.itemCloseAllTabs"),
                   dot: <CloseIcon />,
@@ -2130,6 +2153,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
         </ContextMenuPortal>
       )}
       {worktreePicker.dialogs}
+      {archiveOpen && <TabArchiveDialog scope={scope} onClose={() => setArchiveOpen(false)} />}
       {scheduleDialogKey && (() => {
         const tab = tabs.find((item) => item.key === scheduleDialogKey);
         return tab ? (
@@ -2257,6 +2281,33 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ClockIcon /></span>
               {t("agentSchedule.menu")}
               <UntestedTag id="tabBar.2" />
+            </button>
+          )}
+          {tabs.some((tab) => tab.key === tabMenu.key && canArchiveTab(scope, tab)) && (
+            <button
+              className="tab-new-menu-item"
+              title={t("tabArchive.archiveTitle")}
+              onClick={() => {
+                void archiveTabs(scope, [tabMenu.key]);
+                setTabMenu(null);
+              }}
+            >
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ArchiveIcon /></span>
+              {t("tabArchive.archive")}
+              <UntestedTag id="tabArchive.archive" />
+            </button>
+          )}
+          {tabs.some((tab) => tab.key !== tabMenu.key && canArchiveTab(scope, tab)) && (
+            <button
+              className="tab-new-menu-item"
+              title={t("tabArchive.archiveOthersTitle")}
+              onClick={() => {
+                archiveOthers(tabMenu.key);
+                setTabMenu(null);
+              }}
+            >
+              <span className="tab-new-menu-dot tab-new-menu-dot--accent"><ArchiveIcon /></span>
+              {t("tabArchive.archiveOthers")}
             </button>
           )}
           <button

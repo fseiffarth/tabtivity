@@ -8,6 +8,7 @@ import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
+import { tailscaleServeCommand } from "../../lib/tailscaleServeCommand";
 import { useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
@@ -20,6 +21,7 @@ import type { ProjectEntry } from "../../types";
 import { usePairedPhones, type PairedPhone } from "./usePairedPhones";
 import { PairedDeviceAccess } from "./PairedDeviceAccess";
 import { AddDevicePanel, useAddDevice } from "./AddDevice";
+import { LinkedDesktops } from "./LinkedDesktops";
 
 interface RuntimeStatus {
   configured: boolean;
@@ -131,6 +133,7 @@ function Hint({ help, children }: { help: string; children: ReactNode }) {
 export function MobileSettings() {
   const t = useT();
   const assistantOn = useExperimental("assistant");
+  const sessionHostOn = useExperimental("windows_session_host");
   const { confirmAction, dialogs } = useDialogs();
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
@@ -351,25 +354,13 @@ export function MobileSettings() {
       }
       await updateSettings({
         [MOBILE_HOST_KEY]: {
+          // The block is written whole (a settings patch is shallow): the
+          // stored one rides along, so no gate or list is dropped.
+          ...stored,
           enabled,
           display_name: displayName.trim() || "Workstation",
           port: parsedPort || 8742,
           serve_origin: origin.trim() || undefined,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          browser_client: stored?.browser_client,
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
-          root_devices: stored?.root_devices,
         },
       });
       await invoke("mobile_host_apply", { enabled });
@@ -432,7 +423,8 @@ export function MobileSettings() {
   };
 
   const setUpInTerminal = async () => {
-    const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
+    // The CLI this machine resolves, not a bare `tailscale` (2442s).
+    const command = await tailscaleServeCommand(guidePort);
     const ok = await confirmAction({
       title: translateNow("mobile.guideSummary"),
       // The prose's blank lines set the command apart; a <p> collapses `\n`.
@@ -463,25 +455,10 @@ export function MobileSettings() {
       setServeVerification({ verified: true });
       await updateSettings({
         [MOBILE_HOST_KEY]: {
-          enabled: stored?.enabled ?? false,
+          ...(stored ?? { enabled: false }),
           display_name: detected.display_name,
           port: detected.port,
           serve_origin: detected.origin,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          browser_client: stored?.browser_client,
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
-          root_devices: stored?.root_devices,
         },
       });
     } catch (reason) {
@@ -507,26 +484,13 @@ export function MobileSettings() {
       if (response.status === "error") throw new Error(response.message);
       await updateSettings({
         [MOBILE_HOST_KEY]: {
+          ...stored,
           enabled: false,
           display_name: displayName.trim() || "Workstation",
           port: Number(port) || 8742,
           serve_origin: origin.trim() || undefined,
-          mail_read: stored?.mail_read,
-          mail_actions: stored?.mail_actions,
-          mail_reply: stored?.mail_reply,
-          root_access: stored?.root_access,
-          project_files: stored?.project_files,
-          project_uploads: stored?.project_uploads,
-          project_sync: stored?.project_sync,
-          project_remarks: stored?.project_remarks,
-          stay_after_quit: stored?.stay_after_quit,
-          // `browser_client` is left out on purpose: lockdown closes browser
-          // access too.
-          shell_tabs: stored?.shell_tabs,
-          local_models: stored?.local_models,
-          assistant_access: stored?.assistant_access,
-          assistant_devices: stored?.assistant_devices,
-          root_devices: stored?.root_devices,
+          // Cleared on purpose: lockdown closes browser access too.
+          browser_client: undefined,
         },
       });
       await invoke("mobile_host_apply", { enabled: false });
@@ -609,7 +573,10 @@ export function MobileSettings() {
         </div>
       </div>
       {addDevice.pairing && <AddDevicePanel pairing={addDevice.pairing} />}
-      {IS_HOST_WINDOWS && (
+      {/* Windows without the session host, or with persistent sessions off
+          (the phone then still gets `unsupported`): how to turn them on. With
+          both on the phone reaches agent tabs, so there is nothing to say. */}
+      {IS_HOST_WINDOWS && !(sessionHostOn && settings?.persist_local_sessions !== false) && (
         <p className="settings-help">
           {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />
         </p>
@@ -1007,6 +974,7 @@ export function MobileSettings() {
           </button>
         </div>
       )}
+      <LinkedDesktops busy={busy} />
       <ConnectToServer />
       {dialogs}
     </SettingsCard>

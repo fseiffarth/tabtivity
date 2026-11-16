@@ -97,7 +97,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 
 use serde::Serialize;
@@ -115,11 +115,8 @@ pub struct SyncSource {
     /// Absolute path to the source file, spelled through the caller's
     /// spelling of the PDF's folder or an ancestor of it ({@link Spelling}).
     pub input: String,
-    /// 1-based source line.
+    /// 1-based source line. There is no column: SyncTeX records none.
     pub line: u32,
-    /// Always 0: SyncTeX records no column (the CLI printed `Column:-1` for
-    /// every record pdfTeX writes). Kept so the payload's shape is stable.
-    pub column: u32,
 }
 
 /// A PDF rectangle returned by forward search (`synctex_view`): the page and a
@@ -143,7 +140,7 @@ pub struct SyncRect {
 /// `x`/`y` are the record's origin in big points from the page's top-left — for
 /// a box that is the baseline's left end, so the box spans `x..x+w` horizontally
 /// and `y-h..y+d` vertically. Leaves carry only a point (`w`/`h`/`d` are 0).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Rec {
     tag: u32,
     line: u32,
@@ -195,6 +192,10 @@ struct Preamble {
     /// `X Offset:` / `Y Offset:`, in scaled points, added after the unit scale.
     x_offset: f64,
     y_offset: f64,
+    /// Byte offset of each page's `{N` line in the text this was parsed from
+    /// (the first, should a number repeat), so reverse search starts at its page
+    /// instead of reading every earlier one — see {@link each_hbox}.
+    pages: BTreeMap<u32, usize>,
 }
 
 /// Raw scaled points → big points from the page's top-left.
@@ -216,12 +217,19 @@ fn parse_preamble(text: &str) -> Preamble {
         ..Default::default()
     };
     let mut in_header = true;
-    for raw in text.lines() {
+    let mut at = 0usize;
+    // Every line, with its own terminator, so `at` is its byte offset in `text`
+    // without a second scan. `trim_end` drops the terminator again.
+    for raw in text.split_inclusive('\n') {
+        let line_at = at;
+        at += raw.len();
         let l = raw.trim_end();
         if in_header && l.starts_with("Content:") {
             in_header = false;
         }
-        if let Some(rest) = l.strip_prefix("Input:") {
+        if let Some(page) = l.strip_prefix('{').and_then(|n| n.trim().parse::<u32>().ok()) {
+            p.pages.entry(page).or_insert(line_at);
+        } else if let Some(rest) = l.strip_prefix("Input:") {
             let mut it = rest.splitn(2, ':');
             let Some(tag) = it.next().and_then(|t| t.trim().parse::<u32>().ok()) else {
                 continue;
@@ -268,32 +276,22 @@ fn parse_record(body: &str, p: &Preamble, elastic: bool) -> Option<Rec> {
 
     // Geometry is `w,h,d` for a box/rule and a bare `w` for a kern; absent on
     // glyph/glue records.
-    let (mut w, mut h, mut d) = (0.0, 0.0, 0.0);
-    if let Some(geom) = fields.next() {
-        let mut g = geom.split(',');
-        w = g
-            .next()
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .unwrap_or(0.0);
-        h = g
-            .next()
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .unwrap_or(0.0);
-        d = g
-            .next()
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .unwrap_or(0.0);
-    }
+    let mut geom = fields
+        .next()
+        .into_iter()
+        .flat_map(|g| g.split(','))
+        .map(|v| v.trim().parse::<f64>().unwrap_or(0.0));
+    let mut size = || to_bp(geom.next().unwrap_or(0.0), p.unit, 0.0);
+    let (w, h, d) = (size(), size(), size());
 
-    let scale = |v: f64| v * p.unit / SP_PER_PT * PT_PER_BP;
     Some(Rec {
         tag,
         line,
         x: to_bp(x, p.unit, p.x_offset),
         y: to_bp(y, p.unit, p.y_offset),
-        w: scale(w),
-        h: scale(h),
-        d: scale(d),
+        w,
+        h,
+        d,
         elastic,
         is_box: false,
     })
@@ -314,11 +312,24 @@ fn parse_record(body: &str, p: &Preamble, elastic: bool) -> Option<Rec> {
 /// span whole paragraphs and answering with one would defeat the point.
 fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u32, HBox)> {
     let mut out: Vec<(u32, HBox)> = Vec::new();
+    each_hbox(text, p, only, |page, bx| out.push((page, bx)));
+    out
+}
+
+/// {@link walk_hboxes}, handing each box to `emit` as it closes instead of
+/// collecting them: forward search keeps a digest of every box of the document
+/// ({@link LineBox}) and has no use for all of them at once.
+fn each_hbox(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>, mut emit: impl FnMut(u32, HBox)) {
     // (record, is_hbox, own children)
     let mut stack: Vec<(Rec, bool, Vec<Rec>)> = Vec::new();
     let mut page: u32 = 0;
 
-    for raw in text.lines() {
+    // Reverse search starts where its first page opens: on a long document the
+    // pages before it are most of the map, and every line of them would only be
+    // read to be skipped. Nothing else about the walk changes, since each page
+    // opens with a `{` that resets the state.
+    let from = only.and_then(|pages| walk_start(text, p, pages)).unwrap_or(0);
+    for raw in text[from..].lines() {
         let l = raw.trim_end();
         let Some(c) = l.chars().next() else { continue };
         match c {
@@ -331,7 +342,7 @@ fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u
                 // Reverse search wants only its pages; once the last closes there
                 // is nothing left to find, so stop rather than scan the whole file.
                 if only.is_some_and(|pages| pages.last() == Some(&page)) {
-                    return out;
+                    return;
                 }
             }
             // Skip record parsing entirely for a page reverse search doesn't want,
@@ -343,21 +354,7 @@ fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u
                     Some(rec) => stack.push((rec, is_h, Vec::new())),
                     // An unparseable opener would desynchronise the stack against
                     // its closer, so push a placeholder to keep them paired.
-                    None => stack.push((
-                        Rec {
-                            tag: 0,
-                            line: 0,
-                            x: 0.0,
-                            y: 0.0,
-                            w: 0.0,
-                            h: 0.0,
-                            d: 0.0,
-                            elastic: false,
-                            is_box: false,
-                        },
-                        is_h,
-                        Vec::new(),
-                    )),
+                    None => stack.push((Rec::default(), is_h, Vec::new())),
                 }
             }
             ']' | ')' => {
@@ -368,7 +365,7 @@ fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u
                     parent.2.push(Rec { is_box: true, ..rec });
                 }
                 if is_h && rec.line > 0 {
-                    out.push((
+                    emit(
                         page,
                         HBox {
                             rec,
@@ -376,7 +373,7 @@ fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u
                             ancestors: stack.iter().map(|(r, _, _)| (r.tag, r.line)).collect(),
                             leaves,
                         },
-                    ));
+                    );
                 }
             }
             // Leaves: glyph run, kern, glue, math, rule, and the void boxes.
@@ -391,7 +388,30 @@ fn walk_hboxes(text: &str, p: &Preamble, only: Option<&BTreeSet<u32>>) -> Vec<(u
             _ => {}
         }
     }
-    out
+}
+
+/// Where `each_hbox` may begin for `pages`: the earliest of their page-open lines,
+/// or None to walk from the top. Each recorded offset is checked against `text`
+/// (a line start, holding that very `{N`), because a {@link Preamble} and a text
+/// are not always from the same read; one page without a usable offset means the
+/// old whole-file walk rather than a guess.
+fn walk_start(text: &str, p: &Preamble, pages: &BTreeSet<u32>) -> Option<usize> {
+    let mut start: Option<usize> = None;
+    for page in pages {
+        let at = *p.pages.get(page)?;
+        let rest = text.get(at..)?;
+        let opens = (at == 0 || text.as_bytes()[at - 1] == b'\n')
+            && rest
+                .lines()
+                .next()
+                .and_then(|l| l.trim_end().strip_prefix('{'))
+                .is_some_and(|n| n.trim().parse::<u32>() == Ok(*page));
+        if !opens {
+            return None;
+        }
+        start = Some(start.map_or(at, |s| s.min(at)));
+    }
+    start
 }
 
 /// Every hbox on `page` with its direct children — reverse search's per-page view.
@@ -709,11 +729,20 @@ impl Spelling {
 /// well under a tenth of this.
 pub(crate) const MAX_MAP_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Decompressed SyncTeX text, cached against the file's path and mtime so a
-/// burst of clicks on one PDF re-reads (and re-inflates) nothing. Single-entry:
-/// reverse search is driven by one focused PDF at a time, and a stale megabyte
-/// of a document nobody is looking at is not worth holding.
-static CACHE: Mutex<Option<(PathBuf, SystemTime, std::sync::Arc<Map>)>> = Mutex::new(None);
+/// Decompressed SyncTeX text, cached against the file's path, mtime and size so
+/// a burst of clicks on one PDF re-reads (and re-inflates) nothing. The size is
+/// there for a rebuild inside one tick of a coarse-mtime filesystem.
+/// Single-entry: SyncTeX is driven by one focused PDF at a time, and a stale
+/// megabyte of a document nobody is looking at is not worth holding.
+static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
+
+/// The cached map and the file it was read from.
+struct Cached {
+    path: PathBuf,
+    /// The file's mtime and size when it was read.
+    stamp: (SystemTime, u64),
+    map: Arc<Map>,
+}
 
 /// A loaded map: the decompressed text plus its already-parsed header. The
 /// header parse is a full scan (the input table runs into the body — see
@@ -721,6 +750,39 @@ static CACHE: Mutex<Option<(PathBuf, SystemTime, std::sync::Arc<Map>)>> = Mutex:
 struct Map {
     text: String,
     pre: Preamble,
+    /// Forward search's digest of every box, made on the first search of this
+    /// map and kept with it: walking a thesis' map parses every record of every
+    /// page, and a forward search used to pay that on each Ctrl+click.
+    line_boxes: OnceLock<Vec<LineBox>>,
+}
+
+impl Map {
+    fn new(text: String) -> Self {
+        let pre = parse_preamble(&text);
+        Self {
+            text,
+            pre,
+            line_boxes: OnceLock::new(),
+        }
+    }
+
+    fn line_boxes(&self) -> &[LineBox] {
+        self.line_boxes.get_or_init(|| line_boxes(&self.text, &self.pre))
+    }
+}
+
+/// The folder `pdf` sits in, as the caller spelled it.
+fn pdf_dir(pdf: &Path) -> &Path {
+    pdf.parent().unwrap_or_else(|| Path::new("."))
+}
+
+/// Where the map of `pdf` may sit, the compressed form the engines write
+/// first. The one spelling of those names: what is read here is what
+/// `commands::synctex` confines to the project.
+pub(crate) fn map_candidates(pdf: &Path) -> Option<[PathBuf; 2]> {
+    let stem = pdf.file_stem()?.to_str()?;
+    let dir = pdf_dir(pdf);
+    Some([dir.join(format!("{stem}.synctex.gz")), dir.join(format!("{stem}.synctex"))])
 }
 
 /// The SyncTeX map beside `pdf`, preferring the compressed form the engines
@@ -730,17 +792,7 @@ fn map_path(pdf: &Path) -> Option<PathBuf> {
     if is_network_path(&pdf.to_string_lossy()) {
         return None;
     }
-    let stem = pdf.file_stem()?.to_str()?;
-    let dir = pdf.parent().unwrap_or_else(|| Path::new("."));
-    let gz = dir.join(format!("{stem}.synctex.gz"));
-    let plain = dir.join(format!("{stem}.synctex"));
-    if gz.exists() {
-        Some(gz)
-    } else if plain.exists() {
-        Some(plain)
-    } else {
-        None
-    }
+    map_candidates(pdf)?.into_iter().find(|map| map.exists())
 }
 
 /// What SyncTeX can promise for a PDF right now — the answer to "why did my
@@ -758,6 +810,19 @@ pub struct MapStatus {
     /// main document's directory — saved after the map was written. The lines
     /// SyncTeX answers with are those of the build *before* that edit.
     pub newer_sources: Vec<String>,
+}
+
+impl MapStatus {
+    /// A map exists and the PDF has not outgrown it: its pages are this PDF's.
+    pub fn is_current(&self) -> bool {
+        self.has_map && !self.pdf_newer_than_map
+    }
+
+    /// `input` (spelled as the map spells it) was saved after the build, so the
+    /// map's line numbers for it are those of the text before that edit.
+    pub fn is_edited(&self, input: &str) -> bool {
+        self.newer_sources.iter().any(|s| s == input)
+    }
 }
 
 /// Two files closed by the same compile can land in either order within a
@@ -817,7 +882,7 @@ pub fn status(pdf: &Path) -> MapStatus {
     let pdf_newer_than_map = mtime(pdf).is_some_and(|m| m > map_mtime + STALE_GRACE);
     let newer_sources = match load_map(pdf) {
         Some(map) => {
-            let pdf_dir = pdf.parent().unwrap_or_else(|| Path::new("."));
+            let pdf_dir = pdf_dir(pdf);
             let spelling = Spelling::new(pdf_dir);
             // The main document is the lowest-numbered input; its directory is
             // the tree the person edits (an out-dir build puts the PDF elsewhere).
@@ -863,27 +928,28 @@ fn read_map(path: &Path, cap: u64) -> Option<Map> {
     if read.is_err() || text.len() as u64 > cap {
         return None;
     }
-    let pre = parse_preamble(&text);
-    Some(Map { text, pre })
+    Some(Map::new(text))
 }
 
 /// Read the SyncTeX map beside `pdf` ({@link map_path}), through the cache.
-fn load_map(pdf: &Path) -> Option<std::sync::Arc<Map>> {
+///
+/// The cache stays locked across the read: a second caller for the same map
+/// (the status probe behind a click, a forward search behind a compile) waits
+/// for this parse instead of inflating a copy of its own beside it.
+fn load_map(pdf: &Path) -> Option<Arc<Map>> {
     let path = map_path(pdf)?;
-
-    let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
-    if let Ok(guard) = CACHE.lock() {
-        if let Some((p, m, map)) = guard.as_ref() {
-            if *p == path && *m == mtime {
-                return Some(map.clone());
-            }
-        }
+    let meta = std::fs::metadata(&path).ok()?;
+    let stamp = (meta.modified().ok()?, meta.len());
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(hit) = cache.as_ref().filter(|c| c.path == path && c.stamp == stamp) {
+        return Some(hit.map.clone());
     }
-
-    let map = std::sync::Arc::new(read_map(&path, MAX_MAP_BYTES)?);
-    if let Ok(mut guard) = CACHE.lock() {
-        *guard = Some((path, mtime, map.clone()));
-    }
+    let map = Arc::new(read_map(&path, MAX_MAP_BYTES)?);
+    *cache = Some(Cached {
+        path,
+        stamp,
+        map: map.clone(),
+    });
     Some(map)
 }
 
@@ -911,8 +977,7 @@ fn resolve_point(map: &Map, spelling: &Spelling, boxes: &[HBox], x: f64, y: f64)
 pub fn resolve(pdf: &Path, page: u32, x: f64, y: f64) -> Option<(String, u32)> {
     let map = load_map(pdf)?;
     let boxes = drop_backgrounds(page_hboxes(&map.text, page, &map.pre));
-    let spelling = Spelling::new(pdf.parent().unwrap_or_else(|| Path::new(".")));
-    resolve_point(&map, &spelling, &boxes, x, y)
+    resolve_point(&map, &Spelling::new(pdf_dir(pdf)), &boxes, x, y)
 }
 
 /// {@link resolve} for many points on many pages, walking the map once: what a
@@ -930,7 +995,7 @@ pub fn resolve_pages(pdf: &Path, points: &BTreeMap<u32, Vec<(f64, f64)>>) -> BTr
     }
     let by_page: BTreeMap<u32, Vec<HBox>> =
         by_page.into_iter().map(|(page, boxes)| (page, drop_backgrounds(boxes))).collect();
-    let spelling = Spelling::new(pdf.parent().unwrap_or_else(|| Path::new(".")));
+    let spelling = Spelling::new(pdf_dir(pdf));
     points
         .iter()
         .map(|(page, list)| {
@@ -1048,6 +1113,51 @@ fn is_chrome(bx: &HBox) -> bool {
     bx.ancestors.first().is_none_or(|page| *page == own)
 }
 
+/// What forward search keeps of one hbox: where it is, how it is tagged and what
+/// its leaves say — the box itself, with every leaf of every line of the
+/// document, is not held.
+struct LineBox {
+    page: u32,
+    rec: Rec,
+    /// {@link is_chrome}.
+    chrome: bool,
+    /// {@link material} with chrome, each `(tag, line)` once: the matching rules
+    /// only ever ask whether a line is among them.
+    material: Vec<(u32, u32)>,
+}
+
+impl LineBox {
+    fn new(page: u32, bx: &HBox) -> Self {
+        let mut material = material(bx, true);
+        let mut seen = BTreeSet::new();
+        material.retain(|tl| seen.insert(*tl));
+        Self {
+            page,
+            rec: bx.rec,
+            chrome: is_chrome(bx),
+            material,
+        }
+    }
+
+    /// {@link material} for one pass. Chrome-shaped material — nothing but the
+    /// box's own tag, in a box tagged like its page — counts only `with_chrome`.
+    fn material(&self, with_chrome: bool) -> &[(u32, u32)] {
+        let own = (self.rec.tag, self.rec.line);
+        if !with_chrome && self.chrome && self.material.iter().all(|tl| *tl == own) {
+            &[]
+        } else {
+            &self.material
+        }
+    }
+}
+
+/// The {@link LineBox} of every hbox in the map, in the order the boxes close.
+fn line_boxes(text: &str, pre: &Preamble) -> Vec<LineBox> {
+    let mut out = Vec::new();
+    each_hbox(text, pre, None, |page, bx| out.push(LineBox::new(page, &bx)));
+    out
+}
+
 /// Forward search: the boxes `input:line` produced, on any page, as rects in big
 /// points from the page's top-left.
 ///
@@ -1059,12 +1169,17 @@ pub fn view(pdf: &Path, input: &str, line: u32) -> Vec<SyncRect> {
     let Some(map) = load_map(pdf) else {
         return Vec::new();
     };
-    let spelling = Spelling::new(pdf.parent().unwrap_or_else(|| Path::new(".")));
-    view_in(&map.text, &map.pre, &spelling, input, line)
+    view_among(map.line_boxes(), &map.pre, &Spelling::new(pdf_dir(pdf)), input, line)
 }
 
-/// The pure core of {@link view}, separated from the on-disk map load so it can be
-/// unit-tested against a SyncTeX fixture without a real PDF.
+/// {@link view} over a map's text, for a unit test against a SyncTeX fixture
+/// without a real PDF.
+#[cfg(test)]
+fn view_in(text: &str, pre: &Preamble, spelling: &Spelling, input: &str, line: u32) -> Vec<SyncRect> {
+    view_among(&line_boxes(text, pre), pre, spelling, input, line)
+}
+
+/// The core of {@link view}, over the map's boxes.
 ///
 /// Runs {@link find_boxes} without page chrome first, and only when that finds
 /// nothing with it: a header or footer must not outrank the text of the line
@@ -1072,30 +1187,27 @@ pub fn view(pdf: &Path, input: &str, line: u32) -> Vec<SyncRect> {
 /// look like chrome, must still be found. Where one hit contains another on the
 /// same page only the outer one is kept: a section number inside its heading's
 /// line, the identical wrappers beamer nests a block title in.
-fn view_in(text: &str, pre: &Preamble, spelling: &Spelling, input: &str, line: u32) -> Vec<SyncRect> {
+fn view_among(boxes: &[LineBox], pre: &Preamble, spelling: &Spelling, input: &str, line: u32) -> Vec<SyncRect> {
     let tags = input_tags(pre, input, spelling);
     if tags.is_empty() {
         return Vec::new();
     }
-    let walked = walk_hboxes(text, pre, None);
     for with_chrome in [false, true] {
-        let boxes: Vec<(&HBox, Vec<(u32, u32)>)> =
-            walked.iter().map(|(_, bx)| (bx, material(bx, with_chrome))).collect();
-        let hits = find_boxes(&boxes, &tags, line, with_chrome);
+        let hits = find_boxes(boxes, &tags, line, with_chrome);
         if hits.is_empty() {
             continue;
         }
         let rects = hits
             .iter()
             .map(|&i| {
-                let (page, bx) = &walked[i];
+                let LineBox { page, rec, .. } = &boxes[i];
                 // The box spans `y - h` (top) to `y + d` (bottom).
                 SyncRect {
                     page: *page,
-                    x: bx.rec.x,
-                    y: bx.rec.y - bx.rec.h,
-                    w: bx.rec.w,
-                    h: bx.rec.h + bx.rec.d,
+                    x: rec.x,
+                    y: rec.y - rec.h,
+                    w: rec.w,
+                    h: rec.h + rec.d,
                 }
             })
             .collect();
@@ -1104,8 +1216,9 @@ fn view_in(text: &str, pre: &Preamble, spelling: &Spelling, input: &str, line: u
     Vec::new()
 }
 
-/// The indices of the boxes in `boxes` (each with its material) that file `tags`,
-/// line `line` produced. The first rule that finds anything wins:
+/// The indices of the boxes in `boxes` that file `tags`, line `line` produced,
+/// by each box's material for this pass ({@link LineBox::material}). The first
+/// rule that finds anything wins:
 /// 1. the boxes with material at `(F, L)`, plus the boxes *tagged* `(F, L)`
 ///    with no material (an outer line box with nothing but a nested box in it:
 ///    XeTeX's section heading); failing those, the boxes tagged `(F, L)` whose
@@ -1119,37 +1232,33 @@ fn view_in(text: &str, pre: &Preamble, spelling: &Spelling, input: &str, line: u
 ///
 /// Never a box whose material is only another file's, nor, unless
 /// `with_chrome`, page chrome ({@link is_chrome}).
-fn find_boxes(boxes: &[(&HBox, Vec<(u32, u32)>)], tags: &BTreeSet<u32>, line: u32, with_chrome: bool) -> Vec<usize> {
+fn find_boxes(boxes: &[LineBox], tags: &BTreeSet<u32>, line: u32, with_chrome: bool) -> Vec<usize> {
     let of_file = |tl: &(u32, u32)| tags.contains(&tl.0);
     // Tagged with the file, and neither page chrome nor another file's lines.
-    let eligible_by_tag = |bx: &HBox, m: &[(u32, u32)]| {
+    let eligible_by_tag = |bx: &LineBox| {
+        let m = bx.material(with_chrome);
         tags.contains(&bx.rec.tag)
-            && (with_chrome || !is_chrome(bx) || !m.is_empty())
+            && (with_chrome || !bx.chrome || !m.is_empty())
             && (m.is_empty() || m.iter().any(of_file))
+    };
+    let indices = |keep: &dyn Fn(&LineBox) -> bool| -> Vec<usize> {
+        boxes.iter().enumerate().filter(|(_, bx)| keep(bx)).map(|(i, _)| i).collect()
     };
     // A box tagged `(F, l)` that holds other lines of `F` is only the
     // paragraph `l`'s `\par` closed: it stands in for `l` when no box holds
     // `l` itself — `\item` closes the item before it, whose box must not come
     // back beside the item's own.
     let hits_at = |l: u32| -> Vec<usize> {
-        let tagged = |bx: &HBox, m: &[(u32, u32)]| bx.rec.line == l && eligible_by_tag(bx, m);
-        let own: Vec<usize> = boxes
-            .iter()
-            .enumerate()
-            .filter(|(_, (bx, m))| {
-                m.iter().any(|tl| of_file(tl) && tl.1 == l) || (m.is_empty() && tagged(bx, m))
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if !own.is_empty() {
-            return own;
+        let tagged = |bx: &LineBox| bx.rec.line == l && eligible_by_tag(bx);
+        let own = indices(&|bx| {
+            let m = bx.material(with_chrome);
+            m.iter().any(|tl| of_file(tl) && tl.1 == l) || (m.is_empty() && tagged(bx))
+        });
+        if own.is_empty() {
+            indices(&tagged)
+        } else {
+            own
         }
-        boxes
-            .iter()
-            .enumerate()
-            .filter(|(_, (bx, m))| tagged(bx, m))
-            .map(|(i, _)| i)
-            .collect()
     };
     let nearest = |lines: BTreeSet<u32>| {
         lines
@@ -1165,25 +1274,16 @@ fn find_boxes(boxes: &[(&HBox, Vec<(u32, u32)>)], tags: &BTreeSet<u32>, line: u3
     }
     let lines: BTreeSet<u32> = boxes
         .iter()
-        .flat_map(|(_, m)| m.iter().filter(|tl| of_file(tl)).map(|tl| tl.1))
+        .flat_map(|bx| bx.material(with_chrome).iter().filter(|tl| of_file(tl)).map(|tl| tl.1))
         .collect();
     if let Some(l) = nearest(lines) {
         return hits_at(l);
     }
-    let lines: BTreeSet<u32> = boxes
-        .iter()
-        .filter(|(bx, m)| eligible_by_tag(bx, m))
-        .map(|(bx, _)| bx.rec.line)
-        .collect();
-    let Some(l) = nearest(lines) else {
-        return Vec::new();
-    };
-    boxes
-        .iter()
-        .enumerate()
-        .filter(|(_, (bx, m))| bx.rec.line == l && eligible_by_tag(bx, m))
-        .map(|(i, _)| i)
-        .collect()
+    let lines: BTreeSet<u32> = boxes.iter().filter(|bx| eligible_by_tag(bx)).map(|bx| bx.rec.line).collect();
+    match nearest(lines) {
+        Some(l) => indices(&|bx| bx.rec.line == l && eligible_by_tag(bx)),
+        None => Vec::new(),
+    }
 }
 
 /// Drop every rect that another one on the same page contains (of identical

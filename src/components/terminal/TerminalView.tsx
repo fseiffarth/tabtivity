@@ -10,7 +10,7 @@ import { resolveTheme, useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useExperimental } from "../../lib/experimental";
-import { IS_HOST_WINDOWS } from "../../lib/platform";
+import { IS_HOST_WINDOWS, IS_MAC } from "../../lib/platform";
 import { reportFrontendIssue } from "../../crashReporter";
 import { isDetachedPtyId, useTabsStore, type TabKind } from "../../stores/tabs";
 import { agentDeliveryTurn, isDialogNavigationInput, isInterruptInput, lastPtyOutputAt, noteAgentResting, noteLiveTurn, notePtyResize, notePtySpawn, noteTurnCutOff, noteUserInput, splitPtyId, useActivityStore } from "../../stores/activity";
@@ -31,6 +31,7 @@ import {
   type TerminalOutputRange,
 } from "../../lib/terminal/terminalBus";
 import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
+import { clearSessionHostState, reportSessionHostSpawnError } from "../../lib/terminal/sessionHostNotice";
 import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
@@ -41,7 +42,7 @@ import { useUnfencedPlatformStore } from "../../stores/unfencedPlatformPrompt";
 import { CSI_U_SHIFT_TAB, FORCE_SELECTION_MODIFIER, SILENT_START_MS, agentMouseDownAction, altArrowWordJump, bufferTail, claimInitialInput, decodeOsc52Clipboard, initialInputForPty, claudeLaunchName, isClaudeCommand, isCodexCommand, isTerminalAutoReply, isTerminalIdentityResponse, isTerminalReport, showsAgentTrustDialog, silentStartNotice, stripTerminalQueries, suppressNativeContextMenu, terminalProgramLabel, type SilentStartNotice } from "../../lib/terminal/terminalControl";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
 // Aliased: the component has its own `copyText` (a link copy with its toast).
-import { copyText as writeClipboard } from "../../lib/terminal/copyText";
+import { copyText as writeClipboard, readClipboardText } from "../../lib/terminal/copyText";
 import { deliverDrop, insertIntoReader, pasteClipboardImage } from "../../lib/terminal/terminalDrop";
 import { isExternalFileDrag, parseDroppedFiles } from "../../lib/files/droppedFiles";
 import { clearPtyInput, writePtyInput } from "../../lib/terminal/terminalInput";
@@ -85,6 +86,7 @@ import { isDetachedWindow } from "../../stores/detachedContext";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
+import { TerminalSessionHostCard } from "./TerminalSessionHostCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
 import { buildScaffoldFillPrompt } from "../../lib/projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
@@ -95,7 +97,9 @@ import { noteTypedLine, screenAtCursor } from "../../lib/agents/typedClear";
 import { isSessionCommand } from "../../lib/agents/prompt/chart";
 import { notePromptTrailInput } from "../../stores/agents/promptTrail";
 import "@xterm/xterm/css/xterm.css";
-import { storageKey } from "../../lib/brand";
+import { envName, storageKey } from "../../lib/brand";
+import { noteCheckpointKey } from "../../lib/agents/checkpoints";
+import { useCheckpointsStore } from "../../stores/agents/checkpoints";
 import type { AssistantLaunch } from "../../lib/assistant";
 
 // Hoisted to module scope: keystroke input fires this on every key, so we reuse
@@ -1383,7 +1387,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         rows: term.rows,
         length: buf.length,
         lineText: (y) => buf.getLine(y)?.translateToString(true) ?? "",
-      });
+      }, IS_MAC);
       if (step.kind === "move") {
         keySelect = step.state;
         drawKeySelect();
@@ -1402,7 +1406,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     // text may hold an image (a screenshot): that is typed the way a dropped
     // file is (`pasteClipboardImage`).
     const pasteClipboard = () => {
-      (navigator.clipboard?.readText() ?? Promise.resolve(""))
+      readClipboardText()
         .catch(() => "")
         .then((text) => {
           if (text) {
@@ -1839,6 +1843,8 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // stayed unstamped and never wore the running ▶.
       if (kind === "shell" && (cmd || initialInput)) noteUserInput(id);
       const spawn = async () => {
+        // A new attempt: whatever the session host said about the last one is over.
+        clearSessionHostState(id);
         if ((kind === "agent" || kind === "local_agent") && !attachOnly && (tmuxSession || tmuxAttach)) {
           const owner = splitPtyId(id)?.scope;
           // A workspace identity is required for self-targeted MCP grants.
@@ -1846,12 +1852,29 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           if (owner) await useTabsStore.getState().persistScope(owner, "").catch(() => {});
           if (cancelled) return;
         }
-        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision" } | null>("pty_spawn", {
+        const spawned = await invoke<{ named?: boolean; interrupted?: boolean; attached?: boolean; resting?: boolean; turn?: "working" | "decision"; checkpointKey?: string } | null>("pty_spawn", {
           // A pane not shown yet has no terminal: xterm's own default size, the
           // one an unfitted terminal reported here before; the first fit resizes.
           opts: { id, cmd, args, env, cwd, cols: term?.cols ?? 80, rows: term?.rows ?? 24, local_only: localOnly, sandbox, agent: kind === "agent" || kind === "local_agent", project_id: projectId ?? null, schedule_target_id: scheduleTargetId ?? null, remote_host_id: remoteHostId ?? null, tmux_session: tmuxSession ?? null, tmux_attach: tmuxAttach ?? null, host_bound_uid: hostBoundUid ?? null, local_model: kind === "local_agent", host_session: hostSession, api_key: apiKey, assistant: JSON.parse(assistantKey) as AssistantLaunch | null, login: JSON.parse(loginKey) as LoginTarget | null },
           sessionName: launchName,
         });
+        // The view went while `pty_spawn` was out. Its cleanup's `pty_kill` ran
+        // before this PTY existed, so a CLOSED tab (gone from the store — not a
+        // relaunch, which reuses the id and spawns again) would leave it
+        // running: end it here, and on Windows the host session a local agent
+        // tab minted, which nothing would ever reattach. A popout taking the
+        // tab over, a dialog terminal and a sleeping pane keep theirs.
+        if (cancelled) {
+          const parts = splitPtyId(id);
+          const closed = !!parts && !(useTabsStore.getState().tabsByScope[parts.scope] ?? []).some((t) => t.key === parts.key);
+          if (closed && !attachOnly && !isDetachedPtyId(id) && !persistOnUnmount && !asleepPty(id)) {
+            invoke("pty_kill", { id }).catch(() => {});
+            if (IS_HOST_WINDOWS && (kind === "agent" || kind === "local_agent") && tmuxSession && !tmuxAttach) {
+              invoke("local_tmux_kill", { session: tmuxSession }).catch(() => {});
+            }
+          }
+          return;
+        }
         // An older backend answers nothing: `named` absent types the line as before.
         launchAttached = spawned?.attached === true;
         launchNamed = spawned?.named === true || launchAttached;
@@ -1866,6 +1889,13 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         // headless owner kept it running while no window was open): the turn
         // its hooks last reported, which the watcher will not repeat.
         if (spawned?.turn === "working" || spawned?.turn === "decision") noteLiveTurn(id, spawned.turn);
+        // Per-turn checkpoints: the key this window names the tab's by
+        // (`lib/agents/checkpoints`); a joined client's PTY gets none.
+        const launchUid = env?.[envName("TAB_UID")];
+        if (launchUid && !launchAttached) {
+          noteCheckpointKey(launchUid, spawned?.checkpointKey);
+          if (spawned?.checkpointKey) void useCheckpointsStore.getState().refresh(launchUid);
+        }
       };
       try {
         await spawn();
@@ -1896,6 +1926,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
               if (cancelled) return;
               if (!isAiOffRefusal(retryErr)) {
                 writeTerm(spawnErrorNote(retryErr));
+                reportSessionHostSpawnError(id, retryErr);
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, pause));
@@ -1934,13 +1965,17 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             spawnState = "spawned";
             ownsPty = true;
           } catch (retryErr) {
-            if (!cancelled) writeTerm(spawnErrorNote(retryErr));
+            if (!cancelled) {
+              writeTerm(spawnErrorNote(retryErr));
+              reportSessionHostSpawnError(id, retryErr);
+            }
           }
           return;
         }
         const refusal = hpcGuardRefusal(e);
         if (!refusal) {
           writeTerm(spawnErrorNote(e));
+          reportSessionHostSpawnError(id, e);
           return;
         }
         const ok = await useHpcGuardStore.getState().request(refusal.kind, refusal.target);
@@ -1967,7 +2002,10 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           spawnState = "spawned";
           ownsPty = true;
         } catch (retryErr) {
-          if (!cancelled) writeTerm(spawnErrorNote(retryErr));
+          if (!cancelled) {
+            writeTerm(spawnErrorNote(retryErr));
+            reportSessionHostSpawnError(id, retryErr);
+          }
         }
       }
     };
@@ -2331,6 +2369,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         }
       } else if (!attachOnly && !isDetachedPtyId(id) && !persistOnUnmount) {
         invoke("pty_kill", { id }).catch(() => {});
+        clearSessionHostState(id);
         // Drop the captured agent-task title so a closed tab's summary can't
         // linger against a future tab that reuses the key. Through the shared
         // parser: splitting on every colon left a box tab's key as
@@ -2846,6 +2885,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
     {agentPane && !attachOnly && !signIn && !signInDone && host && (
       <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}
+    {agentPane && !attachOnly && host && <TerminalSessionHostCard host={host} ptyId={id} visible={visible} />}
     {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
       <TerminalAgentsEmptyCard
         host={host}

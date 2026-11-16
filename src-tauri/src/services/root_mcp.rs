@@ -45,6 +45,7 @@ pub mod root_mcp_review;
 pub mod root_mcp_security;
 
 use std::collections::HashMap;
+use super::agent_registry::McpWiring;
 use app_core::sync::LockExt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -82,6 +83,10 @@ pub const MARKUP_URL_ENV: &str = crate::app_env!("MARKUP_MCP_URL");
 /// project-agent tab the window spawns while the server is on.
 pub const PRINT_TOKEN_ENV: &str = crate::app_env!("PRINT_MCP_TOKEN");
 pub const PRINT_URL_ENV: &str = crate::app_env!("PRINT_MCP_URL");
+/// The tab messages identity's pair (`services::tabs_mcp`), set for a local
+/// project-agent tab the window spawns while the server is on.
+pub const TABS_TOKEN_ENV: &str = crate::app_env!("TABS_MCP_TOKEN");
+pub const TABS_URL_ENV: &str = crate::app_env!("TABS_MCP_URL");
 /// The web lane's pair (`services::web_lane`), set for a chat-assistant tab
 /// only (`PtyOptions.assistant`), and the only MCP token such a tab gets.
 /// `services::assistant::LaneGrant::from_env` reads them back.
@@ -99,6 +104,7 @@ pub const LANE_TOKEN_ENVS: &[&str] = &[
     MARKUP_TOKEN_ENV,
     PRINT_TOKEN_ENV,
     WEB_TOKEN_ENV,
+    TABS_TOKEN_ENV,
 ];
 /// The server name the agent CLIs list the tools under.
 pub const SERVER_NAME: &str = crate::brand::MCP_SERVER;
@@ -134,6 +140,11 @@ impl Runtime {
     /// Mobile host does too, but no root lane). Approval needs the window's
     /// print preview and this machine's printers.
     pub fn serves_print(&self) -> bool { self.serves_root && self.serves_web }
+    /// This process grants the tab messages lane (`services::tabs_mcp`): the
+    /// window alone, as print — the one process whose views show every
+    /// message, so a Mobile host or a server daemon grants nothing and no
+    /// traffic exists that the window cannot show.
+    pub fn serves_tabs(&self) -> bool { self.serves_root && self.serves_web }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,6 +186,13 @@ pub struct PushBinding {
     /// runs the repo's `pre-push` hook inside this scope's fence, and refuses
     /// while it is `None` — never on the host (gap 18).
     pub fence_scope: Option<String>,
+    /// The tab is a local agent on a platform with no fence (Windows) that
+    /// the user accepted running with their rights, stamped by the spawn path
+    /// ([`TokenStore::stamp_push_unfenced_host`]). Its preflight runs the
+    /// repo's `pre-push` on the host, without the token, and only while
+    /// `exec_trust` holds the user's approval of the hook files (2442g): the
+    /// agent itself already runs on the host with the same rights.
+    pub unfenced_host: bool,
     /// The `.git` entry git discovery found from `dir` at spawn
     /// ([`git_push_mcp::git_entry_identity`](super::git_push_mcp::git_entry_identity)).
     /// Pushes, releases and CI reads refuse (`repo_changed`) when there was
@@ -196,6 +214,7 @@ fn lane(caller: Caller) -> u8 {
         Caller::Web => 5,
         Caller::Cockpit => 6,
         Caller::Printer => 7,
+        Caller::Tabs => 8,
     }
 }
 /// One process's bearer tokens and the sessions they open, in memory only.
@@ -230,6 +249,17 @@ impl TokenStore {
         binding.fence_scope = Some(scope.to_string());
         true
     }
+    /// Record on `token`'s Pusher binding that its tab runs unfenced on a
+    /// fence-less platform the user accepted ([`PushBinding::unfenced_host`]).
+    /// Same caller and timing as [`Self::stamp_push_fence_scope`].
+    pub fn stamp_push_unfenced_host(&self, token: &str) -> bool {
+        let mut map = self.map();
+        let Some(binding) = map.get_mut(token)
+            .filter(|s| s.identity.caller == Caller::Pusher)
+            .and_then(|s| s.identity.push.as_mut()) else { return false };
+        binding.unfenced_host = true;
+        true
+    }
     /// See [`register_token`].
     fn register(&self, token: String, identity: Identity, read_mail: bool) {
         let mut map = self.map();
@@ -242,6 +272,7 @@ impl TokenStore {
         });
         let session = Session {
             cockpit: None,
+            tabs: None,
             cockpit_rate: Arc::default(),
             id: crate::digest::sha256_hex(token.as_bytes()),
             access: Access::initial(identity.caller), identity,
@@ -290,7 +321,7 @@ pub fn token_generations() -> Vec<(String, Vec<String>)> {
 /// have called the tools in between.
 pub fn mark_tab_projects_readable(tab: &str, grant: ProjectsGrant) {
     for s in tokens().map().values() {
-        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) {
+        if s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs) {
             *s.projects_grant.lock_ok() = grant.clone();
         }
     }
@@ -331,6 +362,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
         Caller::Marker => super::markup_mcp::SERVER_NAME,
         Caller::Web => super::web_lane::SERVER_NAME,
         Caller::Printer => super::print_mcp::SERVER_NAME,
+        Caller::Tabs => super::tabs_mcp::SERVER_NAME,
     }).collect();
     names.dedup();
     names
@@ -339,7 +371,7 @@ pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
 /// and web lanes own no sandbox view, so they never keep one alive).
 pub fn tab_active(tab: &str) -> bool {
     tokens().map().values()
-        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer))
+        .any(|s| s.identity.tab == tab && !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs))
 }
 
 /// The on-disk half of the mail taint: an empty marker per tab under the root
@@ -442,6 +474,19 @@ pub(crate) fn test_session_bound(caller: Caller, tab: &str, project: &str, targe
     let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
     (token, session)
 }
+/// A [`Caller::Tabs`] session seated at `binding`, enrolled as a grant does.
+#[cfg(test)]
+pub(crate) fn test_session_tabs(tab: &str, binding: super::tabs_mcp::Binding) -> (String, Session) {
+    let token = mint_token().unwrap();
+    register_token(token.clone(), Identity {
+        tab: tab.to_string(), caller: Caller::Tabs, project: Some(binding.seat.scope.clone()),
+        schedule_target: None, push: None, endpoint: None, model: None,
+    }, false);
+    if let Some(session) = tokens().map().get_mut(&token) { session.tabs = Some(binding.clone()); }
+    let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
+    super::tabs_mcp::enrol(binding, tab, &session.id);
+    (token, session)
+}
 /// A root session that reads every project (`Session::projects_grant`, unfenced).
 #[cfg(test)]
 pub(crate) fn test_session_reading_projects(caller: Caller, tab: &str, state: &Path) -> (String, Session) {
@@ -487,6 +532,10 @@ pub enum Caller {
     /// bound at spawn to its project: served `print_request` /
     /// `print_status` / `print_cancel` on `/mcp/print` and nothing else.
     Printer,
+    /// A local project-agent tab's messaging identity (`services::tabs_mcp`),
+    /// bound at spawn to its saved tab and class (`Session::tabs`): served
+    /// `tabs_list` / `tabs_send` / `tabs_inbox` on `/mcp/tabs` and nothing else.
+    Tabs,
 }
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -520,6 +569,8 @@ pub struct Session {
     pub identity: Identity,
     pub access: Access,
     pub(crate) cockpit: Option<super::cockpit_mcp::Binding>,
+    /// A [`Caller::Tabs`] session's seat (`services::tabs_mcp`), set at grant.
+    pub(crate) tabs: Option<super::tabs_mcp::Binding>,
     cockpit_rate: Arc<std::sync::Mutex<RollingWindow>>,
     revoked: Arc<AtomicBool>,
     /// Latched by the first mail read tool this spawn calls
@@ -634,7 +685,7 @@ pub struct SessionInfo {
 /// Help, markup and web sessions are left out: one per agent tab, nothing to
 /// grant, and they end with their tab or their switch.
 pub fn sessions() -> Vec<SessionInfo> {
-    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer)).map(|s| SessionInfo {
+    tokens().map().values().filter(|s| !matches!(s.identity.caller, Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs)).map(|s| SessionInfo {
         id: s.id.clone(), tab: s.identity.tab.clone(), caller: s.identity.caller, access: s.access.clone(), project: s.identity.project.clone(),
     }).collect()
 }
@@ -643,7 +694,7 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
     let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
-    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer) { return Err("this session's scope is fixed at spawn".into()); }
+    if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
     s.access = access;
@@ -693,13 +744,18 @@ fn basename(cmd: &str) -> &str {
     cmd.rsplit(['/', '\\']).next().unwrap_or(cmd)
 }
 
-/// The cloud agent CLIs [`apply_to_spawn_with`] names the server to on their
-/// command line — the ones that can actually *call* the tools. Every other
-/// opted-in root agent gets the env pair only. The Models & agents menu's
+/// The cloud agent CLIs every lane names its server to for one launch — the
+/// registry rows whose [`McpWiring`] is not `None`, the ones that see the
+/// tools as their own. Every other agent gets each lane's env pair only, which
+/// the `<slug>-mcp` command reads. The Models & agents menu's
 /// "MCP" chip reads this (via `root_mcp_status`) to say which CLIs the switch
 /// can do anything for, so a CLI wired below must be listed here; the
 /// `every_wired_cli_is_named_the_server` test holds the two together.
-pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
+pub const WIRED_CLIS: &[&str] = &["claude", "codex", "copilot", "opencode"];
+
+/// The CLIs a `mail_reader` VM's agent is wired for: the argv-only forms, as
+/// the reader lane has nothing but the remote command line to carry them.
+const READER_CLIS: &[&str] = &["claude", "codex"];
 
 /// Hand a root agent the endpoint. Pure over `runtime` so it is testable.
 ///
@@ -727,8 +783,13 @@ pub const WIRED_CLIS: &[&str] = &["claude", "codex"];
 ///   what lets a completion-only model run at all. The tools are narrowed to this
 ///   server's, so a small model gets a short tool list and no shell. The
 ///   token is named (`api_key_env`), not inlined.
-/// - Every other opted-in agent gets the env pair only, until its CLI has a
-///   per-invocation way to name a server.
+/// - **Copilot**: `--additional-mcp-config <json>` first in argv, one per
+///   server, the token named as `${…}` (verified on 1.0.110).
+/// - **OpenCode**: an `mcp` entry merged into `OPENCODE_CONFIG_CONTENT`, the
+///   token named as `{env:…}` (verified on 2.3.0).
+/// - Every other opted-in agent gets the env pair only, which the
+///   `<slug>-mcp` command reads, until its CLI has a verified per-launch form
+///   ([`McpWiring`]).
 ///
 /// `local_only` (`Settings::root_mcp_local_only`) hands a cloud agent nothing
 /// at all. Each spawn gets its own secret; the token map retains its caller class.
@@ -770,31 +831,40 @@ pub fn apply_to_spawn_with(
                 json!([format!("{SERVER_NAME}_*")]).to_string(),
             );
         }
-        bin => wire_cli_args(bin, &mut opts.args, &url),
+        _ => wire_named_cli(opts, &url, SERVER_NAME, TOKEN_ENV),
     }
 }
 
-/// Name the server on a wired CLI's own command line ([`WIRED_CLIS`]); a no-op
-/// for every other binary, and for an argv that already names it.
+/// Name the root server on Claude's or Codex's own command line: the reader
+/// lane's form ([`reader_wiring`]), which has only the argv of a CLI inside a VM.
 fn wire_cli_args(bin: &str, args: &mut Vec<String>, url: &str) {
-    wire_named_cli_args(bin, args, url, SERVER_NAME, TOKEN_ENV);
+    wire_named_cli_args(super::agent_registry::mcp_wiring(bin), args, url, SERVER_NAME, TOKEN_ENV);
 }
 
-fn wire_named_cli_args(bin: &str, args: &mut Vec<String>, url: &str, server: &str, token_env: &str) {
-    match bin {
+/// Name `server` at `url` to this spawn's CLI the one way its registry row
+/// says ([`McpWiring`]), with `token_env` as the token's variable. A no-op for
+/// a CLI without a per-launch form ([`McpWiring::None`]): its tab keeps the
+/// lane's env pair, which the `<slug>-mcp` command reads.
+fn wire_named_cli(opts: &mut PtyOptions, url: &str, server: &str, token_env: &str) {
+    match super::agent_registry::mcp_wiring(basename(&opts.cmd)) {
+        McpWiring::OpenCodeInline => wire_opencode_inline(&mut opts.env, url, server, token_env),
+        wiring => wire_named_cli_args(wiring, &mut opts.args, url, server, token_env),
+    }
+}
+
+fn wire_named_cli_args(wiring: McpWiring, args: &mut Vec<String>, url: &str, server: &str, token_env: &str) {
+    let named = |args: &[String]| args.iter().any(|a| a.contains(&format!("\"{server}\":")));
+    let header = format!("Bearer ${{{token_env}}}");
+    match wiring {
         // The root server keeps its rule (a `--mcp-config` already present wins);
         // the schedule and help servers join whatever is there. None twice.
         // A subcommand (`claude auth login`, a sign-in tab) refuses the flag.
-        "claude" if !super::agent_fence::runs_subcommand(args)
-            && !args.iter().any(|a| a.contains(&format!("\"{server}\":")))
+        McpWiring::ClaudeFlag if !super::agent_fence::runs_subcommand(args)
+            && !named(args)
             && (server != SERVER_NAME || !args.iter().any(|a| a == "--mcp-config")) => {
             let config = json!({
                 "mcpServers": {
-                    server: {
-                        "type": "http",
-                        "url": url,
-                        "headers": { "Authorization": format!("Bearer ${{{token_env}}}") },
-                    }
+                    server: { "type": "http", "url": url, "headers": { "Authorization": header } }
                 }
             });
             if let Some(index) = args.iter().position(|a| a == "--mcp-config") {
@@ -804,7 +874,7 @@ fn wire_named_cli_args(bin: &str, args: &mut Vec<String>, url: &str, server: &st
                 args.push(config.to_string());
             }
         }
-        "codex" if !args.iter().any(|a| a.starts_with(&format!("mcp_servers.{server}."))) => {
+        McpWiring::CodexOverrides if !args.iter().any(|a| a.starts_with(&format!("mcp_servers.{server}."))) => {
             let overrides = [
                 "-c".to_string(),
                 format!("mcp_servers.{server}.url=\"{url}\""),
@@ -813,8 +883,65 @@ fn wire_named_cli_args(bin: &str, args: &mut Vec<String>, url: &str, server: &st
             ];
             args.splice(0..0, overrides);
         }
+        // One flag per server, first in argv: the flag is global and must
+        // precede a subcommand, and a sign-in (`copilot login`) gets none.
+        McpWiring::CopilotFlag if !super::agent_fence::runs_subcommand(args) && !named(args) => {
+            let config = json!({
+                "mcpServers": {
+                    server: { "type": "http", "url": url, "headers": { "Authorization": header }, "tools": ["*"] }
+                }
+            });
+            args.splice(0..0, ["--additional-mcp-config".to_string(), config.to_string()]);
+        }
         _ => {}
     }
+}
+
+/// Merge `server` into OpenCode's inline config (`OPENCODE_CONFIG_CONTENT`):
+/// over the one already in `env` (another lane's, an API route's), or else the
+/// user's own from this process's environment, which must survive since the
+/// spawn's value replaces it. A server of that name already there stays, and
+/// a config that is not a JSON object is left alone (no server, no clobber).
+/// The local-models config `launch_prep` adds later merges these entries in
+/// ([`merge_opencode_mcp`]).
+fn wire_opencode_inline(env: &mut HashMap<String, String>, url: &str, server: &str, token_env: &str) {
+    const KEY: &str = super::agent_api_keys::OPENCODE_INLINE_ENV;
+    let existing = env.get(KEY).cloned().or_else(|| std::env::var(KEY).ok());
+    let mut config = match existing {
+        Some(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(value) if value.is_object() => value,
+            _ => return,
+        },
+        None => json!({}),
+    };
+    let entry = json!({
+        "type": "remote",
+        "url": url,
+        "headers": { "Authorization": format!("Bearer {{env:{token_env}}}") },
+    });
+    match config.get_mut("mcp") {
+        Some(Value::Object(servers)) => { servers.entry(server.to_string()).or_insert(entry); }
+        None => { config["mcp"] = json!({ server: entry }); }
+        Some(_) => return,
+    }
+    env.insert(KEY.to_string(), config.to_string());
+}
+
+/// `base` (an OpenCode inline config) with the `mcp` servers of `lanes` — the
+/// config [`wire_opencode_inline`] built — added where `base` names none of
+/// that name. `base` unchanged when either is not a JSON object.
+pub fn merge_opencode_mcp(base: &str, lanes: &str) -> String {
+    let (Ok(mut config), Ok(lanes)) = (serde_json::from_str::<Value>(base), serde_json::from_str::<Value>(lanes)) else {
+        return base.to_string();
+    };
+    let Some(added) = lanes.get("mcp").and_then(Value::as_object) else { return base.to_string() };
+    if !config.is_object() { return base.to_string(); }
+    if config.get("mcp").is_none() { config["mcp"] = json!({}); }
+    let Some(servers) = config["mcp"].as_object_mut() else { return base.to_string() };
+    for (name, entry) in added {
+        servers.entry(name.clone()).or_insert_with(|| entry.clone());
+    }
+    config.to_string()
 }
 
 /// Whether this spawn is a local-model tab: Vibe, pointed at an Ollama model
@@ -1017,7 +1144,31 @@ pub fn grant_lanes(opts: &mut PtyOptions, agent_spawn: bool, runtime: Option<&Ru
         && trusted.settings.as_ref().is_some_and(|s| s.cockpit_mcp()) {
         grant_cockpit(opts, runtime, store, &trusted.state, &trusted.tool_models());
     }
+    // Last: the tab messages server (`services::tabs_mcp`), merged into the
+    // same Vibe env. Only the window grants it (`Runtime::serves_tabs`), only
+    // to a tab of a registered project (never a box), and never to a spawn
+    // with the network cut (`local_lane::MCP_ALLOWED` leaves `/mcp/tabs` out).
+    // The class comes from the gate's stamp and `local_model`, both final by
+    // now: `launch_prep::prepare` runs the gate before this, and nothing
+    // between here and the home it prepares changes either.
+    if project_lanes && runtime.serves_tabs() && trusted.settings.as_ref().is_some_and(|s| s.tabs_mcp())
+        && tabs_reaches(opts, &trusted) {
+        grant_tabs(opts, runtime, store, &trusted.state, &trusted.tool_models());
+    }
     root_agent
+}
+
+/// Whether a project-lane spawn may hold the tab messages lane beyond
+/// [`grant_lanes`]' own checks: its scope is a registered project (a box tab's
+/// view changes with its membership) and its network is not cut — by the
+/// record the gate verified it under, or by the project's setting now.
+fn tabs_reaches(opts: &PtyOptions, trusted: &Trusted) -> bool {
+    let Some(entry) = trusted.entry.as_ref() else { return false };
+    if opts.project_id.as_deref().is_some_and(|p| super::box_store::box_id_of_scope(p).is_some()) { return false; }
+    let privacy = super::agent_privacy::privacy_of(entry);
+    let cut_now = privacy.local_models_only && privacy.cut_network;
+    let cut_verified = super::agent_privacy::verified_launch(&opts.id).is_some_and(|v| v.cut);
+    !cut_now && !cut_verified
 }
 
 /// The assistant scope's lanes: the web lane's token and URL in the spawn env
@@ -1136,7 +1287,7 @@ pub fn apply_schedule_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, to
         opts.env.insert("VIBE_MCP_SERVERS".into(), json!([{"name":name,"transport":"http","url":url,"api_key_env":SCHEDULE_TOKEN_ENV}]).to_string());
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), json!([format!("{name}_*")]).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, super::schedule_mcp::SERVER_NAME, SCHEDULE_TOKEN_ENV);
+        wire_named_cli(opts, &url, super::schedule_mcp::SERVER_NAME, SCHEDULE_TOKEN_ENV);
     }
 }
 
@@ -1179,7 +1330,7 @@ pub fn apply_git_push_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, to
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, GIT_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, GIT_TOKEN_ENV);
     }
 }
 
@@ -1193,7 +1344,7 @@ pub fn grant_git_push(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenSto
     let Some(token) = mint_token() else { return };
     apply_git_push_to_spawn_with(opts, runtime, &token, tool_models);
     if opts.env.get(GIT_TOKEN_ENV) == Some(&token) {
-        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None }), endpoint: None, model: None }, false);
+        store.register(token, Identity { tab: opts.id.clone(), caller: Caller::Pusher, project: opts.project_id.clone(), schedule_target: None, push: Some(PushBinding { git_at_spawn: super::git_push_mcp::git_entry_identity(&dir), dir, fence_scope: None, unfenced_host: false }), endpoint: None, model: None }, false);
     }
 }
 
@@ -1217,7 +1368,7 @@ pub fn apply_cockpit_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, tok
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, COCKPIT_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, COCKPIT_TOKEN_ENV);
     }
 }
 
@@ -1225,7 +1376,6 @@ pub fn apply_cockpit_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, tok
 /// argument can choose this scope or identity.
 fn grant_cockpit(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, state: &Path, models: &[String]) {
     let Some(binding) = super::cockpit_mcp::binding_for_spawn(state, opts) else { return };
-    if !matches!(basename(&opts.cmd), "claude" | "codex") && !is_local_model(opts) { return; }
     let Some(token) = mint_token() else { return };
     apply_cockpit_to_spawn_with(opts, runtime, &token, models);
     if opts.env.get(COCKPIT_TOKEN_ENV) != Some(&token) { return; }
@@ -1265,7 +1415,7 @@ pub fn apply_help_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token:
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, HELP_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, HELP_TOKEN_ENV);
     }
 }
 
@@ -1316,7 +1466,7 @@ pub fn apply_markup_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, toke
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, MARKUP_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, MARKUP_TOKEN_ENV);
     }
 }
 
@@ -1362,7 +1512,7 @@ pub fn apply_print_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token
         if !enabled.contains(&pattern) { enabled.push(pattern); }
         opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
     } else {
-        wire_named_cli_args(basename(&opts.cmd), &mut opts.args, &url, name, PRINT_TOKEN_ENV);
+        wire_named_cli(opts, &url, name, PRINT_TOKEN_ENV);
     }
 }
 
@@ -1379,6 +1529,60 @@ pub fn grant_print(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore,
     }
 }
 
+/// Hand a local project-agent tab the tab messages server
+/// (`services::tabs_mcp`). Pure over `runtime` so it is testable;
+/// [`grant_lanes`] decides who qualifies. Wired as print is: Claude, Codex,
+/// Copilot and OpenCode on their own launch, a tool-tagged local Vibe model
+/// merged into its MCP env, every other agent CLI the env pair (read by the
+/// `<slug>-mcp` command). A container tab and an untagged local model get
+/// nothing.
+pub fn apply_tabs_to_spawn_with(opts: &mut PtyOptions, runtime: &Runtime, token: &str, tool_models: &[String]) {
+    let local = is_local_model(opts);
+    if opts.project_id.is_none() || opts.sandbox || (local && !local_model_has_tools(opts, tool_models)) { return; }
+    let url = tabs_endpoint_url(runtime.port);
+    let name = super::tabs_mcp::SERVER_NAME;
+    opts.env.insert(TABS_TOKEN_ENV.into(), token.into());
+    opts.env.insert(TABS_URL_ENV.into(), url.clone());
+    if local {
+        let mut servers: Vec<Value> = opts.env.get("VIBE_MCP_SERVERS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        servers.retain(|s| s["name"] != name);
+        servers.push(json!({"name": name, "transport": "http", "url": url, "api_key_env": TABS_TOKEN_ENV}));
+        opts.env.insert("VIBE_MCP_SERVERS".into(), Value::Array(servers).to_string());
+        let mut enabled: Vec<Value> = opts.env.get("VIBE_ENABLED_TOOLS")
+            .and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
+        let pattern = json!(format!("{name}_*"));
+        if !enabled.contains(&pattern) { enabled.push(pattern); }
+        opts.env.insert("VIBE_ENABLED_TOOLS".into(), Value::Array(enabled).to_string());
+    } else {
+        wire_named_cli(opts, &url, name, TABS_TOKEN_ENV);
+    }
+}
+
+pub fn tabs_endpoint_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/mcp/tabs")
+}
+
+/// The tab messages lane of [`grant_lanes`]: the token binds the tab's seat
+/// (the cockpit binding: exactly one saved agent tab for its tmux session),
+/// its class and its handle; no binding or no handle key, no grant. The seat
+/// is enrolled so its siblings can list it.
+pub(crate) fn grant_tabs(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, state: &Path, tool_models: &[String]) {
+    let Some(binding) = super::tabs_mcp::binding_for_spawn(state, opts) else { return };
+    let Some(token) = mint_token() else { return };
+    apply_tabs_to_spawn_with(opts, runtime, &token, tool_models);
+    if opts.env.get(TABS_TOKEN_ENV) != Some(&token) { return; }
+    store.register(token.clone(), Identity { tab: opts.id.clone(), caller: Caller::Tabs,
+        project: Some(binding.seat.scope.clone()), schedule_target: None, push: None, endpoint: None, model: None }, false);
+    let session = {
+        let mut map = store.map();
+        let Some(session) = map.get_mut(&token) else { return };
+        session.tabs = Some(binding.clone());
+        session.id.clone()
+    };
+    super::tabs_mcp::enrol(binding, &opts.id, &session);
+}
+
 /// The guest-side address of the root MCP port inside a `mail_reader` VM: a
 /// `guestfwd` channel `services::vm` adds for such a project only. Fixed, for
 /// the reason the proxy's is — the in-guest config survives a host port change.
@@ -1392,7 +1596,7 @@ pub fn reader_endpoint_url() -> String {
 /// The pure half of the reader lane ([`grant_lanes`]).
 pub fn reader_wiring(agent_cmd: &str, agent_args: &mut Vec<String>, token: &str) -> Option<Vec<(String, String)>> {
     let bin = basename(agent_cmd);
-    if !WIRED_CLIS.contains(&bin) {
+    if !READER_CLIS.contains(&bin) {
         return None;
     }
     let url = reader_endpoint_url();

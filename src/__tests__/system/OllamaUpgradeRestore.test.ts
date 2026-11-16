@@ -7,8 +7,11 @@
  * a **changed** version is the only signal that starts the reload (an
  * unreadable one is the binary mid-replacement, not an answer), the wait is
  * **bounded** and running out is a reported state with a retry rather than a
- * silent give-up, and an upgrade with **nothing resident** starts no watcher at
- * all — this restores what was there, it never invents a load.
+ * silent give-up, and an upgrade with **nothing resident** loads nothing — this
+ * restores what was there, it never invents a load. A server the upgrade left
+ * running on the old version is restarted, but only once it has stayed stale
+ * for two polls (an installer may still be restarting it), and a failed restart
+ * is a reported state with a retry.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
@@ -33,9 +36,10 @@ const loadedCalls = () =>
     .map(([, args]) => (args as { model: string }).model);
 
 /** What the local `ollama --version` read answers from now on. */
-const reports = (current: string) =>
+const reports = (current: string, server = current) =>
   versionStatus.mockResolvedValue({
     current,
+    server,
     latest: "",
     update_available: false,
     install_cmd: "",
@@ -64,12 +68,20 @@ afterEach(() => {
 });
 
 describe("the snapshot", () => {
-  it("starts no watcher when nothing was resident", async () => {
+  it("loads nothing when nothing was resident, and says nothing if no restart was needed", async () => {
     begin("0.14.3", []);
+    expect(phase()).toBe("waiting"); // the server may still need restarting
+    reports("0.15.2");
+    await tick();
+    expect(phase()).toBe("idle");
+    expect(loadedCalls()).toEqual([]);
+    expect(invoke).not.toHaveBeenCalledWith("restart_ollama_server");
+  });
+
+  it("starts no watcher with nothing installed to compare against", async () => {
+    begin("", ["a:7b"]);
     expect(phase()).toBe("idle");
     await tick();
-    // Not merely "no load" — nothing is even *asked*, so an upgrade on a
-    // machine with an empty memory costs no polling at all.
     expect(versionStatus).not.toHaveBeenCalled();
   });
 
@@ -149,5 +161,71 @@ describe("a model that will not come back", () => {
     const s = useOllamaUpgradeStore.getState();
     expect(s.loaded).toEqual(["a:7b"]);
     expect(s.failed).toEqual({ "b:3b": "model not found" });
+  });
+});
+
+const restarts = () => invoke.mock.calls.filter(([cmd]) => cmd === "restart_ollama_server").length;
+
+describe("a server the upgrade left running", () => {
+  it("is restarted once it stays on the old version, then the models come back", async () => {
+    begin("0.14.3", ["a:7b"]);
+    reports("0.15.2", "0.14.3");
+    await tick();
+    // One stale reading may be an installer about to restart it itself.
+    expect(restarts()).toBe(0);
+    expect(phase()).toBe("waiting");
+    await tick();
+    await vi.waitFor(() => expect(phase()).toBe("done"));
+    expect(restarts()).toBe(1);
+    expect(loadedCalls()).toEqual(["a:7b"]);
+    expect(useOllamaUpgradeStore.getState().to).toBe("0.15.2");
+  });
+
+  it("is restarted with nothing resident, and the note says it was", async () => {
+    begin("0.14.3", []);
+    reports("0.15.2", "0.14.3");
+    await tick();
+    await tick();
+    await vi.waitFor(() => expect(phase()).toBe("done"));
+    expect(restarts()).toBe(1);
+    expect(loadedCalls()).toEqual([]);
+  });
+
+  it("is left alone when the installer restarted it itself", async () => {
+    begin("0.14.3", ["a:7b"]);
+    reports("0.15.2", "0.14.3");
+    await tick();
+    reports("0.15.2"); // the installer's own restart landed in between
+    await tick();
+    await vi.waitFor(() => expect(phase()).toBe("done"));
+    expect(restarts()).toBe(0);
+  });
+
+  it("is not restarted when no server is running at all", async () => {
+    begin("0.14.3", ["a:7b"]);
+    reports("0.15.2", "");
+    await tick();
+    await vi.waitFor(() => expect(phase()).toBe("done"));
+    expect(restarts()).toBe(0);
+  });
+
+  it("reports a failed restart, loads nothing, and retries on the click", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "restart_ollama_server" ? Promise.reject("ollama_still_running") : Promise.resolve(),
+    );
+    begin("0.14.3", ["a:7b"]);
+    reports("0.15.2", "0.14.3");
+    await tick();
+    await tick();
+    await vi.waitFor(() => expect(phase()).toBe("restart_failed"));
+    expect(useOllamaUpgradeStore.getState().restartError).toBe("ollama_still_running");
+    expect(loadedCalls()).toEqual([]);
+
+    invoke.mockReset();
+    invoke.mockResolvedValue(undefined);
+    await useOllamaUpgradeStore.getState().restartNow();
+    expect(restarts()).toBe(1);
+    expect(phase()).toBe("done");
+    expect(loadedCalls()).toEqual(["a:7b"]);
   });
 });

@@ -33,6 +33,14 @@ const TITLES: Record<string, TranslationKey> = {
   other: "terminal.reader.modelGroup.other",
 };
 
+/** OpenCode's own model list: the step titled "Select model" on an OpenCode
+ * tab. Its rows are shown grouped (`groupOpenCodeModels`); every other step
+ * and every other CLI's list is shown as it comes. One answer for the markup
+ * model chip, the reader, the steering box and the phone's sheet. */
+export function isOpenCodeModelList(agentLabel: string | undefined, stepTitle: string | undefined): boolean {
+  return isOpenCodeTab(agentLabel) && stepTitle === "Select model";
+}
+
 export function openCodeModelGroupTitle<T>(group: OpenCodeModelGroup<T>, t: (key: TranslationKey) => string): string {
   return group.provider ?? t(TITLES[group.key] ?? TITLES.other);
 }
@@ -66,4 +74,5 @@ export function groupOpenCodeModels<T extends { label: string; description?: str
   });
 }
 import type { TranslationKey } from "../../../src/lib/i18n";
+import { isOpenCodeTab } from "./openCodeMini";
 

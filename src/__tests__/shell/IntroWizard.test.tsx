@@ -121,6 +121,76 @@ describe("How to start intro wizard", () => {
     expect(heading()).toContain(`Ask ${BRAND.display}`);
   });
 
+  it("Already on this computer: asks before copying, imports only what stays ticked", async () => {
+    const answers: unknown[] = [];
+    backend({
+      agent_import_offer: () => ({ pending: true, logins: ["claude", "codex"], config: [".claude", ".codex"] }),
+      agent_import_offer_answer: (args) => {
+        answers.push(args);
+        return { logins: [{ id: "claude", error: null }], config: { files: 3, configs: 1 }, configError: null };
+      },
+    });
+    await act(async () => {
+      render(<HowToStart onClose={vi.fn()} firstRun />);
+    });
+    // The page joins the route as step 2 once the backend answered.
+    await waitFor(() => expect(railEntries()[1]).toBe("2Already on this computer"));
+    expect(answers).toEqual([]);
+    next();
+    expect(heading()).toContain("Already on this computer");
+    const group = screen.getByRole("group", { name: "What to bring along" });
+    const cards = Array.from(group.querySelectorAll("button"));
+    expect(cards.map((c) => c.getAttribute("aria-pressed"))).toEqual(["true", "true", "true"]);
+    expect(group.textContent).toContain("~/.claude, ~/.codex");
+    // Untick Codex; paging away and back copies nothing.
+    fireEvent.click(cards[1]);
+    next();
+    back();
+    expect(answers).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Import the ticked ones" }));
+    await waitFor(() => expect(screen.getByText(/login imported/)).toBeTruthy());
+    expect(answers).toEqual([{ logins: ["claude"], config: true }]);
+    expect(screen.getByText("Agent config imported (4 files)")).toBeTruthy();
+    // The result stays while this wizard is open.
+    next();
+    back();
+    expect(screen.getByText(/login imported/)).toBeTruthy();
+    expect(readIntroPage()).toBe("welcome");
+  });
+
+  it("Already on this computer: Don't import sends an empty answer", async () => {
+    const answers: unknown[] = [];
+    backend({
+      agent_import_offer: () => ({ pending: true, logins: ["claude"], config: [] }),
+      agent_import_offer_answer: (args) => {
+        answers.push(args);
+        return { logins: [], config: null, configError: null };
+      },
+    });
+    await act(async () => {
+      render(<HowToStart onClose={vi.fn()} />);
+    });
+    await waitFor(() => expect(railEntries()[1]).toBe("2Already on this computer"));
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Don't import" }));
+    await waitFor(() => expect(screen.getByText("Nothing was imported.")).toBeTruthy());
+    expect(answers).toEqual([{ logins: [], config: false }]);
+  });
+
+  it("Already on this computer: no page when nothing is asked", async () => {
+    for (const offer of [
+      { pending: false, logins: [], config: [] },
+      { pending: true, logins: [], config: [] },
+    ]) {
+      cleanup();
+      backend({ agent_import_offer: () => offer });
+      await act(async () => {
+        render(<HowToStart onClose={vi.fn()} />);
+      });
+      expect(railEntries()[1]).toBe("2Your goals");
+    }
+  });
+
   it("types the Welcome greeting only on the first run, and only once", async () => {
     const greeting = `Hi there — I'm ${BRAND.display}.`;
     const typed = () => document.querySelector(".typewriter [aria-hidden='true']")?.textContent ?? "";
@@ -363,9 +433,10 @@ describe("How to start intro wizard", () => {
     expect(screen.getByText("1 project(s) open")).toBeTruthy();
   });
 
-  it("Agent CLIs: installed state per CLI, and Install runs the registry command in a terminal tab", async () => {
+  it("Agent CLIs: installed state per CLI, and Install runs the registry installer in place", async () => {
     localStorage.setItem(storageKey("intro.page"), "agents");
     backend({
+      install_agent: () => "ok",
       list_agents: () => [
         { id: "claude", label: "Claude", bin: "claude", install_cmd: "curl claude | bash", shell_kind: "bash", docs: "", installed: true },
         { id: "codex", label: "Codex", bin: "codex", install_cmd: "curl codex | sh", shell_kind: "bash", docs: "", installed: false },
@@ -374,6 +445,8 @@ describe("How to start intro wizard", () => {
       ],
       node_runtime_status: () => ({ npm: false, version: null, min_major: 24, too_old: false }),
     });
+    const updateSettings = vi.fn(async () => {});
+    useSettingsStore.setState({ updateSettings });
     const onClose = vi.fn();
     render(<HowToStart onClose={onClose} />);
     await screen.findByRole("button", { name: "Codex" });
@@ -382,9 +455,13 @@ describe("How to start intro wizard", () => {
     expect(screen.getByText("installed")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Codex" }));
-    fireEvent.click(screen.getByRole("button", { name: "Install Codex in a terminal" }));
-    expect(runInstallInTab).toHaveBeenCalledWith("Install Codex", "curl codex | sh", "bash");
-    expect(onClose).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Install Codex" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_agent", { id: "codex" }));
+    // A confirmed install is the pick: it becomes the default agent CLI, and
+    // the wizard stays open (no terminal needed).
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ default_agent_cmd: "codex" }));
+    expect(runInstallInTab).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
 
     // npm-based: the Node.js prerequisite shows up with its own installer.
     fireEvent.click(screen.getByRole("button", { name: "Google Gemini" }));

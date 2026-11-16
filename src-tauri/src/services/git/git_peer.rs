@@ -55,7 +55,7 @@ use std::time::Duration;
 use notify::{RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use app_core::CoreCtx;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{mpsc, Notify};
 use tokio::time::MissedTickBehavior;
 
 use crate::schema::net_usage;
@@ -266,6 +266,26 @@ impl Peer {
             Peer::Remote(spec) => ssh_exec::run_git_remote(spec, &remote_git_args(args)),
         }
     }
+
+    /// What `git <args>` printed, when git ran and exited 0.
+    fn stdout(&self, args: &[&str]) -> Option<Vec<u8>> {
+        self.run(args).ok().filter(|o| o.status.success()).map(|o| o.stdout)
+    }
+
+    /// [`Self::stdout`] as trimmed text; `None` also when git printed nothing.
+    pub(crate) fn answer(&self, args: &[&str]) -> Option<String> {
+        self.stdout(args)
+            .map(|out| String::from_utf8_lossy(&out).trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+}
+
+/// The paths of a NUL-separated git listing (`-z`), `/`-separated.
+fn nul_paths(listing: &[u8]) -> impl Iterator<Item = String> + '_ {
+    listing
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).replace('\\', "/"))
 }
 
 /// The argument list [`Peer::run`] hands `git` on the host:
@@ -286,10 +306,17 @@ fn remote_git_args(args: &[&str]) -> Vec<String> {
 /// without this a host repo's `core.fsmonitor` program or its `post-index-change`
 /// hook would run on every one. The pairs are constants, each `shell_quote`d.
 ///
+/// `GIT_OPTIONAL_LOCKS=0` goes first, as the local arm sets it
+/// (`git_hardened::git_command`): the probe's `git status` would otherwise take
+/// the host's `index.lock` to refresh the index on every poll, and a `git add`
+/// or `commit` the user runs on the host in that moment fails on the lock. A
+/// variable, not `--no-optional-locks`: a git too old for it ignores the
+/// variable and rejects the flag. Mandatory locks are taken regardless.
+///
 /// Not covered, as for every host git call (`git_hardened::run_git`'s doc): a
 /// host repo's own `filter.<driver>.*` keys, which no fixed `-c` can name. The
 /// host's `.git/config` is the host's business. Pure.
-fn hardened_remote_script(script: &str) -> String {
+pub(crate) fn hardened_remote_script(script: &str) -> String {
     let pairs: Vec<String> = crate::services::git_hardened::hardened_git_args::<&str>(&[])
         .iter()
         .map(|a| ssh_exec::shell_quote(a))
@@ -297,7 +324,8 @@ fn hardened_remote_script(script: &str) -> String {
     let pairs = pairs.join(" ");
     let diff_verbs = crate::services::git_hardened::DIFF_DRIVER_CMDS.join("|");
     format!(
-        "git() {{ case $1 in {diff_verbs}) __git_verb=$1; shift; \
+        "GIT_OPTIONAL_LOCKS=0; export GIT_OPTIONAL_LOCKS; \
+         git() {{ case $1 in {diff_verbs}) __git_verb=$1; shift; \
          command git {pairs} \"$__git_verb\" --no-ext-diff --no-textconv \"$@\";; \
          *) command git {pairs} \"$@\";; esac; }}; {script}"
     )
@@ -737,7 +765,7 @@ git symbolic-ref --quiet --short HEAD 2>/dev/null; printf '\\036'; \
 git rev-parse --verify --quiet HEAD 2>/dev/null; printf '\\036'; \
 git for-each-ref --format='%(objectname) %(refname:short)' refs/heads 2>/dev/null; printf '\\036'; \
 git for-each-ref --format='%(objectname) %(refname:short)' refs/tags 2>/dev/null; printf '\\036'; \
-git status --porcelain 2>/dev/null; printf '\\036'; \
+git status --porcelain --untracked-files=no 2>/dev/null; printf '\\036'; \
 git log -1 --format=%s HEAD 2>/dev/null; printf '\\036'; \
 git worktree list --porcelain 2>/dev/null || true; \
 elif [ \"$r\" -eq 128 ] && [ -z \"$g\" ]; then printf 'norepo'; \
@@ -1343,10 +1371,8 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
     // literal `HEAD` that a bare `rev-parse HEAD` prints — the two probes must agree
     // on what unborn looks like, whichever one a peer happens to take.
     let rev = peer
-        .run(&["rev-parse", "--verify", "--quiet", "HEAD"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .stdout(&["rev-parse", "--verify", "--quiet", "HEAD"])
+        .map(|out| String::from_utf8_lossy(&out).to_string())
         .unwrap_or_default();
     let head = Some(parse_head(&symbolic, &rev));
 
@@ -1354,12 +1380,8 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
     // read as "no branches" / "clean tree", and a tree read as clean is one a
     // `reset --hard` may overwrite. Unlike `symbolic-ref` / `rev-parse --verify`
     // (which fail on a detached / unborn HEAD), they succeed in every repo.
-    let answered = |args: &[&str]| -> Option<String> {
-        peer.run(args)
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    };
+    let answered =
+        |args: &[&str]| -> Option<String> { peer.stdout(args).map(|out| String::from_utf8_lossy(&out).into_owned()) };
     let (Some(heads), Some(tag_refs), Some(status)) = (
         answered(&[
             "for-each-ref",
@@ -1371,28 +1393,23 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
             "--format=%(objectname) %(refname:short)",
             "refs/tags",
         ]),
-        answered(&["status", "--porcelain"]),
+        // Only the tracked-dirty bit is read (`is_dirty_tracked`): git need not
+        // scan the untracked tree for it.
+        answered(&["status", "--porcelain", "--untracked-files=no"]),
     ) else {
         return probe_error_snapshot();
     };
     let branches = parse_refs(&heads);
     let tags = parse_refs(&tag_refs);
     let dirty_tracked = is_dirty_tracked(&status);
-    let head_subject = peer
-        .run(&["log", "-1", "--format=%s", "HEAD"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty());
+    let head_subject = peer.answer(&["log", "-1", "--format=%s", "HEAD"]);
     // #23 D1: the branches checked out in LINKED worktrees, which `symbolic-ref`
     // above cannot see. The batched probe asks for the same thing in its own
     // section; both must, or a peer that fell back to per-command probing would
     // silently lose the protection.
     let checked_out = peer
-        .run(&["worktree", "list", "--porcelain"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| checked_out_branches(&String::from_utf8_lossy(&o.stdout)))
+        .stdout(&["worktree", "list", "--porcelain"])
+        .map(|out| checked_out_branches(&String::from_utf8_lossy(&out)))
         .unwrap_or_default();
 
     PeerSnapshot {
@@ -1426,11 +1443,19 @@ fn probe_per_command(peer: &Peer) -> PeerSnapshot {
 pub fn tracked_paths(project_id: &str) -> Result<HashSet<String>, String> {
     let local = Peer::Local(mirror_dir(project_id));
     let out = run_checked(&local, &["ls-files", "-z"], "listing the git-tracked files")?.stdout;
-    Ok(out
-        .split(|&b| b == 0)
-        .filter(|s| !s.is_empty())
-        .map(|s| String::from_utf8_lossy(s).replace('\\', "/"))
-        .collect())
+    Ok(nul_paths(&out).collect())
+}
+
+/// Whether lockstep is on for the project, and the tracked set it then owns
+/// ([`tracked_paths`]; empty with lockstep off, where byte-sync owns every
+/// file). The ownership question every byte-sync candidate list asks. Runs git
+/// when lockstep is on: call it off the runtime thread.
+pub fn lockstep_tracked(project_id: &str) -> (bool, Result<HashSet<String>, String>) {
+    if load_state(project_id).enabled {
+        (true, tracked_paths(project_id))
+    } else {
+        (false, Ok(HashSet::new()))
+    }
 }
 
 /// Every non-gitignored file in the mirror — tracked AND untracked — as git sees
@@ -1443,16 +1468,8 @@ pub fn tracked_paths(project_id: &str) -> Result<HashSet<String>, String> {
 /// to a raw mirror walk rather than to conclude the mirror is empty.
 pub fn non_ignored_paths(project_id: &str) -> Option<HashSet<String>> {
     let local = Peer::Local(mirror_dir(project_id));
-    let out = match local.run(&["ls-files", "-z", "-co", "--exclude-standard"]) {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return None,
-    };
-    Some(
-        out.split(|&b| b == 0)
-            .filter(|s| !s.is_empty())
-            .map(|s| String::from_utf8_lossy(s).replace('\\', "/"))
-            .collect(),
-    )
+    let out = local.stdout(&["ls-files", "-z", "-co", "--exclude-standard"])?;
+    Some(nul_paths(&out).collect())
 }
 
 // ── Transport + apply ───────────────────────────────────────────────────────
@@ -1638,6 +1655,8 @@ async fn transfer_and_apply(
         .iter()
         .filter_map(|r| {
             sha_of(dest, RefKind::Head, &r.name)
+                // Equal tips are in sync whatever their ancestry (`decide`).
+                .filter(|d| *d != r.sha)
                 .map(|d| (r.name.clone(), d.to_string(), r.sha.clone()))
         })
         .collect();
@@ -1653,6 +1672,12 @@ async fn transfer_and_apply(
         .map(|(b, _, _)| b.as_str())
         .zip(flags)
         .collect();
+
+    // The peer refs the dest holds now: clearing one per branch cost a round trip
+    // each for refs that almost never exist. Unlisted → clear every branch's.
+    let parked: Option<HashSet<String>> = dst_peer
+        .stdout(&["for-each-ref", "--format=%(refname)", crate::brand::GIT_REF_PEER])
+        .map(|out| String::from_utf8_lossy(&out).lines().map(|l| l.trim().to_string()).collect());
 
     // Every branch tip that actually moved on the dest this pass, as
     // `(old_tip, new_tip)` — unioned into a "files synced" count at the end so a
@@ -1690,29 +1715,19 @@ async fn transfer_and_apply(
         match action {
             _ if blocked_by_worktree => {}
             RefAction::InSync => {}
-            RefAction::DestAhead => {
-                // Under a resolution the authority wins even where the dest is ahead:
-                // discard the dest's extra commits (backed up) and reset to source.
-                if force {
-                    match force_reset_branch(
-                        &dst_peer,
-                        &src_ref.name,
-                        &src_ref.sha,
-                        dst_sha.unwrap(),
-                        is_head,
-                        ts,
-                    ) {
-                        Ok(()) => result.applied += 1,
-                        Err(e) => result.blocked = result.blocked.or(Some(e)),
-                    }
-                } else {
-                    result.dest_ahead.push(src_ref.name.clone());
-                }
-            }
-            RefAction::CreateOnDest => match create_branch(&dst_peer, &src_ref.name, &src_ref.sha) {
-                Ok(()) => result.applied += 1,
-                Err(e) => result.blocked = result.blocked.or(Some(e)),
-            },
+            // Under a resolution the authority wins, also where the dest is ahead:
+            // discard the dest's own commits (backed up) and reset to source.
+            RefAction::DestAhead | RefAction::Diverged if force => result.note(force_reset_branch(
+                &dst_peer,
+                &src_ref.name,
+                &src_ref.sha,
+                dst_sha.unwrap(),
+                is_head,
+                ts,
+            )),
+            RefAction::DestAhead => result.dest_ahead.push(src_ref.name.clone()),
+            RefAction::Diverged => result.diverged.push(src_ref.name.clone()),
+            RefAction::CreateOnDest => result.note(create_branch(&dst_peer, &src_ref.name, &src_ref.sha)),
             RefAction::FastForwardDest => {
                 if is_head {
                     // Checked-out branch: move ref + working tree, refusing on a dirty tree.
@@ -1800,27 +1815,7 @@ async fn transfer_and_apply(
                         }
                     }
                 } else {
-                    match fast_forward_branch_ref(&dst_peer, &src_ref.name, &src_ref.sha, dst_sha.unwrap()) {
-                        Ok(()) => result.applied += 1,
-                        Err(e) => result.blocked = result.blocked.or(Some(e)),
-                    }
-                }
-            }
-            RefAction::Diverged => {
-                if force {
-                    match force_reset_branch(
-                        &dst_peer,
-                        &src_ref.name,
-                        &src_ref.sha,
-                        dst_sha.unwrap(),
-                        is_head,
-                        ts,
-                    ) {
-                        Ok(()) => result.applied += 1,
-                        Err(e) => result.blocked = result.blocked.or(Some(e)),
-                    }
-                } else {
-                    result.diverged.push(src_ref.name.clone());
+                    result.note(fast_forward_branch_ref(&dst_peer, &src_ref.name, &src_ref.sha, dst_sha.unwrap()));
                 }
             }
         }
@@ -1846,7 +1841,9 @@ async fn transfer_and_apply(
                 }
             }
             PeerRefOp::Delete => {
-                let _ = dst_peer.run(&["update-ref", "-d", &peer_ref]);
+                if parked.as_ref().is_none_or(|refs| refs.contains(&peer_ref)) {
+                    let _ = dst_peer.run(&["update-ref", "-d", &peer_ref]);
+                }
             }
         }
     }
@@ -1855,16 +1852,10 @@ async fn transfer_and_apply(
     // surface (and, under a resolution, force-move after a backup — never otherwise).
     for src_tag in &source.tags {
         match sha_of(dest, RefKind::Tag, &src_tag.name) {
-            None => match create_tag(&dst_peer, &src_tag.name, &src_tag.sha) {
-                Ok(()) => result.applied += 1,
-                Err(e) => result.blocked = result.blocked.or(Some(e)),
-            },
+            None => result.note(create_tag(&dst_peer, &src_tag.name, &src_tag.sha)),
             Some(d) if d != src_tag.sha => {
                 if force {
-                    match force_move_tag(&dst_peer, &src_tag.name, &src_tag.sha, d, ts) {
-                        Ok(()) => result.applied += 1,
-                        Err(e) => result.blocked = result.blocked.or(Some(e)),
-                    }
+                    result.note(force_move_tag(&dst_peer, &src_tag.name, &src_tag.sha, d, ts));
                 } else {
                     result.diverged.push(format!("tag:{}", src_tag.name));
                 }
@@ -1910,6 +1901,18 @@ async fn transfer_and_apply(
     }
 
     Ok(result)
+}
+
+impl TransferResult {
+    /// Count a ref write that landed; keep the first refusal of one that did not.
+    fn note(&mut self, written: Result<(), String>) {
+        match written {
+            Ok(()) => self.applied += 1,
+            Err(e) => {
+                self.blocked.get_or_insert(e);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -2038,22 +2041,10 @@ enum FfRetry {
 /// `hash-object` applies the same filters (CRLF/clean) git would, so this is the blob
 /// the file *would* become — an equal name means checkout is a no-op for that file.
 fn blob_matches_worktree(peer: &Peer, sha: &str, path: &str) -> bool {
-    let incoming = peer
-        .run(&["rev-parse", "--verify", "--quiet", &format!("{sha}:{path}")])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-    if incoming.is_empty() {
+    let Some(incoming) = peer.answer(&["rev-parse", "--verify", "--quiet", &format!("{sha}:{path}")]) else {
         return false;
-    }
-    let on_disk = peer
-        .run(&["hash-object", "--", path])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-    !on_disk.is_empty() && on_disk == incoming
+    };
+    peer.answer(&["hash-object", "--", path]) == Some(incoming)
 }
 
 /// Which of a blocked ff's colliding untracked paths are provably disposable
@@ -2107,13 +2098,7 @@ async fn stale_byte_sync_residue(
 /// ref, so this is true for an object the bundle fetch just brought into
 /// `refs/tabtivity/incoming/*` even before any ref points at it.
 fn object_already_known(peer: &Peer, path: &str) -> bool {
-    let Some(hash) = peer
-        .run(&["hash-object", "--", path])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
+    let Some(hash) = peer.answer(&["hash-object", "--", path]) else {
         return false;
     };
     peer.run(&["cat-file", "-e", &hash])
@@ -2159,12 +2144,7 @@ async fn forget_synced_paths(manifest: &SyncManifestState, project_id: &str, pat
 
 /// The mirror's current HEAD sha, or `None` when it is unborn / not a repo.
 fn local_head_sha(project_id: &str) -> Option<String> {
-    Peer::Local(mirror_dir(project_id))
-        .run(&["rev-parse", "--verify", "--quiet", "HEAD"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
+    Peer::Local(mirror_dir(project_id)).answer(&["rev-parse", "--verify", "--quiet", "HEAD"])
 }
 
 /// The tracked paths present at `from` and gone at `to` — i.e. what checking `to` out
@@ -2496,11 +2476,7 @@ async fn init_pairing(
         Peer::Remote(spec.clone())
     };
     let origin_url = |p: &Peer| -> Option<String> {
-        p.run(&["config", "--get", "remote.origin.url"])
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty())
+        p.answer(&["config", "--get", "remote.origin.url"])
     };
     let src_url = origin_url(&source_peer);
     let dst_url = origin_url(&dest_peer);
@@ -2553,10 +2529,8 @@ async fn pairing_conflicts(
 
     // What the source would write: every tracked blob at HEAD, with its size + sha.
     let source: HashMap<String, Fingerprint> = source_peer
-        .run(&["ls-tree", "-r", "-l", "-z", "HEAD"])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| parse_ls_tree_long(&o.stdout))
+        .stdout(&["ls-tree", "-r", "-l", "-z", "HEAD"])
+        .map(|out| parse_ls_tree_long(&out))
         .unwrap_or_default();
     if source.is_empty() {
         return Vec::new(); // unborn source → nothing to overwrite with
@@ -2661,25 +2635,17 @@ fn hash_objects(peer: &Peer, paths: &[String]) -> HashMap<String, String> {
 /// primitive.
 fn reset_collisions(source_peer: &Peer, dest_peer: &Peer, target_sha: &str) -> Vec<String> {
     let target: HashMap<String, Fingerprint> = source_peer
-        .run(&["ls-tree", "-r", "-l", "-z", target_sha])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| parse_ls_tree_long(&o.stdout))
+        .stdout(&["ls-tree", "-r", "-l", "-z", target_sha])
+        .map(|out| parse_ls_tree_long(&out))
         .unwrap_or_default();
     if target.is_empty() {
         return Vec::new();
     }
 
-    let listed = match dest_peer.run(&["ls-files", "--others", "-z"]) {
-        Ok(o) if o.status.success() => o.stdout,
-        _ => return Vec::new(),
+    let Some(listed) = dest_peer.stdout(&["ls-files", "--others", "-z"]) else {
+        return Vec::new();
     };
-    let candidates: Vec<String> = listed
-        .split(|&b| b == 0)
-        .filter(|s| !s.is_empty())
-        .map(|s| String::from_utf8_lossy(s).replace('\\', "/"))
-        .filter(|p| target.contains_key(p))
-        .collect();
+    let candidates: Vec<String> = nul_paths(&listed).filter(|p| target.contains_key(p)).collect();
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -2798,19 +2764,33 @@ async fn reconcile_with(
     spec: &RemoteSpec,
     opts: ReconcileOpts,
 ) -> GitPeerState {
-    let prior = load_state(project_id);
-
     // #28p D4: with no pooled SSH session, every remote git command would exit non-zero
     // — which `probe` used to read as "the host is a clean, empty side" (it is a
     // `probe_error` since #10, but an unreachable host still must not), which pairs into it,
     // which fails, which computes to Synchronized. A green pill for a host we cannot
     // see. So: no connection, no claim, no writes.
     if !connected(pool, project_id).await {
-        return persist(project_id, disconnected_state(&prior));
+        return persist(project_id, disconnected_state(&load_state(project_id)));
     }
 
     let local = probe(&Peer::Local(mirror_dir(project_id)));
     let remote = probe(&Peer::Remote(spec.clone()));
+    reconcile_probed(pool, manifest, project_id, spec, opts, local, remote).await
+}
+
+/// [`reconcile_with`] from the snapshots of both sides its caller just took, with
+/// the session up and nothing run on either side since: an idle poll then probes
+/// each side once, not twice.
+async fn reconcile_probed(
+    pool: &RemotePoolState,
+    manifest: &remote_sync::SyncManifestState,
+    project_id: &str,
+    spec: &RemoteSpec,
+    opts: ReconcileOpts,
+    local: PeerSnapshot,
+    remote: PeerSnapshot,
+) -> GitPeerState {
+    let prior = load_state(project_id);
     let (local_sig, remote_sig) = (refs_signature(&local), refs_signature(&remote));
     let plan = pair_plan(&local, &remote);
 
@@ -2986,19 +2966,12 @@ async fn reconcile_with(
         (SyncStatus::Desynchronized, Some(msg))
     } else if let Some(c) = &pairing_conflict {
         let where_ = if c.source_is_local { "host" } else { "mirror" };
-        let shown: Vec<&str> = c.paths.iter().take(3).map(String::as_str).collect();
-        let more = c.paths.len() - shown.len();
-        let extra = if more > 0 {
-            format!(" (+{more} more)")
-        } else {
-            String::new()
-        };
+        let names = name_list(&c.paths, 3, "");
         (
             SyncStatus::Desynchronized,
             Some(format!(
-                "Pairing would overwrite {} file(s) on the {where_} that differ: {}{extra}",
+                "Pairing would overwrite {} file(s) on the {where_} that differ: {names}",
                 c.paths.len(),
-                shown.join(", ")
             )),
         )
     } else if !final_local.is_repo || !final_remote.is_repo {
@@ -3054,9 +3027,7 @@ async fn reconcile_with(
 /// Whether the project's pooled SSH/SFTP session is up. The single gate every writing
 /// path checks before it believes anything about the host (#28p D4).
 pub async fn connected(pool: &RemotePoolState, project_id: &str) -> bool {
-    crate::services::remote::pooled_sftp(pool, project_id)
-        .await
-        .is_some()
+    crate::services::remote::is_connected(pool, project_id).await
 }
 
 /// The state to report when the pool is cold (#28p D4). Keeps the last-known heads —
@@ -3129,34 +3100,50 @@ async fn restamp_after_checkout(
     if changes.is_empty() {
         return;
     }
-    let sftp = crate::services::remote::pooled_sftp(pool, project_id).await;
+    let (gone, changed): (Vec<_>, Vec<_>) = changes.into_iter().partition(|ch| ch.deleted);
+    let paths = |changes: Vec<TrackedChange>| changes.into_iter().map(|ch| ch.path).collect::<Vec<String>>();
+    let what = "re-stamp the sync bases after a checkout";
+    restamp_bases(pool, manifest, project_id, spec, paths(changed), &paths(gone), what).await;
+}
 
+/// Max host stats in flight while re-stamping (the status refresh's bound).
+const RESTAMP_STAT_CONCURRENCY: usize = 16;
+
+/// Stamp the byte-sync bases of the tracked files `paths` from both sides as they
+/// are now (so they read green, not as edits), and drop the entries of `gone`.
+/// Best-effort; `what` names the attempt in the log.
+async fn restamp_bases(
+    pool: &RemotePoolState,
+    manifest: &remote_sync::SyncManifestState,
+    project_id: &str,
+    spec: &RemoteSpec,
+    paths: Vec<String>,
+    gone: &[String],
+    what: &str,
+) {
+    use futures_util::StreamExt;
+    let sftp = crate::services::remote::pooled_sftp(pool, project_id).await;
     // Stat both sides first, then take the manifest lock once to record: the lock is
     // the one every byte-sync pass and transfer waits on, and holding it across one
-    // SFTP round trip per changed path stalled all of them for the whole walk (code
-    // screen B2; `sync_auto::reconcile_pass` stats before it locks too).
-    let mut deleted = Vec::new();
-    let mut stamps = Vec::new();
-    for ch in changes {
-        if ch.deleted {
-            deleted.push(ch.path);
-            continue;
-        }
-        let (local, host) = stat_both_sides(sftp.as_ref(), project_id, spec, &ch.path).await;
-        stamps.push((ch.path, local, host));
-    }
+    // SFTP round trip per path stalled all of them for the whole walk (code screen
+    // B2; `sync_auto::reconcile_pass` stats before it locks too). The stats ride the
+    // pooled channel together: this runs under the project's mutation lock, and a
+    // pairing stats every tracked file.
+    let stamps: Vec<_> = futures_util::stream::iter(0..paths.len())
+        .map(|i| stat_both_sides(sftp.as_ref(), project_id, spec, &paths[i]))
+        .buffered(RESTAMP_STAT_CONCURRENCY)
+        .collect()
+        .await;
     let mut g = manifest.lock().await;
     let m = remote_sync::ensure_loaded(&mut g, project_id);
-    for path in &deleted {
+    for path in gone {
         m.remove(path);
     }
-    let mut restamped = Vec::new();
-    for (path, (ls, lm), (hs, hm)) in stamps {
-        remote_sync::record_pull(m, &path, hs, hm, ls, lm);
-        restamped.push(path);
+    for (path, (local, host)) in paths.iter().zip(stamps) {
+        remote_sync::record_pull(m, path, host, local);
     }
-    if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &restamped) {
-        eprintln!("lockstep: could not re-stamp the sync bases after a checkout: {e}");
+    if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &paths) {
+        eprintln!("lockstep: could not {what}: {e}");
     }
 }
 
@@ -3168,7 +3155,7 @@ async fn stat_both_sides(
     project_id: &str,
     spec: &RemoteSpec,
     rel: &str,
-) -> ((u64, Option<u64>), (u64, Option<u64>)) {
+) -> (remote_sync::Stat, remote_sync::Stat) {
     let local = remote_sync::local_size_mtime(std::fs::metadata(mirror_local_path(project_id, rel)).ok());
     let host = match sftp {
         Some(s) => sftp::metadata_on(s, &remote_sync::join_remote(&spec.remote_path, rel))
@@ -3199,21 +3186,7 @@ async fn seed_manifest_after_pairing(
     if paths.is_empty() {
         return;
     }
-    let sftp = crate::services::remote::pooled_sftp(pool, project_id).await;
-
-    // Stat first, lock once to record (see `restamp_after_checkout`).
-    let mut stamps = Vec::with_capacity(paths.len());
-    for rel in &paths {
-        stamps.push(stat_both_sides(sftp.as_ref(), project_id, spec, rel).await);
-    }
-    let mut g = manifest.lock().await;
-    let m = remote_sync::ensure_loaded(&mut g, project_id);
-    for (rel, ((ls, lm), (hs, hm))) in paths.iter().zip(stamps) {
-        remote_sync::record_pull(m, rel, hs, hm, ls, lm);
-    }
-    if let Err(e) = remote_sync::save_manifest_or_mark_stale(project_id, m, &paths) {
-        eprintln!("lockstep: could not seed the sync bases after pairing: {e}");
-    }
+    restamp_bases(pool, manifest, project_id, spec, paths, &[], "seed the sync bases after pairing").await;
 }
 
 /// Coordinated checkout: pause file auto-sync, check the target out on the initiating
@@ -3653,11 +3626,7 @@ async fn restore_backup_on(
     };
 
     let sha = peer
-        .run(&["rev-parse", "--verify", "--quiet", refname])
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
+        .answer(&["rev-parse", "--verify", "--quiet", refname])
         .ok_or_else(|| format!("Backup ref {refname} no longer resolves"))?;
 
     // Resumes when dropped, on every return path below.
@@ -3683,18 +3652,11 @@ async fn restore_backup_on(
     if is_head {
         let collisions = reset_collisions(&peer, &peer, &sha);
         if !collisions.is_empty() {
-            let shown: Vec<&str> = collisions.iter().take(5).map(String::as_str).collect();
-            let more = collisions.len() - shown.len();
-            let extra = if more > 0 {
-                format!(" (+{more} more)")
-            } else {
-                String::new()
-            };
+            let names = name_list(&collisions, 5, "");
             return Err(format!(
                 "Refusing to restore: {} untracked file(s) on the {peer_label} differ from \
-                 the backup and are not in git: {}{extra}. Move or remove them, then retry.",
+                 the backup and are not in git: {names}. Move or remove them, then retry.",
                 collisions.len(),
-                shown.join(", "),
             ));
         }
     }
@@ -3773,33 +3735,15 @@ fn desync_state(project_id: &str, spec: &RemoteSpec, detail: &str) -> GitPeerSta
 
 // ── Detection loop + registry ───────────────────────────────────────────────
 
-/// One running git-peer lockstep task: its cancel signal, join handle, and the
-/// `.git` watcher whose lifetime is tied to the task (dropping it unwatches).
-pub struct GitPeerTask {
-    cancel: Arc<Notify>,
-    join: tokio::task::JoinHandle<()>,
-    /// Set by [`stop`]: the task is on its way out, though it may still be
-    /// finishing a pass that outlasted the stop's wait; a pass that only gets the
-    /// mutation lock after that never runs.
-    stopping: Arc<std::sync::atomic::AtomicBool>,
-    /// How many stops this task has been asked for (see `sync_auto`'s twin).
-    stops: Arc<std::sync::atomic::AtomicUsize>,
-    /// Flips when the task has really ended (and released its lease).
-    exited: crate::services::process_lease::RunnerExited,
-}
-
-impl GitPeerTask {
-    fn ended(&self) -> bool {
-        self.join.is_finished() || *self.exited.borrow()
-    }
-}
+/// One running git-peer lockstep task (`sync_task::Task`, `sync_auto`'s twin).
+pub type GitPeerTask = crate::services::sync_task::Task;
 
 /// Tauri-managed registry of per-project lockstep tasks, keyed by project id.
-pub type GitPeerRegistry = Arc<Mutex<HashMap<String, GitPeerTask>>>;
+pub type GitPeerRegistry = crate::services::sync_task::Tasks;
 
 /// Build a fresh, empty registry for `tauri::Builder::manage`.
 pub fn new_registry() -> GitPeerRegistry {
-    Arc::new(Mutex::new(HashMap::new()))
+    crate::services::sync_task::new_tasks()
 }
 
 /// Attach the mirror's `.git` watcher once the repository exists. Initial
@@ -3870,26 +3814,15 @@ pub async fn start(
 ) {
     // A stopped loop still finishing its last pass keeps the project: start this
     // one once it has ended, never beside it (and only if still connected then).
-    {
-        let guard = reg.lock().await;
-        if let Some(t) = guard.get(project_id) {
-            if t.stopping.load(std::sync::atomic::Ordering::SeqCst) && !t.ended() {
-                let mut exited = t.exited.clone();
-                let stops = Arc::clone(&t.stops);
-                let seen = stops.load(std::sync::atomic::Ordering::SeqCst);
-                let reg = reg.clone();
-                let project_id = project_id.to_string();
-                tokio::spawn(async move {
-                    let _ = exited.wait_for(|done| *done).await;
-                    if crate::services::sync_auto::restart_still_wanted(&stops, seen)
-                        && connected(&pool, &project_id).await
-                    {
-                        start_now(ctx, pool, manifest, auto, &reg, worker_sync, &project_id).await;
-                    }
-                });
-                return;
+    if let Some(ended) = crate::services::sync_task::behind_stopping(reg, project_id).await {
+        let reg = reg.clone();
+        let project_id = project_id.to_string();
+        tokio::spawn(async move {
+            if ended.await && connected(&pool, &project_id).await {
+                start_now(ctx, pool, manifest, auto, &reg, worker_sync, &project_id).await;
             }
-        }
+        });
+        return;
     }
     start_now(ctx, pool, manifest, auto, reg, worker_sync, project_id).await;
 }
@@ -3920,57 +3853,27 @@ async fn start_now(
     if crate::services::hpc_mode::is_hpc_spec(&target.spec) {
         return;
     }
-    let mut guard = reg.lock().await;
-    // A task that ended on its own (the loop breaks when the host is tagged HPC
-    // mid-session) is a dead registry entry, not a running task: keeping it would
-    // refuse every restart until a disconnect/reconnect, so untagging the host —
-    // or toggling lockstep off and on — would silently leave the loop stopped.
-    if guard.get(project_id).is_some_and(GitPeerTask::ended) {
-        guard.remove(project_id);
-    }
-    if guard.contains_key(project_id) {
-        return;
-    }
-    // One lockstep loop per mirror across the window and its desktop sidecar
-    // (`process_lease`, final review B4): the other process may run it.
+    // One lockstep loop per mirror across the window and its desktop sidecar.
     let key = crate::services::process_lease::git_peer_key(project_id);
-    if !crate::services::process_lease::claim_sync(&key) {
-        eprintln!("git_peer: {project_id}: another process of this app runs its lockstep");
-        return;
-    }
-
-    let (tx, rx) = mpsc::unbounded_channel::<()>();
-
-    let cancel = Arc::new(Notify::new());
-    let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (exit, exited) = crate::services::process_lease::runner_exit(&key);
-    let loop_fut = poll_loop(
-        ctx,
-        pool,
-        manifest,
-        auto,
-        worker_sync,
-        target.spec,
-        project_id.to_string(),
-        tx,
-        rx,
-        cancel.clone(),
-        stopping.clone(),
-    );
-    let join = tokio::spawn(async move {
-        let _exit = exit; // the lease ends with this task, however it ends
-        loop_fut.await;
-    });
-    guard.insert(
-        project_id.to_string(),
-        GitPeerTask {
-            cancel,
-            join,
-            stopping,
-            stops: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            exited,
-        },
-    );
+    let busy = format!("git_peer: {project_id}: another process of this app runs its lockstep");
+    crate::services::sync_task::spawn(reg, project_id, &key, &busy, |stop| {
+        let (tx, rx) = mpsc::unbounded_channel::<()>();
+        let run = poll_loop(
+            ctx,
+            pool,
+            manifest,
+            auto,
+            worker_sync,
+            target.spec,
+            project_id.to_string(),
+            tx,
+            rx,
+            stop.cancel,
+            stop.stopping,
+        );
+        (run, ())
+    })
+    .await;
 }
 
 /// Stop the project's lockstep task (no-op if none). Waits a bounded time for it
@@ -3978,34 +3881,15 @@ async fn start_now(
 /// its lease until it actually ends (`start` defers behind it), so a slow pass is
 /// never detached while the project reads as free.
 pub async fn stop(reg: &GitPeerRegistry, project_id: &str) {
-    let mut exited = {
-        let guard = reg.lock().await;
-        let Some(t) = guard.get(project_id) else {
-            return;
-        };
-        t.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
-        t.stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        t.cancel.notify_one();
-        t.exited.clone()
-    };
-    if crate::services::process_lease::wait_runner_exit(&mut exited, Duration::from_secs(5)).await {
-        let mut guard = reg.lock().await;
-        if guard.get(project_id).is_some_and(GitPeerTask::ended) {
-            guard.remove(project_id);
-        }
-    } else {
+    use crate::services::sync_task;
+    if !sync_task::stop(reg, project_id, sync_task::STOP_WAIT).await {
         eprintln!("git_peer: {project_id}: lockstep still finishing a pass; it keeps the project until it ends");
     }
 }
 
 /// Stop every lockstep task (app exit).
 pub async fn stop_all(reg: &GitPeerRegistry) {
-    let tasks: Vec<GitPeerTask> = reg.lock().await.drain().map(|(_, t)| t).collect();
-    for t in tasks {
-        t.stopping.store(true, std::sync::atomic::Ordering::SeqCst);
-        t.cancel.notify_one();
-        let _ = tokio::time::timeout(Duration::from_secs(5), t.join).await;
-    }
+    crate::services::sync_task::stop_all(reg).await;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4099,12 +3983,8 @@ async fn poll_loop(
                 // A `.git` change reconciles against the host exactly as a tick
                 // does, so it takes the same re-check.
                 if crate::services::hpc_mode::is_hpc_spec(&spec) { break; }
-                loop {
-                    tokio::select! {
-                        _ = cancel.notified() => return,
-                        _ = tokio::time::sleep(GIT_DEBOUNCE) => break,
-                        res = rx.recv() => { if res.is_none() { return; } }
-                    }
+                if !crate::services::sync_auto::absorb_burst(&mut rx, &cancel, GIT_DEBOUNCE, GIT_POLL_INTERVAL).await {
+                    return;
                 }
                 // Nothing a pass acts on changed since we last left the mirror: this
                 // burst is our own tail (or a stat-cache refresh). Skip the pass; the
@@ -4248,49 +4128,39 @@ async fn detect_and_sync_on(
     let local_moved = head_target_moved(&prior.local_head, &local.head);
     let remote_moved = head_target_moved(&prior.remote_head, &remote.head);
 
-    // Local is authoritative: whatever either side switched to, the host follows the
-    // mirror's checkout — never the other way round. Keyed on the two targets
-    // differing, not on a move, so it also settles an "Out of step" left from before
-    // the switch was turned on.
-    if prior.local_authoritative {
+    // The checkout to replay on the other side, and which side made it.
+    let follow: Option<(String, &str)> = if prior.local_authoritative {
+        // Local is authoritative: whatever either side switched to, the host follows
+        // the mirror's checkout — never the other way round. Keyed on the two targets
+        // differing, not on a move, so it also settles an "Out of step" left from
+        // before the switch was turned on.
         let host_target = target_of(&remote.head);
-        if let Some(t) = target_of(&local.head).filter(|t| Some(t) != host_target.as_ref()) {
-            if let Ok(s) =
-                checkout_lockstep_on(pool, manifest, auto, project_id, spec, &t, "local", true).await
-            {
-                return s;
-            }
-        }
-        return reconcile_with(pool, manifest, project_id, spec, opts).await;
-    }
-
-    if local_moved && remote_moved {
+        target_of(&local.head)
+            .filter(|t| Some(t) != host_target.as_ref())
+            .map(|t| (t, "local"))
+    } else if local_moved && remote_moved {
         // Both sides changed what they have checked out since the last look (a long
         // disconnect, two people, or two windows). There is no principled way to say
-        // which side follows the other, and picking the mirror — as the `if`/`else if`
-        // below used to — silently switched the host's branch under whatever was
-        // running there. Reconcile refs only; if the two targets differ,
-        // `head_mismatch` reports it and the Checkout action is one click away.
-        return reconcile_with(pool, manifest, project_id, spec, opts).await;
-    }
-    if local_moved {
-        if let Some(t) = target_of(&local.head) {
-            if let Ok(s) =
-                checkout_lockstep_on(pool, manifest, auto, project_id, spec, &t, "local", true).await
-            {
-                return s;
-            }
-        }
+        // which side follows the other, and picking the mirror silently switched the
+        // host's branch under whatever was running there. Reconcile refs only; if the
+        // two targets differ, `head_mismatch` reports it and the Checkout action is
+        // one click away.
+        None
+    } else if local_moved {
+        target_of(&local.head).map(|t| (t, "local"))
     } else if remote_moved {
-        if let Some(t) = target_of(&remote.head) {
-            if let Ok(s) =
-                checkout_lockstep_on(pool, manifest, auto, project_id, spec, &t, "remote", true).await
-            {
-                return s;
-            }
-        }
+        target_of(&remote.head).map(|t| (t, "remote"))
+    } else {
+        None
+    };
+    let Some((target, side)) = follow else {
+        return reconcile_probed(pool, manifest, project_id, spec, opts, local, remote).await;
+    };
+    match checkout_lockstep_on(pool, manifest, auto, project_id, spec, &target, side, true).await {
+        Ok(state) => state,
+        // The refused checkout may have moved either side: look again.
+        Err(_) => reconcile_with(pool, manifest, project_id, spec, opts).await,
     }
-    reconcile_with(pool, manifest, project_id, spec, opts).await
 }
 
 #[cfg(test)]
