@@ -1948,7 +1948,9 @@ pub enum CodexHookState {
 /// Classify Tabtivity's hook across the Tabtivity-owned agent homes: the least
 /// trusted state any home that has run Codex is in (a `sessions/` dir), since
 /// Codex asks for the trust approval per config file. `NoCodex` when no home
-/// has run it yet.
+/// has run it yet. A home counts as `Enabled` only when its approval hook
+/// (`PermissionRequest`) is trusted too, where it is registered
+/// ([`codex_reported_state_in`]).
 pub fn codex_hook_state() -> CodexHookState {
     codex_hook_state_across(&crate::services::agent_home::existing_homes_in(&storage::state_dir()))
 }
@@ -1961,7 +1963,7 @@ fn codex_hook_state_across(homes: &[PathBuf]) -> CodexHookState {
         if crate::services::agent_home::is_probe_home(home) || !home.join(".codex").join("sessions").is_dir() {
             continue;
         }
-        let state = codex_hook_state_of_home(home);
+        let state = codex_reported_state_of_home(home);
         let rank = |s: CodexHookState| match s {
             CodexHookState::Enabled => 0,
             CodexHookState::NoCodex => 1,
@@ -1976,14 +1978,45 @@ fn codex_hook_state_across(homes: &[PathBuf]) -> CodexHookState {
     worst.unwrap_or(CodexHookState::NoCodex)
 }
 
-/// Tabtivity's hook as the Codex of one agent home sees it.
+/// Tabtivity's `SessionStart` hook as the Codex of one agent home sees it: the
+/// resume path, and what [`codex_binder_enabled`] goes by.
 fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
+    let (src, config) = codex_config_of_home(home);
+    codex_hook_state_in(&src, &config, &hook_command())
+}
+
+/// What [`codex_hook_state`] reports for one agent home: its `SessionStart`
+/// hook, and its `PermissionRequest` hook where that one is registered.
+fn codex_reported_state_of_home(home: &std::path::Path) -> CodexHookState {
+    let (src, config) = codex_config_of_home(home);
+    codex_reported_state_in(&src, &config, &hook_command())
+}
+
+/// One agent home's Codex config text and its path as a trust key spells it.
+fn codex_config_of_home(home: &std::path::Path) -> (String, String) {
     let config = home.join(".codex").join("config.toml");
     // The agent can rewrite its own config: never a FIFO or a link.
     let src = crate::services::home_io::open_regular(&config)
         .and_then(|f| std::io::read_to_string(f).ok())
         .unwrap_or_default();
-    codex_hook_state_in(&src, &config.to_string_lossy(), &hook_command())
+    (src, config.to_string_lossy().into_owned())
+}
+
+/// Testable core of [`codex_reported_state_of_home`]. Codex asks for trust per
+/// hook, so a home that trusted the session hooks and then skipped the "Hooks
+/// need review" for a hook added later runs without that one, silently: an
+/// untrusted or switched-off `PermissionRequest` is reported, so the one-click
+/// trust is offered for it. One not registered yet (a home no tab has spawned
+/// in since) does not count against a live `SessionStart`.
+pub fn codex_reported_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHookState {
+    let resume = codex_hook_state_in(src, config_path, cmd);
+    if resume != CodexHookState::Enabled {
+        return resume;
+    }
+    match codex_event_state_in(src, config_path, cmd, "PermissionRequest") {
+        state @ (CodexHookState::Untrusted | CodexHookState::Disabled) => state,
+        _ => resume,
+    }
 }
 
 /// Testable core of [`codex_hook_state`].
@@ -1997,6 +2030,15 @@ fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
 /// the `[[hooks.SessionStart.hooks]]` tables within each. So we find our hook by
 /// its `command`, note where it sits, and look the verdict up under that key.
 pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHookState {
+    codex_event_state_in(src, config_path, cmd, "SessionStart")
+}
+
+/// [`codex_hook_state_in`] for the hook of any one of [`CODEX_HOOK_EVENTS`].
+fn codex_event_state_in(src: &str, config_path: &str, cmd: &str, event: &str) -> CodexHookState {
+    let Some((label, _)) = codex_event_label(event) else {
+        return CodexHookState::NotRegistered;
+    };
+    let (group_table, hook_table) = (format!("[[hooks.{event}]]"), format!("[[hooks.{event}.hooks]]"));
     let mut group: i64 = -1;
     let mut hook: i64 = -1;
     let mut in_hook_table = false;
@@ -2012,10 +2054,10 @@ pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHook
         if line.starts_with('[') {
             in_hook_table = false;
             state_key = None;
-            if line.starts_with("[[hooks.SessionStart]]") {
+            if line.starts_with(&group_table) {
                 group += 1;
                 hook = -1;
-            } else if line.starts_with("[[hooks.SessionStart.hooks]]") {
+            } else if line.starts_with(&hook_table) {
                 hook += 1;
                 in_hook_table = true;
             } else if let Some(key) = toml_state_table_key(line) {
@@ -2041,7 +2083,7 @@ pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHook
     let Some((g, h)) = ours else {
         return CodexHookState::NotRegistered;
     };
-    let suffix = format!(":session_start:{g}:{h}");
+    let suffix = format!(":{label}:{g}:{h}");
     let verdict = verdicts
         .get(&format!("{config_path}{suffix}"))
         // Fall back to any entry at our position: Codex builds the key from the
@@ -2150,6 +2192,9 @@ fn codex_event_label(event: &str) -> Option<(&'static str, bool)> {
         "SessionEnd" => ("session_end", true),
         "UserPromptSubmit" => ("user_prompt_submit", false),
         "Stop" => ("stop", false),
+        // Tool-matched like PostToolUse; ours carries no matcher, and the
+        // hash this gives was accepted by 0.169.0.
+        "PermissionRequest" => ("permission_request", true),
         _ => return None,
     })
 }
@@ -2375,6 +2420,9 @@ pub fn trust_codex_hooks_in(src: &str, key_paths: &[String], cmd: &str) -> Optio
 pub fn install_session_start_hook() -> std::io::Result<()> {
     write_hook_script()?;
     crate::services::opencode_session::write_plugin()?;
+    crate::services::antigravity_session::write_script()?;
+    crate::services::muse_session::write_hook()?;
+    crate::services::copilot_session::write_turn_hook()?;
     crate::services::agent_hint::write_script()
 }
 
@@ -2413,13 +2461,20 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     // OpenCode's session plugin (`services::opencode_session`).
     crate::services::opencode_session::register_in_home(home);
     crate::services::opencode_session::disable_service_in_home(home);
+    // Antigravity's conversation hook (`services::antigravity_session`).
+    crate::services::antigravity_session::register_in_home(home);
+    // Muse's session hook (`services::muse_session`), on a Muse that takes it.
+    crate::services::muse_session::register_in_home(home);
+    // Copilot's turn hooks (`services::copilot_session`), on a Copilot that takes them.
+    crate::services::copilot_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);
 }
 
-/// Vibe's user hook runs after each completed turn and reports the live ID.
-/// Local-model homes have their own hooks.toml, so preparation calls this too.
+/// Vibe's user hooks ([`VIBE_HOOK_TYPES`]) report the live ID at each prompt
+/// and turn's end, and the turn state. Local-model homes have their own
+/// hooks.toml, so preparation calls this too.
 ///
 /// A local-model home (`<state>/vibe_local/<alias>`) is Tabtivity's own, so its
 /// file is rewritten to hold Tabtivity's hook alone: a hook a fenced agent planted
@@ -2448,24 +2503,63 @@ fn write_vibe_hooks(file: &HomeFile, app_owned: bool) -> std::io::Result<()> {
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
-    if content.lines().any(|line| line.trim() == format!("name = \"{}\"", crate::brand::VIBE_SESSION_HOOK)) {
+    // Per hook, by name: a file from before the turn hooks has the
+    // `post_agent` one alone and gains the rest.
+    let missing: Vec<&str> = VIBE_HOOK_TYPES
+        .iter()
+        .copied()
+        .filter(|kind| {
+            let line = format!("name = \"{}\"", vibe_hook_name(kind));
+            !content.lines().any(|l| l.trim() == line)
+        })
+        .collect();
+    if missing.is_empty() {
         return Ok(());
     }
     if !content.is_empty() && !content.ends_with('\n') {
         content.push('\n');
     }
     content.push('\n');
-    content.push_str(&vibe_hook_block()?);
+    content.push_str(&vibe_hook_entries(&missing)?);
     file.write(content.as_bytes())
 }
 
-fn vibe_hook_block() -> std::io::Result<String> {
+/// The Vibe hook types the session hook serves (Vibe 3.1.2, probed offline
+/// with `scripts/verify-cli/vibe/turn_hooks.py`; all fire in the TUI):
+/// `pre_agent` at each prompt and `post_agent` after each turn record the
+/// session and the turn's working / done, `post_tool` (which also ends an
+/// approval wait), the `approval_requested` notification (the dialog opening)
+/// and `session_end` the rest of the turn state. `session_start` is left out:
+/// it fires before a session took a prompt.
+pub const VIBE_HOOK_TYPES: [&str; 5] = ["post_agent", "pre_agent", "post_tool", "notification", "session_end"];
+
+/// The name of the hook of one of [`VIBE_HOOK_TYPES`]: Vibe wants every name
+/// once. `post_agent` keeps the name it has had since the first build.
+fn vibe_hook_name(kind: &str) -> String {
+    if kind == "post_agent" {
+        crate::brand::VIBE_SESSION_HOOK.to_string()
+    } else {
+        format!("{}-{}", crate::brand::VIBE_SESSION_HOOK, kind.replace('_', "-"))
+    }
+}
+
+fn vibe_hook_entries(kinds: &[&str]) -> std::io::Result<String> {
     let cmd = serde_json::to_string(&hook_command()).map_err(std::io::Error::other)?;
-    Ok(format!(
-        "# {DISPLAY}: remember the live Vibe session for this tab.\n\
-         [[hooks]]\nname = \"{name}\"\ntype = \"post_agent\"\ncommand = {cmd}\ntimeout = 10.0\n",
-        name = crate::brand::VIBE_SESSION_HOOK
-    ))
+    let mut out = format!("# {DISPLAY}: remember the live Vibe session and turn state for this tab.\n");
+    for (i, kind) in kinds.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "[[hooks]]\nname = \"{name}\"\ntype = \"{kind}\"\ncommand = {cmd}\ntimeout = 10.0\n",
+            name = vibe_hook_name(kind)
+        ));
+    }
+    Ok(out)
+}
+
+fn vibe_hook_block() -> std::io::Result<String> {
+    vibe_hook_entries(&VIBE_HOOK_TYPES)
 }
 
 /// Whether `home` is one of Tabtivity's local-model `VIBE_HOME`s — the same root
@@ -2598,8 +2692,10 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
     format!(
         "#!/bin/sh\n\
-         # {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\n\
-         # PermissionRequest, Notification, SessionEnd) — records, per tab, the agent's live session id\n\
+         # {DISPLAY} agent hook (SessionStart, Stop, StopFailure, UserPromptSubmit, PostToolUse,\n\
+         # PostToolUseFailure, PermissionRequest, Elicitation, ElicitationResult, Notification,\n\
+         # SessionEnd; Vibe's pre_agent, post_agent, post_tool, notification, session_end)\n\
+         # — records, per tab, the agent's live session id\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\n\
          # was left in, incl. after /clear), how the session started (so a prompt\n\
          # sent after a /clear is filed under the new session, linked to the old\n\
@@ -2615,6 +2711,7 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          event=$(printf '%s' \"$input\" | sed -n 's/.*\"hook_event_name\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          ntype=$(printf '%s' \"$input\" | sed -n 's/.*\"notification_type\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
          reason=$(printf '%s' \"$input\" | sed -n 's/.*\"reason\"[[:space:]]*:[[:space:]]*\"\\([a-zA-Z_]*\\)\".*/\\1/p')\n\
+         intr=$(printf '%s' \"$input\" | sed -n 's/.*\"is_interrupt\"[[:space:]]*:[[:space:]]*\\([a-z]*\\).*/\\1/p')\n\
          tpath=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p')\n\
          tnull=$(printf '%s' \"$input\" | sed -n 's/.*\"transcript_path\"[[:space:]]*:[[:space:]]*null.*/null/p')\n\
          secs=$(printf '%s' \"$input\" | sed -n 's/.*\"seconds_since_last_response\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p')\n\
@@ -2628,10 +2725,27 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          # Only the tab's own session may move the records: a nested CLI under the\n\
          # tab inherits {UPPER}_TAB_UID and fires this hook too.\n\
          case \"${UPPER}_TAB_AGENT\" in\n\
-         \x20 vibe) [ \"$event\" = post_agent ] || exit 0\n\
+         \x20 # Vibe (3.1.2): its own session only — not a subagent's (a parent set),\n\
+         \x20 # not a Vibe run by a Vibe tool's shell (`VIBE_SESSION`, which Vibe sets\n\
+         \x20 # for the commands its tools run and never for its own hooks). A prompt\n\
+         \x20 # (pre_agent) or a finished turn (post_agent) records the session; the\n\
+         \x20 # rest must come from the recorded one. Turn words as for Claude: an\n\
+         \x20 # approval notice is the dialog opening, a finished tool ends it.\n\
+         \x20 vibe) [ -z \"$VIBE_SESSION\" ] || exit 0\n\
          \x20   parent=$(printf '%s' \"$input\" | sed -n 's/.*\"parent_session_id\"[[:space:]]*:[[:space:]]*\\([^,}}]*\\).*/\\1/p')\n\
          \x20   [ \"$parent\" = null ] || exit 0\n\
-         \x20   printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"\n\
+         \x20   turn=\n\
+         \x20   case \"$event\" in\n\
+         \x20     pre_agent) printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"; turn=working ;;\n\
+         \x20     post_agent) printf '%s' \"$sid\" > \"$dir/${UPPER}_TAB_UID\"; turn=done ;;\n\
+         \x20     post_tool|notification|session_end) [ -z \"$cur\" ] || [ \"$sid\" = \"$cur\" ] || exit 0\n\
+         \x20       case \"$event:$ntype\" in\n\
+         \x20         post_tool:*) turn=working ;;\n\
+         \x20         notification:approval_requested) turn=decision ;;\n\
+         \x20         session_end:*) [ \"$reason\" = clear ] || turn=idle ;;\n\
+         \x20       esac ;;\n\
+         \x20   esac\n\
+         \x20   [ -n \"$turn\" ] && printf '%s %s' \"$turn\" \"$(date +%s)\" > \"$dir/${UPPER}_TAB_UID.turn\"\n\
          \x20   exit 0 ;;\n\
          \x20 codex) [ -z \"$CLAUDECODE\" ] || exit 0\n\
          \x20   # Codex mints its own ids, so a start is free-form; every later event\n\
@@ -2725,12 +2839,17 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          # verdict it had (done) is what keeps the tab off its stale screen.\n\
          # A permission request is the dialog opening (a question, an approval,\n\
          # a plan to accept): Claude 2.1.322 sends its notice for it only 6 s\n\
-         # later, and none at all for one answered sooner.\n\
+         # later, and none at all for one answered sooner. An MCP server's\n\
+         # elicitation is the same (Elicitation, ElicitationResult once\n\
+         # answered). Claude 2.1.325 ends a turn the API refused with StopFailure\n\
+         # and a failed tool with PostToolUseFailure, never Stop / PostToolUse;\n\
+         # an interrupted tool is not work going on.\n\
          turn=\n\
          case \"$event\" in\n\
-         \x20 UserPromptSubmit|PostToolUse) turn=working ;;\n\
-         \x20 PermissionRequest) turn=decision ;;\n\
-         \x20 Stop) turn=done ;;\n\
+         \x20 UserPromptSubmit|PostToolUse|ElicitationResult) turn=working ;;\n\
+         \x20 PostToolUseFailure) [ \"$intr\" = true ] || turn=working ;;\n\
+         \x20 PermissionRequest|Elicitation) turn=decision ;;\n\
+         \x20 Stop|StopFailure) turn=done ;;\n\
          \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
@@ -2818,8 +2937,10 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
     let notice = crate::services::tabs_mcp::NOTICE;
     let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
     format!(
-        "# {DISPLAY} agent hook (SessionStart, Stop, UserPromptSubmit, PostToolUse,\r\n\
-         # PermissionRequest, Notification, SessionEnd) - records, per tab, the agent's live session id\r\n\
+        "# {DISPLAY} agent hook (SessionStart, Stop, StopFailure, UserPromptSubmit, PostToolUse,\r\n\
+         # PostToolUseFailure, PermissionRequest, Elicitation, ElicitationResult, Notification,\r\n\
+         # SessionEnd; Vibe's pre_agent, post_agent, post_tool, notification, session_end)\r\n\
+         # - records, per tab, the agent's live session id\r\n\
          # and permission mode (so {DISPLAY} resumes the current session in the mode it\r\n\
          # was left in, incl. after /clear) and its turn state (working / decision /\r\n\
          # done / idle), which lights the tab's working and finished marks. No-op\r\n\
@@ -2835,6 +2956,7 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
          $me = [regex]::Match($payload, '\"hook_event_name\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mn = [regex]::Match($payload, '\"notification_type\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
          $mr = [regex]::Match($payload, '\"reason\"\\s*:\\s*\"([A-Za-z_]+)\"')\r\n\
+         $mi = [regex]::Match($payload, '\"is_interrupt\"\\s*:\\s*([a-z]+)')\r\n\
          $mq = [regex]::Match($payload, '\"seconds_since_last_response\"\\s*:\\s*([0-9]+)')\r\n\
          $mc = [regex]::Match($payload, '\"context_tokens\"\\s*:\\s*([0-9]+)')\r\n\
          $mu = [regex]::Match($payload, '\"estimated_cache_write_usd\"\\s*:\\s*([0-9.]+)')\r\n\
@@ -2850,9 +2972,21 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
          $rec = Join-Path $dir $uid\r\n\
          $cur = ''\r\n\
          if (Test-Path $rec) {{ $cur = [IO.File]::ReadAllText($rec).Trim() }}\r\n\
+         # Vibe: its own top-level session only, never a Vibe run by a Vibe\r\n\
+         # tool's shell (VIBE_SESSION); see the POSIX twin.\r\n\
          if ($env:{UPPER}_TAB_AGENT -eq 'vibe') {{\r\n\
-         \x20 if (($event -ne 'post_agent') -or ($payload -notmatch '\"parent_session_id\"\\s*:\\s*null')) {{ exit 0 }}\r\n\
-         \x20 [IO.File]::WriteAllText($rec, $sid)\r\n\
+         \x20 if ((-not [string]::IsNullOrEmpty($env:VIBE_SESSION)) -or ($payload -notmatch '\"parent_session_id\"\\s*:\\s*null')) {{ exit 0 }}\r\n\
+         \x20 $turn = ''\r\n\
+         \x20 if (($event -eq 'pre_agent') -or ($event -eq 'post_agent')) {{\r\n\
+         \x20   [IO.File]::WriteAllText($rec, $sid)\r\n\
+         \x20   if ($event -eq 'pre_agent') {{ $turn = 'working' }} else {{ $turn = 'done' }}\r\n\
+         \x20 }} elseif (@('post_tool', 'notification', 'session_end') -contains $event) {{\r\n\
+         \x20   if (($cur -ne '') -and ($sid -ne $cur)) {{ exit 0 }}\r\n\
+         \x20   if ($event -eq 'post_tool') {{ $turn = 'working' }}\r\n\
+         \x20   elseif (($event -eq 'notification') -and ($ntype -eq 'approval_requested')) {{ $turn = 'decision' }}\r\n\
+         \x20   elseif (($event -eq 'session_end') -and -not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }}\r\n\
+         \x20 }}\r\n\
+         \x20 if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
          \x20 exit 0\r\n\
          }}\r\n\
          # Only the tab's own session may move the records: a nested CLI under the\r\n\
@@ -2934,8 +3068,12 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
          switch ($event) {{\r\n\
          \x20 'UserPromptSubmit' {{ $turn = 'working' }}\r\n\
          \x20 'PostToolUse' {{ $turn = 'working' }}\r\n\
+         \x20 'PostToolUseFailure' {{ if (-not ($mi.Success -and ($mi.Groups[1].Value -eq 'true'))) {{ $turn = 'working' }} }}\r\n\
+         \x20 'ElicitationResult' {{ $turn = 'working' }}\r\n\
          \x20 'PermissionRequest' {{ $turn = 'decision' }}\r\n\
+         \x20 'Elicitation' {{ $turn = 'decision' }}\r\n\
          \x20 'Stop' {{ $turn = 'done' }}\r\n\
+         \x20 'StopFailure' {{ $turn = 'done' }}\r\n\
          \x20 'Notification' {{ if (@('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input') -contains $ntype) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
          }}\r\n\
@@ -2980,9 +3118,16 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
 /// opening) or a permission/elicitation notice means blocked on the user, the
 /// session's end means idle. The notice alone came too late: Claude 2.1.322
 /// sends it 6 s after its dialog opens, and not at all for one answered sooner.
-/// Codex is registered for its own list ([`CODEX_HOOK_EVENTS`]); its approval
-/// wait is still read off its screen.
-pub const HOOK_EVENTS: [&str; 7] = [
+///
+/// The four after it close gaps an offline probe of 2.1.325 showed
+/// (`scripts/verify-cli/claude/turn_hooks.py`): a turn the API refuses (a
+/// rate limit, a failed sign-in, a rejected request) ends with `StopFailure`
+/// and no `Stop`, and a tool that fails reports `PostToolUseFailure` instead
+/// of `PostToolUse`, so a working mark had nothing to end it; an MCP server's
+/// question opens with `Elicitation` (its notice again 6 s later) and is
+/// answered with `ElicitationResult`. Codex is registered for its own list
+/// ([`CODEX_HOOK_EVENTS`]).
+pub const HOOK_EVENTS: [&str; 11] = [
     "SessionStart",
     "Stop",
     "UserPromptSubmit",
@@ -2990,6 +3135,10 @@ pub const HOOK_EVENTS: [&str; 7] = [
     "PermissionRequest",
     "Notification",
     "SessionEnd",
+    "StopFailure",
+    "PostToolUseFailure",
+    "Elicitation",
+    "ElicitationResult",
 ];
 
 /// Merge our handlers into a Claude `settings.json`, preserving all other content
@@ -3064,15 +3213,21 @@ pub(crate) fn register_hook_in_settings_as(settings: &HomeFile, cmd: &str) -> st
 /// the user trusts it — see [`codex_hook_state`], which detects that, and
 /// [`crate::services::codex_bind`], the hook-free fallback that keeps Codex tabs
 /// resumable meanwhile.
-/// The events registered with Codex: [`HOOK_EVENTS`] minus `Notification`,
-/// which Codex 0.154 does not offer, and `PermissionRequest`, which Codex 0.167
-/// offers but nobody has verified live (its approval wait is read off its screen).
-pub const CODEX_HOOK_EVENTS: [&str; 5] = [
+/// The events registered with Codex: the ones of [`HOOK_EVENTS`] Codex offers.
+/// `PermissionRequest` (0.169.0, probed offline with
+/// `scripts/verify-cli/codex/turn_hooks.py`) fires as the approval dialog
+/// opens, so the wait no longer depends on reading the screen; an accepted
+/// approval then fires `PostToolUse`, a declined one nothing. A home that
+/// trusted the older events gets Codex's "Hooks need review" screen once at
+/// its next start, and until the new hook is trusted it does not run — the
+/// screen reading stays the fallback for that.
+pub const CODEX_HOOK_EVENTS: [&str; 6] = [
     "SessionStart",
     "Stop",
     "UserPromptSubmit",
     "PostToolUse",
     "SessionEnd",
+    "PermissionRequest",
 ];
 
 /// Which events already carry our hook in a Codex config: every

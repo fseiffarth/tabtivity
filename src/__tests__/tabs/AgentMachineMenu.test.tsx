@@ -125,3 +125,42 @@ describe("agent rows with machines", () => {
     );
   });
 });
+
+describe("per-host CLI inventory", () => {
+  function rows(remoteBins: string[], pinned = false) {
+    const install = vi.fn(async () => {});
+    const pick = vi.fn();
+    const machines = [
+      ...(!pinned ? [{ location: "local" as const, label: "Local" }] : []),
+      { location: "remote" as const, label: "Primary", installedBins: new Set(remoteBins), install },
+      { location: "host:gpu" as const, label: "GPU", installedBins: new Set(["codex"]), install },
+    ];
+    return { install, pick, entries: agentMenuEntries({
+      machines, installedBuiltins: new Set(["claude"]), installedCmds: new Set<string>(),
+      customAgents: [], pick, onAddCustom: vi.fn(), t,
+    }) };
+  }
+
+  it("only offers hosts where the selected CLI is installed", () => {
+    const { entries } = rows([]);
+    expect(entries.find((row) => row.key === "claude")?.machineEntries?.map((row) => row.label)).toEqual(["Local"]);
+    expect(entries.find((row) => row.key === "codex")?.machineEntries?.map((row) => row.label)).toEqual(["GPU"]);
+  });
+
+  it("starts a remote-only CLI on its available host, including pinned scopes", () => {
+    for (const pinned of [false, true]) {
+      const { entries, pick } = rows([], pinned);
+      entries.find((row) => row.key === "codex")!.onPick();
+      expect(pick).toHaveBeenCalledWith(expect.objectContaining({ cmd: "codex" }), "host:gpu");
+      if (pinned) expect(entries.some((row) => row.key === "claude")).toBe(false);
+    }
+  });
+
+  it("installs missing CLIs on the selected host and omits already installed ones", () => {
+    const { entries, install } = rows(["claude"]);
+    const installs = entries.find((row) => row.key === "__install_remote_agent__")!.moreEntries!;
+    expect(installs.some((row) => row.key === "install:claude@remote")).toBe(false);
+    installs.find((row) => row.key === "install:codex@remote")!.onPick();
+    expect(install).toHaveBeenCalledWith("codex", expect.any(String));
+  });
+});

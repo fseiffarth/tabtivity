@@ -2716,7 +2716,11 @@ pub fn import_project_export_blocking(
     // still lists it). Mint a fresh one when the id is taken, which is the
     // "import a copy beside the original" case.
     let id_in_use = list.iter().any(|p| p.id == manifest.entry.id);
-    let new_id = id_in_use || manifest.entry.id.is_empty();
+    // A bundle's id that would be read as a box's scope (`box:<x>`, or one
+    // sharing box `<x>`'s session and agent-home folders) is never kept.
+    let new_id = id_in_use
+        || manifest.entry.id.is_empty()
+        || crate::services::box_store::id_imitates_box_scope(&manifest.entry.id);
     let id = if new_id {
         uuid_v4()
     } else {

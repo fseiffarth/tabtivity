@@ -84,7 +84,10 @@ function bringUpScope(scope: string): Promise<void> {
   }
   const { activeId, setActive } = useProjectsStore.getState();
   const target = scope === ROOT_SCOPE ? null : scope;
-  return activeId === target ? Promise.resolve() : setActive(target);
+  // Inside a box `activeId` is still the project the box was entered from, and
+  // that project is NOT up: `setActive` with the id it holds is the way out.
+  const up = activeId === target && !tabs.scope.startsWith(BOX_SCOPE_PREFIX);
+  return up ? Promise.resolve() : setActive(target);
 }
 
 /**

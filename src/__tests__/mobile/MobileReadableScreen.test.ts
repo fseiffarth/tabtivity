@@ -509,6 +509,34 @@ describe(`${BRAND.display} Mobile side panel`, () => {
     expect(picker?.options.map((option) => option.label)).toEqual(["Fable 5.2", "Sonnet 5.5", "Haiku 5.5"]);
   });
 
+  it("reads a dialog edge a long notice took over, down to its last stroke, as the bare edge", () => {
+    // `/model` at 80×24 (verify-cli claude/2.1.325/model/w80_12; 2.1.323 draws
+    // the same): the notice is cut with `…` and fills the row but for one `▔`.
+    const rows = [
+      "❯ /model ",
+      "  ⎿  Kept model as Opus 5.5",
+      "",
+      " tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and rea… ▔",
+      `${WRAP}   Select model`,
+      "   Switch between Claude models. Your pick becomes the default for new ",
+      "   sessions. For other/previous model names, specify with --model.",
+      "",
+      "     1.  Default (recommended)  Fable 5.2",
+      "   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks",
+      "   ↓ 3.  Fable 5.2              For your toughest challenges",
+      "      … +3 models",
+      "",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    ];
+    const lines = readableScreen(plainBuffer(rows)).lines;
+    const heading = lines.find((line) => line.text.includes("Select model"));
+    expect(heading).toMatchObject({ text: "   Select model", afterRule: true });
+    expect(lines.map((line) => line.text).join("\n")).not.toContain("focus-events");
+    const picker = readSelectPrompt(lines, "Claude");
+    expect(picker?.title).toBe("Select model");
+    expect(picker?.options.map((option) => option.label)).toEqual(["Default (recommended)", "Opus 5.5 ✔", "Fable 5.2"]);
+  });
+
   it("leaves a table's columns whole above the input box: its bottom is a junction, not the box's rule", () => {
     const rows = [
       "┌──────────────────────────┬──────────┐",

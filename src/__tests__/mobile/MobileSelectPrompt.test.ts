@@ -765,6 +765,25 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(question?.options[0]).toMatchObject({ label: "Red", description: "Warm and loud" });
   });
 
+  it("rejoins a label 2.1.325 wrapped one column short of the pane's edge", () => {
+    // verify-cli claude/2.1.325/prompt/prompt@60x30: `these` would have ended
+    // in column 60, where 2.1.323 put it; 2.1.325 leaves that column free.
+    const prompt = readSelectPrompt([
+      { text: " Do you want to proceed?" },
+      { text: " ❯ 1. Yes" },
+      { text: "   2. Yes, and don’t ask again for: python3 *" },
+      { text: "   3. Yes, and switch to auto mode · auto mode handles " },
+      { text: "      these prompts for you" },
+      { text: "   4. No" },
+    ], "Claude Code", 60);
+    expect(prompt?.options.map((option) => [option.label, option.description])).toEqual([
+      ["Yes", undefined],
+      ["Yes, and don’t ask again for: python3 *", undefined],
+      ["Yes, and switch to auto mode · auto mode handles these prompts for you", undefined],
+      ["No", undefined],
+    ]);
+  });
+
   it("knows Claude's free-text row and types into it", () => {
     const single = readSelectPrompt(lines(
       "Which database?",

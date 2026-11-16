@@ -5,7 +5,8 @@ use crate::schema::settings::CompletionProjectPolicy;
 use crate::schema::Settings;
 use crate::services::copilot::documents::Position;
 use crate::services::copilot::credentials;
-use crate::services::copilot::policy::{self, PolicyError};
+use crate::services::copilot::policy::{self, error_code as policy_code};
+use crate::services::copilot::remote as remote_copilot;
 use crate::services::copilot::session::{sessions, CompletionRequest, DeviceCode, Session};
 use crate::services::copilot::process;
 use crate::services::copilot::requests;
@@ -21,19 +22,6 @@ fn settings_path() -> PathBuf {
     storage::settings_path()
 }
 
-fn policy_code(error: PolicyError) -> String {
-    match error {
-        PolicyError::Disabled => "copilot_disabled",
-        PolicyError::Remote => "copilot_remote_project",
-        PolicyError::NoConsent => "copilot_no_consent",
-        PolicyError::LocalOnly => "copilot_local_only",
-        PolicyError::InvalidPath => "copilot_invalid_path",
-        PolicyError::OutsideProject => "copilot_outside_project",
-        PolicyError::SecretFile => "copilot_secret_file",
-    }
-    .into()
-}
-
 fn load_settings() -> Result<Settings, String> {
     let path = settings_path();
     if path.exists() {
@@ -47,7 +35,7 @@ fn load_settings() -> Result<Settings, String> {
 /// consent is on file (`services::agent_privacy`): the same refusal as a
 /// project's own `local_only`, so the editor falls back to the local model.
 fn locked_project(project_id: &str) -> bool {
-    remote::project_entry(project_id).is_ok_and(|entry| crate::services::agent_privacy::is_locked(&entry))
+    remote::project_entry(project_id).map_or(true, |entry| crate::services::agent_privacy::is_locked(&entry))
 }
 
 fn authorize_in(settings: &Settings, project_id: &str) -> Result<PathBuf, String> {
@@ -55,8 +43,10 @@ fn authorize_in(settings: &Settings, project_id: &str) -> Result<PathBuf, String
         return Err("copilot_local_only".into());
     }
     let directory = remote::project_directory(project_id).ok_or("copilot_no_consent")?;
-    let is_remote = remote::remote_target_for(project_id).is_some();
-    policy::authorize_project(settings, project_id, Path::new(&directory), is_remote).map_err(policy_code)
+    if let Some(target) = remote::remote_target_for(project_id) {
+        return remote_copilot::authorize(settings, &target).map_err(policy_code);
+    }
+    policy::authorize_project(settings, project_id, Path::new(&directory), false).map_err(policy_code)
 }
 
 fn authorize(project_id: &str) -> Result<PathBuf, String> {
@@ -70,6 +60,10 @@ async fn session(project_id: &str) -> Result<(Arc<Session>, PathBuf), String> {
     crate::services::ai_switch::check()?;
     match authorize(project_id) {
         Ok(root) => {
+            if remote::remote_target_for(project_id).is_some() {
+                // App-owned empty workspace, mounted read-only; buffers stay in RAM.
+                std::fs::create_dir_all(&root).map_err(|_| "copilot_invalid_path")?;
+            }
             let session = sessions().get_or_start(project_id, &root).await?;
             if authorize(project_id).as_ref() != Ok(&root) {
                 sessions().stop(project_id).await;
@@ -120,28 +114,38 @@ pub fn copilot_setup() -> Value {
 /// it too. Returns the settings that won, like `patch_settings`, for the
 /// sender to broadcast.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn copilot_set_project_policy(project_id: String, copilot: bool, local_only: bool, text: Option<bool>)
+pub async fn copilot_set_project_policy(ctx: Ctx, project_id: String, copilot: bool, local_only: bool, text: Option<bool>)
     -> Result<Settings, String> {
     let directory = remote::project_directory(&project_id).ok_or("copilot_invalid_path")?;
     if copilot && locked_project(&project_id) {
         return Err("copilot_local_only".into());
     }
-    if copilot && remote::remote_target_for(&project_id).is_some() {
-        return Err("copilot_remote_project".into());
+    let target = remote::remote_target_for(&project_id);
+    let binding = target.as_ref().map(remote_copilot::binding);
+    // Revocation must work while disconnected. Only granting consent needs SSH.
+    let directory = if let Some(target) = &target {
+        if copilot && !local_only {
+            remote_copilot::canonical_root(ctx.get::<remote::RemotePoolState>(), target).await?
+        } else {
+            target.spec.remote_path.clone()
+        }
+    } else {
+        Path::new(&directory).canonicalize().map_err(|_| "copilot_invalid_path")?.to_string_lossy().into_owned()
+    };
+    if remote::remote_target_for(&project_id).as_ref().map(remote_copilot::binding) != binding {
+        return Err("copilot_no_consent".into());
     }
-    let directory = Path::new(&directory).canonicalize().map_err(|_| "copilot_invalid_path")?;
     let saved = storage::patch_json(&settings_path(), Settings::default(), |settings| {
         let policies = settings.completion_project_policies.get_or_insert_with(Default::default);
         let extra = policies.remove(&project_id).map(|old| old.extra).unwrap_or_default();
         policies.insert(project_id.clone(), CompletionProjectPolicy {
-            directory: directory.to_string_lossy().into_owned(), copilot, local_only,
+            directory, remote: binding, copilot, local_only,
             copilot_text: copilot && !local_only && text.unwrap_or(false), extra,
         });
         Ok(settings.clone())
     })?;
-    if !copilot || local_only {
-        sessions().stop(&project_id).await;
-    }
+    // A changed consent/root must also discard the old server and candidates.
+    sessions().stop(&project_id).await;
     Ok(saved)
 }
 
@@ -174,7 +178,7 @@ pub async fn copilot_complete(
             return Err(error);
         }
     };
-    let file = authorize_file(&settings, &project_id, &root, &path)?;
+    let file = authorize_file(&ctx, &settings, &project_id, &root, &path).await?;
     // Detached: a keystroke cancels this request, never the server launch
     // behind it. Dropping the launch would kill the starting server, and three
     // of those spend the project's restart budget.
@@ -195,11 +199,17 @@ pub async fn copilot_complete(
     }
     // Keeps the server from its idle shutdown (`Sessions::reap_idle`).
     sessions().note_use(&project_id);
-    let file = match authorize_file(&settings, &project_id, &root, &path) {
+    let file = match authorize_file(&ctx, &settings, &project_id, &root, &path).await {
         Ok(again) if again == file => file,
         Ok(_) => return Err("copilot_invalid_path".into()),
         Err(error) => return Err(error),
     };
+    let current = load_settings()?;
+    if authorize_in(&current, &project_id).as_ref() != Ok(&root)
+        || policy::text_consented(&current, &project_id) != policy::text_consented(&settings, &project_id) {
+        sessions().stop(&project_id).await;
+        return Err("copilot_no_consent".into());
+    }
     let uri = url::Url::from_file_path(&file).map_err(|_| "copilot_invalid_path")?;
     session.complete_cancellable(CompletionRequest {
         uri: uri.as_str(), editor: &editor, client_version: version, text: &text, language: &language,
@@ -211,7 +221,10 @@ pub async fn copilot_complete(
 /// resolved: inside the consented project, not credential-shaped, not inside
 /// a local-models-only project (whatever this project's consent is,
 /// `services::agent_privacy`), and prose only with the text consent.
-fn authorize_file(settings: &Settings, project_id: &str, root: &Path, path: &str) -> Result<PathBuf, String> {
+async fn authorize_file(ctx: &CoreCtx, settings: &Settings, project_id: &str, root: &Path, path: &str) -> Result<PathBuf, String> {
+    if let Some(target) = remote::remote_target_for(project_id) {
+        return remote_copilot::document(ctx.get::<remote::RemotePoolState>(), settings, &target, root, path).await;
+    }
     let file = policy::authorize_document(root, Path::new(path)).map_err(policy_code)?;
     if crate::services::agent_privacy::inside_locked(&file) {
         return Err("copilot_local_only".into());

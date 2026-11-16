@@ -391,6 +391,8 @@ pub fn remote_target_for_host(project_id: &str, host_id: &str) -> Option<RemoteT
 /// ControlMaster it established, alive. Dropping `child` would collapse the
 /// connection, so it is owned here and killed explicitly on teardown.
 struct PooledRemote {
+    /// Endpoint/root actually used when this connection was opened.
+    spec: RemoteSpec,
     sftp: Arc<Sftp>,
     child: Child,
     /// The `cm-<hash>` socket this connection's ControlMaster owns, resolved at
@@ -592,6 +594,7 @@ pub async fn connect_host(
     let replaced = guard.conns.insert(
         key,
         PooledRemote {
+            spec: spec.clone(),
             sftp: Arc::new(sftp),
             child,
             control_path,
@@ -666,6 +669,25 @@ pub async fn disconnect_all(pool: &RemotePoolState) {
 /// "disconnected" state rather than hanging.
 pub async fn pooled_sftp(pool: &RemotePoolState, project_id: &str) -> Option<Arc<Sftp>> {
     pooled_sftp_host(pool, project_id, PRIMARY_HOST).await
+}
+
+/// Match an authorization snapshot to the connection actually carrying SFTP.
+/// A project edit can leave an old connection pooled until its next reconnect.
+pub(crate) async fn pooled_sftp_for_target(pool: &RemotePoolState, target: &RemoteTarget) -> Option<Arc<Sftp>> {
+    let key = conn_key(&target.project_id, PRIMARY_HOST);
+    let mut guard = pool.lock().await;
+    let conn = guard.conns.get_mut(&key)?;
+    if !same_sftp_target(&conn.spec, &target.spec) { return None; }
+    if !matches!(conn.child.try_wait(), Ok(None)) {
+        guard.conns.remove(&key);
+        return None;
+    }
+    Some(Arc::clone(&conn.sftp))
+}
+
+fn same_sftp_target(a: &RemoteSpec, b: &RemoteSpec) -> bool {
+    a.host == b.host && a.user == b.user && a.port.unwrap_or(22) == b.port.unwrap_or(22)
+        && a.remote_path == b.remote_path
 }
 
 /// Clone the pooled SFTP session for a specific `(project, host)`, if connected.
@@ -789,6 +811,7 @@ async fn teardown_pooled(conn: PooledRemote) {
     // releasing the standing authorization — the same thing that happens when a
     // dead entry is reaped without ever reaching here.
     let PooledRemote {
+        spec: _,
         sftp,
         mut child,
         control_path,
@@ -929,6 +952,26 @@ mod tests {
         assert_eq!(projects_at(&path).unwrap()[0].id, "aaaa");
         write("bbbb");
         assert_eq!(projects_at(&path).unwrap()[0].id, "bbbb");
+    }
+
+    #[test]
+    fn authorized_sftp_target_must_match_the_opened_connection() {
+        let original = spec();
+        let mut changed = original.clone();
+        assert!(same_sftp_target(&original, &changed));
+        changed.port = Some(original.port.unwrap_or(22));
+        assert!(same_sftp_target(&original, &changed));
+        changed.host.push_str("-other");
+        assert!(!same_sftp_target(&original, &changed));
+        changed = original.clone();
+        changed.user = Some("other".into());
+        assert!(!same_sftp_target(&original, &changed));
+        changed = original.clone();
+        changed.port = Some(2223);
+        assert!(!same_sftp_target(&original, &changed));
+        changed = original.clone();
+        changed.remote_path.push_str("-other");
+        assert!(!same_sftp_target(&original, &changed));
     }
 
     #[test]

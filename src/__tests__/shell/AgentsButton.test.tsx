@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AgentsButton } from "../../components/header/AgentsButton";
 import { APP_ICONS } from "../../components/header/appIcons";
-import { HEADER_GROUPS, HEADER_ITEM_IDS, headerPinDefaults, isHeaderPinned } from "../../lib/headerPins";
+import { HEADER_GROUPS, HEADER_ITEM_IDS, headerPinDefaults, isHeaderPinned, isHeaderReadout } from "../../lib/headerPins";
 import { useRootOverlayStore } from "../../stores/rootOverlay";
 
 beforeEach(() => useRootOverlayStore.setState({ open: false, view: "root" }));
@@ -45,5 +45,13 @@ describe("the six view buttons in the top bar", () => {
     expect(HEADER_GROUPS.apps).toContain("agents");
     expect(HEADER_GROUPS.status).toContain("machines");
     expect(APP_ICONS.agents).toBeTruthy();
+  });
+
+  // `HeaderBar` draws its run from `APP_ICONS` alone: a status menu dragged
+  // there (VPN, Machines, …) with no entry vanished from the bar entirely.
+  it("every item that may be dragged into the apps run has a node to draw there", () => {
+    for (const id of HEADER_ITEM_IDS.filter((x) => !isHeaderReadout(x))) {
+      expect(APP_ICONS[id], id).toBeTruthy();
+    }
   });
 });

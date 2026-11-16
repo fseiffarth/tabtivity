@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useBoxesStore, BOX_SCOPE_PREFIX } from "./boxes";
-import { useProjectsStore } from "./projects";
+import { stopClosedProjectScope, useProjectsStore } from "./projects";
+import { translateNow } from "../lib/i18n";
 import { ROOT_SCOPE, useTabsStore } from "./tabs";
 import type { ProjectBox, ProjectEntry } from "../types";
 
@@ -75,10 +76,20 @@ export const useBoxSliceStore = create<BoxSliceStore>((set, get) => ({
   },
 
   selectBox: async (boxId) => {
+    const before = get().sliceBoxId;
     get().setSlice(boxId);
     // Picking a box makes the BOX the current scope: its tabs, its pill lit.
     if (boxId) {
-      await useBoxesStore.getState().openBox(boxId);
+      try {
+        await useBoxesStore.getState().openBox(boxId);
+      } catch (error) {
+        // The box was not entered (its folder could not be made, or it was
+        // dissolved elsewhere): a strip sliced to it would show a box nobody is
+        // in. Most callers fire this with `void`, so the reason is said here.
+        if (get().sliceBoxId === boxId) get().setSlice(before);
+        useProjectsStore.setState({ switchToast: String(error) });
+        throw error;
+      }
       return;
     }
     // Back to every project — and to the project that view was last on (user,
@@ -98,16 +109,53 @@ export const useBoxSliceStore = create<BoxSliceStore>((set, get) => ({
 }));
 
 /**
+ * Leaving a box stops the closed members it reopened (user decision
+ * 2026-11-16). Entering a box restores the tabs of members that are closed in
+ * the general strip; once the slice is gone those projects have no pill, and
+ * their agents used to run on where nothing could reach them. A member the
+ * next slice's box also holds stays (it still has a pill), and so does the one
+ * on screen. The projects stay closed, with their layout saved for next time.
+ */
+async function stopReopenedMembers(leftBoxId: string, nextBoxId: string | null): Promise<void> {
+  const boxes = useBoxesStore.getState().boxes;
+  const left = boxes.find((b) => b.id === leftBoxId);
+  if (!left) return;
+  const kept = new Set(boxes.find((b) => b.id === nextBoxId)?.member_ids ?? []);
+  const stopped: string[] = [];
+  for (const id of left.member_ids) {
+    if (kept.has(id) || useTabsStore.getState().scope === id) continue;
+    const project = useProjectsStore.getState().projects.find((p) => p.id === id);
+    if (project?.status !== "inactive") continue;
+    if (await stopClosedProjectScope(id, { ask: false }).catch(() => false)) stopped.push(project.name);
+  }
+  if (stopped.length > 0) {
+    useProjectsStore.setState({
+      switchToast: translateNow("boxSlice.closedAgain", { names: stopped.join(", ") }),
+    });
+  }
+}
+
+useBoxSliceStore.subscribe((state, prev) => {
+  const left = prev.sliceBoxId;
+  if (left && left !== state.sliceBoxId) void stopReopenedMembers(left, state.sliceBoxId);
+});
+
+/**
  * The project pills the strip shows, in pill order: the ONE list behind the
  * rendered pills, the keyboard ring (`projectStations`: `cycleProject`, the
  * steering digits) and the station badges, so they cannot number the strip
  * differently.
  *
- * Unsliced (`box` null) it is every active project. A slice shows its box's
- * members REGARDLESS of status (a member closed in the general strip is still
- * open inside its box: `openBox` restored its tabs box-locally), plus the
- * project currently in scope even when it is not a member, since a strip that
- * hides the project you are working in has lost you.
+ * Unsliced (`box` null) it is every active project, by position. A slice shows
+ * its box's members REGARDLESS of status (a member closed in the general strip
+ * is still open inside its box: `openBox` restored its tabs box-locally), plus
+ * the project currently in scope even when it is not a member, since a strip
+ * that hides the project you are working in has lost you.
+ *
+ * A slice is in the BOX'S order (`member_ids`, user decision 2026-11-16), the
+ * same order the side panel's sections stand in: one view used to show two
+ * orders, and dragging a pill inside a box reordered the whole strip behind
+ * it. The non-member in scope comes last, a guest after the members.
  */
 export function stripProjects(
   projects: readonly ProjectEntry[],
@@ -116,8 +164,12 @@ export function stripProjects(
 ): ProjectEntry[] {
   const byPosition = (a: ProjectEntry, b: ProjectEntry) => a.position - b.position;
   if (!box) return projects.filter((p) => p.status !== "inactive").sort(byPosition);
-  const members = new Set(box.member_ids);
-  return projects.filter((p) => members.has(p.id) || p.id === scope).sort(byPosition);
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  const members = box.member_ids
+    .map((id) => byId.get(id))
+    .filter((p): p is ProjectEntry => !!p);
+  const guest = box.member_ids.includes(scope) ? undefined : byId.get(scope);
+  return guest ? [...members, guest] : members;
 }
 
 /**

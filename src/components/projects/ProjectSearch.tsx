@@ -7,6 +7,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { memberNames, projectSearchRows, searchPaths, searchRowId, searchRowName, type SearchRow } from "../../lib/projects/projectSearchRows";
 import { boxColor } from "../../lib/theme/boxColor";
 import { useBoxSliceStore } from "../../stores/boxSlice";
+import { useTabsStore } from "../../stores/tabs";
 
 /** How many member names a box row spells out before it trails off. */
 const MEMBER_NAMES_SHOWN = 4;
@@ -97,7 +98,9 @@ export function ProjectSearch({
       void leaveBox();
     } else if (row.kind === "box") {
       onOpenBox(row.box.id);
-    } else if (row.project.status !== "current") {
+    } else if (row.project.status !== "current" || useTabsStore.getState().scope.startsWith("box:")) {
+      // Inside a box the "current" project is only the one the box was entered
+      // from: it is not on screen, and picking it must bring it up.
       onActivateProject(row.project.id);
     }
   };

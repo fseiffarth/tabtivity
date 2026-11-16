@@ -614,6 +614,11 @@ jobs:
     if: ${{ !cancelled() && needs.ci-plan.outputs.skip_macos != 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')) }}
     runs-on: macos-26
     timeout-minutes: 100
+    env:
+      # This runner has 7 GB and the backend crate's two compiles (library,
+      # test harness) want about 17 GB side by side: the test steps build
+      # the harness first, alone (scripts/ci-failed-first.sh, split_build).
+      CI_CARGO_SPLIT_BUILD: "1"
 
     steps:
       - name: Checkout

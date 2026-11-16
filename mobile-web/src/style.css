@@ -420,7 +420,7 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .project-host-note { display:flex; align-items:flex-start; gap:var(--sp-1); }
 .project-host-note > span { flex:1 1 auto; min-width:0; }
 .home-hint > button,.project-hint > button,.project-host-note > button { display:grid; place-items:center; flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -6px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.2rem; }
-.hint-message { --rim:#4a426e; margin:12px 0; padding:10px 14px; border:1px solid #4a426e; background-color:#211e35; color:#e6e9f2; font-size:var(--fs-sub); line-height:1.45; }
+.hint-message { --rim:#4a426e; position:relative; margin:12px 0; padding:10px 14px; border:1px solid #4a426e; background-color:#211e35; color:#e6e9f2; font-size:var(--fs-sub); line-height:1.45; }
 .hint-message-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .hint-message-head > button { flex:0 0 auto; width:var(--hit); height:var(--hit); margin:-8px -8px -8px 0; padding:0; border:0; background:transparent; color:inherit; font-size:1.3rem; }
 .hint-message > p { margin:8px 0; }
@@ -2365,14 +2365,17 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
   .sheet-backdrop,.option-sheet,.screen,.terminal-screen,.list-skeleton > i { animation:none; }
 }
 
-/* Phone tips point to the visible control; all decorations pass taps through. */
-.phone-hint-pointer { position:fixed; inset:0; width:100%; height:100%; z-index:9; pointer-events:none; overflow:visible; color:#baabff; }
-.phone-hint-pointer path,.phone-hint-ring { fill:none; stroke:currentColor; stroke-width:2; }
+/* Phone tips point to the visible control; all decorations pass taps through.
+   The connector sits in the card's box under the sticky header (5) and the
+   bottom bar (8), the ring is the control's own outline: both scroll and clip
+   with what they mark instead of being redrawn a frame late over the chrome. */
+.phone-hint-pointer { position:absolute; left:0; top:0; width:1px; height:1px; z-index:4; pointer-events:none; overflow:visible; color:#baabff; }
+.phone-hint-pointer path { fill:none; stroke:currentColor; stroke-width:2; }
 .phone-hint-pointer circle { fill:currentColor; }
-.phone-hint-ring { animation:phone-hint-pulse 1.8s ease-in-out 3; }
-@keyframes phone-hint-pulse { 50% { opacity:.35; } }
-@media (prefers-reduced-motion:reduce) { .phone-hint-ring { animation:none; } }
-[data-software-paint] .phone-hint-ring { animation:none; }
+[data-phone-hint-ring] { outline:2px solid #baabff; outline-offset:3px; animation:phone-hint-pulse 1.8s ease-in-out 3; }
+@keyframes phone-hint-pulse { 50% { outline-color:rgba(186,171,255,.35); } }
+@media (prefers-reduced-motion:reduce) { [data-phone-hint-ring] { animation:none; } }
+[data-software-paint] [data-phone-hint-ring] { animation:none; }
 
 /* PDF cards use the library's bounded first-page covers. */
 .pdf-file-cover { position:relative; display:grid; place-items:center; overflow:hidden; background:#0f131c; }

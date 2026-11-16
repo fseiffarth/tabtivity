@@ -320,6 +320,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("tex_preview_snippet", "dir", UserPath),
     ("watch_dir", "path", UserPath),
     ("watch_dir", "repoDir", UserPathOpt),
+    // Only the key of the watch to release (`fs_watch::Watches`): never opened.
+    ("unwatch_dir", "path", BodyConfined),
     ("format_source", "path", Hint),
     ("formatter_available", "path", Hint),
     ("create_project", "req.mirrorParent", UserPathOpt),

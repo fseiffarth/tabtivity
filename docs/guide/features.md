@@ -240,9 +240,12 @@ current integration state.
 | **Claude** (`claude`) | Per-tab conversation via session hooks; preserves the CLI-selected permission mode on resume. | Core tab use confirmed; newer resume/activity paths still have open checks. |
 | **Codex** (`codex`) | Per-tab conversation via hooks or hook-free binding, including the SQLite session index. | Core tab use confirmed; newer binding/activity paths still have open checks. |
 | **Gemini** (`gemini`) | Continues the latest conversation in the directory. | Core tab use confirmed; restore remains less precise than Claude/Codex. |
-| **Vibe** (`vibe`) | Continues the latest saved session. | Pending. |
+| **Vibe** (`vibe`) | Per-tab session by the id its post-agent hook records; a tab with no record yet, or on a remote host, continues the latest saved session. | Pending. |
 | **Ollama via Vibe** | Isolated per-model `VIBE_HOME`; continue-latest where a resumable tab is available. | Partial. |
-| **Qwen, OpenCode, Copilot, Cursor, Grok, Antigravity, Droid, Muse Code** | CLI-specific continue-latest flags (Muse: `resume --last`, skipped in a folder with no session yet). | Pending. |
+| **OpenCode, Copilot** | Per-tab session: OpenCode by the id its plugin records at each prompt, Copilot by a session id the tab pins at launch. Remote tabs continue the latest. | Pending. |
+| **Antigravity** (`agy`) | Per-tab conversation (1.5.2 and later): a hook records each tab's conversation and the tab resumes it with `--conversation <id>`. A tab that never took a prompt starts fresh; tabs from before the hook, and remote tabs, continue the latest. | Pending (probed offline on 1.5.2–1.5.9). |
+| **Muse Code** (`muse`) | Per-tab session (1.3.0 and later, Linux and macOS): a prompt hook records each tab's session and the tab resumes it with `resume <id>`. Otherwise `resume --last`, skipped where the folder has no prompted session. | Pending (probed offline on 1.3.0 and 1.4.15). |
+| **Qwen, Cursor, Grok, Droid** | CLI-specific continue-latest flags. | Pending. |
 | **Kiro, Cline, Aider, OpenClaw, Goose, Pi, Plandex, SWE-agent, Mini SWE-agent, Crush, Amp, Kimi, Qoder, Auggie, Kilo Code, Continue.dev, Junie, CodeBuddy** | Launch support; no built-in tab restore path. | Pending. |
 | **Custom agents** | Optional resume arguments supplied by the user. | Depends on the command. |
 | **Shell** | Respawns an ordinary shell or reattaches its tmux session where configured. | Core tab use confirmed. |
@@ -255,15 +258,19 @@ filesystem access; project-local XDG paths alone are not an isolation boundary.
 restarts. Tabtivity installs session hooks keyed by `TABTIVITY_TAB_UID`, so a
 `/clear` can update the recorded live session. Codex also has hook-free binding,
 including its SQLite-backed session index; its hooks may need one-time `/hooks`
-trust. Qwen, OpenCode, Copilot, Cursor, Grok, Gemini, Antigravity, Vibe, and Muse
-have continue-latest restore paths. Those cannot distinguish several conversations
-in the same directory as precisely as Claude/Codex. Custom agents can supply
+trust. OpenCode (a plugin), Vibe (a post-agent hook) and Copilot (a pinned
+session id) also come back to each tab's own session, as do Antigravity and Muse,
+each through a hook that records the tab's conversation at a prompt (Muse not on
+Windows). Qwen, Cursor, Grok, and Gemini have continue-latest restore paths.
+Those cannot distinguish several conversations in the same directory. Custom agents can supply
 resume arguments; agents without a supported resume path are not restored.
 
 **Permission and activity.** Set permission mode inside the agent CLI. On Claude
 resume, Tabtivity reapplies the mode its hook recorded to preserve that choice.
-Claude/Codex turn hooks also drive working, decision-needed, and finished states;
-agents without a hook verdict use terminal-output heuristics.
+Turn hooks also drive the working, decision-needed, and finished states for
+Claude, Codex, Vibe, Copilot, OpenCode, Antigravity, and Muse (Antigravity and
+Muse without the decision state); agents without a hook verdict use
+terminal-output heuristics.
 
 **Tabtivity's tools (MCP).** Agents opened in the root console get Tabtivity's
 own tools: calendar, to-do board, project sweeps, and the

@@ -1270,8 +1270,9 @@ frontend and as the fallback when the backend lacks `patch_box`'s `order`),
   checklist, `BoxMemberChecklist` (box pill menu: projects; project pill menu:
   boxes): closed projects included and labelled, scrolls, filter field past 8
   rows, each toggle one singular `patch_box` add/remove (optimistic, reverted
-  on failure). Saves from the box sheet go through `saveBox`, a diffed
-  `patch_box` (`name`, `addMembers`, `removeMembers`, `color`), never the whole
+  on failure). The box sheet applies every change at once the same way (a
+  tick is one `addToBox` / `removeFromBox`, a colour pick one `setBoxColor`, the
+  name `rename_box` on Enter or blur; no Save, no draft), never the whole
   list, so a member added meanwhile survives (the side panel's drag reorder is
   likewise a `patch_box` `order`: the named members take the slots they hold,
   any other member keeps its slot); against an older running backend both
@@ -1339,13 +1340,17 @@ frontend and as the fallback when the backend lacks `patch_box`'s `order`),
   a member show a `TabMemberChip` (dot in `memberColor(projectId)`, a square
   for the whole box; shell, agent, `files`, `projectfiles` kinds only; derived
   from `tab.cwd`, nothing stored), in the main strip and the popout's. The side
-  panel is an accordion (`ProjectFilesPane.tsx`, `stores/boxAccordion.ts`): one
-  member expanded, headers with colour dot, git dot and agent count; the
-  collapse state is per-viewer `localStorage` keyed by box id. A `⋯` on a member
+  panel lists one collapsible section per member (`ProjectFilesPane.tsx`,
+  `stores/boxAccordion.ts`): any number expanded at once (a header click
+  toggles only that one), headers with colour dot, git dot and agent count; the
+  collapse state is per-viewer `localStorage` keyed by box id. With at most one
+  section open the panel follows the active tab's member; with several it opens
+  that member beside them. A `⋯` on a member
   header (`BoxMemberMenu.tsx`) offers Files/Git, Remote/Local, the file manager,
-  project settings and **Open as tab** (a `projectfiles` tab at the member's
-  root); the toolbar's search is one shared field above the sections that
-  searches the expanded member (`sharedSearch` on `FileTree`). The
+  project settings, **Open as tab** (a `projectfiles` tab at the member's
+  root) and **Fold the other projects** / **Open all projects**; the toolbar's
+  search is one shared field above the sections that searches every expanded
+  member (`sharedSearch` on `FileTree`). The
   spawn gate (`pty_spawn`) and file confinement (`compute_allowed_roots`)
   accept the box folder ∪ member roots ∪ remote members' mirrors, and fail
   closed on an unknown box. Local shells in a box scope get tmux persistence

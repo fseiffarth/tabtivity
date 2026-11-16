@@ -458,9 +458,10 @@ fn upgrade_doc_via(
     swapped
 }
 
-/// Which file a read saw: `(device, inode)`, so a doc replaced by another file
-/// with the same bytes still reads as changed. Where the platform has no inode
-/// (Windows) length and modification time stand in.
+/// Which file a read saw: `(device, inode)` — on Windows the volume serial and
+/// the NTFS file id — so a doc replaced by another file with the same bytes
+/// still reads as changed. (Length and modification time are no stand-in: a
+/// same-sized file written within one clock tick matches both.)
 type FileId = (u64, u128);
 
 /// [`read_scaffold_doc`] with the identity of the file that was read, taken
@@ -468,7 +469,7 @@ type FileId = (u64, u128);
 fn read_with_id(path: &Path) -> Option<(String, FileId)> {
     use std::io::Read;
     let file = crate::services::home_io::open_regular(path)?;
-    let id = file_id(&file.metadata().ok()?);
+    let id = file_id(&file)?;
     let mut bytes = Vec::new();
     file.take(MAX_SCAFFOLD_DOC_BYTES + 1).read_to_end(&mut bytes).ok()?;
     if bytes.len() as u64 > MAX_SCAFFOLD_DOC_BYTES {
@@ -478,19 +479,15 @@ fn read_with_id(path: &Path) -> Option<(String, FileId)> {
 }
 
 #[cfg(unix)]
-fn file_id(meta: &std::fs::Metadata) -> FileId {
+fn file_id(file: &std::fs::File) -> Option<FileId> {
     use std::os::unix::fs::MetadataExt;
-    (meta.dev(), meta.ino() as u128)
+    let meta = file.metadata().ok()?;
+    Some((meta.dev(), meta.ino() as u128))
 }
 
-#[cfg(not(unix))]
-fn file_id(meta: &std::fs::Metadata) -> FileId {
-    let nanos = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_nanos());
-    (meta.len(), nanos)
+#[cfg(windows)]
+fn file_id(file: &std::fs::File) -> Option<FileId> {
+    crate::services::mobile_control::files::handle_identity(file).ok()
 }
 
 /// A name for the upgrade's temporary: dot-led, in the doc's own folder.

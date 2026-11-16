@@ -28,7 +28,7 @@ vi.mock("../../lib/terminal/terminalRegistry", () => ({
   }),
 }));
 
-import { useSessionPicker } from "../../hooks/useSessionPicker";
+import { modelPickOffered, useSessionPicker } from "../../hooks/useSessionPicker";
 import type { TabEntry } from "../../stores/tabs";
 
 const ESC = String.fromCharCode(27);
@@ -168,5 +168,18 @@ describe("the model list remembered for the CLI's build", () => {
     mocks.rows = PICKER;
     await waitFor(() => expect(result.current.step?.options).toHaveLength(4));
     await waitFor(() => expect(keeps()).toHaveLength(1));
+  });
+});
+
+
+describe("model picker capabilities", () => {
+  it("offers only CLIs with a supported live picker", () => {
+    for (const cmd of ["claude", "codex", "opencode", "agy", "copilot"]) {
+      expect(modelPickOffered({ kind: "agent", cmd })).toBe(true);
+    }
+    for (const cmd of ["muse", "aider", "custom"]) {
+      expect(modelPickOffered({ kind: "agent", cmd })).toBe(false);
+    }
+    expect(modelPickOffered({ kind: "local_agent", cmd: "opencode" })).toBe(false);
   });
 });

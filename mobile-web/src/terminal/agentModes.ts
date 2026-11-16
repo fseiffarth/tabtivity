@@ -224,6 +224,12 @@ export function modeFixed(agentLabel?: string): boolean {
   return FAMILIES.some((family) => family.fixed && family.agent.test(agentLabel));
 }
 
+/** Only these families have a verified mode key or a fixed mode readout.
+ * Unknown CLIs must not receive a guessed Shift+Tab. */
+export function modeOffered(agentLabel: string): boolean {
+  return FAMILIES.some((family) => family.agent.test(agentLabel));
+}
+
 /** Which listed choice the session is in right now, by value or alias.
  * `framed` says whether an input frame is on screen at all — required before
  * the absence of mode text may be read as the family's silent mode. */

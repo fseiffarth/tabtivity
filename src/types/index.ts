@@ -648,6 +648,8 @@ export interface Settings {
   /** Tabtivity-owned consent, bound to both project id and canonical directory. */
   completion_project_policies?: Record<string, {
     directory: string;
+    /** Backend-owned SSH endpoint/root identity; absent for local consent. */
+    remote?: string;
     copilot: boolean;
     local_only: boolean;
     /** Copilot also serves the project's text files (Markdown, LaTeX, plain text). */

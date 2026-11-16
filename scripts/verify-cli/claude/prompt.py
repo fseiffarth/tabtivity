@@ -1,12 +1,16 @@
 """Claude's TUI held at a permission prompt, captured at four widths.
 
-    python3 scripts/verify-cli/claude/prompt.py <label> <claude-bin>
+    python3 scripts/verify-cli/claude/prompt.py <label> <claude-bin> [cols ...]
     → tmp/verify-cli/claude/<label>/prompt/{*.esc,dump/*.json}
 
 Real HOME (needs the login), `--model haiku`, one small paid turn. Frames:
 the prompt at 120 cols (just shown, then 9 s later), at 60 and 42 cols, after
 Escape, the `/model` slash menu, and the exit. Replay them with
 parsers/frames.probe.ts; the hook payloads feed claude/sedcheck.py.
+
+Extra `cols` hold the same prompt at each of those widths too (`wrap@<cols>x30`),
+for where a long option wraps: the reader tells a wrapped label from a note by
+whether the next word would have fit (`selectPrompt.ts` `wrapsLabel`).
 """
 import os
 import sys
@@ -50,6 +54,9 @@ try:
     t.cap("prompt")
     t.size(42, 24)
     t.cap("prompt")
+    for cols in sys.argv[3:]:
+        t.size(int(cols), 30)
+        t.cap("wrap")
     t.size(120, 40)
     t.keys("Escape")
     time.sleep(3)

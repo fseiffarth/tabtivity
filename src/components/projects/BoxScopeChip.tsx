@@ -21,7 +21,7 @@ import { useRootOverlayStore } from "../../stores/rootOverlay";
 import { BoxColorPicker } from "./BoxColorPicker";
 import { BoxMemberChecklist } from "./BoxMemberChecklist";
 import { useBoxNameCheck, useQuickCreateBox } from "./useQuickCreateBox";
-import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, PlusIcon, SquareIcon } from "../common/icons/Icon";
+import { BoxSwatch, CheckboxIcon, CheckIcon, CloseIcon, MoreIcon, PlusIcon, SquareIcon } from "../common/icons/Icon";
 import { setBoxBarHidden, useBarHidden } from "../../lib/projects/barHidden";
 import { BarHiddenSection, BarSoloToggle, type BarHiddenSet } from "./BarHiddenList";
 
@@ -295,8 +295,9 @@ export function BoxScopeChip({
   // target, the list would only cover the header for nothing. When boxes do
   // overflow, a drag in flight opens the list so every row becomes a target;
   // it folds back unless the user had opened it themselves.
-  const pillDrag = usePillDragStore((s) => s.drag);
-  const dragging = !!pillDrag && overflow > 0;
+  const pillDragging = usePillDragStore((s) => !!s.drag);
+  const dragOverBoxId = usePillDragStore((s) => s.drag?.overBoxId ?? null);
+  const dragging = pillDragging && overflow > 0;
   useEffect(() => {
     if (dragging) {
       if (!menuOpen) sprung.current = true;
@@ -502,7 +503,7 @@ export function BoxScopeChip({
                 data-box-id={b.id}
                 className={`box-chip box-scope-pill${isSelected ? " is-selected filtering" : ""}${
                   isActive ? " active" : ""
-                }${pillDrag?.overBoxId === b.id ? " drag-over" : ""}`}
+                }${dragOverBoxId === b.id ? " drag-over" : ""}`}
                 style={{ "--box-color": color } as CSSProperties}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -557,6 +558,26 @@ export function BoxScopeChip({
                     hover-only): the same action as the list's "All projects". */}
                 {isSelected && renamingId !== b.id && (
                   <>
+                    {/* The visible door to the box's menu (rename, colour,
+                        members, edit, dissolve): it used to open on a right
+                        click alone, which nothing on screen said. */}
+                    <button
+                      type="button"
+                      className="box-pill-more"
+                      aria-haspopup="menu"
+                      aria-expanded={contextMenu?.boxId === b.id}
+                      title={t("boxPill.moreTitle")}
+                      aria-label={t("boxPill.moreAria", { name: b.name })}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        dismiss();
+                        const r = e.currentTarget.getBoundingClientRect();
+                        setContextMenu({ x: r.left, y: r.bottom + 2, boxId: b.id });
+                      }}
+                    >
+                      <MoreIcon />
+                    </button>
+                    <UntestedTag id="boxPill.more" />
                     <button
                       type="button"
                       className="box-pill-leave"
@@ -673,7 +694,7 @@ export function BoxScopeChip({
                   // portaled row counts exactly as a pill does.
                   data-box-id={b.id}
                   className={`${isSlice ? "is-current is-slice" : ""}${isScope ? " is-scope" : ""}${
-                    pillDrag?.overBoxId === b.id ? " drag-over" : ""
+                    dragOverBoxId === b.id ? " drag-over" : ""
                   }`.trim()}
                   onClick={() => pick(b.id)}
                   title={
@@ -692,6 +713,23 @@ export function BoxScopeChip({
                   <BoxStatusBars box={b} interactive={false} className="inline" />
                   <span className="box-chip-menu-count">{b.member_ids.length}</span>
                 </button>
+                {/* The same menu the pill's ⋯ opens, for every box: one with
+                    no pill on the row (hidden, or past the row's budget) could
+                    not be renamed, recoloured or dissolved without entering it. */}
+                <button
+                  type="button"
+                  className="box-chip-menu-more"
+                  aria-haspopup="menu"
+                  title={t("boxPill.moreTitle")}
+                  aria-label={t("boxPill.moreAria", { name: b.name })}
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    dismiss();
+                    setContextMenu({ x: r.left, y: r.bottom + 2, boxId: b.id });
+                  }}
+                >
+                  <MoreIcon />
+                </button>
               </div>
               );
             })}
@@ -704,18 +742,6 @@ export function BoxScopeChip({
             >
               {t("projectSwitcher.newBox")} <UntestedTag id="boxChip.createDoors" />
             </button>
-            {/* Opens the box you are looking at, else the first one: the editor
-                is for editing, never a way into creating (that is the row above). */}
-            {ordered.length > 0 && (
-              <button
-                onClick={() => {
-                  dismiss();
-                  useBoxEditorStore.getState().openEditor(selectedId ?? ordered[0].id);
-                }}
-              >
-                {t("pill.editBoxesEllipsis")}
-              </button>
-            )}
           </div>,
           document.body,
         )}
@@ -738,6 +764,12 @@ export function BoxScopeChip({
           <button
             onClick={() => {
               setContextMenu(null);
+              // The rename field lives on the box's pill; a box with none on
+              // the row is renamed in its sheet.
+              if (!shown.some((b) => b.id === menuBox.id)) {
+                useBoxEditorStore.getState().openEditor(menuBox.id);
+                return;
+              }
               setRenameValue(menuBox.name);
               setRenamingId(menuBox.id);
             }}

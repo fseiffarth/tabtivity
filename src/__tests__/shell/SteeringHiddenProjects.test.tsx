@@ -103,7 +103,8 @@ describe("projectStations with hidden projects", () => {
     useBoxesStore.setState({ boxes: [{ id: "bx", name: "bx", member_ids: ["b", "c"], position: 0 }] });
     hide({ bar_hidden_projects: ["b"], bar_hidden_boxes: ["bx"] });
     useBoxSliceStore.setState({ sliceBoxId: "bx" });
-    expect(projectStations()).toEqual([null, "a", "b", "c"]);
+    // The members in the box's order, then the non-member in scope.
+    expect(projectStations()).toEqual([null, "b", "c", "a"]);
   });
 });
 

@@ -211,6 +211,49 @@ pub fn install_agent_remote_command(
     )
 }
 
+/// Probe commands in the same login shell used by remote agent tabs. Never dial
+/// a disconnected host just because its add-tab menu was opened.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn probe_remote_agent_binaries(
+    ctx: Ctx, project_id: String, host_id: String, bins: Vec<String>,
+) -> Result<Vec<String>, String> {
+    use crate::services::{remote, ssh_exec};
+    if !remote::is_connected_host(ctx.get::<remote::RemotePoolState>(), &project_id, &host_id).await {
+        return Err("remote project host is not connected".into());
+    }
+    let target = remote::remote_target_for_host(&project_id, &host_id)
+        .ok_or("not a remote project host")?;
+    app_core::rt::try_blocking("remote agent probe", move || {
+        let bins: Vec<_> = bins.into_iter().filter(|bin| !bin.is_empty() && !bin.starts_with('-') && !bin.contains(['\n', '\r'])).collect();
+        let script = bins.iter().map(|bin| {
+            let quoted = ssh_exec::shell_quote(bin);
+            format!("if command -v {quoted} >/dev/null 2>&1; then printf '%s\\n' {quoted}; fi;")
+        }).collect::<Vec<_>>().join(" ");
+        let command = format!("exec \"${{SHELL:-/bin/sh}}\" -lc {}", ssh_exec::shell_quote(&script));
+        let mut process = ssh_exec::remote_shell_command(&target.spec, &command)?;
+        let out = crate::services::git_bounded::run(&mut process, crate::services::git_bounded::Opts {
+            timeout: Some(std::time::Duration::from_secs(15)), no_precheck: true, ..Default::default()
+        }).map_err(|error| error.to_string())?.output;
+        if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).into_owned()); }
+        Ok(String::from_utf8_lossy(&out.stdout).lines().filter(|line| bins.iter().any(|bin| bin == line)).map(str::to_owned).collect())
+    }).await
+}
+
+/// Registry-owned installer for a project's primary or worker, in a visible tab.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_agent_project_command(
+    ctx: Ctx, agent_id: String, project_id: String, host_id: String,
+) -> Result<String, String> {
+    use crate::services::{remote, ssh_exec};
+    if !remote::is_connected_host(ctx.get::<remote::RemotePoolState>(), &project_id, &host_id).await {
+        return Err("remote project host is not connected".into());
+    }
+    let spec = find_spec(&agent_id).ok_or("unknown agent")?;
+    let target = remote::remote_target_for_host(&project_id, &host_id).ok_or("not a remote project host")?;
+    let command = format!("\"${{SHELL:-/bin/sh}}\" -lc {}", ssh_exec::shell_quote(&remote_install_script(spec)));
+    ssh_exec::interactive_exec_command(&target.spec.user, &target.spec.host, target.spec.port, &command)
+}
+
 /// True when the given agent (by id) is installed. Unknown ids return false.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn agent_is_installed(id: String) -> bool {

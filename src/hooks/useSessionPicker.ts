@@ -1,3 +1,4 @@
+import { agentFamily } from "../../shared/agentComposer";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { OPENCODE_MODEL_KEYS, OpenCodePickerWalk, isOpenCodeTab, openCodeDialogCloseKeys } from "../../mobile-web/src/terminal/openCodeMini";
@@ -32,8 +33,8 @@ export type SessionPickerCommand = "/model" | "/permissions";
  * local-model tab: its model is the Ollama one it was launched on, and the
  * driver's list (OpenCode's providers, Claude's or Codex's cloud models) would
  * only offer to move the tab off it. */
-export function modelPickOffered(tab: Pick<TabEntry, "kind">): boolean {
-  return tab.kind !== "local_agent";
+export function modelPickOffered(tab: Pick<TabEntry, "kind" | "cmd">): boolean {
+  return tab.kind !== "local_agent" && ["claude", "codex", "gemini", "qwen", "opencode", "antigravity", "copilot"].includes(agentFamily(tab.cmd));
 }
 
 /** The effort slider as a list of its own, one row per stop. */
@@ -248,7 +249,7 @@ export function useSessionPicker({ tab, ptyId, agentLabel, typeKeys }: {
   }, [picking, step, picker, answered, effortFor, finish, closeUnread]);
 
   const open = (next: SessionPickerCommand = "/model") => {
-    if (picking) return;
+    if (picking || (next === "/model" ? !modelPickOffered(tab) : agentFamily(tab.cmd) !== "codex")) return;
     setCommand(next);
     sawPicker.current = false;
     answeredOnce.current = false;

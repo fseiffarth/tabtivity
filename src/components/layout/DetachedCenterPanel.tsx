@@ -55,6 +55,7 @@ import { subscribeTauri, useTauriListener } from "../../hooks/useTauriListener";
 import { usePaneRects } from "./usePaneRects";
 import { useDividerDrag } from "./useDividerDrag";
 import { TabHoverCard } from "../tabs/TabHoverCard";
+import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
 import { TabMemberChip, memberTableOf, tabMemberInfo } from "../tabs/TabMemberChip";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { WindowControls } from "../header/WindowControls";
@@ -292,7 +293,10 @@ export function DetachedCenterPanel({
   // store subscriptions per hover, for detail the tab strip and the pane
   // itself already show.
   const fastMode = useFastMode();
-  const [hoverTab, setHoverTab] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [hoverTab, setHoverTab] = useState<{ key: string; x: number; y: number; el: HTMLElement } | null>(null);
+  // Same guard as the main strip: a tab that leaves the pointer without a
+  // mouseleave (the pointer left this window) drops its card.
+  useHoverAnchorGuard(hoverTab?.el ?? null, () => setHoverTab(null));
   // Multi-host locality menu (shared with TabBar). Machine names + the primary
   // host come from the streamed `remoteInfo`. Remoteness is the project's own
   // `remote` config, as the main window's `isRemoteScope` reads it — NOT the
@@ -1568,7 +1572,7 @@ export function DetachedCenterPanel({
                   // this strip is bespoke, so it anchors the shared card itself).
                   onMouseEnter={(e) => {
                     const r = e.currentTarget.getBoundingClientRect();
-                    setHoverTab({ key: tab.key, x: r.left + r.width / 2, y: r.bottom });
+                    setHoverTab({ key: tab.key, x: r.left + r.width / 2, y: r.bottom, el: e.currentTarget });
                   }}
                   // Looking at a tab marks its output read, exactly as the main
                   // window's strip does — the popout forwards it, so the main

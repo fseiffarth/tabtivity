@@ -42,6 +42,14 @@ Two things once made every cargo step of a CI job recompile the backend
   each compile of the crate a minute and 4 GB (swap, on the 7 GB macOS
   runner). Copy the file into `OUT_DIR` and `include_bytes!` it.
 
+A third cost is memory, not a rebuild: the crate's two compiles for `cargo
+test` (library, test harness) peak at about 7 GB and 10 GB and cargo runs them
+side by side, on a macOS runner with 7 GB — 38 minutes of mostly swap for five
+minutes of compiler work (measured 2026-11-16; `-j1` and `debug = false` leave
+both peaks where they are). `test-macos` sets `CI_CARGO_SPLIT_BUILD=1`, which
+makes `ci-failed-first.sh` build the harness first and alone. That only stops
+the overlap; no single compile fits until the crate is split.
+
 The backend test steps carry their own `timeout-minutes`, inside the job's. A
 job timeout cancels the run and names nothing; a step timeout fails it, and
 `ci-failed-first.sh hung` then names the tests that were still running (an

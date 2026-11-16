@@ -5,6 +5,7 @@ import { jumpToTab } from "../../lib/shortcuts/tabJump";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { useFastMode } from "../../lib/agents/fastMode";
 import { TabHoverCard } from "../tabs/TabHoverCard";
+import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
 
 /** Most status bars the strip will draw. A scope with more busy tabs than this
  *  would overflow a narrow pill, so the strip stops here and the tooltip carries
@@ -98,7 +99,7 @@ function StatusStrip({
   // Fast mode keeps the plain tooltips: the card ticks a clock and asks the
   // backend once per hover (`TabBar` drops its card there for the same reason).
   const fastMode = useFastMode();
-  const [hovered, setHovered] = useState<{ item: StatusBarItem; x: number; y: number } | null>(null);
+  const [hovered, setHovered] = useState<{ item: StatusBarItem; x: number; y: number; el: HTMLElement } | null>(null);
   const cards = interactive && !fastMode;
   const same = (a: StatusBarItem, b: StatusBarItem) => a.scope === b.scope && a.key === b.key;
   const leave = (item: StatusBarItem) => {
@@ -114,6 +115,14 @@ function StatusStrip({
     setHovered(null);
     onBarHover?.(false);
   }, [gone, onBarHover]);
+  // Nor does a bar that leaves the pointer some other way — the fullscreen
+  // header sliding away under it, the pointer leaving the window — get a
+  // mouseleave: the card then hung over the content until that bar was hovered
+  // and left again.
+  useHoverAnchorGuard(hovered?.el ?? null, () => {
+    setHovered(null);
+    onBarHover?.(false);
+  });
   if (items.length === 0) return null;
   return (
     <span
@@ -141,7 +150,7 @@ function StatusStrip({
             onMouseEnter={(e) => {
               if (!cards) return;
               const r = e.currentTarget.getBoundingClientRect();
-              setHovered({ item, x: r.left + r.width / 2, y: r.bottom });
+              setHovered({ item, x: r.left + r.width / 2, y: r.bottom, el: e.currentTarget });
               onBarHover?.(true);
             }}
             onMouseLeave={() => leave(item)}
@@ -157,7 +166,9 @@ function StatusStrip({
           />
         );
       })}
-      {cards && hovered && !gone && <BarHoverCard {...hovered} hint={t("pill.statusTabJump")} />}
+      {cards && hovered && !gone && (
+        <BarHoverCard item={hovered.item} x={hovered.x} y={hovered.y} hint={t("pill.statusTabJump")} />
+      )}
     </span>
   );
 }

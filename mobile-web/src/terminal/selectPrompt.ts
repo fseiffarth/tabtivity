@@ -120,7 +120,7 @@ const EDGE = /^[↑↓]$/u;
  * under the run, and nothing but the count and one word. */
 const HIDDEN_ROWS = /^\s*(?:…|\.\.\.)\s*\+(\d{1,2})\s+\p{L}+$/u;
 const RADIO_AGENT = /gemini|qwen/iu;
-/** GitHub Copilot CLI (1.0.106 to 1.0.110) draws a row whose label wraps with
+/** GitHub Copilot CLI (1.0.106 to 1.0.112) draws a row whose label wraps with
  * no hanging indent: the row and its next line both start under the `1.` of
  * the rows that fit, inside the dialog's box —
  *
@@ -353,11 +353,14 @@ function readPanelWrap(text: string, labelColumn: number): string | null {
 
 /** Whether `next` continues the label on `above` rather than starting the
  * row's note under it: its first word would not have fit on `above` in a pane
- * `columns` wide. Unknown width reads every such line as a note, as before. */
+ * `columns` wide. Unknown width reads every such line as a note, as before.
+ * The last column counts as no room: Claude Code 2.1.325 wraps a word that
+ * would have ended in it (2.1.323 still put it there), so at 60 columns
+ * `… auto mode handles` / `these prompts for you` is one label. */
 function wrapsLabel(above: string, next: string, columns?: number): boolean {
   if (!columns) return false;
   const word = next.trim().split(/\s/u)[0];
-  return above.trimEnd().length + 1 + word.length > columns;
+  return above.trimEnd().length + 1 + word.length >= columns;
 }
 
 /** Where the dialog's own text ends going up. A `/model` opened mid-turn is

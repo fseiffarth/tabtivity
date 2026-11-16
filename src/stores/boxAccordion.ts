@@ -3,10 +3,10 @@ import { storageKey } from "../lib/brand";
 import { cappedMap, readJson, writeJson } from "../lib/persist";
 
 /**
- * The box side panel's accordion, remembered **per box**, across scope
- * switches and relaunches: which member section is expanded, whether the box
- * folder's own section is folded, and which view (Files / Git) each member
- * shows.
+ * The box side panel's sections, remembered **per box**, across scope
+ * switches and relaunches: which member sections are expanded (any number at
+ * once), whether the box folder's own section is folded, and which view
+ * (Files / Git) each member shows.
  *
  * Per-viewer convenience, not data: it lives in localStorage like
  * `texViewPref` / `fileSourcePref` (never a JSON file, nothing to round-trip),
@@ -15,14 +15,15 @@ import { cappedMap, readJson, writeJson } from "../lib/persist";
  * the cap eventually drops.
  *
  * `open` has three states on purpose: `undefined` = the user never chose (the
- * panel follows the active tab's member, else the first), `null` = every member
- * section folded by a click, an id = that member is expanded.
+ * panel follows the active tab's member, else the first), an empty list = every
+ * member section folded by a click, ids = those members are expanded. A row an
+ * older build stored (one id, or `null` for "all folded") still reads.
  */
 export type BoxMemberView = "files" | "git";
 
 export interface BoxAccordionRow {
-  /** The expanded member: see above for `undefined` / `null`. */
-  open?: string | null;
+  /** The expanded members: see above for `undefined` / empty. */
+  open?: string[];
   /** The box folder's own section is folded. */
   boxFolded?: boolean;
   /** Per member: the view it shows when expanded (absent = Files). */
@@ -39,7 +40,13 @@ function parseRow(v: unknown): BoxAccordionRow | null {
   if (!v || typeof v !== "object") return null;
   const { open, boxFolded, views } = v as Record<string, unknown>;
   const row: BoxAccordionRow = {};
-  if (typeof open === "string" || open === null) row.open = open;
+  if (Array.isArray(open)) {
+    row.open = [...new Set(open.filter((id): id is string => typeof id === "string"))];
+  } else if (typeof open === "string") {
+    row.open = [open]; // the one-at-a-time accordion's row
+  } else if (open === null) {
+    row.open = [];
+  }
   if (typeof boxFolded === "boolean") row.boxFolded = boxFolded;
   if (views && typeof views === "object") {
     const out: Record<string, BoxMemberView> = {};
@@ -80,8 +87,8 @@ function persistRow(boxId: string, row: BoxAccordionRow) {
 
 interface BoxAccordionStore {
   byBox: Record<string, BoxAccordionRow>;
-  /** Expand a member (an id), or fold them all (`null`). */
-  setOpen: (boxId: string, open: string | null) => void;
+  /** The members to show expanded; an empty list folds them all. */
+  setOpen: (boxId: string, open: string[]) => void;
   setBoxFolded: (boxId: string, folded: boolean) => void;
   setView: (boxId: string, memberId: string, view: BoxMemberView) => void;
 }
@@ -95,7 +102,12 @@ export const useBoxAccordionStore = create<BoxAccordionStore>((set) => {
     });
   return {
     byBox: readPersisted(),
-    setOpen: (boxId, open) => patch(boxId, (r) => (r.open === open ? r : { ...r, open })),
+    setOpen: (boxId, open) =>
+      patch(boxId, (r) =>
+        r.open && r.open.length === open.length && r.open.every((id, i) => id === open[i])
+          ? r
+          : { ...r, open },
+      ),
     setBoxFolded: (boxId, boxFolded) =>
       patch(boxId, (r) => (!!r.boxFolded === boxFolded ? r : { ...r, boxFolded })),
     setView: (boxId, memberId, view) =>

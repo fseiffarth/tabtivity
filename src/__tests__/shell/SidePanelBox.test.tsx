@@ -123,8 +123,8 @@ describe("SidePanel multi-root box view", () => {
     useRemoteStatusStore.setState({ byProject: { p2: { ssh: "off", vpn: "off" } } });
     useFileSourcePrefStore.setState({ byProject: { p2: "remote" }, byViewer: {} });
     useTabsStore.setState({ scope: "box:boxA" });
-    // One member is expanded at a time: the remote one, so its prompt shows.
-    useBoxAccordionStore.getState().setOpen("boxA", "p2");
+    // Only the remote member is expanded, so its prompt shows.
+    useBoxAccordionStore.getState().setOpen("boxA", ["p2"]);
 
     let container!: HTMLElement;
     await act(async () => {
@@ -149,14 +149,15 @@ describe("SidePanel multi-root box view", () => {
     )!;
     expect(p1Section.querySelector(".file-root-body")).toBeNull();
     expect(p1Section.classList.contains("is-collapsed")).toBe(true);
-    // Opening p1 shows its ordinary tree (no switch, no prompt) and folds p2.
+    // Opening p1 shows its ordinary tree (no switch, no prompt) beside p2,
+    // which stays open with its prompt.
     await act(async () => {
       fireEvent.click(p1Section.querySelector(".file-root-header")!);
     });
     expect(p1Section.querySelector(".file-root-body")).not.toBeNull();
     expect(p1Section.querySelector(".dialog-connect-btn")).toBeNull();
     expect(p1Section.querySelector(".side-panel-source-switch")).toBeNull();
-    expect(p2Section.querySelector(".dialog-connect-btn")).toBeNull();
+    expect(p2Section.querySelector(".dialog-connect-btn")).not.toBeNull();
   });
 
   it("shows a disconnected remote member's LOCAL mirror by default", async () => {
@@ -347,7 +348,7 @@ describe("box member reorder", () => {
 });
 
 /**
- * The accordion: one member section expanded at a time, one-line headers with
+ * The sections: any number of members expanded at once, one-line headers with
  * the member's facts, the choice remembered per box.
  */
 describe("box side panel accordion", () => {
@@ -406,7 +407,7 @@ describe("box side panel accordion", () => {
     useProjectsStore.setState({
       projects: ["p1", "p2", "p3"].map((id) => ({ ...proj(id), directory: `/p/${id}` }) as ProjectEntry),
     });
-    useBoxAccordionStore.getState().setOpen("boxA", "p1");
+    useBoxAccordionStore.getState().setOpen("boxA", ["p1"]);
     useTabsStore.setState({ tabs: [agentTab("t1", "/p/p2", "shell")], activeKey: "t1" });
     const container = await renderBox();
     // The remembered click wins at mount ...
@@ -428,14 +429,14 @@ describe("box side panel accordion", () => {
     useProjectsStore.setState({
       projects: ["p1", "p2", "p3"].map((id) => ({ ...proj(id), directory: `/p/${id}` }) as ProjectEntry),
     });
-    useBoxAccordionStore.getState().setOpen("boxA", "p1");
+    useBoxAccordionStore.getState().setOpen("boxA", ["p1"]);
     const container = await renderBox();
     expect(open(container)).toEqual(["p1"]);
     await act(async () => {
       useTabsStore.setState({ tabs: [agentTab("t1", "/p/p2", "shell")], activeKey: "t1" });
     });
     expect(open(container)).toEqual(["p1"]);
-    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBe("p1");
+    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toEqual(["p1"]);
     // Once a tab is active, moving to another member's tab still follows it.
     await act(async () => {
       useTabsStore.setState({
@@ -446,18 +447,73 @@ describe("box side panel accordion", () => {
     expect(open(container)).toEqual(["p3"]);
   });
 
-  it("a click opens that member and folds the one before; a second click folds all", async () => {
+  it("a click opens that member beside the open one; a click on an open one folds only it", async () => {
     const container = await renderBox();
-    await act(async () => {
-      fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
-    });
-    expect(open(container)).toEqual(["p2"]);
-    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBe("p2");
-    await act(async () => {
-      fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
-    });
+    const click = (name: string) =>
+      act(async () => {
+        fireEvent.click(section(container, name).querySelector(".file-root-header")!);
+      });
+    await click("p2");
+    expect(open(container)).toEqual(["p1", "p2"]);
+    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toEqual(["p1", "p2"]);
+    await click("p3");
+    expect(open(container)).toEqual(["p1", "p2", "p3"]);
+    await click("p2");
+    expect(open(container)).toEqual(["p1", "p3"]);
+    await click("p1");
+    await click("p3");
+    // Every section folded by a click stays folded: no fallback reopens one.
     expect(open(container)).toEqual([]);
-    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBeNull();
+    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toEqual([]);
+  });
+
+  it("with several open, the active tab's member opens beside them and nothing folds", async () => {
+    useProjectsStore.setState({
+      projects: ["p1", "p2", "p3"].map((id) => ({ ...proj(id), directory: `/p/${id}` }) as ProjectEntry),
+    });
+    useBoxAccordionStore.getState().setOpen("boxA", ["p1", "p2"]);
+    useTabsStore.setState({ tabs: [agentTab("t1", "/p/p2", "shell")], activeKey: "t1" });
+    const container = await renderBox();
+    const reveal = vi.fn();
+    section(container, "p3").scrollIntoView = reveal;
+    await act(async () => {
+      useTabsStore.setState({
+        tabs: [agentTab("t1", "/p/p2", "shell"), agentTab("t2", "/p/p3", "shell")],
+        activeKey: "t2",
+      });
+    });
+    expect(open(container)).toEqual(["p1", "p2", "p3"]);
+    // The sections above may fill the panel: the opened one is scrolled to.
+    expect(reveal).toHaveBeenCalledTimes(1);
+    // Going back to a member that is already open changes nothing.
+    await act(async () => {
+      useTabsStore.setState({ activeKey: "t1" });
+    });
+    expect(open(container)).toEqual(["p1", "p2", "p3"]);
+    expect(reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the row the one-at-a-time accordion stored", async () => {
+    localStorage.setItem(
+      storageKey("boxAccordion"),
+      JSON.stringify({ boxA: { open: "p2" }, boxB: { open: null }, boxC: { open: ["p1", 7, "p1", "p3"] } }),
+    );
+    vi.resetModules();
+    const fresh = await import("../../stores/boxAccordion");
+    const rows = fresh.useBoxAccordionStore.getState().byBox;
+    expect(rows.boxA?.open).toEqual(["p2"]);
+    expect(rows.boxB?.open).toEqual([]);
+    expect(rows.boxC?.open).toEqual(["p1", "p3"]);
+  });
+
+  it("falls back to the first member when every remembered one has left the box", async () => {
+    useBoxAccordionStore.getState().setOpen("boxA", ["gone", "p3"]);
+    const first = await renderBox();
+    expect(open(first)).toEqual(["p3"]);
+    cleanup();
+    useBoxAccordionStore.getState().setOpen("boxA", ["gone"]);
+    const second = await renderBox();
+    expect(open(second)).toEqual(["p1"]);
   });
 
   it("remembers the choice across a remount and writes it to localStorage", async () => {
@@ -466,7 +522,7 @@ describe("box side panel accordion", () => {
       fireEvent.click(section(first, "p3").querySelector(".file-root-header")!);
     });
     const stored = JSON.parse(localStorage.getItem(`${storageKey("boxAccordion")}`) ?? "{}");
-    expect(stored.boxA.open).toBe("p3");
+    expect(stored.boxA.open).toEqual(["p1", "p3"]);
     cleanup();
     // A fresh store read (as after a relaunch) sees the stored row.
     useBoxAccordionStore.setState({ byBox: {} });
@@ -474,7 +530,7 @@ describe("box side panel accordion", () => {
       byBox: JSON.parse(localStorage.getItem(storageKey("boxAccordion")) ?? "{}"),
     });
     const second = await renderBox();
-    expect(open(second)).toEqual(["p3"]);
+    expect(open(second)).toEqual(["p1", "p3"]);
   });
 
   it("renders without localStorage", async () => {
@@ -486,7 +542,7 @@ describe("box side panel accordion", () => {
       await act(async () => {
         fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
       });
-      expect(open(container)).toEqual(["p2"]);
+      expect(open(container)).toEqual(["p1", "p2"]);
     } finally {
       spy.mockRestore();
     }
@@ -580,8 +636,9 @@ describe("box side panel accordion", () => {
       await act(async () => {
         useDragStore.getState().end();
       });
-      expect(open(container)).toEqual(["p2"]);
-      expect(useBoxAccordionStore.getState().byBox.boxA?.open).toBe("p2");
+      // The section the file was dropped into stays open, and nothing folds.
+      expect(open(container)).toEqual(["p1", "p2"]);
+      expect(useBoxAccordionStore.getState().byBox.boxA?.open).toEqual(["p1", "p2"]);
     });
 
     it("a sweep that never dwells opens nothing", async () => {
@@ -686,10 +743,37 @@ describe("box side panel member menu and shared search", () => {
       );
     });
     const row = useBoxAccordionStore.getState().byBox.boxA;
-    expect(row?.open).toBe("p2");
+    expect(row?.open).toEqual(["p1", "p2"]);
     expect(row?.views?.p2).toBe("git");
     expect(section(container, "p2").classList.contains("is-collapsed")).toBe(false);
     expect(document.querySelector(".context-menu-portal")).toBeNull();
+  });
+
+  it("the ⋯ menu folds the other members or opens them all, and offers only what would change something", async () => {
+    const container = await renderBox();
+    const pickRow = (label: string) =>
+      act(async () => {
+        fireEvent.click(
+          [...document.querySelectorAll<HTMLElement>(".context-menu-portal button")].find((b) =>
+            b.textContent?.startsWith(label),
+          )!,
+        );
+      });
+    const openNames = () =>
+      [...container.querySelectorAll(".file-root--member:not(.is-collapsed) .file-root-name")].map(
+        (el) => el.textContent ?? "",
+      );
+    // Only p1 is open: its own menu has nothing to fold, but can open the rest.
+    await openMenu(container, "p1");
+    expect(menuRows().some((r) => r.startsWith("Fold the other projects"))).toBe(false);
+    await pickRow("Open all projects");
+    expect(openNames()).toEqual(["p1", "p2"]);
+    // Everything is open: nothing left to open, and p2 can stand alone.
+    await openMenu(container, "p2");
+    expect(menuRows().some((r) => r.startsWith("Open all projects"))).toBe(false);
+    await pickRow("Fold the other projects");
+    expect(openNames()).toEqual(["p2"]);
+    expect(useBoxAccordionStore.getState().byBox.boxA?.open).toEqual(["p2"]);
   });
 
   it("Open as tab opens the member's Files (Project) tab in its root", async () => {
@@ -761,7 +845,7 @@ describe("box side panel member menu and shared search", () => {
       ).toContain("p1");
     });
 
-    it("searches the expanded member only, and follows the expansion", async () => {
+    it("searches every expanded member, and only those", async () => {
       const container = await renderBox();
       await openSearch(container);
       const input = () => container.querySelector(".box-shared-search input") as HTMLInputElement;
@@ -771,16 +855,46 @@ describe("box side panel member menu and shared search", () => {
       const pathCalls = () =>
         mockInvoke.mock.calls.filter((c) => c[0] === "list_project_paths").map((c) => (c[1] as { projectDir: string }).projectDir);
       expect(pathCalls()).toEqual(["/p/p1"]);
-      // Opening another member clears the query and searches the new one.
+      // Opening another member keeps the query (the field still shows it) and
+      // searches that member too.
+      await act(async () => {
+        fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
+      });
+      expect(input().value).toBe("needle");
+      expect(input().placeholder).toContain("2 open projects");
+      expect(pathCalls()).toContain("/p/p2");
+      // Folding the last open member drops it: nothing is left to search.
+      await act(async () => {
+        fireEvent.click(section(container, "p1").querySelector(".file-root-header")!);
+      });
+      expect(input().value).toBe("needle");
       await act(async () => {
         fireEvent.click(section(container, "p2").querySelector(".file-root-header")!);
       });
       expect(input().value).toBe("");
-      expect(input().placeholder).toContain("p2");
+      expect(input().disabled).toBe(true);
+    });
+
+    it("among several open members, a remote one on its Remote side says it needs Local", async () => {
+      const remoteMember = {
+        ...proj("p1"),
+        remote: { host: "h", user: "u", remote_path: "/srv/p1" },
+      } as ProjectEntry;
+      useProjectsStore.setState({ projects: [remoteMember, proj("p2")] });
+      useRemoteStatusStore.setState({ byProject: { p1: { ssh: "connected", vpn: "off" } } });
+      useFileSourcePrefStore.setState({ byProject: { p1: "remote" }, byViewer: {} });
+      useBoxAccordionStore.getState().setOpen("boxA", ["p1", "p2"]);
+      const container = await renderBox();
+      await openSearch(container);
+      const input = container.querySelector(".box-shared-search input") as HTMLInputElement;
+      // The local member can be searched, so the field is live.
+      expect(input.disabled).toBe(false);
+      expect(section(container, "p1").textContent).not.toContain("Switch this project to Local");
       await act(async () => {
-        fireEvent.change(input(), { target: { value: "other" } });
+        fireEvent.change(input, { target: { value: "needle" } });
       });
-      expect(pathCalls()).toContain("/p/p2");
+      expect(section(container, "p1").textContent).toContain("Switch this project to Local");
+      expect(section(container, "p2").textContent).not.toContain("Switch this project to Local");
     });
 
     it("closing the toolbar toggle clears the query and removes the field", async () => {

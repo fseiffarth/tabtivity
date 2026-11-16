@@ -178,8 +178,11 @@ const RULE_RIGHT = /\s+[─━═]+[╮┐┓╗]?\s*$/u;
  * `▔▔▔ ● high · /effort ▔`, `▔▔▔ tmux detected · … ▔` (2.1.322, more often
  * from 2.1.323). The edge is still the dialog's top: kept as text it glued the
  * heading under it onto the notice and the `/model` sheet went untitled. It
- * reads as the bare edge does, the notice dropped with it. */
-const LABELLED_DIALOG_EDGE = /^\s*▔{3,}\s+\S.*?\s+▔+\s*$/u;
+ * reads as the bare edge does, the notice dropped with it. A notice too long
+ * for the pane takes the whole row, cut with `…`, and leaves the edge its last
+ * stroke only (80 columns, 2.1.323 and 2.1.325):
+ * ` tmux focus-events off · add … and rea… ▔`. */
+const LABELLED_DIALOG_EDGE = /^\s*(?:▔{3,}\s+)?\S.*?\s+▔+\s*$/u;
 /** How a rule goes on when it really did wrap: more of its strokes. */
 const RULE_CONTINUES = /^[─━═▔]/u;
 /** How a row ends that its program filled with blanks: text that really ran

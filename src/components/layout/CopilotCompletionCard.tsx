@@ -5,6 +5,7 @@ import { useT } from "../../lib/i18n";
 import { runInstallInTab } from "../../lib/installCommand";
 import { useProjectsStore } from "../../stores/projects";
 import { SETTINGS_CHANGED_EVENT, useSettingsStore } from "../../stores/settings";
+import { copilotRemoteConsentMatches } from "../../lib/viewers/completion/copilotCompletionProvider";
 import type { Settings } from "../../types";
 import { Toggle } from "../common/Toggle";
 import { UntestedTag } from "../common/UntestedTag";
@@ -70,7 +71,7 @@ export function CopilotCompletionCard() {
   const provider = settings?.code_completion_provider ?? "ollama";
   const policy = project ? settings?.completion_project_policies?.[project.id] : undefined;
   const remote = !!project?.remote;
-  const consented = policy?.copilot === true && policy.local_only !== true && !remote;
+  const consented = policy?.copilot === true && policy.local_only !== true && (project?.remote ? copilotRemoteConsentMatches(policy.remote, project.remote) : !policy.remote);
   const projectId = project?.id;
   const currentProject = useRef(projectId);
   currentProject.current = projectId;
@@ -182,10 +183,10 @@ export function CopilotCompletionCard() {
       {project ? (
         <>
           <label className="settings-toggle-card-row">
-            <span>{t("settings.copilotProjectConsent", { project: project.name })}</span>
+            <span>{t("settings.copilotProjectConsent", { project: project.name })} {remote && <UntestedTag id="settings.copilotRemoteCompletion" />}</span>
             <Toggle
-              checked={policy?.copilot === true && !remote}
-              disabled={remote || policy?.local_only === true}
+              checked={consented}
+              disabled={policy?.local_only === true}
               onChange={(e) => void setPolicy(e.target.checked, false)}
             />
           </label>

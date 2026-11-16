@@ -8,6 +8,8 @@ import { cmdToKind, hydrateScopeFromDisk, ROOT_SCOPE, useTabsStore } from "./tab
 import { BOX_SCOPE_PREFIX } from "../lib/terminal/ptyId";
 import { isBoxColor } from "../lib/theme/boxColor";
 import { isPathWithin } from "../lib/paths";
+import { isLocalModelsOnly } from "../lib/projects/localModelsOnly";
+import { isHostPinned } from "../lib/projectTabHost";
 import type { useT } from "../lib/i18n";
 
 // Re-exported, not redeclared: the PTY-id parser needs the same constant and
@@ -429,14 +431,22 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
     // (a Mobile box's agents on Unix, the session host's on Windows): nothing
     // would be left to reattach them. Every tab's own name, wrapped or not —
     // ending an absent session is a no-op — never one it only attached to.
-    const sessions = (useTabsStore.getState().tabsByScope[`${BOX_SCOPE_PREFIX}${boxId}`] ?? [])
+    const scope = `${BOX_SCOPE_PREFIX}${boxId}`;
+    const sessions = (useTabsStore.getState().tabsByScope[scope] ?? [])
       .filter((tab) => tab.tmuxSession && !tab.tmuxAttach)
       .map((tab) => tab.tmuxSession as string);
+    // The delete first: a refused one must leave the box with its sessions.
+    await invoke<void>("delete_box", { boxId });
+    set((state) => ({ boxes: state.boxes.filter((b) => b.id !== boxId) }));
     await Promise.all(
       sessions.map((session) => invoke<void>("local_tmux_kill", { session }).catch(() => {})),
     );
-    await invoke<void>("delete_box", { boxId });
-    set((state) => ({ boxes: state.boxes.filter((b) => b.id !== boxId) }));
+    // And the tabs themselves, as closing a project does: without this every
+    // PTY of the scope kept running in a pane no pill or scope could reach.
+    // `pty_kill_scope` reaps each PTY's child subtree, hidden and popped-out
+    // views included; `unloadScope` drops the scope's panes and popouts.
+    await invoke<string[]>("pty_kill_scope", { scope }).catch(() => {});
+    await useTabsStore.getState().unloadScope(scope);
     // Members are untouched: membership lives only in the (now-deleted) box's
     // member_ids, so there is no back-reference to clear anywhere.
   },
@@ -471,17 +481,33 @@ export const useBoxesStore = create<BoxesStore>((set, get) => ({
   },
 
   reorderBoxMembers: async (boxId, order) => {
+    // Shown at once (a dropped pill or section must not snap back for the
+    // length of the write) and taken back if the write is refused.
+    const before = get().boxes.find((b) => b.id === boxId);
+    if (before) {
+      const member_ids = reorderedMembers(before.member_ids, order);
+      set((state) => ({ boxes: state.boxes.map((b) => (b.id === boxId ? { ...b, member_ids } : b)) }));
+    }
+    const revert = () => {
+      if (before) set((state) => ({ boxes: state.boxes.map((b) => (b.id === boxId ? before : b)) }));
+    };
     let updated: ProjectBox;
     try {
       updated = await invoke<ProjectBox>("patch_box", { boxId, patch: { order } });
     } catch (error) {
-      if (!isUnknownFieldRefusal(error)) throw error;
+      if (!isUnknownFieldRefusal(error) || !before) {
+        revert();
+        throw error;
+      }
       // The older backend: the same slot-wise reorder, written as the whole list
       // (it can still lose a member added meanwhile; only until the restart).
-      const held = get().boxes.find((b) => b.id === boxId);
-      if (!held) throw error;
-      const memberIds = reorderedMembers(held.member_ids, order);
-      updated = await invoke<ProjectBox>("set_box_members", { boxId, memberIds });
+      const memberIds = reorderedMembers(before.member_ids, order);
+      try {
+        updated = await invoke<ProjectBox>("set_box_members", { boxId, memberIds });
+      } catch (fallbackError) {
+        revert();
+        throw fallbackError;
+      }
     }
     set((state) => ({
       boxes: state.boxes.map((b) => (b.id === boxId ? updated : b)),
@@ -614,6 +640,11 @@ export type SearchRow =
  * The active box scope's members with resolved roots, for surfaces that offer
  * per-member actions (the box "+" menu's "Files/Shell/agent — ⟨member⟩" rows).
  * Pure; [] outside a box scope or for an unknown box.
+ *
+ * A Local-models-only member and a host-only one (a VM, a remote project with
+ * no local copy) are left out, as the backend leaves them out of the box's
+ * roots (`compute_box_allowed_roots`): a tab started in one is refused, so no
+ * surface should offer it as a place to start.
  */
 export function boxMembersOfScope(
   scope: string,
@@ -626,6 +657,7 @@ export function boxMembersOfScope(
   return box.member_ids
     .map((id) => projects.find((p) => p.id === id))
     .filter((p): p is NonNullable<typeof p> => !!p)
+    .filter((p) => !isLocalModelsOnly(p) && !isHostPinned(p))
     .map((p) => ({ id: p.id, name: p.name, dir: resolveProjectDirectory(p) }))
     .filter((m) => m.dir.length > 0);
 }

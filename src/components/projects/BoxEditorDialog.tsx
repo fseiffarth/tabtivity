@@ -1,21 +1,18 @@
-import { useModalFocus } from "../../hooks/useModalFocus";
 import { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import type { ProjectBox, ProjectEntry } from "../../types";
 import { useProjectsStore } from "../../stores/projects";
-import { diffBoxMembers, useBoxesStore, type BoxDraftDiff } from "../../stores/boxes";
+import { useBoxesStore } from "../../stores/boxes";
 import { dissolveBox } from "../../stores/boxSlice";
 import { useSettingsStore } from "../../stores/settings";
 import { useBoxNameCheck } from "./useQuickCreateBox";
 import { BoxColorSwatches } from "./BoxColorPicker";
 import { useBoxEditorStore } from "../../stores/boxEditor";
-import { usePillSelectionStore } from "../../stores/drag/pillSelection";
 import { UntestedTag } from "../common/UntestedTag";
 import { ErrorNote } from "../common/ErrorNote";
 import { useT } from "../../lib/i18n";
-import { useDialogs, type ConfirmSpec } from "../common/PromptDialogs";
-import { BoxSwatch, CloseIcon, LockIcon } from "../common/icons/Icon";
+import { DialogShell, useDialogs, type ConfirmSpec } from "../common/PromptDialogs";
+import { BoxSwatch, LockIcon } from "../common/icons/Icon";
 import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ToggleRow } from "../layout/settingsUi";
 import { MobileAccessPicker, PhoneReachButton } from "../mobile/MobileAccessPicker";
@@ -26,18 +23,21 @@ import { boxColor, isBoxColor } from "../../lib/theme/boxColor";
 import { projectHostKind } from "../../lib/projectTabHost";
 
 /**
- * The box sheet — one box, edited wholesale: its name (checked as you type),
+ * The box sheet — everything about one box: its name (checked as you type),
  * colour, member projects (closed ones too, each row saying what kind of project
  * it is and which other boxes hold it), the folder, its phone access and, set
  * apart in the footer, **Dissolve box…**. A box is born through the name prompt
  * (`useQuickCreateBox`), never here: no target dropdown, no create mode, so a
  * half-made draft can never be swapped away by a click on another box.
  *
- * Save is ONE diffed `saveBox` (name, colour, and the members the user ticked or
- * unticked, taken against the box as it is when Save is pressed), not the whole
- * member list: a project another window, the phone or an import added meanwhile
- * survives, and shows as a member (it can be unticked). The phone row is the
- * Settings → Mobile switch and acts at once, as that one does.
+ * Every change applies at once (user decision 2026-11-16; there is no Save and
+ * no draft): a member tick is one additive `addToBox` / `removeFromBox`, never
+ * the whole member list, so a project another window, the phone or an import
+ * added meanwhile survives and shows as a member; a colour pick is one
+ * `setBoxColor`; the name is written on Enter or when its field loses focus.
+ * The sheet used to mix this with a Save for name, colour and members, and a
+ * press outside it silently dropped the unsaved ticks. The phone row is the
+ * Settings → Mobile switch and has always acted at once.
  *
  * Dissolving is the ONLY way a box disappears (no silent one-member dissolve), an
  * explicit, confirmed action; the confirm states what is kept — the box folder
@@ -46,9 +46,7 @@ import { projectHostKind } from "../../lib/projectTabHost";
  * that is gone.
  *
  * Mounted once in `AppShell` (`BoxEditorHost`, the RemoteMachines host pattern),
- * driven by `stores/boxEditor`. Portaled dialog: the chrome sets an explicit
- * color (`.project-dialog` does), since `body` has none and a portal would
- * otherwise inherit black.
+ * driven by `stores/boxEditor`, on the shared `DialogShell` frame.
  */
 
 /** The one dissolve question, asked by the sheet's Dissolve and by the box
@@ -57,29 +55,14 @@ import { projectHostKind } from "../../lib/projectTabHost";
 export function dissolveBoxSpec(t: ReturnType<typeof useT>, name: string, folder?: string): ConfirmSpec {
   return {
     title: t("boxEditor.dissolve"),
-    body: folder
-      ? t("boxEditor.dissolveConfirmFolder", { name, folder })
-      : t("boxEditor.dissolveConfirm", { name }),
+    body: `${
+      folder ? t("boxEditor.dissolveConfirmFolder", { name, folder }) : t("boxEditor.dissolveConfirm", { name })
+    } ${t("boxEditor.dissolveTabs")}`,
     confirmLabel: t("boxEditor.dissolve"),
     danger: true,
   };
 }
 
-/** What the sheet opened with: the diff is taken against this, never against
- *  the live box (which may have moved since). */
-interface Loaded {
-  name: string;
-  color: string;
-  members: string[];
-}
-
-function loadedOf(box: ProjectBox): Loaded {
-  return {
-    name: box.name,
-    color: isBoxColor(box.color) ? box.color.toLowerCase() : "",
-    members: [...box.member_ids],
-  };
-}
 
 type Kind = "closed" | "container" | "vm" | "remote";
 
@@ -118,40 +101,41 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
   const { check, messageOf } = useBoxNameCheck();
   const projects = useProjectsStore((s) => s.projects);
   const boxes = useBoxesStore((s) => s.boxes);
-  const saveBox = useBoxesStore((s) => s.saveBox);
+  const toast = (error: unknown) => useProjectsStore.setState({ switchToast: messageOf(error) });
 
-  const [loaded] = useState<Loaded>(() => loadedOf(box));
-  const [name, setName] = useState(loaded.name);
-  const [color, setColor] = useState(loaded.color);
-  // The user's own ticks, by project id. Everything not ticked or unticked here
-  // follows the box as it is NOW, so a project added meanwhile reads as a member
-  // (and can be unticked), and the diff below is taken against the live list.
-  const [edits, setEdits] = useState<Record<string, boolean>>({});
-  const checked = useMemo(() => {
-    const now = new Set(box.member_ids.filter((id) => edits[id] !== false));
-    for (const [id, on] of Object.entries(edits)) if (on) now.add(id);
-    return [...now];
-  }, [box.member_ids, edits]);
+  // Everything in the sheet applies at once (user decision 2026-11-16), as the
+  // phone row and the pill menu's checklist always did: a member tick is one
+  // additive `addToBox` / `removeFromBox`, a colour pick one `setBoxColor`, and
+  // the name is written on Enter or when its field loses focus. There is no
+  // draft, so nothing is lost by closing and nothing waits for a Save.
+  const [name, setName] = useState(box.name);
+  // The members the sheet opened with: only the row ORDER is taken from it, so
+  // a ticked row does not jump to the top under the pointer.
+  const [openedWith] = useState(() => [...box.member_ids]);
+  const checked = box.member_ids;
+  const color = isBoxColor(box.color) ? box.color.toLowerCase() : "";
   const [filter, setFilter] = useState("");
   const [saving, setSaving] = useState(false);
   // The per-phone picker's anchor while it is open (Escape closes it first).
   const [picker, setPicker] = useState<{ x: number; y: number } | null>(null);
-  const modalRef = useModalFocus(() => (picker ? setPicker(null) : onClose()));
 
-  // Only a name that differs from the one the sheet opened with is checked, so a
-  // legacy empty or duplicate name never blocks a colour or member save.
+  // Only a name that differs from the stored one is checked, so a legacy empty
+  // or duplicate name never stands in the way of anything else in the sheet.
   const trimmed = name.trim();
-  const renamed = trimmed !== loaded.name;
+  const renamed = trimmed !== box.name;
   const nameProblem = renamed ? check(name, box.id) : null;
-  const recoloured = color !== loaded.color;
+  const commitName = () => {
+    if (!renamed || nameProblem) return;
+    void useBoxesStore.getState().renameBox(box.id, trimmed).catch(toast);
+  };
 
   // Members first (as they were when the sheet opened), then the rest, each by
-  // position. Ticking a row does not move it under the pointer.
+  // position.
   const order = useMemo(() => {
-    const was = new Set(loaded.members);
+    const was = new Set(openedWith);
     const all = [...projects].sort((a, b) => a.position - b.position);
     return [...all.filter((p) => was.has(p.id)), ...all.filter((p) => !was.has(p.id))];
-  }, [projects, loaded]);
+  }, [projects, openedWith]);
 
   const rows = useMemo(() => {
     const needle = filter.trim().toLocaleLowerCase();
@@ -177,24 +161,9 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
     .map((kind) => ({ kind, list: namesOf(kind) }))
     .filter((line) => line.list);
 
-  const toggle = (id: string) => setEdits((prev) => ({ ...prev, [id]: !checked.includes(id) }));
-
-  const save = async () => {
-    if (saving || nameProblem) return;
-    setSaving(true);
-    try {
-      const diff: BoxDraftDiff = diffBoxMembers(box.member_ids, checked);
-      if (renamed) diff.name = trimmed;
-      if (recoloured) diff.color = color;
-      await saveBox(box.id, diff);
-      usePillSelectionStore.getState().clear();
-      onClose();
-    } catch (error) {
-      // A name another window took meanwhile, a refused write: say which, rather
-      // than leaving the sheet looking unresponsive.
-      useProjectsStore.setState({ switchToast: messageOf(error) });
-      setSaving(false);
-    }
+  const toggle = (id: string) => {
+    const store = useBoxesStore.getState();
+    void (checked.includes(id) ? store.removeFromBox(id, box.id) : store.addToBox(id, box.id)).catch(toast);
   };
 
   const dissolve = async () => {
@@ -217,24 +186,20 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
     );
   };
 
-  return createPortal(
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div
-        ref={modalRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("boxEditor.sheetTitle", { name: box.name })}
-        className="project-dialog dialog-framed box-editor"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="settings-title-row">
-          <h2>
-            {t("boxEditor.sheetTitle", { name: box.name })} <UntestedTag id="boxEditor.sheet" />
-          </h2>
-          <button aria-label={t("common.close")} type="button" className="dialog-close-btn" onClick={onClose}><CloseIcon /></button>
-        </div>
-        <div className="dialog-scroll">
+  return (
+    <DialogShell
+      frame="project-dialog"
+      className="box-editor"
+      scroll
+      title={
+        <>
+          {t("boxEditor.sheetTitle", { name: box.name })} <UntestedTag id="boxEditor.sheet" />
+        </>
+      }
+      onDismiss={() => (picker ? setPicker(null) : onClose())}
+      onClose={onClose}
+      closeDisabled={saving}
+    >
           <label>
             {t("boxEditor.nameLabel")}
             <input
@@ -243,8 +208,9 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
               autoFocus
               aria-invalid={nameProblem ? true : undefined}
               onChange={(e) => setName(e.target.value)}
+              onBlur={commitName}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void save();
+                if (e.key === "Enter") commitName();
               }}
             />
             {nameProblem && <span className="project-dialog-error box-editor-name-error" role="alert">{nameProblem}</span>}
@@ -252,7 +218,11 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
 
           <div className="box-editor-field">
             <span className="box-editor-field-label">{t("boxEditor.colourLabel")}</span>
-            <BoxColorSwatches boxId={box.id} color={color} onPick={(c) => setColor(c ?? "")} />
+            <BoxColorSwatches
+              boxId={box.id}
+              color={color}
+              onPick={(c) => void useBoxesStore.getState().setBoxColor(box.id, c ?? undefined).catch(toast)}
+            />
           </div>
 
           <div className="box-editor-field">
@@ -344,17 +314,11 @@ function BoxSheet({ box, onClose }: { box: ProjectBox; onClose: () => void }) {
               {t("boxPill.dissolveBox")}
             </button>
             <button type="button" onClick={onClose} disabled={saving}>
-              {t("common.cancel")}
-            </button>
-            <button type="button" onClick={() => void save()} disabled={saving || !!nameProblem}>
-              {t("common.save")}
+              {t("common.close")}
             </button>
           </div>
-        </div>
         {dialogs}
-      </div>
-    </div>,
-    document.body,
+    </DialogShell>
   );
 }
 

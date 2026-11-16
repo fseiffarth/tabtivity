@@ -1736,6 +1736,16 @@
   animation: toast-fade 2.2s ease forwards;
 }
 
+/* A toast that offers one action ("Undo"): it takes clicks and stays for the
+   6 s its clear timer gives it. */
+.project-switch-toast.has-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  pointer-events: auto;
+  animation-duration: 6s;
+}
+
 /* Remote (SSH) projects show two lines — a local mirror path and the remote
    user@host:remote_path target. Preserve the newline + label spacing and left-
    align; single-line local/conn toasts keep their nowrap + ellipsis above. */
