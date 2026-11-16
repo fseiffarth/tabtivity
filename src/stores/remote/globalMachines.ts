@@ -43,7 +43,8 @@ interface GlobalMachinesStore {
    *  claim a session nothing ever opened. Written only by `add`/`register`/
    *  `connect`/`disconnect`. */
   status: Record<string, ConnState>;
-  /** Per-machine id: the last `probeAll` answer — `true` = "the host answered and
+  /** Per-machine id: the last `probeAll` answer, or `true` from a login that just
+   *  worked (`add`/`register`/`connect`) — `true` = "the host answered and
    *  authenticated our credential" (not a session, and never to be mistaken for
    *  one), `false` = "genuinely off the network" (`ssh_probe.unreachable`). Absent
    *  = never probed **or** last probed a host that answered but rejected our
@@ -186,6 +187,49 @@ interface GlobalMachinesStore {
 /** Latest `load` — an answer from an older one is dropped. */
 let loadSeq = 0;
 
+/** Per machine: the latest lamp-writing action (`connect`, a connecting
+ *  `update`, `disconnect`, `remove`). A connect answers after its own timeout,
+ *  so without this a late failure overwrote a newer success, and a connect
+ *  still running when the user pressed ⏻ lit the lamp again on landing. */
+const lampSeq = new Map<string, number>();
+const nextLampSeq = (id: string): number => {
+  const seq = (lampSeq.get(id) ?? 0) + 1;
+  lampSeq.set(id, seq);
+  return seq;
+};
+
+/** At most this many `ssh_probe`s at once. Each is a real login with its own
+ *  subprocesses and keychain read; a fleet of twenty dead hosts fired all at
+ *  once is a burst of ~100 processes for answers that land together anyway. */
+const PROBE_CONCURRENCY = 6;
+
+/** A probe still unanswered after this is scored unreachable on the frontend.
+ *  The backend bounds a probe itself; this only keeps one lost answer from
+ *  holding a sweep (and the menu's in-flight brake) open for good. */
+const PROBE_GIVE_UP_MS = 45_000;
+
+/** End a machine's jobs and close its master. Best effort and unawaited by
+ *  `remove`. On a host the sweep found off the network the master goes first:
+ *  a dead master is what a kill riding it would hang on. */
+async function teardownMachine(target: { user?: string; host: string; port?: number }, unreachable: boolean) {
+  if (unreachable) {
+    await invoke("ssh_close_master", target).catch(() => {});
+    await invoke("remote_kill_all_jobs", target).catch(() => {});
+    return;
+  }
+  await invoke("remote_kill_all_jobs", target).catch(() => {});
+  await invoke("ssh_close_master", target).catch(() => {});
+}
+
+/** `run` over `items`, at most `limit` at a time. */
+async function eachLimited<T>(items: T[], limit: number, run: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await run(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => ({
   machines: [],
   status: {},
@@ -238,6 +282,7 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
     set((s) => ({
       machines: [...s.machines, machine],
       status: { ...s.status, [machine.id]: "connected" },
+      reachable: { ...s.reachable, [machine.id]: true },
     }));
     return machine;
   },
@@ -254,6 +299,7 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
     set((s) => ({
       machines: s.machines.some((m) => m.id === machine.id) ? s.machines : [...s.machines, machine],
       status: { ...s.status, [machine.id]: "connected" },
+      reachable: { ...s.reachable, [machine.id]: true },
     }));
     return machine;
   },
@@ -269,6 +315,7 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
     });
     set({ machines: list });
     if (!opts?.connect) return;
+    const seq = nextLampSeq(id);
     set((s) => ({ status: { ...s.status, [id]: "connecting" } }));
     try {
       await withHostKeyConfirm(() =>
@@ -284,12 +331,18 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
           background: false,
         }),
       );
+      if (lampSeq.get(id) !== seq) return;
       set((s) => {
         const errors = { ...s.errors };
         delete errors[id];
-        return { status: { ...s.status, [id]: "connected" }, errors };
+        return {
+          status: { ...s.status, [id]: "connected" },
+          reachable: { ...s.reachable, [id]: true },
+          errors,
+        };
       });
     } catch (e) {
+      if (lampSeq.get(id) !== seq) return;
       set((s) => ({ status: { ...s.status, [id]: "error" }, errors: { ...s.errors, [id]: String(e) } }));
     }
   },
@@ -302,8 +355,11 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
     // ⏻ performs, and for the same reason its confirm names the jobs it kills.
     // Gated on the lamp: an `off`/`error` row has no session, and
     // `remote_kill_all_jobs` on it would dial the host just to find nothing.
+    // Not awaited: on a host that has gone away the kill waits out a login
+    // timeout, and the row must not sit there undeleted for it.
     const live = get().status[id];
-    if (live === "connected" || live === "connecting") await get().disconnect(id);
+    if (live === "connected" || live === "connecting") void get().disconnect(id);
+    nextLampSeq(id);
     const list = await invoke<GlobalMachine[]>("global_machine_remove", { id }).catch(() => null);
     if (!list) return;
     set((s) => {
@@ -320,6 +376,7 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
   connect: async (id, password, opts) => {
     const m = get().machines.find((x) => x.id === id);
     if (!m) return;
+    const seq = nextLampSeq(id);
     set((s) => ({ status: { ...s.status, [id]: "connecting" } }));
     try {
       await withHostKeyConfirm(() =>
@@ -337,14 +394,23 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
           background: opts?.background === true,
         }),
       );
+      // A newer connect, a disconnect or a remove owns the lamp now.
+      if (lampSeq.get(id) !== seq) return;
       set((s) => {
         const errors = { ...s.errors };
         delete errors[id];
         // Propagation onto a project holding this host rides the lamp itself
         // (`lib/remote/machineSync`'s subscription), not a call from here.
-        return { status: { ...s.status, [id]: "connected" }, errors };
+        // A login that just worked is the freshest reachability answer there
+        // is: an older sweep's `false` left beside it painted the row `stale`.
+        return {
+          status: { ...s.status, [id]: "connected" },
+          reachable: { ...s.reachable, [id]: true },
+          errors,
+        };
       });
     } catch (e) {
+      if (lampSeq.get(id) !== seq) return;
       set((s) => ({ status: { ...s.status, [id]: "error" }, errors: { ...s.errors, [id]: String(e) } }));
     }
   },
@@ -352,6 +418,7 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
   disconnect: async (id) => {
     const m = get().machines.find((x) => x.id === id);
     if (!m) return;
+    nextLampSeq(id);
     // Clear the lamp first — the kill + master-close are best-effort and must
     // not leave the row stuck on "connected" if the host is momentarily away.
     set((s) => ({ status: { ...s.status, [id]: "off" } }));
@@ -363,9 +430,7 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
     // pulsing for work this very call killed (the reading is only re-probed when
     // a menu opens, so nothing else would correct it).
     useHostBusyStore.getState().clear(m);
-    const target = { user: m.user, host: m.host, port: m.port };
-    await invoke("remote_kill_all_jobs", target).catch(() => {});
-    await invoke("ssh_close_master", target).catch(() => {});
+    await teardownMachine({ user: m.user, host: m.host, port: m.port }, get().reachable[id] === false);
   },
 
   reorder: async (orderedIds) => {
@@ -440,6 +505,11 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
             errors[id] = err;
             changedErrors = true;
           }
+        } else if (reachable[id] === false) {
+          // The host answered, so an older "off the network" no longer holds:
+          // kept, it painted a password-only host `stale` for good.
+          delete reachable[id];
+          changedReach = true;
         }
         // Same idempotence rule as `setStatus`: an answer that changed nothing must
         // not notify. A sweep lands one of these per machine, so on a fleet of N an
@@ -454,29 +524,31 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
     // Each machine lands on its own, the moment it answers. A host that does not
     // answer costs its `ConnectTimeout` at least, and the sweep used to hold every
     // other row back for it: one dead machine kept a whole fleet "not checked".
-    await Promise.all(
-      machines.map(async (m) => {
-        const [ok, unreachable, err] = await invoke<{ ok: boolean; unreachable: boolean; error: string }>(
-          "ssh_probe",
-          {
-            user: m.user,
-            host: m.host,
-            port: m.port,
-          },
-        )
-          .then((r) => [r.ok, r.unreachable, r.error] as const)
-          // A rejected task is not the host telling us it is off the network, so
-          // it is NOT `unreachable`: fall into the answered-but-unconfirmed lane
-          // rather than scoring the host down.
-          .catch((e) => [false, false, String(e)] as const);
-        applyProbe(m.id, ok, unreachable, err);
-        onProbed?.(m.id);
-      }),
-    );
+    // Bounded fan-out (`PROBE_CONCURRENCY`): rows still land one by one.
+    await eachLimited(machines, PROBE_CONCURRENCY, async (m) => {
+      let giveUp: ReturnType<typeof setTimeout> | undefined;
+      const lost = new Promise<readonly [boolean, boolean, string]>((resolve) => {
+        giveUp = setTimeout(() => resolve([false, true, ""] as const), PROBE_GIVE_UP_MS);
+      });
+      const answer = invoke<{ ok: boolean; unreachable: boolean; error: string }>("ssh_probe", {
+        user: m.user,
+        host: m.host,
+        port: m.port,
+      })
+        .then((r) => [r.ok, r.unreachable, r.error] as const)
+        // A rejected task is not the host telling us it is off the network, so
+        // it is NOT `unreachable`: fall into the answered-but-unconfirmed lane
+        // rather than scoring the host down.
+        .catch((e) => [false, false, String(e)] as const);
+      const [ok, unreachable, err] = await Promise.race([answer, lost]);
+      clearTimeout(giveUp);
+      applyProbe(m.id, ok, unreachable, err);
+      onProbed?.(m.id);
+    });
   },
 
   retryAll: async () => {
-    const { machines, status, connect } = get();
+    const { machines, status, reachable, connect } = get();
     // "Retry everything" is a gesture at the fleet, not at any one login node: a
     // tagged cluster is left out and stays connectable from its own row's button,
     // which IS a gesture at it.
@@ -486,7 +558,10 @@ export const useGlobalMachinesStore = create<GlobalMachinesStore>((set, get) => 
         if (!mayAutoTouch(settings, { user: m.user, host: m.host, port: m.port }))
           return Promise.resolve();
         const st = status[m.id] ?? "off";
-        if (st === "connected" || st === "connecting") return Promise.resolve();
+        if (st === "connecting") return Promise.resolve();
+        // A `connected` lamp the sweep found off the network is stale, and the
+        // refresh button is how a whole stale fleet gets logged back in.
+        if (st === "connected" && reachable[m.id] !== false) return Promise.resolve();
         return connect(m.id);
       }),
     );

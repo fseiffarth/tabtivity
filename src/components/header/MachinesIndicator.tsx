@@ -206,7 +206,9 @@ const UTIL_SLACK_MS = 1_000;
  *  returns. */
 const probeBrakes = { inFlight: false, lastAt: new Map<string, number>() };
 
-type HandCheck = { ok: boolean; at: number; error?: string };
+/** `unreachable`: the probe never reached the host. `ok` false without it is a
+ *  host that answered and rejected the credential — up, not down. */
+type HandCheck = { ok: boolean; at: number; error?: string; unreachable?: boolean };
 
 /** Per-row manual checks — the only reachability a tagged HPC machine ever has,
  *  since every sweep skips it by design — and when the last sweep landed. Kept
@@ -673,8 +675,15 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
   /** The reachability a row should believe: a hand Check while it stands,
    *  otherwise the sweep's answer — and `undefined` (nobody asked) stays
    *  `undefined` rather than collapsing into "no". */
-  const reachOf = (id: string): boolean | undefined =>
-    checkStands(id) ? checked[id]?.ok : reachable[id];
+  const reachOf = (id: string): boolean | undefined => {
+    if (!checkStands(id)) return reachable[id];
+    const c = checked[id];
+    if (c?.ok) return true;
+    if (c?.unreachable) return false;
+    // Answered but not authenticated: the host is up, so an older sweep's
+    // `false` no longer holds (it painted a connected row `stale`).
+    return reachable[id] === false ? undefined : reachable[id];
+  };
   const stateOf = (m: GlobalMachine): RowState =>
     rowStateOf(status[m.id] ?? "off", reachOf(m.id));
 
@@ -685,13 +694,13 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
    *  sweep's map, and `status` means a session, which a probe is not. */
   const runCheck = async (m: GlobalMachine) => {
     setChecking((prev) => new Set(prev).add(m.id));
-    const r = await invoke<{ ok: boolean; error: string }>("ssh_probe", {
+    const r = await invoke<{ ok: boolean; unreachable: boolean; error: string }>("ssh_probe", {
       user: m.user,
       host: m.host,
       port: m.port,
       background: false,
     })
-      .then((res) => ({ ok: res.ok, error: res.error || undefined }))
+      .then((res) => ({ ok: res.ok, unreachable: res.unreachable, error: res.error || undefined }))
       // A guard refusal is not an error to print — it means the call was read as
       // background after all, and the row's honest answer is still "not checked".
       .catch((e) => ({ ok: false, error: hpcGuardRefusal(e) ? undefined : String(e) }));
@@ -777,6 +786,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
     );
     if (due.length === 0) return;
     probeBrakes.inFlight = true;
+    // The sweep is stamped with when it STARTED: a hand Check pressed while it
+    // ran is newer than its answers and must stand over them.
+    const startedAt = now;
     setSweeping(() => Object.fromEntries(eligible.map((m) => [m.id, true as const])));
     void probeAll((id) => {
       setSweeping((prev) => {
@@ -786,12 +798,15 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
       });
       const gm = useGlobalMachinesStore.getState();
       const m = gm.machines.find((mm) => mm.id === id);
-      if (m && gm.status[id] === "connected") void useHostBusyStore.getState().probeGlobal(m);
+      // Not on a host the probe just found off the network: that would be a
+      // second doomed login, waiting out the same timeout again.
+      if (m && gm.status[id] === "connected" && gm.reachable[id] !== false)
+        void useHostBusyStore.getState().probeGlobal(m);
     })
       .then(() => {
         const at = Date.now();
         for (const m of eligible) probeBrakes.lastAt.set(m.id, at);
-        setSweepAt(at);
+        setSweepAt(startedAt);
       })
       // A rejected sweep must still release the in-flight brake, or the menu
       // would never probe again for the rest of the session.
@@ -815,6 +830,9 @@ function MachinesSurface({ surface }: { surface: "menu" | "view" }) {
     const now = Date.now();
     for (const m of gm.machines) {
       if ((gm.status[m.id] ?? "off") !== "connected") continue;
+      // A stale session (the sweep found the host off the network) would cost
+      // a login timeout every poll for a reading that cannot come back.
+      if (gm.reachable[m.id] === false) continue;
       if (!showsUtilization(s, m) || !mayAutoTouch(s, targetOfSpec(m))) continue;
       if (now - (utilLastAt.get(m.id) ?? 0) < UTIL_POLL_MS - UTIL_SLACK_MS) continue;
       utilLastAt.set(m.id, now);

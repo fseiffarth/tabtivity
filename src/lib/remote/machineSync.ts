@@ -209,15 +209,13 @@ function openPoolOnMachine(ref: ProjectHostRef, skip: ConnState[]): void {
 }
 
 /** A global machine actively disconnected (jobs ended, master closed) — tear the
- *  matching pool on the active project and drop every matching lamp to `off`. */
+ *  matching pool on the active project and drop every matching lamp to `off`.
+ *  Ending the jobs is the machine's own teardown: every ref here is the same
+ *  target (`sameTarget`), so a kill from here was a second login to the host. */
 export function syncGlobalDisconnected(target: Target): void {
   const { activeId } = useProjectsStore.getState();
   for (const ref of projectHostsMatching(target)) {
     if (ref.projectId === activeId) {
-      const t = ref.target;
-      void invoke("remote_kill_all_jobs", { user: t.user, host: t.host, port: t.port }).catch(
-        () => {},
-      );
       void invoke("remote_disconnect", {
         projectId: ref.projectId,
         hostId: ref.hostId,
@@ -227,15 +225,17 @@ export function syncGlobalDisconnected(target: Target): void {
   }
 }
 
-/** Upgrade any global machine to `connected` when a project host with the same
- *  target is connected. Never downgrades — a machine's lamp is its own, and a
- *  project deactivating must not knock it offline. */
+/** Upgrade an `off` global machine to `connected` when a project host with the
+ *  same target is connected. Never downgrades — a machine's lamp is its own, and a
+ *  project deactivating must not knock it offline. Only from `off`: a connect in
+ *  flight owns its lamp, and a just-failed one must keep its red lamp and reason
+ *  rather than be relit by the next unrelated project lamp change. */
 function reconcileGlobalsFromProjects(): void {
   const gm = useGlobalMachinesStore.getState();
   const status = useRemoteStatusStore.getState();
   for (const m of gm.machines) {
     const cur: ConnState = gm.status[m.id] ?? "off";
-    if (cur === "connected") continue;
+    if (cur !== "off") continue;
     const anyConnected = projectHostsMatching(m).some(
       (ref) => hostStateOf(status, ref.projectId, ref.hostId).ssh === "connected",
     );
