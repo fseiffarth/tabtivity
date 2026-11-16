@@ -6696,6 +6696,8 @@ export const enSource = {
   "newTabMenu.moreAgents": "More agents & CLIs…",
   "newTabMenu.agentWorktreeLabel": "{agent} · {branch}",
   "newTabMenu.cloudSession": "Cloud session",
+  "newTabMenu.installRemoteAgent": "Install {agent} on {machine}",
+  "newTabMenu.installRemoteAgents": "Install CLI on remote…",
   "newTabMenu.chooseMachine": "Start {agent} on…",
   "newTabMenu.startInTitle": "Start {what} in…",
   "newTabMenu.startInMember": "{what} in {name}",

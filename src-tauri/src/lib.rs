@@ -2660,6 +2660,8 @@ pub fn run() {
             commands::agents::agent_is_installed,
             commands::agents::node_runtime_status,
             commands::agents::probe_binaries,
+            commands::agents::probe_remote_agent_binaries,
+            commands::agents::install_agent_project_command,
             commands::agents::list_agents,
             commands::agents::codex_hook_status,
             commands::agents::codex_hook_trust,

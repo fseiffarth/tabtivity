@@ -6483,6 +6483,8 @@ export const dict: Dict = {
   "newTabMenu.moreAgents": "Mehr Agenten & CLIs…",
   "newTabMenu.agentWorktreeLabel": "{agent} · {branch}",
   "newTabMenu.cloudSession": "Cloud-Sitzung",
+  "newTabMenu.installRemoteAgent": "{agent} auf {machine} installieren",
+  "newTabMenu.installRemoteAgents": "CLI auf Remote-Rechner installieren…",
   "newTabMenu.chooseMachine": "{agent} starten auf…",
   "newTabMenu.startInTitle": "{what} starten in…",
   "newTabMenu.startInMember": "{what} in {name}",

@@ -17,6 +17,7 @@ import { useProjectsStore } from "../../stores/projects";
 import { ROOT_SCOPE } from "../../stores/tabs";
 import type { BoxMemberDir, NewTabTarget } from "../../stores/boxes";
 import { AGENT_ITEMS, SHELL_ITEMS, TAB_ACCENT, buildStaticTabSpec, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
+import { useRemoteAgentMachines } from "./useRemoteAgentMachines";
 import { agentMenuEntries, compactAgentMenuEntries, type AgentMachine } from "./agentMenuEntries";
 import { AddTabMenuList } from "./AddTabMenuList";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
@@ -127,6 +128,7 @@ export function NewTabMenu({
     installedCustom,
     memberTable,
   } = useAddTabMenuData(scope, { seed: boxSeed });
+  const remoteMachines = useRemoteAgentMachines(scope, machines, customAgents.map((agent) => agent.cmd), true);
   const fixedCwd = target && memberTable?.boxFolder ? memberTable.boxFolder : projectCwd;
   // This menu only exists while open, so the GPU gate probes for its lifetime
   // (a host-pinned scope has neither group, so it probes nothing).
@@ -237,7 +239,7 @@ export function NewTabMenu({
               agentOrder,
               pick: pickStatic,
               pickCloud,
-              machines,
+              machines: remoteMachines,
               startIn: memberTable ? (what, item) => startInFor("agent", what, item) : undefined,
               onAddCustom: () => {
                 onClose();
@@ -253,7 +255,7 @@ export function NewTabMenu({
                 agentOrder,
                 pick: pickStatic,
                 pickCloud,
-                machines,
+                machines: remoteMachines,
                 startIn: memberTable ? (what, item) => startInFor("agent", what, item) : undefined,
                 onAddCustom: () => {
                   onClose();

@@ -30,6 +30,7 @@ import { TabDropPlaceholder } from "./TabDropPlaceholder";
 import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
 import { tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
+import { useRemoteAgentMachines } from "./useRemoteAgentMachines";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { isHostPinned } from "../../lib/projectTabHost";
 import { cloudRowsOffered, isCutNetwork, isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
@@ -852,8 +853,9 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   }, [activeKey, tabs.length, revealTab]);
 
   // A remote project's "+" agent rows each get a ▾ to start on a machine.
-  const addMenuMachines =
-    menuOpen && isRemoteScope ? agentMachines({ primaryHost, computeHosts, pinned: hostPinned, t }) : undefined;
+  const addMenuMachines = useRemoteAgentMachines(scope,
+    isRemoteScope ? agentMachines({ primaryHost, computeHosts, pinned: hostPinned, t }) : undefined,
+    customAgents.map((agent) => agent.cmd), menuOpen);
 
   function openAddMenu() {
     if (menuPos) { setMenuPos(null); return; }
