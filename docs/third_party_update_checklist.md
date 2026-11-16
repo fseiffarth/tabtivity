@@ -1318,6 +1318,29 @@ Tabtivity:
   Not run.
 - Windows: `irm https://dev.meta.ai/install.ps1 | iex` installs
   `%LOCALAPPDATA%\Programs\muse\muse.cmd`. The registry has no Windows row yet.
+- Session hook (`muse_session/hook.rs`, 2026-11-16, 1.3.0 and 1.4.15, offline):
+  each home's `~/.config/muse/settings.json` gets
+  `{"schema_version": 1, "hooks": {"UserPromptSubmit": [{"hooks": [{"type":
+  "command", "command": "\"<state>/hooks/<slug>_muse_session.sh\""}]}]}}`.
+  A file without `schema_version` makes Muse exit at launch (`malformed
+  settings file`); a handler with an unknown field (`env`) is skipped with
+  `UnsupportedHandler`, and 1.3.0 skips an event it does not know
+  (`SessionFork`). Read from the stdin JSON: `hook_event_name` and
+  `session_id`. The hook's environment is an allow-list (`HOME`, `PATH`,
+  `MUSE_SESSION_ID`, …; 1.3.0 sets no `MUSE_*`), so the script reads the tab's
+  variables from its parent's `/proc/<pid>/environ` (`ps -E` on macOS). A
+  `muse exec` started by a tab's Muse has `MUSE_SESSION_ID` in its own
+  environment in 1.4.15 and nothing in 1.3.0; the script also refuses a Muse
+  with a same-named Muse above it among the tab's processes. Timing: no hook
+  fires before the first prompt (`SessionStart` comes just before
+  `UserPromptSubmit`), `/clear` fires `SessionEnd` then `SessionStart`
+  `source: "clear"` with a new id, `resume` fires `source: "resume"`, `/fork`
+  makes a separate session ("Source session stays active") and fires
+  nothing, and the memory-reminder subagents fire `SubagentStart`/`Stop` with
+  their own ids but no `UserPromptSubmit`. `resume <id>` opens a session that
+  took no prompt, but `resume --last` skips it and exits when no other is
+  left. Re-check with `scripts/verify-cli/muse/resume.py <label> <bin>`; the
+  version gate is `FIRST_HOOKED` in `hook.rs`.
 
 Not verified: a session with tool calls or a real model's answers (an answer
 split around tool calls should read as several answers), a tool-approval prompt (`Would you like to allow this tool

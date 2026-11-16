@@ -215,6 +215,46 @@ from a shared background service. The Reader adapts `session_v2` and
 `session_message` on a read-only connection; no vendor data is migrated or
 rewritten. This port has fixture coverage but has not been checked live.
 
+### Muse: a hook that has to find its tab
+
+`services::muse_session` (2026-11-16, plan `docs/agent_tab_resume_plan.md`
+B; probed offline on 1.3.0 and 1.4.15, never live). Muse's settings take
+Claude-shaped hooks from 1.3.0 on, so each home's
+`.config/muse/settings.json` lists one script (`muse_session/hook.rs`) on
+`UserPromptSubmit`, which writes the prompt's `session_id` to
+`live_sessions/<uid>`, the record the Resume menu already wrote. Why it is
+built the way it is:
+
+- **The prompt, not the start.** No hook fires before a session's first
+  prompt, so a launch that never took one records nothing and is not the
+  tab's (decision 5). `/clear` starts a new id, recorded at its first prompt;
+  `/fork` leaves the tab in its source session and fires nothing; the
+  memory-reminder subagents fire only `Subagent*` events.
+- **The tab is read from the parent.** Muse runs hooks with an allow-listed
+  environment, so `TABTIVITY_TAB_UID` never reaches the script, and the
+  settings have no way to pass it (an `env` field gets the handler skipped).
+  The script takes the variables from the nearest ancestor that has them —
+  the Muse that fired it — through `/proc/<pid>/environ`, or `ps -E` without
+  `/proc` (macOS, unverified). Windows has no unprivileged way, so nothing is
+  registered there and its tabs keep folder's latest (decision 9).
+- **Only the tab's own Muse.** `TAB_AGENT` must be `muse`; a Muse carrying
+  `MUSE_SESSION_ID` was started by a Muse tool (1.4.15 sets it for its tools'
+  processes); and since 1.3.0 sets nothing, a Muse with a same-named Muse
+  above it among the processes carrying the tab's key is refused too.
+- **Never break a launch.** Muse exits on a settings file it cannot read,
+  so the merge touches only plain JSON with `schema_version` 1 (a new file
+  gets it), leaves a `hooks` of another shape alone, writes atomically, and
+  runs only for a Muse the version probe found at 1.3.0 or later.
+- **Notes and proof.** Each spawn with the hook registered writes the
+  host-only `live_sessions/<uid>.muse`; the script leaves `muse.hook` in its
+  record folder. `resolve` follows the plan's table: noted and a record of the
+  folder's session → `resume <id>`; noted, no record and the proof → fresh;
+  otherwise today's rules. The Reader reads a noted tab's record first, so two
+  tabs of one folder no longer show the newer one's chat.
+- `resume --last` skips sessions that took no prompt and exits when only
+  such are left, so the fallback keeps it only where a prompted session
+  exists.
+
 ### The phone send hint
 
 An accepted Claude or Codex `SessionStart` prints a one-line

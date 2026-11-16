@@ -116,11 +116,18 @@ gives its usage.
   Get a binary without installing it: `npm pack @github/copilot-linux-x64@<v>`,
   unpack, `package/copilot`.
 
-- **Muse**: no script yet. Fetch a binary from the public channel manifest
-  (checklist §1.5, Meta Muse Code). Run the binary, not the launcher, and drive
-  it with `tui.py … -- <bin> --provider echo`, which answers offline. Don't
-  use its `meta` provider from a probe: with `--base-url` at the stub, one
-  turn was still answered by something that wasn't the stub.
+- **Muse** (`muse/`): `resume.py <label> <bin>` writes the app's session
+  hook (through the ignored test `writes_the_hook_for_a_probe`) into a scratch
+  home and plays two tabs of one folder: each must record its own session and
+  come back in it on `resume <id>`; a `muse exec` from a tab's `!` escape,
+  another CLI's tab and a launch with no prompt must record nothing, and a
+  `/clear` moves the record at its first prompt. It sets made-up tab keys,
+  which the hook writes only into that home. Fetch a binary from the public
+  channel manifest (checklist §1.5, Meta Muse Code). Run the binary, not the
+  launcher, and drive other checks with `tui.py … -- <bin> --provider echo`,
+  which answers offline. Don't use its `meta` provider from a probe: with
+  `--base-url` at the stub, one turn was still answered by something that
+  wasn't the stub.
 
 ## Traps
 

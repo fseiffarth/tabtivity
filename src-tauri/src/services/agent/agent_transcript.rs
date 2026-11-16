@@ -387,9 +387,8 @@ pub fn agent_session_transcript(
             return AgentTranscript::unavailable("unsupported");
         }
         let home = crate::services::agent_home::scope_home(project_id);
-        let own = crate::services::google_chat::recorded_conversation(project_id, launch_id);
-        let own = own.as_ref().map(|(id, at)| (id.as_str(), *at));
-        return crate::services::muse_session::transcript(&home, directory, since, own, version, limit);
+        let own = crate::services::muse_session::recorded(project_id, launch_id);
+        return crate::services::muse_session::transcript(&home, directory, since, own.as_ref(), version, limit);
     }
     if cmd == "copilot" {
         return copilot_transcript(project_id, launch_id, subagent, version, limit);

@@ -2376,6 +2376,7 @@ pub fn install_session_start_hook() -> std::io::Result<()> {
     write_hook_script()?;
     crate::services::opencode_session::write_plugin()?;
     crate::services::antigravity_session::write_script()?;
+    crate::services::muse_session::write_hook()?;
     crate::services::agent_hint::write_script()
 }
 
@@ -2416,6 +2417,8 @@ pub fn register_hooks_in_home(home: &std::path::Path) {
     crate::services::opencode_session::disable_service_in_home(home);
     // Antigravity's conversation hook (`services::antigravity_session`).
     crate::services::antigravity_session::register_in_home(home);
+    // Muse's session hook (`services::muse_session`), on a Muse that takes it.
+    crate::services::muse_session::register_in_home(home);
     // The other CLIs' `tabtivity-send` hint (Claude and Codex get it from the
     // session hook above).
     crate::services::agent_hint::register_in_home(home);
