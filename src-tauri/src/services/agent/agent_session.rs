@@ -1948,7 +1948,9 @@ pub enum CodexHookState {
 /// Classify Tabtivity's hook across the Tabtivity-owned agent homes: the least
 /// trusted state any home that has run Codex is in (a `sessions/` dir), since
 /// Codex asks for the trust approval per config file. `NoCodex` when no home
-/// has run it yet.
+/// has run it yet. A home counts as `Enabled` only when its approval hook
+/// (`PermissionRequest`) is trusted too, where it is registered
+/// ([`codex_reported_state_in`]).
 pub fn codex_hook_state() -> CodexHookState {
     codex_hook_state_across(&crate::services::agent_home::existing_homes_in(&storage::state_dir()))
 }
@@ -1961,7 +1963,7 @@ fn codex_hook_state_across(homes: &[PathBuf]) -> CodexHookState {
         if crate::services::agent_home::is_probe_home(home) || !home.join(".codex").join("sessions").is_dir() {
             continue;
         }
-        let state = codex_hook_state_of_home(home);
+        let state = codex_reported_state_of_home(home);
         let rank = |s: CodexHookState| match s {
             CodexHookState::Enabled => 0,
             CodexHookState::NoCodex => 1,
@@ -1976,14 +1978,45 @@ fn codex_hook_state_across(homes: &[PathBuf]) -> CodexHookState {
     worst.unwrap_or(CodexHookState::NoCodex)
 }
 
-/// Tabtivity's hook as the Codex of one agent home sees it.
+/// Tabtivity's `SessionStart` hook as the Codex of one agent home sees it: the
+/// resume path, and what [`codex_binder_enabled`] goes by.
 fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
+    let (src, config) = codex_config_of_home(home);
+    codex_hook_state_in(&src, &config, &hook_command())
+}
+
+/// What [`codex_hook_state`] reports for one agent home: its `SessionStart`
+/// hook, and its `PermissionRequest` hook where that one is registered.
+fn codex_reported_state_of_home(home: &std::path::Path) -> CodexHookState {
+    let (src, config) = codex_config_of_home(home);
+    codex_reported_state_in(&src, &config, &hook_command())
+}
+
+/// One agent home's Codex config text and its path as a trust key spells it.
+fn codex_config_of_home(home: &std::path::Path) -> (String, String) {
     let config = home.join(".codex").join("config.toml");
     // The agent can rewrite its own config: never a FIFO or a link.
     let src = crate::services::home_io::open_regular(&config)
         .and_then(|f| std::io::read_to_string(f).ok())
         .unwrap_or_default();
-    codex_hook_state_in(&src, &config.to_string_lossy(), &hook_command())
+    (src, config.to_string_lossy().into_owned())
+}
+
+/// Testable core of [`codex_reported_state_of_home`]. Codex asks for trust per
+/// hook, so a home that trusted the session hooks and then skipped the "Hooks
+/// need review" for a hook added later runs without that one, silently: an
+/// untrusted or switched-off `PermissionRequest` is reported, so the one-click
+/// trust is offered for it. One not registered yet (a home no tab has spawned
+/// in since) does not count against a live `SessionStart`.
+pub fn codex_reported_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHookState {
+    let resume = codex_hook_state_in(src, config_path, cmd);
+    if resume != CodexHookState::Enabled {
+        return resume;
+    }
+    match codex_event_state_in(src, config_path, cmd, "PermissionRequest") {
+        state @ (CodexHookState::Untrusted | CodexHookState::Disabled) => state,
+        _ => resume,
+    }
 }
 
 /// Testable core of [`codex_hook_state`].
@@ -1997,6 +2030,15 @@ fn codex_hook_state_of_home(home: &std::path::Path) -> CodexHookState {
 /// the `[[hooks.SessionStart.hooks]]` tables within each. So we find our hook by
 /// its `command`, note where it sits, and look the verdict up under that key.
 pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHookState {
+    codex_event_state_in(src, config_path, cmd, "SessionStart")
+}
+
+/// [`codex_hook_state_in`] for the hook of any one of [`CODEX_HOOK_EVENTS`].
+fn codex_event_state_in(src: &str, config_path: &str, cmd: &str, event: &str) -> CodexHookState {
+    let Some((label, _)) = codex_event_label(event) else {
+        return CodexHookState::NotRegistered;
+    };
+    let (group_table, hook_table) = (format!("[[hooks.{event}]]"), format!("[[hooks.{event}.hooks]]"));
     let mut group: i64 = -1;
     let mut hook: i64 = -1;
     let mut in_hook_table = false;
@@ -2012,10 +2054,10 @@ pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHook
         if line.starts_with('[') {
             in_hook_table = false;
             state_key = None;
-            if line.starts_with("[[hooks.SessionStart]]") {
+            if line.starts_with(&group_table) {
                 group += 1;
                 hook = -1;
-            } else if line.starts_with("[[hooks.SessionStart.hooks]]") {
+            } else if line.starts_with(&hook_table) {
                 hook += 1;
                 in_hook_table = true;
             } else if let Some(key) = toml_state_table_key(line) {
@@ -2041,7 +2083,7 @@ pub fn codex_hook_state_in(src: &str, config_path: &str, cmd: &str) -> CodexHook
     let Some((g, h)) = ours else {
         return CodexHookState::NotRegistered;
     };
-    let suffix = format!(":session_start:{g}:{h}");
+    let suffix = format!(":{label}:{g}:{h}");
     let verdict = verdicts
         .get(&format!("{config_path}{suffix}"))
         // Fall back to any entry at our position: Codex builds the key from the

@@ -1945,6 +1945,53 @@ fn codex_hook_state_reads_a_bare_trusted_hash_as_enabled() {
     assert_eq!(codex_hook_state_in(&off, CFG, CMD), CodexHookState::Disabled);
 }
 
+/// Our approval hook block as `register_codex_hook_in` writes it.
+fn our_approval_hook() -> String {
+    format!(
+        "[[hooks.PermissionRequest]]\n\n\
+             [[hooks.PermissionRequest.hooks]]\n\
+             type = \"command\"\n\
+             command = '{CMD}'\n\
+             timeout = 10\n"
+    )
+}
+
+#[test]
+fn the_reported_codex_state_counts_an_untrusted_approval_hook() {
+    // A home that trusted the session hooks, then skipped Codex's "Hooks need
+    // review" for the approval hook added later: that hook never runs, and
+    // reporting Enabled offered no way to fix it.
+    let trusted_start = format!("[hooks.state.\"{CFG}:session_start:0:0\"]\ntrusted_hash = \"sha256:93f0\"\n");
+    let src = format!("{}\n{}\n{trusted_start}", our_hook(), our_approval_hook());
+    assert_eq!(codex_reported_state_in(&src, CFG, CMD), CodexHookState::Untrusted);
+    // The resume path is live all the same: the binder's gate reads this one.
+    assert_eq!(codex_hook_state_in(&src, CFG, CMD), CodexHookState::Enabled);
+
+    let both = format!("{src}\n[hooks.state.\"{CFG}:permission_request:0:0\"]\ntrusted_hash = \"sha256:77aa\"\n");
+    assert_eq!(codex_reported_state_in(&both, CFG, CMD), CodexHookState::Enabled);
+
+    let off = format!("{both}enabled = false\n");
+    assert_eq!(codex_reported_state_in(&off, CFG, CMD), CodexHookState::Disabled);
+}
+
+#[test]
+fn the_reported_codex_state_follows_the_session_hook_first() {
+    // No approval hook in the file yet (no tab has spawned in this home since
+    // the update): the session hook's own state is the answer.
+    let trusted = format!("{}\n[hooks.state.\"{CFG}:session_start:0:0\"]\nenabled = true\n", our_hook());
+    assert_eq!(codex_reported_state_in(&trusted, CFG, CMD), CodexHookState::Enabled);
+    // An untrusted session hook is reported as such whatever the approval hook's verdict.
+    let src = format!(
+        "{}\n{}\n[hooks.state.\"{CFG}:permission_request:0:0\"]\ntrusted_hash = \"sha256:77aa\"\n",
+        our_hook(),
+        our_approval_hook()
+    );
+    assert_eq!(codex_reported_state_in(&src, CFG, CMD), CodexHookState::Untrusted);
+    // A verdict for the session hook's position is not read as the approval hook's.
+    let other = format!("{}\n{}\n[hooks.state.\"{CFG}:session_start:0:0\"]\nenabled = true\n", our_hook(), our_approval_hook());
+    assert_eq!(codex_reported_state_in(&other, CFG, CMD), CodexHookState::Untrusted);
+}
+
 #[test]
 fn codex_hook_state_indexes_our_hook_past_the_users_own() {
     // A user hook group precedes ours, so our verdict key is `:0:0` → no,

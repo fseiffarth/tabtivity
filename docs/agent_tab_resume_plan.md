@@ -303,11 +303,14 @@ Found and fixed on the way: a nested `copilot -p`, `opencode run` (OpenCode 2)
 or `vibe -p` started from the tab's own shell tool took the tab's session
 record over.
 
+Decided by the user afterwards (2026-11-16) and built: the Codex hook status
+counts `PermissionRequest` too (`codex_reported_state_in`; the binder's gate
+stays on `SessionStart`), and the comment in `src/stores/activity.ts` names
+which CLIs have an approval hook.
+
 Open, for the user:
 
 - Adding `PermissionRequest` makes Codex show "Hooks need review" once in a
-  home that trusted the other hooks. `codex_hook_state` still reads only
-  `SessionStart`, so a home that skipped that review reports Enabled while the
-  approval wait falls back to the screen.
-- `src/stores/activity.ts` still says "Codex has no such hook" in a comment.
+  home that trusted the other hooks; a home that skips it now reports
+  Untrusted until the hooks are trusted.
 - OpenCode 1.x needs a real run of the plugin's turn half.

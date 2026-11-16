@@ -1053,10 +1053,12 @@ function attentionFor(
   const bell = bellByPty[ptyId] ?? 0;
   const quiet = now - Math.max(out, bell);
   // A decision is read from the hook where the agent has one for it (Claude's
-  // permission notice) AND from the screen regardless: Codex has no such hook,
-  // so its approval menu sitting in a quiet tail is still the only sign — even
-  // under a "working" verdict, which its tool-use hook left standing while
-  // the tool waits on the user. Not after a Stop, though: a finished turn is
+  // and Codex's permission request, Vibe's, Copilot's and OpenCode's own) AND
+  // from the screen regardless: a Codex that has not trusted that hook yet,
+  // Antigravity and Muse have none, so the approval menu sitting in a quiet
+  // tail is still the only sign — even under a "working" verdict, which the
+  // tool-use hook left standing while the tool waits on the user. Not after a
+  // Stop, though: a finished turn is
   // back at its input box, so nothing on screen can be a pending approval —
   // and what IS on screen is the agent's own reply, which quotes menus (a
   // diff of this very classifier, a report on a prompt) often enough to light

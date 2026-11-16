@@ -111,9 +111,13 @@ that trusted the others makes Codex (0.169.0) show "Hooks need review — 1 hook
 is new or changed" at its next start (Review / Trust all and continue /
 Continue without trusting); skipped, the new hook stays inert and the trusted
 ones keep running. The app's own trust action (`trust_codex_hooks`) covers
-every event `codex_event_label` names. `codex_hook_state` still reads only
-`SessionStart`, so a home with an untrusted `PermissionRequest` reads as
-enabled: the approval wait is then read off the screen, as before.
+every event `codex_event_label` names. The status the UI reads
+(`codex_hook_state`, `codex_reported_state_in`) counts `PermissionRequest`
+beside `SessionStart`, so a home that skipped that review reads as untrusted
+and is offered the one-click trust; until then its approval wait is read off
+the screen. `codex_binder_enabled` still goes by `SessionStart` alone: an
+untrusted approval hook must not put the guessing binder back beside a live
+session hook.
 
 Since 2026-11-16 (probed offline on Claude 2.1.325, Codex 0.169.0, Vibe
 3.1.2 with `scripts/verify-cli/{claude,codex,vibe}/turn_hooks.py`; never run
