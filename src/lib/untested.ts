@@ -31,6 +31,7 @@ export type UntestedEntry = {
 
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
+  "terminal.reader.selection": { area: "terminal", what: "Chat selected-text right-click menu: Copy, Add to draft and Quote in reply; earlier chats offer Copy only" },
   "steering.cockpit": { area: "shell", what: "Cockpit keyboard steering: roster actions, visible-area navigation, detail controls and narrow back behavior" },
   "agentPrivacy.menuItem": { area: "agents", what: "Project pill menu · Local models only…: opens the Agent privacy dialog; a lock on the pill shows the project is set; refused with a message naming the project for a remote/VM/container project, a folder with another project or a box folder inside, or an Ollama host that is not this machine" },
   "agentPrivacy.local": { area: "agents", what: "Agent privacy dialog · Local models only switch: the + menu offers only local-model rows; Claude/Codex/OpenCode/… cloud tabs, API-key rows and the Host session are refused with the backend's message; running cloud agent tabs of the project are closed when it goes on; other projects' and boxes' agents see an empty folder; a local tab (Mistral or an Ollama launch line) runs only on an installed non-cloud model; dropping a file of the project onto a cloud agent is refused" },

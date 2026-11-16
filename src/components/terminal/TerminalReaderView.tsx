@@ -48,6 +48,7 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { ASSISTANT_SCOPE, withAssistantPromptTarget } from "../../lib/assistant";
 import { replaceAssistantChat } from "../../stores/assistantScope";
 import { SIGN_IN_CARD_CLASS } from "./TerminalSignInCard";
+import { ReaderSelectionMenu } from "./ReaderSelectionMenu";
 import { TerminalReaderFacts } from "./TerminalReaderFacts";
 import { STATUS_AGENTS, type ReaderPanel } from "./TerminalReaderStatus";
 import { CONTEXT_AGENTS } from "./TerminalReaderContext";
@@ -2526,6 +2527,11 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const shownFile = filePicked ?? readerFiles[0]?.entry ?? null;
 
   return createPortal(<>
+    <ReaderSelectionMenu
+      root={listRef}
+      enabled={visible && shown && !changesOpen && !filesOpen}
+      onInsert={browsed ? undefined : (text) => { insertIntoReader(ptyId, text); }}
+    />
     <div
       ref={regionRef}
       className={`terminal-reader ${SIGN_IN_CARD_CLASS}${browsed ? " browsing" : ""}${actionSlot ? " has-topbar" : ""}${actionSlot || scope === ASSISTANT_SCOPE ? " card-composer" : ""}`}

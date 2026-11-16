@@ -5782,6 +5782,8 @@ export const dict: Dict = {
   "terminal.promptStrip.typedHint": "Lu depuis vos frappes — l’agent a pu le recevoir légèrement différemment",
   "terminal.promptStrip.keys": "↑ ↓ parcourir · Début/Fin premier/dernier · {modifier}+C copier · Échap fermer",
   "terminal.promptStrip.keysChat": "↑ ↓ parcourir · Entrée ou double-clic le place dans la zone de saisie · {modifier}+C copier · Échap fermer",
+  "terminal.reader.selectionDraft": "Ajouter au brouillon",
+  "terminal.reader.selectionQuote": "Citer dans la réponse",
   "terminal.reader.title": "Chat",
   "terminal.reader.showReader": "Chat",
   "terminal.reader.showReaderHint": "Discuter avec cet agent comme dans un chat — sa conversation en messages, par-dessus le terminal",
