@@ -92,6 +92,7 @@ function agentPane() {
     buffer: { active: { type: "alternate" } },
     scrollLines: vi.fn(),
     scrollToBottom: vi.fn(),
+    focus: vi.fn(),
   };
   registerTerminal(id, term as unknown as Terminal);
   cleanups.push(() => unregisterTerminal(id, term as unknown as Terminal));

@@ -74,10 +74,54 @@ export function largestScroller(root: HTMLElement): HTMLElement | null {
  *  with no scrolling box. Keep the selection and viewport where they were. */
 export function focusDocumentEditor(scope: string, tabKey: string): boolean {
   const pane = paneFor(scope, tabKey);
-  const editor = pane?.querySelector<HTMLTextAreaElement>("textarea.file-viewer-editor:not(:disabled)");
-  if (!editor || editor.closest('[hidden], [inert]') || getComputedStyle(editor).display === "none" || getComputedStyle(editor).visibility === "hidden") return false;
-  editor.focus({ preventScroll: true });
-  return document.activeElement === editor;
+  if (!pane) return false;
+  for (const editor of pane.querySelectorAll<HTMLTextAreaElement>("textarea.file-viewer-editor:not(:disabled):not([readonly])")) {
+    if (!documentControlVisible(editor, pane)) continue;
+    editor.focus({ preventScroll: true });
+    if (document.activeElement === editor) return true;
+  }
+  return false;
+}
+
+/** TeX workspaces retain their other files under display:none ancestors. */
+function documentControlVisible(el: HTMLElement, pane: HTMLElement): boolean {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (node.hidden || node.inert || node.hasAttribute("inert") || style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+    if (node === pane) break;
+  }
+  return true;
+}
+
+/** A just-opened file can still be reading when Work hands it the keyboard.
+ * Retry only while its visible loading placeholder remains, and stop if the
+ * caller's visit changes or the user presses another key / points elsewhere. */
+export function focusDocumentEditorWhenReady(scope: string, tabKey: string, current: () => boolean): () => void {
+  let timer: number | null = null;
+  const cancel = () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+    document.removeEventListener("keydown", cancel, true);
+    document.removeEventListener("pointerdown", cancel, true);
+  };
+  const attempt = (tries: number) => {
+    if (!current() || focusDocumentEditor(scope, tabKey) || tries === 0) {
+      cancel();
+      return;
+    }
+    const pane = paneFor(scope, tabKey);
+    const loading = pane && Array.from(pane.querySelectorAll<HTMLElement>(".file-viewer-loading"))
+      .some((el) => documentControlVisible(el, pane));
+    if (!loading) {
+      cancel();
+      return;
+    }
+    timer = window.setTimeout(() => attempt(tries - 1), 50);
+  };
+  document.addEventListener("keydown", cancel, true);
+  document.addEventListener("pointerdown", cancel, true);
+  attempt(20);
+  return cancel;
 }
 
 /**

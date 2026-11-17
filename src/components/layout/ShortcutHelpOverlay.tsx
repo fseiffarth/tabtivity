@@ -99,6 +99,7 @@ export function ShortcutHelpOverlay() {
               <UntestedTag id="steering.readerView" />
               <UntestedTag id="steering.insideChanges" />
               <UntestedTag id="steering.readerFiles" />
+              <UntestedTag id="steering.workFocus" />
               <UntestedTag id="steering.legendGroups" />
               <UntestedTag id="steering.legendToggle" />
               <UntestedTag id="steering.bar" />

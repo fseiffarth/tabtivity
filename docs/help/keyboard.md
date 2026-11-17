@@ -106,7 +106,7 @@ current project's tabs; **E S D F** work like **↑ ← ↓ →** throughout.
 | / | Open Settings and walk it: ← → pages, E D controls |
 | ? | Open the cheat sheet: E D scroll it |
 | Space | On an agent tab: with its Chat view shown, the Chat's own input field appears (hidden while steering) and takes the keys; Enter sends and hides it, Esc hides it without sending. In the Terminal view (or while a dialog is up): a prompt box in the window's middle; Enter sends, Esc returns. Its chips (Alt+M model, Alt+E effort, Alt+C clear, Alt+P / Alt+G plan / goal) include Alt+T Commit: a list of the three commit prompts (↑/↓, Enter or a digit sends one), as the Chat box's Commit chip |
-| Esc / Enter | Leave Tabtivity navigation (Esc inside a panel or menu backs out of it first) |
+| Esc / Enter / Shift+Space | Leave Tabtivity navigation and focus the selected file editor or terminal (Esc inside a panel or menu backs out of it first). After editing, pause briefly and press Shift+Space to navigate again |
 
 **D** from the tab level steps *Inside* the active tab: the arrows stop
 switching tabs and move through what the tab shows. The ladder names what you

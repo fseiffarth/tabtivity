@@ -55,6 +55,7 @@ function fakeTerm(opts: { tracking?: boolean; buffer?: "normal" | "alternate"; r
     buffer: { active: { type: opts.buffer ?? "normal" } },
     scrollLines: vi.fn(),
     scrollToBottom: vi.fn(),
+    focus: vi.fn(),
   };
   return { term, wheels };
 }
