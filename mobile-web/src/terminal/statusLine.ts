@@ -34,6 +34,7 @@ import {
   openCodeStatusRow,
   openCodeTurnFooter,
 } from "./openCodeMini";
+import { claudeEffortHint, effortHintAbove, isClaudeTmuxNotice, withoutEffortHint } from "./claudeStatus";
 import { openCodePermissionShown } from "./openCodeQuestion";
 import { isActionRow, isChatRow, isStrayListRow, isUnnumberedRow } from "./selectPrompt";
 import { readAgentList } from "./subagentInput";
@@ -145,6 +146,8 @@ const MODES: [RegExp, string][] = [
   [/\byolo mode\b/iu, "yolo"],
   [/\bask permissions\b/iu, "ask permissions"],
   [/\bauto mode\b/iu, "auto"],
+  // Claude Code 2.1.284+ names its ordinary mode (`⏸ manual mode on`).
+  [/\bmanual mode\b/iu, "default"],
   [/^[⏵⏩▶›>\s]*auto(?:\s+on)?$/iu, "auto"],
 ];
 
@@ -245,6 +248,9 @@ function classify(segment: string, status: SessionStatus) {
   }
   if (!status.path) {
     const path = PATH.exec(segment);
+    // A path cut short by the pane's width (`~/work/pro…`) is no path: it would
+    // stand in front of the tab's real one.
+    if (path?.[1].endsWith("…")) return;
     if (path) {
       status.path = path[1];
       if (!status.branch) {
@@ -523,9 +529,15 @@ export function sessionStatus(
   let read = 0;
   for (let index = inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
     const text = lines[index].text.trim();
-    if (!text) continue;
+    if (!text || isClaudeTmuxNotice(text)) continue;
     read += 1;
-    for (const segment of text.split(SEGMENT_SPLIT)) classify(segment.trim(), status);
+    const effort = claudeEffortHint(text);
+    if (effort) status.effort = effort;
+    for (const segment of withoutEffortHint(text).split(SEGMENT_SPLIT)) classify(segment.trim(), status);
+  }
+  if (!status.effort) {
+    const hint = effortHintAbove(lines, inputIndex);
+    if (hint) status.effort = hint.effort;
   }
   // Claude Code prints its goal at the right end of its last footer row, under
   // a custom statusline that can wrap to several rows on a narrow pane — past
@@ -556,8 +568,9 @@ export function shortenPath(path: string): string {
  * input line. It is a question waiting for an answer, never the composer —
  * and so is a multi-select question's unnumbered `❯ Submit` (`isActionRow`)
  * and the highlighted row of an unnumbered dialog (`isUnnumberedRow`), and a
- * preview question's `❯ Chat about this` (`isChatRow`). */
-const OPTION_ROW = /^\s*[>›❯*]\s*\d{1,2}[.)]\s/u;
+ * preview question's `❯ Chat about this` (`isChatRow`), and the `/model`
+ * picker's `❯ ▸ More models`. */
+const OPTION_ROW = /^\s*[>›❯*]\s*(?:\d{1,2}[.)]|[▸▶►])\s/u;
 
 /** The rule an agent draws across the top of its input box, with the project
  * or model name sitting in it (`──────── my-project ─`). `readableScreen`
@@ -610,7 +623,7 @@ export function inputFrameStart(
   // the frame; left behind they would trail the output with a rule and a gap.
   while (start > 0) {
     const above = lines[start - 1].frameText ?? lines[start - 1].text;
-    if (!above.trim() || labelledRule(above)) start -= 1;
+    if (!above.trim() || labelledRule(above) || claudeEffortHint(lines[start - 1].text)) start -= 1;
     else break;
   }
   return start;
