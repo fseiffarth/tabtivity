@@ -32,6 +32,7 @@ import {
 } from "../../lib/terminal/terminalBus";
 import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
 import { clearSessionHostState, reportSessionHostSpawnError } from "../../lib/terminal/sessionHostNotice";
+import { clearContainerNotice, reportContainerSpawnError } from "../../lib/terminal/containerSpawnNotice";
 import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
@@ -87,6 +88,7 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalSessionHostCard } from "./TerminalSessionHostCard";
+import { TerminalContainerCard } from "./TerminalContainerCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
 import { buildScaffoldFillPrompt } from "../../lib/projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
@@ -1845,6 +1847,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       const spawn = async () => {
         // A new attempt: whatever the session host said about the last one is over.
         clearSessionHostState(id);
+        clearContainerNotice(id);
         if ((kind === "agent" || kind === "local_agent") && !attachOnly && (tmuxSession || tmuxAttach)) {
           const owner = splitPtyId(id)?.scope;
           // A workspace identity is required for self-targeted MCP grants.
@@ -1927,6 +1930,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
               if (!isAiOffRefusal(retryErr)) {
                 writeTerm(spawnErrorNote(retryErr));
                 reportSessionHostSpawnError(id, retryErr);
+                if (sandbox && projectId) reportContainerSpawnError(id, projectId);
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, pause));
@@ -1968,6 +1972,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             if (!cancelled) {
               writeTerm(spawnErrorNote(retryErr));
               reportSessionHostSpawnError(id, retryErr);
+              if (sandbox && projectId) reportContainerSpawnError(id, projectId);
             }
           }
           return;
@@ -1976,6 +1981,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         if (!refusal) {
           writeTerm(spawnErrorNote(e));
           reportSessionHostSpawnError(id, e);
+          if (sandbox && projectId) reportContainerSpawnError(id, projectId);
           return;
         }
         const ok = await useHpcGuardStore.getState().request(refusal.kind, refusal.target);
@@ -2005,6 +2011,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           if (!cancelled) {
             writeTerm(spawnErrorNote(retryErr));
             reportSessionHostSpawnError(id, retryErr);
+            if (sandbox && projectId) reportContainerSpawnError(id, projectId);
           }
         }
       }
@@ -2370,6 +2377,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       } else if (!attachOnly && !isDetachedPtyId(id) && !persistOnUnmount) {
         invoke("pty_kill", { id }).catch(() => {});
         clearSessionHostState(id);
+        clearContainerNotice(id);
         // Drop the captured agent-task title so a closed tab's summary can't
         // linger against a future tab that reuses the key. Through the shared
         // parser: splitting on every colon left a box tab's key as
@@ -2886,6 +2894,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}
     {agentPane && !attachOnly && host && <TerminalSessionHostCard host={host} ptyId={id} visible={visible} />}
+    {sandbox && projectId && !attachOnly && host && <TerminalContainerCard host={host} ptyId={id} visible={visible} />}
     {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
       <TerminalAgentsEmptyCard
         host={host}
