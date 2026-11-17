@@ -297,7 +297,7 @@ pub fn prompts(state_dir: &Path, project_id: &str) -> Result<Vec<ProjectAgentPro
 // ── Transcript ──────────────────────────────────────────────────────────────
 
 /// The agents whose transcript Tabtivity reads at all (`TRANSCRIPT_AGENTS`).
-const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "opencode", "gemini", "agy", "muse"];
+const TRANSCRIPT_AGENTS: &[&str] = &["claude", "codex", "copilot", "opencode", "gemini", "agy", "muse"];
 
 /// `agentTranscriptFor` off the tab record: the same two "not yet" answers
 /// (`no_session` for a transcript family whose hook has not recorded a
@@ -2716,6 +2716,8 @@ mod tests {
     #[test]
     fn a_transcript_answers_the_same_not_yet_reasons_as_the_window() {
         assert_eq!(transcript("p1", &tab("claude", None), None, None, None).reason.as_deref(), Some("no_session"));
+        // Copilot's session id comes from its hook too: not yet, not never.
+        assert_eq!(transcript("p1", &tab("copilot", None), None, None, None).reason.as_deref(), Some("no_session"));
         assert_eq!(transcript("p1", &tab("bash", None), None, None, None).reason.as_deref(), Some("unsupported"));
         // OpenCode is read by folder, so a tab without a session id (a
         // local-model one) still reaches the reader instead of waiting on one.

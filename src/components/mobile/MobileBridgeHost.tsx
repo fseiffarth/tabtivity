@@ -3002,7 +3002,7 @@ async function refreshSlices(projectId: string | null | undefined, slices: strin
 
 /** The agents whose transcript `services::agent_transcript` reads; any other
  * family answers `unsupported` there, and so does the short-circuit below. */
-const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "opencode", "gemini", "agy", "muse"]);
+const TRANSCRIPT_AGENTS = new Set(["claude", "codex", "copilot", "opencode", "gemini", "agy", "muse"]);
 
 /**
  * The phone's Focus view on an agent tab: the conversation as the agent's own
