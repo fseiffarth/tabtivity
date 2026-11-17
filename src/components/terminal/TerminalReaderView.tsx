@@ -70,7 +70,8 @@ import { isPathWithin, relativePathWithin, resolvePath } from "../../lib/paths";
 import { NAMES } from "../../lib/brand";
 import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
-import { answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
+import { ARTIFACT_ATTR, answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
+import { ReaderArtifactDialog } from "./ReaderArtifactDialog";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
 import { claudeBoxWords, pullQueuedPrompts, queueFamily, queuedHintShown, sendQueuedNow, takeBackStopped, takenPrompts, type QueuePullDriver } from "../../../mobile-web/src/terminal/queuePull";
@@ -1730,6 +1731,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const [pathLinks, setPathLinks] = useState<ReadonlyMap<string, FileEntry | null>>(() => new Map());
   const pathLinksRef = useRef(pathLinks);
   const [pathHover, setPathHover] = useState<PathLinkHover | null>(null);
+  const [artifact, setArtifact] = useState<{ target: string; request: Record<string, unknown> } | null>(null);
   /** The file the Files tab shows: the last one clicked in the chat or picked there. */
   const [filePicked, setFilePicked] = useState<FileEntry | null>(null);
   /** Show a file in the Files tab, at the line a link named. */
@@ -1785,8 +1787,19 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     onOpenUrl?.(url);
     return true;
   };
+  // A link to a plan the Antigravity chat wrote (`data-artifact`) opens its
+  // text in a read-only dialog; the backend reads only this tab's own chat's
+  // folder (`ReaderArtifactDialog`).
+  const openArtifactAt = (target: EventTarget | null): boolean => {
+    const name = target instanceof Element ? target.closest(`[${ARTIFACT_ATTR}]`)?.getAttribute(ARTIFACT_ATTR) : null;
+    const current = tabRef.current;
+    if (!name || !current) return false;
+    setPathHover(null);
+    setArtifact({ target: name, request: readerRequest(scope, current, cwd, undefined, 0) ?? {} });
+    return true;
+  };
   const onPathClick = (event: ReactMouseEvent) => {
-    if (openWebAt(event.target)) {
+    if (openWebAt(event.target) || openArtifactAt(event.target)) {
       event.preventDefault();
       return;
     }
@@ -1796,7 +1809,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     openPathAt(el, event.ctrlKey || event.metaKey);
   };
   const onPathKey = (event: KeyboardEvent) => {
-    if (event.key === "Enter" && openWebAt(event.target)) {
+    if (event.key === "Enter" && (openWebAt(event.target) || openArtifactAt(event.target))) {
       event.preventDefault();
       return;
     }
@@ -2751,6 +2764,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
         </ReaderInboxContext.Provider>
         </PathLinksContext.Provider>
         <PathLinkHint hover={visible ? pathHover : null} />
+        {artifact && <ReaderArtifactDialog target={artifact.target} request={artifact.request} onClose={() => setArtifact(null)} />}
         {!openStep && pinnedPrompt && (
           <button
             type="button"
