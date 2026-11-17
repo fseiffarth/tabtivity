@@ -204,6 +204,9 @@ export interface HoverPreviewConfig {
  *  enough that crossing a page of equations on the way somewhere else starts
  *  nothing, short enough to feel like an answer to the hover rather than an
  *  event of its own. */
+/** How long a `gotoLine` jump's line band stays up: the length of its fade
+ *  (`file-viewer-jump-flash`), as the PDF's forward-search mark does. */
+const JUMP_FLASH_MS = 3200;
 const HOVER_PREVIEW_DWELL_MS = 400;
 
 /** How wide the hover card may get, and how far down the window an anchor may
@@ -358,6 +361,7 @@ export function CodeEditor({
   const gutterInnerRef = useRef<HTMLDivElement>(null);
   const blameInnerRef = useRef<HTMLDivElement>(null);
   const blameInlineRef = useRef<HTMLDivElement>(null);
+  const jumpFlashRef = useRef<HTMLDivElement>(null);
   const indentLayerRef = useRef<HTMLPreElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const linkLayerRef = useRef<HTMLPreElement>(null);
@@ -701,6 +705,9 @@ export function CodeEditor({
     }
     if (blameInlineRef.current) {
       blameInlineRef.current.style.transform = `translateY(${-scrollTop}px)`;
+    }
+    if (jumpFlashRef.current) {
+      jumpFlashRef.current.style.transform = `translateY(${-scrollTop}px)`;
     }
     const transform = `translate(${-scrollLeft}px, ${-scrollTop}px)`;
     for (const ref of [
@@ -1746,6 +1753,8 @@ export function CodeEditor({
     if (view) syncScroll();
   }, [draft, syncScroll]);
 
+  // The landed-on line of the last `gotoLine` jump, banded for `JUMP_FLASH_MS`.
+  const [jumpFlash, setJumpFlash] = useState<{ line: number; nonce: number } | null>(null);
   // SyncTeX reverse search: on a new `gotoLine` nonce, place the caret at the
   // target line/column and scroll it to roughly the middle of the view. SyncTeX
   // reports a column (0 when it has none); we offset into the line by it, clamped
@@ -1776,9 +1785,24 @@ export function CodeEditor({
     const target = lineTop(gotoLine.line) - el.clientHeight / 2 + effectiveLineHeight / 2;
     el.scrollTop = Math.max(0, target);
     syncScroll();
+    // A band across the whole landed-on line, so a jump (a PDF Ctrl+click, an
+    // error row) says where it went: the gutter tint alone is easy to miss.
+    setJumpFlash({ line: gotoLine.line, nonce: gotoLine.nonce });
     onGotoApplied?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gotoLine?.nonce, loaded]);
+
+  // The jump band comes down after its fade (and stays put, then goes, when
+  // the fade is off or paused). Mounted after the scroll above, so it is put in
+  // register with the textarea once it is in the DOM.
+  useEffect(() => {
+    if (!jumpFlash) return;
+    const id = window.setTimeout(() => setJumpFlash(null), JUMP_FLASH_MS);
+    return () => window.clearTimeout(id);
+  }, [jumpFlash]);
+  useLayoutEffect(() => {
+    if (jumpFlash) syncScroll();
+  }, [jumpFlash, syncScroll]);
 
   const dismissSuggestion = useCallback(() => {
     acCandidates.current = [];
@@ -2673,6 +2697,20 @@ export function CodeEditor({
               <div key={i} className="fv-measure-line">{ln === "" ? "\u200B" : ln}</div>
             ))}
           </pre>
+        )}
+        {jumpFlash && (
+          <div
+            key={jumpFlash.nonce}
+            ref={jumpFlashRef}
+            className="file-viewer-jump-flash"
+            aria-hidden="true"
+            style={{
+              top: lineTop(jumpFlash.line),
+              height: wrap && lineHeights[jumpFlash.line - 1] ? lineHeights[jumpFlash.line - 1] : effectiveLineHeight,
+            }}
+          >
+            <UntestedTag id="fileViewer.jumpFlash" />
+          </div>
         )}
         {/* Indent guides. First of the layers, so the hairlines sit behind the
             coloured glyphs rather than across them. */}

@@ -2476,6 +2476,26 @@ select.file-viewer-run-args-input {
   border-radius: 2px;
 }
 
+/* Where a jump landed (`gotoLine`: a PDF Ctrl+click, an error row, a link): a
+   band across the whole line, behind the text, scroll-locked like the blame
+   hint. Shares the PDF mark's fade, visible from its first frame, so a paused
+   animation still shows it; `JUMP_FLASH_MS` takes it down. */
+.file-viewer-jump-flash {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  will-change: transform;
+  animation: file-viewer-pdf-sync-fade 3.2s ease-in forwards;
+}
+.file-viewer-jump-flash > * {
+  position: absolute;
+  right: 12px;
+  top: 0;
+}
+
 /* TeX missing-end diagnostic: the line number stays red even when it is also
    the caret/search row, so the structural error does not disappear on focus. */
 .file-viewer-gutter-line.has-unclosed-bracket {
@@ -6035,7 +6055,8 @@ select.file-viewer-run-args-input {
   /* Hold a static highlight briefly rather than animating its opacity. */
   .file-viewer-pdf-dest-mark,
   .file-viewer-pdf-sync-highlight,
-  .file-viewer-pdf-sync-line {
+  .file-viewer-pdf-sync-line,
+  .file-viewer-jump-flash {
     animation: none;
     opacity: 1;
   }
