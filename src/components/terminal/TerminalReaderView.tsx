@@ -34,7 +34,7 @@ import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
-import { agentTabLabel, useAgentTabModelTag } from "../../stores/agents/agentModels";
+import { agentTabLabel, useAgentModelsStore, useAgentTabModelTag } from "../../stores/agents/agentModels";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useAgentReaderStore } from "../../stores/agents/agentReader";
 import { useKeyboardSteeringStore, type SteeringBaseLevel } from "../../stores/keyboardSteering";
@@ -1233,7 +1233,27 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setSlashClosed(false);
   };
 
+  /** Steering's prompt-box keys on the Chat composer: Alt+M model, Alt+E
+   * effort, Alt+P / Alt+G plan / goal, Alt+T commit menu, Alt+C clear (a
+   * second press confirms) press that button of this pane, when it is there
+   * and enabled. */
+  const clearArmed = useRef(false);
+  const factKey = (e: KeyboardEvent<HTMLTextAreaElement>, box: HTMLTextAreaElement): boolean => {
+    if (e.nativeEvent.isComposing || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return false;
+    const fact = ({ KeyM: "model", KeyE: "effort", KeyP: "plan", KeyG: "goal", KeyT: "commit", KeyC: "clear" } as Record<string, string>)[e.code];
+    if (!fact) return false;
+    if (fact === "clear" && !clearArmed.current) {
+      clearArmed.current = true;
+      return true;
+    }
+    clearArmed.current = false;
+    const button = box.closest(".terminal-reader")?.querySelector<HTMLButtonElement>(`[data-reader-fact="${fact}"]`);
+    if (button && !button.disabled) button.click();
+    return true;
+  };
+
   const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Alt" && e.code !== "KeyC") clearArmed.current = false;
     const redo = actionMatches("editorRedo", shortcutOverrides, e);
     if (!e.nativeEvent.isComposing && (redo || actionMatches("editorUndo", shortcutOverrides, e))) {
       e.preventDefault();
@@ -1246,6 +1266,9 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
       e.preventDefault();
       voice.cancelSend();
       voiceLoop.stopReading();
+    } else if (steerOpenRef.current !== null && factKey(e, e.currentTarget)) {
+      // Steering's Alt+M / Alt+E: the facts row's model and effort pickers.
+      e.preventDefault();
     } else if (slashKey(e) || suggestionKey(e)) {
       e.preventDefault();
     } else if (questionOpen && !draft && (e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && focusQuestionOption(e.currentTarget)) {
@@ -1288,6 +1311,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           value={draft}
           disabled={inputBlocked}
           rows={3}
+          spellCheck={false}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
             : t("terminal.reader.placeholder")}
@@ -1503,6 +1527,24 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The working row's name for the agent, as the phone's says it: the model
    * the session prints, its first word (`Opus is working…`). */
   const workingModel = (live.status?.model ?? modelTag)?.trim().split(/\s+/)[0];
+  // The model store otherwise reads at a turn's edges or when a roster polls, so
+  // a Claude tab opened here showed a bare "Model" until its first answer. Read
+  // on show, and again every few seconds while no source names one.
+  const modelKnown = !!(live.status?.model ?? modelTag);
+  useEffect(() => {
+    if (!visible || !tab) return;
+    const read = () => {
+      const models = useAgentModelsStore.getState();
+      void models.refresh(scope, tab);
+      void models.refreshScreen(scope, tab);
+    };
+    read();
+    if (modelKnown) return;
+    const timer = setInterval(read, 3_000);
+    return () => clearInterval(timer);
+    // `tab` changes on every tab edit; its key and launch id are what matter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, scope, tab?.key, tab?.sessionId, modelKnown]);
   const workingLine = workingModel ? t("terminal.reader.workingModel", { model: workingModel }) : t("terminal.reader.working");
   const typeIntoPane = useCallback((keys: string[]) => typePaneKeys(ptyId, keys), [ptyId]);
   const signInItem = AGENT_ITEMS.find((item) => item.cmd === tab?.cmd);

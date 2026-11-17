@@ -76,6 +76,8 @@ const VERSION_ARGV: &[(&str, &[&str])] = &[
     ("antigravity", &["--version"]),
     // "Muse Code 1.3.0 (1.3.0-R3057.1)" — only with [`VERSION_ENV`]'s flag.
     ("muse", &["--version"]),
+    // "vibe 3.1.2" (Windows, uv tool shim, 2026-11-15)
+    ("vibe", &["--version"]),
 ];
 
 /// Environment a version probe sets for one agent, keyed like [`VERSION_ARGV`].
@@ -727,6 +729,7 @@ mod tests {
     fn parses_the_version_lines_the_recipes_were_verified_against() {
         assert_eq!(parse_version("2.1.263 (Claude Code)").as_deref(), Some("2.1.263"));
         assert_eq!(parse_version("codex-cli 0.153.4").as_deref(), Some("0.153.4"));
+        assert_eq!(parse_version("vibe 3.1.2").as_deref(), Some("3.1.2"));
         assert_eq!(
             parse_version("0.0.393 Commit: ea52078").as_deref(),
             Some("0.0.393")

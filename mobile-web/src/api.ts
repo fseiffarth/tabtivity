@@ -113,6 +113,8 @@ export interface GitOverview {
   branches_total: number;
   remote_branches: string[];
   remote_total: number;
+  /** git could not read the project (no git, a refused or damaged repo): no reading, unlike `repo: false`. Missing from an older desktop. */
+  unreadable?: boolean;
 }
 
 /** The project's git overview, read by the phone host itself (window open or
@@ -1594,6 +1596,8 @@ export interface ProjectFileEntry {
  * project ("Phone may write remarks into PDFs"); omitted by an older desktop. */
 export interface ProjectFileListing {
   entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean
+  /** git could not say which rows it ignores, so ignored ones sit among the rest. Missing when it could, or from an older desktop. */
+  git_unread?: boolean
   /** The project root's catalog docs and the state each is in (the desktop tree's "Project docs" group; names only, in the catalog's order). Root of this computer's side only; missing in any folder, on the remote side, from an older desktop, or when the read timed out — the plain group then. A ghost row is `state === "missing" && creatable`. */
   docs?: DocStatus[]
 }

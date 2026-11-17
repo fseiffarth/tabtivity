@@ -2535,7 +2535,7 @@ mod tests {
             assert_eq!(windows_shell_kind(cmd), "powershell", "{id}");
             assert!(!cmd.contains("bash") && !cmd.contains("npm"), "{id}: {cmd}");
         }
-        assert_eq!(windows_shell_kind(win("vibe").unwrap()), "default", "uv runs in either shell");
+        assert_eq!(windows_shell_kind(win("vibe").unwrap()), "powershell", "uv's irm | iex, then uv");
         assert_eq!(win("kiro"), None);
         assert_eq!(win("plandex"), None);
     }
@@ -2886,8 +2886,8 @@ mod tests {
         assert_eq!(stem(installer_command(claude).unwrap()), "powershell");
         let gemini = find_spec("gemini").unwrap(); // npm install -g …
         assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
-        let vibe = find_spec("vibe").unwrap(); // uv tool install …
-        assert_eq!(stem(installer_command(vibe).unwrap()), "cmd");
+        let vibe = find_spec("vibe").unwrap(); // uv's irm | iex, then uv
+        assert_eq!(stem(installer_command(vibe).unwrap()), "powershell");
         // Picked from the registry, so a CLI that gains a Windows installer
         // later doesn't leave this pointing at one that has one.
         let none = AGENTS
@@ -2895,6 +2895,18 @@ mod tests {
             .find(|a| a.install_cmd_windows.is_none())
             .expect("some CLI has no one-line Windows installer");
         assert!(installer_command(none).is_err());
+    }
+
+    #[test]
+    fn vibe_windows_install_stays_in_the_install_home_and_upgrades() {
+        let cmd = find_spec("vibe").unwrap().install_cmd_windows.unwrap();
+        assert_eq!(windows_shell_kind(cmd), "powershell");
+        // uv lands in the install home and never edits the user's PATH.
+        assert!(cmd.starts_with(r#"$env:UV_UNMANAGED_INSTALL = "$env:USERPROFILE\.local\bin";"#));
+        // A rerun is Manage CLIs' Update: plain `uv tool install` stops at
+        // "already installed" and never upgrades.
+        assert!(cmd.contains("tool install --upgrade --python cpython-3.14+gil mistral-vibe"));
+        assert!(cmd.find("python install cpython-3.14").unwrap() < cmd.find("tool install").unwrap());
     }
 
     #[test]

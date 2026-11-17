@@ -8,7 +8,10 @@ web lanes keep their authorities and routes. These lanes share a listener,
 not a token. Design: `docs/cockpit_mcp_plan.md`.
 
 `tab_rename` changes the caller's own display label. The host
-resolves its tmux session to exactly one saved agent tab at spawn and binds
+resolves its tmux session — or, for a spawn no session host carries (Windows
+without the session host, unix without Mobile access), its launch uid
+(`TAB_UID` in the spawn's and the saved tab's `env`) — to exactly one saved
+agent tab at spawn and binds
 the state directory, scope and persistent workspace id to its session.
 Neither project nor tab ids are tool arguments. An unavailable saved identity
 means no grant. `TerminalView` persists agent tabs before launching them so

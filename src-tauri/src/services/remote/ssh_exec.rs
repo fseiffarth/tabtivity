@@ -1382,14 +1382,24 @@ pub fn run_git_remote(
     // A spec ssh would refuse fails here, before anything is probed.
     git_ssh_args(spec, git_args)?;
     let host = crate::services::git_hardened::host_git(spec);
+    // A host without git fails every call with one sentence that says so, not
+    // an empty answer a read would show as "nothing there".
+    if host.missing {
+        return Err(crate::services::git_hardened::HOST_GIT_MISSING.to_string());
+    }
     if let Some(refusal) = crate::services::git_hardened::host_hooks_off_refusal(host.version, git_args) {
         return Err(refusal);
     }
     let args = git_ssh_args_within(spec, git_args, host.timeout.then(|| host_timeout_secs(git_args)))?;
     let mut cmd = crate::paths::command_no_window("ssh");
     cmd.args(&args);
-    crate::services::git_bounded::wrapped_output(cmd, git_args, host.timeout)
-        .map_err(|e| format!("failed to run git over ssh: {e}"))
+    let out = crate::services::git_bounded::wrapped_output(cmd, git_args, host.timeout)
+        .map_err(|e| format!("failed to run git over ssh: {e}"))?;
+    // git went missing after the host was probed (the probe is kept for the app's life).
+    if out.status.code() == Some(crate::services::git_hardened::SHELL_NOT_FOUND) {
+        return Err(crate::services::git_hardened::HOST_GIT_MISSING.to_string());
+    }
+    Ok(out)
 }
 
 /// The host-side ceiling for `git <git_args>`: the verb's own

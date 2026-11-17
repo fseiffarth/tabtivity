@@ -30,6 +30,11 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "list_ollama_models_detailed") return [];
     if (cmd === "list_pending_ollama_pulls") return [];
     if (cmd === "list_orphan_partial_blobs") return [];
+    if (cmd === "pull_ollama_model") {
+      throw new Error(
+        'pull model manifest: realm host "huggingface.co" does not match original host "hf.co"',
+      );
+    }
     if (cmd === "search_ollama_registry") {
       h.searches.push(args as SearchArgs);
       return h.answer(args as SearchArgs);
@@ -166,5 +171,16 @@ describe("Ollama registry browser", () => {
     await flush();
     expect(screen.queryByText("stale-model")).toBeNull();
     expect(screen.getByText("vision-model")).toBeTruthy();
+  });
+
+  it("names the fix when Ollama refuses a gated Hugging Face repo pulled as hf.co/", async () => {
+    render(<OllamaPanel onBack={() => {}} onClose={() => {}} />);
+    await flush();
+    const box = screen.getByRole("textbox");
+    fireEvent.change(box, { target: { value: "hf.co/org/Gated-GGUF:Q4_K_M" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await flush();
+    expect(screen.getByText(/pull it as huggingface\.co\/<user>\/<repo>:<quant>/)).toBeTruthy();
+    expect(screen.queryByText(/does not match original host/)).toBeNull();
   });
 });

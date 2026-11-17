@@ -65,6 +65,7 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
       <button
         key={command}
         type="button"
+        data-reader-fact={plan ? "plan" : "goal"}
         className={`terminal-reader-chip${active === command ? " active" : ""}`}
         disabled={disabled}
         aria-pressed={active === command}
@@ -82,6 +83,7 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
         className="terminal-reader-chip"
         disabled={disabled}
         onMouseDown={keepFocus}
+        data-reader-fact="clear"
         onClick={onClear}
         title={t("mobile.composer.clearChat")}
       >
@@ -101,6 +103,7 @@ export function ReaderComposerChips({ prefixes, active, disabled, onPrefix, onCl
         type="button"
         className={`terminal-reader-chip${commitOpen ? " active" : ""}`}
         disabled={disabled}
+        data-reader-fact="commit"
         aria-haspopup="menu"
         aria-expanded={commitOpen}
         onMouseDown={keepFocus}

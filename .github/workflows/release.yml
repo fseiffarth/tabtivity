@@ -74,7 +74,8 @@ jobs:
       RELEASE_BRANCH: main
 
     steps:
-      # package.json names the version; the public key checks the signature.
+      # package.json names the version; the public key checks the signature;
+      # the script and the two agent tables write the verified-CLI notes.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,6 +84,9 @@ jobs:
           sparse-checkout: |
             package.json
             src-tauri/release-signing.pub.pem
+            scripts/release-cli-notes.mjs
+            src-tauri/src/services/agent/agent_versions.rs
+            src-tauri/src/services/agent/agent_registry.rs
           sparse-checkout-cone-mode: false
 
       - name: Decide the tag
@@ -203,6 +207,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.decide.outputs.tag }}
         run: |
+          set -euo pipefail
           {
             printf 'Tabtivity %s — alpha / preview build.\n\n' "$RELEASE_TAG"
             printf 'Built from commit `%s`.\n\n' "$SHA"
@@ -214,6 +219,12 @@ jobs:
             printf -- '- Linux server (preview, x86_64, never run in production): `tabtivity-server_*.deb` — '
             printf 'set it up with the [server guide](https://github.com/%s/blob/main/docs/guide/server.md); ' "$GH_REPO"
             printf 'Windows and macOS hosts run it in a Linux VM\n'
+
+            # services::agent_versions::VERIFIED at this commit. A table the
+            # script cannot read whole fails the release rather than shipping
+            # a shorter list; npm test holds the read to the real table.
+            printf '\n'
+            node scripts/release-cli-notes.mjs
 
             # Until the cleanup release (the one that drops the old-name
             # lookups): what an upgrade across the rename does and asks for.

@@ -88,7 +88,8 @@ export function GitSheet({ projectId, label, onClose }: { projectId: string; lab
       {error && <p className="sheet-note error" role="alert">{t("mobile.gitSheet.failed", { error })}</p>}
       {busy && !overview && !outdated && !error && <p className="sheet-note">{t("mobile.gitSheet.loading")}</p>}
       {outdated && <p className="sheet-note">{t("mobile.gitSheet.hostOld")}</p>}
-      {overview && !overview.repo && <p className="sheet-note">{t("mobile.gitSheet.notRepo")}</p>}
+      {overview?.unreadable && <p className="sheet-note error" role="alert">{t("mobile.gitSheet.unreadable")}</p>}
+      {overview && !overview.repo && !overview.unreadable && <p className="sheet-note">{t("mobile.gitSheet.notRepo")}</p>}
 
       {overview?.repo && head && <div className="git-body">
         <p className="git-head">

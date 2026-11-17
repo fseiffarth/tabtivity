@@ -574,6 +574,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <button
             type="button"
             className="terminal-reader-fact-model"
+            data-reader-fact="model"
             onClick={() => modelPicking ? close() : openPicker()}
             disabled={!modelPicking && (!!live.working || !!live.question || picking)}
             aria-haspopup="dialog"
@@ -591,6 +592,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <button
             type="button"
             className="terminal-reader-fact-model"
+            data-reader-fact="effort"
             onClick={claude ? openEffort : modelPicking ? close : openEffort}
             disabled={claude ? !effortOpen && (!!live.question || picking) : !modelPicking && (!!live.working || !!live.question || picking)}
             aria-haspopup="dialog"

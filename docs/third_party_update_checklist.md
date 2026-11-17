@@ -28,7 +28,8 @@ How to use it:
    drift apart exactly like the two install tables did. Bump `FRONTEND_VERIFIED`
    in `src/stores/agents/agentVersionNotice.ts` as well: it is what lets a
    hot-reloaded window drop its old backend's card, and a test holds it to
-   `VERIFIED`.
+   `VERIFIED`. Every GitHub release lists `VERIFIED` as it stood at the
+   released commit (`scripts/release-cli-notes.mjs`), so a row is a public claim.
 3. A breakage found this way is a normal fix: patch the one place named under
    **Where**, add a test alongside the existing ones, update the version note.
 
@@ -1224,7 +1225,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 
 | Agent | Resume flag | Warm-up | Install |
 |-------|-------------|---------|---------|
-| Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh` |
+| Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh`; Windows: Astral's `install.ps1` then `uv tool install --upgrade --python cpython-3.14+gil mistral-vibe` (no vendor `install.ps1`; re-check against `install.sh`'s uv/Python pins) |
 | OpenCode | `--continue` | `run` | `curl … opencode.ai/v2/install` (also writes `opencode2`, shimmed by `agent_bin::VENDOR_ALIASES`) / `npm i -g @opencode/cli` |
 | Copilot | `--session-id <tab uuid>` (`copilot_session::resolve`; `--continue` only on a remote tab) | `-p` | `npm i -g @github/copilot` |
 | Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |

@@ -99,6 +99,41 @@ const REGISTRY_TYPES = ["tools", "vision", "thinking", "embedding", "audio"] as 
 /** Where a model runs, also a `c=` value on ollama.com — one or neither. */
 const REGISTRY_RUNS = ["local", "cloud"] as const;
 
+/** Ollama's refusal of a gated/private Hugging Face repo pulled as `hf.co/…`:
+ *  the Hub's auth realm is on `huggingface.co`, and Ollama signs a challenge
+ *  only for the host the pull started on (`hf.rs` `model_row`). */
+const HF_REALM_MISMATCH = /realm host "huggingface\.co" does not match original host "hf\.co"/i;
+
+/** TEMP diagnostic for the filter chips (see `diagChip` in the panel): the
+ *  trace lives here, not in the panel, so a remount mid-click keeps it. */
+const chipDiagBus = {
+  run: null as null | { t0: number; lines: string[]; timer: number },
+  last: [] as string[],
+  subs: new Set<(lines: string[]) => void>(),
+  eventIds: new WeakMap<Event, number>(),
+  nextId: 0,
+};
+function chipDiagNote(line: string) {
+  const bus = chipDiagBus;
+  const run = bus.run ?? (bus.run = { t0: performance.now(), lines: [], timer: 0 });
+  run.lines.push(`+${Math.round(performance.now() - run.t0)}ms ${line}`);
+  window.clearTimeout(run.timer);
+  run.timer = window.setTimeout(() => {
+    bus.last = run.lines;
+    bus.run = null;
+    for (const sub of bus.subs) sub(run.lines);
+  }, 600);
+}
+function chipDiagEvent(ev: Event): string {
+  let id = chipDiagBus.eventIds.get(ev);
+  if (id === undefined) {
+    id = ++chipDiagBus.nextId;
+    chipDiagBus.eventIds.set(ev, id);
+  }
+  const m = ev as MouseEvent & { pointerType?: string };
+  return `ev#${id} ${ev.type} trusted=${ev.isTrusted} detail=${m.detail} pointer=${m.pointerType || "-"} t=${ev.timeStamp.toFixed(1)}`;
+}
+
 /** Download-size caps, Ollama's `s=` search param (GB; "over64" is the top bucket). */
 const REGISTRY_DOWNLOAD_SIZES = ["8", "16", "32", "64", "over64"] as const;
 
@@ -196,7 +231,17 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   const paused = useOllamaActivityStore((s) => s.paused);
   // Orphaned partial layers in Ollama's blob cache with no recoverable model
   // name — surfaced only so the user can delete them to reclaim space.
-  const [orphans, setOrphans] = useState<{ digest: string; size: number; path: string }[]>([]);
+  const [allOrphans, setOrphans] = useState<{ digest: string; size: number; path: string }[]>([]);
+  // The short digests of the layers live pulls are writing (Ollama's
+  // "pulling <digest>" phase). Their `-partial` files belong to a named
+  // download, so they are not orphans, and Delete must never be offered on a
+  // file Ollama is still writing. Joined so the re-read below keys on content.
+  const liveLayers = Object.values(pullProgress)
+    .map((p) => /^pulling ([0-9a-f]{12})/.exec(p.status ?? "")?.[1])
+    .filter((d): d is string => d !== undefined)
+    .sort()
+    .join(",");
+  const orphans = allOrphans.filter((o) => !liveLayers.split(",").includes(o.digest));
   // Live registry browser (ollama.com/search): query, filters, lazy-loaded pages.
   const [regQuery, setRegQuery] = useState("");
   const [regQueryLive, setRegQueryLive] = useState(""); // debounced
@@ -333,6 +378,18 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       .then(setOrphans)
       .catch(() => {});
   }, [installed]);
+
+  // A live layer that finished was renamed out of `-partial`, and one a pull
+  // stopped writing is an orphan again: re-read whenever the live set moves.
+  const prevLiveLayers = useRef(liveLayers);
+  useEffect(() => {
+    if (prevLiveLayers.current === liveLayers) return;
+    prevLiveLayers.current = liveLayers;
+    if (installed !== true) return;
+    invoke<{ digest: string; size: number; path: string }[]>("list_orphan_partial_blobs")
+      .then(setOrphans)
+      .catch(() => {});
+  }, [liveLayers, installed]);
 
   // Delete an orphaned partial layer to reclaim its disk space. The list is
   // re-read afterwards rather than trimmed optimistically: a delete the OS
@@ -507,6 +564,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     );
   };
 
+  // Ollama's error text, except the Hugging Face realm-host refusal, which
+  // says nothing a user can act on: name the fix instead.
+  const actionError = (e: unknown) => (HF_REALM_MISMATCH.test(String(e)) ? t("ollama.hfRealmHost") : String(e));
+
   const withBusy = async (key: string, fn: () => Promise<void>) => {
     setBusy((prev) => ({ ...prev, [key]: true }));
     setError(null);
@@ -514,7 +575,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       await fn();
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(actionError(e));
     } finally {
       setBusy((prev) => ({ ...prev, [key]: false }));
       if (key.endsWith(":pull")) clearPullProgress(key.slice(0, -":pull".length));
@@ -535,7 +596,7 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
       setRegQuery(""); // clear only on success; errors keep the typed ref
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(actionError(e));
     } finally {
       setBusy((prev) => ({ ...prev, [key]: false }));
       clearPullProgress(model);
@@ -549,6 +610,53 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
   // every page arrives filtered and in order and scrolling just appends.
   const regCapabilities = [...regTypes, regRuns].filter(Boolean);
   const regFilterKey = `${regSource}|${regCapabilities.join(",")}|${regDownload}|${sortBy}`;
+
+  // ── TEMP diagnostic: filter chips that toggle back in the cockpit window ──
+  // Records, for ~0.6 s after a chip click, every native click the document
+  // sees on a chip, every run of a chip's handler (same event ids, so a
+  // handler run twice for one event shows) and every filter-state change, each
+  // tagged with this panel instance's id (a remount shows as a new id). The
+  // trace renders under the filter row. Remove once the cause is found.
+  const diagPanelId = useRef(Math.random().toString(36).slice(2, 6));
+  const [chipDiag, setChipDiag] = useState<string[]>(chipDiagBus.last);
+  useEffect(() => {
+    chipDiagBus.subs.add(setChipDiag);
+    return () => {
+      chipDiagBus.subs.delete(setChipDiag);
+    };
+  }, []);
+  const diagNote = (line: string) => chipDiagNote(`panel=${diagPanelId.current} ${line}`);
+  const diagEvent = chipDiagEvent;
+  const diagChip = (key: string, ev: Event) => {
+    const stack = (new Error().stack ?? "")
+      .split("\n")
+      .slice(2, 6)
+      .map((l) => l.trim().replace(/\(?https?:\/\/[^/]+\//, "("))
+      .join(" < ");
+    diagNote(`handler "${key}" ${diagEvent(ev)} | ${stack}`);
+  };
+  useEffect(() => {
+    const onDoc = (ev: Event) => {
+      const chip = ev.target instanceof Element ? ev.target.closest(".ollama-filters .seg > button") : null;
+      if (chip) diagNote(`document ${diagEvent(ev)} on "${chip.textContent ?? ""}"`);
+    };
+    for (const type of ["pointerdown", "click"]) document.addEventListener(type, onDoc, true);
+    return () => {
+      for (const type of ["pointerdown", "click"]) document.removeEventListener(type, onDoc, true);
+    };
+    // Mount-only: `diagNote` reads refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (chipDiagBus.run) diagNote(`state ${regFilterKey}`);
+  }, [regFilterKey]);
+  useEffect(() => {
+    // Only inside a click's trace: a remount mid-click shows, an open does not.
+    if (chipDiagBus.run) diagNote("mounted");
+    return () => {
+      if (chipDiagBus.run) diagNote("unmounted");
+    };
+  }, []);
 
   // Fetch one page of ollama.com/search results. `reset` replaces the list
   // (new query/filter/sort); otherwise it appends, de-duping by name across
@@ -985,7 +1093,15 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
     <div className="ollama-filter-group">
       <span className="ollama-filter-label">{label}</span>
       <div className="seg" role="group" aria-label={label}>
-        <button type="button" className={anyActive ? "active" : ""} aria-pressed={anyActive} onClick={onAny}>
+        <button
+          type="button"
+          className={anyActive ? "active" : ""}
+          aria-pressed={anyActive}
+          onClick={(e) => {
+            diagChip(`${label}/any`, e.nativeEvent);
+            onAny();
+          }}
+        >
           {t("ollama.any")}
         </button>
         {items.map((it) => (
@@ -994,7 +1110,10 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
             type="button"
             className={it.active ? "active" : ""}
             aria-pressed={it.active}
-            onClick={it.toggle}
+            onClick={(e) => {
+              diagChip(it.key, e.nativeEvent);
+              it.toggle();
+            }}
           >
             {it.label}
           </button>
@@ -1482,6 +1601,17 @@ export function OllamaPanel({ onBack, onClose }: SubPanelProps) {
           />
         </label>
       </div>
+      {chipDiag.length > 0 && (
+        <div className="ollama-chip-diag">
+          <div className="ollama-chip-diag-head">
+            {t("ollama.chipDiag")}
+            <button type="button" className="ollama-action-btn" onClick={() => setChipDiag([])}>
+              {t("common.close")}
+            </button>
+          </div>
+          <pre>{chipDiag.join("\n")}</pre>
+        </div>
+      )}
 
       {regError && (
         <div className="ollama-reg-error">

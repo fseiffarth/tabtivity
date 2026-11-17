@@ -384,7 +384,7 @@ pub async fn mobile_admin(ctx: Ctx, request: AdminRequest) -> Result<AdminRespon
 /// The admin plane of this state dir's sidecar.
 async fn admin_call_here(request: &AdminRequest) -> Result<AdminResponse, String> {
     admin::admin_call(
-        &storage::state_dir().join("mobile-control/admin.sock"),
+        &crate::services::mobile_control::config::admin_socket(&storage::state_dir()),
         request,
     )
     .await
@@ -722,8 +722,25 @@ pub(crate) fn install_binary_copy(source: &Path, target_dir: &Path, leaf: &str) 
         .as_file()
         .sync_all()
         .map_err(|error| format!("stage mobile host: {error}"))?;
-    if target.exists() {
-        let _ = std::fs::remove_file(&target);
+    // Leftovers of earlier moves-aside whose process has since exited.
+    if let Ok(entries) = std::fs::read_dir(target_dir) {
+        let prefix = format!("{leaf}.old-");
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    // A process still running from the target (a host the stop could not
+    // reach) makes it undeletable, but Windows lets a running image be
+    // renamed: move it aside so the new copy can take its name.
+    if target.exists() && std::fs::remove_file(&target).is_err() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos());
+        let aside = target_dir.join(format!("{leaf}.old-{stamp}"));
+        std::fs::rename(&target, &aside)
+            .map_err(|error| format!("install mobile host: {} is in use: {error}", target.display()))?;
     }
     staged
         .persist(&target)
@@ -1633,7 +1650,7 @@ const DESKTOP_BRIDGE_BIND_TRIES: u32 = 5;
 
 #[cfg(unix)]
 pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
-    let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
+    let socket = crate::services::mobile_control::config::desktop_socket(&storage::state_dir());
     app_core::rt::spawn(async move {
         use std::os::unix::fs::PermissionsExt;
         if let Some(parent) = socket.parent() {
@@ -1691,7 +1708,7 @@ pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
 #[cfg(windows)]
 pub fn start_desktop_bridge(ctx: CoreCtx, state: MobileDesktopState) {
     use crate::services::mobile_control::admin::pipe;
-    let socket = storage::state_dir().join("mobile-control/desktop-control.sock");
+    let socket = crate::services::mobile_control::config::desktop_socket(&storage::state_dir());
     app_core::rt::spawn(async move {
         use crate::services::local_pipe;
         let name = pipe::pipe_name(&socket);

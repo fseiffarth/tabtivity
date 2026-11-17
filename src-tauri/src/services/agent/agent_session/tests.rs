@@ -846,6 +846,55 @@ fn the_powershell_hook_refuses_a_nested_claudes_resume() {
     assert_eq!(opens, closes);
 }
 
+/// The PowerShell twin records a backgrounded call's task id like the POSIX
+/// one, so the Windows job scan can know it mid-turn; run for real on Windows.
+#[test]
+fn the_powershell_hook_records_background_task_ids() {
+    let body = powershell_hook_script_body(r"C:\live", "app.exe");
+    let at = body.find("if ($event -eq 'PostToolUse') {").expect("the .bg block");
+    let turn_write = body.rfind("[IO.File]::WriteAllText(($rec + '.turn')").unwrap();
+    assert!(at < turn_write, "written before the turn record the scan wakes on");
+    assert!(body[at..].contains(r#"'"backgroundTaskId"\s*:\s*"([A-Za-z0-9]+)"'"#));
+    assert!(body[at..].contains("-Tail 15"));
+}
+
+#[cfg(windows)]
+#[test]
+fn the_powershell_hook_writes_the_bg_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let script = dir.path().join("hook.ps1");
+    std::fs::write(&script, powershell_hook_script_body(&live.to_string_lossy(), "app.exe")).unwrap();
+    let uid = "77777777-7777-4777-8777-777777777777";
+    let run = |extra: &str| {
+        use std::io::Write;
+        let mut child = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .env(crate::app_env!("TAB_UID"), uid)
+            .env(crate::app_env!("TAB_AGENT"), "claude")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let payload = format!(r#"{{"session_id":"{uid}","hook_event_name":"PostToolUse"{extra}}}"#);
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+    };
+    let bg = || std::fs::read_to_string(live.join(format!("{uid}.bg"))).ok();
+    run(r#","tool_name":"PowerShell","tool_response":{"stdout":"{\"backgroundTaskId\":\"zzz9\"}"}"#);
+    assert_eq!(bg(), None, "a quoted field in the output is not the result's");
+    for i in 0..18 {
+        run(&format!(r#","tool_name":"PowerShell","tool_response":{{"stdout":"","backgroundTaskId":"t{i}"}}"#));
+    }
+    let kept: Vec<String> = bg().unwrap().lines().map(str::to_string).collect();
+    assert_eq!(kept, (2..18).map(|i| format!("t{i}")).collect::<Vec<_>>(), "the last sixteen");
+    assert_eq!(
+        std::fs::read_to_string(live.join(format!("{uid}.turn"))).unwrap().split(' ').next(),
+        Some("working")
+    );
+}
+
 /// `/fork` starts a thread with no `SessionStart` the matcher lets through, so
 /// the fork's rollout is what moves the record (Codex 0.166.0, payloads and
 /// rollout header as captured). The move comes on the fork's first event, or a

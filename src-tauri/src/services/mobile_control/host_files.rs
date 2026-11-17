@@ -418,7 +418,7 @@ pub async fn list_on(sftp: &Sftp, root: &str, rel: &str, host_key: &[u8], raw_id
     let dir = proven(&mut fs, root, rel).await?;
     let (rows, truncated) = kept_rows(read_rows(&mut fs, &dir).await?);
     let entries = entries_of(sftp, &dir, rel, rows, host_key, raw_id).await?;
-    Ok(Listing { entries, truncated })
+    Ok(Listing { entries, truncated, git_unread: false })
 }
 
 /// One file's bytes and media type, bounded as the local [`files::read`].
