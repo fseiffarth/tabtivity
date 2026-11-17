@@ -85,6 +85,39 @@ describe("phone mail writes", () => {
     expect(screen.getByLabelText("Star").getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("shows a message the desktop marked read on opening as read in the list", async () => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === "/api/v1/mail") {
+        return { mail: { view: "overview", accounts: [{ id: "acc", label: "Work", address: "me@example.test", folders: [folderView(false).folder] }], actions: true } };
+      }
+      if (path.endsWith("/messages/msg-1?offset=0")) return { mail: messageView(true) };
+      if (path.startsWith("/api/v1/mail/folders/folder-1?")) return { mail: folderView(false) };
+      throw new Error(`unexpected ${path}`);
+    });
+    render(createElement(Mail));
+    fireEvent.click(await screen.findByText("Inbox"));
+    const row = (await screen.findByText("Meeting")).closest("button")!;
+    expect(row.classList.contains("unread")).toBe(true);
+    fireEvent.click(row);
+    await screen.findByLabelText("Mark unread");
+    fireEvent.click(screen.getByRole("button", { name: /Inbox/ }));
+    await waitFor(() => expect(screen.getByText("Meeting").closest("button")!.classList.contains("unread")).toBe(false));
+  });
+
+  it("refreshes an open message from its folder page, so a mark-unread is not undone", async () => {
+    await openMessage({ actions: true });
+    const paths: string[] = [];
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      paths.push(path);
+      return { mail: folderView(false) };
+    });
+    fireEvent.click(screen.getByLabelText("Refresh"));
+    await waitFor(() => expect(paths).toEqual(["/api/v1/mail/folders/folder-1?offset=0"]));
+    // Still on the message, still unread.
+    expect(await screen.findByLabelText("Mark read")).toBeTruthy();
+    expect(screen.getByText("Are we on?", { selector: "pre" })).toBeTruthy();
+  });
+
   it("explains a desktop-side refusal instead of echoing the code", async () => {
     await openMessage({ actions: true });
     vi.mocked(api).mockRejectedValue(new ApiError(403, "mail_actions_disabled"));

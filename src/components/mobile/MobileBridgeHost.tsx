@@ -2416,11 +2416,17 @@ async function mailMessage(folderId: string, messageId: string, offset: number):
     ? new DOMParser().parseFromString(body.html, "text/html").body.textContent ?? ""
     : "");
   const bounded = boundedText(source, MAIL_BODY_BYTES);
+  // Opening a message reads it, as the desktop's own reader does — but marking
+  // it read is a write, so only while the phone's mail actions are on. The
+  // store's `setFlag` patches the desktop's list and recounts its folders; the
+  // server round trip is not waited for (a refusal lands in the store's error).
+  const markRead = !header.seen && mailWriteGates().actions;
+  if (markRead) void useMailStore.getState().setFlag(header.id, "seen", true);
   return {
     status: "mail",
     mail: {
       view: "message",
-      message: await publicMailHeader(header),
+      message: await publicMailHeader(markRead ? { ...header, seen: true } : header),
       body: bounded.value,
       truncated: !!body.truncated || bounded.truncated,
       attachments: body.attachments.slice(0, 40).map((attachment) => ({

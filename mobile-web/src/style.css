@@ -464,6 +464,8 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .screen-head h1 { min-width:0; overflow-wrap:anywhere; unicode-bidi:plaintext; }
 .screen-head-main { display:grid; flex:1 1 auto; min-width:0; align-self:center; }
 .screen-head-title { display:flex; flex-wrap:wrap; align-items:center; column-gap:var(--sp-2); }
+.screen-head-backrow { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-2); }
+.screen-head-compact h1 { font-size:var(--fs-title); line-height:1.25; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; overflow:hidden; }
 .screen-head-back { display:inline-flex; align-items:center; align-self:flex-start; gap:var(--sp-1); min-height:var(--hit); margin-left:calc(-1 * var(--sp-2)); padding:0 var(--sp-3) 0 var(--sp-1); border:0; border-radius:var(--r-md); background:transparent; color:#bcb0ff; font-size:var(--fs-body); font-weight:600; }
 .screen-head-back > .app-icon { width:20px; height:20px; }
 .screen-head-back > .app-icon g { stroke-width:2; }

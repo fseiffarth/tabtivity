@@ -153,6 +153,16 @@ export function Mail() {
       const { mail } = await api<{ mail: MobileMailView }>(`/api/v1/mail/folders/${encodeURIComponent(folder.folder.id)}/messages/${encodeURIComponent(target.id)}?offset=${folder.offset}`, undefined, MAIL_MESSAGE_TIMEOUT);
       if (mail.view !== "message") throw new Error("unexpected_mail_view");
       setMessage(mail); setReply(""); setConfirmReply(false); setSent(false);
+      // The desktop marked it read on the way (when the phone's mail actions
+      // are on): the list and the counts follow its answer, not a re-read.
+      if (mail.message.seen && !target.seen) {
+        const unread = Math.max(0, folder.folder.unread - 1);
+        takeFolder({
+          ...folder,
+          folder: { ...folder.folder, unread },
+          messages: folder.messages.map((item) => item.id === target.id ? { ...item, seen: true } : item),
+        });
+      }
     } catch (reason) { setError(writeError(reason)); } finally { setBusy(false); }
   };
 
@@ -268,6 +278,15 @@ export function Mail() {
     } catch (reason) { setError(writeError(reason)); } finally { setBusy(false); }
   };
 
+  const refreshOpenMessage = async () => {
+    if (!folder) return;
+    setBusy(true); setError("");
+    try {
+      const { mail } = await reloadPage(folder)();
+      absorbPage(mail);
+    } catch (reason) { setError(writeError(reason)); } finally { setBusy(false); }
+  };
+
   const sendReply = async () => {
     if (!folder || !message) return;
     setBusy(true); setError(""); setConfirmReply(false);
@@ -300,8 +319,11 @@ export function Mail() {
     if (!inStack || !host) return;
     return installFocusSwipe(host, { onSwipeRight: stepBack, onSwipeLeft: () => {} }, { ignore: ".sheet-backdrop, [role='dialog']" });
   }, [inStack]);
+  // On an open message, Refresh re-reads its folder page, not the message:
+  // opening it again would mark read what the user just marked unread, and
+  // drop a reply being typed.
   const refresh = () => {
-    if (message) void loadMessage(message.message);
+    if (message && folder) void refreshOpenMessage();
     else if (folder) void loadFolder(folder.folder, folder.offset);
     else void loadOverview();
   };
@@ -337,7 +359,7 @@ export function Mail() {
       title={message ? safeText(message.message.subject) || t("mobile.mail.noSubject") : folder ? safeText(folder.folder.name) : t("mobile.mail.title")}
       subtitle={subtitle}
       back={goBack ? { label: message && folder ? safeText(folder.folder.name) : t("mobile.mail.title"), onClick: goBack } : undefined}
-      actions={actions}
+      actions={actions} compact={!!message}
       onRefresh={refresh} refreshing={busy} untested={isUntested("mobile.design.mail")} />
     <HintQueue hints={MAIL_TIPS} />
     {error && <p className="error">{error}</p>}
