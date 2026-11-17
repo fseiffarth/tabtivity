@@ -5864,15 +5864,31 @@ select.file-viewer-run-args-input {
 .file-viewer-pdf-sync-highlight {
   position: absolute;
   pointer-events: none;
-  background: color-mix(in srgb, var(--accent) 38%, transparent);
-  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+  /* Drawn past the glyphs it covers (an outline takes no layout space), so a
+     one-word box still reads at a glance. */
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
   border-radius: 2px;
-  animation: file-viewer-pdf-sync-fade 1.6s ease-out forwards;
+  animation: file-viewer-pdf-sync-fade 3.2s ease-in forwards;
 }
 
+/* The whole SyncTeX line behind a box narrowed to the clicked word. */
+.file-viewer-pdf-sync-line {
+  position: absolute;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-radius: 2px;
+  animation: file-viewer-pdf-sync-fade 3.2s ease-in forwards;
+}
+
+/* Every SyncTeX mark is fully visible from its first frame and only fades at
+   the end. A mark must never depend on its animation running to be seen: a
+   paused one (`[data-blurred]` pauses every animation) or one cut short sits
+   on its first keyframe, so that keyframe is the visible one. The component
+   takes the mark down after the same length (`SYNC_HIGHLIGHT_MS`). */
 @keyframes file-viewer-pdf-sync-fade {
-  0% { opacity: 0; }
-  15% { opacity: 1; }
+  0%, 65% { opacity: 1; }
   100% { opacity: 0; }
 }
 
@@ -5892,9 +5908,10 @@ select.file-viewer-run-args-input {
   animation: file-viewer-pdf-click-fade 2s ease-out forwards;
 }
 
+/* Visible from the first frame, like the sync fade above: paused, it still shows. */
 @keyframes file-viewer-pdf-click-fade {
-  0% { opacity: 0; transform: scale(0.4); }
-  12% { opacity: 1; transform: scale(1); }
+  0% { opacity: 1; transform: scale(1); }
+  60% { opacity: 1; transform: scale(1.3); }
   100% { opacity: 0; transform: scale(1.7); }
 }
 
@@ -6017,7 +6034,8 @@ select.file-viewer-run-args-input {
   }
   /* Hold a static highlight briefly rather than animating its opacity. */
   .file-viewer-pdf-dest-mark,
-  .file-viewer-pdf-sync-highlight {
+  .file-viewer-pdf-sync-highlight,
+  .file-viewer-pdf-sync-line {
     animation: none;
     opacity: 1;
   }

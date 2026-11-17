@@ -758,12 +758,12 @@ export function PdfPageCanvas({
 
   const syncTarget = highlight ? refined ?? highlight.rect : null;
   const syncView = geom?.page ? syncViewports(geom.page, scale, rot) : null;
-  const box =
-    syncTarget && geom
-      ? syncView
-        ? syncRectToViewport(syncTarget, syncView.turned, syncView.unturned)
-        : bigPointsToCssRect(syncTarget, scale)
-      : null;
+  const toCss = (r: SyncRect) =>
+    syncView ? syncRectToViewport(r, syncView.turned, syncView.unturned) : bigPointsToCssRect(r, scale);
+  const box = syncTarget && geom ? toCss(syncTarget) : null;
+  // The whole SyncTeX line under a box narrowed to one word: a word-sized mark
+  // alone is easy to lose on a full page, the tinted line is not.
+  const lineBox = box && refined && highlight ? toCss(highlight.rect) : null;
 
   return (
     <div
@@ -890,6 +890,13 @@ export function PdfPageCanvas({
           aria-hidden="true"
         />
       )}
+      {lineBox && (
+        <div
+          key={`line-${highlight!.nonce}`}
+          className="file-viewer-pdf-sync-line"
+          style={{ left: lineBox.left, top: lineBox.top, width: lineBox.width, height: lineBox.height }}
+        />
+      )}
       {box && (
         <div
           key={highlight!.nonce}
@@ -902,6 +909,7 @@ export function PdfPageCanvas({
         // Untested pills ride the mark they are about, for as long as it is up.
         <span className="file-viewer-pdf-sync-pills" style={{ left: box.left, top: box.top + box.height + 2 }}>
           <UntestedTag id="pdfViewer.syncHighlightClears" />
+          <UntestedTag id="pdfViewer.syncMarkVisible" />
           {syncView && syncView.turned.rotation !== 0 && <UntestedTag id="pdfViewer.syncTurnedPage" />}
         </span>
       )}
