@@ -627,6 +627,19 @@ Claude's `/fast` — different thing.
   as the bare edge (`LABELLED_DIALOG_EDGE`, `MobileReadableScreen.test.ts`),
   and all 77 picker frames are titled. Not exercised: a live tab, the phone, a
   real sign-in.
+- **2.1.325 (2026-11-15), partial, on Windows, beside 2.1.323** (`npm pack
+  @anthropic-ai/claude-code-win32-x64`; no tmux, no login) — `VERIFIED` stays
+  2.1.323. `--help` and every subcommand's help identical; the binary's hook
+  event, permission-mode, notification-type and model-alias arrays identical.
+  Without a login: SessionStart (startup, resume), UserPromptSubmit and
+  SessionEnd keys identical, transcript record types identical, `-p --resume`
+  of `plan`/`manual` still `default`, the unauthenticated `/usage` envelope
+  identical. Still owed on Linux: Stop/PostToolUse/PermissionRequest/
+  Notification payloads (`hooks.sh`, `sedcheck.py`), the `/usage` panel, and
+  `prompt.py` at 42/60 columns — 2.1.325 changed how wrapped permission-prompt
+  options are drawn. Also: a `-p` with no cached account data now waits a few
+  seconds before its first request; watch `agent_usage`'s 15 s timeout in a
+  fresh agent home.
 
 **Verify**
 
@@ -1151,7 +1164,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 
 | Agent | Resume flag | Warm-up | Install |
 |-------|-------------|---------|---------|
-| Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh` |
+| Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh`; Windows: Astral's `install.ps1` then `uv tool install --upgrade --python cpython-3.14+gil mistral-vibe` (no vendor `install.ps1`; re-check against `install.sh`'s uv/Python pins) |
 | OpenCode | `--continue` | `run` | `curl … opencode.ai/v2/install` (also writes `opencode2`, shimmed by `agent_bin::VENDOR_ALIASES`) / `npm i -g @opencode/cli` |
 | Copilot | `--session-id <tab uuid>` (`copilot_session::resolve`; `--continue` only on a remote tab) | `-p` | `npm i -g @github/copilot` |
 | Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |
@@ -1371,6 +1384,24 @@ at once, so a second writer is kept out; Tabtivity spawns by `--session-id`
 and runs no `-p --resume` beside a tab. Enter pressed twice on a permission
 prompt no longer warns. Real sign-in, model pickers and a model's own output
 were not exercised.
+
+Re-checked **1.0.112** (2026-11-15, on Windows: `npm pack
+@github/copilot-win32-x64`, beside 1.0.110; no tmux, so `screens.sh` and the
+frame replay were not run). No flag added or removed (`--help` rewords
+`--allow-tool`/`--deny-tool` only); `-p`, `--session-id`, `--continue` worded
+as before; `login --help` identical. `copilot-events-probe.py` against the
+stub: the same 9 of 13 pass on both, the other 4 are the probe's own Windows
+gaps (a `/bin/sh` hook; backslash `fileEdits` paths against `a/C:/…` diff
+headers); a `powershell` sessionStart hook gets `{cwd, initialPrompt,
+sessionId, source, timestamp}` on both. `-p --continue` appends to the newest
+session. The event schema's 242 types and every field Tabtivity reads are
+unchanged; `authTokens`/`lastLoggedInUser`/`storeTokenPlaintext` sit in the
+Windows runtime as in 1.0.110. Both runtimes also accept an object-valued
+`authTokens` entry (`{ token, expiresAt }`, Entra); `copilot_auth` reads
+string values only, so check the shape on the next real `/login`. Changelog
+items near Tabtivity: an unreadable `config.json` is no longer replaced at
+startup; permission prompts in short terminals keep title and selection
+visible (PgUp/PgDn) — the narrow-width prompt read is unverified this round.
 
 The `tabtivity-send` hint (`services/agent_hint.rs`, 2026-10-01) leans on each
 CLI's session-start context channel; re-check it on update. Gemini, Qwen,
@@ -1939,6 +1970,15 @@ Tabtivity neither reads nor sets Antigravity's mode, so a tab now asks less
 by Antigravity's own choice. 1.5.8 also adds click-to-expand in the altscreen
 rendering mode (not the default) and `agy acp` context updates. Not reached:
 swarms and a real sign-in.
+1.5.9 on 2026-11-15, partial, on Windows (the manifest's Windows exe, sha512
+checked; 1.5.8 by its execution id; no tmux) — `VERIFIED` stays 1.5.8:
+`--help` and every subcommand's help identical, `agy models` the same 21 ids,
+`-p` then `-c -p` against the stub one conversation of three turns, `store.py`
+identical schemas, `agy update` from a read-only folder exit 1 with the reason.
+Changelog: `/resume <id>` takes a unique prefix (Tabtivity relaunches with
+`--conversation`), a BOM in `settings.json` handled, bad window-size reports
+ignored. Still owed on Linux: `main.py`/`second.py`/`signin.py` frames — the
+footer and the `/model` dialog this row covers.
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row

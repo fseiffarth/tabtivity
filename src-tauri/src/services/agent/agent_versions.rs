@@ -149,7 +149,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "copilot",
-        version: "1.0.110",
+        version: "1.0.112",
         surface: "§1.5 — -p/--session-id/--continue, session-state store, authTokens login layout",
     },
     Verified {
