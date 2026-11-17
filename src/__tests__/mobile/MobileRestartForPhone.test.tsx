@@ -112,9 +112,21 @@ describe("Mobile bridge — an agent tab started before Mobile access", () => {
     expect(tabNow()?.relaunchSeq).toBeUndefined();
   });
 
-  it("says a wrapped tab whose session ended is gone instead of restarting it", async () => {
+  it.each(["claude", "codex"])("resumes a previously wrapped %s tab whose terminal disappeared", async (cmd) => {
+    useTabsStore.setState({ tabsByScope: { [project.id]: [agentTab({ cmd })] } });
     mobileAgentTmuxReady.set(mobileTmuxReadyKey(project.id, "agent-1"), true);
-    expect(await openFromPhone()).toMatchObject({ status: "error", code: "session_gone" });
+    expect(await openFromPhone()).toMatchObject({ status: "activated" });
+    expect(tabNow()?.relaunchSeq).toBe(1);
+    expect(tabNow()?.args).toEqual(RESUMABLE_AGENTS[cmd](SESSION));
+    // A stale phone catalog can miss a surviving terminal. The launch uses
+    // create-or-attach; it must never kill that terminal to resume it.
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "local_tmux_kill")).toBe(false);
+  });
+
+  it("still refuses to restart a wrapped agent while it is working", async () => {
+    mobileAgentTmuxReady.set(mobileTmuxReadyKey(project.id, "agent-1"), true);
+    useActivityStore.setState({ busyByTab: { [`${project.id}:agent-1`]: true } });
+    expect(await openFromPhone()).toMatchObject({ status: "error", code: "agent_busy" });
     expect(tabNow()?.relaunchSeq).toBeUndefined();
   });
 

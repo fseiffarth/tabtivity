@@ -1362,9 +1362,12 @@ async function activate(projectId: string, tmuxSession?: string): Promise<Deskto
  * its minted tmux session, and the phone's next catalog read finds it live.
  *
  * Returns why not, or null when the tab is (or is about to be) coming up:
- * `session_gone` when there is nothing to bring back — the tab is wrapped
- * already and its session ended, or tmux never wraps it here (root, a remote
- * host, Windows, persistent sessions off); `tab_not_resumable` when a respawn
+ * A previously wrapped tab whose session disappeared resumes the same way:
+ * the persistent-session launch attaches if it is still alive, or creates it
+ * with the saved resume args if it ended.
+ *
+ * `session_gone` when tmux never wraps it here (root, a remote host, persistent
+ * sessions off); `tab_not_resumable` when a respawn
  * would lose its conversation; `agent_busy` while it works or waits on a
  * question, which a respawn would cut off.
  */
@@ -1380,7 +1383,7 @@ function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string |
   // Not drawn yet (a scope `enterScope` just restored): its first render
   // stamps the switch, which is on, and the spawn is wrapped.
   if (ready === undefined) return null;
-  if (ready || (tab.kind !== "agent" && tab.kind !== "local_agent") || scope.id === ROOT_SCOPE) return "session_gone";
+  if ((tab.kind !== "agent" && tab.kind !== "local_agent") || scope.id === ROOT_SCOPE) return "session_gone";
   const localPersist = localSessionsAvailableNow();
   if (!localPersist || tab.login) return "session_gone";
   if (!isResumableAgentTab(tab)) return "tab_not_resumable";
