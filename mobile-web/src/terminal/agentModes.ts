@@ -25,11 +25,10 @@
  * a session that ignores it and then reported a failed switch.
  *
  * Deliberately absent:
- *   - Vibe / Copilot / Crush / Cline — full-screen (alternate-screen) TUIs;
- *     the Focus view already hands those to the Terminal view. Copilot has
- *     drawn one unconditionally since 1.0.12, and Qwen Code does too by
- *     default since `ui.useTerminalBuffer` (0.23). Plain `opencode` is one of
- *     them; only `opencode --mini` writes scrollback, and only that is what
+ *   - Vibe / Crush / Cline — full-screen (alternate-screen) TUIs;
+ *     the Focus view already hands those to the Terminal view. Qwen Code
+ *     draws one by default since `ui.useTerminalBuffer` (0.23). Plain
+ *     `opencode` is one of them; only `opencode --mini` writes scrollback, and only that is what
  *     the OpenCode family below reads.
  *   - Agents whose mode is not on Shift+Tab: Amp (Ctrl+S), Goose and
  *     mini-SWE-agent (a slash command each), Aider (the prompt prefix is the
@@ -185,7 +184,25 @@ const ANTIGRAVITY: ModeFamily = {
   ],
 };
 
-const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE, ANTIGRAVITY];
+
+/** GitHub Copilot CLI: the execution mode its footer names first
+ * (`Interactive · Manual Approval · …`) and Shift+Tab cycles — Interactive,
+ * Plan, Autopilot, round again — verified on 1.0.112 with the legacy backtab.
+ * Its approval setting (`Manual Approval`, `Assisted Permissions`, `Allow All`)
+ * is the second segment and a `/permissions` command, not on that cycle, so it
+ * is not a choice here. The footer always names a mode (none while a turn
+ * runs, when it shows the working hint instead), so none is `silent`. "plan"
+ * is `labelled`: it is Claude Code's, Codex's, Qwen's and Gemini's word too. */
+const COPILOT: ModeFamily = {
+  agent: /copilot/iu,
+  choices: [
+    { value: "interactive", label: "mobile.mode.interactive", description: "mobile.mode.interactiveHint" },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
+    { value: "autopilot", label: "mobile.mode.autopilot", description: "mobile.mode.autopilotHint" },
+  ],
+};
+
+const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE, ANTIGRAVITY, COPILOT];
 
 function claims(choice: Pick<ModeChoice, "value" | "aliases">, mode: string) {
   return choice.value === mode || (choice.aliases?.includes(mode) ?? false);

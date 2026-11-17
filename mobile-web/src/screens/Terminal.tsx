@@ -89,6 +89,7 @@ import {
   type SelectPrompt,
   type SelectStep,
 } from "../terminal/selectPrompt";
+import { isCopilotTab } from "../terminal/copilotStatus";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../terminal/openCodeMini";
 import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
 import { isAntigravityTab } from "../terminal/antigravity";
@@ -2973,6 +2974,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {modeOffered(agentLabel) && <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>}
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+          {tab.kind === "agent" && isCopilotTab(agentLabel) && status && isUntested("mobile.focus.copilotStatus") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(isUntested("mobile.design.rounded") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         </>}
         {tab.worktree && <span className="fact-worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: tab.worktree.label })}</span>}

@@ -26,6 +26,7 @@ import {
 } from "./antigravity";
 import { codexModelSegment, codexOutputRow, codexPathTruncated, isCodexTab } from "./codexFooter";
 import { isMuseTab, museStatus } from "./muse";
+import { isCopilotTab, readCopilotFrame } from "./copilotStatus";
 import {
   isOpenCodeHomeFooter,
   isOpenCodeTab,
@@ -525,6 +526,12 @@ export function sessionStatus(
   if (antigravity) return antigravity.status;
   const muse = isMuseTab(agentLabel) ? museStatus(lines, SEARCH_WINDOW) : null;
   if (muse) return muse;
+  // Copilot keeps its path and branch over the box and its model under it.
+  const copilot = readCopilotFrame(lines, agentLabel);
+  if (copilot) return copilot.status;
+  // Without its footer a Copilot screen is a dialog (`/statusline` previews a
+  // model of its own), not a frame: nothing under a `❯` is a status.
+  if (isCopilotTab(agentLabel)) return null;
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return null;
   const bottom = agentListStart(lines);
   let inputIndex = -1;
@@ -627,6 +634,8 @@ export function inputFrameStart(
   // sheet is already showing its rows. Without one the ordinary scan below
   // finds the box on its own.
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return lines.length;
+  const copilot = readCopilotFrame(lines, agentLabel);
+  if (copilot) return copilot.start;
   const antigravity = antigravityFrame(lines, agentLabel);
   let start = antigravity?.start ?? -1;
   const bottom = agentListStart(lines);
