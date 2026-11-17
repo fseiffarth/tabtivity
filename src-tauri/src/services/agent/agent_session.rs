@@ -3077,6 +3077,20 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
          \x20 'Notification' {{ if (@('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input') -contains $ntype) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
          }}\r\n\
+         # A call put in the background leaves its task id for the job scan, the\r\n\
+         # last few kept, before the turn record (see the POSIX twin). A field\r\n\
+         # quoted inside a tool's output is escaped and never matches.\r\n\
+         if ($event -eq 'PostToolUse') {{\r\n\
+         \x20 $mb = [regex]::Match($payload, '\"backgroundTaskId\"\\s*:\\s*\"([A-Za-z0-9]+)\"')\r\n\
+         \x20 if ($mb.Success) {{\r\n\
+         \x20   $bgf = $rec + '.bg'\r\n\
+         \x20   $ids = @()\r\n\
+         \x20   if (Test-Path -LiteralPath $bgf) {{ $ids = @(Get-Content -LiteralPath $bgf -Tail 15) }}\r\n\
+         \x20   $tmp = $bgf + '.' + $PID\r\n\
+         \x20   [IO.File]::WriteAllText($tmp, ((@($ids) + $mb.Groups[1].Value) -join \"`n\") + \"`n\")\r\n\
+         \x20   Move-Item -LiteralPath $tmp -Destination $bgf -Force\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
          if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
          # A prompt in the conversation a /clear started ends that clear's undo\r\n\
          # (see the POSIX twin).\r\n\
