@@ -7,6 +7,12 @@
 import type { Dict } from "./index";
 
 export const dict: Dict = {
+  "appLink.unavailable": "Cette destination n’est plus disponible.",
+  "appLink.copy": "Copier le lien",
+  "appLink.copied": "Lien copié",
+  "appLink.copyFailed": "Impossible de copier le lien",
+  "appLink.desktopOnly":
+    "Ouvrez ce lien dans l’application de bureau. La navigation vers cette destination n’est pas encore disponible sur le téléphone.",
   "mobile.pair.title": "Connecter ce téléphone",
   "mobile.pair.intro": "Saisissez le code à usage unique affiché dans les réglages de {app}. Ce téléphone pourra contrôler les terminaux des projets que vous autorisez.",
   "mobile.pair.finishHint": "Téléphone connecté. Terminez la configuration de son verrouillage.",
@@ -135,6 +141,11 @@ export const dict: Dict = {
   "gitPushMcp.ciStatus.expired": "Lecture CI de l'agent · expirée",
   "gitPushMcp.ciAllowTitle": "Autoriser la CI pour {repo}",
   "gitPushMcp.ciAllowHelp": "Un agent a demandé à lire les exécutions GitHub Actions, les journaux de jobs ou les alertes code scanning de ce dépôt avec votre jeton enregistré. Ce n'est pas le dépôt confirmé pour les push de ce projet. N'autorisez que s'il s'agit du dépôt propre à ce projet.",
+  "gitPushMcp.hooksReview":
+    "Le hook pre-push de ce dépôt s’exécute sur votre ordinateur avant le push et vous ne l’avez pas encore approuvé. Examinez-le une fois ; le push se relance ensuite tout seul.",
+  "gitPushMcp.hooksChanged":
+    "Les hooks de ce dépôt ont changé depuis votre approbation, le hook pre-push ne s’est donc pas exécuté. Examinez-les à nouveau ; le push se relance ensuite tout seul.",
+  "gitPushMcp.reviewHooks": "Examiner les hooks…",
   "gitPushMcp.ciAllow": "Autoriser",
   "gitPushMcp.dismiss": "Rejeter",
   "gitPushMcp.clear": "Effacer",
@@ -2917,6 +2928,15 @@ export const dict: Dict = {
   "fixedKeys.panels.label": "Basculer les panneaux",
   "fixedKeys.exitFullscreen.label": "Quitter le plein écran de sous-fenêtre",
 
+  "git.help":
+    "Un jeton d’accès par service d’hébergement (GitHub, GitLab, votre propre instance). {app} ne transmet chaque jeton qu’à son propre hôte, pour pousser, récupérer, cloner et publier. Les jetons sont conservés dans le trousseau de votre système.",
+  "git.profileUrlDefault": "URL du profil (hôte par défaut)",
+  "git.tokenStored": "Enregistré dans le trousseau — saisissez pour remplacer",
+  "git.removeToken": "Supprimer le jeton",
+  "git.removeHost": "Supprimer l’hôte",
+  "git.addHost": "Ajouter un hôte",
+  "git.projectOverrideHint":
+    "Un projet peut utiliser son propre jeton : menu de la pastille → Hébergement Git…. Un jeton limité à ce seul dépôt (jeton à granularité fine GitHub, jeton de projet GitLab) garde les push d’un agent sur ce dépôt.",
   "git.profileUrl": "URL du profil",
   "git.profileUrlPlaceholder": "https://github.com/moi ou https://gitlab.com/moi",
   "git.accessToken": "Jeton d'accès",

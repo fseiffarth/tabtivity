@@ -7,6 +7,12 @@
 import type { Dict } from "./index";
 
 export const dict: Dict = {
+  "appLink.unavailable": "Dieses Ziel ist nicht mehr verfügbar.",
+  "appLink.copy": "Link kopieren",
+  "appLink.copied": "Link kopiert",
+  "appLink.copyFailed": "Link konnte nicht kopiert werden",
+  "appLink.desktopOnly":
+    "Öffne diesen Link in der Desktop-App. Die Navigation zu diesem Ziel ist auf dem Handy noch nicht verfügbar.",
   "mobile.pair.title": "Dieses Handy verbinden",
   "mobile.pair.intro": "Gib den einmaligen Code aus den {app}-Einstellungen ein. Dieses Handy kann Terminals in freigegebenen Projekten steuern.",
   "mobile.pair.finishHint": "Das Handy ist verbunden. Schließe die Einrichtung der Sperre ab.",
@@ -135,6 +141,11 @@ export const dict: Dict = {
   "gitPushMcp.ciStatus.expired": "Agenten-CI-Abfrage · abgelaufen",
   "gitPushMcp.ciAllowTitle": "CI für {repo} erlauben",
   "gitPushMcp.ciAllowHelp": "Ein Agent möchte mit deinem gespeicherten Token die GitHub-Actions-Läufe, Job-Logs oder Code-Scanning-Warnungen dieses Repositorys lesen. Es ist nicht das für die Pushes dieses Projekts bestätigte Repository. Erlaube es nur, wenn es das eigene Repository dieses Projekts ist.",
+  "gitPushMcp.hooksReview":
+    "Der Pre-Push-Hook dieses Repos läuft vor dem Push auf deinem Computer und du hast ihn noch nicht freigegeben. Prüfe ihn einmal; danach läuft der Push von selbst erneut.",
+  "gitPushMcp.hooksChanged":
+    "Die Hooks dieses Repos haben sich seit deiner Freigabe geändert, deshalb lief der Pre-Push-Hook nicht. Prüfe sie erneut; danach läuft der Push von selbst erneut.",
+  "gitPushMcp.reviewHooks": "Hooks prüfen…",
   "gitPushMcp.ciAllow": "Erlauben",
   "gitPushMcp.dismiss": "Verwerfen",
   "gitPushMcp.clear": "Ausblenden",

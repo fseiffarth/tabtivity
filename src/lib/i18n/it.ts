@@ -7,6 +7,12 @@
 import type { Dict } from "./index";
 
 export const dict: Dict = {
+  "appLink.unavailable": "Questa destinazione non è più disponibile.",
+  "appLink.copy": "Copia link",
+  "appLink.copied": "Link copiato",
+  "appLink.copyFailed": "Impossibile copiare il link",
+  "appLink.desktopOnly":
+    "Apri questo link nell’app desktop. La navigazione verso questa destinazione non è ancora disponibile sul telefono.",
   "mobile.pair.title": "Collega questo telefono",
   "mobile.pair.intro": "Inserisci il codice monouso dalle impostazioni di {app}. Questo telefono potrà controllare i terminali dei progetti che autorizzi.",
   "mobile.pair.finishHint": "Telefono collegato. Completa la configurazione del blocco.",
@@ -135,6 +141,11 @@ export const dict: Dict = {
   "gitPushMcp.ciStatus.expired": "Lettura CI dell'agente · scaduta",
   "gitPushMcp.ciAllowTitle": "Consenti CI per {repo}",
   "gitPushMcp.ciAllowHelp": "Un agente ha chiesto di leggere le esecuzioni di GitHub Actions, i log dei job o gli avvisi di code scanning di questo repository con il tuo token salvato. Non è il repository confermato per i push di questo progetto. Consenti solo se è il repository di questo progetto.",
+  "gitPushMcp.hooksReview":
+    "L’hook pre-push di questo repository viene eseguito sul tuo computer prima del push e non l’hai ancora approvato. Controllalo una volta; poi il push riparte da solo.",
+  "gitPushMcp.hooksChanged":
+    "Gli hook di questo repository sono cambiati da quando li hai approvati, quindi l’hook pre-push non è stato eseguito. Controllali di nuovo; poi il push riparte da solo.",
+  "gitPushMcp.reviewHooks": "Controlla gli hook…",
   "gitPushMcp.ciAllow": "Consenti",
   "gitPushMcp.dismiss": "Scarta",
   "gitPushMcp.clear": "Rimuovi",
@@ -2915,6 +2926,15 @@ export const dict: Dict = {
   "fixedKeys.panels.label": "Attiva/disattiva pannelli",
   "fixedKeys.exitFullscreen.label": "Esci da schermo intero della sottofinestra",
 
+  "git.help":
+    "Un token di accesso per servizio di hosting (GitHub, GitLab, la tua istanza). {app} consegna ogni token solo al proprio host, per push, fetch, clonazione e pubblicazione. I token sono conservati nel portachiavi del sistema.",
+  "git.profileUrlDefault": "URL del profilo (host predefinito)",
+  "git.tokenStored": "Salvato nel portachiavi — digita per sostituire",
+  "git.removeToken": "Rimuovi token",
+  "git.removeHost": "Rimuovi host",
+  "git.addHost": "Aggiungi host",
+  "git.projectOverrideHint":
+    "Un progetto può usare un proprio token: menu della pillola → Hosting Git…. Un token limitato a quel solo repository (token granulare GitHub, token di progetto GitLab) mantiene i push di un agente su quel repository.",
   "git.profileUrl": "URL del profilo",
   "git.profileUrlPlaceholder": "https://github.com/me o https://gitlab.com/me",
   "git.accessToken": "Token di accesso",

@@ -19,7 +19,7 @@ it("keeps agent help destinations aligned with the settings registry", () => {
     "Search settings also offers Copy link beside each result. Prefer those links or the catalog below over guessing a destination. A removed control falls back to its containing page.", "",
     "<!-- Generated from settingsLinkTargets. Update with UPDATE_SETTINGS_LINKS=1 and the SettingsLinkCatalog test. -->", "",
     "| Page | Setting | Link |", "|---|---|---|",
-    ...targets.map((target) => `| ${target.entry} | ${target.label.replaceAll("|", "\\|")} | ${target.url} |`), "",
+    ...targets.map((target) => `| ${target.entry} | ${target.label.replace(/\|/g, "\\|")} | ${target.url} |`), "",
   ].join("\n");
   if (process.env.UPDATE_SETTINGS_LINKS === "1") writeFileSync(file, text);
   expect(readFileSync(file, "utf8").replaceAll("\r\n", "\n")).toBe(text);
