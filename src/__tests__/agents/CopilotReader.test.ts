@@ -72,6 +72,9 @@ describe("Copilot's screen in the Reader", () => {
   it("reads the footer's working row as work, and the idle footer as none", () => {
     expect(busyRow(" ◎ Working esc esc edit prompt                        stub")).toBe(true);
     expect(busyRow(" ○ Reading files esc esc edit prompt")).toBe(true);
+    // 1.0.106 on: the hint is `ctrl+c interrupt`, after what the turn received.
+    expect(busyRow(" ○ Working · 49 B ctrl+c interrupt                                       stub")).toBe(true);
+    expect(busyRow("Press ctrl+c interrupt to leave")).toBe(false);
     expect(busyRow(" ← open sidebar · Interactive · Manual Approval · / commands · ? help")).toBe(false);
     expect(readReaderLive(plainBuffer(WORKING), "Copilot", 120).working).not.toBeNull();
     const idle = readReaderLive(plainBuffer(IDLE), "Copilot", 120);
