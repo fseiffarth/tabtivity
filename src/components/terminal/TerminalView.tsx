@@ -62,6 +62,8 @@ import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
 import { findSignInDone, findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
+import { isAppLink, parseAppLink } from "../../lib/navigation/appLinks";
+import { openAppLink } from "../../lib/navigation/openAppLink";
 import { openPathLink } from "../../lib/terminal/pathLinks";
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
@@ -493,6 +495,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // a container's loopback cannot be reached yet.
   const openLinkRef = useRef<(url: string) => Promise<void>>(() => Promise.resolve());
   openLinkRef.current = async (url) => {
+    if (isAppLink(url)) {
+      const target = parseAppLink(url);
+      try {
+        if (!target || !await openAppLink(target)) toast(t("appLink.unavailable"));
+      } catch {
+        toast(t("appLink.unavailable"));
+      }
+      return;
+    }
     const route = routeLink(url, localityRef.current);
     if (route === "unsupported") {
       toast(t("terminal.remoteLoopback.unsupported"));
@@ -702,7 +713,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // A URL an agent CLI cut across rows with hard newlines (a sign-in link,
       // above all) is one link on every row it covers, opened whole. Registered
       // before the web-links addon because the first provider with a link at the
-      // cell wins; it answers nothing for a URL that fits one row.
+      // cell wins. It also recognizes single-row internal navigation URLs.
       termDisposables.push(term.registerLinkProvider({
         provideLinks(row, reply) {
           const buf = term.buffer.active;

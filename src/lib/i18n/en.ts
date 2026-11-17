@@ -10,6 +10,11 @@
 // where the dictionary is loaded (`en` in `./index`, `registerDict` for the others).
 // Exported solely for the tests — components go through `useT()`/`translate`.
 export const enSource = {
+  "appLink.unavailable": "This destination is no longer available.",
+  "appLink.copy": "Copy link",
+  "appLink.copied": "Link copied",
+  "appLink.copyFailed": "Could not copy link",
+  "appLink.desktopOnly": "Open this link in the desktop app. Navigation to this destination is not available on the phone yet.",
   "mobile.pair.title": "Connect this phone",
   "mobile.pair.intro": "Enter the one-time code from {app} Settings. This phone can control terminals in projects you enable.",
   "mobile.pair.finishHint": "Phone connected. Finish setting up its lock.",

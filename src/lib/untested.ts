@@ -31,6 +31,7 @@ export type UntestedEntry = {
 
 /** Every tagged feature. One row per pill; `tested` retires it. */
 export const UNTESTED = {
+  "navigation.internalLinks": { area: "shell", what: "CLI answer links open settings pages and exact controls, projects and existing tabs; settings search results copy their navigation link; phone explains desktop-only destinations" },
   "terminal.reader.selection": { area: "terminal", what: "Chat selected-text right-click menu: Copy, Add to draft and Quote in reply; earlier chats offer Copy only" },
   "steering.cockpit": { area: "shell", what: "Cockpit keyboard steering: roster actions, visible-area navigation, detail controls and narrow back behavior" },
   "agentPrivacy.menuItem": { area: "agents", what: "Project pill menu · Local models only…: opens the Agent privacy dialog; a lock on the pill shows the project is set; refused with a message naming the project for a remote/VM/container project, a folder with another project or a box folder inside, or an Ollama host that is not this machine" },

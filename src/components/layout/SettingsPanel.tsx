@@ -1224,7 +1224,7 @@ export function SettingsDialog({
     const root = modalRef.current?.querySelector<HTMLElement>(".settings-panel-content");
     if (!reveal || !root) return;
     return revealSetting(root, reveal.path, reveal.open);
-  }, [reveal, modalRef]);
+  }, [reveal, panel, section, modalRef]);
 
   // Voice exists only where the microphone is this machine's (not a browser
   // client). The assistant's page is always there: it holds its own switch.
@@ -1316,6 +1316,11 @@ export function SettingsDialog({
             <SettingRow
               label={<>{t("settings.language")} <UntestedTag id="settings.language" /></>}
               help={t("settings.language.help")}
+  useEffect(() => {
+    changePanel(initialPanel);
+    if (initialAnchor) changeSection(sectionOfAnchor(initialAnchor));
+    setReveal((previous) => initialReveal ? { ...initialReveal, n: (previous?.n ?? 0) + 1 } : null);
+  }, [initialPanel, initialAnchor, initialReveal]);
               control={
                 <Dropdown
                   value={currentLang}
