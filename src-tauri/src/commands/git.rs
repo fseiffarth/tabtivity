@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::services::remote::{remote_target_for_dir, RemoteTarget};
+use crate::services::git_hosting::GitAuth;
 use crate::tauri_host::Ctx;
 
 // The hardened git runner lives in `services::git_hardened` (S5); these names
@@ -10,7 +11,7 @@ pub use crate::services::git_hardened::git_available_blocking;
 pub(crate) use crate::services::git_hardened::{
     check_rev, hardened_git_command_in, hooked_git_command_in, hookless_git_command_in,
     failed_read, failure_message, local_non_repo, pin_common_dir, run_git, run_git_hooked, ReadFailure,
-    git_clone_blocking, scoped_token_config, stdout, valid_positional_path, validate_clone_url,
+    git_clone_blocking, stdout, valid_positional_path, validate_clone_url,
 };
 
 // Off-thread note: why every git command runs its body through
@@ -1056,12 +1057,8 @@ pub async fn git_release_preview(
             return Err("Releases are tagged from local projects only.".to_string());
         }
         require_hook_trust(None, &project_dir)?;
-        let (token, origins) = release_creds(project_id.as_deref());
-        Ok(crate::services::git_release::preview(
-            Path::new(&project_dir),
-            token.as_deref(),
-            &origins,
-        ))
+        let auth = release_creds(project_id.as_deref());
+        Ok(crate::services::git_release::preview(Path::new(&project_dir), &auth))
     })
     .await
 }
@@ -1085,11 +1082,10 @@ pub async fn git_release_tag(
         }
         require_hook_trust(None, &project_dir)?;
         let dir = Path::new(&project_dir);
-        let (token, origins) = release_creds(project_id.as_deref());
-        let plan =
-            crate::services::git_release::plan(dir, tag.trim(), false, token.as_deref(), &origins, &|_| true)
-                .map_err(|f| f.message)?;
-        crate::services::git_release::release(dir, &plan, &plan.tag, token.as_deref(), &origins)
+        let auth = release_creds(project_id.as_deref());
+        let plan = crate::services::git_release::plan(dir, tag.trim(), false, &auth, &|_| true)
+            .map_err(|f| f.message)?;
+        crate::services::git_release::release(dir, &plan, &plan.tag, &auth)
             .map(|_| {
                 format!(
                     "Tagged {} at {} and pushed it to {}.",
@@ -1109,12 +1105,12 @@ pub async fn git_release_tag(
     .await
 }
 
-/// The project's effective token and the origins it may go to; no project
-/// (a nested repo) means no token, so the user's own helpers answer.
-fn release_creds(project_id: Option<&str>) -> (Option<String>, Vec<String>) {
+/// The project's tokens, each for its own origin; no project (a nested repo)
+/// means no token, so the user's own helpers answer.
+fn release_creds(project_id: Option<&str>) -> GitAuth {
     match project_id {
         Some(id) => crate::services::git_push_mcp::creds(id),
-        None => (None, Vec::new()),
+        None => GitAuth::none(),
     }
 }
 
@@ -1125,26 +1121,18 @@ fn release_creds(project_id: Option<&str>) -> (Option<String>, Vec<String>) {
 /// than 2.37 ignores the key and fails as before.
 const PUSH_ARGS: [&str; 3] = ["-c", "push.autoSetupRemote=true", "push"];
 
-/// `git push` in a local directory, authenticating an https remote with `token`
-/// when one is set — scoped to `project_id`'s token origins (see
-/// [`scoped_token_config`]). Hardened like every local git call, and gated on
+/// `git push` in a local directory, authenticating an https remote with the
+/// project's tokens, each offered only to its own origin (see
+/// [`GitAuth::git_args`]). Hardened like every local git call, and gated on
 /// the repo's hooks (`pre-push`) being approved. Shared by the local-project push
 /// and the mirror-side push below, so both sides get identical auth.
-fn push_local(
-    dir: &std::path::Path,
-    token: Option<&str>,
-    project_id: Option<&str>,
-) -> Result<std::process::Output, String> {
+fn push_local(dir: &std::path::Path, auth: &GitAuth) -> Result<std::process::Output, String> {
     crate::services::exec_trust::require(crate::services::exec_trust::TrustKind::GitHooks, dir)?;
-    let mut args: Vec<String> = Vec::new();
-    if token.is_some() {
-        let origins = crate::commands::git_hosting::token_origins(project_id, None);
-        args.extend(scoped_token_config(&origins, "x-access-token"));
-    }
+    let mut args = auth.git_args("x-access-token");
     args.extend(PUSH_ARGS.map(str::to_string));
     let mut cmd = hooked_git_command_in(dir, &args);
-    if let Some(tok) = token {
-        cmd.env(crate::app_env!("GIT_TOKEN"), tok);
+    if !auth.is_empty() {
+        auth.apply_env(&mut cmd);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
     }
     // Bounded (#2349), like every other local git call: a FIFO planted in the
@@ -1163,10 +1151,10 @@ fn git_push_blocking(project_dir: String, project_id: Option<String>) -> Result<
         // is the right machine's secret.
         match crate::commands::git_publish::mirror_origin_repo(&target.project_id) {
             Some(mirror) => {
-                let token = crate::commands::git_hosting::effective_git_creds(&target.project_id).1;
+                let auth = crate::commands::git_hosting::project_auth(&target.project_id);
                 let before = pushed_tip(&mirror);
                 local_repo = Some(mirror.clone());
-                let out = push_local(&mirror, token.as_deref(), Some(&target.project_id))?;
+                let out = push_local(&mirror, &auth)?;
                 (out, before)
             }
             // No mirror-side origin (or no mirror: a remote-only project): the
@@ -1179,14 +1167,12 @@ fn git_push_blocking(project_dir: String, project_id: Option<String>) -> Result<
             None => (run_git_hooked(Some(&target), &project_dir, &PUSH_ARGS)?, None),
         }
     } else {
-        // Local project: effective per-project → global token (if any).
-        let token = project_id
-            .as_deref()
-            .and_then(|id| crate::commands::git_hosting::effective_git_creds(id).1);
+        // Local project: its own token, else the host defaults.
+        let auth = project_id.as_deref().map(crate::commands::git_hosting::project_auth).unwrap_or_default();
         let dir = std::path::PathBuf::from(&project_dir);
         let before = pushed_tip(&dir);
         local_repo = Some(dir.clone());
-        (push_local(&dir, token.as_deref(), project_id.as_deref())?, before)
+        (push_local(&dir, &auth)?, before)
     };
     push_outcome(&out, local_repo.as_deref(), before)
 }

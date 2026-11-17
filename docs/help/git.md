@@ -64,9 +64,22 @@ remote**, **Resolve in terminal** and **Backups** when they diverge. See
 
 A project with no remote yet can be published from its pill menu: **Publish
 to GitHub / GitLab**, public or private (see `projects`). It uses the `gh` or
-`glab` CLI, signed in, or the token you saved under **Settings → Remote &
-mobile → Git Hosting** (hosting profile and access token). Tokens are kept in
-your system keyring, not in a file.
+`glab` CLI, signed in, or a token you saved under **Settings → Remote &
+mobile → Git Hosting**.
+
+Git Hosting lists your hosts — github.com, gitlab.com, your own GitLab or
+GitHub Enterprise — each with its profile URL and one access token (**Add
+host** for another). The first host is the default. Tabtivity hands each token
+only to its own host when it pushes, fetches, clones, publishes or forks, so a
+GitLab token never goes to GitHub. Tokens are kept in your system keyring, not
+in a file; a token an older version saved in its settings file moves to the
+keyring the next time Tabtivity starts.
+
+A single project can use its own token instead: pill menu → **Git hosting…**.
+While a project has one, it is used for that project and the host tokens are
+not. A token limited to one repository (a GitHub fine-grained token, a GitLab
+project access token) is the safest choice for a project where agents push:
+their pushes can then reach only that repository.
 
 ## Letting agents push, tag releases and read CI
 

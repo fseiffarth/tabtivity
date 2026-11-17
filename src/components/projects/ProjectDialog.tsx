@@ -1,6 +1,7 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { hasTokenFor, useGitHosts } from "../../lib/gitHosts";
 import { Toggle } from "../common/Toggle";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -103,15 +104,14 @@ export function ProjectDialog({
   const t = useT();
   const { confirmAction, dialogs } = useDialogs();
   const defaultAgentCmd = useSettingsStore((s) => s.settings?.default_agent_cmd ?? "claude");
-  // A GitHub/GitLab "connection through Tabtivity" = a global access token saved in
+  // A GitHub/GitLab "connection through Tabtivity" = a host token saved in
   // Settings → Git Hosting (the credential publishing actually uses). Used to
   // decide whether picking a "Push to GitHub/GitLab" git type can proceed or
   // should first send the user to set the connection up.
-  const gitToken = useSettingsStore((s) => s.settings?.git_token ?? "");
-  // The same setting's profile URL, which is what says *which* provider that
-  // global connection belongs to (Settings → Git Hosting derives its own token
-  // hints from it the same way).
-  const gitProfileUrl = useSettingsStore((s) => s.settings?.git_profile_url ?? "");
+  const gitHosts = useGitHosts();
+  // The default (first) host's profile URL says which provider a publish goes
+  // to when none was picked.
+  const gitProfileUrl = gitHosts?.[0]?.profile_url ?? "";
   const [projectsRoot, setProjectsRoot] = useState("");
   // Remote (SSH) projects only: the chosen parent dir for the LOCAL mirror (the
   // synced working copy). The mirror lands at `<mirrorParent>/<name>`. Seeded
@@ -357,11 +357,19 @@ export function ProjectDialog({
     : kind === "new" || isCloneImport || mode === "copy"
       ? targetDir
       : sourceDir;
+  // Which provider the publish goes through: the explicit pick, else what the
+  // default host's profile URL says (GitHub when it says nothing).
+  const publishProviderResolved: GitProvider =
+    publishProvider === "github" || publishProvider === "gitlab"
+      ? publishProvider
+      : gitProfileUrl.toLowerCase().includes("gitlab")
+        ? "gitlab"
+        : "github";
   // "Push to GitHub/GitLab" was chosen, but no Tabtivity connection is set up yet.
   // Here "remote" is the git push target (a hosting service), distinct from the
   // SSH host the files may live on — see the git-hosting hint below.
   const wantsRemoteGit = gitType === "remote-private" || gitType === "remote-public";
-  const gitConnected = gitToken.trim() !== "";
+  const gitConnected = hasTokenFor(gitHosts, publishProviderResolved);
   // A clone (or a folder with an origin) is exempt: the gate exists because
   // publishing a *new* repo needs a token, and a hosted repo already has an
   // origin to push back to. (The clone itself only needs the token when the
@@ -413,14 +421,6 @@ export function ProjectDialog({
     gitAvailable === false &&
     (gitType !== "none" || isCloneImport);
 
-  // Which provider the publish goes through: the explicit pick, else what the
-  // global connection's profile URL says (GitHub when it says nothing).
-  const publishProviderResolved: GitProvider =
-    publishProvider === "github" || publishProvider === "gitlab"
-      ? publishProvider
-      : gitProfileUrl.toLowerCase().includes("gitlab")
-        ? "gitlab"
-        : "github";
   // Whether *this* creation publishes the repository itself.
   //
   // "Push to GitHub/GitLab" used to be recorded and nothing more: the project

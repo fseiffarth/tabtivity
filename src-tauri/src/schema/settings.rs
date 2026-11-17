@@ -223,8 +223,17 @@ pub struct Settings {
     pub debug: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_profile_url: Option<String>,
+    /// An old build's single access token, in plain text. Read only to move it
+    /// into the keyring (`git_hosting::migrate_legacy_token`); never written,
+    /// never sent to the renderer (`commands::settings`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_token: Option<String>,
+    /// Settings → Git Hosting: the hosts the user has an account on, as
+    /// profile URLs, first = default. Each host's token is in the keyring
+    /// (`git_hosting::host_scope`). `None` = written before the list existed:
+    /// `git_profile_url` alone stands for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_hosts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_scheme: Option<String>,
     /// UI language for Tabtivity's interface (`en`/`de`/`es`/`fr`/`it`). Frontend
@@ -313,9 +322,10 @@ pub struct Settings {
     pub root_mcp: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_mcp: Option<bool>,
-    /// Agent-requested pushes (`services::git_push_mcp`, `/mcp/git`). Absent
-    /// means off: no local project-agent spawn is wired, and the endpoint
-    /// refuses tabs that already hold a token.
+    /// Agent-requested pushes (`services::git_push_mcp`, `/mcp/git`).
+    /// **Absent means on** (`git_push_mcp::enabled_in`); a stored `false`
+    /// wires no new local project-agent spawn, and the endpoint refuses tabs
+    /// that already hold a token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_push_mcp: Option<bool>,
     /// The read-only help server (`services::help_mcp`) handed to every local
@@ -417,10 +427,10 @@ pub struct Settings {
     /// across a relaunch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_alerts_muted: Option<Vec<String>>,
-    /// Mail: the experimental gate for the embedded mail client
-    /// (`src/lib/experimental.ts` — unset is off, so a flag still moving is
-    /// invisible until someone ticks it; see [`Settings::experimental`] for the
-    /// one exception, a profile not yet marked `experimental_explicit`).
+    /// Mail: the experimental gate for the embedded mail client. One of the
+    /// experiments a profile gets without asking (`ON_BY_DEFAULT` in
+    /// `src/lib/experimental.ts`, [`Settings::mail_client()`]): unset is
+    /// on, and only an explicit `false` turns it off.
     ///
     /// It is the ONE mail switch, and it gates the whole feature: the header's
     /// ✉ button and the overlay behind it, which is the entire client since the
@@ -787,7 +797,9 @@ pub struct Settings {
     /// every viewer read goes through, so nothing in the backend reads this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub md_graph: Option<bool>,
-    /// EXPERIMENTAL, default OFF. Project-wide per-file remarks in REMARKS.md.
+    /// EXPERIMENTAL, default ON (`ON_BY_DEFAULT` in `src/lib/experimental.ts`:
+    /// unset is on, an explicit `false` turns it off). Project-wide per-file
+    /// remarks in REMARKS.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_remarks: Option<bool>,
     /// EXPERIMENTAL, default OFF. The Chat's hands-free loop
@@ -803,7 +815,9 @@ pub struct Settings {
     /// the Settings card sets in the same click.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_checkpoints: Option<bool>,
-    /// EXPERIMENTAL, default OFF. The chat assistant (`docs/assistant_plan.md`,
+    /// EXPERIMENTAL, default ON (`ON_BY_DEFAULT` in `src/lib/experimental.ts`:
+    /// unset is on, an explicit `false` turns it off). The chat assistant
+    /// (`docs/assistant_plan.md`,
     /// `services::assistant`): chats in a scope of its own that reach the web
     /// and nothing else. Read via [`Settings::assistant_enabled`]; the
     /// commands, the spawn and the web lane refuse while it is off.

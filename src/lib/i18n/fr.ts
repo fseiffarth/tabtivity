@@ -2917,8 +2917,6 @@ export const dict: Dict = {
   "fixedKeys.panels.label": "Basculer les panneaux",
   "fixedKeys.exitFullscreen.label": "Quitter le plein écran de sous-fenêtre",
 
-  "git.help":
-    "Votre profil d'hébergement et votre jeton d'accès sont utilisés lors de la publication du dépôt d'un projet sur GitHub ou GitLab.",
   "git.profileUrl": "URL du profil",
   "git.profileUrlPlaceholder": "https://github.com/moi ou https://gitlab.com/moi",
   "git.accessToken": "Jeton d'accès",

@@ -6,10 +6,10 @@
 //! `commands::git` re-exports every item, so `commands::git::
 //! hardened_git_command_in` keeps resolving.
 
-use crate::brand::UPPER;
 use std::path::{Path, PathBuf};
 
 use crate::services::remote::RemoteTarget;
+use crate::services::git_hosting::GitAuth;
 
 // Every git invocation goes through the single `run_git` helper, which dispatches
 // on whether the project is local or remote:
@@ -169,7 +169,7 @@ fn git_args<S: AsRef<str>>(args: &[S], hooks: Hooks) -> Vec<String> {
         }
     }
     let mut rest = args.iter().map(|a| a.as_ref()).peekable();
-    // A caller may bring its own `-c <key>=<value>` pairs (`scoped_token_config`),
+    // A caller may bring its own `-c <key>=<value>` pairs (`GitAuth::git_args`),
     // and those are git's *pre-subcommand* options — so they are passed through
     // first and the subcommand is whatever follows them. Without this the leading
     // `-c` was mistaken for the subcommand, which happens to still produce a valid
@@ -999,55 +999,26 @@ pub fn local_git_version_blocking() -> Option<(u32, u32)> {
     parse_git_version(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// `-c` pairs for an ephemeral inline credential helper that answers an https
-/// challenge with the effective token — **only for `origins`** (from
-/// `git_hosting::token_origins`). The token is read from the child's env INSIDE
-/// the snippet, so it never lands in argv or on disk. A leading empty
-/// `credential.helper=` clears every helper configured so far (a system GCM, and
-/// any a repo's own config names) so only ours runs.
-///
-/// Scoping by origin is the point: the push URL comes from `.git/config`, which a
-/// fenced agent can rewrite (`pushurl`, `insteadOf`), and an unscoped helper
-/// would hand the token to whatever server that names. Harmless for SSH remotes —
-/// git won't call an http helper. Shared by push, publish and clone.
-pub(crate) fn scoped_token_config(origins: &[String], username: &str) -> Vec<String> {
-    let helper = format!(
-        "!f() {{ test \"$1\" = get && echo username={username} && echo \"password=${UPPER}_GIT_TOKEN\"; }}; f" // privacy-check: ok — an env-var NAME; the token is read at runtime, never written here
-    );
-    let mut args = vec!["-c".to_string(), "credential.helper=".to_string()];
-    for origin in origins {
-        args.push("-c".to_string());
-        args.push(format!("credential.{origin}.helper={helper}"));
-    }
-    args
-}
-
 /// The transport half of an agent-requested push (`services::git_push_mcp`):
 /// one explicit `refspec` to one explicit `url`, hooks off. Unlike
 /// [`push_local`] this never runs the repo's `pre-push` — the fenced,
 /// tokenless preflight has already run it — so no project code runs on the
-/// host while `TABTIVITY_GIT_TOKEN` is in the environment. `--no-verify` says so
+/// host while a token is in the environment. `--no-verify` says so
 /// twice: [`hardened_git_command_in`] already pins `core.hooksPath=`, which
 /// also silences `reference-transaction`. The URL goes on the command line, so
 /// `remote.<r>.pushurl` plays no part (a repo-scope `insteadOf` is refused by
-/// the caller before this runs). `token` is offered only to `origins`. The
-/// caller runs it under its own timeout.
+/// the caller before this runs). Each token in `auth` is offered only to its
+/// own origin. The caller runs it under its own timeout.
 pub(crate) fn push_transport_command(
     dir: &std::path::Path,
     url: &str,
     refspec: &str,
-    token: Option<&str>,
-    origins: &[String],
+    auth: &GitAuth,
 ) -> std::process::Command {
-    let mut args: Vec<String> = Vec::new();
-    if token.is_some() {
-        args.extend(scoped_token_config(origins, "x-access-token"));
-    }
+    let mut args = auth.git_args("x-access-token");
     args.extend(["push", "--no-verify", "--porcelain", "--", url, refspec].map(str::to_string));
     let mut cmd = hardened_git_command_in(dir, &args);
-    if let Some(tok) = token {
-        cmd.env(crate::app_env!("GIT_TOKEN"), tok);
-    }
+    auth.apply_env(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     // A `refs/replace` graft would otherwise pass push's fast-forward check
     // for a commit that rewrites the remote branch.
@@ -1366,7 +1337,8 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let token = crate::services::git_hosting::global_git_token();
+    // No project yet: every host default, each for its own host.
+    let auth = crate::services::git_hosting::hosts_auth();
     let https = {
         let lower = url.to_ascii_lowercase();
         lower.starts_with("https://") || lower.starts_with("http://")
@@ -1378,11 +1350,8 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
     if https {
-        if let Some(tok) = token.as_deref() {
-            let origins = crate::services::git_hosting::token_origins(None, None);
-            cmd.args(scoped_token_config(&origins, "x-access-token"));
-            cmd.env(crate::app_env!("GIT_TOKEN"), tok);
-        }
+        cmd.args(auth.git_args("x-access-token"));
+        auth.apply_env(&mut cmd);
     }
     // `--` so a URL can never be read as an option.
     cmd.args(["clone", "--", &url, &dest]);
@@ -1401,7 +1370,7 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
         if dest_path.exists() {
             let _ = std::fs::remove_dir_all(&dest_path);
         }
-        return Err(clone_error(&raw, token.is_some(), https));
+        return Err(clone_error(&raw, !auth.is_empty(), https));
     }
     Ok(dest)
 }

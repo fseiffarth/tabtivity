@@ -19,6 +19,9 @@ pub fn get_settings() -> Result<Settings, String> {
     // is not persisted, so the bar appears immediately; the first edit in the
     // Global Apps settings panel writes the merged set back to disk.
     seed_default_global_apps(&mut settings);
+    // An old build's plaintext git token stays on the backend until it is
+    // migrated to the keyring (`git_hosting::migrate_legacy_token`).
+    settings.git_token = None;
     Ok(settings)
 }
 
@@ -57,8 +60,11 @@ fn save_settings_at(path: &std::path::Path, settings: Settings) -> Result<(), St
         }
         previous = Some(current.clone());
         let rev = current.rev + 1;
+        let git_token = current.git_token.take();
         *current = settings.clone();
         current.rev = rev;
+        // Never the renderer's to write: it is never sent one (`get_settings`).
+        current.git_token = git_token;
         Ok(current.clone())
     })?;
     if let Some(previous) = previous {
@@ -84,6 +90,8 @@ fn patch_settings_at(path: &std::path::Path, mut patch: Map<String, Value>) -> R
     // The revision is the file's to move, never a caller's to set: a patch
     // built by spreading a cached object carries the old one.
     patch.remove("rev");
+    // Tokens go to the keyring through `set_git_hosts`, never into this file.
+    patch.remove("git_token");
     let mut previous = None;
     let saved = storage::patch_json(path, Settings::default(), |settings| {
         seed_default_global_apps(settings);
@@ -508,6 +516,22 @@ mod tests {
         assert_eq!(loaded.rev, 0);
         save_settings_at(&legacy, loaded).unwrap();
         assert_eq!(storage::read_json::<Settings>(&legacy).unwrap().rev, 1);
+    }
+
+    /// The old plaintext git token is the backend's alone: a patch cannot set
+    /// it, and a whole-document save (whose renderer never saw it) keeps it.
+    #[test]
+    fn the_old_git_token_is_never_written_from_the_renderer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"git_token":"old-plaintext"}"#).unwrap();
+        let patch = serde_json::from_value::<Map<String, Value>>(serde_json::json!({"git_token": "from-renderer"})).unwrap();
+        patch_settings_at(&path, patch).unwrap();
+        let mut loaded: Settings = storage::read_json(&path).unwrap();
+        assert_eq!(loaded.git_token.as_deref(), Some("old-plaintext"));
+        loaded.git_token = None;
+        save_settings_at(&path, loaded).unwrap();
+        assert_eq!(storage::read_json::<Settings>(&path).unwrap().git_token.as_deref(), Some("old-plaintext"));
     }
 
     /// The Mobile host block round-trips every key through a patch: the phone

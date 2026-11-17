@@ -2919,8 +2919,15 @@ export const dict: Dict = {
   "fixedKeys.exitFullscreen.label": "Unterfenster-Vollbild verlassen",
 
   "git.help":
-    "Dein Hosting-Profil und Zugriffstoken werden verwendet, wenn das Repo eines Projekts auf GitHub oder GitLab veröffentlicht wird.",
+    "Ein Zugriffstoken pro Hosting-Dienst (GitHub, GitLab, eigene Instanz). {app} gibt jedes Token nur an seinen eigenen Host weiter – zum Pushen, Fetchen, Klonen und Veröffentlichen. Tokens liegen im Schlüsselbund deines Systems.",
   "git.profileUrl": "Profil-URL",
+  "git.profileUrlDefault": "Profil-URL (Standard-Host)",
+  "git.tokenStored": "Im Schlüsselbund gespeichert – tippen zum Ersetzen",
+  "git.removeToken": "Token entfernen",
+  "git.removeHost": "Host entfernen",
+  "git.addHost": "Host hinzufügen",
+  "git.projectOverrideHint":
+    "Ein Projekt kann stattdessen ein eigenes Token nutzen: Projekt-Menü → Git-Hosting…. Ein Token, das nur für dieses eine Repository gilt (GitHub fine-grained, GitLab-Projekttoken), beschränkt die Pushes eines Agenten auf dieses Repository.",
   "git.profileUrlPlaceholder": "https://github.com/me oder https://gitlab.com/me",
   "git.accessToken": "Zugriffstoken",
   "git.tokenPlaceholder": "ghp_... / glpat-...",

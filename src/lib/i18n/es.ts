@@ -2915,8 +2915,6 @@ export const dict: Dict = {
   "fixedKeys.panels.label": "Alternar paneles",
   "fixedKeys.exitFullscreen.label": "Salir de pantalla completa de subventana",
 
-  "git.help":
-    "Tu perfil de alojamiento y token de acceso se usan al publicar el repositorio de un proyecto en GitHub o GitLab.",
   "git.profileUrl": "URL del perfil",
   "git.profileUrlPlaceholder": "https://github.com/me o https://gitlab.com/me",
   "git.accessToken": "Token de acceso",

@@ -8,8 +8,8 @@
 //! GitHub only. The repository is the checked-out branch's upstream URL (else
 //! `origin`) — never an argument — and the lane reads it only once the user
 //! confirmed that repo: it is the confirmed push URL's, or one allowed on an
-//! "Allow CI" card (`git_push_mcp::ci_target`, gap 19). The stored token is offered to the API only when github.com is
-//! one of the project's token origins; without one, a public repo still
+//! "Allow CI" card (`git_push_mcp::ci_target`, gap 19). The API gets the token the project's git calls
+//! would hand to github.com; without one, a public repo still
 //! answers its runs, and anything else says where to add a token. Nothing here
 //! writes: no re-run, no cancel, no dispatch. `tip_ci` is the same read for
 //! the Release gate (`git_release::plan`).
@@ -79,11 +79,10 @@ pub fn resolve(dir: &Path) -> Result<CiRepo, Failure> {
     Ok(CiRepo { owner, repo, branch, url })
 }
 
-/// The token for api.github.com: only when github.com is one of the
-/// project's token origins (`git_hosting::token_origins`).
+/// The token for api.github.com: the one the project's git calls would hand
+/// to github.com (its own override, else the github.com host default).
 fn api_token(project: &str) -> Option<String> {
-    let (token, origins) = crate::services::git_push_mcp::creds(project);
-    token.filter(|_| origins.iter().any(|o| o == "https://github.com"))
+    crate::services::git_push_mcp::creds(project).token_for("https://github.com").map(str::to_string)
 }
 
 /// Per-tab budget, taken at admission.
@@ -219,7 +218,7 @@ pub fn log_excerpt(raw: &str, token: Option<&str>) -> String {
         _ => (lines.len().saturating_sub(150), lines.len()),
     };
     let text = lines[start..end].join("\n");
-    tail(&redact(&crate::services::root_mcp_mail::strip_invisible(&text), token), EXCERPT_CAP)
+    tail(&redact(&crate::services::root_mcp_mail::strip_invisible(&text), token.as_slice()), EXCERPT_CAP)
 }
 
 /// Short, single-line, redacted text from GitHub (titles, messages).
@@ -227,7 +226,7 @@ fn short(value: &Value, token: Option<&str>) -> Value {
     match value.as_str() {
         Some(s) => {
             let clean: String = crate::services::root_mcp_mail::strip_invisible(s).split_whitespace().collect::<Vec<_>>().join(" ");
-            let clean = redact(&clean, token);
+            let clean = redact(&clean, token.as_slice());
             Value::String(if clean.chars().count() > TEXT_CAP { format!("{}…", clean.chars().take(TEXT_CAP).collect::<String>()) } else { clean })
         }
         None => Value::Null,

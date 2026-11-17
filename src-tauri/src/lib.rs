@@ -1614,6 +1614,13 @@ pub fn run() {
             // inside each one to the current names, off the main thread.
             // Returns at once while the name is unchanged.
             services::brand_migration::project::sweep_at_launch();
+            // An older build's plaintext git token → the keyring, off the main
+            // thread (a keyring prompt may block). Kept in place on failure.
+            std::thread::spawn(|| {
+                if let Err(e) = services::git_hosting::migrate_legacy_token() {
+                    eprintln!("git hosting: the old access token stays in settings.json for now: {e}");
+                }
+            });
             // The root console's MCP endpoint (`services::root_mcp`): loopback,
             // token minted here per run, handed only to root-scope agent tabs.
             commands::root_mcp::start(core.clone());
@@ -2356,6 +2363,8 @@ pub fn run() {
             commands::git_fork::provider_cli_available,
             commands::git_hosting::get_project_git_hosting,
             commands::git_hosting::set_project_git_hosting,
+            commands::git_hosting::get_git_hosts,
+            commands::git_hosting::set_git_hosts,
             // Timer flush + activity
             commands::timer::timer_flush_app,
             commands::timer::timer_flush_project,

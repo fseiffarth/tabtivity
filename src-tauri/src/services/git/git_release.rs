@@ -28,6 +28,7 @@ use crate::services::git_push_mcp::{
 };
 use crate::services::git_bounded::RunError;
 use crate::services::git_hardened::{hardened_git_command_in, push_transport_command};
+use crate::services::git_hosting::GitAuth;
 
 /// What a release would do: tag `head` (the tip of `branch`, already on
 /// `remote`) as `tag` and push it to `url`.
@@ -136,7 +137,7 @@ pub fn suggest_tag(dir: &Path, head: &str) -> (String, Option<String>) {
 
 /// The checked-out branch, its same-named upstream and URL, and its tip —
 /// everything a release is decided on, read locally.
-fn local_target(dir: &Path, need_token: bool, token: Option<&str>) -> Result<(String, String, String, String, String), Failure> {
+fn local_target(dir: &Path, need_token: bool, auth: &GitAuth) -> Result<(String, String, String, String, String), Failure> {
     let branch = git(dir, &["symbolic-ref", "--short", "-q", "HEAD"]).ok().filter(|b| !b.is_empty())
         .ok_or_else(|| Failure::new(Category::NotCheckedOut, "HEAD is detached; check out the branch to release from first."))?;
     let remote = git(dir, &["config", "--get", &format!("branch.{branch}.remote")]).ok().filter(|s| !s.is_empty())
@@ -150,8 +151,8 @@ fn local_target(dir: &Path, need_token: bool, token: Option<&str>) -> Result<(St
     }
     let url = git(dir, &["config", "--get", &format!("remote.{remote}.url")]).ok().filter(|s| !s.is_empty())
         .ok_or_else(|| Failure::new(Category::NoUpstream, format!("remote '{remote}' has no URL.")))?;
-    if need_token && url.starts_with("http") && token.is_none() {
-        return Err(Failure::new(Category::AuthFailed, "No access token is stored for this project. Ask the user to add one in Settings → Git Hosting."));
+    if need_token && url.starts_with("http") && auth.token_for_url(&url).is_none() {
+        return Err(Failure::new(Category::AuthFailed, "No access token is stored for this remote's host. Ask the user to add one in Settings → Git Hosting (or for this project in its Git hosting… menu)."));
     }
     let head = git(dir, &["rev-parse", "--verify", &format!("refs/heads/{branch}^{{commit}}")]).map_err(|e| Failure::new(Category::NotCheckedOut, e))?;
     let subject = git(dir, &["log", "-1", "--format=%h %s", &head, "--"]).unwrap_or_default();
@@ -167,9 +168,9 @@ fn local_target(dir: &Path, need_token: bool, token: Option<&str>) -> Result<(St
 /// remote URL's repo may be asked about CI with the token: the agent lane
 /// passes its confirmed-repo check (gap 19 — the pending/failed workflow
 /// names reach the agent in the refusal), the user's own button `|_| true`.
-pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origins: &[String], ci_allowed: &dyn Fn(&str) -> bool) -> Result<ReleasePlan, Failure> {
+pub fn plan(dir: &Path, tag: &str, need_token: bool, auth: &GitAuth, ci_allowed: &dyn Fn(&str) -> bool) -> Result<ReleasePlan, Failure> {
     validate_tag(tag).map_err(|e| Failure::new(Category::InvalidArguments, e))?;
-    let (branch, remote, url, head, subject) = local_target(dir, need_token, token)?;
+    let (branch, remote, url, head, subject) = local_target(dir, need_token, auth)?;
     // Before any request: the release gate reads this repo's CI with the
     // token, and its workflow names reach the caller.
     if git_ci::github_repo(&url).is_some() && !ci_allowed(&url) {
@@ -182,7 +183,7 @@ pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origin
     }
     let want_branch = format!("refs/heads/{branch}");
     let want_tag = format!("refs/tags/{tag}");
-    let stdout = ls_remote_raw(dir, &url, &[want_branch.clone(), want_tag.clone()], token, origins)?;
+    let stdout = ls_remote_raw(dir, &url, &[want_branch.clone(), want_tag.clone()], auth)?;
     let mut remote_sha = None;
     let mut tag_on_remote = false;
     for line in stdout.lines() {
@@ -199,7 +200,7 @@ pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origin
     if remote_sha != head {
         return Err(Failure::new(Category::NotPushed, format!("'{branch}' is not in sync with the remote ({} here, {} there); push or pull first, then release.", &head[..7.min(head.len())], &remote_sha[..7.min(remote_sha.len())])));
     }
-    let api_token = token.filter(|_| origins.iter().any(|o| o == "https://github.com"));
+    let api_token = auth.token_for("https://github.com");
     match git_ci::tip_ci(&url, &branch, &head, api_token) {
         TipCi::Pending(names) => return Err(Failure::new(Category::CiPending, format!("CI is still running on {} ({}); release once it has passed.", &head[..7.min(head.len())], names.join(", ")))),
         TipCi::Failed(names) => return Err(Failure::new(Category::CiFailed, format!("CI did not pass on {} ({}); fix it and push, then release.", &head[..7.min(head.len())], names.join(", ")))),
@@ -210,9 +211,9 @@ pub fn plan(dir: &Path, tag: &str, need_token: bool, token: Option<&str>, origin
 
 /// The dialog's opening state. Never fails outright: a refusal becomes
 /// `problem`, so the dialog can say what to do.
-pub fn preview(dir: &Path, token: Option<&str>, origins: &[String]) -> Preview {
+pub fn preview(dir: &Path, auth: &GitAuth) -> Preview {
     let mut out = Preview { suggested: String::new(), source: None, branch: None, head: None, subject: None, url: None, problem: None, category: None };
-    match local_target(dir, false, token) {
+    match local_target(dir, false, auth) {
         Ok((branch, _, url, head, subject)) => {
             let (suggested, source) = suggest_tag(dir, &head);
             out.suggested = suggested;
@@ -228,7 +229,7 @@ pub fn preview(dir: &Path, token: Option<&str>, origins: &[String]) -> Preview {
             return out;
         }
     }
-    if let Err(failure) = plan(dir, &out.suggested, false, token, origins, &|_| true) {
+    if let Err(failure) = plan(dir, &out.suggested, false, auth, &|_| true) {
         out.problem = Some(failure.message);
         out.category = Some(failure.category);
     }
@@ -251,7 +252,7 @@ fn pinned_tag_refspec(dir: &Path, plan: &ReleasePlan) -> Result<String, Failure>
 /// Create the annotated tag (unless it already names the tip) and push it.
 /// A tag this call created is removed again when the push fails, so a retry
 /// starts clean. Returns the push's cleaned output.
-pub fn release(dir: &Path, plan: &ReleasePlan, message: &str, token: Option<&str>, origins: &[String]) -> Result<String, Failure> {
+pub fn release(dir: &Path, plan: &ReleasePlan, message: &str, auth: &GitAuth) -> Result<String, Failure> {
     validate_tag(&plan.tag).map_err(|e| Failure::new(Category::InvalidArguments, e))?;
     let created = local_tag_commit(dir, &plan.tag).is_none();
     if created {
@@ -260,21 +261,21 @@ pub fn release(dir: &Path, plan: &ReleasePlan, message: &str, token: Option<&str
             .map_err(|e| Failure::new(Category::TransportFailed, e))?;
         if !out.status.success() {
             return Err(Failure::new(Category::TransportFailed, "git could not create the tag; read its output.")
-                .with_output(clean_output(&String::from_utf8_lossy(&out.stderr), None)));
+                .with_output(clean_output(&String::from_utf8_lossy(&out.stderr), &[])));
         }
     }
     // Push the tag object read and checked here, never `refs/tags/T` by name:
     // the fenced agent can write `.git` refs and re-point the local tag at an
     // unpushed commit between this check and the transport.
     let result = pinned_tag_refspec(dir, plan).and_then(|refspec| {
-        let mut cmd = push_transport_command(dir, &plan.url, &refspec, token, origins);
+        let mut cmd = push_transport_command(dir, &plan.url, &refspec, auth);
         crate::services::git_push_mcp::before_transport();
         match crate::services::git_bounded::run(&mut cmd, lane_opts(None, TRANSPORT_TIMEOUT)) {
             Err(RunError::TimedOut(_)) => Err(Failure::new(Category::Network, "The push did not finish within ten minutes and was stopped.")),
             Err(e) => Err(Failure::new(Category::TransportFailed, format!("git could not be started: {e}"))),
             Ok(ran) => {
                 let (stdout, stderr) = lane_text(&ran.output);
-                let output = clean_output(&join_streams(&stdout, &stderr), token);
+                let output = clean_output(&join_streams(&stdout, &stderr), &auth.secrets());
                 if ran.output.status.success() {
                     Ok(output)
                 } else {
@@ -373,20 +374,20 @@ mod tests {
     fn releases_only_a_pushed_tip_and_never_moves_a_remote_tag() {
         let (_root, remote, work) = pair("0.1.86");
         let head = sh(&work, &["rev-parse", "HEAD"]);
-        let plan = plan(&work, "v0.1.86", false, None, &[], &|_| true).unwrap();
+        let plan = plan(&work, "v0.1.86", false, &GitAuth::none(), &|_| true).unwrap();
         assert_eq!((plan.branch.as_str(), plan.head.as_str()), ("develop", head.as_str()));
-        release(&work, &plan, "", None, &[]).unwrap();
+        release(&work, &plan, "", &GitAuth::none()).unwrap();
         assert_eq!(sh(&remote, &["rev-parse", "refs/tags/v0.1.86^{commit}"]), head);
         assert_eq!(sh(&remote, &["cat-file", "-t", "refs/tags/v0.1.86"]), "tag", "annotated");
-        assert_eq!(super::plan(&work, "v0.1.86", false, None, &[], &|_| true).unwrap_err().category, Category::TagExists);
+        assert_eq!(super::plan(&work, "v0.1.86", false, &GitAuth::none(), &|_| true).unwrap_err().category, Category::TagExists);
 
         std::fs::write(work.join("c.txt"), "c\n").unwrap();
         sh(&work, &["add", "c.txt"]);
         sh(&work, &["commit", "-q", "-m", "unpushed"]);
-        assert_eq!(super::plan(&work, "v0.1.87", false, None, &[], &|_| true).unwrap_err().category, Category::NotPushed);
-        let preview = preview(&work, None, &[]);
+        assert_eq!(super::plan(&work, "v0.1.87", false, &GitAuth::none(), &|_| true).unwrap_err().category, Category::NotPushed);
+        let preview = preview(&work, &GitAuth::none());
         assert_eq!(preview.category, Some(Category::NotPushed));
-        assert!(super::plan(&work, "+v1", false, None, &[], &|_| true).is_err());
+        assert!(super::plan(&work, "+v1", false, &GitAuth::none(), &|_| true).is_err());
     }
 
     #[test]
@@ -398,7 +399,7 @@ mod tests {
         sh(&work, &["commit", "-q", "-m", "unpushed"]);
         let unpushed = sh(&work, &["rev-parse", "HEAD"]);
         sh(&work, &["reset", "-q", "--hard", &head]);
-        let plan = plan(&work, "v0.1.86", false, None, &[], &|_| true).unwrap();
+        let plan = plan(&work, "v0.1.86", false, &GitAuth::none(), &|_| true).unwrap();
         // The agent re-points the local tag at an unpushed commit after the
         // tag was created and checked, right before the transport.
         let w = work.clone();
@@ -406,14 +407,14 @@ mod tests {
         crate::services::git_push_mcp::BEFORE_TRANSPORT.with(|slot| *slot.borrow_mut() = Some(Box::new(move || {
             sh(&w, &["tag", "-f", "-a", "v0.1.86", "-m", "moved", &other]);
         })));
-        release(&work, &plan, "", None, &[]).unwrap();
+        release(&work, &plan, "", &GitAuth::none()).unwrap();
         assert_eq!(sh(&remote, &["rev-parse", "refs/tags/v0.1.86^{commit}"]), head, "the checked tag object left");
         let missing = Command::new("git").args(["cat-file", "-e", &unpushed]).current_dir(&remote).output().unwrap();
         assert!(!missing.status.success(), "the unpushed commit never reached the remote");
         // A local tag already re-pointed when Release runs is refused.
         sh(&work, &["tag", "-f", "-a", "v0.1.87", "-m", "x", &unpushed]);
         let stale = ReleasePlan { tag: "v0.1.87".into(), ..plan.clone() };
-        assert_eq!(release(&work, &stale, "", None, &[]).unwrap_err().category, Category::StaleApproval);
+        assert_eq!(release(&work, &stale, "", &GitAuth::none()).unwrap_err().category, Category::StaleApproval);
         assert!(sh(&remote, &["tag", "-l", "v0.1.87"]).is_empty());
         assert_eq!(pinned_tag_refspec(&work, &plan).unwrap_err().category, Category::StaleApproval, "the moved v0.1.86");
         sh(&work, &["tag", "-f", "-a", "v0.1.86", "-m", "back", &head]);
@@ -426,7 +427,10 @@ mod tests {
     fn agent_lane_needs_a_token_for_https() {
         let (_root, _remote, work) = pair("1.0.0");
         sh(&work, &["remote", "set-url", "origin", "https://github.com/o/r.git"]);
-        assert_eq!(plan(&work, "v1.0.0", true, None, &[], &|_| true).unwrap_err().category, Category::AuthFailed);
+        assert_eq!(plan(&work, "v1.0.0", true, &GitAuth::none(), &|_| true).unwrap_err().category, Category::AuthFailed);
+        // A token for another host is no token for this one.
+        let gitlab = GitAuth::single("not-a-real-token", &["https://gitlab.com".into()]);
+        assert_eq!(plan(&work, "v1.0.0", true, &gitlab, &|_| true).unwrap_err().category, Category::AuthFailed);
     }
 
     /// Gap 19: the agent lane's release gate asks GitHub about the remote's
@@ -439,12 +443,12 @@ mod tests {
         let asked = std::cell::RefCell::new(Vec::new());
         let gate = |url: &str| { asked.borrow_mut().push(url.to_string()); false };
         // A token is on hand, so only the gate stops the request.
-        let failure = plan(&work, "v1.0.0", true, Some("not-a-real-token"), &["https://github.com".into()], &gate).unwrap_err();
+        let failure = plan(&work, "v1.0.0", true, &GitAuth::single("not-a-real-token", &["https://github.com".into()]), &gate).unwrap_err();
         assert_eq!(failure.category, Category::CiRepoUnconfirmed, "{}", failure.message);
         assert_eq!(*asked.borrow(), vec!["https://github.com/Other-Org/private.git".to_string()]);
         // Not GitHub: no CI to read, so the gate is never asked.
         let (_root, _remote, work) = pair("1.0.0");
         let never = |_: &str| -> bool { panic!("a non-GitHub remote has no CI gate") };
-        assert!(plan(&work, "v1.0.0", false, None, &[], &never).is_ok());
+        assert!(plan(&work, "v1.0.0", false, &GitAuth::none(), &never).is_ok());
     }
 }

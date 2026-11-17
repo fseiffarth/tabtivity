@@ -6,6 +6,7 @@ import { UntestedTag } from "../common/UntestedTag";
 import { ContextMenuPortal } from "../common/ContextMenuPortal";
 import { IdeMenuItems } from "./IdeMenuItems";
 import { invoke } from "@tauri-apps/api/core";
+import { hasTokenFor, useGitHosts } from "../../lib/gitHosts";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   resolveProjectDirectory,
@@ -457,10 +458,11 @@ function PublishWindow({
   // probe (a local `<cli> --version`) can't see. `null` while probing/unknown,
   // so a pending answer never claims the CLI is missing.
   const [cliAvailable, setCliAvailable] = useState<boolean | null>(null);
-  // The saved global token (⚙ Settings → Git hosting) — a project-specific
-  // override is possible too (`GitHostingWindow`) but rare enough that this
-  // approximation (skip the sign-in nudge when a token is set at all) is fine.
-  const gitToken = useSettingsStore((s) => s.settings?.git_token ?? "");
+  // A host token for this provider (⚙ Settings → Git hosting) — a
+  // project-specific override is possible too (`GitHostingWindow`) but rare
+  // enough that this approximation (skip the sign-in nudge when the provider
+  // has a host token) is fine.
+  const gitConnected = hasTokenFor(useGitHosts(), provider);
 
   useEffect(() => {
     if (!runsLocally) {
@@ -581,7 +583,7 @@ function PublishWindow({
               {t("projectDialog.runInTerminalBtn")}
             </button>
           </div>
-        ) : cliAvailable === true && !gitToken.trim() ? (
+        ) : cliAvailable === true && !gitConnected ? (
           <div className="tex-install-banner" role="status">
             <span className="tex-install-banner-text">{t("pill.publishSignInHint", { cli })}</span>
             <button

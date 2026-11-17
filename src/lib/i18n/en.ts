@@ -2911,8 +2911,15 @@ export const enSource = {
 
   // Settings — Git hosting panel.
   "git.help":
-    "Your hosting profile and access token are used when publishing a project's repo to GitHub or GitLab.",
+    "One access token per hosting service (GitHub, GitLab, your own instance). {app} hands each token only to its own host, for pushing, fetching, cloning and publishing. Tokens are kept in your system keyring.",
   "git.profileUrl": "Profile URL",
+  "git.profileUrlDefault": "Profile URL (default host)",
+  "git.tokenStored": "Saved in the keyring — type to replace",
+  "git.removeToken": "Remove token",
+  "git.removeHost": "Remove host",
+  "git.addHost": "Add host",
+  "git.projectOverrideHint":
+    "A project can use its own token instead, from its pill menu → Git hosting…. A token limited to that one repository (a GitHub fine-grained token, a GitLab project token) keeps an agent's pushes to that repository.",
   "git.profileUrlPlaceholder": "https://github.com/me or https://gitlab.com/me",
   "git.accessToken": "Access token",
   "git.tokenPlaceholder": "ghp_... / glpat-...",
@@ -7427,6 +7434,9 @@ export const enSource = {
   "gitPushMcp.confirmUrl": "First push to this URL: pushing confirms it for this project.",
   "gitPushMcp.toDefault": "Agent pushes to this branch always wait for you: it is the remote's default branch, main or master, or a release workflow runs on it.",
   "gitPushMcp.note": "Agent's note: {note}",
+  "gitPushMcp.hooksReview": "This repo's pre-push hook runs on your computer before the push and you haven't approved it yet. Review it once; the push then runs again by itself.",
+  "gitPushMcp.hooksChanged": "This repo's hooks changed since you approved them, so the pre-push hook did not run. Review them again; the push then runs again by itself.",
+  "gitPushMcp.reviewHooks": "Review hooks…",
   "gitPushMcp.push": "Push",
   "gitPushMcp.release": "Release",
   "gitPushMcp.releaseOn": "on {branch}",
