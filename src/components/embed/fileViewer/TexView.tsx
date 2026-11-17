@@ -79,6 +79,7 @@ import { ErrorNote } from "../../common/ErrorNote";
 import { useViewerState } from "./viewerState";
 import { openLinkedFile } from "./openLinked";
 import { alignFileTabSide, jumpToSource } from "./sourceJump";
+import { useTexPdfHost } from "./texPdfHost";
 import { localMirrorRootFor, ViewerHeader } from "./ViewerHeader";
 import { type EditorApi, useEditableFile, ExternalChangeBanner } from "./editableFile";
 import { type HoverPreviewConfig, CodeEditor } from "./CodeEditor";
@@ -206,13 +207,18 @@ export function TexView({
   const t = useT();
   const texInstallLabel = IS_HOST_WINDOWS ? t("fileViewer.texInstallMiktex") : t("fileViewer.texInstallLatex");
   const {
-    error, draft, setDraft, loaded, isDirty, saving, saveError, save,
+    error, draft, setDraft, loaded, isDirty, saving, saveError, save, saveClean,
     undo, redo, canUndo, canRedo, externalChange, reloadFromDisk, keepMine, baseline,
   } = useEditableFile(path);
   // The latest text for callbacks that must not change identity per keystroke
   // (compile, follow-link): they read it at call time, not at render time.
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const isDirtyRef = useRef(isDirty);
+  isDirtyRef.current = isDirty;
+  // A one-pane host (the agent tab's Data view) shows the PDF and the sources
+  // in its own pane instead of tabs (`texPdfHost`).
+  const pdfHost = useTexPdfHost();
   const scope = useFileScope();
   // The SyncTeX commands read the map off local disk; a file read from a remote
   // host (not its local mirror) has none there.
@@ -623,6 +629,16 @@ export function TexView({
   // so a reused tab reloads the freshly compiled bytes on its own.
   const openPdf = useCallback(
     (pdf: string) => {
+      // A one-pane host shows the PDF in this editor's place, which unmounts it:
+      // an unsaved draft is written first (as Compile does) rather than dropped,
+      // and a failed save keeps the editor up with its error.
+      if (!onOpenPdf && pdfHost) {
+        void (isDirtyRef.current ? saveClean() : Promise.resolve(true)).then((clean) => {
+          if (!clean) return;
+          if (!pdfHost.showPdf(pdf)) openLinkedFile(tabKey, dirname(path) || "/", { path: pdf, viewer: "pdf", label: basename(pdf) });
+        });
+        return;
+      }
       // A remote project's PDF tab open on the other side (the mirror's PDF, or
       // the host's switched to Local) is put on this build's side first, so the
       // dedupe below finds it instead of opening a second PDF tab.
@@ -637,7 +653,7 @@ export function TexView({
       const dir = dirname(path) || "/";
       openLinkedFile(tabKey, dir, { path: pdf, viewer: "pdf", label: name });
     },
-    [path, tabKey, onOpenPdf],
+    [path, tabKey, onOpenPdf, pdfHost, saveClean],
   );
 
   // The PDF this source builds to: the last compile's actual output when known,
@@ -908,7 +924,8 @@ export function TexView({
 
   // The error-list jump: a workspace switches the center to an in-structure file;
   // standalone falls back to the module default (open/focus a tab).
-  const jumpToError = onJumpToSource ?? jumpToSource;
+  const jumpToError = onJumpToSource
+    ?? (pdfHost ? (input: string, line: number, column: number) => { if (!pdfHost.showSource(input, line, column)) jumpToSource(input, line, column); } : jumpToSource);
 
   // No engine (or still probing): degrade to exactly the plain-text editor. A
   // host build runs on the host, whatever this machine has.
