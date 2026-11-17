@@ -3086,7 +3086,7 @@ export const dict: Dict = {
   "agents.lead": "CLI di agenti che {app} può aprire come schede. Quelle installate e attivate compaiono nel menu +, nell'ordine fissato dalle frecce.",
   "agents.settingsHeading": "Impostazioni",
   "agents.autoTabName": "Dai alle schede agente il nome del loro primo prompt",
-  "agents.autoTabNameHelp": "Sul telefono la scheda prende quel nome; il desktop mantiene il nome della CLI e mostra il compito al passaggio sulla scheda. Una scheda rinominata mantiene il suo nome.",
+  "agents.autoTabNameHelp": "La scheda prende quel nome, sul desktop e sul telefono. Una scheda rinominata mantiene il suo nome.",
   "agents.dailyReleaseCheck": "Cerca nuove versioni ogni giorno",
   "agents.dailyReleaseCheckHelp": "Una volta al giorno chiede al feed delle versioni di ogni CLI installata e a quello di Ollama se c'è una versione più nuova. Non installa nulla. Disattivato: chiede solo Cerca aggiornamento.",
   "agents.groupAccounts": "Account e chiavi",

@@ -28,7 +28,7 @@ import { useDetachAnimStore, flyVector } from "../../stores/drag/detachAnim";
 import { commitDrop } from "./commitDrop";
 import { TabDropPlaceholder } from "./TabDropPlaceholder";
 import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
-import { tabTaskName } from "../../lib/agents/autoTabName";
+import { tabDisplayLabel, tabTaskName } from "../../lib/agents/autoTabName";
 import { SHELL_ITEMS, TAB_ACCENT, agentShortcutSlots, isFileTabKind, itemLabel, onOwnLogin, type StaticMenuItem } from "../../lib/tabs/newTabItems";
 import { agentMachines, agentMenuEntries, compactAgentMenuEntries } from "./agentMenuEntries";
 import { isHostPinned } from "../../lib/projectTabHost";
@@ -246,6 +246,14 @@ function selectOnMount(el: HTMLInputElement | null) {
   if (el) el.select();
 }
 
+/** Commit an inline rename that starts from the shown name (an agent tab's
+ *  task name): leaving it as shown is no rename, so the tab keeps following
+ *  its first prompt instead of freezing the task into its label. */
+function commitShownRename(bar: TabItemBar, tab: TabEntry, value: string): void {
+  if (value.trim() === tabDisplayLabel(tab)) bar.cancelRename();
+  else bar.commitRename(tab.key, value);
+}
+
 /** Fast mode's native tooltip: the label, an agent tab's task name, then a
  *  shell's launch lines. */
 function fastModeTitle(tab: TabEntry, member?: string): string {
@@ -361,7 +369,7 @@ const TabItem = memo(function TabItem({
       {editing ? (
         <input
           className="tab-label-edit"
-          defaultValue={tab.label}
+          defaultValue={tabDisplayLabel(tab)}
           autoFocus
           aria-label={t("tabBar.renameAriaLabel")}
           // Mount focused with the whole label selected for a fast retype.
@@ -372,15 +380,15 @@ const TabItem = memo(function TabItem({
           onKeyDown={(e) => {
             e.stopPropagation();
             if (e.key === "Enter") {
-              bar.commitRename(tab.key, (e.target as HTMLInputElement).value);
+              commitShownRename(bar, tab, (e.target as HTMLInputElement).value);
             } else if (e.key === "Escape") {
               bar.cancelRename();
             }
           }}
-          onBlur={(e) => bar.commitRename(tab.key, e.target.value)}
+          onBlur={(e) => commitShownRename(bar, tab, e.target.value)}
         />
       ) : (
-        <span className="tab-label">{tab.label}</span>
+        <span className="tab-label">{tabDisplayLabel(tab)}</span>
       )}
       {!editing && <TabMemberChip info={memberInfo} label={tab.label} />}
       <TabMarkBadge tab={tab} />
@@ -1246,8 +1254,8 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
     const label = await promptText({
       title: t("common.rename"),
       label: t("tabBar.renameAriaLabel"),
-      initial: tab.label,
-      unchanged: tab.label,
+      initial: tabDisplayLabel(tab),
+      unchanged: tabDisplayLabel(tab),
     });
     if (label) renameTab(key, label);
   }

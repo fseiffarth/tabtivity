@@ -3086,7 +3086,7 @@ export const dict: Dict = {
   "agents.lead": "CLIs de agentes que {app} puede abrir como pestañas. Los instalados y activados aparecen en el menú +, en el orden que fijan las flechas.",
   "agents.settingsHeading": "Ajustes",
   "agents.autoTabName": "Nombrar las pestañas de agente según su primer prompt",
-  "agents.autoTabNameHelp": "En el teléfono la pestaña toma ese nombre; el escritorio conserva el nombre de la CLI y muestra la tarea al pasar sobre la pestaña. Una pestaña renombrada conserva su nombre.",
+  "agents.autoTabNameHelp": "La pestaña toma ese nombre, en el escritorio y en el teléfono. Una pestaña renombrada conserva su nombre.",
   "agents.dailyReleaseCheck": "Buscar versiones nuevas cada día",
   "agents.dailyReleaseCheckHelp": "Una vez al día pregunta a la fuente de versiones de cada CLI instalada y a la de Ollama si hay una versión más nueva. No instala nada. Desactivado: solo pregunta Buscar actualización.",
   "agents.groupAccounts": "Cuentas y claves",

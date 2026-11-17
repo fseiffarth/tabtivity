@@ -6,9 +6,10 @@ import { AGENT_CLI_ROWS } from "./agentCliTable";
  * Agent tabs named by their task: a new agent tab opens as its CLI ("Claude",
  * "Codex") and takes the name of its first prompt once one is recorded
  * (`stores/agents/autoTabNames` does the naming; this module is its pure
- * half). For now the name shows on the phone only: there it is the tab's name
- * (`discovery::public_label_of`); the desktop keeps the CLI's name on the tab
- * and shows the task in its hover card (`tabTaskName`).
+ * half). The phone names the tab by it (`discovery::public_label_of`); the
+ * desktop strip shows it in place of the label (`tabDisplayLabel`). The stored
+ * `label` stays the CLI's name either way: the hover card still shows the CLI,
+ * and a rename is what ends the automatic name.
  *
  * The tab remembers the label Tabtivity gave it (`TabEntry.autoLabel`) and the
  * task name apart (`TabEntry.taskName`). The task name counts only while
@@ -128,6 +129,12 @@ export function holdsAutoLabel(tab: Pick<TabEntry, "label" | "autoLabel">): bool
 /** The task name `tab` carries, while its label is still Tabtivity's. */
 export function tabTaskName(tab: Pick<TabEntry, "label" | "autoLabel" | "taskName">): string | undefined {
   return holdsAutoLabel(tab) && tab.taskName ? tab.taskName : undefined;
+}
+
+/** What the desktop tab strip shows for `tab`: its task name while it holds
+ *  its automatic label, else the label itself. */
+export function tabDisplayLabel(tab: Pick<TabEntry, "label" | "autoLabel" | "taskName">): string {
+  return tabTaskName(tab) ?? tab.label;
 }
 
 /**

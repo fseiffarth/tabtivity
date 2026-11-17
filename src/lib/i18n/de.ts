@@ -3089,7 +3089,7 @@ export const dict: Dict = {
   "agents.lead": "Agent-CLIs, die {app} als Tabs öffnen kann. Installierte, eingeschaltete erscheinen im +-Menü, in der Reihenfolge der Pfeile.",
   "agents.settingsHeading": "Einstellungen",
   "agents.autoTabName": "Agent-Tabs nach ihrem ersten Prompt benennen",
-  "agents.autoTabNameHelp": "Auf dem Handy bekommt der Tab diesen Namen; der Desktop behält den CLI-Namen und zeigt die Aufgabe, wenn du über den Tab fährst. Ein umbenannter Tab behält seinen Namen.",
+  "agents.autoTabNameHelp": "Der Tab bekommt diesen Namen, auf dem Desktop und auf dem Handy. Ein umbenannter Tab behält seinen Namen.",
   "agents.dailyReleaseCheck": "Täglich nach neuen Versionen suchen",
   "agents.dailyReleaseCheckHelp": "Fragt einmal am Tag den Release-Feed jeder installierten CLI und von Ollama, ob es eine neuere Version gibt. Installiert wird nichts. Aus: nur „Nach Update suchen“ fragt an.",
   "agents.groupAccounts": "Konten & Schlüssel",

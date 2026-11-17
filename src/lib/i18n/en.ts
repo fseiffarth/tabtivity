@@ -1494,7 +1494,7 @@ export const enSource = {
   "errors.connectionLost": "The connection dropped midway. Try again; if it keeps happening, check the network.",
   "errors.certificate": "The server's security certificate isn't trusted. Check the address; a self-hosted server needs its certificate trusted first.",
   "agents.autoTabName": "Name agent tabs after their first prompt",
-  "agents.autoTabNameHelp": "On the phone the tab takes that name; the desktop keeps the CLI's name and shows the task when you hover the tab. A tab you renamed keeps its name.",
+  "agents.autoTabNameHelp": "The tab takes that name, on the desktop and on the phone. A tab you renamed keeps its name.",
   "agents.dailyReleaseCheck": "Check for new releases daily",
   "agents.dailyReleaseCheckHelp": "Once a day, asks each installed CLI's release feed and Ollama's whether a newer version is out. Nothing is installed. Off: only Check for update asks.",
   "terminal.limitHandoff.title": "CLI usage limit reached",

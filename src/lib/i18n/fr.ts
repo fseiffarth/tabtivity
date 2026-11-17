@@ -3088,7 +3088,7 @@ export const dict: Dict = {
   "agents.lead": "CLI d'agents que {app} peut ouvrir comme onglets. Les CLI installés et activés apparaissent dans le menu +, dans l'ordre fixé par les flèches.",
   "agents.settingsHeading": "Réglages",
   "agents.autoTabName": "Nommer les onglets d'agent d'après leur premier prompt",
-  "agents.autoTabNameHelp": "Sur le téléphone, l'onglet prend ce nom ; le bureau garde le nom du CLI et affiche la tâche au survol de l'onglet. Un onglet renommé garde son nom.",
+  "agents.autoTabNameHelp": "L'onglet prend ce nom, sur le bureau comme sur le téléphone. Un onglet renommé garde son nom.",
   "agents.dailyReleaseCheck": "Chercher les nouvelles versions chaque jour",
   "agents.dailyReleaseCheckHelp": "Une fois par jour, demande au flux de versions de chaque CLI installé et à celui d'Ollama si une version plus récente existe. Rien n'est installé. Désactivé : seul Rechercher une mise à jour interroge.",
   "agents.groupAccounts": "Comptes et clés",
