@@ -1127,6 +1127,7 @@ export const dict: Dict = {
   "mobile.transcript.plan": "Plan",
   "mobile.transcript.asked": "Pregunta",
   "mobile.transcript.notAnswered": "Sin responder",
+  "mobile.transcript.asyncWaiting": "Espera tu respuesta · el agente sigue trabajando",
   "mobile.transcript.today": "Hoy",
   "mobile.transcript.yesterday": "Ayer",
   "mobile.subagent.region": "Subagente",

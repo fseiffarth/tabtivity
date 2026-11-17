@@ -49,6 +49,10 @@ pub const TURN_SUFFIX: &str = ".turn";
 /// background (`<uid>.bg`): their task ids, one a line, the last few kept. The
 /// hook writes it on a `PostToolUse` whose result names a `backgroundTaskId`.
 const BG_SUFFIX: &str = ".bg";
+/// The open async questions of a Codex tab (`request_user_input_async`), one
+/// call id per line, written and read by the hook alone: while one is open the
+/// hook records `decision` for `working`. Removed with the turn record.
+pub const ASK_SUFFIX: &str = ".ask";
 
 /// Suffix of the per-tab record of where the user last typed into the tab
 /// (`<uid>.from`): `phone` or `desktop`, written by [`note_input_from`] and
@@ -379,6 +383,7 @@ pub fn clear_record(uid: &str, project_id: Option<&str>) {
 fn clear_paths(paths: &[PathBuf]) {
     for p in paths {
         let _ = std::fs::remove_file(p.with_extension(&BG_SUFFIX[1..]));
+        let _ = std::fs::remove_file(p.with_extension(&ASK_SUFFIX[1..]));
         let _ = std::fs::remove_file(p);
     }
 }

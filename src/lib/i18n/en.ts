@@ -1126,6 +1126,7 @@ export const enSource = {
   "mobile.transcript.plan": "Plan",
   "mobile.transcript.asked": "Question",
   "mobile.transcript.notAnswered": "Not answered",
+  "mobile.transcript.asyncWaiting": "Waiting for your answer · the agent works on meanwhile",
   "mobile.transcript.today": "Today",
   "mobile.transcript.yesterday": "Yesterday",
   "mobile.subagent.region": "Subagent",

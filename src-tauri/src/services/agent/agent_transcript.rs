@@ -138,6 +138,13 @@ pub struct TranscriptEntry {
     /// plain text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskedQuestion>,
+    /// On an `answer` entry with `questions`: still waiting for the user's
+    /// reply. Only Codex's async question (`request_user_input_async`) is
+    /// written before it is answered: the agent works on, the question waits
+    /// in Codex's queue (shift+← opens it) and nowhere on its screen, so the
+    /// chat is where it shows. Dropped, by Codex too, when the turn ends.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asking: bool,
     /// On an `agent` entry: the folder the subagent works in — the worktree
     /// Claude made for it (`isolation: "worktree"`, named in its `.meta.json`),
     /// else the session's own folder when it was spawned. A path, so the
@@ -1612,6 +1619,10 @@ fn parse_entries(
     // one entry, placed where the result lands — the agent waits on it, so
     // nothing of its own comes in between.
     let mut asked: std::collections::HashMap<String, (Vec<AskedQuestion>, Option<String>)> = std::collections::HashMap::new();
+    // Codex's async questions by call: their entry, written when asked, and
+    // whether the turn they wait in is still going.
+    let mut async_asks: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut async_open: Vec<String> = Vec::new();
     for line in lines {
         let line = line.trim();
         if line.is_empty() {
@@ -1639,6 +1650,25 @@ fn parse_entries(
             ended.extend(claude_tasks_ended(line));
             agents.read(&value, line);
             runs.extend(claude_workflow_launch(&value));
+        }
+        if kind == TranscriptKind::Codex {
+            for (call, index, answer) in codex_async_replies(&value) {
+                async_open.retain(|open| *open != call);
+                if let Some(entry) = async_asks.get(&call).and_then(|&at| entries.get_mut(at)) {
+                    answer_async_question(entry, index, answer);
+                }
+            }
+            if codex_turn_ended(&value) {
+                async_open.clear();
+            }
+            if let Some((call, questions)) = codex_async_ask(&value) {
+                let at = value.get("timestamp").and_then(Value::as_str).map(str::to_string);
+                if let Some(entry) = transcript_entry("answer", &asked_text(&questions), at) {
+                    async_asks.insert(call.clone(), entries.len());
+                    async_open.push(call);
+                    entries.push(TranscriptEntry { questions, ..entry });
+                }
+            }
         }
         let records = match kind {
             TranscriptKind::Claude => claude_records(&value, sidechain),
@@ -1721,6 +1751,11 @@ fn parse_entries(
         entries[*index].running = !finished && (background.is_some() || *index >= turn_start);
         entries[*index].finished = finished;
         entries[*index].background = background.is_some();
+    }
+    for call in &async_open {
+        if let Some(entry) = async_asks.get(call).and_then(|&at| entries.get_mut(at)) {
+            entry.asking = true;
+        }
     }
     let waiting = shells.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, shell)| shell).collect();
     let background = backgrounded
@@ -2335,12 +2370,112 @@ fn question_entry(mut questions: Vec<AskedQuestion>, result: Option<&Value>, at:
             }
         }
     }
-    let text = questions
+    transcript_entry("answer", &asked_text(&questions), at).map(|entry| TranscriptEntry { questions, ..entry })
+}
+
+/// Questions and their answers as plain text, an entry's `text`.
+fn asked_text(questions: &[AskedQuestion]) -> String {
+    questions
         .iter()
         .map(|q| format!("{}\n→ {}", q.question, q.answer.as_deref().unwrap_or("—")))
         .collect::<Vec<_>>()
-        .join("\n\n");
-    transcript_entry("answer", &text, at).map(|entry| TranscriptEntry { questions, ..entry })
+        .join("\n\n")
+}
+
+/// The tool Codex (0.169.0) asks an async question with.
+const CODEX_ASYNC_ASK: &str = "request_user_input_async";
+/// The tag Codex wraps the user's reply to one in, as a user message.
+const CODEX_ASYNC_REPLY: &str = "send_user_message_question_reply";
+
+/// A Codex `request_user_input_async` call: its id and the questions, each a
+/// `title` with plain-string `options` (a `{label, description}` row read too).
+fn codex_async_ask(value: &Value) -> Option<(String, Vec<AskedQuestion>)> {
+    if value.get("type").and_then(Value::as_str) != Some("response_item") {
+        return None;
+    }
+    let payload = value.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("function_call") || payload.get("name").and_then(Value::as_str) != Some(CODEX_ASYNC_ASK) {
+        return None;
+    }
+    let call = payload.get("call_id")?.as_str()?.to_string();
+    let args: Value = serde_json::from_str(payload.get("arguments")?.as_str()?).ok()?;
+    let questions: Vec<AskedQuestion> = args
+        .get("questions")?
+        .as_array()?
+        .iter()
+        .filter_map(|q| {
+            let question = bounded_line(q.get("title").or_else(|| q.get("question"))?.as_str()?)?;
+            let options = q
+                .get("options")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| {
+                            let (label, description) = match row {
+                                Value::String(label) => (label.as_str(), None),
+                                _ => (row.get("label")?.as_str()?, row.get("description").and_then(Value::as_str)),
+                            };
+                            Some(AskedOption { label: bounded_line(label)?, description: description.and_then(bounded_line), chosen: false })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let header = q.get("header").and_then(Value::as_str).and_then(bounded_line);
+            Some(AskedQuestion { header, question, options, answer: None })
+        })
+        .collect();
+    (!questions.is_empty()).then_some((call, questions))
+}
+
+/// The user's reply to async questions: a user message holding
+/// `<send_user_message_question_reply>[{answer, question, questionItemId}]`,
+/// where `questionItemId` is itself JSON — `["request_user_input_async",
+/// "<call>", <index>]`. Each (call, question index, answer).
+fn codex_async_replies(value: &Value) -> Vec<(String, usize, String)> {
+    let payload = value.get("payload");
+    let user = value.get("type").and_then(Value::as_str) == Some("response_item")
+        && payload.and_then(|p| p.get("type")).and_then(Value::as_str) == Some("message")
+        && payload.and_then(|p| p.get("role")).and_then(Value::as_str) == Some("user");
+    let Some(blocks) = payload.filter(|_| user).and_then(|p| p.get("content")).and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let (open, close) = (format!("<{CODEX_ASYNC_REPLY}>"), format!("</{CODEX_ASYNC_REPLY}>"));
+    let mut out = Vec::new();
+    for text in blocks.iter().filter_map(|b| b.get("text").and_then(Value::as_str)) {
+        let Some(body) = text.split_once(open.as_str()).and_then(|(_, rest)| rest.split_once(close.as_str())).map(|(body, _)| body) else {
+            continue;
+        };
+        let Ok(Value::Array(items)) = serde_json::from_str::<Value>(body.trim()) else { continue };
+        for item in &items {
+            let Some(answer) = item.get("answer").and_then(Value::as_str).and_then(bounded_line) else { continue };
+            let Some(Ok(Value::Array(id))) = item.get("questionItemId").and_then(Value::as_str).map(serde_json::from_str::<Value>) else {
+                continue;
+            };
+            if id.first().and_then(Value::as_str) != Some(CODEX_ASYNC_ASK) {
+                continue;
+            }
+            let (Some(call), Some(index)) = (id.get(1).and_then(Value::as_str), id.get(2).and_then(Value::as_u64)) else { continue };
+            out.push((call.to_string(), index as usize, answer));
+        }
+    }
+    out
+}
+
+/// A Codex turn ended (finished or cut off): an async question still waiting
+/// in it is dropped.
+fn codex_turn_ended(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("event_msg")
+        && matches!(value.pointer("/payload/type").and_then(Value::as_str), Some("task_complete" | "turn_aborted"))
+}
+
+/// One reply put on its question, the row it names marked.
+fn answer_async_question(entry: &mut TranscriptEntry, index: usize, answer: String) {
+    let Some(question) = entry.questions.get_mut(index) else { return };
+    for option in &mut question.options {
+        option.chosen = option.label == answer;
+    }
+    question.answer = Some(answer);
+    entry.text = asked_text(&entry.questions);
 }
 
 /// A `Bash` `tool_use` block: the command, and the description Claude gave it.

@@ -747,6 +747,22 @@ tab and resume/fork remain tagged for live verification.
   `PreCompact`/`PostCompact` (`trigger`). A turn against a closed port shows
   "Reconnecting… waiting for network" and fired no `Stop` within 20 s.
   `approval_policy = "untrusted"` is refused at config load since 0.169.0.
+  With `approvals_reviewer = "auto_review"` `PermissionRequest` fires before
+  the reviewer agent answers (one `guardian_review` thread per session; in
+  the fence nearly every command asks to escalate): the hook writes nothing
+  then (2026-11-17, live rollouts).
+- **Async question, 0.169.0 (2026-11-17, offline: `codex/async_question.py`)**:
+  the GPT-6 family is offered `request_user_input_async` (`questions[]` of
+  `title` + string `options`); the call returns `{"accepted":true}` at once
+  (`PostToolUse`, `tool_use_id`) and the turn works on. Screen: `• Queued
+  follow-up inputs / ? 1 question / shift+← to answer`; shift+← opens a picker
+  under that heading (question, `› 1.` rows, `N. Other`, `enter submit ^] skip
+  shift+→ main prompt`). The reply is a user message
+  `<send_user_message_question_reply>[{answer, question, questionItemId:
+  "[\"request_user_input_async\",\"<call>\",<i>]"}]</…>` and fires
+  `UserPromptSubmit` with it as the prompt; a skip records nothing; the turn's
+  end drops a waiting one. Read by the hook's `.ask` record, `agent_transcript`
+  and the phone's `useAsyncAsk`.
 - **0.169.0 (2026-11-13), outside Tabtivity, beside 0.167.2** — same setup as
   0.167.1 below; release notes of 0.168.0 and 0.169.0 read. `--help` of the top
   level, `resume`, `fork`, `mcp`, `login` and `queue` is identical; `exec` adds

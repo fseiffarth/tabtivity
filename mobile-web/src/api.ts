@@ -1074,6 +1074,9 @@ export interface TranscriptEntry {
    * `AskUserQuestion`), with the answers they got — sent once answered, so
    * the one still waiting is the live screen's. `text` says the same plainly. */
   questions?: AskedQuestion[];
+  /** On an `answer` with `questions`: still waiting for the reply — Codex's
+   * async question, written when asked while the agent works on. */
+  asking?: boolean;
   /** On an `agent`: it has not reported back yet (Claude's spawn call has
    * no result in the transcript). */
   running?: boolean;

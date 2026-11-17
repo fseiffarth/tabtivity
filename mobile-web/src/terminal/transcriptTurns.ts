@@ -42,6 +42,8 @@ export interface TranscriptTurn {
   plan?: boolean;
   /** On an `answer`: the questions it asked, as answered. */
   questions?: readonly AskedQuestion[];
+  /** On a `questions` turn: still waiting for the reply (Codex's async question). */
+  asking?: boolean;
   /** A prompt sent from this phone the session has not recorded yet, by its
    * id; `failed` once the link lost it, `retrying` while a resend waits;
    * `held` while the desktop still holds it and its words can change;
@@ -117,7 +119,7 @@ function buildTurns(entries: readonly TranscriptEntry[]): TranscriptTurn[] {
       command: entry.kind === "prompt" ? slashCommand(entry.text) : null,
       ...(entry.kind === "agent" ? { subagent: entry.subagent, role: entry.role, ...(entry.finished ? { finished: true } : {}), ...(entry.running ? { running: true } : {}), ...(entry.background ? { background: true } : {}), ...(entry.workflow ? { workflow: true } : {}), ...(entry.worktree ? { worktree: entry.worktree } : {}) } : {}),
       ...(entry.kind === "answer" && entry.plan === true ? { plan: true } : {}),
-      ...(entry.kind === "answer" && entry.questions?.length ? { questions: entry.questions } : {}),
+      ...(entry.kind === "answer" && entry.questions?.length ? { questions: entry.questions, ...(entry.asking ? { asking: true } : {}) } : {}),
       ...(entry.pending !== undefined ? { pending: entry.pending, failed: entry.failed === true, retrying: entry.retrying === true, ...(entry.held ? { held: true } : {}), ...(entry.queued ? { queued: true } : {}) } : {}),
     };
   });

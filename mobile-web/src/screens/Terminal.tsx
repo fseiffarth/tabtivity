@@ -142,6 +142,7 @@ import { useOutboxPoll, useOutboxViewers } from "./terminal/useOutbox";
 import { useModelPicker, useModelPickerAnswers } from "./terminal/useModelPicker";
 import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
 import { useLiveQuestion } from "./terminal/useLiveQuestion";
+import { type AsyncAsk, type AsyncAskSending, useAsyncAsk } from "./terminal/useAsyncAsk";
 import { useVoiceInput, type StartVoiceOptions } from "./terminal/useVoiceInput";
 import { useTabbyGate } from "./terminal/useTabbyGate";
 import { useTerminalSteering } from "./terminal/useTerminalSteering";
@@ -374,7 +375,7 @@ function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`.
  * `queuedActions` goes under every queued prompt's bubble. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, taskLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, taskLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles, asyncAsk }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -403,6 +404,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   /** The project files the answers name: their pictures and PDFs follow
    * each answer (`AnswerAlbum`), a path in its words opens the file. */
   answerFiles?: AnswerFiles;
+  /** Answers a question still waiting in Codex's queue (`useAsyncAsk`). */
+  asyncAsk?: AsyncAsk;
 }) {
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
@@ -435,7 +438,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
           <span className="readable-command-text"><span aria-hidden="true">■ </span>{t("tabBar.statusInterrupted")}{isUntested("mobile.transcript.interrupted") && <em> · {t("mobile.focus.untested")}</em>}</span>
         </div>
       : turn.questions
-      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)} />
+      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t(turn.asking ? "mobile.transcript.asyncWaiting" : "mobile.transcript.notAnswered")} untested={(turn.asking ? isUntested("mobile.transcript.asyncAsk") : isUntested("mobile.focus.askedCard")) ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)}
+          answer={turn.asking && asyncAsk ? { sending: asyncAsk.sending?.key === turn.key ? asyncAsk.sending : null, label: t("mobile.transcript.answering"), pick: (question, row) => asyncAsk.pick(turn.key, turn.questions?.[question]?.question ?? "", question, row) } : undefined} />
       : turn.command
       ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
       : turn.kind === "prompt"
@@ -593,13 +597,16 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
 const CHAT_TIPS: readonly HintKey[] = ["statusModel", "composerAttach", "composerKeys", "composerPlanGoal", "composerClear", "composerCommit", "composerMic", "statusLamp", "statusMode", "statusWorktree", "sendHold", "chatMenu", "sentFiles", "markup", "chatSwipe"];
 const TABBY_TIPS: readonly HintKey[] = ["sendHold", "chatMenu", "chatSwipe"];
 
-function AskedCard({ questions, label, notAnswered, untested, time, press }: {
+function AskedCard({ questions, label, notAnswered, untested, time, press, answer }: {
   questions: readonly AskedQuestion[];
   label: string;
   notAnswered: string;
   untested: string;
   time: ReactNode;
   press: TapHandlers;
+  /** A question still waiting (Codex's async one): its rows are taps, and
+   * the one on its way says so. */
+  answer?: { sending: AsyncAskSending | null; label: string; pick: (question: number, row: number) => void };
 }) {
   return <div className="transcript-screen transcript-asked" role="group" aria-label={label} {...press}>
     <small>{label}{untested && <> · {untested}</>}</small>
@@ -608,7 +615,13 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
       return <Fragment key={index}>
         {asked.header && <div className="question-tabs"><span>{asked.header}</span></div>}
         <div className="question-ask"><div className="readable-line">{asked.question}</div></div>
-        <ul className="option-list question-list asked-list">
+        {answer && asked.answer === undefined && (asked.options?.length ?? 0) > 0 ? <QuestionRows
+          rows={(asked.options ?? []).map((option, row) => ({ key: row, label: option.label, description: option.description, pending: answer.sending?.question === index && answer.sending.row === row }))}
+          disabled={answer.sending !== null}
+          sendingLabel={answer.label}
+          onPick={(row) => answer.pick(index, Number(row.key))}
+          onType={() => {}}
+        /> : <ul className="option-list question-list asked-list">
           {asked.options?.map((option, row) => {
             const recommended = RECOMMENDED.exec(option.label);
             return <li key={row} className={option.chosen ? "chosen" : undefined}>
@@ -620,7 +633,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
             </li>;
           })}
           {typed && <li className="chosen"><span><strong>{asked.answer}</strong></span><span className="asked-check" aria-hidden="true">✓</span></li>}
-        </ul>
+        </ul>}
         {asked.answer === undefined && <small className="asked-none">{notAnswered}</small>}
       </Fragment>;
     })}
@@ -2178,6 +2191,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion,
   });
+  const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
   const queueSteer = useRef({ shown: false, send: () => {}, pull: () => {} });
   useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput, queue: queueSteer });
@@ -2762,7 +2776,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} />
+                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
