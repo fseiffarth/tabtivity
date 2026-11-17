@@ -3,7 +3,7 @@ import { CloseIcon } from "../glyphs";
 import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { PATH_LINK_ATTR } from "../../../src/lib/terminal/pathCandidates";
-import { chatLinkUrl } from "../terminal/answerMarkdown";
+import { ARTIFACT_ATTR, chatLinkUrl } from "../terminal/answerMarkdown";
 import { HOLD_MS } from "./MessageMenu";
 import { useBackLayer } from "../backStack";
 
@@ -79,13 +79,17 @@ export interface LinkHandlers {
  * `chatLinkUrl` accepts) opens `LinkSheet`; nothing opens without it. A press
  * held long enough to be a hold is the phone selecting the link's words, not
  * a tap. A path link (`linkPathsInHtml`) goes to `openPath` instead: it opens
- * a file of the project in the app, so it needs no confirmation.
+ * a file of the project in the app, so it needs no confirmation. So does a
+ * link to a document of an Antigravity chat (`data-artifact`): `openArtifact`
+ * asks the desktop for it, which reads only that chat's own folder.
  */
-export function useChatLinks(openPath?: (path: string) => void) {
+export function useChatLinks(openPath?: (path: string) => void, openArtifact?: (target: string) => void) {
   const [url, setUrl] = useState<string | null>(null);
   const downAt = useRef(0);
   const opener = useRef(openPath);
   opener.current = openPath;
+  const artifactOpener = useRef(openArtifact);
+  artifactOpener.current = openArtifact;
   const askUrl = useCallback((address?: string): boolean => {
     const href = chatLinkUrl(address);
     if (!href) return false;
@@ -96,6 +100,11 @@ export function useChatLinks(openPath?: (path: string) => void) {
     const path = target instanceof Element ? target.closest(`[${PATH_LINK_ATTR}]`)?.getAttribute(PATH_LINK_ATTR) : null;
     if (path && opener.current) {
       opener.current(path);
+      return true;
+    }
+    const doc = target instanceof Element ? target.closest(`[${ARTIFACT_ATTR}]`)?.getAttribute(ARTIFACT_ATTR) : null;
+    if (doc && artifactOpener.current) {
+      artifactOpener.current(doc);
       return true;
     }
     const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href]") : null;

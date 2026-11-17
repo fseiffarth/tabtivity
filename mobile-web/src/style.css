@@ -464,6 +464,8 @@ button.home-brand-root { justify-content:flex-start; min-height:var(--hit); padd
 .screen-head h1 { min-width:0; overflow-wrap:anywhere; unicode-bidi:plaintext; }
 .screen-head-main { display:grid; flex:1 1 auto; min-width:0; align-self:center; }
 .screen-head-title { display:flex; flex-wrap:wrap; align-items:center; column-gap:var(--sp-2); }
+.screen-head-backrow { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-2); }
+.screen-head-compact h1 { font-size:var(--fs-title); line-height:1.25; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; line-clamp:3; overflow:hidden; }
 .screen-head-back { display:inline-flex; align-items:center; align-self:flex-start; gap:var(--sp-1); min-height:var(--hit); margin-left:calc(-1 * var(--sp-2)); padding:0 var(--sp-3) 0 var(--sp-1); border:0; border-radius:var(--r-md); background:transparent; color:#bcb0ff; font-size:var(--fs-body); font-weight:600; }
 .screen-head-back > .app-icon { width:20px; height:20px; }
 .screen-head-back > .app-icon g { stroke-width:2; }
@@ -1078,8 +1080,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-md pre code { padding:0; background:none; color:#e3e6f2; white-space:pre; overflow-wrap:normal; }
 .transcript-md blockquote { margin:0 0 .6em; padding:2px 0 2px 10px; border-left:3px solid #4a4f68; color:#b9bdcc; }
 .transcript-md hr { margin:.8em 0; border:0; border-top:1px solid #34384a; }
-.transcript-md .md-link { color:#b7c9ff; }
-.transcript-md .md-link[data-href], .transcript-md [data-path-link] { color:#b7c9ff; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
+/* A link that goes nowhere (no web address, no file found for it) is drawn as
+   the plain text it is: only the two rules below make something look tappable. */
+.transcript-md .md-link[data-href], .transcript-md [data-path-link], .transcript-md [data-artifact] { color:#b7c9ff; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .transcript-md .md-math { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85em; }
 .transcript-md .md-table { display:block; max-width:100%; margin:0 0 .6em; overflow-x:auto; border-collapse:collapse; font-size:.82rem; -webkit-overflow-scrolling:touch; }
 .transcript-md .md-table th,.transcript-md .md-table td { padding:4px 8px; border:1px solid #34384a; text-align:left; vertical-align:top; }
@@ -1323,11 +1326,11 @@ body.terminal-open { min-height:0; overflow:hidden; }
 /* Claude's effort in the model sheet: the levels as one segment under the
    models, the current one lit as the list's current row is. */
 .model-effort { margin-top:var(--sp-3); }
-.model-effort-levels { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:2px; padding:2px; background:#0b0d13; }
+.model-effort-levels { display:grid; grid-template-columns:repeat(var(--effort-levels,6),minmax(0,1fr)); gap:2px; padding:2px; background:#0b0d13; }
 .model-effort-levels button { min-width:0; min-height:44px; padding:0 2px; border:0; border-radius:0; background:var(--surface-raised); color:#c8cdda; font-size:var(--fs-sub); font-weight:600; }
 .model-effort-levels button.current { background:#2e2b48; color:#d7d3f5; box-shadow:inset 0 0 0 1px #8c7df4; }
 .model-effort-levels button:disabled { opacity:.5; }
-@media (max-width:359px) { .model-effort-levels { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:359px) { .model-effort-levels:not([style]) { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 .model-effort > .sheet-note { margin-top:6px; }
 /* The same lamp the tab row shows, so the state reads without opening the
    sheet. `idle` is dim rather than absent: a missing lamp reads as broken. */
@@ -2652,3 +2655,6 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
 /* Over a screen with no header (splash, pairing, the lock sheet): above the
    lock sheet's backdrop (12). */
 .shell-switch-floating { position:fixed; z-index:13; top:max(10px,env(safe-area-inset-top)); right:max(10px,env(safe-area-inset-right)); border-radius:var(--r-md); }
+
+/* A document an Antigravity chat wrote (`ArtifactSheet`): the answer's own Markdown, scrolling inside the sheet. */
+.artifact-sheet .artifact-body { max-height:68dvh; overflow:auto; padding:0 4px 12px; -webkit-overflow-scrolling:touch; -webkit-user-select:text; user-select:text; }

@@ -1091,6 +1091,20 @@ fn friendly_ollama_error_detects_missing_runner() {
 }
 
 #[test]
+fn a_registry_404_is_a_missing_manifest_and_other_pull_errors_are_not() {
+    // Ollama 0.40's exact stream error for a tag the registry has no manifest for.
+    assert!(is_missing_manifest("pull model manifest: file does not exist"));
+    assert!(is_missing_manifest("pull model manifest: not found"));
+    for transient in [
+        "pull model manifest: Get \"https://registry.ollama.ai/v2/library/qwen3/manifests/latest\": dial tcp: lookup registry.ollama.ai: no such host",
+        "max retries exceeded: unexpected EOF",
+        "digest mismatch, file must be downloaded again",
+    ] {
+        assert!(!is_missing_manifest(transient), "{transient}");
+    }
+}
+
+#[test]
 fn friendly_ollama_error_is_case_insensitive() {
     let msg = friendly_ollama_error("LLAMA-SERVER binary NOT FOUND");
     assert!(msg.contains("inference runner"));

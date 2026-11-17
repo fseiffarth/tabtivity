@@ -93,6 +93,13 @@ class H(BaseHTTPRequestHandler):
         tools=[t.get('name') or t.get('function',{}).get('name') or t.get('type') for t in d.get('tools',[])]
         # A namespace (Codex's `multi_agent_v1`) lists its tools as `<ns>.<tool>`.
         tools+=[f"{t.get('name')}.{x.get('name')}" for t in d.get('tools',[]) if t.get('type')=='namespace' for x in t.get('tools',[])]
+        # The GPT-6 family gets its tools as an `additional_tools` input item
+        # (Codex 0.169.0): namespaces, `functions` holding the plain ones.
+        for x in items:
+            if x.get('type')!='additional_tools': continue
+            for t in x.get('tools',[]):
+                inner=[i.get('name') for i in t.get('tools',[])] if t.get('type')=='namespace' else [t.get('name')]
+                tools+=[n if t.get('type')!='namespace' or t.get('name')=='functions' else f"{t.get('name')}.{n}" for n in inner if n]
         rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':(items[-1].get('role') or items[-1].get('type')) if items else None,
              'tool_results':[str(x.get('output'))[:700] for x in outs]}
         log.write(json.dumps(rec)+'\n')

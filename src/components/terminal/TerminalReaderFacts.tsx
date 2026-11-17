@@ -385,8 +385,12 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
       </button>
     );
   };
-  const modelLabel = status?.model ?? modelTag;
-  const effortLabel = status?.effort ?? effort;
+  // The tab's tag carries an effort as `Gemini 3.8 Flash · high`
+  // (`statusModelTag`); the chip names the model and the effort is its own
+  // fact beside it, as it is when the live status is read.
+  const taggedEffort = status?.model ? null : /^(.+) · (low|medium|high|xhigh|max)$/u.exec(modelTag ?? "");
+  const modelLabel = status?.model ?? taggedEffort?.[1] ?? modelTag;
+  const effortLabel = status?.effort ?? effort ?? taggedEffort?.[2];
   const modeLabel = modes.find((choice) => choice.value === activeMode)?.label ?? status?.mode;
   const shownPath = status?.path ?? path;
   const worktree = worktreeOfPath(shownPath);
@@ -570,6 +574,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <button
             type="button"
             className="terminal-reader-fact-model"
+            data-reader-fact="model"
             onClick={() => modelPicking ? close() : openPicker()}
             disabled={!modelPicking && (!!live.working || !!live.question || picking)}
             aria-haspopup="dialog"
@@ -587,6 +592,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
           <button
             type="button"
             className="terminal-reader-fact-model"
+            data-reader-fact="effort"
             onClick={claude ? openEffort : modelPicking ? close : openEffort}
             disabled={claude ? !effortOpen && (!!live.question || picking) : !modelPicking && (!!live.working || !!live.question || picking)}
             aria-haspopup="dialog"

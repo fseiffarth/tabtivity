@@ -10,6 +10,7 @@ fn spec(user: Option<&str>, host: &str, port: Option<u16>, remote_path: &str) ->
         auto_connect: None,
         key_auth: None,
         persist_sessions: None,
+        agent_dir: None,
         vm: None,
         remote_only: None,
         label: None,
@@ -1261,4 +1262,44 @@ fn the_start_command_script_takes_only_a_safe_name() {
     assert!(script.contains("-t \"$e\"app-p--agent-1\"$c\" '#{pane_start_command}'"), "{script}");
     assert!(script.ends_with("|| true"));
     assert_eq!(tmux_start_command_script("a'; reboot"), None);
+}
+
+#[test]
+fn an_agent_on_a_host_with_an_agent_folder_runs_and_installs_with_that_folder_as_home() {
+    let home = "/scratch/me/agent-home";
+    let id = "0a1b2c3d-0000-4000-8000-000000000001";
+    let args = vec!["--session-id".to_string(), id.to_string()];
+    let cmd = remote_command_in("claude", &args, &HashMap::new(), "/srv/p", None, Some(home));
+    let swap = cmd.find("export HOME=").expect("the home is swapped");
+    // Before the probe, the installer and the host-side resume check, which all read $HOME.
+    assert!(swap < cmd.find("command -v claude").unwrap(), "cmd: {cmd}");
+    assert!(swap < cmd.find("claude.ai/install.sh").unwrap(), "cmd: {cmd}");
+    assert!(swap < cmd.find("if ls").unwrap(), "cmd: {cmd}");
+    assert!(cmd.contains(home), "cmd: {cmd}");
+    // Inside the login shell's script, not outside it: the real home's profile must still run.
+    assert!(cmd.find("-lc").unwrap() < swap, "cmd: {cmd}");
+}
+
+#[test]
+fn the_agent_folder_changes_nothing_for_shells_other_commands_or_a_host_without_one() {
+    let home = Some("/scratch/me/agent-home");
+    let shell = remote_command_in("", &[], &HashMap::new(), "/srv/p", None, home);
+    assert!(!shell.contains("HOME"), "a shell tab keeps the real home: {shell}");
+    let other = remote_command_in("mytool", &[], &HashMap::new(), "/srv/p", None, home);
+    assert!(!other.contains("HOME"), "an unknown command keeps the real home: {other}");
+    for bin in ["claude", "codex"] {
+        assert_eq!(
+            remote_command_in(bin, &[], &HashMap::new(), "/srv/p", None, None),
+            remote_command(bin, &[], &HashMap::new(), "/srv/p", None)
+        );
+        assert!(!remote_command(bin, &[], &HashMap::new(), "/srv/p", None).contains("export HOME="));
+    }
+}
+
+#[test]
+fn the_agent_folder_swap_survives_a_tmux_wrap() {
+    let wrap = TmuxWrap::Session("s1".to_string());
+    let cmd = remote_command_in("codex", &[], &HashMap::new(), "/srv/p", Some(&wrap), Some("/scratch/me/agent-home"));
+    assert!(cmd.contains("export HOME="), "cmd: {cmd}");
+    assert!(cmd.contains("tmux"), "cmd: {cmd}");
 }

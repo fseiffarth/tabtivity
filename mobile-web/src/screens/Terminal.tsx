@@ -6,6 +6,7 @@ import { HintQueue, type HintKey } from "../components/HintMessage";
 import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type TapHandlers } from "../components/MessageMenu";
+import { ArtifactSheet } from "../components/ArtifactSheet";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { ChatLinksIndex } from "../components/ChatLinksIndex";
 import { chatLinksOf } from "../terminal/chatLinks";
@@ -23,7 +24,7 @@ import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
-import { Fragment, memo, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   ANY_FILE_ACCEPT,
@@ -88,6 +89,7 @@ import {
   type SelectPrompt,
   type SelectStep,
 } from "../terminal/selectPrompt";
+import { isCopilotTab } from "../terminal/copilotStatus";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../terminal/openCodeMini";
 import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
 import { isAntigravityTab } from "../terminal/antigravity";
@@ -142,6 +144,7 @@ import { useOutboxPoll, useOutboxViewers } from "./terminal/useOutbox";
 import { useModelPicker, useModelPickerAnswers } from "./terminal/useModelPicker";
 import { useSignInPageWalk } from "./terminal/useSignInPageWalk";
 import { useLiveQuestion } from "./terminal/useLiveQuestion";
+import { type AsyncAsk, type AsyncAskSending, useAsyncAsk } from "./terminal/useAsyncAsk";
 import { useVoiceInput, type StartVoiceOptions } from "./terminal/useVoiceInput";
 import { useTabbyGate } from "./terminal/useTabbyGate";
 import { useTerminalSteering } from "./terminal/useTerminalSteering";
@@ -374,7 +377,7 @@ function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`.
  * `queuedActions` goes under every queued prompt's bubble. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, taskLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, taskLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles, asyncAsk, onOpenArtifact }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -403,6 +406,10 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   /** The project files the answers name: their pictures and PDFs follow
    * each answer (`AnswerAlbum`), a path in its words opens the file. */
   answerFiles?: AnswerFiles;
+  /** Answers a question still waiting in Codex's queue (`useAsyncAsk`). */
+  asyncAsk?: AsyncAsk;
+  /** Opens a document an Antigravity answer links (`ArtifactSheet`). */
+  onOpenArtifact?: (target: string) => void;
 }) {
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
@@ -411,7 +418,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
     const file = answerFiles?.links.get(path);
     if (file) answerFiles?.open(file);
   }, [answerFiles]);
-  const { links, sheet: linkSheet } = useChatLinks(openPath);
+  const { links, sheet: linkSheet } = useChatLinks(openPath, onOpenArtifact);
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
@@ -435,7 +442,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
           <span className="readable-command-text"><span aria-hidden="true">■ </span>{t("tabBar.statusInterrupted")}{isUntested("mobile.transcript.interrupted") && <em> · {t("mobile.focus.untested")}</em>}</span>
         </div>
       : turn.questions
-      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t("mobile.transcript.notAnswered")} untested={isUntested("mobile.focus.askedCard") ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)} />
+      ? <AskedCard questions={turn.questions} label={t("mobile.transcript.asked")} notAnswered={t(turn.asking ? "mobile.transcript.asyncWaiting" : "mobile.transcript.notAnswered")} untested={(turn.asking ? isUntested("mobile.transcript.asyncAsk") : isUntested("mobile.focus.askedCard")) ? t("mobile.focus.untested") : ""} time={time} press={tap(turn.key, () => turn.text)}
+          answer={turn.asking && asyncAsk ? { sending: asyncAsk.sending?.key === turn.key ? asyncAsk.sending : null, label: t("mobile.transcript.answering"), pick: (question, row) => asyncAsk.pick(turn.key, turn.questions?.[question]?.question ?? "", question, row) } : undefined} />
       : turn.command
       ? <CommandDivider command={turn.command} label={promptLabel} press={tap(turn.key, () => turn.text)} inbox={inbox} links={links} />
       : turn.kind === "prompt"
@@ -593,13 +601,16 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
 const CHAT_TIPS: readonly HintKey[] = ["statusModel", "composerAttach", "composerKeys", "composerPlanGoal", "composerClear", "composerCommit", "composerMic", "statusLamp", "statusMode", "statusWorktree", "sendHold", "chatMenu", "sentFiles", "markup", "chatSwipe"];
 const TABBY_TIPS: readonly HintKey[] = ["sendHold", "chatMenu", "chatSwipe"];
 
-function AskedCard({ questions, label, notAnswered, untested, time, press }: {
+function AskedCard({ questions, label, notAnswered, untested, time, press, answer }: {
   questions: readonly AskedQuestion[];
   label: string;
   notAnswered: string;
   untested: string;
   time: ReactNode;
   press: TapHandlers;
+  /** A question still waiting (Codex's async one): its rows are taps, and
+   * the one on its way says so. */
+  answer?: { sending: AsyncAskSending | null; label: string; pick: (question: number, row: number) => void };
 }) {
   return <div className="transcript-screen transcript-asked" role="group" aria-label={label} {...press}>
     <small>{label}{untested && <> · {untested}</>}</small>
@@ -608,7 +619,13 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
       return <Fragment key={index}>
         {asked.header && <div className="question-tabs"><span>{asked.header}</span></div>}
         <div className="question-ask"><div className="readable-line">{asked.question}</div></div>
-        <ul className="option-list question-list asked-list">
+        {answer && asked.answer === undefined && (asked.options?.length ?? 0) > 0 ? <QuestionRows
+          rows={(asked.options ?? []).map((option, row) => ({ key: row, label: option.label, description: option.description, pending: answer.sending?.question === index && answer.sending.row === row }))}
+          disabled={answer.sending !== null}
+          sendingLabel={answer.label}
+          onPick={(row) => answer.pick(index, Number(row.key))}
+          onType={() => {}}
+        /> : <ul className="option-list question-list asked-list">
           {asked.options?.map((option, row) => {
             const recommended = RECOMMENDED.exec(option.label);
             return <li key={row} className={option.chosen ? "chosen" : undefined}>
@@ -620,7 +637,7 @@ function AskedCard({ questions, label, notAnswered, untested, time, press }: {
             </li>;
           })}
           {typed && <li className="chosen"><span><strong>{asked.answer}</strong></span><span className="asked-check" aria-hidden="true">✓</span></li>}
-        </ul>
+        </ul>}
         {asked.answer === undefined && <small className="asked-none">{notAnswered}</small>}
       </Fragment>;
     })}
@@ -1243,6 +1260,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const toggleChatIndex = (index: NonNullable<typeof openChatIndex>) => setOpenChatIndex((open) => open === index ? null : index);
   const subagentListOpen = openChatIndex === "subagents";
   const { askUrl: askIndexLink, close: closeIndexLink, sheet: indexLinkSheet } = useChatLinks();
+  // The Antigravity document a tapped answer link opened (`ArtifactSheet`).
+  const [artifactTarget, setArtifactTarget] = useState<string | null>(null);
   /** The strip over the chat: a tap anywhere else shuts its open list. */
   const chatIndex = useRef<HTMLDivElement>(null);
   useTapOutside(chatIndex, openChatIndex !== null, closeChatIndex);
@@ -2178,6 +2197,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   } = useLiveQuestion({
     clearPending, deliver, agentLabel, liveTail, liveQuestion,
   });
+  const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
   const queueSteer = useRef({ shown: false, send: () => {}, pull: () => {} });
   useTerminalSteering({ focusView: view === "focus", liveQuestion, answerQuestion, composer: composerInput, queue: queueSteer });
@@ -2381,12 +2401,25 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * line, then the spinner's `with high effort`), else the level just sent. */
   const effortNow = status?.effort ?? sessionWork?.effort ?? (effortPicked || undefined);
   const effortOffered = tab.kind === "agent" && !tab.local_model && !bare && agentKey === "claude";
-  /** Claude's model chip: the model, then the level as a gauge. The tag's own
+  /** Antigravity prints its effort in the footer beside the model, and the
+   * chip shows it the same way as Claude's: the model, then the level as a gauge. */
+  const effortGauge = effortOffered || (antigravity && !tab.local_model && !bare);
+  /** The model chip: the model, then the level as a gauge. The tag's own
    * ` · <level>` (`statusModelTag`) is taken off, since it may be older than
    * the level just sent; other CLIs keep the tag as it is. */
-  const effortTagged = effortOffered ? CLAUDE_EFFORT_SUFFIX.exec(modelChip) : null;
+  const effortTagged = effortGauge ? CLAUDE_EFFORT_SUFFIX.exec(modelChip) : null;
   const chipModel = effortTagged ? modelChip.slice(0, effortTagged.index) : modelChip;
-  const chipEffort = effortOffered ? effortNow ?? effortTagged?.[1] : undefined;
+  const chipEffort = effortGauge ? effortNow ?? effortTagged?.[1] : undefined;
+  /** Antigravity's slider for the model the session is on. Its dialog draws
+   * the slider only for the highlighted row, and the highlight opens on the
+   * `(current)` one, so the stops are offered under the models while the
+   * highlight is there. Mid-walk, or after a tap, the stops belong to another
+   * row and are not shown. */
+  const highlighted = pickerStep?.options[pickerStep.current];
+  const antigravityStops = antigravity && !effortStep && !effortFor && !reveal && !answered
+    && highlighted?.description === "(current)" && effortSlider && effortSlider.stops.length > 1
+    ? effortSlider
+    : null;
   /** Claude's levels in the model sheet, under the models as the CLI's own
    * `/model` dialog draws its effort line: one tap sends `/effort <level>`
    * and closes the sheet. The model chip carries the level instead of a chip
@@ -2402,7 +2435,21 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       onClick={() => chooseEffortLevel(level)}
     >{level}</button>)}</div>
     <p className="sheet-note">{t("terminal.reader.effortNote")}</p>
-  </section>;
+  </section>
+    /* Antigravity's stops for the current model: a tap moves its slider and
+     * presses the Enter that applies the model and the effort together. */
+    || antigravityStops && <section className="model-effort" aria-label={t("terminal.reader.effortTitle")}>
+      <h3 className="option-list-group">{t("terminal.reader.effortTitle")}{isUntested("mobile.model.antigravityEffort") && <span className="untested">{t("mobile.focus.untested")}</span>}</h3>
+      <div className="model-effort-levels" style={{ "--effort-levels": antigravityStops.stops.length } as CSSProperties}>{antigravityStops.stops.map((stop, index) => <button
+        key={stop.label}
+        className={index === antigravityStops.current ? "current" : undefined}
+        aria-current={index === antigravityStops.current || undefined}
+        aria-label={t("terminal.reader.effort", { effort: stop.label })}
+        disabled={!connected}
+        onClick={() => chooseEffort(String(index))}
+      >{stop.label}</button>)}</div>
+      <p className="sheet-note">{antigravityStops.stops[antigravityStops.current]?.description ?? t("mobile.model.effortHint")}</p>
+    </section>;
   const modeOptions: SheetOption[] = modes.map((choice) => ({
     key: choice.value,
     label: choice.label,
@@ -2762,7 +2809,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} />
+                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
@@ -2818,6 +2865,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               </div>}
         </section>
         {indexLinkSheet}
+        {artifactTarget && <ArtifactSheet tabId={tab.id} target={artifactTarget} onClose={() => setArtifactTarget(null)} />}
         {!openStep && pinnedPrompt && <button className="readable-pinned-prompt" style={pinnedTop ? { top: pinnedTop + 6 } : undefined} aria-label={t("mobile.focus.lastPrompt")}
           onClick={() => pinnedPromptEl.current?.scrollIntoView({ block: "start", behavior: "smooth" })}>
           <span className="readable-pinned-prompt-text">{pinnedPrompt}</span>
@@ -2926,6 +2974,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {modeOffered(agentLabel) && <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>}
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
+          {tab.kind === "agent" && isCopilotTab(agentLabel) && status && isUntested("mobile.focus.copilotStatus") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(isUntested("mobile.design.rounded") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
         </>}
         {tab.worktree && <span className="fact-worktree" title={t("terminal.reader.worktreeHint")}>{t("terminal.reader.worktree", { name: tab.worktree.label })}</span>}

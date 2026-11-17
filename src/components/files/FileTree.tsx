@@ -64,6 +64,8 @@ import { FileIcon } from "../common/icons/FileIcon";
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CloseIcon, PlayIcon, RefreshIcon, SearchIcon } from "../common/icons/Icon";
 import { useT, type TranslationKey } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
+import { useProjectsStore } from "../../stores/projects";
+import { expectsGitRepo } from "../../stores/gitDirty";
 import { BRAND, storageKey } from "../../lib/brand";
 import type { GitStatusMap, MoveTargetAttrs, RowActions, SharedTreeSearch } from "./fileTreeTypes";
 import { beginNativeFileDrag, startEntryPointerDrag } from "./fileTreeDrag";
@@ -665,6 +667,13 @@ export function FileTree({
   } = useFileTreeListingState({
     projectId, projectDir, initialRelPath, scanExcluded,
   });
+  // Why the last `git_file_statuses` failed: the letters on screen are then the
+  // last good ones (or none), not a reading. Said only for a project that
+  // should be a repo — a git-less one on a host without git is not news.
+  const [gitStatusError, setGitStatusError] = useState<string | null>(null);
+  const expectsRepo = useProjectsStore((s) =>
+    expectsGitRepo(s.projects.find((p) => p.id === projectId)?.git_type),
+  );
   const [isDragOver, setIsDragOver] = useState(false);
   const [gitignoredExpanded, setGitignoredExpanded] = useState<boolean>(() => {
     try {
@@ -1010,11 +1019,16 @@ export function FileTree({
       if (loadTargetRef.current !== rel) return;
       setRawEntries((prev) => (fileEntriesEqual(prev, result) ? prev : result));
       announceRel();
+      let statusError: string | null = null;
       const statuses = await invoke<GitStatusMap | null>("git_file_statuses", {
         projectDir,
         relPath: rel,
-      }).catch(() => null);
+      }).catch((e: unknown) => {
+        statusError = String(e);
+        return null;
+      });
       if (loadTargetRef.current !== rel) return;
+      setGitStatusError(statusError);
       // A failed status probe is a transient (a `.git/index.lock` held by
       // another git, a spawn hiccup) and not "nothing is ignored/modified":
       // keep what is on screen (the seed's letters) rather than wiping it to a
@@ -1118,11 +1132,16 @@ export function FileTree({
     // only fallback is a full load of `rel`, which would be just as stale.
     if (loadTargetRef.current !== rel) return true;
     setRawEntries((prev) => (fileEntriesEqual(prev, result) ? prev : result));
+    let statusError: string | null = null;
     const statuses = await invoke<GitStatusMap | null>("git_file_statuses", {
       projectDir,
       relPath: rel,
-    }).catch(() => null);
+    }).catch((e: unknown) => {
+      statusError = String(e);
+      return null;
+    });
     if (loadTargetRef.current !== rel) return true;
+    setGitStatusError(statusError);
     // Keep the last good letters over a failed probe (see `load`): a quiet
     // refresh must never move rows between sections because git was busy.
     if (statuses) setGitStatuses((prev) => (stringMapsEqual(prev, statuses) ? prev : statuses));
@@ -2972,6 +2991,9 @@ export function FileTree({
       </div>
       {loading && <SkeletonRows count={6} className="file-tree-skeleton" />}
       {error && <ErrorNote className="file-tree-error" error={error} />}
+      {!error && expectsRepo && gitStatusError && (
+        <ErrorNote className="file-tree-error" error={t("fileTree.gitStatusFailed", { error: gitStatusError })} />
+      )}
       {/* What the last transfer did — the success half, which nothing reported
           before. Same chrome as the whole-project row's result line. */}
       {syncNotice && (

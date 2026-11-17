@@ -49,6 +49,10 @@ pub const TURN_SUFFIX: &str = ".turn";
 /// background (`<uid>.bg`): their task ids, one a line, the last few kept. The
 /// hook writes it on a `PostToolUse` whose result names a `backgroundTaskId`.
 const BG_SUFFIX: &str = ".bg";
+/// The open async questions of a Codex tab (`request_user_input_async`), one
+/// call id per line, written and read by the hook alone: while one is open the
+/// hook records `decision` for `working`. Removed with the turn record.
+pub const ASK_SUFFIX: &str = ".ask";
 
 /// Suffix of the per-tab record of where the user last typed into the tab
 /// (`<uid>.from`): `phone` or `desktop`, written by [`note_input_from`] and
@@ -379,6 +383,7 @@ pub fn clear_record(uid: &str, project_id: Option<&str>) {
 fn clear_paths(paths: &[PathBuf]) {
     for p in paths {
         let _ = std::fs::remove_file(p.with_extension(&BG_SUFFIX[1..]));
+        let _ = std::fs::remove_file(p.with_extension(&ASK_SUFFIX[1..]));
         let _ = std::fs::remove_file(p);
     }
 }
@@ -581,7 +586,16 @@ fn boot_ticks_now() -> Option<u64> {
     u64::try_from(now.as_micros()).ok()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows: `FILETIME` now (100-ns units since 1601), the clock
+/// `sysstat::process_start` (`GetProcessTimes`) reads a shell's start on.
+#[cfg(target_os = "windows")]
+fn boot_ticks_now() -> Option<u64> {
+    const UNIX_EPOCH_AS_FILETIME: u64 = 116_444_736_000_000_000;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(now.as_nanos() / 100).ok().map(|t| t + UNIX_EPOCH_AS_FILETIME)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn boot_ticks_now() -> Option<u64> {
     None
 }
@@ -590,7 +604,7 @@ fn boot_ticks_now() -> Option<u64> {
 /// `0` = unknown) was already running when the turn ended at `ended`. Unknown
 /// on either side reads as yes: the plain `done` reading, as before the start
 /// was compared.
-#[cfg(any(target_os = "linux", target_os = "macos", test))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 fn outlived_turn(start: u64, ended: Option<u64>) -> bool {
     start == 0 || ended.is_none_or(|end| start <= end)
 }
@@ -809,7 +823,7 @@ fn is_task_output(path: &Path, tasks: &HashSet<String>) -> bool {
 }
 
 /// The tab uid a NUL-separated environment block belongs to, if it sets one.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn environ_uid(environ: &[u8]) -> Option<String> {
     crate::services::proc_table::environ_tab_uid(environ)
 }
@@ -829,7 +843,7 @@ fn environ_uid(environ: &[u8]) -> Option<String> {
 /// [`refresh_jobs`]), each shell's environment read once in its life, and
 /// each match checked alive before it counts — a shell that ended since the
 /// walk is no job. macOS walks its own table through `sysstat` (below);
-/// Windows reports no job. A contained agent's shells belong to the
+/// Windows reads each shell's PEB (below). A contained agent's shells belong to the
 /// container's user and a remote one's live on its host, so those report none
 /// either.
 #[cfg(target_os = "linux")]
@@ -960,10 +974,111 @@ fn tool_shell_uids(
     background_job_uids(want, ends, pids, &probe)
 }
 
-/// Windows: no tab ever reports a job — there is no reader of another
-/// process's environment block here (it would take `NtQueryInformationProcess`
-/// and a PEB walk), so no tool shell can be tied to its tab.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// The shells a tool call runs in on Windows, by image name without `.exe`:
+/// Git Bash for Claude's Bash tool (its `bin\bash.exe` and the `usr\bin` one
+/// it starts), the `cmd` → `powershell` pair of its PowerShell tool, and
+/// whichever of them Codex uses.
+#[cfg(any(target_os = "windows", test))]
+const WIN_SHELL_EXES: &[&str] = &["bash", "sh", "cmd", "powershell", "pwsh"];
+
+/// An image name as [`WIN_SHELL_EXES`] spells it: lowercase, no `.exe`.
+#[cfg(any(target_os = "windows", test))]
+fn win_exe_stem(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    lower.strip_suffix(".exe").map(str::to_string).unwrap_or(lower)
+}
+
+/// Whether a Windows process is a shell its agent started for a tool call:
+/// Claude's Bash tool (sources the CLI's shell snapshot, as on POSIX), its
+/// PowerShell tool (handed its script through `CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT`,
+/// measured on Claude 2.1.326), or a shell whose parent is Codex. Tabtivity's own
+/// session hook, which Codex starts as a PowerShell too, is none of them.
+#[cfg(any(target_os = "windows", test))]
+fn is_win_tool_shell(exe: &str, cmdline: &str, parent_exe: &str) -> bool {
+    WIN_SHELL_EXES.contains(&exe)
+        && !cmdline.contains(crate::brand::SESSION_HOOK_PS1)
+        && (cmdline.contains("/shell-snapshots/snapshot-")
+            || cmdline.contains("CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT")
+            || parent_exe.starts_with("codex"))
+}
+
+/// Whether a Windows command line writes to the output file of one of `tasks`
+/// (`…\tasks\<id>.output`): Claude's PowerShell tool redirects there in the
+/// command line itself, so a call the hook recorded as backgrounded is known
+/// mid-turn. Its Bash tool does not (its output goes through a pipe), and
+/// writes the stdin seam POSIX reads (`CLAUDE_BACKGROUND_SEAM`) on every call,
+/// foreground too — so a backgrounded Bash call is known once it outlives the
+/// turn.
+#[cfg(any(target_os = "windows", test))]
+fn win_cmdline_writes_task(cmdline: &str, tasks: &HashSet<String>) -> bool {
+    tasks.iter().any(|id| {
+        cmdline.contains(&format!("tasks\\{id}.output")) || cmdline.contains(&format!("tasks/{id}.output"))
+    })
+}
+
+/// The walk behind Windows' [`tool_shell_uids`], over a process table `procs`
+/// (`(pid, ppid, image name)`) and the readers of a process's command line +
+/// environment (`params`) and start (`start`, `0` = unknown). Shells only:
+/// only they have their PEB read.
+#[cfg(any(target_os = "windows", test))]
+fn win_background_job_uids(
+    want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
+    bg: &HashMap<String, HashSet<String>>,
+    procs: &[(u32, u32, String)],
+    params: impl Fn(u32) -> Option<(String, Vec<u8>)>,
+    start: impl Fn(u32) -> u64,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if want.is_empty() {
+        return out;
+    }
+    let exe_of: HashMap<u32, String> = procs.iter().map(|(pid, _, name)| (*pid, win_exe_stem(name))).collect();
+    for (pid, ppid, _) in procs {
+        let Some(exe) = exe_of.get(pid) else { continue };
+        if !WIN_SHELL_EXES.contains(&exe.as_str()) {
+            continue;
+        }
+        let Some((cmdline, environ)) = params(*pid) else { continue };
+        let Some(uid) = environ_uid(&environ) else { continue };
+        let Some(state) = want.get(uid.as_str()) else { continue };
+        if out.contains(&uid) {
+            continue;
+        }
+        let parent_exe = exe_of.get(ppid).map(String::as_str).unwrap_or_default();
+        if !is_win_tool_shell(exe, &cmdline, parent_exe) {
+            continue;
+        }
+        let task = bg.get(&uid).is_some_and(|tasks| win_cmdline_writes_task(&cmdline, tasks));
+        let outlived = outlived_turn(start(*pid), ends.get(&uid).copied());
+        if (*state == TurnState::Done && outlived) || task {
+            out.insert(uid);
+        }
+    }
+    out
+}
+
+/// Windows: one ToolHelp walk, then each shell's command line and environment
+/// from its PEB (`sysstat::process_params`) — the tab id is in the
+/// environment, as on POSIX. Only the user's own processes answer, which is
+/// every tab's; a contained or remote agent's shells are not on this table.
+#[cfg(target_os = "windows")]
+fn tool_shell_uids(
+    want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
+    bg: &HashMap<String, HashSet<String>>,
+    _max_age: Duration,
+) -> HashSet<String> {
+    if want.is_empty() {
+        return HashSet::new();
+    }
+    let procs = crate::sysstat::process_list();
+    win_background_job_uids(want, ends, bg, &procs, crate::sysstat::process_params, |pid| {
+        crate::sysstat::process_start(pid).unwrap_or(0)
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn tool_shell_uids(
     _want: &HashMap<&str, TurnState>,
     _ends: &HashMap<String, u64>,
@@ -1786,5 +1901,89 @@ mod tests {
         assert!(!states().lock().unwrap().contains_key(&uid));
         assert!(!job_flag(&uid));
         on_tab_gone(pty);
+    }
+
+    /// Windows (measured on Claude 2.1.326): the Bash tool is Git Bash with the
+    /// snapshot `source` and the stdin seam on EVERY call; the PowerShell tool
+    /// is `cmd` (the `chcp` wrapper, which redirects into the task's output
+    /// file) over `powershell`, both handed the launcher script.
+    #[test]
+    fn windows_tool_shells_are_tied_to_their_tab_and_backgrounded_ones_found() {
+        let var = crate::app_env!("TAB_UID");
+        let env = |uid: &str| format!("PATH=C:\\x\0{var}={uid}\0").into_bytes();
+        let bash = "\"C:\\Program Files\\Git\\bin\\bash.exe\" -c \"source /c/Users/u/AppData/Roaming/x/agent-homes/k/.claude/shell-snapshots/snapshot-bash-1-x.sh 2>/dev/null || true && eval 'cargo test' < /dev/null && pwd -P >| /c/Users/u/AppData/Local/Temp/claude-3c2a-cwd\"";
+        let ps_cmd = "C:\\WINDOWS\\System32\\cmd.exe /d /s /c \"\"C:\\WINDOWS\\System32\\chcp.com\" 65001 >nul & \"powershell.exe\" -NoProfile -Command \"$s = $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT; Invoke-Expression -Command $s\" > \"C:\\Users\\u\\AppData\\Local\\Temp\\claude\\p\\s\\tasks\\b798ytynj.output\" 2>&1\"";
+        let hook = format!("powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\x\\hooks\\{}\"", crate::brand::SESSION_HOOK_PS1);
+        // pid → (cmdline, uid, start)
+        let table: Vec<(u32, u32, String)> = vec![
+            (10, 1, "claude.exe".into()),
+            (11, 10, "bash.exe".into()),
+            (20, 1, "codex.exe".into()),
+            (21, 20, "powershell.exe".into()),
+            (22, 20, "powershell.exe".into()),
+            (30, 1, "claude.exe".into()),
+            (31, 30, "cmd.exe".into()),
+            (40, 1, "Code.exe".into()),
+            (41, 40, "bash.exe".into()),
+        ];
+        let params = |pid: u32| -> Option<(String, Vec<u8>)> {
+            match pid {
+                11 => Some((bash.to_string(), env("u-claude"))),
+                21 => Some(("powershell.exe -Command cargo build".into(), env("u-codex"))),
+                22 => Some((hook.clone(), env("u-codex"))),
+                31 => Some((ps_cmd.to_string(), env("u-ps"))),
+                // A shell of the user's own, not under any tab.
+                41 => Some(("bash.exe --login -i".into(), b"PATH=C:\\x\0".to_vec())),
+                _ => None,
+            }
+        };
+        let start = |pid: u32| if pid == 22 { 500 } else { 100 };
+        let ends: HashMap<String, u64> =
+            ["u-claude", "u-codex", "u-ps"].iter().map(|u| (u.to_string(), 200)).collect();
+        let none: HashMap<String, HashSet<String>> = HashMap::new();
+        let scan = |want: &[(&'static str, TurnState)], bg: &HashMap<String, HashSet<String>>| {
+            let want: HashMap<&str, TurnState> = want.iter().copied().collect();
+            let mut got: Vec<String> = win_background_job_uids(&want, &ends, bg, &table, params, start).into_iter().collect();
+            got.sort();
+            got
+        };
+        // Mid-turn, a foreground call is the turn, seam or no seam.
+        assert!(scan(&[("u-claude", TurnState::Working), ("u-ps", TurnState::Working)], &none).is_empty());
+        // Once the turn is over, a shell that outlived it is a job: Claude's and
+        // Codex's — not the hook Codex runs, started after the Stop and excluded
+        // by name besides.
+        assert_eq!(
+            scan(&[("u-claude", TurnState::Done), ("u-codex", TurnState::Done)], &none),
+            ["u-claude", "u-codex"]
+        );
+        assert!(scan(&[("u-claude", TurnState::Decision)], &none).is_empty());
+        // A PowerShell call the hook recorded as backgrounded is one mid-turn.
+        let bg: HashMap<String, HashSet<String>> =
+            [("u-ps".to_string(), ["b798ytynj".to_string()].into())].into();
+        assert_eq!(scan(&[("u-ps", TurnState::Working)], &bg), ["u-ps"]);
+        let other: HashMap<String, HashSet<String>> = [("u-ps".to_string(), ["zzz".to_string()].into())].into();
+        assert!(scan(&[("u-ps", TurnState::Working)], &other).is_empty());
+        // Only the tabs asked about.
+        assert!(scan(&[("u-gone", TurnState::Done)], &none).is_empty());
+    }
+
+    #[test]
+    fn windows_tool_shell_test_matches_the_measured_spellings() {
+        assert_eq!(win_exe_stem("PowerShell.EXE"), "powershell");
+        assert_eq!(win_exe_stem("bash"), "bash");
+        let snap = "bash.exe -c \"source /c/u/.claude/shell-snapshots/snapshot-bash-1-x.sh && eval 'x'\"";
+        assert!(is_win_tool_shell("bash", snap, "claude"));
+        assert!(is_win_tool_shell("cmd", "cmd.exe /c powershell -Command $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT", "claude"));
+        assert!(is_win_tool_shell("pwsh", "pwsh -Command ls", "codex"));
+        // The agent itself, an MCP server, the hook: none.
+        assert!(!is_win_tool_shell("claude", snap, crate::app_slug!()));
+        assert!(!is_win_tool_shell("node", "node mcp.js", "claude"));
+        assert!(!is_win_tool_shell("cmd", "cmd.exe /c npx some-mcp", "claude"));
+        let hook = format!("powershell -File C:\\h\\{}", crate::brand::SESSION_HOOK_PS1);
+        assert!(!is_win_tool_shell("powershell", &hook, "codex"));
+        let tasks: HashSet<String> = ["abc1".to_string()].into();
+        assert!(win_cmdline_writes_task("x > \"C:\\t\\tasks\\abc1.output\" 2>&1", &tasks));
+        assert!(win_cmdline_writes_task("x > /c/t/tasks/abc1.output", &tasks));
+        assert!(!win_cmdline_writes_task("x > \"C:\\t\\tasks\\abc12.output\"", &tasks));
     }
 }

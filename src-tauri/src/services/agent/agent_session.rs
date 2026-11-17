@@ -2690,6 +2690,7 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
     let name_hint = crate::services::cockpit_mcp::NAME_HINT;
     let notice = crate::services::tabs_mcp::NOTICE;
     let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
+    let ask_suffix = crate::services::agent_turn::ASK_SUFFIX;
     format!(
         "#!/bin/sh\n\
          # {DISPLAY} agent hook (SessionStart, Stop, StopFailure, UserPromptSubmit, PostToolUse,\n\
@@ -2853,6 +2854,41 @@ fn posix_hook_script_body_with(live_dir: &str, proc_root: &str) -> String {
          \x20 Notification) case \"$ntype\" in permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) turn=decision ;; idle_prompt) turn=done ;; esac ;;\n\
          \x20 SessionEnd) [ \"$reason\" = clear ] || turn=idle ;;\n\
          esac\n\
+         # Codex with `approvals_reviewer = \"auto_review\"` fires PermissionRequest\n\
+         # before its reviewer agent answers, and no dialog ever opens: in the\n\
+         # fence every command asks to escalate, so each one lit the tab as a\n\
+         # question for the seconds the review took. Under auto-review the turn\n\
+         # stays working; a dialog that still reaches the user is read off the\n\
+         # screen. Only the home's top-level key counts (a profile's does not).\n\
+         if [ \"$event:${UPPER}_TAB_AGENT\" = PermissionRequest:codex ] &&\n\
+         \x20 sed -n -e '/^[[:space:]]*\\[/q' -e '/^[[:space:]]*approvals_reviewer[[:space:]]*=[[:space:]]*.auto_review.[[:space:]]*\\(#.*\\)\\{{0,1\\}}$/p' \\\n\
+         \x20   \"${{CODEX_HOME:-$HOME/.codex}}/config.toml\" 2>/dev/null | grep -q .; then\n\
+         \x20 turn=\n\
+         fi\n\
+         # Codex's async question (`request_user_input_async`, 0.169.0) leaves the\n\
+         # turn running: asked, its PostToolUse comes at once, and the question\n\
+         # waits in Codex's queue (shift+← opens it) until the user's reply — a\n\
+         # prompt naming the call in `<send_user_message_question_reply>` — or\n\
+         # the turn's end, which drops it; a skip (^]) fires nothing. The open\n\
+         # calls are kept one per line, and while any is open the turn reads as\n\
+         # a question even as the agent works on.\n\
+         if [ \"${UPPER}_TAB_AGENT\" = codex ]; then\n\
+         \x20 ask=\"$dir/${UPPER}_TAB_UID{ask_suffix}\"\n\
+         \x20 case \"$event\" in\n\
+         \x20   PostToolUse) case \"$input\" in *'\"tool_name\":\"request_user_input_async\"'*)\n\
+         \x20     call=$(printf '%s' \"$input\" | sed -n 's/.*\"tool_use_id\"[[:space:]]*:[[:space:]]*\"\\([A-Za-z0-9_.-]*\\)\".*/\\1/p')\n\
+         \x20     [ -n \"$call\" ] && printf '%s\\n' \"$call\" >> \"$ask\" ;;\n\
+         \x20   esac ;;\n\
+         \x20   UserPromptSubmit) case \"$input\" in *send_user_message_question_reply*)\n\
+         \x20     if [ -f \"$ask\" ]; then\n\
+         \x20       open=$(while IFS= read -r c; do [ -z \"$c\" ] || printf '%s' \"$input\" | grep -qF -- \"$c\" || printf '%s\\n' \"$c\"; done < \"$ask\")\n\
+         \x20       if [ -n \"$open\" ]; then printf '%s\\n' \"$open\" > \"$ask\"; else rm -f \"$ask\"; fi\n\
+         \x20     fi ;;\n\
+         \x20   esac ;;\n\
+         \x20   SessionStart|SessionEnd|Stop|StopFailure) rm -f \"$ask\" ;;\n\
+         \x20 esac\n\
+         \x20 [ -s \"$ask\" ] && [ \"$turn\" = working ] && turn=decision\n\
+         fi\n\
          # A Bash call put in the background (`run_in_background`, or moved there\n\
          # while it ran) comes back with its task id, and its shell writes to\n\
          # `<id>.output`: that is how the job scan tells it from the call the\n\
@@ -2936,6 +2972,7 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
     let name_hint = crate::services::cockpit_mcp::NAME_HINT;
     let notice = crate::services::tabs_mcp::NOTICE;
     let mail_suffix = crate::services::agent_turn::MAIL_SUFFIX;
+    let ask_suffix = crate::services::agent_turn::ASK_SUFFIX;
     format!(
         "# {DISPLAY} agent hook (SessionStart, Stop, StopFailure, UserPromptSubmit, PostToolUse,\r\n\
          # PostToolUseFailure, PermissionRequest, Elicitation, ElicitationResult, Notification,\r\n\
@@ -3063,19 +3100,58 @@ fn powershell_hook_script_body(live_dir: &str, host_exe: &str) -> String {
          \x20 }}\r\n\
          }}\r\n\
          # The turn state, from the events the agent fires as it works (see the\r\n\
-         # POSIX twin for the mapping).\r\n\
+         # POSIX twin for the mapping). A Codex whose approvals go to its reviewer\r\n\
+         # agent (`approvals_reviewer = \"auto_review\"`, top level) opens no dialog\r\n\
+         # on PermissionRequest: the turn stays working.\r\n\
+         $codexReviews = $false\r\n\
+         if (($event -eq 'PermissionRequest') -and ($env:{UPPER}_TAB_AGENT -eq 'codex')) {{\r\n\
+         \x20 $cfgDir = $env:CODEX_HOME\r\n\
+         \x20 if ([string]::IsNullOrEmpty($cfgDir)) {{ $cfgDir = Join-Path $HOME '.codex' }}\r\n\
+         \x20 foreach ($line in @(Get-Content -LiteralPath (Join-Path $cfgDir 'config.toml') -ErrorAction SilentlyContinue)) {{\r\n\
+         \x20   if ($line -match '^\\s*\\[') {{ break }}\r\n\
+         \x20   if ($line -match '^\\s*approvals_reviewer\\s*=\\s*.auto_review.\\s*(#.*)?$') {{ $codexReviews = $true }}\r\n\
+         \x20 }}\r\n\
+         }}\r\n\
          $turn = ''\r\n\
          switch ($event) {{\r\n\
          \x20 'UserPromptSubmit' {{ $turn = 'working' }}\r\n\
          \x20 'PostToolUse' {{ $turn = 'working' }}\r\n\
          \x20 'PostToolUseFailure' {{ if (-not ($mi.Success -and ($mi.Groups[1].Value -eq 'true'))) {{ $turn = 'working' }} }}\r\n\
          \x20 'ElicitationResult' {{ $turn = 'working' }}\r\n\
-         \x20 'PermissionRequest' {{ $turn = 'decision' }}\r\n\
+         \x20 'PermissionRequest' {{ if (-not $codexReviews) {{ $turn = 'decision' }} }}\r\n\
          \x20 'Elicitation' {{ $turn = 'decision' }}\r\n\
          \x20 'Stop' {{ $turn = 'done' }}\r\n\
          \x20 'StopFailure' {{ $turn = 'done' }}\r\n\
          \x20 'Notification' {{ if (@('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input') -contains $ntype) {{ $turn = 'decision' }} elseif ($ntype -eq 'idle_prompt') {{ $turn = 'done' }} }}\r\n\
          \x20 'SessionEnd' {{ if (-not ($mr.Success -and ($mr.Groups[1].Value -eq 'clear'))) {{ $turn = 'idle' }} }}\r\n\
+         }}\r\n\
+         # Codex's open async questions (see the POSIX twin).\r\n\
+         if ($env:{UPPER}_TAB_AGENT -eq 'codex') {{\r\n\
+         \x20 $ask = $rec + '{ask_suffix}'\r\n\
+         \x20 if (($event -eq 'PostToolUse') -and ($payload -match '\"tool_name\"\\s*:\\s*\"request_user_input_async\"')) {{\r\n\
+         \x20   $mc = [regex]::Match($payload, '\"tool_use_id\"\\s*:\\s*\"([A-Za-z0-9_.-]+)\"')\r\n\
+         \x20   if ($mc.Success) {{ [IO.File]::AppendAllText($ask, ($mc.Groups[1].Value + \"`n\")) }}\r\n\
+         \x20 }} elseif (($event -eq 'UserPromptSubmit') -and $payload.Contains('send_user_message_question_reply') -and (Test-Path -LiteralPath $ask)) {{\r\n\
+         \x20   $open = @(Get-Content -LiteralPath $ask | Where-Object {{ ($_ -ne '') -and -not $payload.Contains($_) }})\r\n\
+         \x20   if ($open.Count -gt 0) {{ [IO.File]::WriteAllText($ask, (($open -join \"`n\") + \"`n\")) }} else {{ Remove-Item -LiteralPath $ask -Force -ErrorAction SilentlyContinue }}\r\n\
+         \x20 }} elseif (@('SessionStart', 'SessionEnd', 'Stop', 'StopFailure') -contains $event) {{\r\n\
+         \x20   Remove-Item -LiteralPath $ask -Force -ErrorAction SilentlyContinue\r\n\
+         \x20 }}\r\n\
+         \x20 if (($turn -eq 'working') -and (Test-Path -LiteralPath $ask) -and ((Get-Item -LiteralPath $ask).Length -gt 0)) {{ $turn = 'decision' }}\r\n\
+         }}\r\n\
+         # A call put in the background leaves its task id for the job scan, the\r\n\
+         # last few kept, before the turn record (see the POSIX twin). A field\r\n\
+         # quoted inside a tool's output is escaped and never matches.\r\n\
+         if ($event -eq 'PostToolUse') {{\r\n\
+         \x20 $mb = [regex]::Match($payload, '\"backgroundTaskId\"\\s*:\\s*\"([A-Za-z0-9]+)\"')\r\n\
+         \x20 if ($mb.Success) {{\r\n\
+         \x20   $bgf = $rec + '.bg'\r\n\
+         \x20   $ids = @()\r\n\
+         \x20   if (Test-Path -LiteralPath $bgf) {{ $ids = @(Get-Content -LiteralPath $bgf -Tail 15) }}\r\n\
+         \x20   $tmp = $bgf + '.' + $PID\r\n\
+         \x20   [IO.File]::WriteAllText($tmp, ((@($ids) + $mb.Groups[1].Value) -join \"`n\") + \"`n\")\r\n\
+         \x20   Move-Item -LiteralPath $tmp -Destination $bgf -Force\r\n\
+         \x20 }}\r\n\
          }}\r\n\
          if ($turn -ne '') {{ [IO.File]::WriteAllText(($rec + '.turn'), ($turn + ' ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())) }}\r\n\
          # A prompt in the conversation a /clear started ends that clear's undo\r\n\

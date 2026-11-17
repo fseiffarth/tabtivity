@@ -4,6 +4,7 @@ import { currentMode, modeChoices } from "../../../mobile-web/src/terminal/agent
 import { inputFrameStart, sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { BRAND } from "../../lib/brand";
+import { pickerAsks } from "../../../mobile-web/src/screens/terminal/useAsyncAsk";
 
 const lines = (...texts: string[]) => texts.map((text) => ({ text }));
 const ESC = String.fromCharCode(27);
@@ -545,6 +546,39 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
       { index: 0, number: 1, label: "Job: running/completed/failed/ expired (Recommended)", description: "Keep async job statuses for progress tracking." },
       { index: 1, number: 2, label: "Add a short status model", description: "Simpler labels." },
     ]);
+  });
+
+  it("reads Codex's queued async question once shift+← opened it", () => {
+    // Codex 0.169.0, request_user_input_async opened from its queue while the
+    // turn works on (scripts/verify-cli/codex/async_question.py, `opened`).
+    const screen = lines(
+      "? Which window shows the bug?",
+      "  • Main window",
+      "  • Popped-out window",
+      "  • Phone",
+      "• Working (8s • esc to interrupt)",
+      "• Queued follow-up inputs",
+      "  Which window shows the bug?",
+      "  › 1. Main window",
+      "    2. Popped-out window",
+      "    3. Phone",
+      "    4. Other",
+      "  enter submit   ^] skip   shift+→ main prompt",
+    );
+    const prompt = readSelectPrompt(screen, "Codex", 110);
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Main window", "Popped-out window", "Phone", "Other"]);
+    expect(prompt?.current).toBe(0);
+    // Which queued question it is: the lines under the queue's heading, as
+    // wrapped — not the echo of the ask further up.
+    expect(pickerAsks(prompt, screen, "Which window shows the bug?")).toBe(true);
+    expect(pickerAsks(prompt, screen, "Which file?")).toBe(false);
+    const wrapped = lines("• Queued follow-up inputs", "  Which window shows", "  the bug?", "  › 1. Main window", "    2. Phone", "  enter submit   ^] skip   shift+→ main prompt");
+    expect(pickerAsks(readSelectPrompt(wrapped, "Codex", 24), wrapped, "Which window shows the bug?")).toBe(true);
+    // A picker that is not the queue's (a blocking question) is never taken for it.
+    const blocking = lines("  Which window shows the bug?", "  › 1. Main window", "    2. Phone", "  enter to submit answer");
+    expect(pickerAsks(readSelectPrompt(blocking, "Codex", 110), blocking, "Which window shows the bug?")).toBe(false);
+    // Still queued, only the hint on screen: nothing to answer there yet.
+    expect(readSelectPrompt(lines("• Queued follow-up inputs", "  ? 1 question", "    shift+← to answer", "› Ask Codex to do anything"), "Codex")).toBeNull();
   });
 
   it("bounds a Codex question to the dialog, not to the session above it", () => {

@@ -720,6 +720,7 @@ fn spec(user: Option<&str>, host: &str, port: Option<u16>, path: &str) -> Remote
         auto_connect: None,
         key_auth: None,
         persist_sessions: None,
+        agent_dir: None,
         vm: None,
         remote_only: None,
         label: None,
@@ -2263,6 +2264,7 @@ const SYNC_COMMANDS_ALLOWED: &[(&str, &str)] = &[
     ("projects.rs", "set_project_mobile_access"),
     ("projects.rs", "set_project_remote_label"),
     ("projects.rs", "set_project_remote_user"),
+    ("projects.rs", "set_project_remote_agent_dir"),
     ("projects.rs", "set_project_run_host"),
     ("projects.rs", "add_compute_host"),
     ("projects.rs", "remove_compute_host"),
@@ -2485,6 +2487,35 @@ fn a_worker_patch_cannot_make_a_synced_copy_of_a_remote_only_project() {
     let mut host = worker(true, true);
     unshare.apply_checked(&mut host, Some(&plain)).expect("a plain Remote project takes a synced copy");
     assert!(!host.shared_fs);
+}
+
+/// A worker's agent folder is set, replaced and cleared by a patch (a cleared one
+/// is `Some(None)`), and a patch that leaves it out keeps it. The folder a spec
+/// carries becomes the home agents run with only while it is valid.
+#[test]
+fn a_worker_patch_sets_and_clears_the_agent_folder() {
+    let mut host = ComputeHost {
+        id: "w1".into(),
+        sync_code: true,
+        pull_outputs: false,
+        shared_fs: false,
+        spec: spec(None, "gpu.example", None, "/srv/p"),
+    };
+    assert_eq!(host.spec.agent_home(), None);
+    let set = HostPatch { agent_dir: Some(Some("/scratch/me".into())), ..HostPatch::default() };
+    set.apply_checked(&mut host, None).unwrap();
+    assert_eq!(host.spec.agent_dir.as_deref(), Some("/scratch/me"));
+    assert_eq!(
+        host.spec.agent_home().as_deref(),
+        Some(crate::services::remote_agents::agent_home_in("/scratch/me").as_str())
+    );
+    HostPatch { label: Some("gpu".into()), ..HostPatch::default() }.apply_checked(&mut host, None).unwrap();
+    assert_eq!(host.spec.agent_dir.as_deref(), Some("/scratch/me"), "a patch without the field keeps it");
+    HostPatch { agent_dir: Some(None), ..HostPatch::default() }.apply_checked(&mut host, None).unwrap();
+    assert_eq!(host.spec.agent_dir, None);
+    // A hand-edited bad value never half-applies.
+    host.spec.agent_dir = Some("~/agents".into());
+    assert_eq!(host.spec.agent_home(), None);
 }
 
 /// The posture never comes from a renderer-sent spec: create, import and

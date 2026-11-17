@@ -28,7 +28,8 @@ How to use it:
    drift apart exactly like the two install tables did. Bump `FRONTEND_VERIFIED`
    in `src/stores/agents/agentVersionNotice.ts` as well: it is what lets a
    hot-reloaded window drop its old backend's card, and a test holds it to
-   `VERIFIED`.
+   `VERIFIED`. Every GitHub release lists `VERIFIED` as it stood at the
+   released commit (`scripts/release-cli-notes.mjs`), so a row is a public claim.
 3. A breakage found this way is a normal fix: patch the one place named under
    **Where**, add a test alongside the existing ones, update the version note.
 
@@ -747,6 +748,22 @@ tab and resume/fork remain tagged for live verification.
   `PreCompact`/`PostCompact` (`trigger`). A turn against a closed port shows
   "Reconnecting… waiting for network" and fired no `Stop` within 20 s.
   `approval_policy = "untrusted"` is refused at config load since 0.169.0.
+  With `approvals_reviewer = "auto_review"` `PermissionRequest` fires before
+  the reviewer agent answers (one `guardian_review` thread per session; in
+  the fence nearly every command asks to escalate): the hook writes nothing
+  then (2026-11-17, live rollouts).
+- **Async question, 0.169.0 (2026-11-17, offline: `codex/async_question.py`)**:
+  the GPT-6 family is offered `request_user_input_async` (`questions[]` of
+  `title` + string `options`); the call returns `{"accepted":true}` at once
+  (`PostToolUse`, `tool_use_id`) and the turn works on. Screen: `• Queued
+  follow-up inputs / ? 1 question / shift+← to answer`; shift+← opens a picker
+  under that heading (question, `› 1.` rows, `N. Other`, `enter submit ^] skip
+  shift+→ main prompt`). The reply is a user message
+  `<send_user_message_question_reply>[{answer, question, questionItemId:
+  "[\"request_user_input_async\",\"<call>\",<i>]"}]</…>` and fires
+  `UserPromptSubmit` with it as the prompt; a skip records nothing; the turn's
+  end drops a waiting one. Read by the hook's `.ask` record, `agent_transcript`
+  and the phone's `useAsyncAsk`.
 - **0.169.0 (2026-11-13), outside Tabtivity, beside 0.167.2** — same setup as
   0.167.1 below; release notes of 0.168.0 and 0.169.0 read. `--help` of the top
   level, `resume`, `fork`, `mcp`, `login` and `queue` is identical; `exec` adds
@@ -1208,7 +1225,7 @@ The last-prompt line reads the screen echo, as for Gemini.
 
 | Agent | Resume flag | Warm-up | Install |
 |-------|-------------|---------|---------|
-| Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh` |
+| Vibe (Mistral) | `--continue` (`--resume` alone opens a picker — never use) | `-p` | `curl … mistral.ai/vibe/install.sh`; Windows: Astral's `install.ps1` then `uv tool install --upgrade --python cpython-3.14+gil mistral-vibe` (no vendor `install.ps1`; re-check against `install.sh`'s uv/Python pins) |
 | OpenCode | `--continue` | `run` | `curl … opencode.ai/v2/install` (also writes `opencode2`, shimmed by `agent_bin::VENDOR_ALIASES`) / `npm i -g @opencode/cli` |
 | Copilot | `--session-id <tab uuid>` (`copilot_session::resolve`; `--continue` only on a remote tab) | `-p` | `npm i -g @github/copilot` |
 | Cursor agent | `--continue` | `-p` | `curl … cursor.com/install` |
@@ -1246,6 +1263,20 @@ each new release run `scripts/verify-cli/antigravity/hooks.py format` (and
   an `agy -p` from the tab's shell tool off the record), and the hook still
   inherits the CLI's environment (`TABTIVITY_TAB_UID`, `TABTIVITY_TAB_AGENT`,
   `TABTIVITY_PROJECT_DIR`).
+
+How Antigravity links a file it wrote (checked 1.5.9, 2026-11-17): an answer
+carries `[plan.md](file:///<home>/.gemini/antigravity-cli/brain/<conversation>/plan.md)`
+— a path outside the project — and `services::agent_artifacts` opens only such a
+file of the tab's own conversation (read-only, text, no hidden name). On each
+new release have the real binary write a plan and a task list, then grep the
+conversation's `transcript.jsonl` for the link and re-check: it is still a
+`file://` URL (not `[plan](plan.md)` or a bare path), the folder is still
+`brain/<conversation id>/` under `.gemini/antigravity-cli`, a file it names
+exists there (a name inside `.system_generated` is never linked), and the
+answer's link shape still matches the captured sample in
+`src/__tests__/mobile/MobileArtifactLinks.test.tsx`. A new shape fails open: the
+phone draws the link as plain text (`answerMarkdown`'s `data-artifact` is only set
+for the `file:///…/brain/…` form).
 
 The same script writes the tab's turn record and the send hint (follow-up run,
 2026-11-16, 1.5.9; `hooks.py turns` and `events`; `format` on every kept

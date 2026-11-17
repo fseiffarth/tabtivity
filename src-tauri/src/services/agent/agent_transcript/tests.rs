@@ -134,6 +134,62 @@ fn a_claude_question_stays_in_the_chat_with_its_answer_once_answered() {
 }
 
 #[test]
+fn a_codex_async_question_shows_while_it_waits_and_takes_its_reply() {
+    // The records Codex 0.169.0 wrote (scripts/verify-cli/codex/async_question.py):
+    // the call, its `{"accepted":true}` at once, the turn working on; the reply
+    // a user message naming the call; a question still open at the turn's end
+    // is dropped by Codex.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let ask = |call: &str, title: &str| {
+        let args = serde_json::json!({"questions": [{"title": title, "options": ["Main window", "Popped-out window", "Phone"]}]}).to_string();
+        serde_json::json!({"timestamp": "2026-11-17T05:44:08Z", "type": "response_item", "payload": {"type": "function_call", "name": "request_user_input_async", "arguments": args, "call_id": call}}).to_string() + "\n"
+            + &serde_json::json!({"type": "response_item", "payload": {"type": "function_call_output", "call_id": call, "output": "{\"accepted\":true}"}}).to_string()
+            + "\n"
+    };
+    let reply = |call: &str, title: &str, answer: &str| {
+        let id = serde_json::json!(["request_user_input_async", call, 0]).to_string();
+        let body = serde_json::json!([{"answer": answer, "question": title, "questionItemId": id}]).to_string();
+        serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": format!("<send_user_message_question_reply>\n{body}\n</send_user_message_question_reply>")}]}}).to_string() + "\n"
+    };
+    let user = |text: &str| serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}}).to_string() + "\n";
+    let said = |text: &str| serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}}).to_string() + "\n";
+    let end = "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"last_agent_message\":\"done\"}}\n";
+    let mut text = user("fix it") + &ask("call_A", "Which window?") + &said("Working on it.") + &reply("call_A", "Which window?", "Popped-out window");
+    text += &(said("done") + end);
+    // Left waiting when its turn ended: no longer asking.
+    text += &(user("again") + &ask("call_B", "Dropped?") + end);
+    // Waiting now.
+    text += &(user("more") + &ask("call_C", "Still open?") + &said("Meanwhile…"));
+    std::fs::write(&path, &text).unwrap();
+    let read = read_transcript(&path, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
+    assert_eq!(
+        kinds(&read),
+        vec![
+            ("prompt", "fix it"),
+            ("answer", "Which window?\n→ Popped-out window"),
+            ("answer", "Working on it."),
+            ("answer", "done"),
+            ("prompt", "again"),
+            ("answer", "Dropped?\n→ —"),
+            ("prompt", "more"),
+            ("answer", "Still open?\n→ —"),
+            ("answer", "Meanwhile…"),
+        ]
+    );
+    let answered = &read.entries[1];
+    assert_eq!(answered.at.as_deref(), Some("2026-11-17T05:44:08Z"));
+    assert!(!answered.asking);
+    let rows = |entry: &TranscriptEntry| entry.questions[0].options.iter().map(|o| (o.label.clone(), o.chosen)).collect::<Vec<_>>();
+    assert_eq!(rows(answered), vec![("Main window".into(), false), ("Popped-out window".into(), true), ("Phone".into(), false)]);
+    assert!(!read.entries[5].asking);
+    assert_eq!(read.entries[5].questions[0].answer, None);
+    assert!(read.entries[7].asking);
+    assert_eq!(serde_json::to_value(&read.entries[7]).unwrap()["asking"], serde_json::json!(true));
+    assert!(serde_json::to_value(&read.entries[1]).unwrap().get("asking").is_none());
+}
+
+#[test]
 fn a_slash_command_recorded_as_a_local_command_is_a_prompt() {
     // Claude 2.1.30x writes a command typed at its prompt as a `system`
     // record, not a `user` one: `/login` never showed, and the Chat view's

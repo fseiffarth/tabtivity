@@ -10,6 +10,15 @@
  * would say the same, but reading it means a status call that can spawn the
  * CLI; the screen is already streaming to the phone. */
 
+/** The key that stops `family`'s running turn (`agentFamily`): Esc for every
+ * CLI but Copilot. Copilot 1.0.112 ignores a lone Esc mid-turn and stops on
+ * Ctrl+C (its footer's `ctrl+c interrupt`) or Esc Esc; on an idle box Esc Esc
+ * opens its rewind picker, while Ctrl+C only clears the draft (probed offline
+ * 2026-11-17), so a Stop that lands as the turn ends is harmless with Ctrl+C. */
+export function stopKey(family: string): string {
+  return family === "copilot" ? "\u0003" : "\u001b";
+}
+
 /** Rows read from the bottom. The hint sits above the input box, with at most
  * Claude Code's to-do list, the box itself and the footer rows below it. */
 const BUSY_WINDOW = 24;
@@ -24,12 +33,13 @@ const BUSY_WINDOW = 24;
  * dialog's footer — a question, not work — so the cancel form needs its
  * elapsed time. Copilot CLI's footer row while it works is a cycling glyph,
  * the verb and its own key hint (`◎ Working  esc esc edit prompt`, 1.0.102 to
- * 1.0.105); idle, the same row reads `← open sidebar · Interactive · …`.
+ * 1.0.105; `○ Working · 49 B ctrl+c interrupt` from 1.0.106); idle, the same
+ * row reads `← open sidebar · Interactive · …`.
  * OpenCode 2's `mini` joins its status row's groups with ` · ` behind a
  * spinner glyph (`🯦 esc interrupt · Build · …`), and says `esc stop` where the
  * pane is narrow. */
 const BUSY_HINT =
-  /\((?:[^()]*[·•,]\s*)?esc to interrupt\b[^()]*\)|\(esc to cancel, \d+s\)|(?:^|\s)esc (?:again to |to )?interrupt(?:\s*$|\s{2,}|\s·\s)|^\s*[^\p{L}\p{N}\s]\s+esc (?:again: )?stop(?:\s·\s|\s*$)|^\s*[○◌●◉◎]\s+\S.*?\s+esc esc edit prompt\b/iu;
+  /\((?:[^()]*[·•,]\s*)?esc to interrupt\b[^()]*\)|\(esc to cancel, \d+s\)|(?:^|\s)esc (?:again to |to )?interrupt(?:\s*$|\s{2,}|\s·\s)|^\s*[^\p{L}\p{N}\s]\s+esc (?:again: )?stop(?:\s·\s|\s*$)|^\s*[○◌●◉◎]\s+\S.*?\s+(?:esc esc edit prompt|ctrl\+c interrupt)\b/iu;
 
 /** Claude Code's spinner row without the hint: a spinner glyph, the verb with
  * its ellipsis, then the elapsed time in the parentheses — opening them, or

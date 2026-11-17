@@ -17,6 +17,7 @@ import {
 } from "../../api";
 import { DRAFT_SAVE_DELAY, readDraft, writeDraft } from "../../drafts";
 import { type ReadableLine } from "../../terminal/readableScreen";
+import { stopKey } from "../../terminal/agentBusy";
 import { type TerminalControl } from "../../terminal/protocol";
 import { isOpenCodeTab, openCodeDialogCloseKeys } from "../../terminal/openCodeMini";
 import { agentFamily, agentInputWrites, bracketsAgentMessage } from "../../terminal/composer";
@@ -70,12 +71,9 @@ const SUBAGENT_SEND_FAILED: Record<SubagentSendFailure, TranslationKey> = {
   send_failed: "mobile.subagent.noWay",
 };
 
-/** The key every supported agent CLI reads as "stop this turn" (its spinner
- * row says `esc to interrupt`), and how long the message held back behind it
- * waits: a lone Esc followed at once by text is read as Alt+key, and the turn
- * needs a moment to wind down before the CLI takes a new prompt. */
-const AGENT_INTERRUPT = "\u001b";
-
+/** How long a message held back behind the stop key (`stopKey`) waits: a
+ * lone Esc followed at once by text is read as Alt+key, and the turn needs a
+ * moment to wind down before the CLI takes a new prompt. */
 const AGENT_INTERRUPT_GAP = 400;
 
 /** How long Send is held before it interrupts the agent instead of queueing. */
@@ -557,13 +555,13 @@ export function useComposerSend({
       keepMicOnSend.current = false;
     }
   });
-  /** Esc stops the agent's turn; once the CLI has wound down the message is
+  /** The stop key (`stopKey`) ends the agent's turn; once the CLI has wound down the message is
    * typed like any other — not held for an idle point the interrupt has just
    * made. A failure after the gap marks the bubble, as a dropped piece does. */
   const interruptWith = (text: string, id?: number) => {
     clearPending();
     const release = codexQueueShown();
-    if (!type(AGENT_INTERRUPT)) return false;
+    if (!type(stopKey(agentKey))) return false;
     const send = () => later(AGENT_INTERRUPT_GAP, () => {
       if (sendAgentText(text, id) || id === undefined) return;
       setPending((current) => current.map((entry) => entry.id === id ? { ...entry, failed: true, retrying: false } : entry));
@@ -657,11 +655,11 @@ export function useComposerSend({
   const codexQueueShown = () => queueCli === "codex" && queuedHintShown(screenRows.current(), "codex");
   /** What sends that box on (`finishSendNow`). */
   const releaseCodexQueue = () => finishSendNow({ rows: () => screenRows.current(), key: async (key) => type(key) }, "codex", SUBAGENT_WALK);
-  /** The working row's Stop: Esc, and what Claude does on its own for a
+  /** The working row's Stop: the stop key (Ctrl+C for Copilot, else Esc), and what Claude does on its own for a
    * queue, Codex's goes on too. */
   const stopTurn = () => {
     const release = codexQueueShown();
-    if (type(AGENT_INTERRUPT) && release) void releaseCodexQueue();
+    if (type(stopKey(agentKey)) && release) void releaseCodexQueue();
   };
   /** The queued bubbles' Send now (the desktop chat's): Claude's own
    * Ctrl+X Ctrl+S sends what waits in its queue into the turn at once; the

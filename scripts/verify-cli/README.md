@@ -18,7 +18,7 @@ and the new version through the same probe, then compare the two labels.
 |------|---------------|
 | `flags.sh <cli> <label> <bin> [sub ...]` | `--version`, `--help`, each subcommand's `--help` → `flags/`; `diff -ru` two labels' `flags/` to see flags that moved. |
 | `tui.py <cli> <label> <name> [--step …] -- <bin> [args]` | Drives the TUI with steps (`sleep:`, `wait:TEXT[:SECS]`, `cap:`, `key:`, `type:`, `enter:`, `size:COLSxROWS`) and saves frames as `<name>/<frame>@<cols>x<rows>.esc`. `--home DIR` reuses a home (resume tests); `--env K=V`; `--stub openai\|gemini --port N` starts a stub. Default steps: one frame each at 120, 60 and 42 columns. |
-| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`). It logs every request (offered tools, tool results), so you can force calls no real model would make. |
+| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`; the GPT-6 family's `functions` namespace is plain names). It logs every request (offered tools, tool results), so you can force calls no real model would make. |
 | `hookdump.py <log> <event>` | A hook command that appends its event, pid, environment names (and the tab, Copilot and hook-depth values) and stdin payload to a JSONL log. Register it for every event to see which fire, with what. |
 | `stub_anthropic.py <port> <log>` | Anthropic Messages API (`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`), streaming or not. `STUB:CALL`/`STUB:SEQ` as above (only in a request that offers tools), `STUB:ERR <status> <type>` answers that API error. Lets Claude run with no login and no paid turn. |
 | `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
@@ -130,6 +130,12 @@ gives its usage.
   `--dangerously-bypass-hook-trust`), `apierr` (a closed port). Give the
   work folder its own `git init`, or the trust question offers to trust
   the enclosing repo.
+  `async_question.py <label> <bin> <port> [model]` (same home, model
+  `gpt-6.1-sol` by default: the GPT-6 family's tools, `request_user_input_async`
+  and `clock.sleep` among them, ride as an `additional_tools` input item, which
+  the stub reads) asks an async question while the turn works on, opens it
+  (shift+←) and answers it; then one skipped (^]) and one left waiting as the
+  turn ends. Frames, the rollout and the hook dumps land in `async_question/`.
 
 - **Copilot** (`copilot/`): `screens.sh <label> <bin> [port]` walks the folder
   trust question, idle, a stub-forced `create` approval at 110 and 60 columns

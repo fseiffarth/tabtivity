@@ -317,6 +317,24 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
       .catch((e) => setSshError(String(e)));
   };
 
+  // Set this host's agent folder (worker `agent_dir`, or the primary's
+  // `remote.agent_dir`); blank clears it. Unlike the label, an invalid path is
+  // refused by the backend, so this answers whether it took - the dialog restores
+  // the field on `false`, and the refusal shows as the connection error line.
+  const setAgentDir = async (agentDir: string): Promise<boolean> => {
+    try {
+      if (host) {
+        applyPatchedHosts(await invoke<ComputeHost[]>("patch_compute_host", { projectId, hostId, agentDir }));
+      } else {
+        await useProjectsStore.getState().setProjectRemoteAgentDir(projectId, agentDir);
+      }
+      return true;
+    } catch (e) {
+      setSshError(String(e));
+      return false;
+    }
+  };
+
   /**
    * Write the edited login name onto this host's spec (the primary's `remote.user`,
    * or the worker's). Called on blur/Enter *and* at the top of every connect, so a
@@ -812,6 +830,7 @@ export function useRemoteReconnect(project: ProjectEntry, host?: ComputeHost) {
     autoConnectBlock: autoConnectState.reason,
     setAutoConnect,
     setWorkerLabel,
+    setAgentDir,
     connectVpnHeadless,
     connectSshHeadless,
     forgetPasswords,

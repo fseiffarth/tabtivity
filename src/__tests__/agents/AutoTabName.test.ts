@@ -8,6 +8,7 @@ import {
   firstPromptTabName,
   isResumeLaunch,
   promptTabName,
+  tabDisplayLabel,
   tabTaskName,
   withAutoLabel,
 } from "../../lib/agents/autoTabName";
@@ -98,6 +99,12 @@ describe("withAutoLabel", () => {
     expect(tabTaskName({ label: "Claude", autoLabel: "Claude", taskName: "Task" })).toBe("Task");
     expect(tabTaskName({ label: "Mine", autoLabel: "Claude", taskName: "Task" })).toBeUndefined();
     expect(tabTaskName({ label: "Claude", autoLabel: "Claude" })).toBeUndefined();
+  });
+
+  it("the desktop strip shows the task name in place of the label until a rename", () => {
+    expect(tabDisplayLabel({ label: "Claude", autoLabel: "Claude", taskName: "Task" })).toBe("Task");
+    expect(tabDisplayLabel({ label: "Mine", autoLabel: "Claude", taskName: "Task" })).toBe("Mine");
+    expect(tabDisplayLabel({ label: "Claude", autoLabel: "Claude" })).toBe("Claude");
   });
 });
 

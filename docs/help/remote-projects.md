@@ -138,6 +138,17 @@ only detaches it. The **Sessions** view (☰ toggle in the file panel) lists
 live sessions per machine; click one to reattach, × to kill. Local agent tabs
 and the root console do not use tmux, and there is no tmux on Windows.
 
+## Agents on a host with a small home quota
+
+An agent CLI on a host installs into the login's home and keeps its sessions
+and login there. When that home has little quota, set an **Agent folder** in the
+machine's connect dialog (the pill's lamp → the machine): an absolute path on
+the host, e.g. on a scratch or project volume. Agent tabs opened afterwards run
+with a `HOME` inside it, so the install, the sessions (`.claude`, `.codex`, …)
+and the login all land there. Agents on that machine sign in once more; `git`
+and `ssh` keep using your own keys and identity. A blank folder goes back to the
+home. Shell tabs are not affected.
+
 ## HPC clusters (SLURM)
 
 `+` → **HPC pipeline…** is a 6-step wizard: log in, name the project,

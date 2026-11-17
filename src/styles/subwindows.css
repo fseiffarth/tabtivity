@@ -2857,7 +2857,7 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
 /* A file path in the chat (`linkPathsInHtml`): the Markdown viewer's
    `a.file-link`, which has no href and so needs the pointer said. */
 .terminal-reader-md a.file-link,
-.terminal-reader-md .md-link[data-path-link] { cursor: var(--cur-pointer, pointer); }
+.terminal-reader-md .md-link:is([data-path-link], [data-artifact]) { cursor: var(--cur-pointer, pointer); }
 /* Chat file links stand out as links, not as code (`linkPathsInHtml`):
    inside a sentence a solid accent underline, the folder greyed and an ↗
    after; a path on a line of its own a file chip — type icon, the name
@@ -2878,9 +2878,9 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   color: inherit;
 }
 /* A Markdown link to a file (`[the report](out/report.pdf)`, a labelled
-   `.md-link[data-path-link]`) takes the in-sentence look too. */
+   `.md-link:is([data-path-link], [data-artifact])`) takes the in-sentence look too. */
 .markdown-body.terminal-reader-md a.file-link:not(.md-link),
-.markdown-body.terminal-reader-md .md-link[data-path-link] {
+.markdown-body.terminal-reader-md .md-link:is([data-path-link], [data-artifact]) {
   color: var(--accent);
   text-decoration: underline;
   text-decoration-color: var(--accent);
@@ -2889,14 +2889,14 @@ button.outbox-post-file { cursor: var(--cur-pointer, pointer); }
   border-radius: 4px;
 }
 .markdown-body.terminal-reader-md a.file-link:not(.md-link):hover,
-.markdown-body.terminal-reader-md .md-link[data-path-link]:hover {
+.markdown-body.terminal-reader-md .md-link:is([data-path-link], [data-artifact]):hover {
   text-decoration-thickness: 2.5px;
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .terminal-reader-md a.file-link .file-link-dir { color: var(--text-secondary); }
 .terminal-reader-md a.file-link .file-link-line { color: var(--text-secondary); }
 .terminal-reader-md a.file-link:not(.md-link)::after,
-.terminal-reader-md .md-link[data-path-link]::after {
+.terminal-reader-md .md-link:is([data-path-link], [data-artifact])::after {
   content: "";
   display: inline-block;
   width: 0.8em;

@@ -113,6 +113,8 @@ export interface GitOverview {
   branches_total: number;
   remote_branches: string[];
   remote_total: number;
+  /** git could not read the project (no git, a refused or damaged repo): no reading, unlike `repo: false`. Missing from an older desktop. */
+  unreadable?: boolean;
 }
 
 /** The project's git overview, read by the phone host itself (window open or
@@ -1074,6 +1076,9 @@ export interface TranscriptEntry {
    * `AskUserQuestion`), with the answers they got — sent once answered, so
    * the one still waiting is the live screen's. `text` says the same plainly. */
   questions?: AskedQuestion[];
+  /** On an `answer` with `questions`: still waiting for the reply — Codex's
+   * async question, written when asked while the agent works on. */
+  asking?: boolean;
   /** On an `agent`: it has not reported back yet (Claude's spawn call has
    * no result in the transcript). */
   running?: boolean;
@@ -1288,6 +1293,21 @@ export async function describeNamedFiles(tabId: string, paths: readonly string[]
   const query = new URLSearchParams({ paths: paths.join("\n") });
   const { files } = await api<{ files?: { path: string; file: PhoneMarkupFile }[] }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/named-files?${query}`, { signal });
   return Array.isArray(files) ? files : [];
+}
+
+/** `GET /api/v1/tabs/{id}/artifact` — the text of a document an Antigravity
+ * chat linked from an answer (`target`, the link as written), read from that
+ * chat's own folder on the desktop; null when it names none. Refused while
+ * "Project files on the phone" is off. */
+export async function getArtifact(tabId: string, target: string, signal?: AbortSignal): Promise<{ name: string; text: string } | null> {
+  const query = new URLSearchParams({ target });
+  try {
+    const { artifact } = await api<{ artifact?: { name: string; text: string } }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/artifact?${query}`, { signal });
+    return artifact && typeof artifact.text === "string" ? artifact : null;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.code === "artifact_not_found") return null;
+    throw reason;
+  }
 }
 
 /** A file the phone dropped into the tab's project inbox. `reference` is
@@ -1576,6 +1596,8 @@ export interface ProjectFileEntry {
  * project ("Phone may write remarks into PDFs"); omitted by an older desktop. */
 export interface ProjectFileListing {
   entries: ProjectFileEntry[]; truncated: boolean; uploads?: boolean; remarks?: boolean
+  /** git could not say which rows it ignores, so ignored ones sit among the rest. Missing when it could, or from an older desktop. */
+  git_unread?: boolean
   /** The project root's catalog docs and the state each is in (the desktop tree's "Project docs" group; names only, in the catalog's order). Root of this computer's side only; missing in any folder, on the remote side, from an older desktop, or when the read timed out — the plain group then. A ghost row is `state === "missing" && creatable`. */
   docs?: DocStatus[]
 }

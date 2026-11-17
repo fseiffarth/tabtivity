@@ -62,6 +62,7 @@ function pane(tracking: boolean) {
     buffer: { active: { type: tracking ? "alternate" : "normal" } },
     scrollLines: vi.fn(),
     scrollToBottom: vi.fn(),
+    focus: vi.fn(),
   };
   registerTerminal(id, term as unknown as Terminal);
   cleanups.push(() => unregisterTerminal(id, term as unknown as Terminal));

@@ -700,7 +700,7 @@ describe("the desktop Reader's live screen", () => {
     ]), "gemma4:26b · OpenCode", 120);
     expect(idle.stray).toBe(false);
     expect(idle.working).toBeNull();
-    expect(idle.status).toEqual({ mode: "build", model: "gemma4:26b" });
+    expect(idle.status).toEqual({ mode: "build", model: "gemma4:26b", path: "~/projects/app" });
     const busy = readReaderLive(plainBuffer([
       "› Read a.txt and tell me its content in one sentence.",
       "┃",

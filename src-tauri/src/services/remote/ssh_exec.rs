@@ -541,6 +541,21 @@ pub fn remote_command(
     remote_dir: &str,
     tmux: Option<&TmuxWrap>,
 ) -> String {
+    remote_command_in(local_cmd, local_args, env, remote_dir, tmux, None)
+}
+
+/// [`remote_command`] for a host with an agent folder (`RemoteSpec::agent_home`):
+/// a recognised agent CLI runs - and, when missing, installs - with `HOME` set to
+/// `agent_home` (`remote_agents::home_prelude`), so its binary, login and sessions
+/// stay out of the login's home. A shell tab and any other command are untouched.
+pub fn remote_command_in(
+    local_cmd: &str,
+    local_args: &[String],
+    env: &HashMap<String, String>,
+    remote_dir: &str,
+    tmux: Option<&TmuxWrap>,
+    agent_home: Option<&str>,
+) -> String {
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("cd {}", shell_quote(remote_dir)));
 
@@ -601,7 +616,12 @@ pub fn remote_command(
         // For a recognised agent, prepend a detect-and-install prelude so the
         // CLI is present on the remote before we exec it (see remote_agents).
         let inner = match remote_agents::recipe_for(local_cmd) {
-            Some(recipe) => format!("{}; {}", remote_agents::bootstrap_prelude(recipe), exec_cli),
+            Some(recipe) => {
+                // The home swap comes first: the probe, the installer and the
+                // host-side resume check all read `$HOME`.
+                let home = agent_home.map(|h| format!("{}; ", remote_agents::home_prelude(h))).unwrap_or_default();
+                format!("{home}{}; {}", remote_agents::bootstrap_prelude(recipe), exec_cli)
+            }
             None => exec_cli,
         };
         format!("exec \"${{SHELL:-/bin/bash}}\" -lc {}", shell_quote(&inner))
@@ -1362,14 +1382,24 @@ pub fn run_git_remote(
     // A spec ssh would refuse fails here, before anything is probed.
     git_ssh_args(spec, git_args)?;
     let host = crate::services::git_hardened::host_git(spec);
+    // A host without git fails every call with one sentence that says so, not
+    // an empty answer a read would show as "nothing there".
+    if host.missing {
+        return Err(crate::services::git_hardened::HOST_GIT_MISSING.to_string());
+    }
     if let Some(refusal) = crate::services::git_hardened::host_hooks_off_refusal(host.version, git_args) {
         return Err(refusal);
     }
     let args = git_ssh_args_within(spec, git_args, host.timeout.then(|| host_timeout_secs(git_args)))?;
     let mut cmd = crate::paths::command_no_window("ssh");
     cmd.args(&args);
-    crate::services::git_bounded::wrapped_output(cmd, git_args, host.timeout)
-        .map_err(|e| format!("failed to run git over ssh: {e}"))
+    let out = crate::services::git_bounded::wrapped_output(cmd, git_args, host.timeout)
+        .map_err(|e| format!("failed to run git over ssh: {e}"))?;
+    // git went missing after the host was probed (the probe is kept for the app's life).
+    if out.status.code() == Some(crate::services::git_hardened::SHELL_NOT_FOUND) {
+        return Err(crate::services::git_hardened::HOST_GIT_MISSING.to_string());
+    }
+    Ok(out)
 }
 
 /// The host-side ceiling for `git <git_args>`: the verb's own
@@ -1729,7 +1759,8 @@ pub fn wrap_pty_options(opts: &mut PtyOptions) -> Result<(), String> {
         (None, None) => None,
     };
 
-    let cmd_string = remote_command(&opts.cmd, &opts.args, &opts.env, &remote_dir, tmux.as_ref());
+    let agent_home = target.spec.agent_home();
+    let cmd_string = remote_command_in(&opts.cmd, &opts.args, &opts.env, &remote_dir, tmux.as_ref(), agent_home.as_deref());
     let mut args = ssh_pty_args(&target.spec, &cmd_string)?;
     let mcp_token = opts.env.get(crate::services::root_mcp::TOKEN_ENV).cloned();
     if mcp_token.is_some() {

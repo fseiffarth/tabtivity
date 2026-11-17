@@ -390,6 +390,7 @@ const AUTHENTICATED_GETS: &[&str] = &[
     "/api/v1/tabs/anything/uncommitted",
     "/api/v1/tabs/anything/changes",
     "/api/v1/tabs/anything/named-files",
+    "/api/v1/tabs/anything/artifact",
     "/api/v1/projects/anything/prompts",
     "/api/v1/tabs/anything/desktop-images",
     "/api/v1/tabs/anything/markup/questions",
@@ -1895,6 +1896,7 @@ async fn the_assistant_scope_is_no_project_to_any_folder_route() {
         ("GET", format!("/api/v1/tabs/{t}/uncommitted"), Value::Null, &["not_a_project"]),
         ("GET", format!("/api/v1/tabs/{t}/changes"), Value::Null, &["not_a_project", "files_off"]),
         ("GET", format!("/api/v1/tabs/{t}/named-files"), Value::Null, &["not_a_project", "files_off"]),
+        ("GET", format!("/api/v1/tabs/{t}/artifact?target=x"), Value::Null, &["not_a_project", "files_off"]),
         // Files drawer and uploads.
         ("GET", format!("/api/v1/projects/{p}/files"), Value::Null, &["files_unavailable"]),
         ("GET", format!("/api/v1/projects/{p}/files/search?q=a"), Value::Null, &["files_unavailable"]),

@@ -25,17 +25,16 @@
  * a session that ignores it and then reported a failed switch.
  *
  * Deliberately absent:
- *   - Vibe / Copilot / Crush / Cline — full-screen (alternate-screen) TUIs;
- *     the Focus view already hands those to the Terminal view. Copilot has
- *     drawn one unconditionally since 1.0.12, and Qwen Code does too by
- *     default since `ui.useTerminalBuffer` (0.23). Plain `opencode` is one of
- *     them; only `opencode --mini` writes scrollback, and only that is what
+ *   - Vibe / Crush / Cline — full-screen (alternate-screen) TUIs;
+ *     the Focus view already hands those to the Terminal view. Qwen Code
+ *     draws one by default since `ui.useTerminalBuffer` (0.23). Plain
+ *     `opencode` is one of them; only `opencode --mini` writes scrollback, and only that is what
  *     the OpenCode family below reads.
  *   - Agents whose mode is not on Shift+Tab: Amp (Ctrl+S), Goose and
  *     mini-SWE-agent (a slash command each), Aider (the prompt prefix is the
  *     mode). A walk of Shift+Tab presses would never reach one of theirs.
- *   - Kimi Code, Cursor agent, Grok Build, Antigravity — their mode readouts
- *     are known from source only; they wait for a live capture.
+ *   - Kimi Code, Cursor agent, Grok Build — their mode readouts are known
+ *     from source only; they wait for a live capture.
  * See `docs/mobile_focus_cli_survey.md` for what each CLI draws.
  */
 
@@ -170,7 +169,40 @@ const OPENCODE: ModeFamily = {
   ],
 };
 
-const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE];
+/** Google Antigravity: the Shift+Tab cycle is default → accept-edits → plan →
+ * default (legacy backtab, probed on 1.5.9), and its footer prefixes the model
+ * with the mode's word (`plan · Gemini 3.1 Pro · low`) in the two non-default
+ * modes. Default is `silent`: it draws no word. So do `--mode auto` and
+ * `--dangerously-skip-permissions`, which are therefore read as default too.
+ * Both modes are `labelled` — "plan" is every other family's word. */
+const ANTIGRAVITY: ModeFamily = {
+  agent: /antigravity/iu,
+  choices: [
+    { value: "default", label: "mobile.mode.default", description: "mobile.mode.defaultHint", silent: true },
+    { value: "accept-edits", label: "mobile.mode.acceptEdits", description: "mobile.mode.acceptEditsHint", aliases: ["accept edits"], labelled: true },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
+  ],
+};
+
+
+/** GitHub Copilot CLI: the execution mode its footer names first
+ * (`Interactive · Manual Approval · …`) and Shift+Tab cycles — Interactive,
+ * Plan, Autopilot, round again — verified on 1.0.112 with the legacy backtab.
+ * Its approval setting (`Manual Approval`, `Assisted Permissions`, `Allow All`)
+ * is the second segment and a `/permissions` command, not on that cycle, so it
+ * is not a choice here. The footer always names a mode (none while a turn
+ * runs, when it shows the working hint instead), so none is `silent`. "plan"
+ * is `labelled`: it is Claude Code's, Codex's, Qwen's and Gemini's word too. */
+const COPILOT: ModeFamily = {
+  agent: /copilot/iu,
+  choices: [
+    { value: "interactive", label: "mobile.mode.interactive", description: "mobile.mode.interactiveHint" },
+    { value: "plan", label: "mobile.mode.plan", description: "mobile.mode.planHint", labelled: true },
+    { value: "autopilot", label: "mobile.mode.autopilot", description: "mobile.mode.autopilotHint" },
+  ],
+};
+
+const FAMILIES = [CLAUDE, CODEX, QWEN, GEMINI, OPENCODE, ANTIGRAVITY, COPILOT];
 
 function claims(choice: Pick<ModeChoice, "value" | "aliases">, mode: string) {
   return choice.value === mode || (choice.aliases?.includes(mode) ?? false);

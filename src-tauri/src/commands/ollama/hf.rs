@@ -1,6 +1,7 @@
 //! Hugging Face as a second model source beside Ollama's registry.
 //!
-//! Ollama pulls any GGUF repo on the Hub as `hf.co/<user>/<repo>:<quant>`: the
+//! Ollama pulls any GGUF repo on the Hub as `hf.co/<user>/<repo>:<quant>` (a
+//! gated one as `huggingface.co/…`, where its auth realm is: [`model_row`]): the
 //! Hub serves an Ollama-compatible manifest for it at
 //! `huggingface.co/v2/<user>/<repo>/manifests/<quant>`, built from the one
 //! `.gguf` file whose name carries that quantization (`latest` picks one).
@@ -149,7 +150,13 @@ fn parse_search(body: &[u8], link: &str, now: DateTime<Utc>) -> Result<HfSearchP
 /// Ollama could pull (no single-file GGUF) or its id is not a model name.
 fn model_row(row: &serde_json::Value, now: DateTime<Utc>) -> Option<RegistryModel> {
     let id = row["id"].as_str()?;
-    let name = format!("hf.co/{id}");
+    let gated = !matches!(row["gated"], serde_json::Value::Bool(false) | serde_json::Value::Null);
+    // A gated repo answers Ollama's manifest read with a 401 whose auth realm
+    // is on `huggingface.co`. Ollama signs that challenge only when the realm's
+    // host is the one the pull started on, so under `hf.co/` it fails with
+    // "realm host … does not match original host" even with access granted:
+    // a gated repo is pulled under `huggingface.co/`.
+    let name = if gated { format!("huggingface.co/{id}") } else { format!("hf.co/{id}") };
     validate_model_name(&name).ok()?;
     let files: Vec<&str> = row["siblings"]
         .as_array()
@@ -179,7 +186,7 @@ fn model_row(row: &serde_json::Value, now: DateTime<Utc>) -> Option<RegistryMode
             .unwrap_or_default(),
         hugging_face: true,
         params: row["gguf"]["total"].as_u64().filter(|n| *n > 0).map(params_label),
-        gated: !matches!(row["gated"], serde_json::Value::Bool(false) | serde_json::Value::Null),
+        gated,
     })
 }
 
@@ -409,6 +416,9 @@ mod tests {
         assert!(m.hugging_face && !m.community && !m.gated);
         let gated = &page.models[1];
         assert!(gated.gated && gated.params.is_none() && gated.updated.is_empty());
+        // Ollama sends its key only to the host the pull started on, and the
+        // Hub's auth realm is `huggingface.co`.
+        assert_eq!(gated.name, "huggingface.co/org/Gated-GGUF");
         assert_eq!(gated.pulls, "12");
     }
 

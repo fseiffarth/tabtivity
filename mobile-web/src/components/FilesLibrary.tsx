@@ -1477,6 +1477,7 @@ export function FilesLibrary({ projectId, label, onClose, markup: markupOffer, s
       {showRecents ? null : searching
         ? found?.truncated && <p className="sheet-note">{t("mobile.files.searchTruncated", { count: found.hits.length })}</p>
         : listing?.truncated && <p className="sheet-note">{t(view.sort === "name" ? "mobile.files.truncated" : "mobile.files.truncatedSorted", { count: listing.entries.length })}</p>}
+      {!showRecents && !searching && listing?.git_unread && <p className="sheet-note">{t("mobile.files.gitUnread")}</p>}
     </div>
     {selecting && selectBar()}
     {sheet && sheetOver(sheet)}

@@ -115,7 +115,7 @@ import {
 } from "../lib/shortcuts/steeringConfirm";
 import { terminalFor } from "../lib/terminal/terminalRegistry";
 import { releaseTerminalScroll, scrollTerminal, scrollTerminalToLive } from "../lib/terminal/terminalScroll";
-import { documentScroller, focusDocumentEditor, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
+import { documentScroller, focusDocumentEditor, focusDocumentEditorWhenReady, scrollDocument, scrollDocumentToEnd } from "../lib/shortcuts/documentScroll";
 import { chordMatches, isLoneModifier, resolveChord, type ShortcutMap } from "../lib/shortcuts/shortcuts";
 
 export type SteeringSurface = "main" | "popout";
@@ -239,6 +239,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
     // fields, say); Escape then closes it.
     const enterSteering = () => {
       cancelArrival();
+      cancelWorkFocus?.();
       focusSomeGroup();
       handedField = null;
       // Entered while a field has the caret (a dialog's, a rename): the chord
@@ -398,12 +399,42 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         shown: shownStatusTab(),
       } satisfies DetachedSteerPayload);
     };
+    let cancelWorkFocus: (() => void) | undefined;
     const exitSteering = () => {
+      cancelWorkFocus?.();
+      cancelWorkFocus = undefined;
       cancelPlace();
       clearRegionCursor();
       dropOverlay();
       panelOpenedBySteering = false;
       useKeyboardSteeringStore.getState().exit();
+    };
+    // Leaving the navigation levels to work must move the caret too: the
+    // side-panel row or the previous tab can still hold DOM focus after a
+    // file was selected. Resolve the tab before leaving, then focus its
+    // editor without moving its selection or viewport.
+    const workHere = () => {
+      const active = steeringActiveTab();
+      exitSteering();
+      if (!active || focusDocumentEditor(active.scope, active.tab.key)) return;
+      const id = `${active.scope}:${active.tab.key}`;
+      const terminal = terminalFor(id);
+      const view = readerViewFor(id)?.view();
+      // Chat restores its composer when steering lets go. Diffs and Files
+      // keep their own keyboard surface, never the terminal hidden behind it.
+      if (terminal) {
+        if (!view || view === "terminal") terminal.focus();
+        return;
+      }
+      const visit = useKeyboardSteeringStore.getState().visit;
+      const previousFocus = document.activeElement;
+      cancelWorkFocus = focusDocumentEditorWhenReady(active.scope, active.tab.key, () => {
+        const steering = useKeyboardSteeringStore.getState();
+        const current = steeringActiveTab();
+        return !steering.active && steering.visit === visit &&
+          current?.scope === active.scope && current.tab.key === active.tab.key &&
+          document.activeElement === previousFocus;
+      });
     };
     // Out of the current region: back to the surface under it that is still
     // on screen (settings under a dialog, the top bar under its menu), the
@@ -682,7 +713,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       }
       switch (action) {
         case "work":
-          exitSteering();
+          workHere();
           return;
         case "left":
         case "right": {
@@ -974,9 +1005,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         // Work here puts the caret in the selected file, including a short
         // document that has no Inside scroll level.
         case "work": {
-          const active = steeringActiveTab();
-          exitSteering();
-          if (active) focusDocumentEditor(active.scope, active.tab.key);
+          workHere();
           return;
         }
         case "down":
@@ -1385,8 +1414,11 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // The chord toggles: enter when inactive, exit when active (not in a
       // typing burst, `steeringChordFires`).
       if (steeringChordFires(resolveChord("steeringMode", overrides), e, steering.active, lastTypedAt)) {
-        swallow();
+        e.preventDefault();
+        e.stopPropagation();
         if (!steering.active) enterSteering();
+        else if (steering.level === "region") exitSteering();
+        else workHere();
         return;
       }
       // The root console toggles from anywhere, a focused terminal included —
@@ -1539,7 +1571,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
       // Esc (by default) leaves the mode from the tab-bar levels; a region
       // never resolves it (its Esc is Back).
       if (action === "exit") {
-        exitSteering();
+        workHere();
         return;
       }
       // H (by default) folds the key list into the corner badge and back; the
@@ -1675,6 +1707,7 @@ export function useSteering({ surface, onTogglePanels, onSidePanel }: SteeringOp
         })();
     return () => {
       cancelArrival();
+      cancelWorkFocus?.();
       unlistenOwner();
       unlistenRequest();
       unlistenStatus();

@@ -846,6 +846,55 @@ fn the_powershell_hook_refuses_a_nested_claudes_resume() {
     assert_eq!(opens, closes);
 }
 
+/// The PowerShell twin records a backgrounded call's task id like the POSIX
+/// one, so the Windows job scan can know it mid-turn; run for real on Windows.
+#[test]
+fn the_powershell_hook_records_background_task_ids() {
+    let body = powershell_hook_script_body(r"C:\live", "app.exe");
+    let at = body.find("if ($event -eq 'PostToolUse') {").expect("the .bg block");
+    let turn_write = body.rfind("[IO.File]::WriteAllText(($rec + '.turn')").unwrap();
+    assert!(at < turn_write, "written before the turn record the scan wakes on");
+    assert!(body[at..].contains(r#"'"backgroundTaskId"\s*:\s*"([A-Za-z0-9]+)"'"#));
+    assert!(body[at..].contains("-Tail 15"));
+}
+
+#[cfg(windows)]
+#[test]
+fn the_powershell_hook_writes_the_bg_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live");
+    let script = dir.path().join("hook.ps1");
+    std::fs::write(&script, powershell_hook_script_body(&live.to_string_lossy(), "app.exe")).unwrap();
+    let uid = "77777777-7777-4777-8777-777777777777";
+    let run = |extra: &str| {
+        use std::io::Write;
+        let mut child = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .env(crate::app_env!("TAB_UID"), uid)
+            .env(crate::app_env!("TAB_AGENT"), "claude")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let payload = format!(r#"{{"session_id":"{uid}","hook_event_name":"PostToolUse"{extra}}}"#);
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        assert!(child.wait().unwrap().success());
+    };
+    let bg = || std::fs::read_to_string(live.join(format!("{uid}.bg"))).ok();
+    run(r#","tool_name":"PowerShell","tool_response":{"stdout":"{\"backgroundTaskId\":\"zzz9\"}"}"#);
+    assert_eq!(bg(), None, "a quoted field in the output is not the result's");
+    for i in 0..18 {
+        run(&format!(r#","tool_name":"PowerShell","tool_response":{{"stdout":"","backgroundTaskId":"t{i}"}}"#));
+    }
+    let kept: Vec<String> = bg().unwrap().lines().map(str::to_string).collect();
+    assert_eq!(kept, (2..18).map(|i| format!("t{i}")).collect::<Vec<_>>(), "the last sixteen");
+    assert_eq!(
+        std::fs::read_to_string(live.join(format!("{uid}.turn"))).unwrap().split(' ').next(),
+        Some("working")
+    );
+}
+
 /// `/fork` starts a thread with no `SessionStart` the matcher lets through, so
 /// the fork's rollout is what moves the record (Codex 0.166.0, payloads and
 /// rollout header as captured). The move comes on the fork's first event, or a
@@ -1620,6 +1669,58 @@ fn hook_script_records_the_turn_state_for_the_tabs_own_session_only() {
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PermissionRequest", approval));
     assert_eq!(cturn().as_deref(), Some("decision"));
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", r#","tool_name":"Bash""#));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    // With auto-review the request goes to Codex's reviewer agent, never to a
+    // dialog (0.169.0 fired it before every guardian review in the fence):
+    // the turn stays working. Only the top-level key counts.
+    let codex_home = tmp.join("codex-home");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let home_env = [("CODEX_HOME", codex_home.to_str().unwrap())];
+    for (config, asks) in [
+        ("approvals_reviewer = \"auto_review\"\nmodel = \"m\"\n", false),
+        ("model = \"m\"\napprovals_reviewer = 'auto_review' # mine\n[tui]\nx = 1\n", false),
+        ("model = \"m\"\n[profiles.p]\napprovals_reviewer = \"auto_review\"\n", true),
+        ("approvals_reviewer = \"user\"\n", true),
+    ] {
+        std::fs::write(codex_home.join("config.toml"), config).unwrap();
+        run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", ""));
+        run_hook_with(&script, &live, codex_uid, Some("codex"), false, &home_env, &ev(codex_id, "PermissionRequest", approval));
+        assert_eq!(cturn().as_deref(), Some(if asks { "decision" } else { "working" }), "{config}");
+    }
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", r#","tool_name":"Bash""#));
+    // An async question (`request_user_input_async`, the shapes 0.169.0 sent):
+    // the turn works on, but reads as a question until the reply names the
+    // call. Two open at once: the first reply leaves the second asking.
+    let ask = |call: &str| {
+        format!(r#","tool_name":"request_user_input_async","tool_input":{{"questions":[{{"title":"Which?","options":["A","B"]}}]}},"tool_response":"{{\"accepted\":true}}","tool_use_id":"{call}""#)
+    };
+    let reply = |call: &str| {
+        format!(
+            r#","prompt":"<send_user_message_question_reply>\n[{{\"answer\":\"A\",\"question\":\"Which?\",\"questionItemId\":\"[\\\"request_user_input_async\\\",\\\"{call}\\\",0]\"}}]\n</send_user_message_question_reply>""#
+        )
+    };
+    let asks = || std::fs::read_to_string(live.join(format!("{codex_uid}.ask"))).ok();
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", &ask("call_q1")));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", r#","tool_name":"exec""#));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", &ask("call_q2")));
+    // A nested `codex exec`'s question is somebody else's.
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "PostToolUse", &ask("call_n")));
+    assert_eq!(asks().as_deref(), Some("call_q1\ncall_q2\n"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", &reply("call_q1")));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    assert_eq!(asks().as_deref(), Some("call_q2\n"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", &reply("call_q2")));
+    assert_eq!(cturn().as_deref(), Some("working"));
+    assert_eq!(asks(), None);
+    // The turn's end drops a question still waiting (Codex does too).
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "PostToolUse", &ask("call_q3")));
+    assert_eq!(cturn().as_deref(), Some("decision"));
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "Stop", ""));
+    assert_eq!(cturn().as_deref(), Some("done"));
+    assert_eq!(asks(), None);
+    run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(codex_id, "UserPromptSubmit", ""));
     assert_eq!(cturn().as_deref(), Some("working"));
     run_hook(&script, &live, codex_uid, Some("codex"), false, &ev(nested, "Stop", ""));
     assert_eq!(cturn().as_deref(), Some("working"));

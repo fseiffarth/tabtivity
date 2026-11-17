@@ -1119,6 +1119,32 @@ correctness/UX work atop the same layout model #42 detaches.*
         - [ ] ❌ Doesn't work on Windows
         - [ ] ✅ Works on macOS
         - [ ] ❌ Doesn't work on macOS
+    - **Fix (2026-11-17): Windows gets the job scan.** An agent tab whose turn
+      ended over a backgrounded command (gates, a build) never wore the
+      shell-coloured ▶ on Windows: the scan was a stub there, with no reader of
+      another process's environment to tie a tool shell to its tab. It now walks
+      ToolHelp and reads each shell's command line and environment from its PEB
+      (`sysstat::process_params`). Measured on Claude 2.1.326: the Bash tool is
+      Git Bash with the `< /dev/null` seam on EVERY call (so the seam is not
+      read there; a backgrounded Bash call shows once it outlives the turn), the
+      PowerShell tool is `cmd` → `powershell` with the launcher-script marker
+      and a redirect into `tasks\<id>.output` (so a backgrounded one shows
+      mid-turn); the PowerShell hook now writes `<uid>.bg` like the POSIX one.
+      Backend change, **restart needed**.
+      *Files: `src-tauri/src/services/agent/{agent_turn,agent_session}.rs`,
+      `src-tauri/src/sysstat.rs`.*
+      - [x] 🤖 Automated test — `agent_turn`
+        (`windows_tool_shells_are_tied_to_their_tab_and_backgrounded_ones_found`,
+        `windows_tool_shell_test_matches_the_measured_spellings`),
+        `the_powershell_hook_records_background_task_ids`,
+        `the_powershell_hook_writes_the_bg_record` (Windows)
+      - [ ] 🖐️ Manual test — after a restart, in a Claude tab on Windows: "run
+        `sleep 60` in the background with Bash and end your turn". The tab shows
+        the shell-coloured ▶ until the minute is up, then ✓. Again with
+        "`Start-Sleep 60` in the background with PowerShell, then `ls`": two ▶
+        while the turn runs.
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
     - **Fix (2026-10-15): a new tab off the strip's right edge scrolls into
       view.** With the strip overflowing, an agent tab added at its far end
       became active but stayed hidden past the right chevron; only a click

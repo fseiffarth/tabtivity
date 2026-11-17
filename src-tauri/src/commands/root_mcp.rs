@@ -535,7 +535,7 @@ pub fn stop_for_exit() {
 pub fn start(ctx: CoreCtx) {
     // The tabs the Mobile host spawns keep their markup asks in its memory;
     // the window's markup commands read them over its admin socket.
-    crate::commands::markup_mcp::use_host_peer(storage::state_dir().join("mobile-control/admin.sock"));
+    crate::commands::markup_mcp::use_host_peer(crate::services::mobile_control::config::admin_socket(&storage::state_dir()));
     let notify = serve_everything(&ctx, Arc::new(|_| {}));
     let handle = app_core::rt::spawn(async move {
         let served = match bind(LOOPBACK).await {

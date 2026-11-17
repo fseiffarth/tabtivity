@@ -9,7 +9,7 @@ use crate::tauri_host::Ctx;
 pub use crate::services::git_hardened::git_available_blocking;
 pub(crate) use crate::services::git_hardened::{
     check_rev, hardened_git_command_in, hooked_git_command_in, hookless_git_command_in,
-    local_non_repo, pin_common_dir, run_git, run_git_hooked,
+    failed_read, failure_message, local_non_repo, pin_common_dir, run_git, run_git_hooked, ReadFailure,
     git_clone_blocking, scoped_token_config, stdout, valid_positional_path, validate_clone_url,
 };
 
@@ -100,17 +100,18 @@ fn git_status_probe_selected(
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<GitStatus, String> {
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
+    let no_repo = GitStatus {
+        staged: 0,
+        unstaged: 0,
+        untracked: 0,
+        has_remote: false,
+        is_repo: false,
+        behind: 0,
+        head_tagged: false,
+        upstream_ahead: None,
+    };
     if local_non_repo(target.as_ref(), &project_dir) {
-        return Ok(GitStatus {
-            staged: 0,
-            unstaged: 0,
-            untracked: 0,
-            has_remote: false,
-            is_repo: false,
-            behind: 0,
-            head_tagged: false,
-            upstream_ahead: None,
-        });
+        return Ok(no_repo);
     }
 
     // `--branch` adds one `## main...origin/main [behind 2]` header — the
@@ -120,6 +121,13 @@ fn git_status_probe_selected(
         &project_dir,
         &["status", "--porcelain", "--branch"],
     )?;
+    // A failed status is no reading: parsing its empty stdout would report a
+    // clean repo (the pill's dot drew "clean" over a refused or git-less one).
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(no_repo),
+        Some(ReadFailure::Error(why)) => return Err(why),
+    }
 
     let text = String::from_utf8_lossy(&out.stdout);
     let mut staged = 0usize;
@@ -351,27 +359,22 @@ fn git_generate_commit_message_blocking_selected(
     worktree: Option<GitWorktreeSelection>,
 ) -> Result<String, String> {
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
-    let files_out = run_git(
-        target.as_ref(),
-        &project_dir,
-        &["diff", "--staged", "--name-only"],
-    )?;
-    let staged_text = String::from_utf8_lossy(&files_out.stdout).to_string();
-    let staged: Vec<&str> = staged_text.lines().collect();
+    // A failed diff is an error, not "no files": the fallback message below
+    // would otherwise stand in for one git never produced.
+    let names = |args: &[&str]| -> Result<Vec<String>, String> {
+        let out = run_git(target.as_ref(), &project_dir, args)?;
+        if !out.status.success() {
+            return Err(failure_message(&out));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect())
+    };
+    let staged = names(&["diff", "--staged", "--name-only"])?;
 
     // Also check untracked / unstaged if nothing staged
     let files: Vec<String> = if staged.is_empty() {
-        let all = run_git(target.as_ref(), &project_dir, &["diff", "--name-only"])
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
-        all
+        names(&["diff", "--name-only"])?
     } else {
-        staged.iter().map(|s| s.to_string()).collect()
+        staged
     };
 
     if files.is_empty() {
@@ -548,6 +551,12 @@ fn git_file_statuses_blocking(
         ]
     };
     let out = run_git(target.as_ref(), &project_dir, &status_args)?;
+    // A failed status is no reading, not "nothing modified or ignored".
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(HashMap::new()),
+        Some(ReadFailure::Error(why)) => return Err(why),
+    }
     let porcelain = String::from_utf8_lossy(&out.stdout).into_owned();
 
     // prefix used to filter entries under rel_path
@@ -678,7 +687,10 @@ fn git_file_statuses_blocking(
             .map(|name| (true, name))
             .collect();
         let rel = rel_path.trim_matches('/');
-        for name in crate::services::mobile_control::files::ignored_names(Path::new(&project_dir), rel, &empty_dirs) {
+        // Status just answered, so a failure here is a blip: those folders keep
+        // their regular section rather than failing the letters already read.
+        let ignored = crate::services::mobile_control::files::ignored_names(Path::new(&project_dir), rel, &empty_dirs);
+        for name in ignored.into_iter().flatten() {
             map.insert(name, "ignored".to_string());
         }
     }
@@ -781,66 +793,69 @@ pub async fn git_change_stats(
         _ => Some(vec!["diff".into(), "--numstat".into(), "--".into()]),
     };
 
+    // A failed git run is an error, not an empty change list: the tree would
+    // otherwise read "no changes" over a repo git could not read at all.
     let mut changes: Vec<FileChange> = Vec::new();
-    let numstat = numstat_args.and_then(|args| {
+    if let Some(args) = numstat_args {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        run_git(target.as_ref(), &project_dir, &args).ok()
-    });
-    if let Some(out) = numstat {
-        if out.status.success() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                let mut parts = line.splitn(3, '\t');
-                let a = parts.next().unwrap_or("");
-                let d = parts.next().unwrap_or("");
-                let p = parts.next().unwrap_or("");
-                if p.is_empty() {
-                    continue;
-                }
-                changes.push(FileChange {
-                    path: normalize_numstat_path(p),
-                    added: a.parse().unwrap_or(0),
-                    deleted: d.parse().unwrap_or(0),
-                    binary: a == "-" || d == "-",
-                });
+        let out = run_git(target.as_ref(), &project_dir, &args)?;
+        match failed_read(&out) {
+            None => {}
+            Some(ReadFailure::NotARepo) => return Ok(vec![]),
+            Some(ReadFailure::Error(why)) => return Err(why),
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            let mut parts = line.splitn(3, '\t');
+            let a = parts.next().unwrap_or("");
+            let d = parts.next().unwrap_or("");
+            let p = parts.next().unwrap_or("");
+            if p.is_empty() {
+                continue;
             }
+            changes.push(FileChange {
+                path: normalize_numstat_path(p),
+                added: a.parse().unwrap_or(0),
+                deleted: d.parse().unwrap_or(0),
+                binary: a == "-" || d == "-",
+            });
         }
     }
 
     // Untracked files never appear in `git diff`; list them separately and count
     // their lines as additions (the Add list shows them alongside modified files).
     if scope == "unstaged" {
-        if let Ok(out) = run_git(
+        let out = run_git(
             target.as_ref(),
             &project_dir,
             &["ls-files", "--others", "--exclude-standard", "-z"],
-        ) {
-            if out.status.success() {
-                for chunk in out.stdout.split(|&b| b == 0) {
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    let rel = String::from_utf8_lossy(chunk).into_owned();
-                    // Untracked line counts read the file's bytes and apply the
-                    // same NUL/newline logic for both project kinds:
-                    //   * local  → `std::fs::read` under the project directory;
-                    //   * remote → the bytes over the pooled SFTP session, with
-                    //     the rel path confined under `spec.remote_path` (a path
-                    //     that escapes the root is treated as unreadable).
-                    // Any read/confinement error degrades to (0, false) rather
-                    // than failing the whole listing.
-                    let (added, binary) = match &target {
-                        None => count_added_lines(&dir.join(&rel)),
-                        Some(t) => count_added_lines_remote(pool, t, &rel).await,
-                    };
-                    changes.push(FileChange {
-                        path: rel,
-                        added,
-                        deleted: 0,
-                        binary,
-                    });
-                }
+        )?;
+        if !out.status.success() {
+            return Err(failure_message(&out));
+        }
+        for chunk in out.stdout.split(|&b| b == 0) {
+            if chunk.is_empty() {
+                continue;
             }
+            let rel = String::from_utf8_lossy(chunk).into_owned();
+            // Untracked line counts read the file's bytes and apply the
+            // same NUL/newline logic for both project kinds:
+            //   * local  → `std::fs::read` under the project directory;
+            //   * remote → the bytes over the pooled SFTP session, with
+            //     the rel path confined under `spec.remote_path` (a path
+            //     that escapes the root is treated as unreadable).
+            // Any read/confinement error degrades to (0, false) rather
+            // than failing the whole listing.
+            let (added, binary) = match &target {
+                None => count_added_lines(&dir.join(&rel)),
+                Some(t) => count_added_lines_remote(pool, t, &rel).await,
+            };
+            changes.push(FileChange {
+                path: rel,
+                added,
+                deleted: 0,
+                binary,
+            });
         }
     }
 
@@ -1663,6 +1678,11 @@ fn git_branches_blocking_selected(
     }
     let fmt = "--format=%(if)%(HEAD)%(then)*%(else) %(end)\u{1f}%(refname:short)\u{1f}%(refname)\u{1f}%(upstream:short)\u{1f}%(upstream:track,nobracket)";
     let out = run_git(target.as_ref(), &project_dir, &["branch", "-a", fmt])?;
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(vec![]),
+        Some(ReadFailure::Error(why)) => return Err(why),
+    }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut branches = Vec::new();
     for line in text.lines() {
@@ -2329,9 +2349,12 @@ pub(crate) fn git_worktree_list_blocking(
         return Ok(vec![]);
     }
     let out = run_worktree_git(&ctx, &["worktree", "list", "--porcelain"])?;
-    if !out.status.success() {
-        // Lenient, like git_log (e.g. empty repo).
-        return Ok(vec![]);
+    // "Not a repo" is no worktrees; any other failure is no reading (the phone's
+    // git sheet and the agent "+" menu used to read it as a repo with none).
+    match failed_read(&out) {
+        None => {}
+        Some(ReadFailure::NotARepo) => return Ok(vec![]),
+        Some(ReadFailure::Error(why)) => return Err(why),
     }
     let mut list = parse_worktree_porcelain(&String::from_utf8_lossy(&out.stdout));
     for wt in list.iter_mut() {

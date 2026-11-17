@@ -1,6 +1,6 @@
 [package]
 name = "tabtivity"
-version = "0.2.84"
+version = "0.2.86"
 edition = "2021"
 description = "A tab for each project. A tab for everything in it."
 license = "MIT OR Apache-2.0"
@@ -397,6 +397,9 @@ windows = { version = "0.62", features = [
     # Handle-relative, no-reparse project file reads for the phone browser.
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
+    # `NtQueryInformationProcess` for a tool shell's PEB (command line and tab
+    # id) in the agent job scan (`sysstat::process_params`).
+    "Wdk_System_Threading",
     "Win32_Foundation",
     # The user's regional time picture (`GetLocaleInfoEx`) for the default
     # 12/24-hour clock (`commands/os_clock.rs`).

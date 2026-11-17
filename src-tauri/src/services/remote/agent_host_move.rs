@@ -103,10 +103,12 @@ struct Session {
 }
 
 /// One side of the move: this machine, or a host of the project. `folder` is
-/// the slug folder of the folder the tab runs in there.
+/// the slug folder of the folder the tab runs in there; a host's `home` is its
+/// agent home (`RemoteSpec::agent_home`) when it has one, else Claude's files are
+/// relative to the login's home.
 enum Side {
     Here { home: PathBuf, folder: String },
-    Host { sftp: Arc<Sftp>, folder: String },
+    Host { sftp: Arc<Sftp>, home: Option<String>, folder: String },
 }
 
 /// Take the conversation of the `agent` tab with launch id `launch_id` of the
@@ -143,7 +145,7 @@ pub async fn move_session(
 
     // Ask the host's running CLI first: ending its tmux session ends it.
     let running = match &source {
-        Side::Host { sftp, .. } => crate::services::remote_transcript::running_session(sftp, launch_id)
+        Side::Host { sftp, home, .. } => crate::services::remote_transcript::running_session(sftp, home.as_deref(), launch_id)
             .await
             .map(|(id, _)| id),
         Side::Here { .. } => None,
@@ -221,7 +223,7 @@ async fn side(pool: &RemotePoolState, project_id: &str, host: Option<&str>, prim
         .await
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| path.to_string());
-    Ok(Side::Host { sftp, folder: claude_folder_name(real.trim_end_matches('/')) })
+    Ok(Side::Host { sftp, home: target.spec.agent_home(), folder: claude_folder_name(real.trim_end_matches('/')) })
 }
 
 /// End the tab's tmux session on `host`. Failing to end it on the host the
@@ -254,11 +256,11 @@ async fn read_sessions(side: &Side, ids: &[String]) -> Result<Vec<Session>, Stri
             .await
             .map_err(|e| e.to_string())?
         }
-        Side::Host { sftp, folder } => {
+        Side::Host { sftp, home, folder } => {
             let mut out = Vec::new();
             let mut budget = Budget::new();
             for id in ids {
-                if let Some(session) = read_host(sftp, folder, id, &mut budget).await? {
+                if let Some(session) = read_host(sftp, home.as_deref(), folder, id, &mut budget).await? {
                     out.push(session);
                 }
             }
@@ -329,16 +331,17 @@ fn collect_here(dir: &HomeDir, at: &mut Vec<String>, out: &mut Vec<(Vec<String>,
 }
 
 /// `id`'s conversation on the host: in `folder`, else in any slug folder.
-async fn read_host(sftp: &Sftp, folder: &str, id: &str, budget: &mut Budget) -> Result<Option<Session>, String> {
+async fn read_host(sftp: &Sftp, home: Option<&str>, folder: &str, id: &str, budget: &mut Budget) -> Result<Option<Session>, String> {
     use crate::services::sftp::{list_dir_raw_on, metadata_opt_on, read_file_up_to};
+    let projects = crate::services::remote_transcript::under(home, PROJECTS);
     let name = format!("{id}.jsonl");
     let mut found = None;
-    let own = format!("{PROJECTS}/{folder}/{name}");
+    let own = format!("{projects}/{folder}/{name}");
     if let Some((size, modified)) = metadata_opt_on(sftp, &own).await? {
         found = Some((folder.to_string(), size, modified));
-    } else if let Ok(dirs) = list_dir_raw_on(sftp, PROJECTS).await {
+    } else if let Ok(dirs) = list_dir_raw_on(sftp, &projects).await {
         for dir in dirs.iter().filter(|e| matches!(e.kind, SyncKind::Dir)).take(MAX_SEARCHED_DIRS) {
-            if let Ok(Some((size, modified))) = metadata_opt_on(sftp, &format!("{PROJECTS}/{}/{name}", dir.name)).await {
+            if let Ok(Some((size, modified))) = metadata_opt_on(sftp, &format!("{projects}/{}/{name}", dir.name)).await {
                 found = Some((dir.name.clone(), size, modified));
                 break;
             }
@@ -351,10 +354,10 @@ async fn read_host(sftp: &Sftp, folder: &str, id: &str, budget: &mut Budget) -> 
         return Err(too_large());
     }
     // The size above is the host's word; the read is what holds it to the limit.
-    let transcript = read_file_up_to(sftp, &format!("{PROJECTS}/{dir}/{name}"), budget.limit()).await?.ok_or_else(too_large)?;
+    let transcript = read_file_up_to(sftp, &format!("{projects}/{dir}/{name}"), budget.limit()).await?.ok_or_else(too_large)?;
     budget.spend(transcript.len());
     let mut files = Vec::new();
-    collect_host(sftp, &format!("{PROJECTS}/{dir}/{id}"), &mut Vec::new(), &mut files, budget).await?;
+    collect_host(sftp, &format!("{projects}/{dir}/{id}"), &mut Vec::new(), &mut files, budget).await?;
     Ok(Some(Session { id: id.to_string(), transcript, files, modified: modified.unwrap_or(0) }))
 }
 
@@ -395,7 +398,7 @@ async fn write_session(side: &Side, session: &Session) -> Result<(), String> {
                 .map_err(|e| e.to_string())?
                 .map_err(|e| format!("writing the conversation: {e}"))
         }
-        Side::Host { sftp, folder } => write_host(sftp, folder, session).await,
+        Side::Host { sftp, home, folder } => write_host(sftp, home.as_deref(), folder, session).await,
     }
 }
 
@@ -419,9 +422,9 @@ fn write_here(home: &Path, folder: &str, id: &str, transcript: &[u8], files: &[(
     Ok(())
 }
 
-async fn write_host(sftp: &Sftp, folder: &str, session: &Session) -> Result<(), String> {
+async fn write_host(sftp: &Sftp, home: Option<&str>, folder: &str, session: &Session) -> Result<(), String> {
     use crate::services::sftp::{metadata_opt_on, read_file_up_to, rename_on, write_file_on};
-    let base = format!("{PROJECTS}/{folder}");
+    let base = format!("{}/{folder}", crate::services::remote_transcript::under(home, PROJECTS));
     let path = format!("{base}/{}.jsonl", session.id);
     if metadata_opt_on(sftp, &path).await?.is_some() {
         // Only a prefix of the transcript brought over is left in place: a longer file there
