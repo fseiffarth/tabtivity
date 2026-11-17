@@ -1163,6 +1163,65 @@ pub(crate) struct HostGit {
     /// The host runs `timeout -k <s> <s> git …` (GNU coreutils, BusyBox), so a
     /// host git call is bounded on the host as well.
     pub timeout: bool,
+    /// The host was reached and its shell found no `git` (exit 127), as
+    /// opposed to a host that could not be probed at all.
+    pub missing: bool,
+}
+
+/// The error every git call on a host without git ends in
+/// (`ssh_exec::run_git_remote`), instead of an empty answer or a refusal that
+/// blames the connection.
+pub(crate) const HOST_GIT_MISSING: &str = "git is not installed on the remote host (or not on its PATH).";
+
+/// The exit status a POSIX shell reports for a command it cannot find. git
+/// itself never exits with it, so over ssh it means the host has no git.
+pub(crate) const SHELL_NOT_FOUND: i32 = 127;
+
+/// How a read verb's failed git run reads.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReadFailure {
+    /// git ran and said the folder is not a repository: a clean "no repo".
+    NotARepo,
+    /// Anything else (no git, a refused or corrupt repo, an unsafe owner): no
+    /// reading at all, never to be shown as an empty or clean one.
+    Error(String),
+}
+
+/// [`ReadFailure`] for a failed run's exit `code` and `stderr`. git's "not a
+/// git repository" is matched in English: a local git runs under `LC_ALL=C`; a
+/// host git in another language reads as an error, which is still no false
+/// "clean". Pure.
+pub(crate) fn read_failure(code: Option<i32>, stderr: &[u8]) -> ReadFailure {
+    let text = String::from_utf8_lossy(stderr);
+    let text = text.trim();
+    if code == Some(SHELL_NOT_FOUND) {
+        return ReadFailure::Error(HOST_GIT_MISSING.to_string());
+    }
+    if code == Some(128) && text.to_ascii_lowercase().contains("not a git repository") {
+        return ReadFailure::NotARepo;
+    }
+    ReadFailure::Error(if text.is_empty() {
+        match code {
+            Some(c) => format!("git exited with status {c}"),
+            None => "git was stopped by a signal".to_string(),
+        }
+    } else {
+        text.to_string()
+    })
+}
+
+/// [`read_failure`] for a finished run; `None` when it succeeded.
+pub(crate) fn failed_read(out: &std::process::Output) -> Option<ReadFailure> {
+    (!out.status.success()).then(|| read_failure(out.status.code(), &out.stderr))
+}
+
+/// A failed run as an error message, for a caller with no "no repo" answer of
+/// its own.
+pub(crate) fn failure_message(out: &std::process::Output) -> String {
+    match read_failure(out.status.code(), &out.stderr) {
+        ReadFailure::NotARepo => "not a git repository".to_string(),
+        ReadFailure::Error(why) => why,
+    }
 }
 
 /// `(major, minor)` from `git --version`'s output (`git version 2.39.3 (Apple
@@ -1242,18 +1301,24 @@ fn probe_host_git(spec: &crate::schema::project::RemoteSpec) -> HostGit {
     };
     let version = |out: &std::process::Output| parse_git_version(&String::from_utf8_lossy(&out.stdout));
     let Some(out) = run(HOST_GIT_PROBE_BOUNDED) else {
-        return HostGit { version: None, timeout: false };
+        return HostGit { version: None, timeout: false, missing: false };
     };
     if out.status.success() {
         if let Some(v) = version(&out) {
-            return HostGit { version: Some(v), timeout: true };
+            return HostGit { version: Some(v), timeout: true, missing: false };
         }
     }
     // ssh's own failure (255): the host was not reached, so a second try would not be either.
     if out.status.code() == Some(255) {
-        return HostGit { version: None, timeout: false };
+        return HostGit { version: None, timeout: false, missing: false };
     }
-    HostGit { version: run(HOST_GIT_PROBE).as_ref().and_then(version), timeout: false }
+    // The bounded probe's 127 may be a missing `timeout`; only the bare one's says git.
+    let bare = run(HOST_GIT_PROBE);
+    HostGit {
+        version: bare.as_ref().and_then(version),
+        timeout: false,
+        missing: bare.as_ref().is_some_and(|o| o.status.code() == Some(SHELL_NOT_FOUND)),
+    }
 }
 
 /// Turn git's own auth failure into the one sentence that tells the user what to
@@ -1355,6 +1420,27 @@ mod stub_probe_tests {
         assert!(!stub_without_tools(Some(stub), || true));
         assert!(!stub_without_tools(Some(Path::new("/opt/homebrew/bin/git")), || false));
         assert!(!stub_without_tools(None, || false));
+    }
+
+    /// A failed read is "no repo" only on git's own not-a-repo answer; a host
+    /// without git, a refused repo and a silent failure are errors.
+    #[test]
+    fn a_failed_read_is_no_repo_only_on_gits_own_answer() {
+        assert_eq!(
+            read_failure(Some(128), b"fatal: not a git repository (or any of the parent directories): .git\n"),
+            ReadFailure::NotARepo
+        );
+        assert_eq!(
+            read_failure(Some(SHELL_NOT_FOUND), b"sh: 1: git: not found\n"),
+            ReadFailure::Error(HOST_GIT_MISSING.to_string())
+        );
+        let owner = b"fatal: detected dubious ownership in repository at '/srv/x'\n";
+        assert_eq!(
+            read_failure(Some(128), owner),
+            ReadFailure::Error("fatal: detected dubious ownership in repository at '/srv/x'".into())
+        );
+        assert_eq!(read_failure(Some(1), b""), ReadFailure::Error("git exited with status 1".into()));
+        assert_eq!(read_failure(None, b""), ReadFailure::Error("git was stopped by a signal".into()));
     }
 }
 

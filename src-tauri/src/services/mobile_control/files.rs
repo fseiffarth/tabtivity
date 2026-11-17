@@ -122,6 +122,11 @@ pub struct Entry {
 pub struct Listing {
     pub entries: Vec<Entry>,
     pub truncated: bool,
+    /// git could not say which rows it ignores (no git, a refused or damaged
+    /// repo), so ignored rows sit among the rest. Never set for a folder that
+    /// is simply not in a repo. A flag only: git's message can name a path.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub git_unread: bool,
 }
 
 /// Names the listing leaves out and no token may cross: git's internals, the
@@ -633,11 +638,12 @@ pub(super) fn child(rel: &str, name: &str) -> String {
 /// check-ignore` over all of them — what puts a row in the phone's collapsed
 /// "gitignored" section, as on the desktop tree. A tracked file is never
 /// ignored (check-ignore reads the index), and a folder counts only when it is
-/// ignored itself, not when something inside it is. No repo, no git, or any
-/// other failure is no names: a display hint, never a gate.
-pub(crate) fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> HashSet<String> {
+/// ignored itself, not when something inside it is. A folder outside any
+/// repo has no names; `None` when git could not answer (no git, a refused or
+/// damaged repo) — a display hint, never a gate, but not "none ignored".
+pub(crate) fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) -> Option<HashSet<String>> {
     if found.is_empty() {
-        return HashSet::new();
+        return Some(HashSet::new());
     }
     let mut input = Vec::new();
     for (_, name) in found {
@@ -655,17 +661,26 @@ pub(crate) fn ignored_names(root: &Path, rel: &str, found: &[(bool, String)]) ->
         crate::services::git_bounded::Opts { stdin: Some(input), ..Default::default() },
     );
     // Exit 0: some are ignored; 1: none; 128: not a repo, or git refused.
-    let Some(out) = ran.ok().map(|r| r.output).filter(|out| out.status.success()) else {
-        return HashSet::new();
-    };
+    let out = ran.ok()?.output;
+    if !out.status.success() {
+        return match out.status.code() {
+            Some(1) => Some(HashSet::new()),
+            _ => match crate::services::git_hardened::failed_read(&out) {
+                Some(crate::services::git_hardened::ReadFailure::NotARepo) => Some(HashSet::new()),
+                _ => None,
+            },
+        };
+    }
     let prefix = if rel.is_empty() { "./".to_string() } else { format!("./{rel}/") };
-    out.stdout
-        .split(|&byte| byte == 0)
-        .filter_map(|path| std::str::from_utf8(path).ok())
-        .filter_map(|path| path.trim_end_matches('/').strip_prefix(prefix.as_str()))
-        .filter(|name| !name.is_empty() && !name.contains('/'))
-        .map(str::to_owned)
-        .collect()
+    Some(
+        out.stdout
+            .split(|&byte| byte == 0)
+            .filter_map(|path| std::str::from_utf8(path).ok())
+            .filter_map(|path| path.trim_end_matches('/').strip_prefix(prefix.as_str()))
+            .filter(|name| !name.is_empty() && !name.contains('/'))
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 /// How many children of the held folder `dir` its own listing would row
@@ -717,6 +732,8 @@ fn list_with_budget(root: &Path, rel: &str, host_key: &[u8], raw_id: &str, mut b
     let truncated = found.len() > MAX_ENTRIES;
     found.truncate(MAX_ENTRIES);
     let ignored = ignored_names(root, rel, &found);
+    let git_unread = ignored.is_none();
+    let ignored = ignored.unwrap_or_default();
     let mut entries = Vec::with_capacity(found.len());
     for (is_dir, name) in found {
         // Swapped for a link or removed since the listing: not listed.
@@ -737,7 +754,7 @@ fn list_with_budget(root: &Path, rel: &str, host_key: &[u8], raw_id: &str, mut b
         let ignored = ignored.contains(&name);
         entries.push(Entry { token: seal(host_key, raw_id, &child(rel, &name))?, name, kind, size, modified, created, ignored, items });
     }
-    Ok(Listing { entries, truncated })
+    Ok(Listing { entries, truncated, git_unread })
 }
 
 /// One file of the project as its folder's listing would row it, or `None`
@@ -1203,7 +1220,27 @@ mod tests {
     #[test]
     fn outside_a_repo_nothing_is_ignored() {
         let dir = tree();
-        assert!(list(dir.path(), "", KEY, "p1").unwrap().entries.iter().all(|e| !e.ignored));
+        let listing = list(dir.path(), "", KEY, "p1").unwrap();
+        assert!(listing.entries.iter().all(|e| !e.ignored));
+        assert!(!listing.git_unread, "no repo is an answer, not a failed read");
+        assert!(serde_json::to_value(&listing).unwrap().get("git_unread").is_none(), "false is left out");
+    }
+
+    /// A repo git cannot read says so instead of listing nothing as ignored.
+    #[test]
+    fn a_repo_git_cannot_read_is_flagged_not_listed_as_clean() {
+        if !crate::services::git_hardened::git_available_blocking() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        crate::test_util::init_repo(root);
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        fs::write(root.join("run.log"), "x").unwrap();
+        fs::write(root.join(".git").join("index"), b"not an index").unwrap();
+        let listing = list(root, "", KEY, "p1").unwrap();
+        assert!(listing.git_unread);
+        assert_eq!(serde_json::to_value(&listing).unwrap()["git_unread"], true);
     }
 
     #[test]

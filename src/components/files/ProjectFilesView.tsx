@@ -531,6 +531,9 @@ export function ProjectFilesView({
   // Bumped by the Pull button: GitHistory owns the pull preview it opens.
   const [pullRequest, setPullRequest] = useState(0);
   const [gitError, setGitError] = useState<string | null>(null);
+  // Why the last `git status` read failed (no git, a refused or damaged repo):
+  // the bar hides without a reading, and this says why in its place.
+  const [gitReadError, setGitReadError] = useState<string | null>(null);
   // Why a take-a-side in the diverged view did not transfer: the backend's
   // refusal used to reach only the console, so the click read as doing nothing.
   const [orangeError, setOrangeError] = useState<string | null>(null);
@@ -571,14 +574,19 @@ export function ProjectFilesView({
   const runRefreshGit = (dir: string): Promise<void> => {
     const context = gitContextKey;
     const worktreeArgs = gitWorktreeArgs(selectedGitWorktree);
+    let readError: string | null = null;
     return Promise.all([
-      invoke<GitStatus>("git_status", { projectDir: dir, ...worktreeArgs }).catch(() => null),
+      invoke<GitStatus>("git_status", { projectDir: dir, ...worktreeArgs }).catch((e: unknown) => {
+        readError = String(e);
+        return null;
+      }),
       // A failed read (git refused or timed out, #2349) is no reading, not
       // "nothing to push": `null`, so neither this bar nor the pill draws clean.
       invoke<string[]>("git_unpushed_commits", { projectDir: dir, ...worktreeArgs }).catch(() => null),
     ]).then(([status, unpushed]) => {
       if (context !== gitContextKeyRef.current) return;
       setGitStatus(status);
+      setGitReadError(readError);
       // Unknown keeps the last list shown rather than emptying it.
       if (unpushed) setUnpushedCommits(unpushed);
       if (!selectedGitWorktree && unpushed) writeGitBarSnapshot(dir, { status, unpushed });
@@ -688,6 +696,7 @@ export function ProjectFilesView({
     setCommitMsg(null);
     setOpenTree(null);
     setGitError(null);
+    setGitReadError(null);
     setGitStatus(null);
     setUnpushedCommits([]);
   }, [gitContextKey]);
@@ -1351,6 +1360,7 @@ export function ProjectFilesView({
       // not: the counts stay put so the next reveal has something to show, and
       // the branch above refreshes them the moment it comes back.
       setGitStatus(null);
+      setGitReadError(null);
       setUnpushedCommits([]);
     }
   }, [active, effectiveGitRoot, remoteBlocked, gitContextKey]);
@@ -2139,6 +2149,11 @@ export function ProjectFilesView({
             {/* An agent's push request for this project (`services::git_push_mcp`):
                 the card that approves or dismisses it, beside the user's own Push. */}
             {!onNestedRepo && <GitPushProposals projectId={projectId} />}
+          </div>
+        )}
+        {!activeBox && !gitStatus?.is_repo && gitReadError && (
+          <div className="git-action-bar">
+            <ErrorNote className="git-action-error" error={t("projectFilesView.gitStatusFailed", { error: gitReadError })} />
           </div>
         )}
         </>

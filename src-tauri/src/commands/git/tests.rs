@@ -2658,3 +2658,25 @@ fn the_file_scans_catch_the_shapes_they_guard_and_only_those() {
     let lines: Vec<&str> = split.lines().collect();
     assert_eq!(read_default_then_write_same_file(&lines).len(), 1);
 }
+
+/// A status git could not produce is an error, never a clean repo: the pill's
+/// dot drew "clean" over a repo whose `git status` failed (a corrupt index
+/// here; a refused owner or a host without git alike).
+#[test]
+fn a_failed_status_is_an_error_not_a_clean_repo() {
+    if !git_available() {
+        eprintln!("git not on PATH — skipping a_failed_status_is_an_error_not_a_clean_repo");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+    fs::write(repo.join("a.txt"), "one\n").unwrap();
+    let dir = repo.to_string_lossy().into_owned();
+    git_add_all_blocking(dir.clone()).expect("add");
+    fs::write(repo.join(".git").join("index"), b"not an index").unwrap();
+
+    assert!(git_status_blocking(dir.clone()).is_err(), "status over a corrupt index");
+    assert!(git_status_probe(dir.clone(), false).is_err(), "the dot's probe");
+    assert!(git_file_statuses_blocking(dir, String::new()).is_err(), "the file tree's letters");
+}

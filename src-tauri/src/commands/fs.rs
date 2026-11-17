@@ -439,8 +439,8 @@ pub struct DirSizeBreakdown {
 /// Local projects only: splitting by ignore status needs a `git status`
 /// process, and there is no cheap way to run one against a remote host's
 /// index without a dedicated round trip per lazily-shown folder — a remote
-/// folder (or one with no `.git`) just gets `ignored: 0`, same best-effort
-/// fallback as [`dir_size`] on failure.
+/// folder (or one with no `.git`) just gets `ignored: 0`. A `git status` that
+/// fails is an error, which the frontend answers with a plain [`dir_size`].
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn dir_size_breakdown(
     project_dir: String,
@@ -494,7 +494,7 @@ fn dir_size_breakdown_local(
         });
     }
 
-    let ignored = ignored_paths_under(&root, rel_path);
+    let ignored = ignored_paths_under(&root, rel_path)?;
     let (total, ignored_bytes) = walk_dir_size_breakdown(&target, prefix, &ignored, &excluded);
     Ok(DirSizeBreakdown {
         total,
@@ -510,9 +510,10 @@ fn dir_size_breakdown_local(
 /// `wholly_ignored` handling for the same quirk) — here we want every
 /// individual ignored file, at any depth, so [`walk_dir_size_breakdown`] can
 /// classify each file it visits by simple set membership. A failed/absent
-/// `git` yields an empty set, so the breakdown degrades to "0 ignored"
-/// rather than erroring.
-fn ignored_paths_under(root: &Path, rel_path: &str) -> HashSet<String> {
+/// `git` is an error, never an empty set: "0 ignored" would put every ignored
+/// byte into the folder's headline. The frontend then measures the total alone
+/// (`dir_size`), with no split.
+fn ignored_paths_under(root: &Path, rel_path: &str) -> Result<HashSet<String>, String> {
     let mut args = vec![
         "status",
         "--porcelain",
@@ -526,18 +527,20 @@ fn ignored_paths_under(root: &Path, rel_path: &str) -> HashSet<String> {
     // Hardened: `status` in a project directory a container mounts writable, so
     // the repo's config is untrusted (`commands::git`, Group O #151);
     // `hardened_git_command_in` sanitizes it first.
-    let Ok(out) = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(root, &args)) else {
-        return HashSet::new();
-    };
+    let out = crate::services::git_bounded::output(crate::commands::git::hardened_git_command_in(root, &args))?;
+    if !out.status.success() {
+        return Err(crate::services::git_hardened::failure_message(&out));
+    }
     let text = String::from_utf8_lossy(&out.stdout);
-    text.lines()
+    Ok(text
+        .lines()
         .filter_map(|line| {
             if line.len() < 4 || &line[..2] != "!!" {
                 return None;
             }
             Some(line[3..].trim_matches('"').to_string())
         })
-        .collect()
+        .collect())
 }
 
 /// Like [`walk_dir_size`], but also sums the subset of bytes whose
