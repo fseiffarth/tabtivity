@@ -25,6 +25,7 @@ import {
   readAntigravityPicker,
 } from "./antigravity";
 import { codexModelSegment, codexOutputRow, codexPathTruncated, isCodexTab } from "./codexFooter";
+import { isMuseTab, museStatus } from "./muse";
 import {
   isOpenCodeHomeFooter,
   isOpenCodeTab,
@@ -521,6 +522,8 @@ export function sessionStatus(
   if (mini) return mini.status;
   const antigravity = antigravityFrame(lines, agentLabel);
   if (antigravity) return antigravity.status;
+  const muse = isMuseTab(agentLabel) ? museStatus(lines, SEARCH_WINDOW) : null;
+  if (muse) return muse;
   if (isOpenCodeTab(agentLabel) && openCodePermissionShown(lines)) return null;
   const bottom = agentListStart(lines);
   let inputIndex = -1;
