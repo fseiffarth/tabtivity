@@ -433,6 +433,21 @@ pub fn control_dir_for(state_dir: &Path) -> PathBuf {
     state_dir.join("mobile-control")
 }
 
+/// The sidecar's admin socket, `<control_dir>/admin.sock`. On Windows the
+/// path's *spelling* names the pipe (`local_pipe::path_hash`), so both ends
+/// must build it the same way: one `join` per component, never a
+/// `mobile-control/admin.sock` string, whose `/` hashes to a pipe nobody
+/// listens on.
+pub fn admin_socket(state_dir: &Path) -> PathBuf {
+    control_dir_for(state_dir).join("admin.sock")
+}
+
+/// The desktop bridge's socket, `<control_dir>/desktop-control.sock` — the
+/// same spelling rule as [`admin_socket`].
+pub fn desktop_socket(state_dir: &Path) -> PathBuf {
+    control_dir_for(state_dir).join("desktop-control.sock")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +459,49 @@ mod tests {
         let json = format!(r#"{{"{}":{{"enabled":true}}}}"#, crate::brand::MOBILE_HOST_KEY);
         let file: SettingsFile = serde_json::from_str(&json).unwrap();
         assert!(file.app_mobile_host.is_some());
+    }
+
+    /// The desktop's admin and bridge sockets must name the pipes the host
+    /// binds from `control_dir.join(..)`. On Windows the pipe is a hash of the
+    /// path's spelling, and `Path` equality ignores `/` vs `\` — so compare the
+    /// hashes, which is what broke: joining `mobile-control/admin.sock` named
+    /// a pipe nobody listened on, every admin call read "not running", and a
+    /// reinstall over the still-running host failed with os error 5.
+    #[test]
+    fn socket_paths_name_the_pipes_the_host_binds() {
+        use crate::services::local_pipe::path_hash;
+        let state_dir = Path::new("state");
+        let control = control_dir_for(state_dir);
+        assert_eq!(path_hash(&admin_socket(state_dir)), path_hash(&control.join("admin.sock")));
+        assert_eq!(path_hash(&desktop_socket(state_dir)), path_hash(&control.join("desktop-control.sock")));
+    }
+
+    /// No control-dir socket spelled with a `/` anywhere in the backend: the
+    /// `/` survives `join` on Windows and names a different pipe. (Plain file
+    /// reads under the control dir are unaffected; only `.sock` paths are
+    /// hashed into pipe names.)
+    #[test]
+    fn no_slash_literal_names_a_control_dir_file() {
+        fn scan(dir: &Path, hits: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan(&path, hits);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let prefix = concat!("\"mobile-control", "/");
+                    let bad = text.lines().any(|line| {
+                        line.find(prefix).is_some_and(|at| line[at + 1..].split('"').next().is_some_and(|s| s.ends_with(".sock")))
+                    });
+                    if bad {
+                        hits.push(path.display().to_string());
+                    }
+                }
+            }
+        }
+        let mut hits = Vec::new();
+        scan(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut hits);
+        assert!(hits.is_empty(), "join the control dir per component instead: {hits:?}");
     }
     use crate::paths::OsKind;
 
