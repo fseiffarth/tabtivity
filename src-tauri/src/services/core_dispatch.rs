@@ -562,6 +562,9 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("agent_tab_changes", "tabDir", NotAPath),
     ("agent_tab_transcript", "tabDir", NotAPath),
     ("agent_tab_artifact", "tabDir", NotAPath),
+    // A link target as the agent wrote it: only cut after `brain/<the tab's own conversation>/`
+    // and opened by name below the scope's agent home (`services::agent_artifacts`).
+    ("agent_tab_artifact", "target", NotAPath),
     ("agent_tab_chats", "tabDir", NotAPath),
     ("agent_tab_resume_chat", "tabDir", NotAPath),
     ("claude_folder_trusted", "cwd", NotAPath),
