@@ -24,6 +24,7 @@ import {
   isAntigravityTab,
   readAntigravityPicker,
 } from "./antigravity";
+import { codexModelSegment, codexOutputRow, codexPathTruncated, isCodexTab } from "./codexFooter";
 import {
   isOpenCodeHomeFooter,
   isOpenCodeTab,
@@ -527,18 +528,27 @@ export function sessionStatus(
   if (inputIndex < 0) return null;
   const status: SessionStatus = {};
   let read = 0;
+  const codex = isCodexTab(agentLabel);
   for (let index = inputIndex + 1; index < bottom && read < MAX_STATUS_LINES; index += 1) {
     const text = lines[index].text.trim();
-    if (!text || isClaudeTmuxNotice(text)) continue;
+    if (!text || isClaudeTmuxNotice(text) || (codex && codexOutputRow(text))) continue;
     read += 1;
     const effort = claudeEffortHint(text);
     if (effort) status.effort = effort;
-    for (const segment of withoutEffortHint(text).split(SEGMENT_SPLIT)) classify(segment.trim(), status);
+    let column = 0;
+    for (const segment of withoutEffortHint(text).split(SEGMENT_SPLIT)) {
+      const fact = segment.trim();
+      // Codex's footer opens with its model and effort, whatever the model is called.
+      const modelColumn = codex && codexModelSegment(fact, status, read === 1 && column === 0);
+      column += 1;
+      if (!modelColumn) classify(fact, status);
+    }
   }
   if (!status.effort) {
     const hint = effortHintAbove(lines, inputIndex);
     if (hint) status.effort = hint.effort;
   }
+  if (codex && codexPathTruncated(status.path)) delete status.path;
   // Claude Code prints its goal at the right end of its last footer row, under
   // a custom statusline that can wrap to several rows on a narrow pane — past
   // the rows read above. The phrase is only ever the footer's, so every row of
