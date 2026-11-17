@@ -61,3 +61,23 @@ describe("one record for several held prompts", () => {
     expect(recordedRun({ text: "c\nb" }, ["b", "c"])).toEqual([]);
   });
 });
+
+describe("a prompt sent just after a desktop command the phone had not read", () => {
+  it("stands below that command once the session records both", () => {
+    const before: TranscriptEntry[] = [{ kind: "answer", text: "Done.", at: "2026-11-17T07:00:00Z" }];
+    const sent = pendingPrompt(1, "Fix: the order", before);
+    const after: TranscriptEntry[] = [
+      ...before,
+      { kind: "prompt", text: "/model", at: "2026-11-17T07:03:30Z" },
+      { kind: "prompt", text: "Fix: the order", at: "2026-11-17T07:03:32Z" },
+      { kind: "answer", text: "On it.", at: "2026-11-17T07:03:40Z" },
+    ];
+    expect(withPending(after, [sent]).map((entry) => entry.text)).toEqual(["Done.", "/model", "Fix: the order", "On it."]);
+  });
+
+  it("keeps its bubble where it was sent until its record arrives", () => {
+    const before: TranscriptEntry[] = [{ kind: "answer", text: "Done.", at: "2026-11-17T07:00:00Z" }];
+    const sent = pendingPrompt(1, "Fix: the order", before);
+    expect(withPending(before, [sent]).map((entry) => entry.text)).toEqual(["Done.", "Fix: the order"]);
+  });
+});
