@@ -147,7 +147,8 @@ The four items that review left open were closed on 2026-09-26 (tracked in
 The existing network/environment limits also remain: inherited API keys are
 not filtered, loopback/LAN/internet and abstract sockets are reachable, and
 X11 access is still an unaudited route to host interaction (#2321). macOS is
-a weaker filesystem-only boundary with reachable keychain services; Windows
+a weaker boundary (files, launches, unix sockets; Mach services including the
+keychain stay reachable, see "Composition" below); Windows
 has no OS fence. The review did not establish containment on either platform.
 
 Three new regressions failed on the original code (temporary-link overwrite,
@@ -349,10 +350,28 @@ it. Settings → Agent fence → Agent logins imports a login this computer
 already holds (the one safe direction) and signs out. An older Tabtivity's
 Claude mirror (`agent-creds/`) is adopted into the store at startup. The
 first start after the upgrade also runs both imports once
-(`agent_auth::import_once`, `agent_global::import_once`, marker files in
-the state dir): every login the store lacks, and the global layer if it is
+(`agent_auth::import_once_in`, `agent_global::import_once_in`, marker files
+in the state dir): every login the store lacks, and the global layer if it is
 empty — the user asked not to have to remember it. Never repeated, so a
 Sign out or a file removed from the layer stays.
+
+**A fresh install is asked instead** (`services::agent_import_offer`,
+2026-11-15). Silently copying credentials, and hooks and MCP servers that run
+code, was right for an upgrade that only kept what the user already had in
+Tabtivity; on a new install nobody asked for it. `startup_in` runs the silent
+imports only when the state dir shows an earlier run (an import marker, an
+agent home, a stored login, an older build's stores, a registered project, or
+`onboarding_seen`). Otherwise it writes `.agent_import_offer` and imports
+nothing; the first-run wizard's *Already on this computer* page
+(`intro/ComputerPage.tsx`) lists what `offer_in` found and `answer_in`
+imports what stayed ticked. Either answer writes both import markers. Rules
+that must hold: the pending marker outranks every sign of an earlier run (a
+fresh install that opened a tab before answering has agent homes); if the
+marker cannot be written the question is closed unanswered, never left to a
+later silent import; an answer takes only what the offer lists; a fresh
+install with nothing to import is closed at once, so a login that appears
+later is never taken behind the user's back. The wizard may be skipped: the
+question then stays open and the Settings import buttons are the way in.
 
 **Installs are read-only in the fence.** A CLI installed through Manage CLIs
 goes into `<state_dir>/agents/install` (`services::agent_install`: the
@@ -379,8 +398,8 @@ name a vendor's installer leaves beside it (`VENDOR_ALIASES`: OpenCode's
 `TABTIVITY_SCOPE` — same scope home, same shared logins — and runs it as its
 child on the same terminal, draining the terminal's input queue once the
 CLI has exited and before the shell reads again (reevaluation item 3).
-`TABTIVITY_SCOPE`, `TABTIVITY_AGENT_FENCE` and `TABTIVITY_HOST_SESSION` are
-only ever Tabtivity's: `launch_prep::prepare` drops each one (and the other
+`TABTIVITY_SCOPE`, `TABTIVITY_AGENT_FENCE`, `TABTIVITY_AGENT_UNFENCED` and
+`TABTIVITY_HOST_SESSION` are only ever Tabtivity's: `launch_prep::prepare` drops each one (and the other
 control variables) from a tab's incoming env and sets the scope itself, so a
 persisted layout cannot name another scope or switch the shim off (gap 17).
 Inside a fence the shim steps aside to the real CLI, skipping its own
@@ -399,6 +418,13 @@ present and unset), the user's home hidden as before and the whole
 agent tabs still use the same Tabtivity-owned homes and shared logins through
 `HOME`/`USERPROFILE`, with the user's full rights, accepted once
 (`agent_fence_platform_accepted`). Neither is compiled or run here.
+The Windows shell-tab shim is a `<cli>.cmd` that asks
+`tabtivity --agent-shim-env <cli>` for the scope's environment and the real
+CLI (2442d). An agent's own environment there carries
+`TABTIVITY_AGENT_UNFENCED=<shim dir>` (agent tab, Host session, a CLI the shim
+started): a CLI the agent types in its own shell gets the real CLI and keeps
+its environment, as inside a fence. That is decided from the marker alone,
+because the agent home's `APPDATA` no longer leads to Tabtivity's state dir.
 
 **The Host session.** For work that is not a project's — repairing Firefox,
 the printer, the machine — a fence cannot serve (bubblewrap sets
@@ -608,7 +634,58 @@ Composition is explicit:
   (no rename or replace, its contents stay writable) — the Seatbelt form of
   the Linux re-mounts; the agent push preflight gets the same profile shape,
   narrower (`one_shot_command`).
-- The macOS fence is a filesystem fence only. The profile starts from
+- Beyond files, the macOS profile (2442n, 2026-11-15, **never run on a
+  Mac**; CI's macOS runner runs `agent_fence::seatbelt_tests::real`) closes
+  what Linux's private `/tmp`/`/run`, empty home and missing display close:
+  - **No launch outside the sandbox:** `(deny lsopen)` (`open`, `open -a
+    Terminal x.command`) and `(deny appleevent-send)` (`osascript`, Terminal's
+    `do script`). Linux reaches no display, session bus or portal, so
+    `xdg-open` starts nothing there either; on both, a CLI's sign-in prints
+    its URL in the tab for the user to click (the localhost callback is TCP
+    and still works). The `sandbox-exec` probe carries both rules, so a Mac
+    that refuses them starts no agent.
+  - **No ssh-agent, no shared-temp sockets:** `SSH_AUTH_SOCK` /
+    `SSH_AGENT_PID` are unset by a `/bin/sh` step *inside* the profile (it
+    holds whatever a tmux server's `update-environment` adds), and no unix
+    socket under `/tmp`, `/var/folders` (both spellings), the user's home or
+    `/var/run/docker.sock` can be connected to, nor one made in the shared
+    temps — the launchd listener the ssh-agent sits behind, the default tmux
+    server (an unfenced `tmux new-window` otherwise), Docker. Sockets under
+    the roots, the shown support paths, the scope home and the private temp
+    stay reachable; `mDNSResponder` and syslog are outside all of these.
+  - **Private temp:** `TMPDIR` is `<user $TMPDIR>/<slug>-tmp/<hash>` (0700,
+    per scope), the user's own `$TMPDIR` is hidden, `/tmp` stays writable for
+    tools that name it (files only), and the per-user cache dir (`…/C`,
+    clang's module cache) stays writable. macOS's `mktemp` never reads
+    `$TMPDIR` (it asks `confstr(_CS_DARWIN_USER_TEMP_DIR)`, the hidden dir),
+    so a `mktemp` shim in `<state_dir>/bin` gives a fenced call without a
+    template one in `$TMPDIR` (`agent_bin::mktemp_shim_script`). One-shots
+    (push preflight) hide the whole state dir and do not see the shim.
+  - Every rule is written under each path's resolved spelling too (2442w), so
+    a project below a symlink (`~/work` → another volume) or `/var` vs
+    `/private/var` matches. An **allow** rule follows no link that sits at or
+    inside a path the agent may write (`resolve_spelling`,
+    `SeatbeltInputs::planted`): Seatbelt lets an agent rename its root or its
+    home away and leave a link there, which Linux's mount points do not, and
+    the next profile must not allow that link's target. So a project whose
+    folder is *itself* a symlink gets no write access on a Mac (open the real
+    folder instead); denials follow every link.
+  - The folders between a hidden region (the home, a hidden path) and
+    something shown inside it answer `lstat` and nothing else
+    (`stat_only_dirs`, `(allow file-read-metadata (literal …))`): `realpath`,
+    git and Node resolve a path one folder at a time, so a project at
+    `~/code/app` needs `~/code`, and the private temp dir needs the hidden
+    `$TMPDIR` above it. Linux shows the same folders as empty mount parents.
+  - **Still open on macOS:** Mach services (keychain below, pasteboard,
+    `trustd`); `launchctl submit`/`bootstrap` into the user's launchd domain
+    (no SBPL rule found that is known to stop it — check on a Mac:
+    `launchctl submit -l x -- /usr/bin/touch /tmp/x` from a fenced tab); no
+    pid namespace; whether `lsopen` is also enforced when a client speaks to
+    `launchservicesd` directly rather than through LaunchServices is
+    unverified; a socket reached by a relative path or through a symlink
+    whose resolved target Seatbelt matches is unverified; other files in
+    `/tmp` stay readable and writable.
+- The macOS fence's other gap is Mach. The profile starts from
   `(allow default)`, so mach services stay reachable — `securityd` among them.
   A fenced agent can therefore ask the keychain for any item whose access list
   trusts the requesting tool (`/usr/bin/security` included), which is how the

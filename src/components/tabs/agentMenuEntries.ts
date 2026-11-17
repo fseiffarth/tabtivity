@@ -27,7 +27,8 @@ export function compactAgentMenuEntries(
     (entry) =>
       compactBins.has(entry.key) ||
       entry.key === "__add_custom_agent__" ||
-      entry.key === CLOUD_SESSION_KEY,
+      entry.key === CLOUD_SESSION_KEY ||
+      entry.key === "__install_remote_agent__",
   );
 }
 
@@ -40,6 +41,9 @@ export interface AgentMachine {
   label: string;
   /** A worker holding no code (not shared-fs, sync off) cannot run a tab. */
   disabled?: boolean;
+  installError?: string;
+  installedBins?: ReadonlySet<string>;
+  install?: (bin: string, label: string) => Promise<void>;
 }
 
 /** The machines a remote project's new agent tab can start on — the tab
@@ -105,24 +109,32 @@ export function agentMenuEntries(opts: {
   agentOrder?: readonly string[];
   t: (key: TranslationKey, vars?: Record<string, string>) => string;
 }): AddMenuEntry[] {
-  // The ▾ fly-out under an agent row: the same agent, started on a machine.
-  const machinesFor = (label: string, item: () => StaticMenuItem) =>
-    opts.startIn
-      ? opts.startIn(label, item())
-      : opts.machines && opts.machines.length > 1
-      ? {
+  const localAvailable = (cmd: string, custom = false) =>
+    custom ? opts.installedCmds === null || opts.installedCmds.has(cmd) : !!opts.installedBuiltins?.has(cmd);
+  const machinesForCommand = (cmd: string, custom = false) => opts.machines?.filter((machine) =>
+    machine.location === "local" ? localAvailable(cmd, custom)
+      : machine.installedBins === undefined || machine.installedBins.has(cmd),
+  );
+  const hasLocal = !opts.machines || opts.machines.some((machine) => machine.location === "local");
+  const defaultMachine = (cmd: string, custom = false) => {
+    if (hasLocal && localAvailable(cmd, custom)) return undefined;
+    return machinesForCommand(cmd, custom)?.find((machine) => !machine.disabled)?.location;
+  };
+  // The ▾ fly-out only offers machines with this command installed.
+  const machinesFor = (label: string, item: () => StaticMenuItem, custom = false) =>
+    opts.startIn ? opts.startIn(label, item())
+      : opts.machines && opts.machines.length > 1 ? {
           machineTitle: opts.t("newTabMenu.chooseMachine", { agent: label }),
-          machineEntries: opts.machines.map((m): AddMenuEntry => ({
-            key: `${label}@${m.location}`,
-            label: m.label,
-            dot: createElement(m.location === "local" ? HomeIcon : CloudIcon),
+          machineEntries: (machinesForCommand(item().cmd, custom) ?? []).map((machine): AddMenuEntry => ({
+            key: `${label}@${machine.location}`,
+            label: machine.label,
+            dot: createElement(machine.location === "local" ? HomeIcon : CloudIcon),
             color: "var(--accent)",
-            disabled: m.disabled,
+            disabled: machine.disabled,
             untested: "newTabMenu.chooseMachine",
-            onPick: () => opts.pick(item(), m.location),
+            onPick: () => opts.pick(item(), machine.location),
           })),
-        }
-      : {};
+        } : {};
   const chordByKey = new Map<string, AgentTabAction>();
   if (opts.defaultAgentBin !== undefined) {
     agentShortcutSlots({ ...opts, defaultAgentBin: opts.defaultAgentBin }).forEach((slot, i) => {
@@ -130,7 +142,9 @@ export function agentMenuEntries(opts: {
     });
   }
   const builtins = sortByAgentOrder(
-    AGENT_ITEMS.filter((item) => opts.installedBuiltins?.has(item.cmd)),
+    AGENT_ITEMS.filter((item) =>
+      (hasLocal && localAvailable(item.cmd)) || machinesForCommand(item.cmd)?.some((machine) => !machine.disabled),
+    ),
     (item) => item.cmd,
     opts.agentOrder,
   ).map((item) => ({
@@ -138,7 +152,11 @@ export function agentMenuEntries(opts: {
     label: item.label,
     color: TAB_ACCENT[item.kind],
     shortcut: chordByKey.get(item.cmd),
-    onPick: () => opts.pick(onOwnLogin(item)),
+    onPick: () => {
+      const location = defaultMachine(item.cmd);
+      if (location === undefined) opts.pick(onOwnLogin(item));
+      else opts.pick(onOwnLogin(item), location);
+    },
     ...machinesFor(item.label, () => onOwnLogin(item)),
   }));
   // One row whose fly-out holds every installed built-in's cloud launches,
@@ -171,19 +189,34 @@ export function agentMenuEntries(opts: {
       }]
     : [];
   const custom = sortByAgentOrder(opts.customAgents, (ca) => `custom:${ca.id}`, opts.agentOrder).map((ca) => {
-    const missing = opts.installedCmds != null && !opts.installedCmds.has(ca.cmd);
+    const missing = !(hasLocal && localAvailable(ca.cmd, true)) && !machinesForCommand(ca.cmd, true)?.some((machine) => !machine.disabled);
     return {
       key: `custom:${ca.id}`,
       label: missing ? `${ca.label} (${opts.t("globalApps.notFoundPlaceholder")})` : ca.label,
       color: TAB_ACCENT.agent,
       disabled: missing,
       shortcut: chordByKey.get(`custom:${ca.id}`),
-      onPick: () => opts.pick(onOwnLogin(customAgentToItem(ca))),
-      ...(missing ? {} : machinesFor(ca.label, () => onOwnLogin(customAgentToItem(ca)))),
+      onPick: () => {
+        const item = onOwnLogin(customAgentToItem(ca));
+        const location = defaultMachine(ca.cmd, true);
+        if (location === undefined) opts.pick(item);
+        else opts.pick(item, location);
+      },
+      ...(missing ? {} : machinesFor(ca.label, () => onOwnLogin(customAgentToItem(ca)), true)),
     };
   });
+  const installs: AddMenuEntry[] = (opts.machines ?? []).flatMap((machine) =>
+    machine.install && !machine.disabled ? AGENT_ITEMS.filter((item) => !machine.installedBins?.has(item.cmd)).map((item) => ({
+      key: `install:${item.cmd}@${machine.location}`,
+      label: opts.t("newTabMenu.installRemoteAgent", { agent: item.label, machine: machine.label }) + (machine.installError ? ` (${machine.installError})` : ""),
+      color: TAB_ACCENT[item.kind],
+      untested: "newTabMenu.installRemoteAgent",
+      onPick: () => { void machine.install?.(item.cmd, item.label); },
+    })) : [],
+  );
   return [
     ...builtins,
+    ...(installs.length ? [{ key: "__install_remote_agent__", label: opts.t("newTabMenu.installRemoteAgents"), dot: "＋", color: "var(--text-muted)", moreTitle: opts.t("newTabMenu.installRemoteAgents"), moreEntries: installs, onPick: () => {} }] : []),
     ...cloud,
     ...custom,
     {

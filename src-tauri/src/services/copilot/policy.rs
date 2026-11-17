@@ -13,6 +13,19 @@ pub enum PolicyError {
     SecretFile,
 }
 
+pub fn error_code(error: PolicyError) -> String {
+    match error {
+        PolicyError::Disabled => "copilot_disabled",
+        PolicyError::Remote => "copilot_remote_project",
+        PolicyError::NoConsent => "copilot_no_consent",
+        PolicyError::LocalOnly => "copilot_local_only",
+        PolicyError::InvalidPath => "copilot_invalid_path",
+        PolicyError::OutsideProject => "copilot_outside_project",
+        PolicyError::SecretFile => "copilot_secret_file",
+    }
+    .into()
+}
+
 /// `directory` and `remote` must come from the backend project resolver, not
 /// the command's payload or the file's apparent path. Recheck on every sync.
 pub fn authorize_project(
@@ -26,7 +39,8 @@ pub fn authorize_project(
     {
         return Err(PolicyError::Disabled);
     }
-    if remote {
+    if remote || settings.completion_project_policies.as_ref()
+        .and_then(|policies| policies.get(project_id)).is_some_and(|policy| policy.remote.is_some()) {
         return Err(PolicyError::Remote);
     }
     let policy = settings
@@ -75,7 +89,7 @@ pub fn text_file(file: &Path) -> bool {
 
 /// Files that hold credentials rather than code or prose. No consent covers
 /// them: a project's `.env` or a key file never reaches the cloud.
-fn secret_shaped(file: &Path) -> bool {
+pub(super) fn secret_shaped(file: &Path) -> bool {
     let Some(name) = file.file_name().and_then(|name| name.to_str()) else {
         return true;
     };
@@ -172,6 +186,14 @@ mod tests {
         );
         config.copilot_completion = Some(true);
         assert!(authorize_project(&config, "one", dir.path(), false).is_ok());
+    }
+
+    #[test]
+    fn remote_consent_cannot_authorize_a_local_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = settings(dir.path());
+        config.completion_project_policies.as_mut().unwrap().get_mut("one").unwrap().remote = Some("remote-endpoint".into());
+        assert_eq!(authorize_project(&config, "one", dir.path(), false), Err(PolicyError::Remote));
     }
 
     #[test]

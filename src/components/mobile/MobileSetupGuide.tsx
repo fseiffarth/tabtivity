@@ -1,7 +1,9 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useSettingsStore } from "../../stores/settings";
 import { SETTINGS_ANCHORS } from "../layout/settingsUi";
-import { runInstallInTab } from "../../lib/installCommand";
+import { runInstallInTab, TMUX_INSTALL_CMD } from "../../lib/installCommand";
+import { useTmuxAvailable } from "../../lib/tmuxAvailable";
+import { tailscaleServeCommand, tailscaleServeLine } from "../../lib/tailscaleServeCommand";
 import { UntestedTag } from "../common/UntestedTag";
 import { useT, translateNow } from "../../lib/i18n";
 import { MOBILE_HOST_KEY } from "../../lib/brand";
@@ -52,15 +54,18 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
   const port = Number.isInteger(stored?.port) && (stored?.port ?? 0) >= 1024 && (stored?.port ?? 0) <= 65535
     ? (stored?.port as number)
     : DEFAULT_PORT;
-  const command = `tailscale serve --bg http://127.0.0.1:${port}`;
+  const command = tailscaleServeLine(port);
 
   const modalRef = useModalFocus(onClose);
+  const tmuxAvailable = useTmuxAvailable();
   const { confirmAction, dialogs } = useDialogs();
 
   // Same one-click shape as Mobile settings' own button (and every other
   // install-via-command flow): the command runs in a root terminal the root
   // console floats over — so the guide steps aside for the terminal it opened.
+  // The line run names the CLI the backend resolved (2442s).
   const setUpInTerminal = async () => {
+    const command = await tailscaleServeCommand(port);
     const ok = await confirmAction({
       title: translateNow("mobile.setUpInTerminal"),
       body: translateNow("mobile.setUpConfirm", { command }),
@@ -103,6 +108,23 @@ export function MobileSetupGuide({ onClose }: { onClose: () => void }) {
             <p className="settings-help">{t("mobile.setupIntro")} <UntestedTag id="mobile.setupLinks" /></p>
             <p className="settings-help">{t("mobile.setupAboutTailscale")}</p>
             <ExternalLinks links={[[TAILSCALE_ABOUT_URL, t("mobile.setupLinkAbout")]]} />
+            {tmuxAvailable === false && (
+              <div className="settings-link-row">
+                <span className="settings-help">
+                  <strong>{t("mobile.setupNoTmux")}</strong> <UntestedTag id="mobile.setupNoTmux" />
+                </span>
+                <button
+                  type="button"
+                  className="settings-btn sm"
+                  onClick={() => {
+                    runInstallInTab(t("settings.installTmux"), TMUX_INSTALL_CMD, "default");
+                    onClose();
+                  }}
+                >
+                  {t("settings.installTmux")}
+                </button>
+              </div>
+            )}
 
             <ol className="how-to-start-steps">
               <li className="how-to-start-step">

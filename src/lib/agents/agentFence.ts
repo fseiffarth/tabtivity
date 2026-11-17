@@ -49,6 +49,26 @@ export const AGENT_FENCE_DEFAULT_PATHS = [
   "~/.config/git",
 ] as const;
 
+/** Added on a Mac host (2442z): pnpm's and fnm's Mac homes and the version
+ *  managers whose shims are on a Mac's PATH. Mirrors the backend's
+ *  `MACOS_AGENT_FENCE_PATHS` (`schema/settings.rs`). */
+export const AGENT_FENCE_MACOS_PATHS = [
+  "~/Library/pnpm",
+  "~/Library/Application Support/fnm",
+  "~/.local/share/fnm",
+  "~/.fnm",
+  "~/.volta",
+  "~/.asdf",
+  "~/.local/share/mise",
+  "~/.rbenv",
+] as const;
+
+/** The paths the backend uses while the setting is unset, on `os` — the host
+ *  the fence runs on, not the browser's. */
+export function agentFenceDefaultPaths(os: "windows" | "macos" | "linux"): string[] {
+  return os === "macos" ? [...AGENT_FENCE_DEFAULT_PATHS, ...AGENT_FENCE_MACOS_PATHS] : [...AGENT_FENCE_DEFAULT_PATHS];
+}
+
 export function parseAgentFencePaths(value: string): string[] {
   return value
     .split(/\r?\n/)

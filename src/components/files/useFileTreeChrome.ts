@@ -7,7 +7,7 @@ import type { EmbedCap } from "../../stores/drag/drag";
 import type { FileEntry } from "../../lib/viewers/fileUtils";
 import { type TexCapability, getTexCapability } from "../../lib/viewers/tex/tex";
 import { PLATFORM } from "../../lib/window/dragPlatform";
-import { warmDragIcon } from "./fileTreeDrag";
+import { exportDragHeld, warmDragIcon } from "./fileTreeDrag";
 
 /** The row tooltip and its vertical clamp; the dwell timer that opens it stays
  * with the row handlers. */
@@ -154,7 +154,7 @@ export function useFileTreeMountProbes({
     // needs it — the Linux `start_file_drag` embeds the icon backend-side.
     if (PLATFORM !== "linux") void warmDragIcon();
     const sync = (e: KeyboardEvent) => {
-      setCtrlHeld(e.ctrlKey);
+      setCtrlHeld(exportDragHeld(e));
     };
     const clear = () => setCtrlHeld(false);
     window.addEventListener("keydown", sync);

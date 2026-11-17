@@ -5,8 +5,22 @@
 #
 #   ci-failed-first.sh previous   last run's failed vitest files and cargo
 #                                 tests only; exits non-zero if any still fail
-#   ci-failed-first.sh frontend   the full vitest suite, recording failed files
+#   ci-failed-first.sh frontend   the vitest suite, recording failed files.
+#                                 On a CI push to a branch other than main,
+#                                 only the tests the change since this OS's
+#                                 last green suite can reach
+#                                 (scripts/ci-vitest-select.mjs says which, and
+#                                 when only the whole suite will do); main, a
+#                                 PR, a run started by hand and a local run
+#                                 take the whole suite. CI_VITEST_CHANGED=1 or
+#                                 =0 forces either.
 #   ci-failed-first.sh backend    the full cargo test suite, recording failures
+#   ci-failed-first.sh hung       after a backend run its step's timeout cut
+#                                 off: names the tests that were still running
+#                                 and records them as failed
+#
+# CI_CARGO_SPLIT_BUILD=1 (ci-cd.yml sets it on test-macos) compiles the
+# library's test harness on its own before each cargo test: see split_build.
 #
 # A suite that does not run (an earlier step failed) keeps its old list, so
 # its failures are still tried first next time. A listed test that has since
@@ -16,6 +30,17 @@ set -euo pipefail
 state="${CI_FAILED_DIR:-.ci-failed}"
 manifest="src-tauri/Cargo.toml"
 mkdir -p "$state"
+
+# The crate compiles twice for `cargo test`, as the library and as its test
+# harness, and cargo runs the two side by side: about 7 GB and 10 GB of
+# compiler memory at once (2026-11-16), on a macOS runner that has 7 GB. Built
+# first and alone, the harness is fresh when the full build compiles the rest.
+# Dependencies still build in parallel. A failure here is left to the cargo
+# test that follows, which fails the same way and is the one recorded.
+split_build() {
+  [ "${CI_CARGO_SPLIT_BUILD:-}" = 1 ] || return 0
+  cargo test --manifest-path "$manifest" --lib --no-run || true
+}
 
 previous() {
   local rc=0 files=() tests=() line
@@ -43,16 +68,57 @@ previous() {
     echo "::group::Backend tests that failed last run (${#tests[@]})"
     printf '  %s\n' "${tests[@]}"
     echo "::endgroup::"
+    split_build
     cargo test --manifest-path "$manifest" -- --exact "${tests[@]}" || rc=1
   fi
   [ "$rc" -eq 0 ] || echo "::error::Tests that failed in the last run still fail; the full suites were not run."
   return "$rc"
 }
 
+# The commit the frontend suite last passed at on this OS, when this run may
+# test only what changed since: prints it, or nothing for a whole-suite run.
+# The base is that commit, never the push's `before`: a run a newer push
+# cancelled tested nothing, and its commits must not go untested.
+frontend_base() {
+  local base changed="${CI_VITEST_CHANGED:-}"
+  if [ -z "$changed" ] && [ "${GITHUB_EVENT_NAME:-}" = push ] \
+    && [[ "${GITHUB_REF:-}" == refs/heads/* ]] && [ "$GITHUB_REF" != refs/heads/main ]; then
+    changed=1
+  fi
+  [ "$changed" = 1 ] && [ -s "$state/frontend-passed.txt" ] || return 0
+  base="$(tr -d '[:space:]' < "$state/frontend-passed.txt")" || return 0
+  [[ "$base" =~ ^[0-9a-f]{40}$ ]] || return 0
+  # A CI checkout holds the tip alone; one more commit is enough for the diff.
+  git cat-file -e "$base^{commit}" 2>/dev/null \
+    || git fetch --quiet --no-tags --depth=1 origin "$base" 2>/dev/null \
+    || return 0
+  git cat-file -e "$base^{commit}" 2>/dev/null && printf '%s' "$base"
+}
+
 frontend() {
-  local rc=0
+  local rc=0 base selection="" files=() line
   rm -f "$state/vitest.json"
-  npx vitest run --reporter=default --reporter=json --outputFile="$state/vitest.json" || rc=$?
+  base="$(frontend_base)" || base=""
+  if [ -n "$base" ]; then
+    selection="$(node scripts/ci-vitest-select.mjs "$base" | tr -d '\r')" || selection=""
+  fi
+  # A while-read, not mapfile: the macOS runner's bash is 3.2.
+  if [[ "$selection" == RELATED* ]]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && files+=("$line")
+    done < <(sed 1d <<<"$selection")
+  fi
+  if [ "${#files[@]}" -gt 0 ]; then
+    echo "::group::Tests related to the ${#files[@]} files below (the suite passed at ${base:0:9})"
+    printf '  %s\n' "${files[@]}"
+    echo "::endgroup::"
+    npx vitest related --run --passWithNoTests --reporter=default --reporter=json \
+      --outputFile="$state/vitest.json" "${files[@]}" || rc=$?
+  else
+    [ -z "$base" ] || echo "The whole suite: ${selection#FULL }"
+    npx vitest run --reporter=default --reporter=json --outputFile="$state/vitest.json" || rc=$?
+  fi
+  [ "$rc" -ne 0 ] || git rev-parse HEAD > "$state/frontend-passed.txt"
   # Paths relative to the checkout, forward slashes on every OS. No report
   # (vitest died before writing it) keeps the old list.
   if [ -s "$state/vitest.json" ]; then
@@ -71,6 +137,7 @@ frontend() {
 
 backend() {
   local rc=0 log="$state/cargo-test.log"
+  split_build
   cargo test --manifest-path "$manifest" 2>&1 | tee "$log" || rc=$?
   # `test path::to::name ... FAILED`; doctest names carry spaces and are
   # left to the full run. A build failure lists nothing, which is right:
@@ -80,9 +147,36 @@ backend() {
   return "$rc"
 }
 
+# A backend run that ends on its own removes its log, so a log still here is
+# a run the step's timeout killed. libtest prints `test <name> has been
+# running for over 60 seconds` for a slow test and `test <name> ... <result>`
+# when it ends: a name with the first line and no second was still running.
+hung() {
+  local log="$state/cargo-test.log" names t
+  [ -s "$log" ] || return 0
+  names="$(tr -d '\r' < "$log" | awk '
+    /^test .* has been running for over [0-9]+ seconds$/ {
+      sub(/^test /, ""); sub(/ has been running for over [0-9]+ seconds$/, ""); slow[$0] = 1; next
+    }
+    /^test .* \.\.\. / { sub(/^test /, ""); sub(/ \.\.\. .*$/, ""); ended[$0] = 1 }
+    END { for (t in slow) if (!(t in ended)) print t }' | sort -u)"
+  if [ -n "$names" ]; then
+    while IFS= read -r t; do
+      echo "::error title=Backend test still running when the step was cut off::$t"
+    done <<<"$names"
+  else
+    echo "::error::The backend tests were cut off with no test reported as still running. The log's last lines:"
+    tail -n 25 "$log"
+  fi
+  { tr -d '\r' < "$log" | sed -nE 's/^test ([^ ]+) \.\.\. FAILED$/\1/p'; printf '%s\n' "$names"; } \
+    | sed '/^$/d' | sort -u > "$state/backend.txt" || true
+  rm -f "$log"
+}
+
 case "${1:-}" in
   previous) previous ;;
   frontend) frontend ;;
   backend) backend ;;
-  *) echo "usage: $0 previous|frontend|backend" >&2; exit 2 ;;
+  hung) hung ;;
+  *) echo "usage: $0 previous|frontend|backend|hung" >&2; exit 2 ;;
 esac

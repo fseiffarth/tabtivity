@@ -234,7 +234,8 @@ pub fn alive(_proc: &Proc) -> bool {
 
 /// When `pid` started (clock ticks since boot, [`Proc::start`]), read from its
 /// `stat` now — a zombie still answers. With the pid it names one process
-/// across pid reuse. `None` for no such process, and always off Linux.
+/// across pid reuse. `None` for no such process (macOS: its own clock, below;
+/// Windows: always).
 #[cfg(target_os = "linux")]
 pub fn start_time(pid: u32) -> Option<u64> {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -243,7 +244,15 @@ pub fn start_time(pid: u32) -> Option<u64> {
         .map(|now| now.start)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS (2442o): `pbi_start_tvsec`/`usec` through `sysstat::process_start`,
+/// microseconds since the epoch — a different clock from Linux's, compared
+/// only with values read here.
+#[cfg(target_os = "macos")]
+pub fn start_time(pid: u32) -> Option<u64> {
+    crate::sysstat::process_start(pid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn start_time(_pid: u32) -> Option<u64> {
     None
 }
@@ -705,6 +714,20 @@ mod tests {
     fn no_launch_marker_is_read_off_linux() {
         let p = Proc { pid: std::process::id(), ppid: 0, comm: String::new(), start: 0 };
         assert_eq!(launch_id(&p), None);
-        assert_eq!(start_time(p.pid), None);
+    }
+
+    /// macOS has its own start clock (2442o); only Windows answers nothing.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn start_time_names_this_process_on_macos() {
+        let me = std::process::id();
+        let first = start_time(me).expect("this process's start time");
+        assert_eq!(start_time(me), Some(first));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn no_start_time_is_read_off_linux_and_macos() {
+        assert_eq!(start_time(std::process::id()), None);
     }
 }

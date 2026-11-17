@@ -8,6 +8,7 @@ import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
 import { runInstallInTab } from "../../lib/installCommand";
+import { tailscaleServeCommand } from "../../lib/tailscaleServeCommand";
 import { useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
 import { useDialogs } from "../common/PromptDialogs";
@@ -422,7 +423,8 @@ export function MobileSettings() {
   };
 
   const setUpInTerminal = async () => {
-    const command = `tailscale serve --bg http://127.0.0.1:${guidePort}`;
+    // The CLI this machine resolves, not a bare `tailscale` (2442s).
+    const command = await tailscaleServeCommand(guidePort);
     const ok = await confirmAction({
       title: translateNow("mobile.guideSummary"),
       // The prose's blank lines set the command apart; a <p> collapses `\n`.

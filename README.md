@@ -109,7 +109,11 @@ desktop, file tree, and agent tabs — and unbox afterwards.
 
 **How it compares.** Agent orchestrators (Vibe Kanban, Conductor, Claude Squad,
 the Claude Code desktop app) manage agent processes *inside one repo* but have
-no notion of your desktop. KDE Activities, virtual desktops, tmux, and `workon`
+no notion of your desktop. T3 Code comes closest on the agent side — one
+interface for Claude Code, Codex, Cursor, OpenCode and other CLIs, a worktree
+per thread, phone apps, agents on other machines over Tailscale — but it is a
+chat-and-git front end: its project ends at the repo and its threads, not the
+windows, files and cluster jobs around it. KDE Activities, virtual desktops, tmux, and `workon`
 scripts each cover one slice without a project model. Remote tooling (VS Code
 Remote, JupyterHub) attaches one editor to one host, leaving the cluster half a
 terminal exercise. Vendor phone apps reach only *their own* agent through
@@ -166,10 +170,10 @@ Every built-in CLI runs in a terminal tab. These CLIs do more:
 | Claude | ✓ | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
 | Codex | ✓ | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
 | Copilot | ✓ | ✓ own session | ✓ | | ✓ | ✓ |
-| OpenCode | ✓ | ✓ folder's latest | ✓ | ✓ | ✓ | ✓ |
-| Antigravity | ✓ | ✓ folder's latest | ✓ | ✓ | ✓ | |
-| Meta Muse Code | ✓ | ✓ folder's latest | ✓ | ✓ | ✓ | |
-| Mistral Vibe | ✓ | ✓ folder's latest | | | | |
+| OpenCode | ✓ | ✓ own conversation | ✓ | ✓ | ✓ | ✓ |
+| Antigravity | ✓ | ✓ own conversation | ✓ | ✓ | ✓ | |
+| Meta Muse Code | ✓ | ✓ own session | ✓ | ✓ | ✓ | |
+| Mistral Vibe | ✓ | ✓ own conversation | | | | |
 | Gemini | | ✓ folder's latest | | ✓ | | |
 | Qwen, Cursor, Grok, Droid | | ✓ folder's latest | | | | |
 
@@ -178,11 +182,14 @@ releases. Every other built-in CLI still installs and runs, but its support may
 lag behind its newest release.
 
 *Own conversation* or *own session*: each tab comes back to the exact chat it
-had. *Folder's latest*: the tab continues the newest chat in its folder, so
-two tabs of the same CLI in one folder both come back to that one. Picking a
-chat in the Resume menu pins the tab to it. Muse's resume and chat view are
-new and have not been tried in a real window yet. The other built-in CLIs
-start fresh after a restart; a custom agent can bring its own resume flag
+had. OpenCode, Vibe, Antigravity and Muse learn a tab's chat from its first
+prompt on; before that, on a remote host, and for Muse on Windows, the tab
+continues the folder's latest. *Folder's latest*: the tab continues the newest
+chat in its folder, so two tabs of the same CLI in one folder both come back
+to that one. Picking a chat in the Resume menu pins the tab to it.
+Antigravity's and Muse's per-tab resume and Muse's chat view are new and have
+not been tried in a real window yet. The other built-in CLIs start fresh after
+a restart; a custom agent can bring its own resume flag
 ([details](docs/guide/features.md#agent-clis-resume-and-tools)).
 
 The full tour is in **[docs/guide/features.md](docs/guide/features.md)**.

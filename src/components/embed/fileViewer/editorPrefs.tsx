@@ -232,7 +232,7 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
   const modelLoaded = useLocalModelLoaded();
   const scope = useFileScope();
   const enabled = useExperimental("copilot_completion");
-  const remote = useProjectsStore((s) => !!s.projects.find((p) => p.id === scope)?.remote);
+  const remote = useProjectsStore((s) => s.projects.find((p) => p.id === scope)?.remote ?? false);
   const language = languageForPath(path);
   const copilot = useSettingsStore((s) => copilotServes(s.settings, enabled, scope, remote, language, path));
   const provider = useSettingsStore((s) => s.settings?.code_completion_provider ?? "ollama");
@@ -243,8 +243,7 @@ export function EditorAiControls({ ai, path }: { ai: TabAiPrefs; path: string })
   // Why the chosen provider is silent here; the backend gates the same way.
   const note = !ai.autocomplete ? null
     : enabled && provider === "copilot" && !copilot
-      ? remote ? t("fileViewer.copilotNoteRemote")
-        : policy?.copilot === true && policy.local_only !== true && isProseLang(language) && policy.copilot_text !== true
+      ? policy?.copilot === true && policy.local_only !== true && isProseLang(language) && policy.copilot_text !== true
           ? t("fileViewer.copilotNoteText")
           : t("fileViewer.copilotNoteConsent")
       : !copilot && !modelLoaded ? t("fileViewer.autocompleteNoteNoModel") : null;

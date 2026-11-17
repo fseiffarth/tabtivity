@@ -305,6 +305,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("remote_upload_file", "localPath", UserPath),
     ("resolve_tex_root", "path", UserPath),
     ("set_remote_mirror_dir", "path", UserPath),
+    ("skills_copy", "from", SkillTarget),
+    ("skills_copy", "to", SkillTarget),
     ("skills_install", "target", SkillTarget),
     ("skills_list_installed", "target", SkillTarget),
     ("skills_uninstall", "target", SkillTarget),
@@ -318,6 +320,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("tex_preview_snippet", "dir", UserPath),
     ("watch_dir", "path", UserPath),
     ("watch_dir", "repoDir", UserPathOpt),
+    // Only the key of the watch to release (`fs_watch::Watches`): never opened.
+    ("unwatch_dir", "path", BodyConfined),
     ("format_source", "path", Hint),
     ("formatter_available", "path", Hint),
     ("create_project", "req.mirrorParent", UserPathOpt),
@@ -480,6 +484,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     // A skill catalog's folder, a source's cache and an installed skill's
     // name: `services::skills` takes each as plain components inside the
     // source's clone or the target's `.claude/skills` (for every caller).
+    ("skills_copy", "folder", BodyConfined),
     ("skills_get_detail", "relPath", BodyConfined),
     ("skills_get_detail", "sourceId", BodyConfined),
     ("skills_install", "relPath", BodyConfined),
@@ -1044,6 +1049,17 @@ mod tests {
         }
         let mut ok = serde_json::json!({ "target": { "kind": "project", "dir": inside_path("p") }, "name": "s" });
         confine_for_user(Role::User, "skills_uninstall", &mut ok).unwrap();
+        // A copy holds both ends: either one personal, or a project outside
+        // the user's roots, is refused.
+        let project = serde_json::json!({ "kind": "project", "dir": inside_path("p") });
+        assert_held("skills_copy", serde_json::json!({ "from": project.clone(), "to": { "kind": "project" }, "folder": "s" }), "to.dir");
+        assert_held("skills_copy", serde_json::json!({ "from": { "kind": "project" }, "to": project.clone(), "folder": "s" }), "from.dir");
+        for (from, to) in [(serde_json::json!({ "kind": "personal" }), project.clone()), (project.clone(), serde_json::json!({ "kind": "personal" }))] {
+            let mut call = serde_json::json!({ "from": from, "to": to, "folder": "s" });
+            assert!(confine_for_user(Role::User, "skills_copy", &mut call).is_err());
+        }
+        let mut both = serde_json::json!({ "from": project, "to": { "kind": "project", "dir": inside_path("q") }, "folder": "s" });
+        confine_for_user(Role::User, "skills_copy", &mut both).unwrap();
     }
 
     #[test]

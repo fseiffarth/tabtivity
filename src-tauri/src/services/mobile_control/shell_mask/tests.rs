@@ -92,3 +92,51 @@ fn a_command_with_nothing_to_hide_is_unchanged() {
     assert_eq!(mask_command("ls /a/b", &[]), "ls …/b");
     assert_eq!(mask_command("", &[ROOT]), "");
 }
+
+/// Windows folders match in any case, with either separator and spelled
+/// verbatim; the masker is pure, so these run on every OS.
+#[test]
+fn a_windows_folder_becomes_project_relative_in_every_spelling() {
+    let root = r"C:\Users\me\proj";
+    let masked = |command: &str| mask_command(command, &[root]);
+    assert_eq!(masked(r"cd C:\Users\me\proj && cargo test"), "cd . && cargo test");
+    assert_eq!(masked(r"type c:\users\ME\Proj\src\main.rs"), r"type src\main.rs");
+    assert_eq!(masked("Fetch into C:/Users/me/proj/data"), "Fetch into data");
+    assert_eq!(masked(r"cd C:\Users\me\proj\"), "cd .");
+    assert_eq!(masked(r"dir \\?\C:\Users\me\proj\x"), r"dir x");
+    // A verbatim folder matches its plain spelling on the line.
+    assert_eq!(mask_command(r"cd C:\Users\me\proj", &[r"\\?\C:\Users\me\proj"]), "cd .");
+    let unc = r"\\srv\share\proj";
+    assert_eq!(mask_command(r"cd \\?\UNC\srv\share\proj\a", &[unc]), "cd a");
+    assert_eq!(mask_command(r"cd \\srv\share\proj", &[unc]), "cd .");
+    // Not on a path boundary: a sibling folder is another path.
+    assert_eq!(masked(r"dir C:\Users\me\project\a"), r"dir …\a");
+    // A drive root is no tab folder.
+    assert_eq!(mask_command(r"dir C:\a\b", &[r"C:\"]), r"dir …\b");
+}
+
+/// Any other Windows path keeps only its leaf, a spelling of the tab's folder
+/// that pass 1 does not know (an 8.3 short name) included: masked more,
+/// never shown whole.
+#[test]
+fn other_windows_paths_keep_only_their_leaf() {
+    let masked = |command: &str| mask_command(command, &[r"C:\Users\runneradmin\AppData\Local\Temp\x\work"]);
+    assert_eq!(masked(r"cd C:\Users\RUNNER~1\AppData\Local\Temp\x\work && dir"), r"cd …\work && dir");
+    assert_eq!(masked("type C:/Users/me/.ssh/config"), "type …/config");
+    assert_eq!(masked(r"dir C:\Users\me\out\"), r"dir …\out\");
+    assert_eq!(masked(r"dir C:\Users C:\"), r"dir C:\Users C:\");
+    assert_eq!(masked(r#"copy "\\?\D:\deep\a.txt" x"#), r#"copy "…\a.txt" x"#);
+    // A UNC path names a host and a share: neither crosses.
+    assert_eq!(masked(r"copy \\fileserver\team\docs\a.txt ."), r"copy …\a.txt .");
+    assert_eq!(masked(r"net use \\fileserver\team"), "net use …");
+    for leaked in ["RUNNER~1", "fileserver", ".ssh", "deep"] {
+        for command in [
+            r"cd C:\Users\RUNNER~1\AppData\Local\Temp\x\work",
+            r"copy \\fileserver\team\docs\a.txt .",
+            "type C:/Users/me/.ssh/config",
+            r#"copy "\\?\D:\deep\a.txt" x"#,
+        ] {
+            assert!(!masked(command).contains(leaked), "{leaked}: {command}");
+        }
+    }
+}

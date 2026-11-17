@@ -52,13 +52,30 @@ pub fn normalize_path_text(path: &str) -> String {
     s.to_lowercase()
 }
 
-/// [`normalize_path_text`] of `path` resolved as far as the filesystem allows
-/// (canonical when it exists, else absolute): the key a single-instance name
-/// hashes, so `C:\State`, `c:\state\` and a junction to it agree.
+/// [`normalize_path_text`] of `path` resolved as far as the filesystem allows:
+/// the key a single-instance name hashes, so `C:\State`, `c:\state\` and a
+/// junction to it agree. The deepest part that exists is canonicalised and
+/// the rest joined on, so a path hashes the same before it is created as
+/// after: the host makes its state dir and then names its pipe, while a
+/// client may name the pipe first. Canonicalising only a path that exists
+/// gave the two different names under a linked parent (a CI runner's 8.3
+/// `RUNNER~1` temp dir), and the client waited on a pipe nobody served.
 pub fn normalized_path_key(path: &Path) -> String {
-    let resolved = std::fs::canonicalize(path)
-        .or_else(|_| std::path::absolute(path))
-        .unwrap_or_else(|_| path.to_path_buf());
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut missing = Vec::new();
+    let mut existing = absolute.as_path();
+    let resolved = loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            break missing.iter().rev().fold(real, |path, part| path.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => break absolute.clone(),
+        }
+    };
     normalize_path_text(&resolved.to_string_lossy())
 }
 
@@ -414,10 +431,32 @@ mod win {
             format!(r"\\.\pipe\local-pipe-test-{tag}-{}", crate::digest::hex(&bytes))
         }
 
+        /// The DACL of a security descriptor, written as SDDL.
+        ///
+        /// # Safety
+        /// `sd` must point at a valid security descriptor.
+        unsafe fn dacl_of(sd: PSECURITY_DESCRIPTOR) -> String {
+            // SAFETY: the string the conversion allocates is LocalFree'd.
+            unsafe {
+                let mut text = PWSTR::null();
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    sd,
+                    SDDL_REVISION_1,
+                    DACL_SECURITY_INFORMATION,
+                    &mut text,
+                    None,
+                )
+                .unwrap();
+                let out = text.to_string().unwrap();
+                let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+                out
+            }
+        }
+
         /// The DACL of a pipe handle, read back as SDDL.
         pub(crate) fn dacl_sddl(handle: HANDLE) -> String {
-            // SAFETY: GetSecurityInfo allocates the descriptor (LocalFree'd
-            // below); the string the conversion allocates is freed too.
+            // SAFETY: GetSecurityInfo allocates the descriptor, read while it
+            // lives and LocalFree'd below.
             unsafe {
                 let mut sd = PSECURITY_DESCRIPTOR::default();
                 let err = GetSecurityInfo(
@@ -431,20 +470,24 @@ mod win {
                     Some(&mut sd),
                 );
                 assert_eq!(err.0, 0, "GetSecurityInfo");
-                let mut text = PWSTR::null();
-                ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                    sd,
-                    SDDL_REVISION_1,
-                    DACL_SECURITY_INFORMATION,
-                    &mut text,
-                    None,
-                )
-                .unwrap();
-                let out = text.to_string().unwrap();
-                let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+                let out = dacl_of(sd);
                 let _ = LocalFree(Some(HLOCAL(sd.0)));
                 out
             }
+        }
+
+        /// How the SDDL writer spells `sid`. It prints a SID it has an alias
+        /// for as that alias (this machine's built-in Administrator, RID 500,
+        /// reads back as `LA`), so an expected SID goes through the same
+        /// writer before it is compared with a read-back DACL. Any other SID
+        /// comes back as itself.
+        fn sddl_spelling(sid: &str) -> String {
+            let security = PipeSecurity::from_sddl(&format!("D:(A;;GA;;;{sid})")).unwrap();
+            // SAFETY: the descriptor lives as long as `security`.
+            let sddl = unsafe { dacl_of(security.sd) };
+            let mut got = aces(&sddl);
+            assert_eq!(got.len(), 1, "{sddl}");
+            got.remove(0).2
         }
 
         /// The ACEs of an SDDL DACL, `(type, rights, sid)`.
@@ -463,7 +506,7 @@ mod win {
         pub(crate) fn assert_protected_dacl(handle: HANDLE) {
             let sddl = dacl_sddl(handle);
             assert!(sddl.starts_with("D:P"), "{sddl}");
-            let me = current_user_sid().unwrap();
+            let me = sddl_spelling(&current_user_sid().unwrap());
             let got: Vec<(String, String)> = aces(&sddl).into_iter().map(|(t, _, sid)| (t, sid)).collect();
             assert_eq!(
                 got,
@@ -555,6 +598,18 @@ mod tests {
         assert_eq!(normalize_path_text(r"C:\"), r"c:\");
         assert_ne!(key_hash("a"), key_hash("b"));
         assert_eq!(key_hash("a").len(), 32);
+    }
+
+    /// The host creates its state dir and then names its pipe; a client may
+    /// name the pipe first. Reached through a link, as a temp dir is on a
+    /// Windows CI runner (the 8.3 `RUNNER~1`) and on macOS (`/var`).
+    #[test]
+    fn a_path_key_does_not_change_when_the_path_comes_to_exist() {
+        let (_dir, link) = crate::test_util::tempdir_via_symlink();
+        let state = link.join("made").join("later");
+        let before = normalized_path_key(&state);
+        std::fs::create_dir_all(&state).unwrap();
+        assert_eq!(normalized_path_key(&state), before);
     }
 
     #[test]

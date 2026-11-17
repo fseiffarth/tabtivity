@@ -70,6 +70,30 @@ eight pending in the process.
 - Not on the local-models-only lane allowlist (`local_lane::MCP_ALLOWED`):
   a cut tab gets no print tools.
 
+## Platforms (2442aa)
+
+What the system print dialog can be opened preset to differs
+(`nativePresets` in `lib/window/printing.ts`, `print_mcp::native_presets_duplex`):
+
+| | Linux (GTK) | Windows (WebView2 `ShowPrintUI`) | macOS (PDFKit) |
+|---|---|---|---|
+| Paper | preset | not preset: the PDF is laid out on it, the user picks it in the dialog | same as Windows |
+| Grayscale | preset (colour off) | baked into the PDF (`layoutPrintPdf` `bakeGrayscale`: a `Saturation` blend rectangle per sheet over an opaque white one, vector kept) | same as Windows |
+| Two-sided | preset | not preset: the control is disabled with a hint, the user sets it in the dialog | same as Windows |
+| Copies, range, N-up, booklet | in the PDF | in the PDF | in the PDF |
+
+The preview says so (the paper and two-sided hints) instead of claiming a
+preset. An approved `print_request` that asked for two-sided (or a booklet)
+on Windows or macOS reports `notApplied: ["duplex"]` and a message in
+`print_status`, so the agent does not report a two-sided print it cannot
+vouch for. Not verified on a real Windows or macOS printer: whether Edge's
+preview and PDFKit render the `Saturation` blend as gray (both implement the
+non-separable blend modes; a printer driver could still rasterise oddly).
+The white rectangle beneath the document is load-bearing: a page is an
+isolated transparency group, so without it the blend paints its own 50 % gray
+on every part of the sheet the document leaves unpainted (rendered so by
+Ghostscript, MuPDF and Poppler).
+
 ## State
 
 In memory, like markup asks: a request ends printed, unconfirmed, rejected,

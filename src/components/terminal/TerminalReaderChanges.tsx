@@ -1,3 +1,4 @@
+import { forPlatformKeys } from "../../lib/shortcuts/shortcuts";
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useT, type TranslationKey } from "../../lib/i18n";
@@ -264,7 +265,7 @@ export const ChangeCard = memo(function ChangeCard({ change, cardKey, fresh, cur
           <button
             type="button"
             className="terminal-changes-open"
-            title={`${t("terminal.changes.open")} · ${t("terminal.pathLink.newSubwindow")}`}
+            title={`${t("terminal.changes.open")} · ${forPlatformKeys(t("terminal.pathLink.newSubwindow"))}`}
             aria-label={t("terminal.changes.open")}
             onClick={(event) => onOpenFile(change.path, event.ctrlKey || event.metaKey)}
           >

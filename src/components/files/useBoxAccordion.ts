@@ -9,20 +9,25 @@ import { SPRING_LOAD_MS } from "./fileTreeDrag";
 import type { ProjectBox } from "../../types";
 
 /**
- * The box side panel's accordion: which member section is expanded, the agent
+ * The box side panel's sections: which member sections are expanded, the agent
  * count of each member, and the spring-open of a collapsed section a file is
  * dragged over.
  *
- * Exactly one member is expanded. Which one: the last the user clicked
- * (persisted per box, `boxAccordion`), else the active tab's member, else the
- * first. The active tab moving to another member expands that member (a change,
- * not the mount — a remembered click survives a remount).
+ * Any number of members can be expanded: a header click toggles that member and
+ * touches no other. Which ones: what the user left open (persisted per box,
+ * `boxAccordion`), else the active tab's member, else the first.
+ *
+ * The active tab moving to another member expands that member (a change, not
+ * the mount: a remembered choice survives a remount). With at most one section
+ * open the panel *follows* the tab, so the one before folds, as the
+ * one-at-a-time accordion did; once the user keeps several open, nothing folds
+ * by itself and the tab's member is opened beside them (`revealId` asks the
+ * pane to scroll it into view, since the sections above may fill the panel).
  *
  * A collapsed section still takes a drop (its header carries the move-target
  * attributes) and opens after the folder rows' dwell. The open is transient while
- * the drag runs and does NOT fold the others: the section the file is dragged
- * out of must stay mounted, or its gesture would lose its tree. When the drag
- * ends, the last section the file dwelt over becomes the expanded one.
+ * the drag runs. When the drag ends, the last section the file dwelt over stays
+ * expanded, beside the ones that already were.
  */
 export function useBoxAccordion({
   scope,
@@ -82,6 +87,8 @@ export function useBoxAccordion({
   }, [agentCwds, members, folder]);
 
   // The active tab moving to another member expands it.
+  const expandedRef = useRef<string[]>([]);
+  const [reveal, setReveal] = useState<{ id: string; nonce: number } | null>(null);
   const seenActive = useRef<{ boxId: string | null; id: string | null; had: boolean }>({
     boxId,
     id: activeMemberId,
@@ -91,15 +98,26 @@ export function useBoxAccordion({
     const prev = seenActive.current;
     seenActive.current = { boxId, id: activeMemberId, had: hasActiveTab };
     if (!boxId || prev.boxId !== boxId || !prev.had || !activeMemberId || prev.id === activeMemberId) return;
-    if (memberOrder.includes(activeMemberId)) setOpen(boxId, activeMemberId);
+    if (!memberOrder.includes(activeMemberId)) return;
+    const open = expandedRef.current;
+    if (open.includes(activeMemberId)) return;
+    setOpen(boxId, open.length <= 1 ? [activeMemberId] : [...open, activeMemberId]);
+    if (open.length > 1) setReveal((r) => ({ id: activeMemberId, nonce: (r?.nonce ?? 0) + 1 }));
   }, [boxId, activeMemberId, hasActiveTab, memberOrder, setOpen]);
 
   const fallbackId = activeMemberId && memberOrder.includes(activeMemberId)
     ? activeMemberId
     : memberOrder[0] ?? null;
   const stored = row?.open;
-  const expandedId =
-    stored === null ? null : stored && memberOrder.includes(stored) ? stored : fallbackId;
+  const expandedIds = useMemo(() => {
+    const fallback = fallbackId ? [fallbackId] : [];
+    if (!stored) return fallback;
+    if (stored.length === 0) return stored; // folded by a click
+    const live = stored.filter((id) => memberOrder.includes(id));
+    // Every remembered member has left the box: as if the user never chose.
+    return live.length ? live : fallback;
+  }, [stored, memberOrder, fallbackId]);
+  expandedRef.current = expandedIds;
 
   // ── Spring-open while a file is dragged ────────────────────────────────
   const [dragOpen, setDragOpen] = useState<string[]>([]);
@@ -130,7 +148,7 @@ export function useBoxAccordion({
       setDragOpen([]);
       if (!last) return;
       if (last === scope) setBoxFolded(boxId, false);
-      else setOpen(boxId, last);
+      else if (!expandedRef.current.includes(last)) setOpen(boxId, [...expandedRef.current, last]);
     };
     const unsub = useDragStore.subscribe((s) => {
       const d = s.drag;
@@ -155,9 +173,18 @@ export function useBoxAccordion({
 
   const toggleMember = useCallback(
     (id: string) => {
-      if (boxId) setOpen(boxId, expandedId === id ? null : id);
+      if (!boxId) return;
+      const open = expandedRef.current;
+      setOpen(boxId, open.includes(id) ? open.filter((m) => m !== id) : [...open, id]);
     },
-    [boxId, expandedId, setOpen],
+    [boxId, setOpen],
+  );
+  /** Expand exactly these members (the ⋯ menu's "only this" / "all"). */
+  const openOnly = useCallback(
+    (ids: string[]) => {
+      if (boxId) setOpen(boxId, ids);
+    },
+    [boxId, setOpen],
   );
   const toggleBoxFolded = useCallback(() => {
     if (boxId) setBoxFolded(boxId, !row?.boxFolded);
@@ -165,13 +192,16 @@ export function useBoxAccordion({
 
   return {
     boxId,
-    expandedId,
+    expandedIds,
+    fallbackId,
+    reveal,
     boxFolded: !!row?.boxFolded,
     dragOpen,
     armedId,
     agentCounts,
     views: row?.views,
     toggleMember,
+    openOnly,
     toggleBoxFolded,
   };
 }

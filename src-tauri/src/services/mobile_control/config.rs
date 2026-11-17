@@ -127,6 +127,27 @@ fn tailscale_program_for(
         .unwrap_or_else(|| PathBuf::from("tailscale"))
 }
 
+/// The `tailscale serve` line the setup buttons type into a root terminal
+/// (2442s): the program [`tailscale_program`] resolved, quoted for that
+/// terminal's shell — POSIX single quotes, or double quotes for `cmd.exe`
+/// (the Windows shell tab, `COMSPEC`) — so the Mac app's bundled CLI, which is
+/// on no PATH, is the one that runs. A bare `tailscale` stays bare. Pure.
+pub fn serve_command_line(program: &Path, port: u16, os: crate::paths::OsKind) -> String {
+    let program = program.to_string_lossy();
+    let quoted = if program == "tailscale" {
+        program.into_owned()
+    } else if os == crate::paths::OsKind::Windows {
+        format!("\"{program}\"")
+    } else {
+        format!("'{}'", program.replace('\'', "'\\''"))
+    };
+    format!("{quoted} serve --bg http://127.0.0.1:{port}")
+}
+
+pub fn tailscale_serve_command(port: u16) -> String {
+    serve_command_line(&tailscale_program(), port, crate::paths::OsKind::current())
+}
+
 fn tailscale_program() -> PathBuf {
     tailscale_program_for(
         crate::paths::OsKind::current(),
@@ -530,6 +551,25 @@ mod tests {
         assert_eq!(found, expected);
         let no_env = tailscale_program_for(OsKind::Windows, false, None, |_| true);
         assert_eq!(no_env, PathBuf::from("tailscale"));
+    }
+
+    /// 2442s: the setup button types the CLI that will actually run — the Mac
+    /// app's bundled one when only that exists — quoted for the tab's shell.
+    #[test]
+    fn the_setup_line_names_the_resolved_cli_quoted_for_the_shell() {
+        let bundled = Path::new("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+        assert_eq!(
+            serve_command_line(bundled, 8742, OsKind::Macos),
+            "'/Applications/Tailscale.app/Contents/MacOS/Tailscale' serve --bg http://127.0.0.1:8742"
+        );
+        assert_eq!(
+            serve_command_line(Path::new(r"C:\Program Files\Tailscale\tailscale.exe"), 9001, OsKind::Windows),
+            r#""C:\Program Files\Tailscale\tailscale.exe" serve --bg http://127.0.0.1:9001"#
+        );
+        for os in [OsKind::Macos, OsKind::Windows, OsKind::Unix] {
+            assert_eq!(serve_command_line(Path::new("tailscale"), 8742, os), "tailscale serve --bg http://127.0.0.1:8742");
+        }
+        assert_eq!(serve_command_line(Path::new("/o'k/ts"), 1, OsKind::Unix), "'/o'\\''k/ts' serve --bg http://127.0.0.1:1");
     }
 
     #[test]

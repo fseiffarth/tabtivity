@@ -230,20 +230,42 @@ fn version_supports_session_env(v_output: &str) -> bool {
     (major, minor) >= (3, 2)
 }
 
-/// Whether a usable `tmux` is on `PATH`. Cached after the first probe (the answer
-/// cannot change within a run). Always `false` on Windows, which is what makes
-/// every wrap here a no-op there.
+/// Whether a usable `tmux` is on `PATH`. A found tmux is cached for the run; a
+/// missing one is probed again at most every [`TMUX_REPROBE`], so installing it
+/// (the one-click install a Mac without tmux is offered, 2442r) takes effect
+/// without a restart. Always `false` on Windows, which is what makes every wrap
+/// here a no-op there.
 #[cfg(unix)]
 pub fn tmux_available() -> bool {
-    use std::sync::OnceLock;
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        crate::paths::command_no_window("tmux")
-            .arg("-V")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    use app_core::sync::LockExt;
+    static PROBE: std::sync::Mutex<Option<(bool, std::time::Instant)>> = std::sync::Mutex::new(None);
+    let mut probe = PROBE.lock_ok();
+    let now = std::time::Instant::now();
+    if let Some(answer) = cached_probe(*probe, now, TMUX_REPROBE) {
+        return answer;
+    }
+    let found = crate::paths::command_no_window("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    *probe = Some((found, now));
+    found
+}
+
+/// How long a "no tmux" answer stands before [`tmux_available`] asks again.
+#[cfg(unix)]
+const TMUX_REPROBE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The cached answer still standing at `now`: a `true` forever, a `false`
+/// until `ttl` has passed. Pure.
+#[cfg(any(unix, test))]
+fn cached_probe(cached: Option<(bool, std::time::Instant)>, now: std::time::Instant, ttl: std::time::Duration) -> Option<bool> {
+    match cached {
+        Some((true, _)) => Some(true),
+        Some((false, at)) if now.duration_since(at) < ttl => Some(false),
+        _ => None,
+    }
 }
 
 #[cfg(not(unix))]
@@ -956,6 +978,19 @@ pub(crate) fn launcher_text(session: &str) -> Option<String> {
 mod tests {
     use crate::brand::SLUG;
     use super::*;
+
+    /// 2442r: a found tmux stands for the run, a missing one is asked again
+    /// after the TTL, so an install is noticed without a restart.
+    #[test]
+    fn a_missing_tmux_is_probed_again_after_the_ttl() {
+        let t0 = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(30);
+        let later = t0 + std::time::Duration::from_secs(31);
+        assert_eq!(cached_probe(None, t0, ttl), None);
+        assert_eq!(cached_probe(Some((true, t0)), later, ttl), Some(true));
+        assert_eq!(cached_probe(Some((false, t0)), t0 + std::time::Duration::from_secs(5), ttl), Some(false));
+        assert_eq!(cached_probe(Some((false, t0)), later, ttl), None);
+    }
 
     fn env_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs

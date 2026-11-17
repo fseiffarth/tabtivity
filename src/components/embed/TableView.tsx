@@ -1,3 +1,4 @@
+import { forPlatformKeys } from "../../lib/shortcuts/shortcuts";
 import { isTabKey } from "../../lib/shortcuts/keyNames";
 import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -982,7 +983,7 @@ export function TableView({
             </span>
             <button
               onClick={copySelection}
-              title={t("tableView.copySelectionTitle")}
+              title={forPlatformKeys(t("tableView.copySelectionTitle"))}
               style={{
                 all: "unset",
                 cursor: "var(--cur-pointer, pointer)",

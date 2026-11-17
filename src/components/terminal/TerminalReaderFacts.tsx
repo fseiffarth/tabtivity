@@ -27,7 +27,7 @@ import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } fro
 import type { TabEntry } from "../../stores/tabs";
 import type { SessionUsage } from "../../../mobile-web/src/api";
 import { resetCountdown, resetText } from "../../../mobile-web/src/terminal/limitResets";
-import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../../../mobile-web/src/terminal/agentModes";
+import { currentMode, modeChoices, modeFixed, modeOffered, shiftTabKey } from "../../../mobile-web/src/terminal/agentModes";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { sessionStatus } from "../../../mobile-web/src/terminal/statusLine";
 import { sessionLimits } from "../../../mobile-web/src/terminal/sessionUsage";
@@ -202,6 +202,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
     setModeOpen(false);
   };
   const openModes = () => {
+    if (!modeOffered(agentLabel)) return;
     closeWorktrees();
     if (codex) {
       if (permissionPicking) close();
@@ -598,7 +599,7 @@ export function TerminalReaderFacts({ tab, ptyId, agentLabel, live, modelTag, us
             <UntestedTag id="terminal.reader.effortPick" />
           </button>
         )}
-        {tab.kind === "agent" && (
+        {tab.kind === "agent" && modeOffered(agentLabel) && (
           <button
             type="button"
             className={status?.mode === "plan" ? "terminal-reader-fact-model plan" : "terminal-reader-fact-model"}

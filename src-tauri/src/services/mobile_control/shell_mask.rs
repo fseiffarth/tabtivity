@@ -30,30 +30,113 @@ pub fn mask_command(command: &str, folders: &[&str]) -> String {
     leaf_only_paths(&hidden)
 }
 
+/// One of the tab's folders as pass 1 looks for it.
+#[derive(PartialEq, Eq)]
+struct Folder {
+    /// POSIX: as given, no trailing `/`. Windows: no verbatim prefix, `\`
+    /// separators, no trailing `\`.
+    text: String,
+    /// A Windows path (`C:\…`, `\\server\share\…`): matched without regard
+    /// to case or to `\` versus `/`, verbatim (`\\?\…`) spellings included.
+    windows: bool,
+}
+
+impl Folder {
+    /// `None` for a folder that is no absolute path, or is a root (`/`, `C:\`)
+    /// that would make every path on the line relative.
+    fn new(folder: &str) -> Option<Self> {
+        if folder.starts_with('/') {
+            let text = folder.trim_end_matches('/');
+            return (text.len() > 1).then(|| Self { text: text.to_string(), windows: false });
+        }
+        let plain = without_verbatim(folder)?;
+        if !is_windows_absolute(&plain) {
+            return None;
+        }
+        let text = plain.replace('/', "\\").trim_end_matches('\\').to_string();
+        (text.len() > 2).then_some(Self { text, windows: true })
+    }
+
+    fn is_separator(&self, ch: char) -> bool {
+        ch == '/' || (self.windows && ch == '\\')
+    }
+
+    /// `rest` after this folder, when `rest` starts with it.
+    fn strip<'r>(&self, rest: &'r str) -> Option<&'r str> {
+        if !self.windows {
+            return rest.strip_prefix(self.text.as_str());
+        }
+        if let Some(found) = strip_windows(rest, &self.text) {
+            return Some(found);
+        }
+        // The same folder spelled verbatim on the line.
+        let after = strip_windows(rest, r"\\?\")?;
+        match self.text.strip_prefix(r"\\") {
+            Some(unc) => strip_windows(strip_windows(after, r"UNC\")?, unc),
+            None => strip_windows(after, &self.text),
+        }
+    }
+}
+
+/// `path` with a Windows verbatim prefix taken off: `\\?\C:\x` → `C:\x`,
+/// `\\?\UNC\srv\share` → `\\srv\share`. `None` for a verbatim path of any
+/// other kind (a device, a volume GUID).
+fn without_verbatim(path: &str) -> Option<String> {
+    let Some(rest) = strip_windows(path, r"\\?\") else { return Some(path.to_string()) };
+    if let Some(unc) = strip_windows(rest, r"UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    is_windows_absolute(rest).then(|| rest.to_string())
+}
+
+/// A drive path (`C:\…`, `C:/…`) or a UNC one (`\\server\…`).
+fn is_windows_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/');
+    drive || (path.starts_with(r"\\") && !path.starts_with(r"\\?"))
+}
+
+/// `rest` after `prefix`, compared the way Windows compares paths: without
+/// regard to case, `\` in `prefix` matching `\` or `/`.
+fn strip_windows<'r>(rest: &'r str, prefix: &str) -> Option<&'r str> {
+    let mut chars = rest.char_indices();
+    for want in prefix.chars() {
+        let (_, got) = chars.next()?;
+        let same = if want == '\\' {
+            matches!(got, '\\' | '/')
+        } else {
+            got == want || got.to_lowercase().eq(want.to_lowercase())
+        };
+        if !same {
+            return None;
+        }
+    }
+    Some(chars.next().map_or("", |(at, _)| &rest[at..]))
+}
+
 /// Pass 1: each folder (longest first, so a member folder inside the root is
-/// not cut short) followed by `/` is dropped, the bare folder becomes `.`. A
-/// match must start and end on a path boundary: `/a/proj` is not a prefix of
-/// `/a/project` or of `/mnt/a/proj`.
+/// not cut short) followed by a separator is dropped, the bare folder becomes
+/// `.`. A match must start and end on a path boundary: `/a/proj` is not a
+/// prefix of `/a/project` or of `/mnt/a/proj`. A Windows folder matches in any
+/// case, with either separator and spelled verbatim; one written another way
+/// (an 8.3 short name for a long one) is left to pass 3, which cuts it to its
+/// leaf.
 fn relative_to_folders(command: &str, folders: &[&str]) -> String {
-    let mut folders: Vec<&str> = folders
-        .iter()
-        .map(|folder| folder.trim_end_matches('/'))
-        .filter(|folder| folder.len() > 1 && folder.starts_with('/'))
-        .collect();
-    folders.sort_by_key(|folder| std::cmp::Reverse(folder.len()));
+    let mut folders: Vec<Folder> = folders.iter().filter_map(|folder| Folder::new(folder)).collect();
+    folders.sort_by_key(|folder| std::cmp::Reverse(folder.text.len()));
     folders.dedup();
     let mut out = String::with_capacity(command.len());
     let mut rest = command;
     'scan: while let Some(ch) = rest.chars().next() {
         let after_path_char = out.chars().next_back().is_some_and(is_path_char);
-        if ch == '/' && !after_path_char {
+        if !after_path_char && (matches!(ch, '/' | '\\') || ch.is_ascii_alphabetic()) {
             for folder in &folders {
-                let Some(tail) = rest.strip_prefix(folder) else { continue };
+                let Some(tail) = folder.strip(rest) else { continue };
                 match tail.chars().next() {
-                    Some('/') => {
+                    Some(sep) if folder.is_separator(sep) => {
                         // `/proj/` alone (a trailing slash) still names the folder.
                         let after = &tail[1..];
-                        if after.chars().next().is_none_or(|next| !is_path_char(next)) {
+                        if after.chars().next().is_none_or(|next| !is_path_char(next) && !folder.is_separator(next)) {
                             out.push('.');
                         }
                         rest = after;
@@ -154,11 +237,38 @@ fn hide_secrets(command: &str) -> String {
 static PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(^|[\s'"=:(,])(~?/[^/\s'"`;|&<>(),][^\s'"`;|&<>(),]*)"#).expect("path"));
 
+/// A Windows absolute path, after the same boundaries as [`PATH`]: a drive
+/// path (`C:\a`, `C:/a`), a UNC one (`\\server\share`) or anything verbatim
+/// (`\\?\…`).
+static WINDOWS_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(^|[\s'"=:(,])((?:\\\\\?\\|[A-Za-z]:[\\/]|\\\\[^\\/\s'"`;|&<>(),?]+\\)[^\s'"`;|&<>(),]*)"#)
+        .expect("windows path")
+});
+
 /// Pass 3: such a path keeps only its last component, after `…/` (`~/…/` for
 /// a home path). A path of one component (`/tmp`, `~/x`) names nothing private
-/// and stays.
+/// and stays. A Windows path the same, after `…\`: a drive path of one
+/// component (`C:\Users`) stays; a UNC path shows no more than what follows
+/// its server and share, since those name a host.
 fn leaf_only_paths(command: &str) -> String {
-    PATH.replace_all(command, |caps: &Captures| {
+    let command = WINDOWS_PATH.replace_all(command, |caps: &Captures| {
+        let path = &caps[2];
+        let sep = if path.contains('\\') { '\\' } else { '/' };
+        let plain = without_verbatim(path).unwrap_or_else(|| path.to_string());
+        let unc = plain.starts_with(r"\\");
+        let body = if unc { &plain[2..] } else { plain.get(2..).unwrap_or_default() };
+        let parts: Vec<&str> = body.split(['\\', '/']).filter(|part| !part.is_empty()).collect();
+        let shown = if unc { 2 } else { 1 };
+        if !unc && parts.len() <= shown && plain == path {
+            return caps[0].to_string();
+        }
+        let trail = if parts.len() > shown && path.ends_with(['\\', '/']) { sep.to_string() } else { String::new() };
+        match parts.last().filter(|_| parts.len() > shown) {
+            Some(leaf) => format!("{}…{sep}{leaf}{trail}", &caps[1]),
+            None => format!("{}…", &caps[1]),
+        }
+    });
+    PATH.replace_all(&command, |caps: &Captures| {
         let path = &caps[2];
         let body = path.trim_start_matches('~').trim_matches('/');
         if !body.contains('/') {

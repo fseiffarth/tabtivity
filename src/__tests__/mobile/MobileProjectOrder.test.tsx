@@ -11,8 +11,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Home } from "../../../mobile-web/src/screens/Home";
-import { arrangeProjects, mergeProjectOrder, scopeCaption } from "../../../mobile-web/src/projectOrder";
+import { arrangeProjects, mergeProjectOrder, scopeCaption, sortProjectsByAgents } from "../../../mobile-web/src/projectOrder";
 import { readOrder, writeOrder } from "../../../mobile-web/src/prefs";
+import type { ActivityTab } from "../../../mobile-web/src/api";
 import { storageKey } from "../../lib/brand";
 
 describe("Mobile scope caption", () => {
@@ -36,6 +37,17 @@ describe("Mobile project order — the list surgery", () => {
     // A project that has only just become active joins the end rather than
     // landing in the middle of a list arranged by hand.
     expect(ids(arrangeProjects([...rows, { id: "new" }], (row) => row.id, ["c", "b", "a"]))).toEqual(["c", "b", "a", "new"]);
+  });
+
+  it("uses the best agent per project, shared tiers and newest finish, with stable agentless rows", () => {
+    const projects = ["idle1", "old", "working", "recent", "asking", "idle2"].map((id) => ({ id }));
+    const tab = (project_id: string, agent_status: ActivityTab["agent_status"], done_at?: number): ActivityTab => ({
+      id: `${project_id}-${agent_status}`, project_id, project_label: project_id,
+      label: project_id, kind: "agent", agent_status, done_at, available: true, viewer_busy: false,
+    });
+    const tabs = [tab("old", "done", 10), tab("working", "working"), tab("asking", "working"), tab("recent", "done", 20), tab("asking", "question")];
+    expect(ids(sortProjectsByAgents(projects, tabs))).toEqual(["asking", "recent", "old", "working", "idle1", "idle2"]);
+    expect(ids(sortProjectsByAgents(projects, []))).toEqual(ids(projects));
   });
 
   it("folds the new on-screen order into the stored one", () => {
@@ -70,8 +82,10 @@ describe("Mobile home — arranging projects by hand", () => {
     { id: "p3", label: "Gamma", status: "active", live_sessions: 0 },
   ];
 
+  let agentTabs = false;
   const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
     const url = String(input);
+    if (url.startsWith("/api/v1/activity")) return new Response(JSON.stringify({ tabs: agentTabs ? [{ id: "a1", project_id: "p3", project_label: "Gamma", label: "Agent", kind: "agent", agent_status: "question", available: true, viewer_busy: false }] : [] }), { status: 200 });
     if (url.startsWith("/api/v1/alerts")) return new Response(JSON.stringify({ alerts: { enabled: false, items: [] } }), { status: 200 });
     if (url.includes("view=search")) return new Response(JSON.stringify({ projects: PROJECTS }), { status: 200 });
     return new Response(JSON.stringify({ projects: PROJECTS }), { status: 200 });
@@ -85,6 +99,7 @@ describe("Mobile home — arranging projects by hand", () => {
   const home = () => render(<Home tabby={() => {}} open={noop} openTab={noop} todo={noop} mail={noop} />);
 
   beforeEach(() => {
+    agentTabs = false;
     localStorage.clear();
     vi.stubGlobal("fetch", fetchMock);
   });
@@ -93,6 +108,16 @@ describe("Mobile home — arranging projects by hand", () => {
     cleanup();
     vi.unstubAllGlobals();
     fetchMock.mockClear();
+  });
+
+  it("ranks projects by their agents by default and preserves a manual order", async () => {
+    agentTabs = true;
+    const first = home();
+    await waitFor(() => expect(listed()).toEqual(["Gamma", "Alpha", "Beta"]));
+    first.unmount();
+    writeOrder("projectOrder", ["p2", "p1", "p3"]);
+    home();
+    await waitFor(() => expect(listed()).toEqual(["Beta", "Alpha", "Gamma"]));
   });
 
   it("moves a project one place from the grip's arrow keys and remembers it", async () => {

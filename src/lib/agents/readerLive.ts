@@ -192,7 +192,7 @@ export function sameReaderLive(a: ReaderLive, b: ReaderLive): boolean {
 function sameStatus(a: SessionStatus | null, b: SessionStatus | null): boolean {
   if (!a || !b) return a === b;
   return a.model === b.model && a.effort === b.effort && a.branch === b.branch
-    && a.context === b.context && a.mode === b.mode;
+    && a.context === b.context && a.mode === b.mode && a.path === b.path && a.goal === b.goal;
 }
 
 /**

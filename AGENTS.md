@@ -71,6 +71,10 @@ Backend tests must be cross-OS: paths built per component with `Path::join`
 (no `"a/b"` literals), absolute-path literals gated with `cfg!(windows)`,
 spawned programs compared by file stem.
 Don't push new work while the branch's last ci-cd run is red; the next push is its fix.
+A commit only one OS's CI can see (a cfg-gated arm, an OS-only test) carries a
+`CI-Only: <os>` trailer (`linux`, `windows`, `macos`; comma-separated): the
+other OSes then keep their last green verdict on that push. `scripts/ci-skip.sh`
+says how; main always runs every OS.
 
 ## Git & privacy (public repo)
 

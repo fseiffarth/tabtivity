@@ -24,6 +24,12 @@ fn main() {
         };
         std::process::exit(app_lib::services::agent_shim::run(cli, rest));
     }
+    // `tabtivity --agent-shim-env <cli>`: the Windows `.cmd` shim's question
+    // — the real CLI and the scope's environment, printed for it to apply.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--agent-shim-env")) {
+        let cli = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(app_lib::services::agent_shim::run_env(&cli));
+    }
     // `tabtivity --local-relay PORT=SOCKET… -- <cli> [args…]`: the command of a
     // fence with no network (`services::local_lane::relay`) — listens on the
     // loopback ports the CLI was configured with, pumps them to the app over

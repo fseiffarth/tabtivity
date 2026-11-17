@@ -62,11 +62,7 @@ pub fn install_env_for(windows: bool, state_dir: &Path) -> Vec<(String, String)>
         ("PIP_USER".into(), "1".into()),
         ("PYTHONUSERBASE".into(), s(root.join(".local"))),
     ];
-    if windows {
-        env.push(("USERPROFILE".into(), s(root.clone())));
-        env.push(("APPDATA".into(), s(root.join("AppData").join("Roaming"))));
-        env.push(("LOCALAPPDATA".into(), s(root.join("AppData").join("Local"))));
-    }
+    env.extend(crate::services::agent_home::windows_profile_env(windows, &root));
     env
 }
 
@@ -106,6 +102,9 @@ pub fn bin_dirs_for(windows: bool, state_dir: &Path) -> Vec<PathBuf> {
         let local = root.join("AppData").join("Local");
         dirs.push(local.join("agy").join("bin"));
         dirs.push(local.join("Programs").join("OpenAI").join("Codex").join("bin"));
+        // Cursor's `install?win32=true` and Meta's `install.ps1` (2442f).
+        dirs.push(local.join("cursor-agent"));
+        dirs.push(local.join("Programs").join("muse"));
     }
     dirs
 }
@@ -163,6 +162,67 @@ pub fn fence_read_only_paths() -> Vec<String> {
 /// reads as success. `agy update` replaces the binary it runs from, and exits
 /// non-zero with the reason on stderr when it cannot (1.4.5, 2026-10-30).
 const SELF_UPDATE_ARGV: &[(&str, &[&str])] = &[("antigravity", &["update"])];
+
+/// Installers running now, by key: a registry agent id, or `"ollama"` for
+/// the Ollama runtime. Two clicks (the setup wizard and Manage CLIs, or a
+/// double click) used to start two installers of one CLI side by side,
+/// writing the same npm prefix or install script target at once.
+static INSTALLS_RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Held for the whole run of one install, update or removal
+/// ([`begin_install`]); dropping it, however the run ends, lets the next one
+/// start. Hand it to [`InstallGuard::run`] with the installer: held in the
+/// command's async frame it would be let go when that future is dropped,
+/// while the installer on the blocking pool runs on.
+#[must_use = "the install lock is released as soon as the guard is dropped"]
+pub struct InstallGuard(String);
+
+impl InstallGuard {
+    /// Run `work` on the blocking pool with this guard moved in, so the lock
+    /// lives exactly as long as `work`.
+    pub async fn run<T: Send + 'static>(
+        self,
+        work: impl FnOnce() -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        app_core::rt::try_blocking("install", move || {
+            let _held = self;
+            work()
+        })
+        .await
+    }
+}
+
+/// [`begin_install`] then [`InstallGuard::run`]: a refusal comes back before
+/// any of `work` runs.
+pub async fn run_locked<T: Send + 'static>(
+    key: &str,
+    label: &str,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    begin_install(key, label)?.run(work).await
+}
+
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        let mut running = INSTALLS_RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        running.retain(|k| k != &self.0);
+    }
+}
+
+/// Claim the install lock for `key` (an agent id, `"ollama"`), or refuse
+/// with "`label` is already being installed" while another install or
+/// update of it runs. Keys share one space: the Ollama panel's Vibe install
+/// and Manage CLIs' install of `vibe` both take `"vibe"`.
+pub fn begin_install(key: &str, label: &str) -> Result<InstallGuard, String> {
+    let mut running = INSTALLS_RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+    if running.iter().any(|k| k == key) {
+        return Err(format!(
+            "{label} is already being installed, updated or removed. Wait for that run to finish."
+        ));
+    }
+    running.push(key.to_string());
+    Ok(InstallGuard(key.to_string()))
+}
 
 /// See [`SELF_UPDATE_ARGV`]; `None` means the installer run again is the update.
 pub fn self_update_argv(agent_id: &str) -> Option<&'static [&'static str]> {
@@ -340,6 +400,75 @@ pub(crate) fn migrate_legacy_stores_in(state_dir: &Path) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_second_install_of_one_key_is_refused_until_the_first_ends() {
+        // Keys unique to this test: the lock is process-wide.
+        let first = super::begin_install("test-lock-a", "Lock A").unwrap();
+        let err = super::begin_install("test-lock-a", "Lock A").err().unwrap();
+        assert!(err.contains("Lock A is already being installed, updated or removed"), "{err}");
+        // Another key is not held up.
+        let other = super::begin_install("test-lock-b", "Lock B").unwrap();
+        drop(first);
+        let again = super::begin_install("test-lock-a", "Lock A").unwrap();
+        drop((again, other));
+        // A run that ends in a panic still lets go.
+        let _ = std::panic::catch_unwind(|| {
+            let _held = super::begin_install("test-lock-a", "Lock A").unwrap();
+            panic!("installer crashed");
+        });
+        assert!(super::begin_install("test-lock-a", "Lock A").is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_already_installed_early_return_lets_go_of_the_lock() {
+        let out = super::run_locked("test-lock-early", "Early", || Ok("Early is already installed.")).await;
+        assert_eq!(out.as_deref(), Ok("Early is already installed."));
+        assert!(super::begin_install("test-lock-early", "Early").is_ok());
+        // The async-side early return (`install_agent`'s, before `run`) too.
+        async fn command(installed: bool) -> Result<&'static str, String> {
+            let running = super::begin_install("test-lock-early", "Early")?;
+            if installed {
+                return Ok("Early is already installed.");
+            }
+            running.run(|| Ok("installed")).await
+        }
+        assert_eq!(command(true).await.as_deref(), Ok("Early is already installed."));
+        assert!(super::begin_install("test-lock-early", "Early").is_ok());
+        // A failed run lets go as well.
+        assert!(super::run_locked("test-lock-early", "Early", || Err::<(), _>("boom".into())).await.is_err());
+        assert!(super::begin_install("test-lock-early", "Early").is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_lock_outlives_a_dropped_command_while_the_installer_runs() {
+        use std::future::Future;
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let (started, has_started) = std::sync::mpsc::channel::<()>();
+        let mut command = Box::pin(super::run_locked("test-lock-drop", "Drop", move || {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(())
+        }));
+        // Poll once so the installer starts on the blocking pool, then drop the
+        // command's future the way a cancelled invoke would.
+        let waker = std::task::Waker::noop();
+        assert!(command.as_mut().poll(&mut std::task::Context::from_waker(waker)).is_pending());
+        has_started.recv().unwrap();
+        drop(command);
+        let refused = super::begin_install("test-lock-drop", "Drop").err().unwrap();
+        assert!(refused.contains("Drop is already being installed"), "{refused}");
+        // Once the installer ends, the lock is free again.
+        go.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if super::begin_install("test-lock-drop", "Drop").is_ok() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "lock never released");
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[test]
     fn only_a_cli_whose_installer_cannot_update_has_a_self_update_argv() {
         assert_eq!(super::self_update_argv("antigravity"), Some(&["update"][..]));
         assert_eq!(super::self_update_argv("claude"), None);
@@ -427,7 +556,12 @@ mod tests {
         assert!(bin_dirs_for(true, state).contains(&root.join(".local").join("bin")));
         // The `LOCALAPPDATA` installers' launchers come onto PATH from there.
         let local = root.join("AppData").join("Local");
-        for dir in [local.join("agy").join("bin"), local.join("Programs").join("OpenAI").join("Codex").join("bin")] {
+        for dir in [
+            local.join("agy").join("bin"),
+            local.join("Programs").join("OpenAI").join("Codex").join("bin"),
+            local.join("cursor-agent"),
+            local.join("Programs").join("muse"),
+        ] {
             assert!(bin_dirs_for(true, state).contains(&dir), "{}", dir.display());
             assert!(!bin_dirs_for(false, state).contains(&dir), "{}", dir.display());
         }

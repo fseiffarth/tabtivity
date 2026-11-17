@@ -20,7 +20,7 @@ import { useTimerStore } from "../../stores/timer";
 import { PillStatusBars } from "./PillStatusBars";
 import { PillTabMarks } from "./PillTabMarks";
 import { ProjectPhoneMark } from "../mobile/PhoneHereMark";
-import { useProjectsStore } from "../../stores/projects";
+import { stopClosedProjectScope, useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import { adoptSyncOutcome, isResumableAgentTab, syncWorkspace, useTabsStore } from "../../stores/tabs";
 import { restorableSavedTabs, savedLayoutTreeOf } from "../../stores/tabs/savedLayout";
@@ -1234,6 +1234,17 @@ export function ProjectPill({
   // The box whose slice the strip shows, if this pill is one of its members: the
   // menu then offers the explicit "Remove ⟨project⟩ from ⟨box⟩".
   const sliceBoxId = useBoxSliceStore((s) => s.sliceBoxId);
+  const scopeLoaded = useTabsStore((s) => Object.prototype.hasOwnProperty.call(s.tabsByScope, project.id));
+  const closeInBox = async (boxId: string) => {
+    if (project.status !== "inactive") {
+      await useProjectsStore.getState().deactivateProject(project.id);
+      return;
+    }
+    // On screen: step back to the box first, or its panes would be unloaded
+    // under the view.
+    if (useTabsStore.getState().scope === project.id) await useBoxSliceStore.getState().selectBox(boxId);
+    await stopClosedProjectScope(project.id, { ask: true });
+  };
   const sliceBox = useBoxesStore((s) => (sliceBoxId ? (s.boxes.find((b) => b.id === sliceBoxId) ?? null) : null));
   // With `connections_headless` off Tabtivity handles no passwords at all, so neither
   // key auth nor a saved password can ever be the answer — auto-connect there means
@@ -2034,6 +2045,22 @@ export function ProjectPill({
               >
                 {t("projectSwitcher.removeFromBox", { name: project.name, box: sliceBox.name })}
                 <UntestedTag id="boxMembers.removeFromBox" />
+              </button>
+            )}
+            {/* Inside a box a member's ✕ takes it out of the box, so closing
+                the project needs a row of its own — also for a member that is
+                closed in the general strip and was reopened by entering the
+                box, which nothing else could stop. */}
+            {sliceBox && sliceBox.member_ids.includes(project.id) && (project.status !== "inactive" || scopeLoaded) && (
+              <button
+                className="untested"
+                onClick={() => {
+                  setContextMenu(null);
+                  void closeInBox(sliceBox.id);
+                }}
+              >
+                {t("pill.closeProject")}
+                <UntestedTag id="boxMembers.closeInBox" />
               </button>
             )}
             <BoxMemberChecklist project={project} />

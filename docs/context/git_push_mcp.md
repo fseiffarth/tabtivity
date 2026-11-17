@@ -53,9 +53,19 @@ runs project code holds the token:
    the hook tests). A Pusher exists only for a local project agent, which is
    always fenced on Linux and macOS, and the root console's unfenced Host
    session gets no Pusher. A fence that cannot run fails closed too
-   (`fence_unavailable`). Windows has no fence, so a repo with a hook gets
-   `fence_unavailable` with "push from the git bar". A repo without a hook
-   pushes on every platform. The scope used to come from the fence registry
+   (`fence_unavailable`). Windows has no fence: an agent there runs on the
+   host with the user's rights once the user accepted that, and the spawn
+   path stamps `PushBinding::unfenced_host` for exactly that decision
+   (`NotApplicable { reason: "platform" }`, local agent only — never an ssh
+   or docker wrap, whose boundary a host run would cross). Its preflight
+   (`HookBoundary::TrustedHost`, 2442g) runs the hook on the host, through
+   Git for Windows' `sh.exe` (`git_hardened::hook_command`), token removed as
+   everywhere, and only while `exec_trust` holds the user's approval of the
+   repo's hooks — the git bar's own gate. An unapproved or changed hook is
+   `fence_unavailable` with "push once from the git bar, then ask again"; it
+   never runs. This gives the agent nothing it lacks (it can run the hook
+   itself), and keeps the rule that the app runs no project code the user
+   has not approved. A repo without a hook pushes on every platform. The scope used to come from the fence registry
    (`fenced_scope_of_tab`), which a stale `pty_kill` could clear after a
    pane remount — then the hook ran unfenced. Exit ≠ 0 refuses with
    the hook's output; five minutes is the cap. Commits the hook adds are
@@ -310,7 +320,10 @@ the app.
    Revoke the session in MCP session access: further calls fail, the tab
    stays open, its card disappears.
 6. Repeat step 2 in Codex. On Windows (no fence), a repo with a `pre-push`
-   hook answers `fence_unavailable` ("push from the git bar").
+   hook nobody approved answers `fence_unavailable` ("push once from the git
+   bar"); after one git-bar push that approves the hooks, the agent's push
+   runs the hook (its output on the card) and goes out. Edit the hook: the
+   next agent push refuses again.
 7. Fresh settings (no `git_push_mcp` key): a new agent tab has the tools and
    a project with no block reads Propose on the pill menu.
 8. Release button: with everything pushed, press Release; the dialog

@@ -16,7 +16,7 @@ import { UntestedTag } from "../../common/UntestedTag";
 import { FolderPickerDialog } from "../../common/FolderPickerDialog";
 import { basename, dirname, isPathWithin, relativePathFrom } from "../../../lib/paths";
 import { IS_HOST_MAC, IS_HOST_WINDOWS } from "../../../lib/platform";
-import { runInstallInTab } from "../../../lib/installCommand";
+import { runInstallInTab, withHomebrew } from "../../../lib/installCommand";
 import { resolveProjectDirectory } from "../../../types";
 import { useFileScope, useFileSource, readFileText } from "../../../lib/files/fileAccess";
 import { isHostPinned } from "../../../lib/projectTabHost";
@@ -128,7 +128,7 @@ import {
 const TEX_INSTALL_CMD = IS_HOST_WINDOWS
   ? "winget install --id MiKTeX.MiKTeX -e"
   : IS_HOST_MAC
-    ? "brew install --cask mactex-no-gui"
+    ? withHomebrew("brew install --cask mactex-no-gui")
     : "sudo apt-get install -y texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended latexmk";
 
 export function TexView({

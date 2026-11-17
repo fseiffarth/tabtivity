@@ -52,6 +52,9 @@ export interface ProcSample {
    *  the backend can't resolve an owner (Windows/macOS) — the per-user section is
    *  hidden then. An unmapped uid reads as `#<uid>`. */
   user: string;
+  /** Its usage could not be read (Windows: a protected or elevated process).
+   *  `rss_kib`/`cpu_jiffies` are then placeholders, never shown as a reading. */
+  unreadable?: boolean;
 }
 
 /** One interactive login session on the sampled host (a `who` row). Populated
@@ -1274,19 +1277,30 @@ export function SystemMonitorPane({ projectId, visible, globalMachine }: Props) 
                 {rows.map((r) => (
                   <tr key={r.pid}>
                     <td className={`num ${sortedCls("pid") ?? ""}`}>{r.pid}</td>
-                    <td
-                      className={`num ${sortedCls("cpu") ?? ""}`}
-                      style={{ color: toneFor(Math.min(100, r.cpu)) }}
-                    >
-                      {r.cpu.toFixed(1)}
-                    </td>
-                    <td
-                      className={`num ${sortedCls("mem") ?? ""}`}
-                      style={{ color: toneFor(r.mem) }}
-                    >
-                      {r.mem.toFixed(1)}
-                    </td>
-                    <td className={`num ${sortedCls("rss_kib") ?? ""}`}>{formatKib(r.rss_kib)}</td>
+                    {/* No reading is not a zero one: an unreadable process shows none. */}
+                    {r.unreadable ? (
+                      <>
+                        <td className={`num ${sortedCls("cpu") ?? ""}`} title={t("sysmon.unreadableTitle")}>—</td>
+                        <td className={`num ${sortedCls("mem") ?? ""}`} title={t("sysmon.unreadableTitle")}>—</td>
+                        <td className={`num ${sortedCls("rss_kib") ?? ""}`} title={t("sysmon.unreadableTitle")}>—</td>
+                      </>
+                    ) : (
+                      <>
+                        <td
+                          className={`num ${sortedCls("cpu") ?? ""}`}
+                          style={{ color: toneFor(Math.min(100, r.cpu)) }}
+                        >
+                          {r.cpu.toFixed(1)}
+                        </td>
+                        <td
+                          className={`num ${sortedCls("mem") ?? ""}`}
+                          style={{ color: toneFor(r.mem) }}
+                        >
+                          {r.mem.toFixed(1)}
+                        </td>
+                        <td className={`num ${sortedCls("rss_kib") ?? ""}`}>{formatKib(r.rss_kib)}</td>
+                      </>
+                    )}
                     <td className={`num ${sortedCls("threads") ?? ""}`}>{r.threads}</td>
                     <td className="st">{r.state}</td>
                     <td className={`cmd ${sortedCls("comm") ?? ""}`} title={r.cmdline}>

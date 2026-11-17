@@ -568,6 +568,9 @@ fn seatbelt_profile_denies_writes_then_restores_roots_and_protects_hooks() {
         pinned: Vec::new(),
         hidden: Vec::new(),
         own_home: None,
+        private_tmp: None,
+        canonical: Default::default(),
+        planted: Default::default(),
     };
     let profile = sandbox_exec_profile(&inputs);
     let lines: Vec<&str> = profile.lines().collect();
@@ -598,7 +601,18 @@ fn seatbelt_profile_denies_writes_then_restores_roots_and_protects_hooks() {
     // The protected paths are denied LAST so they win over the .claude allow.
     let hook_deny = pos("(deny file-write* (subpath \"/Users/a/.claude/settings.json\"))");
     assert!(hook_deny > pos("(allow file-write* (subpath \"/Users/a/.claude\"))"));
-    assert_eq!(lines.last().unwrap(), &concat!("(deny file-write* (subpath \"/Users/a/.local/share/", crate::app_slug!(), "/hooks\"))"));
+    let last_write = lines.iter().rposition(|l| l.contains("file-write")).unwrap();
+    assert_eq!(lines[last_write], concat!("(deny file-write* (subpath \"/Users/a/.local/share/", crate::app_slug!(), "/hooks\"))"));
+    // After it only `lstat` of the folders above the root: no read of their
+    // contents, no write.
+    let stat_only = &lines[last_write + 1..];
+    assert_eq!(
+        stat_only,
+        [
+            concat!("(allow file-read-metadata (literal \"/Users/a/", crate::app_slug!(), "\"))"),
+            concat!("(allow file-read-metadata (literal \"/Users/a/", crate::app_slug!(), "/projects\"))"),
+        ]
+    );
     // Quoting: a path with a quote or backslash stays one Scheme string.
     assert_eq!(sbpl_string("/a/b\"c\\d"), "\"/a/b\\\"c\\\\d\"");
 }
@@ -618,6 +632,7 @@ fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
         guard,
         vec!["/Users/a/.cargo/credentials.toml".into()],
         Some("/var/folders/xy/T/".into()),
+        Path::new("/var/folders/xy/T/app-tmp/k"),
     );
     assert_eq!(inputs.own_home, None);
     let profile = sandbox_exec_profile(&inputs);
@@ -632,8 +647,13 @@ fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
     assert!(pos("(deny file-write*)") < root_write);
     assert!(pos("(allow file-read* (subpath \"/Users/a/proj\"))") > pos("(deny file-read* (subpath \"/Users/a\"))"));
     pos("(allow file-read* (subpath \"/Users/a/.gitconfig\"))");
-    // Temp is writable, as the Linux one-shot's private /tmp.
-    assert!(pos("(allow file-write* (subpath \"/var/folders/xy/T/\"))") > pos("(deny file-write*)"));
+    // The user's $TMPDIR is hidden and the scope's own temp dir inside it
+    // comes back after every hidden deny, as the Linux one-shot's private
+    // /tmp (2442n); the shared /tmp and the user's cache dir stay writable.
+    assert!(!profile.contains("(allow file-write* (subpath \"/var/folders/xy/T\"))"), "{profile}");
+    let user_tmp = pos("(deny file-read* file-write* (subpath \"/var/folders/xy/T\"))");
+    assert!(pos("(allow file-read* file-write* (subpath \"/var/folders/xy/T/app-tmp/k\"))") > user_tmp);
+    pos("(allow file-write* (subpath \"/var/folders/xy/C\"))");
     pos("(allow file-write* (subpath \"/private/tmp\"))");
     // The git control files and the pinned `.git` come after the root allow.
     assert!(pos("(deny file-write* (subpath \"/Users/a/proj/.git/hooks\"))") > root_write);
@@ -650,8 +670,9 @@ fn the_one_shot_profile_guards_git_and_hides_state_without_an_agent_home() {
         sbpl_string(&state.join("settings.json").to_string_lossy())
     ));
     pos("(deny file-read* file-write* (subpath \"/Users/a/.cargo/credentials.toml\"))");
-    assert!(!profile.contains("(allow file-read* file-write*"), "{profile}");
-    assert!(lines.last().unwrap().starts_with("(deny file-read* file-write*"));
+    let restored: Vec<&&str> = lines.iter().filter(|l| l.starts_with("(allow file-read* file-write*")).collect();
+    assert_eq!(restored, [&"(allow file-read* file-write* (subpath \"/var/folders/xy/T/app-tmp/k\"))"], "{profile}");
+    assert_eq!(lines.last().unwrap(), restored[0]);
 
     // A tab's profile keeps its own home, allowed after every hidden deny.
     let tab = SeatbeltInputs {
@@ -1521,5 +1542,31 @@ fn the_assistant_scope_has_no_fence_status_and_no_one_shot_command() {
         let err = one_shot_command(id, "git", &["status".to_string()], Path::new("/tmp")).unwrap_err();
         assert!(err.contains("assistant"), "{err}");
     }
+}
+
+/// 2442b/2442c: a live Windows tab moves the whole profile set, Codex's own
+/// home variable, and keeps the user's per-user Python packages importable.
+#[test]
+fn a_live_windows_tab_moves_the_profile_set_and_keeps_user_python() {
+    let tmp = tempfile::tempdir().unwrap();
+    let scope = tmp.path().join("agent-homes").join("p");
+    let user = tmp.path().join("user");
+    let appdata = user.join("AppData").join("Roaming");
+    std::fs::create_dir_all(appdata.join("Python")).unwrap();
+    let get = |env: &[(String, String)], k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| PathBuf::from(v));
+    let win = home_env_for(true, &scope, &user, Some(&appdata), "codex.exe");
+    assert_eq!(get(&win, "USERPROFILE"), Some(scope.clone()));
+    assert_eq!(get(&win, "APPDATA"), Some(scope.join("AppData").join("Roaming")));
+    assert_eq!(get(&win, "LOCALAPPDATA"), Some(scope.join("AppData").join("Local")));
+    assert_eq!(get(&win, "CODEX_HOME"), Some(scope.join(".codex")));
+    if std::env::var_os("PYTHONUSERBASE").is_none() {
+        assert_eq!(get(&win, "PYTHONUSERBASE"), Some(appdata.join("Python")));
+    }
+    // macOS (Seatbelt) and Linux: `HOME` only, as before.
+    let unix = home_env_for(false, &scope, &user, Some(&appdata), "codex");
+    for var in ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "CODEX_HOME", "PYTHONUSERBASE"] {
+        assert_eq!(get(&unix, var), None, "{var}");
+    }
+    assert_eq!(get(&unix, "HOME"), Some(scope));
 }
 

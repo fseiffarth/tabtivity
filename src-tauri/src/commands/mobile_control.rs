@@ -16,7 +16,7 @@ use crate::{
         admin::{self, read_frame, write_frame},
         auth,
         config::{
-            detect_serve_settings_json, serve_status_json, verify_tailscale_serve,
+            detect_serve_settings_json, serve_status_json, tailscale_serve_command, verify_tailscale_serve,
             DetectedServeSettings, HostConfig,
         },
         discovery::opaque_control_id,
@@ -1262,6 +1262,14 @@ pub struct TailscaleServeStatus {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn mobile_verify_tailscale_serve(origin: String, port: u16) -> Result<(), String> {
     verify_tailscale_serve(&origin, port)
+}
+
+/// The `tailscale serve` line the setup buttons run in a root terminal, with
+/// the CLI this machine resolves (the Mac app's bundled one off PATH, 2442s).
+/// `async`: the PATH probe stats directories.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn mobile_tailscale_serve_command(port: u16) -> String {
+    tailscale_serve_command(port)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]

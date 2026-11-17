@@ -723,40 +723,20 @@
   width: 230px;
 }
 
-.project-switcher-box-add-title {
-  padding: 5px 7px 2px;
-  color: var(--text-primary);
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
-.project-switcher-box-add-filter {
+/* Inside a box the members lead the menu as a group (the shared
+   `BoxMemberChecklist`, its rows the context menu's checkbox rows), a rule
+   under it, then the ordinary project actions. */
+.project-switcher-add-menu hr {
   width: 100%;
-  box-sizing: border-box;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 6px var(--space-2);
-  background: var(--control-bg);
-  color: var(--text-primary);
-  outline: none;
+  height: 1px;
+  margin: 4px 0;
+  border: 0;
+  background: var(--border-subtle);
 }
 
-.project-switcher-box-add-filter:focus {
-  border-color: var(--accent);
-}
-
-.project-switcher-box-add-list {
+.project-switcher-add-menu button.box-member-row {
   display: flex;
-  max-height: min(280px, calc(100vh - 110px));
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-}
-
-.project-switcher-box-add-empty {
-  padding: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--text-md);
+  align-items: center;
 }
 
 .project-switcher-add-menu button {
@@ -782,11 +762,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.project-switcher-box-add-list button {
-  white-space: normal;
-  overflow-wrap: anywhere;
 }
 
 .project-switcher-add-menu button:hover {
@@ -1837,6 +1812,26 @@
   color: var(--text-muted);
   font-size: var(--text-md);
 }
+/* Installed view: the "From" switch above the list (another project's skills). */
+.skills-pull-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* "Copy to…" picker (SkillCopyDialog): checkbox rows, a flag on the right. */
+.skills-copy .skills-copy-body { display: flex; flex-direction: column; gap: var(--space-3); }
+.skills-copy-list {
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px;
+  max-height: 46vh; overflow-y: auto; font-size: var(--text-md);
+}
+.skills-copy-list li { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.skills-copy-list label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; }
+.skills-copy-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.skills-copy-flag { color: var(--text-muted); flex: none; }
+.skills-copy-flag.is-error { color: var(--danger); }
+.skills-copy-note { font-size: var(--text-md); color: var(--text-secondary); }
+
 .skills-install-note {
   color: var(--text-muted);
   font-size: var(--text-sm);

@@ -561,6 +561,23 @@ fn refusal_shell() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("sh"))
 }
 
+/// A command that runs the git hook `hook` as git itself would: directly
+/// where the OS honours its `#!` line, through Git for Windows' `sh.exe`
+/// (the shell git runs hooks with there) on Windows, where `CreateProcess`
+/// cannot start a script. The caller adds the hook's arguments.
+pub(crate) fn hook_command(hook: &Path) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = crate::paths::command_no_window(refusal_shell());
+        cmd.arg(hook);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        crate::paths::command_no_window(hook)
+    }
+}
+
 /// Where Git for Windows keeps `sh.exe` relative to a `git.exe` it ships —
 /// `<root>\cmd\git.exe`, `<root>\bin\git.exe` or
 /// `<root>\mingw64\bin\git.exe` — in lookup order. Pure.
@@ -932,6 +949,9 @@ pub(crate) fn local_non_repo(target: Option<&RemoteTarget>, project_dir: &str) -
 
 /// [`git_available`] on the calling thread, for code already off the window's.
 pub fn git_available_blocking() -> bool {
+    if git_probe_would_prompt() {
+        return false;
+    }
     // Bare on purpose: `--version` touches no repo.
     crate::paths::command_no_window("git")
         .arg("--version")
@@ -940,9 +960,38 @@ pub fn git_available_blocking() -> bool {
         .unwrap_or(false)
 }
 
+/// macOS (2442t): `/usr/bin/git` is a stub that, without Apple's Command Line
+/// Tools, raises the system "install developer tools" dialog instead of
+/// answering. When that stub is the git found and `xcode-select -p` names no
+/// developer dir, git counts as missing — the app's own "Install git" offer
+/// (`xcode-select --install`) is then the one dialog the user sees.
+fn git_probe_would_prompt() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    // The git `command_no_window` will run: the root-owned system copy first.
+    let resolved = crate::paths::helper_program(std::ffi::OsStr::new("git"))
+        .or_else(|| crate::paths::resolve_executable("git"));
+    stub_without_tools(resolved.as_deref(), || {
+        crate::paths::command_no_window("/usr/bin/xcode-select")
+            .arg("-p")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
+}
+
+/// Whether `resolved` is the macOS git stub and `developer_dir` says the tools
+/// it would run are not installed. Pure over `developer_dir`.
+fn stub_without_tools(resolved: Option<&Path>, developer_dir: impl FnOnce() -> bool) -> bool {
+    resolved.is_some_and(|p| p == Path::new("/usr/bin/git")) && !developer_dir()
+}
+
 /// The local git's `(major, minor)`, or `None` when there is no git or its
 /// banner doesn't parse. Bare on purpose, as [`git_available_blocking`].
 pub fn local_git_version_blocking() -> Option<(u32, u32)> {
+    if git_probe_would_prompt() {
+        return None;
+    }
     let out = crate::paths::command_no_window("git").arg("--version").output().ok()?;
     if !out.status.success() {
         return None;
@@ -1290,6 +1339,23 @@ pub(crate) fn git_clone_blocking(url: String, dest: String) -> Result<String, St
         return Err(clone_error(&raw, token.is_some(), https));
     }
     Ok(dest)
+}
+
+#[cfg(test)]
+mod stub_probe_tests {
+    use super::*;
+
+    /// 2442t: the macOS git stub without the Command Line Tools is not run
+    /// (it would raise the system dialog); any other git, or the stub with the
+    /// tools installed, is.
+    #[test]
+    fn the_mac_git_stub_counts_as_missing_without_the_tools() {
+        let stub = Path::new("/usr/bin/git");
+        assert!(stub_without_tools(Some(stub), || false));
+        assert!(!stub_without_tools(Some(stub), || true));
+        assert!(!stub_without_tools(Some(Path::new("/opt/homebrew/bin/git")), || false));
+        assert!(!stub_without_tools(None, || false));
+    }
 }
 
 /// Hosted plan §6.5 gate 1: in a shared project's repo, config sanitizing

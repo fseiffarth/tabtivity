@@ -8,7 +8,7 @@ fn only_a_pusher_binding_takes_a_fence_scope() {
     let store = TokenStore::default();
     let identity = |caller, push| Identity { tab: "stamp:a".into(), caller, project: Some("p".into()), schedule_target: None, push, endpoint: None, model: None };
     let pusher = mint_token().unwrap();
-    store.register(pusher.clone(), identity(Caller::Pusher, Some(PushBinding { dir: "/p".into(), fence_scope: None, git_at_spawn: None })), false);
+    store.register(pusher.clone(), identity(Caller::Pusher, Some(PushBinding { dir: "/p".into(), fence_scope: None, unfenced_host: false, git_at_spawn: None })), false);
     let helper = mint_token().unwrap();
     store.register(helper.clone(), identity(Caller::Helper, None), false);
     assert!(!store.stamp_push_fence_scope(&helper, "p"));

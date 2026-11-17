@@ -6,7 +6,9 @@
 # MCP endpoints:  /mcp/web (web_search, web_fetch), /mcp/help (the help search).
 # A user prompt holding
 #   STUB:CALL <tool> <json>                  makes the model call that tool, then answer "stub answer done";
-#   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step.
+#   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step;
+#   STUB:FAIL <status>                       answers that HTTP status with an error body.
+# A Responses tool inside a namespace is named `<namespace>.<tool>`.
 # Every request is logged: offered tools, last prompt, tool results.
 import json,os,sys,re,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -50,6 +52,7 @@ class H(BaseHTTPRequestHandler):
         ntool=sum(1 for m in after if m.get('role')=='tool')
         rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':last.get('role'),'tool_results':[text_of(m)[:700] for m in after if m.get('role')=='tool']}
         log.write(json.dumps(rec)+'\n')
+        if self.fail(prompt): return
         seq=[]
         m=re.search(r'STUB:(?:CALL|SEQ) (.*)',prompt,re.S)
         if m:
@@ -69,6 +72,14 @@ class H(BaseHTTPRequestHandler):
             for w in ('stub ','answer ','done'): chunk({'content':w})
             chunk({},'stop')
         self.wfile.write(b'data: [DONE]\n\n'); self.wfile.flush(); self.close_connection=True
+    def fail(self,prompt):
+        """`STUB:FAIL <status>` in the prompt: answer that HTTP status with an
+        error body instead of a turn (a model call that fails). 400 is not
+        retried by the CLIs; 429/500 usually are."""
+        m=re.search(r'STUB:FAIL (\d{3})',prompt)
+        if not m: return False
+        self._json({'error':{'message':'stub failure','type':'invalid_request_error','code':'stub_fail'}},int(m.group(1)))
+        return True
     def responses_api(self,d):
         """The Responses API (`/v1/responses`, streamed), for CLIs that speak
         it instead of chat completions (Muse, Codex): same STUB: prompts.
@@ -80,9 +91,12 @@ class H(BaseHTTPRequestHandler):
         after=items[users[-1]+1:] if users else []
         outs=[x for x in after if x.get('type')=='function_call_output']
         tools=[t.get('name') or t.get('function',{}).get('name') or t.get('type') for t in d.get('tools',[])]
+        # A namespace (Codex's `multi_agent_v1`) lists its tools as `<ns>.<tool>`.
+        tools+=[f"{t.get('name')}.{x.get('name')}" for t in d.get('tools',[]) if t.get('type')=='namespace' for x in t.get('tools',[])]
         rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':(items[-1].get('role') or items[-1].get('type')) if items else None,
              'tool_results':[str(x.get('output'))[:700] for x in outs]}
         log.write(json.dumps(rec)+'\n')
+        if self.fail(prompt): return
         seq=[]
         m=re.search(r'STUB:(?:CALL|SEQ) (.*)',prompt,re.S)
         if m:
@@ -97,7 +111,9 @@ class H(BaseHTTPRequestHandler):
         ev('response.created',response=base); ev('response.in_progress',response=base)
         if len(outs)<len(seq):
             tn,arg=seq[len(outs)]
-            item={'type':'function_call','id':'fc_'+rid,'call_id':'call_'+rid,'name':tn,'arguments':'','status':'in_progress'}
+            ns,_,inner=tn.rpartition('.')
+            item={'type':'function_call','id':'fc_'+rid,'call_id':'call_'+rid,'name':inner,'arguments':'','status':'in_progress'}
+            if ns: item['namespace']=ns
             ev('response.output_item.added',output_index=0,item=item)
             ev('response.function_call_arguments.delta',item_id=item['id'],output_index=0,delta=arg)
             ev('response.function_call_arguments.done',item_id=item['id'],output_index=0,arguments=arg)

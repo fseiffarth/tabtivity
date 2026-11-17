@@ -573,15 +573,24 @@ fn boot_ticks_now() -> Option<u64> {
     Some((secs * crate::sysstat::clk_tck() as f64) as u64)
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: microseconds since the epoch, the clock `sysstat::process_start`
+/// (`pbi_start_tvsec`/`usec`) reads a shell's start on (2442z).
+#[cfg(target_os = "macos")]
+fn boot_ticks_now() -> Option<u64> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(now.as_micros()).ok()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn boot_ticks_now() -> Option<u64> {
     None
 }
 
-/// Whether a shell that started at `start` (ticks since boot, `0` = unknown)
-/// was already running when the turn ended at `ended`. Unknown on either side
-/// reads as yes: the plain `done` reading, as before the start was compared.
-#[cfg(any(target_os = "linux", test))]
+/// Whether a shell that started at `start` (on [`boot_ticks_now`]'s clock,
+/// `0` = unknown) was already running when the turn ended at `ended`. Unknown
+/// on either side reads as yes: the plain `done` reading, as before the start
+/// was compared.
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn outlived_turn(start: u64, ended: Option<u64>) -> bool {
     start == 0 || ended.is_none_or(|end| start <= end)
 }
@@ -870,6 +879,8 @@ trait ProcProbe {
     fn comm_ppid(&self, pid: u32) -> Option<(String, u32)>;
     fn environ(&self, pid: u32) -> Option<Vec<u8>>;
     fn cmdline(&self, pid: u32) -> Option<String>;
+    /// When `pid` started, on [`boot_ticks_now`]'s clock; `0` = unknown.
+    fn start(&self, pid: u32) -> u64;
 }
 
 /// The walk behind [`tool_shell_uids`], over whatever process table `probe`
@@ -879,6 +890,7 @@ trait ProcProbe {
 #[cfg(any(target_os = "macos", test))]
 fn background_job_uids(
     want: &HashMap<&str, TurnState>,
+    ends: &HashMap<String, u64>,
     pids: impl IntoIterator<Item = u32>,
     probe: &impl ProcProbe,
 ) -> std::collections::HashSet<String> {
@@ -899,9 +911,10 @@ fn background_job_uids(
         }
         let cmdline = probe.cmdline(pid).unwrap_or_default();
         let parent_comm = probe.comm_ppid(ppid).map(|(c, _)| c).unwrap_or_default();
-        // No start time is read here: a shell still running after the Stop
-        // counts, as it did before Linux compared the two.
-        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, true, false) {
+        // As on Linux (2442z): a shell started after the Stop is a tool call
+        // something woken later waits on, not the turn's background job.
+        let outlived = outlived_turn(probe.start(pid), ends.get(&uid).copied());
+        if is_agent_tool_shell(&comm, &cmdline, &parent_comm) && is_background_job(&cmdline, *state, outlived, false) {
             out.insert(uid);
         }
     }
@@ -919,7 +932,7 @@ fn background_job_uids(
 #[cfg(target_os = "macos")]
 fn tool_shell_uids(
     want: &HashMap<&str, TurnState>,
-    _ends: &HashMap<String, u64>,
+    ends: &HashMap<String, u64>,
     _bg: &HashMap<String, HashSet<String>>,
     _max_age: Duration,
 ) -> std::collections::HashSet<String> {
@@ -935,13 +948,16 @@ fn tool_shell_uids(
         fn cmdline(&self, pid: u32) -> Option<String> {
             crate::sysstat::cmdline(pid)
         }
+        fn start(&self, pid: u32) -> u64 {
+            crate::sysstat::process_start(pid).unwrap_or(0)
+        }
     }
     if want.is_empty() {
         return std::collections::HashSet::new();
     }
     let probe = Proc(crate::sysstat::parent_map());
     let pids: Vec<u32> = probe.0.keys().copied().collect();
-    background_job_uids(want, pids, &probe)
+    background_job_uids(want, ends, pids, &probe)
 }
 
 /// Windows: no tab ever reports a job — there is no reader of another
@@ -1419,7 +1435,7 @@ mod tests {
     /// A process table for [`background_job_uids`]: pid → (comm, ppid, the
     /// raw `KERN_PROCARGS2` buffer, as macOS hands it over). The command line
     /// is the buffer's argv, as `sysstat::cmdline` reads it.
-    struct FakeTable(HashMap<u32, (&'static str, u32, Vec<u8>, String)>);
+    struct FakeTable(HashMap<u32, (&'static str, u32, Vec<u8>, String)>, HashMap<u32, u64>);
     impl ProcProbe for FakeTable {
         fn comm_ppid(&self, pid: u32) -> Option<(String, u32)> {
             self.0.get(&pid).map(|(c, p, _, _)| (c.to_string(), *p))
@@ -1429,6 +1445,9 @@ mod tests {
         }
         fn cmdline(&self, pid: u32) -> Option<String> {
             Some(self.0.get(&pid)?.3.clone())
+        }
+        fn start(&self, pid: u32) -> u64 {
+            self.1.get(&pid).copied().unwrap_or(0)
         }
     }
 
@@ -1463,16 +1482,23 @@ mod tests {
         table.insert(31, entry("zsh", 30, &["/bin/zsh", spoof.as_str(), bg], &[]));
         let want: HashMap<&str, TurnState> =
             [("t-bg", TurnState::Working), ("t-fg", TurnState::Working), ("t-argv", TurnState::Working)].into();
-        let probe = FakeTable(table);
+        let probe = FakeTable(table, [(21, 500)].into());
         let mut pids: Vec<u32> = probe.0.keys().copied().collect();
         pids.sort();
-        let found = background_job_uids(&want, pids.clone(), &probe);
+        let none = HashMap::new();
+        let found = background_job_uids(&want, &none, pids.clone(), &probe);
         assert_eq!(found, ["t-bg".to_string()].into());
         // Once the foreground tab's turn is over, its shell outlived it.
         let done: HashMap<&str, TurnState> = [("t-fg", TurnState::Done)].into();
-        assert_eq!(background_job_uids(&done, pids.clone(), &probe), ["t-fg".to_string()].into());
+        assert_eq!(background_job_uids(&done, &none, pids.clone(), &probe), ["t-fg".to_string()].into());
+        // 2442z: the turn ended (at 400) before the shell started (500) — a
+        // tool call something woken later waits on, not the turn's job.
+        let ended: HashMap<String, u64> = [("t-fg".to_string(), 400)].into();
+        assert!(background_job_uids(&done, &ended, pids.clone(), &probe).is_empty());
+        let ended_after: HashMap<String, u64> = [("t-fg".to_string(), 600)].into();
+        assert_eq!(background_job_uids(&done, &ended_after, pids.clone(), &probe), ["t-fg".to_string()].into());
         // Nobody asked: nothing is read.
-        assert!(background_job_uids(&HashMap::new(), pids, &probe).is_empty());
+        assert!(background_job_uids(&HashMap::new(), &none, pids, &probe).is_empty());
     }
 
     /// Force the next `refresh_jobs` to walk `/proc` rather than reuse the last

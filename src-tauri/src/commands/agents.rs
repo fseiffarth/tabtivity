@@ -21,11 +21,7 @@ pub use crate::services::agent_registry::*;
 /// itself: `irm … | iex` is PowerShell-only; `npm`/`python` installs work in
 /// either PowerShell or the classic Command Prompt.
 fn windows_shell(cmd: &str) -> &'static str {
-    if cmd.contains("iex")
-        || cmd.trim_start().starts_with("irm")
-        || cmd.contains("Invoke-RestMethod")
-        || cmd.contains("Invoke-Expression")
-    {
+    if needs_powershell(cmd) {
         "PowerShell"
     } else {
         "PowerShell or Command Prompt"
@@ -33,15 +29,21 @@ fn windows_shell(cmd: &str) -> &'static str {
 }
 
 fn windows_shell_kind(cmd: &str) -> &'static str {
-    if cmd.contains("iex")
-        || cmd.trim_start().starts_with("irm")
-        || cmd.contains("Invoke-RestMethod")
-        || cmd.contains("Invoke-Expression")
-    {
+    if needs_powershell(cmd) {
         "powershell"
     } else {
         "default"
     }
+}
+
+/// A Windows install line only PowerShell runs: `irm … | iex`, its long
+/// forms, and a download with `Invoke-WebRequest` (Goose's two-step install).
+fn needs_powershell(cmd: &str) -> bool {
+    cmd.contains("iex")
+        || cmd.trim_start().starts_with("irm")
+        || cmd.contains("Invoke-RestMethod")
+        || cmd.contains("Invoke-Expression")
+        || cmd.contains("Invoke-WebRequest")
 }
 
 /// The install command + the shell it runs in, for the host OS. On Windows the
@@ -207,6 +209,49 @@ pub fn install_agent_remote_command(
         machine.port,
         &remote,
     )
+}
+
+/// Probe commands in the same login shell used by remote agent tabs. Never dial
+/// a disconnected host just because its add-tab menu was opened.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn probe_remote_agent_binaries(
+    ctx: Ctx, project_id: String, host_id: String, bins: Vec<String>,
+) -> Result<Vec<String>, String> {
+    use crate::services::{remote, ssh_exec};
+    if !remote::is_connected_host(ctx.get::<remote::RemotePoolState>(), &project_id, &host_id).await {
+        return Err("remote project host is not connected".into());
+    }
+    let target = remote::remote_target_for_host(&project_id, &host_id)
+        .ok_or("not a remote project host")?;
+    app_core::rt::try_blocking("remote agent probe", move || {
+        let bins: Vec<_> = bins.into_iter().filter(|bin| !bin.is_empty() && !bin.starts_with('-') && !bin.contains(['\n', '\r'])).collect();
+        let script = bins.iter().map(|bin| {
+            let quoted = ssh_exec::shell_quote(bin);
+            format!("if command -v {quoted} >/dev/null 2>&1; then printf '%s\\n' {quoted}; fi;")
+        }).collect::<Vec<_>>().join(" ");
+        let command = format!("exec \"${{SHELL:-/bin/sh}}\" -lc {}", ssh_exec::shell_quote(&script));
+        let mut process = ssh_exec::remote_shell_command(&target.spec, &command)?;
+        let out = crate::services::git_bounded::run(&mut process, crate::services::git_bounded::Opts {
+            timeout: Some(std::time::Duration::from_secs(15)), no_precheck: true, ..Default::default()
+        }).map_err(|error| error.to_string())?.output;
+        if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).into_owned()); }
+        Ok(String::from_utf8_lossy(&out.stdout).lines().filter(|line| bins.iter().any(|bin| bin == line)).map(str::to_owned).collect())
+    }).await
+}
+
+/// Registry-owned installer for a project's primary or worker, in a visible tab.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn install_agent_project_command(
+    ctx: Ctx, agent_id: String, project_id: String, host_id: String,
+) -> Result<String, String> {
+    use crate::services::{remote, ssh_exec};
+    if !remote::is_connected_host(ctx.get::<remote::RemotePoolState>(), &project_id, &host_id).await {
+        return Err("remote project host is not connected".into());
+    }
+    let spec = find_spec(&agent_id).ok_or("unknown agent")?;
+    let target = remote::remote_target_for_host(&project_id, &host_id).ok_or("not a remote project host")?;
+    let command = format!("\"${{SHELL:-/bin/sh}}\" -lc {}", ssh_exec::shell_quote(&remote_install_script(spec)));
+    ssh_exec::interactive_exec_command(&target.spec.user, &target.spec.host, target.spec.port, &command)
 }
 
 /// True when the given agent (by id) is installed. Unknown ids return false.
@@ -526,12 +571,14 @@ fn manual_install_cmd(spec: &AgentSpec) -> &'static str {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    let running = crate::services::agent_install::begin_install(spec.id, spec.label)?;
 
     if spec_is_installed(spec) {
         return Ok(format!("{} is already installed.", spec.label));
     }
     prefetch_release(&ctx.0, spec).await;
-    run_installer(ctx.0.clone(), spec, installer_command)
+    let ctx = ctx.0;
+    running.run(move || run_installer(ctx, spec, installer_command)).await
 }
 
 /// Update an installed agent CLI: its official installer run again, which
@@ -542,11 +589,13 @@ pub async fn install_agent(ctx: Ctx, id: String) -> Result<String, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn update_agent(ctx: Ctx, id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    let running = crate::services::agent_install::begin_install(spec.id, spec.label)?;
     if !spec_is_installed(spec) {
         return Err(format!("{} is not installed.", spec.label));
     }
     prefetch_release(&ctx.0, spec).await;
-    run_installer(ctx.0.clone(), spec, update_command)
+    let ctx = ctx.0;
+    running.run(move || run_installer(ctx, spec, update_command)).await
 }
 
 /// Get Codex's package down before its installer runs, whose own download gives
@@ -803,6 +852,15 @@ fn npm_uninstall_command(
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn uninstall_agent(id: String) -> Result<String, String> {
     let spec = find_spec(&id).ok_or_else(|| format!("unknown agent: {id}"))?;
+    // The install lock: a removal never races an install or update of it.
+    crate::services::agent_install::run_locked(spec.id, spec.label, move || {
+        uninstall_agent_blocking(spec)
+    })
+    .await
+}
+
+/// The blocking body of [`uninstall_agent`] (npm runs, files go).
+fn uninstall_agent_blocking(spec: &'static AgentSpec) -> Result<String, String> {
     server_installs_are_the_helpers(spec.id)?;
 
     let cmd_for_platform = if cfg!(windows) {
@@ -2175,6 +2233,25 @@ pub async fn agent_global_import() -> Result<crate::services::agent_global::Impo
         .map_err(|e| e.to_string())
 }
 
+/// The first-start question of a fresh install (`services::agent_import_offer`):
+/// whether it is open, and which logins and config folders this computer
+/// holds to import. Names only, never a login's content.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_import_offer() -> Result<crate::services::agent_import_offer::Offer, String> {
+    app_core::rt::blocking("agent", crate::services::agent_import_offer::offer).await
+}
+
+/// The user's answer to it: import the ticked logins (registry ids) and, with
+/// `config`, the config layer. Closes the question whatever was ticked.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_import_offer_answer(
+    logins: Vec<String>,
+    config: bool,
+) -> Result<crate::services::agent_import_offer::Outcome, String> {
+    app_core::rt::try_blocking("agent", move || crate::services::agent_import_offer::answer(&logins, config))
+        .await
+}
+
 /// The Manage CLIs switch for Codex auto-review in the Tabtivity-wide layer;
 /// every Codex tab picks it up at its next start.
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2415,6 +2492,23 @@ mod tests {
             windows_shell("npm install -g @google/gemini-cli"),
             "PowerShell or Command Prompt"
         );
+    }
+
+    /// 2442e/2442f: the Windows rows filled from the vendors' own docs run in
+    /// the shell their syntax needs; Grok's is xAI's own CLI, never the stale
+    /// npm client; Kiro (a per-machine MSI) and Plandex (WSL only) stay empty.
+    #[test]
+    fn the_vendor_windows_installers_run_in_their_shell() {
+        let win = |id: &str| find_spec(id).and_then(|s| s.install_cmd_windows);
+        assert_eq!(win("grok"), Some("irm https://x.ai/cli/install.ps1 | iex"));
+        for id in ["grok", "cursor-agent", "muse", "goose"] {
+            let cmd = win(id).unwrap_or_else(|| panic!("{id} has a Windows row"));
+            assert_eq!(windows_shell_kind(cmd), "powershell", "{id}");
+            assert!(!cmd.contains("bash") && !cmd.contains("npm"), "{id}: {cmd}");
+        }
+        assert_eq!(windows_shell_kind(win("vibe").unwrap()), "powershell", "uv's irm | iex, then uv");
+        assert_eq!(win("kiro"), None);
+        assert_eq!(win("plandex"), None);
     }
 
     #[test]
@@ -2765,8 +2859,13 @@ mod tests {
         assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
         let vibe = find_spec("vibe").unwrap(); // uv's irm | iex, then uv
         assert_eq!(stem(installer_command(vibe).unwrap()), "powershell");
-        let kiro = find_spec("kiro").unwrap(); // no Windows installer
-        assert!(installer_command(kiro).is_err());
+        // Picked from the registry, so a CLI that gains a Windows installer
+        // later doesn't leave this pointing at one that has one.
+        let none = AGENTS
+            .iter()
+            .find(|a| a.install_cmd_windows.is_none())
+            .expect("some CLI has no one-line Windows installer");
+        assert!(installer_command(none).is_err());
     }
 
     #[test]

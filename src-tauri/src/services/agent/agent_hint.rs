@@ -300,8 +300,9 @@ fn posix_script_body_in(live_dir: &str) -> String {
          {legacy_env}# Copilot's start also says which session the tab is in (a /new or an in-CLI\n\
          # /resume rolls it): record it under the tab's key, where the next spawn pins it\n\
          # (`copilot_session`). Only the CLI the tab runs may move the record; a nested one\n\
-         # inherits {UPPER}_TAB_UID.\n\
-         if [ \"$1\" = copilot ] && [ \"${UPPER}_TAB_AGENT\" = copilot ] && [ -n \"${UPPER}_TAB_UID\" ]; then\n\
+         # inherits {UPPER}_TAB_UID, and one its own shell tool started also inherits the\n\
+         # COPILOT_AGENT_SESSION_ID Copilot sets for its tools' commands.\n\
+         if [ \"$1\" = copilot ] && [ \"${UPPER}_TAB_AGENT\" = copilot ] && [ -n \"${UPPER}_TAB_UID\" ] && [ -z \"$COPILOT_AGENT_SESSION_ID\" ]; then\n\
          \x20 case \"${UPPER}_TAB_UID\" in *[!a-zA-Z0-9-]*) ;; *)\n\
          \x20   sid=$(cat | tr '\\n' ' ' | sed -n 's/.*\"sessionId\"[[:space:]]*:[[:space:]]*\"\\([0-9a-fA-F-]*\\)\".*/\\1/p')\n\
          \x20   if [ -n \"$sid\" ] && mkdir -p \"{live_dir}\" 2>/dev/null; then printf '%s' \"$sid\" > \"{live_dir}/${UPPER}_TAB_UID\"; fi ;;\n\
@@ -315,6 +316,14 @@ fn posix_script_body_in(live_dir: &str) -> String {
         legacy_env = crate::services::brand_migration::compat::script_preamble_sh(HINT_ENV),
         live_dir = live_dir,
     )
+}
+
+/// The Copilot hint as the hooks probe registers it: the script body recording
+/// under `live_dir`, and the hooks file running it from `script`.
+#[cfg(all(test, unix))]
+pub(crate) fn copilot_hint_for_probe(live_dir: &str, script: &std::path::Path) -> (String, String) {
+    let cmd = format!("{} {}", crate::quote::posix(&script.to_string_lossy()), Shape::Copilot.arg());
+    (posix_script_body_in(live_dir), copilot_hooks(&cmd))
 }
 
 /// PowerShell twin, for a Windows host.
@@ -333,7 +342,7 @@ fn powershell_script_body() -> String {
         "param([string]$Shape = 'plain')\r\n\
          # {DISPLAY} agent hint (SessionStart) - see the POSIX twin. Managed by {DISPLAY}; do not edit.\r\n\
          {legacy_env}# Copilot's start says which session the tab is in: record it (see the POSIX twin).\r\n\
-         if (($Shape -eq 'copilot') -and ($env:{UPPER}_TAB_AGENT -eq 'copilot') -and ($env:{UPPER}_TAB_UID -match '^[A-Za-z0-9-]+$')) {{\r\n\
+         if (($Shape -eq 'copilot') -and ($env:{UPPER}_TAB_AGENT -eq 'copilot') -and ($env:{UPPER}_TAB_UID -match '^[A-Za-z0-9-]+$') -and (-not $env:COPILOT_AGENT_SESSION_ID)) {{\r\n\
          \x20 $payload = [Console]::In.ReadToEnd()\r\n\
          \x20 $m = [regex]::Match($payload, '\"sessionId\"\\s*:\\s*\"([0-9A-Fa-f-]+)\"')\r\n\
          \x20 if ($m.Success) {{\r\n\
@@ -690,12 +699,15 @@ mod tests {
         const UID: &str = "aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb";
         const SID: &str = "0123abcd-0000-4000-8000-00000000cafe";
         let payload = format!(r#"{{"sessionId":"{SID}","timestamp":1,"cwd":"/w","source":"new","initialPrompt":"a \"sessionId\":\"deadbeef\" b"}}"#);
-        let run = |shape: &str, agent: Option<&str>, uid: &str| {
+        let run_in = |shape: &str, agent: Option<&str>, uid: &str, nested: bool| {
             let mut cmd = std::process::Command::new("sh");
             cmd.arg(&script).arg(shape).env_clear().env("PATH", std::env::var_os("PATH").unwrap_or_default())
                 .env(crate::app_env!("TAB_UID"), uid).env(crate::app_env!("PROJECT_DIR"), dir.path())
                 .stdin(Stdio::piped()).stdout(Stdio::piped());
             if let Some(agent) = agent { cmd.env(crate::app_env!("TAB_AGENT"), agent); }
+            // Copilot 1.0.112 sets it for the commands its tools run, so a
+            // `copilot -p` the tab's agent started carries it.
+            if nested { cmd.env("COPILOT_AGENT_SESSION_ID", UID); }
             let mut child = cmd.spawn().unwrap();
             // A script that records nothing never reads its stdin, and may be gone
             // before the payload is written.
@@ -707,8 +719,11 @@ mod tests {
             assert!(out.status.success());
             String::from_utf8(out.stdout).unwrap()
         };
-        // Not the tab's Copilot (a Claude tab running a nested one), another CLI's shape, a bad key: nothing.
+        let run = |shape: &str, agent: Option<&str>, uid: &str| run_in(shape, agent, uid, false);
+        // Not the tab's Copilot (a Claude tab running a nested one, a `copilot -p`
+        // from the tab's own shell tool), another CLI's shape, a bad key: nothing.
         run("copilot", Some("claude"), UID);
+        run_in("copilot", Some("copilot"), UID, true);
         run("context", Some("copilot"), UID);
         run("copilot", Some("copilot"), "../x");
         assert!(!live.exists());

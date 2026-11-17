@@ -12,6 +12,12 @@ fn changed(ctx: &CoreCtx) {
     ctx.emit(CHANGED_EVENT, ());
 }
 
+/// Tell the windows the schedules moved under them (a scope's were dropped
+/// with it), so their lists reload.
+pub(crate) fn announce_changed(ctx: &CoreCtx) {
+    changed(ctx);
+}
+
 /// Cancel the prompts and schedules paired phones made that their phone no
 /// longer reaches — after a revoke, Lock down or a narrowed Mobile access
 /// (`mobile_control::phone_origin`, #2348) — and reload the lists that

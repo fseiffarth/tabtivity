@@ -734,6 +734,13 @@ describe("the desktop Reader's live screen", () => {
     expect(key.screen.join("\n")).toContain("Paste or type your API key below.");
   });
 
+  it("redraws when only the session folder or goal changes", () => {
+    const live = readReaderLive(plainBuffer([">", "? for shortcuts"]), "Claude");
+    const a = { ...live, status: { path: "/work/a", goal: true } };
+    expect(sameReaderLive(a, { ...a, status: { ...a.status, path: "/work/b" } })).toBe(false);
+    expect(sameReaderLive(a, { ...a, status: { ...a.status, goal: false } })).toBe(false);
+  });
+
   it("tells a redraw of the same state from a change", () => {
     const a = readReaderLive(plainBuffer(PERMISSION), "Claude");
     const b = readReaderLive(plainBuffer(PERMISSION), "Claude");

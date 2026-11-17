@@ -34,6 +34,14 @@ import { BRAND, NAMES } from "../../lib/brand";
 // the `dragstart` gesture. The backend returns that data URL; cache it
 // process-wide so every file row shares one warm-up (kicked off at mount) and
 // reads it without awaiting.
+
+/** The key that sends a file-tree drag straight to the OS (export to another
+ *  app): Ctrl, but ⌥ Option on a Mac (2442x) — there Ctrl+press is a
+ *  right-click, and ⌥-drag is what Finder copies with. */
+export function exportDragHeld(e: { ctrlKey: boolean; altKey: boolean }, mac: boolean = PLATFORM === "macos"): boolean {
+  return mac ? e.altKey : e.ctrlKey;
+}
+
 let dragIconDataUrl = "";
 let dragIconPromise: Promise<string> | null = null;
 export function warmDragIcon(): Promise<string> {
@@ -162,7 +170,7 @@ export function startEntryPointerDrag(
   // onDragStart suppresses the broken WebKitGTK drag and hands off to the
   // native OS drag (handleEntryDragStart). Bail out here without
   // preventDefault so that gesture takes over instead of the pointer drag.
-  if (e.ctrlKey) return;
+  if (exportDragHeld(e)) return;
   // Let the inline run (▶) button own its own clicks — don't seed a drag or
   // swallow the click when the press lands on it.
   if ((e.target as HTMLElement).closest(".file-run-btn")) return;
@@ -382,7 +390,7 @@ export function startEntryPointerDrag(
     // While the OS drag owns the pointer, a stray DOM move must not fight the
     // poll for the ghost position or revive the in-app drop targets.
     if (nativeActive) return;
-    ctrlDown = ev.ctrlKey;
+    ctrlDown = exportDragHeld(ev);
     shiftDown = ev.shiftKey;
     lastClient = { x: ev.clientX, y: ev.clientY };
     // Native Wayland: no cursor poll, but the press's implicit grab still

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, type MobileMailFolder, type MobileMailView } from "../../../mobile-web/src/api";
@@ -40,12 +40,23 @@ describe("phone mail account picker", () => {
   it("lists one account's folders, inbox first, and remembers the account picked", async () => {
     serve([]);
     render(createElement(Mail));
-    const picker = await screen.findByLabelText("Mail account") as HTMLSelectElement;
-    expect(Array.from(picker.options).map((option) => option.text)).toEqual(["Work · 2 unread", "Home · 5 unread"]);
+    const switcher = await screen.findByRole("button", { name: /Switch account/ });
+    expect(switcher.textContent).toContain("Work · 2 unread");
     expect(folderNames()).toEqual(["Inbox", "Sent"]);
-    fireEvent.change(picker, { target: { value: "home" } });
+    fireEvent.click(switcher);
+    const sheet = within(screen.getByRole("dialog", { name: "Mail account" }));
+    expect(sheet.getAllByRole("button").map((button) => button.textContent).filter((text) => /unread/.test(text ?? ""))).toEqual(["Work · 2 unread", "Home · 5 unread"]);
+    fireEvent.click(sheet.getByText("Home · 5 unread"));
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(folderNames()).toEqual(["Post", "Bin"]);
     expect(localStorage.getItem(storageKey("mobile.mailAccount"))).toBe("home");
+  });
+
+  it("shows a single account as plain text, not a button", async () => {
+    vi.mocked(api).mockImplementation(async () => ({ mail: { view: "overview", accounts: [accounts[0]] } }));
+    render(createElement(Mail));
+    await screen.findByText("Work · 2 unread");
+    expect(screen.queryByRole("button", { name: /Switch account/ })).toBeNull();
   });
 
   it("opens on the stored account and falls back when the desktop no longer lists it", async () => {
@@ -64,14 +75,35 @@ describe("phone mail account picker", () => {
     serve(paths);
     render(createElement(Mail));
     fireEvent.click(await screen.findByText("Sent"));
-    const folderPicker = await screen.findByLabelText("Folder") as HTMLSelectElement;
-    expect(folderPicker.value).toBe("w-sent");
-    expect(Array.from(folderPicker.options).map((option) => option.text)).toEqual(["Inbox (2)", "Sent"]);
-    fireEvent.change(screen.getByLabelText("Mail account"), { target: { value: "home" } });
-    await waitFor(() => expect((screen.getByLabelText("Folder") as HTMLSelectElement).value).toBe("h-inbox"));
-    fireEvent.change(screen.getByLabelText("Folder"), { target: { value: "h-trash" } });
+    const switcher = await screen.findByRole("button", { name: /Switch account/ });
+    fireEvent.click(switcher);
+    // This account's folders first, then the other accounts.
+    const sheet = within(screen.getByRole("dialog", { name: "Mail account" }));
+    expect(sheet.getAllByRole("listitem").map((item) => item.textContent)).toEqual(["Folder", "Inbox2", "Sent", "Account", "Home · 5 unread"]);
+    fireEvent.click(sheet.getByText("Home · 5 unread"));
+    await waitFor(() => expect(paths).toContain("/api/v1/mail/folders/h-inbox?offset=0"));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Post"));
+    fireEvent.click(screen.getByRole("button", { name: /Switch account/ }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Mail account" })).getByText("Bin"));
     await waitFor(() => expect(paths[paths.length - 1]).toBe("/api/v1/mail/folders/h-trash?offset=0"));
-    expect(paths).toContain("/api/v1/mail/folders/h-inbox?offset=0");
+  });
+});
+
+describe("phone mail folder list", () => {
+  it("folds empty folders under one row that opens in place, never the inbox", async () => {
+    const empty = (id: string, name: string, kind: string) => ({ ...folder(id, name, kind), total: 0 });
+    const solo = { id: "solo", label: "Solo", address: "me@solo.test", folders: [empty("s-inbox", "Inbox", "inbox"), empty("s-drafts", "Drafts", "drafts"), empty("s-bin", "Bin", "trash"), folder("s-sent", "Sent", "sent")] };
+    vi.mocked(api).mockImplementation(async () => ({ mail: { view: "overview", accounts: [solo] } }));
+    render(createElement(Mail));
+    await screen.findByText("Sent");
+    expect(folderNames().slice(0, 2)).toEqual(["Inbox", "Sent"]);
+    expect(screen.queryByText("Drafts")).toBeNull();
+    const more = screen.getByRole("button", { name: /More folders · 2 empty/ });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(more);
+    expect(more.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Drafts")).toBeTruthy();
+    expect(screen.getByText("Bin")).toBeTruthy();
   });
 });
 

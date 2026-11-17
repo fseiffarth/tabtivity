@@ -78,8 +78,16 @@ rest follows from:
    (which a rename erased) was the only trace before. "Start in…" picks another
    place. Remote members whose tabs run in a local copy get no chip, because
    remoteness is never inferred from paths.
-4. **The side panel is an accordion**, one member open, rich headers; the
-   collapse state is per-viewer `localStorage`, not a data file.
+4. **The side panel is one collapsible section per member**, rich headers; the
+   collapse state is per-viewer `localStorage`, not a data file. First built as
+   a strict accordion (one member open); on 2026-11-16 the user asked for
+   several open at once, so a header click now toggles only that section.
+   What survived from the accordion: with at most one section open the panel
+   still *follows* the active tab (the one before folds), so a user who never
+   opens a second one manages nothing. With several open nothing folds by
+   itself; the tab's member opens beside them and is scrolled to. The one
+   search field searches every open member, and each section answers for its
+   own searchability (a remote member on its Remote side says it needs Local).
 
 Consequences worth knowing before touching the code:
 
@@ -165,6 +173,66 @@ is never replaced — the member re-links under a `-1`/`-2` suffix. Dangling
 targets are still linked (a member's folder may not exist yet). Tabtivity's own
 confinement deliberately does not follow the links; the multi-root Files view
 is Tabtivity's file surface, and the allowed-roots sets are explicit.
+
+## What the 2026-11-16 review hardened
+
+Two reviewers read the feature end to end; what changed, and why it must stay:
+
+- **The link manifest is untrusted input.** It sits in a folder every member's
+  fenced agent can write, and the refresh runs unfenced. Only keys that are one
+  plain file name count (`is_link_name`); it records only links that were
+  really made; names are compared case-folded on Windows and macOS.
+- **Names and paths are one escaped line of the generated agent docs**
+  (`doc_text`/`doc_name`): those docs are instructions to every agent started
+  in the box folder, and an imported bundle names its own project.
+- **Every box writer edits under the file's lock** (`box_store::update_boxes`).
+  Box commands run concurrently (browser clients on the blocking pool, the
+  Mobile sidecar, an async import); a read taken before the lock lost updates.
+- **`folder` is an authority root, written only by `ensure_box_folder`.** The
+  whole-list `save_boxes` keeps the file's folder, and the root builders drop a
+  folder that is empty or relative (`box_folder_root`).
+- **Inside a box `activeId` is not "the project on screen".** It stays on the
+  project the box was entered from. The side panel, tab jumps, the steering
+  ring and the header search each compare against the tabs scope instead.
+- **Dissolving closes the box's own tabs** (`pty_kill_scope` + `unloadScope`,
+  as closing a project does), after the delete succeeded.
+- **One file watch per folder** (`fs_watch.rs`), since a box mounts several
+  trees at once.
+
+## The user's decisions of 2026-11-16
+
+Asked one at a time after the review; each reverses or completes something
+above, so the earlier text is read with these:
+
+1. **Dissolve deletes the box's state**, as removing a project does: the saved
+   tab layout, both agent homes (with the copied logins), resume records,
+   checkpoints and scheduled prompts of `box:<id>` (`forget_box_state`). The
+   record goes first, then the scope's terminals, then the state. The box
+   folder and the members stay. "What survives" in the confirm still holds for
+   the folder; a line says what goes.
+2. **The header "+" keeps every project action inside a box**, with the shared
+   member checklist as a group on top. The old members-only menu left New
+   project and Import unreachable until the box was left.
+3. **The box menu has a visible door**: a ⋯ on the selected pill and on every
+   row of the boxes list. "Edit boxes…" (which opened whichever box came first)
+   is gone; a box with no pill renames in its sheet.
+4. **✕ on a member is undoable**: a toast offers Undo and puts the project back
+   at its place in the box's order.
+5. **A box has one order.** The pill strip inside a slice follows `member_ids`
+   like the side panel's sections, and a pill drag reorders the box, not the
+   general strip. A non-member in scope comes last.
+6. **The box sheet has no Save.** A tick, a colour pick and the name (Enter or
+   blur) apply at once, as its phone row and the pill menu's checklist always
+   did. Mixed commit models lost unsaved ticks to a click outside.
+7. **A closed member the box reopened can be stopped, and is on leaving.** The
+   pill menu has Close project inside a box; leaving the box stops the tabs of
+   members that are closed in the general strip (`stopClosedProjectScope`,
+   layout saved first, the project stays closed), since they have no pill
+   there. The one on screen and members of the next box are left alone.
+8. **The box folder presents members as a box tab can reach them.** A remote
+   member is linked and listed by its local copy; a host-only or
+   Local-models-only member is named as not reachable, never linked
+   (`member_projects_in`, the same rules as the box's roots).
 
 ## What stays out of scope (v1)
 

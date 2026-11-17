@@ -934,16 +934,17 @@ fn turning_checkpoints_on_is_refused_over_an_old_git_and_off_always_works() {
 #[test]
 fn settings_list_each_store_and_clear_and_purge_remove_them() {
     let tmp = tempfile::tempdir().unwrap();
-    let state = tmp.path().join("state");
+    let base = tmp.path().canonicalize().unwrap();
+    let state = base.join("state");
     let root = store::root_in(&state);
     let mut folders = Vec::new();
     for (name, project) in [("one", "p1"), ("two", "p2")] {
-        let folder = tmp.path().join(name);
+        let folder = base.join(name);
         std::fs::create_dir_all(&folder).unwrap();
         put(&folder, "a.txt", name);
         let who = Who { project_id: Some(project.into()), ..who("t") };
         snapshot(&root, &folder, Kind::Manual, &who, None).unwrap();
-        folders.push(folder.canonicalize().unwrap());
+        folders.push(folder);
     }
     let view = settings_view_in(&state);
     assert_eq!(view.stores.len(), 2);
@@ -953,7 +954,8 @@ fn settings_list_each_store_and_clear_and_purge_remove_them() {
     purge_project_in(&root, "p1");
     let left = settings_view_in(&state).stores;
     assert_eq!(left.len(), 1);
-    assert_eq!(Path::new(&left[0].folder), folders[1]);
+    // Shown as the UI spells it: no `\\?\` prefix from `canonicalize` on Windows.
+    assert_eq!(left[0].folder, crate::paths::display_path(&folders[1]));
 
     clear_in(&root, Some("nonexistent-key")).unwrap();
     assert_eq!(settings_view_in(&state).stores.len(), 1);
@@ -964,8 +966,9 @@ fn settings_list_each_store_and_clear_and_purge_remove_them() {
 #[test]
 fn a_store_whose_folder_is_gone_is_swept_only_once_it_is_old() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("checkpoints");
-    let folder = tmp.path().join("proj");
+    let base = tmp.path().canonicalize().unwrap();
+    let root = base.join("checkpoints");
+    let folder = base.join("proj");
     std::fs::create_dir_all(&folder).unwrap();
     put(&folder, "a.txt", "x");
     snapshot(&root, &folder, Kind::Manual, &who("t"), None).unwrap();

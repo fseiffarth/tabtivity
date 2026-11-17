@@ -7,6 +7,9 @@ import { CopilotCompletionProvider, CopilotFeedback, copilotServes } from "../..
 import type { CompletionDocument } from "../../lib/viewers/completion/completionProvider";
 import type { Settings } from "../../types";
 
+const remoteHost = { host: "example.invalid", user: "test", remote_path: "/host" };
+const remoteIdentity = JSON.stringify([remoteHost.host, remoteHost.user, 22, remoteHost.remote_path, null]);
+
 const consented = {
   code_completion_provider: "copilot",
   completion_project_policies: { one: { directory: "/one", copilot: true, local_only: false } },
@@ -23,19 +26,40 @@ function provider() {
 beforeEach(() => invoke.mockReset().mockResolvedValue(undefined));
 
 describe("copilotServes", () => {
-  it("needs the flag, the provider, a consenting local project and a code language", () => {
+  it("needs the flag, the provider, matching project consent and a code language", () => {
     const ts = "/one/a.ts";
     expect(copilotServes(consented, true, "one", false, "typescript", ts)).toBe(true);
     expect(copilotServes(consented, false, "one", false, "typescript", ts)).toBe(false);
     expect(copilotServes(consented, true, "two", false, "typescript", ts)).toBe(false);
     expect(copilotServes(consented, true, null, false, "typescript", ts)).toBe(false);
-    expect(copilotServes(consented, true, "one", true, "typescript", ts)).toBe(false);
+    expect(copilotServes(consented, true, "one", remoteHost, "typescript", ts)).toBe(false);
     for (const language of ["", "plain", "markdown", "tex"]) {
       expect(copilotServes(consented, true, "one", false, language, "/one/notes.md")).toBe(false);
     }
     expect(copilotServes({ ...consented, code_completion_provider: undefined }, true, "one", false, "typescript", ts)).toBe(false);
     const localOnly = { ...consented, completion_project_policies: { one: { directory: "/one", copilot: true, local_only: true } } };
     expect(copilotServes(localOnly, true, "one", false, "typescript", ts)).toBe(false);
+  });
+
+  it("requires remote consent and keeps text, secrets, local-only and provider gates", () => {
+    const remote = { ...consented, completion_project_policies: {
+      one: { ...consented.completion_project_policies!.one, remote: remoteIdentity },
+    } } as Settings;
+    expect(copilotServes(remote, true, "one", remoteHost, "typescript", "/host/a.ts")).toBe(true);
+    expect(copilotServes(remote, true, "one", false, "typescript", "/host/a.ts")).toBe(false);
+    for (const changed of [
+      { ...remoteHost, host: "other.invalid" }, { ...remoteHost, user: "other" },
+      { ...remoteHost, port: 2222 }, { ...remoteHost, remote_path: "/other" },
+    ]) expect(copilotServes(remote, true, "one", changed, "typescript", "/host/a.ts")).toBe(false);
+    expect(copilotServes(remote, false, "one", remoteHost, "typescript", "/host/a.ts")).toBe(false);
+    expect(copilotServes(remote, true, "one", remoteHost, "markdown", "/host/a.md")).toBe(false);
+    const text = { ...remote, completion_project_policies: {
+      one: { ...remote.completion_project_policies!.one, copilot_text: true },
+    } } as Settings;
+    expect(copilotServes(text, true, "one", remoteHost, "markdown", "/host/a.md")).toBe(true);
+    expect(copilotServes(text, true, "one", remoteHost, "plain", "/host/.env")).toBe(false);
+    text.completion_project_policies!.one.local_only = true;
+    expect(copilotServes(text, true, "one", remoteHost, "typescript", "/host/a.ts")).toBe(false);
   });
 
   it("serves text files only under the project's text consent, and never credential files", () => {

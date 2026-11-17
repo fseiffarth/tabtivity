@@ -209,18 +209,20 @@ fn a_project_inside_a_git_repository_lists_the_memory_keyed_by_the_repository_ro
     assert!(list(&sources, &[loose]).is_empty());
 }
 
-/// A linked worktree's canonical root is the main working copy.
+/// A linked worktree's canonical root is the main working copy — resolved, so
+/// on macOS (`/var` → `/private/var`) the memory is keyed by the real path.
 #[test]
 fn a_linked_worktree_lists_the_memory_keyed_by_the_main_working_copy() {
     let tmp = tempfile::tempdir().unwrap();
-    let main = tmp.path().join("main");
+    let base = tmp.path().canonicalize().unwrap();
+    let main = base.join("main");
     let gitdir = main.join(".git").join("worktrees").join("wt");
     fs::create_dir_all(&gitdir).unwrap();
     fs::write(gitdir.join("commondir"), "../..\n").unwrap();
-    let wt = tmp.path().join("wt");
+    let wt = base.join("wt");
     fs::create_dir_all(&wt).unwrap();
     fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
-    let home = tmp.path().join("home");
+    let home = base.join("home");
     put_claude_memory(&home, &main);
     let sources = vec![Source { kind: HOME_SCOPE, home }];
 

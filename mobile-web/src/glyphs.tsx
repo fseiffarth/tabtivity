@@ -6,7 +6,7 @@ import { CalendarIcon, CheckboxIcon, FolderIcon, MailIcon, type IconProps } from
  * content — a chat line, a hint sentence, a git row a test reads. */
 export {
   ArchiveIcon, BranchIcon, CheckIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, DiamondIcon, DiffIcon,
-  FolderIcon, GridIcon, GripIcon, HexagonIcon, ListIcon, MeterIcon, StarIcon, MoreIcon, NewChatIcon, PageIcon, PencilIcon, PlayMark, PlusIcon, QuestionIcon, SearchIcon, SidebarIcon, StopIcon, UndoIcon, WindowIcon,
+  FilterIcon, FolderIcon, GridIcon, GripIcon, HexagonIcon, InfoIcon, ListIcon, MeterIcon, StarIcon, MoreIcon, NewChatIcon, PageIcon, PencilIcon, PlayMark, PlusIcon, QuestionIcon, RefreshIcon, SearchIcon, SidebarIcon, StopIcon, UndoIcon, WindowIcon,
 } from "../../src/components/common/icons/Icon";
 
 /**

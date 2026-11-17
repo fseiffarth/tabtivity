@@ -1615,6 +1615,22 @@ fn read_session(state_dir: &Path, raw_id: &str) -> SessionFile {
         .unwrap_or(SessionFile { tab_layout: vec![] })
 }
 
+/// The local sessions the saved tabs of scope `raw_id` minted: each tab's own
+/// session (never one it only attached to), and only a name the app derives for
+/// that scope and kind ([`expected_tmux`]). What ending a scope for good — a
+/// dissolved box — must end, including for a scope no window has loaded.
+pub(crate) fn saved_scope_sessions(state_dir: &Path, raw_id: &str) -> Vec<String> {
+    // project-tree-read: ok — the state-dir terminal-session snapshot.
+    let tabs = read_session(state_dir, raw_id).tab_layout;
+    tabs.into_iter()
+        .filter(|tab| tab.tmux_attach.is_none())
+        .filter_map(|tab| {
+            let name = tab.tmux_session?;
+            expected_tmux(raw_id, &tab.kind, &name).then_some(name)
+        })
+        .collect()
+}
+
 /// The hosts `host_live`'s refresher probes: those of Mobile-enabled remote
 /// projects with at least one listable host tab, by [`host_of_tab`] — the
 /// catalog's own rule. Each host once (by `target_key`). Empty where host

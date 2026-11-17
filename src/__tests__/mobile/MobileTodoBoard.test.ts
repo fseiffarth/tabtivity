@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, normalizeTodoBoard } from "../../../mobile-web/src/api";
@@ -15,6 +15,14 @@ afterEach(() => {
   vi.mocked(api).mockReset();
   localStorage.clear();
 });
+
+/** The hide switches live in the filter sheet, behind the button in the search. */
+const openFilters = () => fireEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+/** The switch by its label, opening the sheet first. */
+function hideSwitch(label: "Hide done" | "Hide archived") {
+  openFilters();
+  return screen.getByLabelText(label) as HTMLInputElement;
+}
 
 function boardWithOneDoneCard() {
   return {
@@ -107,7 +115,7 @@ describe("mobile todo board counts", () => {
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy());
 
-    fireEvent.click(screen.getByLabelText("Hide done"));
+    fireEvent.click(hideSwitch("Hide done"));
 
     expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy();
     expect(screen.queryByText("Finished")).toBeNull();
@@ -120,12 +128,12 @@ describe("mobile todo hide-done persistence", () => {
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("Finished")).toBeTruthy());
-    fireEvent.click(screen.getByLabelText("Hide done"));
+    fireEvent.click(hideSwitch("Hide done"));
     cleanup();
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy());
-    expect((screen.getByLabelText("Hide done") as HTMLInputElement).checked).toBe(true);
+    expect(hideSwitch("Hide done").checked).toBe(true);
     expect(screen.queryByText("Finished")).toBeNull();
   });
 
@@ -135,7 +143,7 @@ describe("mobile todo hide-done persistence", () => {
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("In progress")).toBeTruthy());
 
-    expect((screen.getByLabelText("Hide archived") as HTMLInputElement).checked).toBe(true);
+    expect(hideSwitch("Hide archived").checked).toBe(true);
     expect(screen.queryByText("Set aside")).toBeNull();
     expect(screen.getByRole("heading", { name: "Archived 1" })).toBeTruthy();
   });
@@ -145,13 +153,13 @@ describe("mobile todo hide-done persistence", () => {
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("In progress")).toBeTruthy());
-    fireEvent.click(screen.getByLabelText("Hide archived"));
+    fireEvent.click(hideSwitch("Hide archived"));
     expect(screen.getByText("Set aside")).toBeTruthy();
     cleanup();
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("Set aside")).toBeTruthy());
-    expect((screen.getByLabelText("Hide archived") as HTMLInputElement).checked).toBe(false);
+    expect(hideSwitch("Hide archived").checked).toBe(false);
   });
 
   it("hides an archived card the done switch cannot reach", async () => {
@@ -162,10 +170,10 @@ describe("mobile todo hide-done persistence", () => {
     await waitFor(() => expect(screen.getByText("Set aside")).toBeTruthy());
 
     // The card is unfinished, so "hide done" leaves it standing …
-    fireEvent.click(screen.getByLabelText("Hide done"));
+    fireEvent.click(hideSwitch("Hide done"));
     expect(screen.getByText("Set aside")).toBeTruthy();
     // … and only the archive switch takes it off the board.
-    fireEvent.click(screen.getByLabelText("Hide archived"));
+    fireEvent.click(hideSwitch("Hide archived"));
     expect(screen.queryByText("Set aside")).toBeNull();
     expect(screen.getByText("In progress")).toBeTruthy();
   });
@@ -176,17 +184,17 @@ describe("mobile todo hide-done persistence", () => {
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy());
-    fireEvent.click(screen.getByLabelText("Hide done"));
+    fireEvent.click(hideSwitch("Hide done"));
     cleanup();
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByText("Finished")).toBeTruthy());
-    expect((screen.getByLabelText("Hide done") as HTMLInputElement).checked).toBe(false);
+    expect(hideSwitch("Hide done").checked).toBe(false);
   });
 });
 
 describe("mobile todo column folding", () => {
-  it("folds a column away, says what it is holding, and remembers it", async () => {
+  it("folds a column away, keeps its count, and remembers it", async () => {
     vi.mocked(api).mockResolvedValue(boardWithOneDoneCard());
 
     render(createElement(Todo));
@@ -196,9 +204,9 @@ describe("mobile todo column folding", () => {
 
     fireEvent.click(fold);
     expect(screen.queryByText("Finished")).toBeNull();
-    // The head still counts the card, and the fold says the count is behind it.
+    // The head still counts the card: the folded column is one quiet line.
     expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy();
-    expect(screen.getByText("1 card folded away")).toBeTruthy();
+    expect(within(screen.getByRole("button", { name: "Done" }).closest("section")!).queryByText("No cards")).toBeNull();
     expect(screen.getByRole("button", { name: "Done" }).getAttribute("aria-expanded")).toBe("false");
     // The other column is untouched: folding is per column, not a board mode.
     expect(screen.getByRole("button", { name: "Today" }).getAttribute("aria-expanded")).toBe("true");
@@ -219,7 +227,10 @@ describe("mobile todo column folding", () => {
 
     render(createElement(Todo));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Done 1" })).toBeTruthy());
-    expect(screen.queryByText("1 card folded away")).toBeNull();
+    // Folded and held back by the filter: still just the head, no empty-column line.
+    expect(screen.getByRole("button", { name: "Done" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Hidden by the filters above")).toBeNull();
+    expect(within(screen.getByRole("button", { name: "Done" }).closest("section")!).queryByText("No cards")).toBeNull();
   });
 
   it("drops a fold set on a column the board no longer has", async () => {

@@ -481,7 +481,7 @@ pub fn tools() -> Value {
             "copies": {"type":"integer","minimum":1,"maximum":MAX_COPIES,"description":"Copies, collated (default 1)."},
             "pages": {"type":"string","maxLength":MAX_RANGE_CHARS,"description":"Pages to print, e.g. \"1-3, 5\" (default all)."},
             "grayscale": {"type":"boolean","description":"Print in grayscale (default false)."},
-            "duplex": {"type":"string","enum":["none","long","short"],"description":"Two-sided: none, long edge or short edge (default: the user's setting)."},
+            "duplex": {"type":"string","enum":["none","long","short"],"description":"Two-sided: none, long edge or short edge (default: the user's setting). Preset only where the system print dialog takes it (Linux); elsewhere print_status reports it in notApplied."},
             "pagesPerSheet": {"type":"integer","enum":PAGES_PER_SHEET,"description":"Pages on one side of a sheet (default 1)."},
             "booklet": {"type":"boolean","description":"Print as a folded booklet (two pages per side, short-edge two-sided)."},
             "note": {"type":"string","maxLength":MAX_NOTE_CHARS,"description":"Optional: one line for the user on why or what (shown on the request)."}
@@ -561,7 +561,37 @@ fn call_request(session: &Session, project: &str, ctx: &Context, args: &Value) -
 }
 
 fn status_row(request: &Request) -> Value {
-    json!({"id": request.id, "file": request.file, "state": request.state, "createdAt": request.created_at})
+    status_row_for(native_presets_duplex(), request)
+}
+
+/// Whether this OS's system print dialog can be opened preset to two-sided
+/// printing: Linux's GTK dialog can; Windows' (WebView2's `ShowPrintUI`) and
+/// macOS's (PDFKit) cannot (`commands::print_native`, the frontend's
+/// `nativePresets`). Grayscale is baked into the PDF there instead, and N-up,
+/// booklet imposition, copies and ranges are in the PDF everywhere.
+fn native_presets_duplex() -> bool {
+    cfg!(target_os = "linux")
+}
+
+/// The options of `options` an approved print could not apply where the
+/// dialog takes no two-sided preset (2442aa): `duplex` for a two-sided
+/// request, a booklet's included (it is two-sided on the short edge).
+fn not_applied(duplex_preset: bool, options: &Options) -> Vec<&'static str> {
+    let two_sided = options.booklet || options.duplex.as_deref().is_some_and(|d| d != "none");
+    if two_sided && !duplex_preset { vec!["duplex"] } else { Vec::new() }
+}
+
+/// [`status_row`] with the platform's preset as a parameter. A printed
+/// request whose options were not all applied says which, so the agent does
+/// not report a two-sided print it cannot vouch for.
+fn status_row_for(duplex_preset: bool, request: &Request) -> Value {
+    let mut row = json!({"id": request.id, "file": request.file, "state": request.state, "createdAt": request.created_at});
+    let missing = not_applied(duplex_preset, &request.options);
+    if request.state == State::Printed && !missing.is_empty() {
+        row["notApplied"] = json!(missing);
+        row["message"] = json!("Printed, but two-sided printing could not be preset on this system: the user set it in the system print dialog or the job printed one-sided. Do not report it as printed two-sided.");
+    }
+    row
 }
 
 fn call_status(session: &Session, args: &Value) -> Value {
@@ -949,5 +979,30 @@ mod tests {
         claim_in(&mut list, "fresh", t0).unwrap();
         assert!(!prune_at(&mut list, t0 + PRINTING_TTL - Duration::from_secs(1)));
         assert_eq!(list[0].state, State::Printing);
+    }
+
+    /// 2442aa: where the system dialog takes no two-sided preset (Windows,
+    /// macOS), a printed two-sided or booklet request says it was not applied;
+    /// on Linux, and for a one-sided request, the row is as before.
+    #[test]
+    fn a_printed_request_says_which_options_were_not_applied() {
+        let t0 = Instant::now();
+        let mut two_sided = record("d", "s", State::Printed, t0, Some(t0));
+        two_sided.options.duplex = Some("long".into());
+        let row = status_row_for(false, &two_sided);
+        assert_eq!(row["notApplied"], json!(["duplex"]));
+        assert!(row["message"].as_str().unwrap().contains("two-sided"));
+        assert!(status_row_for(true, &two_sided).get("notApplied").is_none(), "Linux presets it");
+        let mut booklet = record("b", "s", State::Printed, t0, Some(t0));
+        booklet.options.booklet = true;
+        assert_eq!(status_row_for(false, &booklet)["notApplied"], json!(["duplex"]));
+        let mut one_sided = record("o", "s", State::Printed, t0, Some(t0));
+        one_sided.options.duplex = Some("none".into());
+        one_sided.options.grayscale = true;
+        assert!(status_row_for(false, &one_sided).get("notApplied").is_none(), "grayscale is baked in");
+        // Not printed yet: nothing to report.
+        two_sided.state = State::Pending;
+        assert!(status_row_for(false, &two_sided).get("notApplied").is_none());
+        assert_eq!(native_presets_duplex(), cfg!(target_os = "linux"));
     }
 }

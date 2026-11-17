@@ -337,6 +337,9 @@ function BoxRootSection({
   agentCount = 0,
   springArmed = false,
   sharedSearch,
+  revealNonce = 0,
+  onOnlyThis,
+  onOpenAll,
 }: BoxRoot & {
   sortKey: SortKey;
   descending: boolean;
@@ -355,12 +358,23 @@ function BoxRootSection({
   agentCount?: number;
   /** A file drag has dwelt over this collapsed header: it opens soon. */
   springArmed?: boolean;
-  /** The pane's one search field, handed to the expanded member's tree only. */
+  /** The pane's one search field, handed to every expanded member's tree. */
   sharedSearch?: SharedTreeSearch;
+  /** Bumped when the active tab opened this section beside others: scroll it
+   *  into view, the sections above it may fill the panel. */
+  revealNonce?: number;
+  /** The ⋯ menu's "fold the others" / "open all"; absent where it would change
+   *  nothing. */
+  onOnlyThis?: () => void;
+  onOpenAll?: () => void;
 }) {
   const t = useT();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const collapsed = !expanded;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (revealNonce) rootRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [revealNonce]);
   const setView = onViewChange;
   const [showSettings, setShowSettings] = useState(false);
   const rel = useProjectsStore((s) => s.sidePanelFolderByProject[rootId] ?? "");
@@ -383,8 +397,17 @@ function BoxRootSection({
   // single-root view. Git always runs against the host for a remote project,
   // so the git view is blocked regardless of the file-source side.
   const remoteBlocked = remote && sshDown && (source === "remote" || view === "git");
+  // The search backends walk a local path: a remote member is searchable on its
+  // Local side (or when host-pinned, where they ask the host). One that is not
+  // says so while a query is typed, instead of listing its whole tree beside
+  // the other sections' matches.
+  const searchHere = !remote || pinned || source === "local";
+  const searchBlocked = !searchHere && !!sharedSearch?.query.trim();
+  // Only a section that shows its tree (or its settings dialog) reads its
+  // filters: the read walks the whole project for its file endings, and a box
+  // of N members used to pay N walks each time the panel mounted, folded or not.
   const filters = useProjectFileFilters({
-    localFile: localFile ?? undefined,
+    localFile: expanded || showSettings ? localFile ?? undefined : undefined,
     projectDir: treeDir,
     remoteBlocked,
   });
@@ -434,6 +457,7 @@ function BoxRootSection({
     variant === "member" ? ({ "--file-root-accent": memberColor(rootId) } as CSSProperties) : undefined;
   return (
     <div
+      ref={rootRef}
       style={accent}
       className={`file-root file-root--${variant}${collapsed ? " is-collapsed" : ""}${springArmed ? " is-spring-armed" : ""}${
         reorder?.dragging ? " is-reorder-dragging" : ""
@@ -556,7 +580,10 @@ function BoxRootSection({
           )}
         </div>
       )}
-      {!collapsed && !remoteBlocked && view === "files" && (
+      {!collapsed && !remoteBlocked && view === "files" && searchBlocked && (
+        <div className="file-tree-empty">{t("fileRoot.searchNeedsLocal")}</div>
+      )}
+      {!collapsed && !remoteBlocked && view === "files" && !searchBlocked && (
         <div className="file-root-body">
           <FileTree
             // Same invariant as the single-root tree: (project, root dir) is the
@@ -614,6 +641,8 @@ function BoxRootSection({
           source={remote && !pinned ? source : undefined}
           onSource={remote && !pinned ? setSource : undefined}
           onOpenTab={() => openProjectFilesTab(t, dir, "")}
+          onOnlyThis={onOnlyThis}
+          onOpenAll={onOpenAll}
         />
       )}
       {showSettings && project && localFile && (
@@ -838,15 +867,19 @@ export function ProjectFilesPane({
   );
   const reorderFor = useMemberReorder(activeBox, memberOrder);
   const accordion = useBoxAccordion({ scope, box: activeBox, memberOrder, active });
-  // ONE search field for the whole box, above the sections, searching the
+  // ONE search field for the whole box, above the sections, searching every
   // expanded member (the host's 🔍 opens it, as it opened the per-tree boxes).
   const boxSearchOpen = !!activeBox && !!searchOpen;
   const [boxQuery, setBoxQuery] = useState("");
   const [boxSearchMode, setBoxSearchMode] = useState<"name" | "content">("name");
   const [boxSearchCase, setBoxSearchCase] = useState(false);
-  const searchedRoot = boxRoots.find(
-    (r) => r.variant === "member" && r.rootId === accordion.expandedId,
+  const openMembers = useMemo(
+    () => boxRoots.filter((r) => r.variant === "member" && accordion.expandedIds.includes(r.rootId)),
+    [boxRoots, accordion.expandedIds],
   );
+  // With one member open the field names it and says why it cannot be searched;
+  // with several, each section answers for itself (`BoxRootSection`).
+  const searchedRoot = openMembers.length === 1 ? openMembers[0] : undefined;
   const searchedProject = useProjectsStore((s) =>
     searchedRoot ? s.projects.find((p) => p.id === searchedRoot.rootId) ?? null : null,
   );
@@ -855,15 +888,24 @@ export function ProjectFilesPane({
   // The search backends walk a local path: a remote member is searchable on its
   // Local side (or when host-pinned, where they ask the host).
   const searchable =
-    !!searchedRoot && (!searchedRemote || isHostPinned(searchedProject) || searchedSource === "local");
+    openMembers.length > 1 ||
+    (!!searchedRoot && (!searchedRemote || isHostPinned(searchedProject) || searchedSource === "local"));
+  const nothingToSearch = openMembers.length === 0;
+  // 🔍 with every member folded would open a field with nothing to search:
+  // open the member the panel would follow (the active tab's, else the first).
+  const { fallbackId, openOnly } = accordion;
   useEffect(() => {
-    // Closing the field, or moving to another member, drops the query: the next
-    // open must not silently repopulate results nobody typed there.
-    if (!boxSearchOpen) setBoxQuery("");
+    if (boxSearchOpen && nothingToSearch && fallbackId) openOnly([fallbackId]);
+    // Only on the field opening: folding the last member while it is open is
+    // the user's choice, and the field then says to open a section.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boxSearchOpen]);
   useEffect(() => {
-    setBoxQuery("");
-  }, [accordion.expandedId]);
+    // Closing the field, or folding the last open member, drops the query: the
+    // next open must not silently repopulate results nobody typed there. Opening
+    // or folding one of several keeps it, the field above still shows it.
+    if (!boxSearchOpen || nothingToSearch) setBoxQuery("");
+  }, [boxSearchOpen, nothingToSearch]);
   const sharedSearch = useMemo<SharedTreeSearch>(
     () => ({
       query: searchable ? boxQuery : "",
@@ -1087,13 +1129,17 @@ export function ProjectFilesPane({
               autoFocus
               disabled={!searchable}
               placeholder={
-                !searchedRoot
+                nothingToSearch
                   ? t("fileRoot.searchNoMember")
                   : !searchable
                     ? t("fileRoot.searchNeedsLocal")
-                    : boxSearchMode === "name"
-                      ? t("fileRoot.findIn", { name: searchedRoot.label })
-                      : t("fileRoot.searchIn", { name: searchedRoot.label })
+                    : !searchedRoot
+                      ? t(boxSearchMode === "name" ? "fileRoot.findInOpen" : "fileRoot.searchInOpen", {
+                          count: openMembers.length,
+                        })
+                      : boxSearchMode === "name"
+                        ? t("fileRoot.findIn", { name: searchedRoot.label })
+                        : t("fileRoot.searchIn", { name: searchedRoot.label })
               }
               spellCheck={false}
               autoComplete="off"
@@ -1167,8 +1213,20 @@ export function ProjectFilesPane({
                 key={r.rootId}
                 {...r}
                 expanded={
-                  (r.variant === "box" ? !accordion.boxFolded : accordion.expandedId === r.rootId) ||
+                  (r.variant === "box" ? !accordion.boxFolded : accordion.expandedIds.includes(r.rootId)) ||
                   accordion.dragOpen.includes(r.rootId)
+                }
+                revealNonce={accordion.reveal?.id === r.rootId ? accordion.reveal.nonce : 0}
+                onOnlyThis={
+                  r.variant === "member" &&
+                  !(accordion.expandedIds.length === 1 && accordion.expandedIds[0] === r.rootId)
+                    ? () => accordion.openOnly([r.rootId])
+                    : undefined
+                }
+                onOpenAll={
+                  r.variant === "member" && memberOrder.some((id) => !accordion.expandedIds.includes(id))
+                    ? () => accordion.openOnly(memberOrder)
+                    : undefined
                 }
                 onToggle={
                   r.variant === "box" ? accordion.toggleBoxFolded : () => accordion.toggleMember(r.rootId)
@@ -1189,11 +1247,11 @@ export function ProjectFilesPane({
                 onSortChange={compact ? undefined : onSortChange}
                 active={active}
                 // The trees draw no search box in a box: the one field above
-                // the sections feeds the expanded member (`sharedSearch`).
+                // the sections feeds every expanded member (`sharedSearch`).
                 searchOpen={false}
                 onSearchOpenChange={onSearchOpenChange}
                 sharedSearch={
-                  boxSearchOpen && r.variant === "member" && r.rootId === accordion.expandedId
+                  boxSearchOpen && r.variant === "member" && accordion.expandedIds.includes(r.rootId)
                     ? sharedSearch
                     : undefined
                 }

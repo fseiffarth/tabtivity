@@ -10,18 +10,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn rust_bytes(bytes: &[u8]) -> String {
-    let mut out = String::from("&[");
-    for (index, byte) in bytes.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push_str(&byte.to_string());
-    }
-    out.push(']');
-    out
-}
-
 fn collect(dir: &Path, root: &Path, out: &mut Vec<(String, Vec<u8>)>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -51,9 +39,20 @@ fn generate_mobile_assets() {
         assets.push(("/index.html".into(), concat!("<!doctype html><title>", crate::app_name!(), " Mobile</title><main>Mobile assets are not built. Run npm run mobile:build.</main>").as_bytes().to_vec()));
     }
     assets.sort_by(|a, b| a.0.cmp(&b.0));
+    // Each file is copied into OUT_DIR and named by one `include_bytes!`, never
+    // spelled as a byte-literal array: the 9 MB bundle as 9 million integer
+    // literals cost every compile of this crate a minute and 4 GB of memory
+    // (measured 2026-11-15), which the 7 GB macOS CI runner paid in swap. A
+    // copy, not the path in `mobile-dist/`: the table holds the bytes this
+    // script read, whatever a later bundle write renames or removes.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
+    let copies = out_dir.join("mobile_assets");
+    let _ = fs::remove_dir_all(&copies);
+    fs::create_dir_all(&copies).expect("create the mobile assets dir");
     let rows = assets
         .into_iter()
-        .map(|(name, bytes)| {
+        .enumerate()
+        .map(|(index, (name, bytes))| {
             let mime = match name.rsplit('.').next().unwrap_or("") {
                 "html" => "text/html; charset=utf-8",
                 "js" => "text/javascript; charset=utf-8",
@@ -64,7 +63,8 @@ fn generate_mobile_assets() {
                 "wav" => "audio/wav",
                 _ => "application/octet-stream",
             };
-            format!("({name:?}, {}, {mime:?})", rust_bytes(&bytes))
+            fs::write(copies.join(index.to_string()), bytes).expect("copy a mobile asset");
+            format!("({name:?}, include_bytes!(concat!(env!(\"OUT_DIR\"), \"/mobile_assets/{index}\")) as &[u8], {mime:?})")
         })
         .collect::<Vec<_>>()
         .join(",\n");
@@ -72,7 +72,7 @@ fn generate_mobile_assets() {
     // off the disk at run time can stand in for it (threat recheck 2026-10-08,
     // gap 20 — the dev-only overlay from `target/mobile-pwa/` is gone).
     let generated = format!("pub static MOBILE_ASSETS: &[(&str, &[u8], &str)] = &[{rows}];\n");
-    let out = PathBuf::from(env::var("OUT_DIR").expect("out dir")).join("mobile_assets.rs");
+    let out = out_dir.join("mobile_assets.rs");
     fs::write(out, generated).expect("write mobile assets");
 }
 
@@ -167,13 +167,21 @@ fn embed_build_commit() {
         return;
     };
     println!("cargo:rustc-env={UPPER}_BUILD_COMMIT={commit}");
-    let mut watched = vec!["HEAD".to_string(), "packed-refs".to_string()];
+    // HEAD's own log moves with every commit, checkout and reset; the branch
+    // ref and packed-refs cover a clone that keeps no reflog. Only the ones
+    // that exist are watched: cargo takes a watched path that is missing for a
+    // change, reruns this script and recompiles the crate on every build. A
+    // fresh clone has no packed-refs, so each cargo step of a CI job rebuilt
+    // the whole backend (2026-11-15), and a packed branch has no loose ref.
+    let mut watched = vec!["HEAD".to_string(), "logs/HEAD".to_string(), "packed-refs".to_string()];
     if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
         watched.push(branch);
     }
     for name in watched {
         if let Some(path) = git(&["rev-parse", "--path-format=absolute", "--git-path", &name]) {
-            println!("cargo:rerun-if-changed={path}");
+            if Path::new(&path).exists() {
+                println!("cargo:rerun-if-changed={path}");
+            }
         }
     }
 }

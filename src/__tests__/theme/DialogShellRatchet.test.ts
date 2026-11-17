@@ -65,7 +65,6 @@ const STILL_HAND_ROLLED = new Set([
   "mobile/PairedDeviceDialog.tsx",
   "monitoring/GlobalMachineMonitorDialog.tsx",
   "projects/BigFolderExcludeDialog.tsx",
-  "projects/BoxEditorDialog.tsx",
   "projects/ExtendToRemoteDialog.tsx",
   "projects/HpcPipelineWizard.tsx",
   "projects/ProjectDialog.tsx",

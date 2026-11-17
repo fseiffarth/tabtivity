@@ -1728,8 +1728,14 @@ export function cycleProject(delta: 1 | -1): Promise<unknown> | null {
   if (stations.length < 2) return null;
   // The root station is the Root VIEW: while the window shows it, that is
   // where the ring stands, whatever project the workspace behind it is on.
-  const here = rootViewShown(useRootOverlayStore.getState()) ? null : ps.activeId;
-  const idx = stations.indexOf(here);
+  // Inside a box the ring stands on no project: `activeId` is only the one the
+  // box was entered from, and stepping must be able to land on it.
+  const here = rootViewShown(useRootOverlayStore.getState())
+    ? null
+    : useTabsStore.getState().scope.startsWith("box:")
+      ? undefined
+      : ps.activeId;
+  const idx = here === undefined ? -1 : stations.indexOf(here);
   const next =
     idx < 0 && stations.length > 1
       ? stations[delta > 0 ? 1 : stations.length - 1]
@@ -1752,5 +1758,8 @@ export function landOnStation(target: string | null): Promise<unknown> {
   const ps = useProjectsStore.getState();
   const overlay = useRootOverlayStore.getState();
   if (rootViewShown(overlay)) overlay.close();
-  return target !== ps.activeId ? ps.setActive(target) : Promise.resolve();
+  // In a box the project the box was entered from is still `activeId` without
+  // being on screen: `setActive` with the id it holds is the way out of the box.
+  const inBox = useTabsStore.getState().scope.startsWith("box:");
+  return target !== ps.activeId || inBox ? ps.setActive(target) : Promise.resolve();
 }

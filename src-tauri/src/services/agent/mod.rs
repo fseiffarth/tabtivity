@@ -30,6 +30,9 @@ pub mod agent_hint;
 // Where each CLI keeps its conversations in an agent home, for export/import.
 pub mod agent_history;
 pub mod agent_home;
+// The first-start question a fresh install is asked before this computer's
+// agent logins and config are copied.
+pub mod agent_import_offer;
 pub mod agent_install;
 pub mod agent_latest;
 pub mod agent_privacy;
@@ -82,6 +85,8 @@ pub mod muse_session;
 pub mod opencode_models;
 pub mod opencode_session;
 pub mod opencode_store;
+// Antigravity's PreInvocation hook: which conversation is each tab's own.
+pub mod antigravity_session;
 pub mod google_chat;
 // Change notifications for the transcripts the desktop Reader shows.
 pub mod transcript_watch;

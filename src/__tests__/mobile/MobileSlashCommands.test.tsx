@@ -79,6 +79,8 @@ describe(`${BRAND.display} Mobile slash commands — which CLI`, () => {
     expect(slashCli("Codex")).toBe("codex");
     expect(slashCli("Gemini CLI")).toBe("gemini");
     expect(slashCli("OpenCode mini")).toBe("opencode");
+    expect(slashCli("Open Code")).toBe("opencode");
+    expect(slashCli("agy")).toBe("antigravity");
     expect(slashCli("Goose")).toBe("goose");
     expect(slashCli("  ")).toBe("agent");
   });
@@ -92,6 +94,7 @@ describe(`${BRAND.display} Mobile slash commands — which CLI`, () => {
     expect(slashCatalog("claude").map((entry) => entry.command)).not.toContain("/new");
     expect(slashCatalog("gemini").map((entry) => entry.command)).toContain("/compress");
     expect(slashCatalog("goose")).toEqual([]);
+    expect(slashCatalog("opencode").map((entry) => entry.command)).toEqual(["/new", "/review", "/init", "/exit"]);
   });
 });
 

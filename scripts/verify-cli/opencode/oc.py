@@ -70,15 +70,18 @@ def stub_config(port, **more):
     return cfg
 
 
-def home_env(home, cfg, tab=True):
-    """The env a tab's OpenCode gets: scratch HOME, config via env, the plugin listed."""
+def home_env(home, cfg, tab=True, v1=False):
+    """The env a tab's OpenCode gets: scratch HOME, config via env, the plugin
+    listed — as the app lists it: the directory for 2.x, its `index.js` in
+    `plugin` for 1.x (`v1`)."""
     live = os.path.join(home, "live_sessions")
     plug = os.path.join(home, "plugins", f"{common.SLUG}_opencode_session")
     os.makedirs(plug, exist_ok=True)
     os.makedirs(os.path.join(home, ".config", "opencode"), exist_ok=True)
     with open(os.path.join(plug, "index.js"), "w") as f:
         f.write(plugin_body(live))
-    common.write_json(os.path.join(home, ".config", "opencode", "opencode.json"), {"plugins": [f"file://{plug}"]})
+    listed = {"plugin": [f"file://{plug}/index.js"]} if v1 else {"plugins": [f"file://{plug}"]}
+    common.write_json(os.path.join(home, ".config", "opencode", "opencode.json"), listed)
     extra = {"OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_CONFIG_CONTENT": json.dumps(cfg),
              common.ENV_PREFIX + "WEB_MCP_TOKEN": "t", common.ENV_PREFIX + "HELP_MCP_TOKEN": "t"}
     if tab:

@@ -473,15 +473,18 @@
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
     - [ ] 🖐️ Manual test — **The box sheet (Edit box…).** Edit box…
-      opens one box (the box you are in, else the first): name (checked as
+      (in a box's menu) opens that box: name (checked as
       you type), colour, the member list (closed projects too, badges
       for closed/container/VM/remote and the swatches of the other boxes
       holding the project, a filter field), one trust line per kind of
       member that runs outside its container/VM or needs a connection,
       the folder with Open, the phone-access switch and a Dissolve box…
-      footer. Save sends only the difference: add a member from a pill
-      menu while the sheet is open, then Save a rename: the new member is
-      still there. A refused name stays on the sheet with its reason.
+      footer. Every change applies at once, there is no Save: tick a
+      project and its pill appears in the box behind the sheet; pick a
+      colour and the pill recolours; type a new name and press Enter (or
+      click elsewhere) and the pill is renamed. Add a member from a pill
+      menu while the sheet is open: it shows ticked. A refused name stays
+      in its field with the reason and is not written.
       Switch phone access on, turn persistent local sessions off in
       Settings and reopen the sheet: the switch is still there (access
       can always be switched off) with a line saying it is on but cannot
@@ -540,21 +543,54 @@
       - [ ] ❌ Doesn't work on Windows
       - [ ] ✅ Works on macOS
       - [ ] ❌ Doesn't work on macOS
-    - [ ] 🖐️ Manual test — **Side panel accordion.** In a box the side
-      panel shows one section per member: one open at a time, each
-      header with the project's colour dot, a git dot (only when dirty,
+    - [ ] 🖐️ Manual test — **Side panel sections.** In a box the side
+      panel shows one section per member, and several can be open at
+      once: a click on a header opens or folds only that one; the ⋯
+      menu has Fold the other projects and Open all projects. With one
+      section open, switching to a tab of another member moves the open
+      section there; with two or more open, that member opens beside
+      them and the panel scrolls to it. Each
+      header has the project's colour dot, a git dot (only when dirty,
       staged, unpushed or broken; none for remote members), and the
       agent count. Folding is remembered per box across a restart. Drag
       a file over a folded section for about ⅔ s: it opens, and dropping
       moves the file there. The ⋯ on a header opens a menu (Files/Git,
       Remote/Local, open folder, project settings, Open as tab: a files
       tab with the git bar at that member's root). The toolbar 🔍 opens
-      one search field above the sections that searches the expanded
-      member (disabled on a remote member's Remote side). Drag a header's
+      one search field above the sections that searches every open
+      member (with one open, disabled on a remote member's Remote side;
+      with several, that section says it needs Local). Drag a header's
       grip to reorder the members; add a project from the box pill menu
       in the meantime and reorder again: the new member is still there.
       An empty box shows "No projects yet" with an Add projects… button
       that opens the box sheet (no button in a popout).
+      - [ ] ✅ Works on Linux (X11)
+      - [ ] ❌ Doesn't work on Linux (X11)
+      - [ ] ✅ Works on Linux (Wayland)
+      - [ ] ❌ Doesn't work on Linux (Wayland)
+      - [ ] ✅ Works on Windows
+      - [ ] ❌ Doesn't work on Windows
+      - [ ] ✅ Works on macOS
+      - [ ] ❌ Doesn't work on macOS
+    - [ ] 🖐️ Manual test — **Box decisions of 2026-11-16.** (1) Inside a
+      box the header "+" lists the box's projects as a checklist on top
+      (closed ones too) and still has New project, Import and the rest.
+      (2) The selected box pill has a ⋯ next to its ✕, and every row of
+      the boxes list has one: both open the box's menu; a box with no
+      pill renames in its sheet; there is no "Edit boxes…" row. (3) ✕ on
+      a member's pill removes it and a toast offers Undo for about 6 s;
+      Undo puts it back at the same place. (4) The pills inside a box
+      stand in the same order as the side panel's sections; dragging a
+      pill reorders the box (and the sections), not the general strip.
+      (5) A member's pill menu has Close project inside a box. Close a
+      project, enter a box holding it (its tabs come back), leave the
+      box: a toast says it was closed again and its agents have stopped.
+      (6) Dissolve a box with a running agent tab: the tab ends, and the
+      box's folder under sessions/ and agent-homes/ in the state folder
+      is gone; the box folder itself is kept. (7) In a box with a remote
+      member that has a local copy, the box folder's link and the line
+      in its CLAUDE.md point at the copy; a host-only or
+      Local-models-only member is listed as not reachable, with no link.
       - [ ] ✅ Works on Linux (X11)
       - [ ] ❌ Doesn't work on Linux (X11)
       - [ ] ✅ Works on Linux (Wayland)

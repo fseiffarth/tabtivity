@@ -65,15 +65,16 @@ describe("projectStations", () => {
       });
     });
 
-    it("is the visible pills: the members, inactive ones included, in pill order", () => {
+    it("is the visible pills: the members, inactive ones included, in the box's own order", () => {
       useBoxSliceStore.setState({ sliceBoxId: "bx" });
-      expect(projectStations()).toEqual([null, "a", "b", "d"]);
+      expect(projectStations()).toEqual([null, "d", "b", "a"]);
     });
 
     it("keeps the project in scope even when it is not a member", () => {
       useBoxSliceStore.setState({ sliceBoxId: "bx" });
       useTabsStore.setState({ scope: "c" });
-      expect(projectStations()).toEqual([null, "a", "b", "c", "d"]);
+      // A guest after the members, as the strip draws it.
+      expect(projectStations()).toEqual([null, "d", "b", "a", "c"]);
     });
 
     it("is the plain active ring again once the slice is left", () => {

@@ -36,6 +36,7 @@ const { skills } = vi.hoisted(() => ({
     refreshSkillSource: vi.fn(),
     installSkill: vi.fn(),
     uninstallSkill: vi.fn(),
+    copyInstalledSkill: vi.fn(),
   },
 }));
 vi.mock("../../lib/agents/skills", () => skills);

@@ -2,7 +2,7 @@
 
 Wired end to end behind the `copilot_completion` experimental flag, never run
 live and never signed in (2026-09-18). Ollama stays the default and serves every
-file Copilot does not: no consent, remote project, prose, flag or provider off.
+file Copilot does not: no consent, prose without text consent, flag or provider off.
 That fallback is deliberate — it only ever moves work *onto* the machine.
 
 Text files (Markdown, LaTeX, plain text including unclassified files) take a
@@ -25,13 +25,37 @@ when editor line endings differ. Ollama streaming and cache behavior are behind
 Consent is stored in Tabtivity's `settings.json`, never project metadata. The new
 `completion_project_policies` map binds each project id to a canonical directory;
 `local_only` overrides `copilot`. The backend policy rejects disabled providers,
-remote projects, changed roots and symlinks resolving outside the approved tree.
+changed roots and symlinks resolving outside the approved tree.
 Commands must obtain project directory/remoteness from `services::remote` and
 apply this policy before every document synchronization (`commands/copilot.rs`
 `session()`); a refusal there also stops that project's server, as does turning
 consent off or local-only on. Consent is written only by
 `copilot_set_project_policy`, which resolves and canonicalizes the directory
 itself — the webview never supplies a path.
+
+## Remote projects
+
+Remote consent stores `remote`, a backend-built identity of SSH host, user,
+normalized port, configured remote root and canonical local mirror (if present).
+`directory` stores the SFTP-canonical remote root at opt-in. Existing local
+consent cannot authorize a remote project, or vice versa. An endpoint, root or
+mirror change requires fresh consent. Granting consent requires an already
+connected project; revocation works disconnected and always stops its server.
+
+Remote buffers use a per-identity empty local workspace mounted read-only in
+CLS's existing fence. No SSH credentials or remote tree are mounted; no buffer
+is written to disk. Host paths receive virtual file URIs under `remote/`; local
+mirror files under `local/`, keeping same-named files distinct. Mirrors still
+use local canonical confinement and privacy checks. Host documents check both
+the opened path and SFTP-canonical target, regular-file metadata, credential
+exclusions, text consent and nested protected projects on that endpoint. Every
+request rechecks the canonical host root and consent after asynchronous work.
+SFTP uses only an existing connection whose recorded endpoint/root matches the
+authorization snapshot, with a five-second bound; it never auto-connects.
+
+Remote autocomplete is tagged untested until verified with a live SSH project
+and a signed-in Copilot account. The language server's existing Linux platform
+limit still applies to the computer running the app.
 
 ## Shape
 

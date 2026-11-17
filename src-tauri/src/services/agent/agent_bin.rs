@@ -64,28 +64,66 @@ fn install_in(dir: &Path, exe: Option<&Path>, clis: &[&str]) -> io::Result<()> {
             write_script(dir, &format!("{old}.cmd"), alias.as_bytes())?;
         }
     }
+    #[cfg(target_os = "macos")]
+    write_script(dir, "mktemp", mktemp_shim_script().as_bytes())?;
     if let Some(exe) = exe {
-        for cli in clis {
-            // Windows has no fence to door into, and an extensionless `#!/bin/sh`
-            // file first on PATH is not launchable there: a PTY spawn of the
-            // bare name found it and died with os error 193. Drop one an
-            // earlier build wrote.
+        let aliases = VENDOR_ALIASES.iter().filter(|(_, cli)| clis.contains(cli)).copied();
+        for (name, cli) in clis.iter().map(|cli| (*cli, *cli)).chain(aliases) {
+            // An extensionless `#!/bin/sh` file first on PATH is not
+            // launchable on Windows: a PTY spawn of the bare name found it
+            // and died with os error 193. Drop one an earlier build wrote;
+            // `cmd` and PowerShell find the `.cmd` twin by PATHEXT instead.
             if cfg!(windows) {
-                let _ = fs::remove_file(dir.join(cli));
+                let _ = fs::remove_file(dir.join(name));
+                write_script(dir, &format!("{name}.cmd"), cmd_shim_script(cli, exe).as_bytes())?;
                 continue;
             }
-            write_script(dir, cli, shim_script(cli, exe, dir).as_bytes())?;
-        }
-        for (alias, cli) in VENDOR_ALIASES.iter().filter(|(_, cli)| clis.contains(cli)) {
-            // Not on Windows either, for the reason above.
-            if cfg!(windows) {
-                let _ = fs::remove_file(dir.join(alias));
-                continue;
-            }
-            write_script(dir, alias, shim_script(cli, exe, dir).as_bytes())?;
+            write_script(dir, name, shim_script(cli, exe, dir).as_bytes())?;
         }
     }
     Ok(())
+}
+
+/// The `mktemp` in front of macOS's (installed on macOS only). Its `mktemp`
+/// never reads `$TMPDIR`: without a template it asks the system
+/// (`confstr(_CS_DARWIN_USER_TEMP_DIR)`) and lands in the user's own
+/// `/var/folders/…/T`, which the Seatbelt fence hides (2442n), so every bare
+/// `mktemp` in a fenced tab failed. Inside a fence a call without a template
+/// (`mktemp`, `-d`, `-q`, `-u`, `-t prefix`) gets one in `$TMPDIR`, the scope's
+/// private temp dir; anything else — a template, `-p`, an option this does not
+/// know, or no fence — runs the real one untouched. Programs that ask the
+/// system themselves (Foundation's `NSTemporaryDirectory`) are not covered.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+pub(crate) fn mktemp_shim_script() -> String {
+    mktemp_shim_script_for("/usr/bin/mktemp")
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn mktemp_shim_script_for(real: &str) -> String {
+    format!(
+        "#!/bin/sh\n\
+         # {DISPLAY} fence mktemp: a call without a template gets one in $TMPDIR (services::agent_bin).\n\
+         real={real}\n\
+         if [ -z \"${{{UPPER}_AGENT_FENCE:-}}\" ] || [ -z \"${{TMPDIR:-}}\" ]; then\n\
+         \x20   exec \"$real\" \"$@\"\n\
+         fi\n\
+         prefix=tmp\n\
+         flags=\n\
+         want_prefix=\n\
+         for a in \"$@\"; do\n\
+         \x20   if [ -n \"$want_prefix\" ]; then prefix=$a; want_prefix=; continue; fi\n\
+         \x20   case $a in\n\
+         \x20       -t) want_prefix=1 ;;\n\
+         \x20       -t?*) prefix=${{a#-t}} ;;\n\
+         \x20       -[dqu]|-[dqu][dqu]|-[dqu][dqu][dqu]) flags=\"$flags $a\" ;;\n\
+         \x20       *) exec \"$real\" \"$@\" ;;\n\
+         \x20   esac\n\
+         done\n\
+         [ -z \"$want_prefix\" ] || exec \"$real\" \"$@\"\n\
+         # $flags holds only -d/-q/-u letters: split on purpose.\n\
+         exec \"$real\" $flags \"${{TMPDIR%/}}/$prefix.XXXXXXXXXX\"\n",
+        real = crate::quote::posix(real),
+    )
 }
 
 /// The shim for `cli`: exec the fence through `exe`, or — already inside a
@@ -116,6 +154,36 @@ pub(crate) fn shim_script(cli: &str, exe: &Path, dir: &Path) -> String {
         not_found = quote(&format!("{cli}: command not found")),
         dir = quote(&dir.to_string_lossy()),
         exe = quote(&exe.to_string_lossy()),
+    )
+}
+
+/// The Windows shim for `cli`, a batch file: ask `exe --agent-shim-env` for
+/// the real CLI and the scope's environment (`agent_shim::run_env`), set it
+/// for this one run (`setlocal`), and start the CLI on the same console.
+/// Windows has no fence, so this is what an agent tab of the scope gets
+/// there: its home, the Windows profile set and the shared logins. A refusal
+/// is printed and the shim stops. Delayed expansion stays off while values
+/// and arguments pass through, so a `!` in either survives.
+pub(crate) fn cmd_shim_script(cli: &str, exe: &Path) -> String {
+    let (real, call, err) = crate::services::agent_shim::windows_answer_vars();
+    let exe = exe.to_string_lossy();
+    // A CLI name is a registry id (`[a-z0-9-]`); nothing in it needs quoting.
+    format!(
+        "@echo off\r\n\
+         rem {DISPLAY} agent shim: runs {cli} in this tab's scope home (services::agent_shim).\r\n\
+         setlocal DisableDelayedExpansion\r\n\
+         set \"{real}=\"\r\n\
+         set \"{call}=\"\r\n\
+         set \"{err}=\"\r\n\
+         for /f \"usebackq delims=\" %%L in (`\"\"{exe}\" --agent-shim-env {cli}\"`) do set \"%%L\"\r\n\
+         if defined {real} goto run\r\n\
+         if not defined {err} set \"{err}={cli}: the agent shim gave no answer\"\r\n\
+         setlocal EnableDelayedExpansion\r\n\
+         echo(!{err}! 1>&2\r\n\
+         exit /b 1\r\n\
+         :run\r\n\
+         %{call}% \"%{real}%\" %*\r\n\
+         exit /b %errorlevel%\r\n"
     )
 }
 
@@ -253,10 +321,10 @@ mod tests {
 
     /// Windows runs no `sh` shim, a vendor alias's included: none is written,
     /// and one an earlier build left is removed, so a bare `claude` in a PTY
-    /// cannot resolve to it.
+    /// cannot resolve to it. The `.cmd` twin is written instead (2442d).
     #[cfg(windows)]
     #[test]
-    fn no_cli_shim_is_written_on_windows_and_a_stale_one_is_removed() {
+    fn windows_gets_cmd_shims_and_a_stale_sh_one_is_removed() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("claude"), "#!/bin/sh\n").unwrap();
         fs::write(dir.path().join("opencode2"), "#!/bin/sh\n").unwrap();
@@ -264,6 +332,31 @@ mod tests {
         assert!(!dir.path().join("claude").exists());
         assert!(!dir.path().join("agy").exists());
         assert!(!dir.path().join("opencode2").exists(), "nor a vendor alias's");
+        for name in ["claude.cmd", "agy.cmd", "opencode.cmd", "opencode2.cmd"] {
+            assert!(dir.path().join(name).is_file(), "{name}");
+        }
+        let alias = fs::read_to_string(dir.path().join("opencode2.cmd")).unwrap();
+        assert!(alias.contains("--agent-shim-env opencode\""), "the alias runs its CLI's shim");
+    }
+
+    /// 2442d: the `.cmd` shim asks the app for the scope's environment, sets
+    /// it for one run only and starts the real CLI with the arguments as typed.
+    #[test]
+    fn the_cmd_shim_sets_the_scope_env_for_one_run_and_passes_the_arguments() {
+        let exe = Path::new(r"C:\Program Files\App\app.exe");
+        let script = cmd_shim_script("claude", exe);
+        let (real, call, err) = crate::services::agent_shim::windows_answer_vars();
+        assert!(script.starts_with("@echo off\r\n"));
+        assert!(script.lines().all(|l| !l.is_empty()), "CRLF lines");
+        assert!(script.contains(r#"(`""C:\Program Files\App\app.exe" --agent-shim-env claude"`)"#));
+        assert!(script.contains(r#"do set "%%L""#));
+        // Set for this run only, with `!` in values and arguments intact.
+        let setlocal = script.find("setlocal DisableDelayedExpansion").unwrap();
+        assert!(setlocal < script.find("for /f").unwrap());
+        assert!(script.contains(&format!("%{call}% \"%{real}%\" %*\r\n")));
+        assert!(script.find(":run").unwrap() > script.find("EnableDelayedExpansion").unwrap(), "the run line has delayed expansion off");
+        assert!(script.contains(&format!("echo(!{err}! 1>&2")));
+        assert!(script.contains("exit /b %errorlevel%"));
     }
 
     #[cfg(unix)]
@@ -333,5 +426,60 @@ mod tests {
             .unwrap();
         assert_eq!(out.status.code(), Some(127));
         assert!(String::from_utf8_lossy(&out.stderr).contains("fakecli: command not found"));
+    }
+
+    /// Runs the mktemp shim with `args`, fenced or not, in front of `real`.
+    #[cfg(unix)]
+    fn run_mktemp_shim(real: &str, dir: &Path, fenced: bool, args: &[&str]) -> std::process::Output {
+        let shim = dir.join("mktemp");
+        write_script(dir, "mktemp", mktemp_shim_script_for(real).as_bytes()).unwrap();
+        let mut cmd = std::process::Command::new(&shim);
+        cmd.args(args).env("TMPDIR", dir.join("private")).env_remove(crate::app_env!("AGENT_FENCE"));
+        if fenced {
+            cmd.env(crate::app_env!("AGENT_FENCE"), "1");
+        }
+        cmd.output().unwrap()
+    }
+
+    /// macOS's mktemp ignores `$TMPDIR` without a template, so inside the
+    /// fence the shim names one there; everything else reaches it untouched.
+    #[cfg(unix)]
+    #[test]
+    fn the_fenced_mktemp_gets_a_template_in_tmpdir_and_passes_anything_else_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let echo = dir.path().join("echo-args");
+        write_script(dir.path(), "echo-args", b"#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n").unwrap();
+        let echo = echo.to_string_lossy().into_owned();
+        let private = dir.path().join("private").to_string_lossy().into_owned();
+        let args_of = |fenced: bool, args: &[&str]| {
+            let out = run_mktemp_shim(&echo, dir.path(), fenced, args);
+            assert!(out.status.success(), "{out:?}");
+            String::from_utf8(out.stdout).unwrap().lines().map(str::to_string).collect::<Vec<_>>()
+        };
+        let tmpl = |prefix: &str| format!("{private}/{prefix}.XXXXXXXXXX");
+        assert_eq!(args_of(true, &[]), [tmpl("tmp")]);
+        assert_eq!(args_of(true, &["-d"]), ["-d".to_string(), tmpl("tmp")]);
+        assert_eq!(args_of(true, &["-dq"]), ["-dq".to_string(), tmpl("tmp")]);
+        assert_eq!(args_of(true, &["-q", "-t", "build"]), ["-q".to_string(), tmpl("build")]);
+        assert_eq!(args_of(true, &["-tcache"]), [tmpl("cache")]);
+        // A template, -p, an unknown option, a dangling -t: untouched.
+        for args in [&["x.XXXXXX"][..], &["-p", "/elsewhere"], &["--tmpdir"], &["-t"], &["-d", "a b.XXXXXX"]] {
+            assert_eq!(args_of(true, args), args.iter().map(|a| a.to_string()).collect::<Vec<_>>(), "{args:?}");
+        }
+        // Not fenced: untouched.
+        assert_eq!(args_of(false, &[]), Vec::<String>::new());
+        assert_eq!(args_of(false, &["-d"]), ["-d"]);
+
+        // And the template it names is one the real mktemp takes.
+        assert_eq!(mktemp_shim_script(), mktemp_shim_script_for("/usr/bin/mktemp"));
+        std::fs::create_dir_all(&private).unwrap();
+        for args in [&[][..], &["-d"], &["-t", "probe"]] {
+            let out = run_mktemp_shim("/usr/bin/mktemp", dir.path(), true, args);
+            assert!(out.status.success(), "{args:?}: {out:?}");
+            let made = String::from_utf8(out.stdout).unwrap();
+            let made = Path::new(made.trim());
+            assert_eq!(made.parent(), Some(Path::new(&private)), "{args:?}");
+            assert!(made.exists());
+        }
     }
 }

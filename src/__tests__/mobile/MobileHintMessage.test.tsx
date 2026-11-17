@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe("phone hint messages", () => {
-  it("points at a visible control, follows scrolling, and removes the pointer on dismissal", async () => {
+  it("rings a visible control, draws the connector in the card's box, follows layout, and clears both on dismissal", async () => {
     // Scrolls are measured once per frame, not once per event.
     const nextFrame = () => act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
     const rect = (top: number) => ({ top, bottom: top + 44, left: 20, right: 100, width: 80, height: 44, x: 20, y: top, toJSON: () => ({}) });
@@ -29,17 +29,24 @@ describe("phone hint messages", () => {
       return rect(this.matches(".fab") ? targetTop : 100);
     });
     const { container } = render(<main className="screen"><HintMessage hint="agentHold" /><button className="fab">+</button></main>);
-    expect(container.querySelector(".phone-hint-ring")?.getAttribute("y")).toBe("297");
+    const fab = container.querySelector(".fab")!;
+    // The ring is the control's own outline; the connector runs from the card's
+    // bottom (card at top 100, 44 high) to just above the control, card-relative.
+    expect(fab.hasAttribute("data-phone-hint-ring")).toBe(true);
+    expect(container.querySelector(".hint-message > .phone-hint-pointer path")?.getAttribute("d")).toBe("M 40 44 L 40 197");
     targetTop = -60;
     fireEvent.scroll(window);
     await nextFrame();
     expect(container.querySelector(".phone-hint-pointer")).toBeNull();
+    expect(fab.hasAttribute("data-phone-hint-ring")).toBe(false);
     targetTop = 400;
     fireEvent.scroll(window);
     await nextFrame();
-    expect(container.querySelector(".phone-hint-ring")?.getAttribute("y")).toBe("397");
+    expect(container.querySelector(".phone-hint-pointer path")?.getAttribute("d")).toBe("M 40 44 L 40 297");
+    expect(fab.hasAttribute("data-phone-hint-ring")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
     expect(container.querySelector(".phone-hint-pointer")).toBeNull();
+    expect(fab.hasAttribute("data-phone-hint-ring")).toBe(false);
   });
 
   it("points at the control its text names, not a sibling sharing its class", () => {
@@ -52,7 +59,32 @@ describe("phone hint messages", () => {
       <header><button className="drawer-open">🔍</button><button className="drawer-open" data-phone-hint="menu">☰</button></header>
       <HintMessage hint="projectFiles" />
     </main>);
-    expect(container.querySelector(".phone-hint-ring")?.getAttribute("x")).toBe("297");
+    expect(container.querySelector('[data-phone-hint="menu"]')?.hasAttribute("data-phone-hint-ring")).toBe(true);
+    expect(container.querySelector(".drawer-open:not([data-phone-hint])")?.hasAttribute("data-phone-hint-ring")).toBe(false);
+  });
+
+  it("rings the matching control nearest the card, also one partly off screen", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const top = this.dataset.top ? Number(this.dataset.top) : 100;
+      return { top, bottom: top + 44, left: 20, right: 300, width: 280, height: 44, x: 20, y: top, toJSON: () => ({}) };
+    });
+    const ringed = (root: HTMLElement) => [...root.querySelectorAll("[data-phone-hint-ring]")].map((el) => el.textContent);
+    const near = render(<main className="screen">
+      <button className="tab-card-more" data-top="10">a</button>
+      <HintMessage hint="tabCard" />
+      <button className="tab-card-more" data-top="400">b</button>
+      <button className="tab-card-more" data-top="180">c</button>
+    </main>);
+    expect(ringed(near.container)).toEqual(["c"]);
+    near.unmount();
+    // The next card's ⋯ straddles the bottom edge: it stays the one marked
+    // rather than the pointer jumping to another card or vanishing.
+    const edge = render(<main className="screen">
+      <HintMessage hint="tabCard" />
+      <button className="tab-card-more" data-top={String(innerHeight - 20)}>c</button>
+      <button className="tab-card-more" data-top={String(innerHeight + 300)}>d</button>
+    </main>);
+    expect(ringed(edge.container)).toEqual(["c"]);
   });
 
   it("tapping the control the tip points at closes it like ×, a tap elsewhere does not", () => {
@@ -86,6 +118,13 @@ describe("phone hint messages", () => {
     halfHourLater();
     render(<HintMessage hint="agentHold" floating />);
     expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("lays its actions out as one text row: Turn off tips, then Skip and Read in the accent", () => {
+    const { container } = render(<HintMessage hint="agentHold" />);
+    const row = [...container.querySelectorAll(".hint-message-actions > button")];
+    expect(row.map((b) => b.textContent)).toEqual(["Turn off tips", "Skip", "Read"]);
+    expect(row.map((b) => b.className)).toEqual(["hint-message-off", "hint-message-skip", "hint-message-read"]);
   });
 
   it("Skip closes the tip for this visit without counting a read", () => {

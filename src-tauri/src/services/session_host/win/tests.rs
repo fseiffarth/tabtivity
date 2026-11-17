@@ -55,6 +55,14 @@ fn spawn_req(name: &str, argv: Vec<String>, remain_on_exit: bool) -> Request {
     }
 }
 
+/// `fut` bounded: a host that never answers fails the test with `what`, it
+/// does not hang the whole backend step until its timeout cuts it off.
+async fn within<T>(secs: u64, what: &str, fut: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(secs), fut)
+        .await
+        .unwrap_or_else(|_| panic!("{what}: no answer within {secs}s"))
+}
+
 async fn capture_until(c: &mut Client<NamedPipeClient>, name: &str, want: &str) -> String {
     let mut text = String::new();
     for _ in 0..500 {
@@ -98,12 +106,17 @@ async fn a_second_host_is_refused() {
     };
     let name = pipe_name(&other);
     assert!(wait_until_async(Duration::from_secs(10), || std::fs::metadata(copies::token_path(&control_dir(&other))).is_ok()).await);
-    let version = loop {
-        if let Ok(c) = connect(&name, &local_pipe::read_token_at(&copies::token_path(&control_dir(&other))).unwrap()).await {
-            break c.welcome().host_version.clone();
+    // Bounded: a host that never answers fails the test, it does not hang it.
+    let mut version = None;
+    for _ in 0..1000 {
+        let token = local_pipe::read_token_at(&copies::token_path(&control_dir(&other))).unwrap();
+        if let Ok(Ok(c)) = tokio::time::timeout(Duration::from_secs(2), connect(&name, &token)).await {
+            version = Some(c.welcome().host_version.clone());
+            break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+    }
+    let version = version.expect("the host came up");
     // `<version>+<build>`: this test binary's build identity.
     let ours = copies::identity(
         env!("CARGO_PKG_VERSION"),
@@ -112,11 +125,16 @@ async fn a_second_host_is_refused() {
     assert_eq!(version, ours);
     assert!(version.starts_with(concat!(env!("CARGO_PKG_VERSION"), "+")), "{version}");
     let token_before = std::fs::read(copies::token_path(&control_dir(&other))).unwrap();
-    assert_eq!(run_host(&other, HostOptions::default()).await.unwrap(), HostEnd::AlreadyRunning);
+    let loser = within(15, "the second host ended at once", run_host(&other, HostOptions::default())).await;
+    assert_eq!(loser.unwrap(), HostEnd::AlreadyRunning);
     assert_eq!(std::fs::read(copies::token_path(&control_dir(&other))).unwrap(), token_before, "the loser wrote nothing");
     let real = local_pipe::read_token_at(&copies::token_path(&control_dir(&other))).unwrap();
-    connect(&name, &real).await.unwrap().shutdown(false).await.unwrap();
-    assert_eq!(runner.await.unwrap().unwrap(), HostEnd::Exited);
+    within(15, "the host took Shutdown", async {
+        connect(&name, &real).await.unwrap().shutdown(false).await.unwrap();
+    })
+    .await;
+    let end = tokio::time::timeout(Duration::from_secs(15), runner).await.expect("the host exits when asked");
+    assert_eq!(end.unwrap().unwrap(), HostEnd::Exited);
 }
 
 /// A mutex of the host's name that this user may not open (another
@@ -307,11 +325,14 @@ async fn killing_the_host_process_reaps_its_sessions() {
     let state = tmp.path().join("state");
     let test_name = concat!(module_path!(), "::child_host_entry");
     let test_name = test_name.split_once("::").map_or(test_name, |(_, rest)| rest);
+    // The child's output kept, so a host that never came up says why.
+    let child_log = tmp.path().join("child-host.log");
+    let log_file = std::fs::File::create(&child_log).unwrap();
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test_name, "--ignored", "--nocapture", "--test-threads=1"])
         .env(CHILD_STATE_ENV, &state)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(log_file.try_clone().unwrap())
+        .stderr(log_file)
         .spawn()
         .unwrap();
     let name = pipe_name(&state);
@@ -319,14 +340,23 @@ async fn killing_the_host_process_reaps_its_sessions() {
     let mut c = None;
     for _ in 0..1000 {
         if let Ok(token) = local_pipe::read_token_at(&token_path) {
-            if let Ok(client) = connect(&name, &token).await {
+            if let Ok(Ok(client)) = tokio::time::timeout(Duration::from_secs(2), connect(&name, &token)).await {
                 c = Some(client);
                 break;
             }
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let mut c = c.expect("the child host came up");
+    let Some(mut c) = c else {
+        let exited = child.try_wait();
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!(
+            "the child host never came up (exit status {exited:?}, token written: {}); it said:\n{}",
+            token_path.exists(),
+            std::fs::read_to_string(&child_log).unwrap_or_default()
+        );
+    };
     assert_ne!(c.welcome().pid, std::process::id(), "a separate host process");
     let ping = ping_outliving_its_console(&mut c, "orphan").await;
     child.kill().unwrap();

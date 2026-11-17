@@ -169,6 +169,8 @@ struct WindowInfo {
     pid: u32,
     layer: i32,
     owner_name: String,
+    /// `kCGWindowName`: empty unless the user granted Screen Recording.
+    title: String,
     bounds: CGRect,
 }
 
@@ -212,7 +214,8 @@ fn dict_string(dict: CFDictionaryRef, key: CFStringRef) -> String {
 
 /// Snapshot every on-screen window (front-to-back). Needs no Screen Recording
 /// permission for these keys (id/pid/owner-name/layer/bounds); without that
-/// permission only `kCGWindowName` would be withheld, which is not read.
+/// permission only `kCGWindowName` is withheld, so `title` reads empty and
+/// [`named_windows`] matches nothing by title.
 fn window_list() -> Vec<WindowInfo> {
     let mut out = Vec::new();
     // SAFETY: every Create/Copy ref made here (the key strings, the array) is
@@ -227,6 +230,8 @@ fn window_list() -> Vec<WindowInfo> {
             CFStringCreateWithCString(std::ptr::null(), c"kCGWindowOwnerName".as_ptr(), UTF8);
         let key_layer =
             CFStringCreateWithCString(std::ptr::null(), c"kCGWindowLayer".as_ptr(), UTF8);
+        let key_name =
+            CFStringCreateWithCString(std::ptr::null(), c"kCGWindowName".as_ptr(), UTF8);
         let key_bounds =
             CFStringCreateWithCString(std::ptr::null(), c"kCGWindowBounds".as_ptr(), UTF8);
 
@@ -253,12 +258,13 @@ fn window_list() -> Vec<WindowInfo> {
                     pid: dict_i64(dict, key_pid).max(0) as u32,
                     layer: dict_i64(dict, key_layer) as i32,
                     owner_name: dict_string(dict, key_owner),
+                    title: dict_string(dict, key_name),
                     bounds,
                 });
             }
             CFRelease(array);
         }
-        for key in [key_number, key_pid, key_owner, key_layer, key_bounds] {
+        for key in [key_number, key_pid, key_owner, key_name, key_layer, key_bounds] {
             if !key.is_null() {
                 CFRelease(key);
             }
@@ -439,6 +445,39 @@ impl Drop for MacBackend {
 
 /// All on-screen layer-0 window ids, front-to-back. Non-zero layers (menu bar,
 /// Dock, overlays) are not app windows and never enter tracked sets.
+/// Every on-screen app window by owner and title (2442o), for "Open in IDE"
+/// to raise an IDE already showing the project: `class` is the owning app's
+/// name (`Code` for VS Code). Titles come only with Screen Recording
+/// permission; without it nothing matches and the IDE is launched as before.
+/// Tabtivity's own windows are left out.
+pub fn named_windows() -> Vec<super::NamedWindow> {
+    let self_pid = std::process::id();
+    window_list()
+        .into_iter()
+        .filter(|w| w.layer == 0 && w.pid != self_pid && !w.title.is_empty())
+        .map(|w| super::NamedWindow { id: w.id, class: w.owner_name, title: w.title })
+        .collect()
+}
+
+/// Bring the app owning `window_id` to the front (2442o): `unhide` plus
+/// `activateWithOptions:`, as showing a parked window does. The app, not the
+/// one window — raising a single window of another app takes the
+/// Accessibility API.
+pub fn activate_window(window_id: u64) -> Result<(), String> {
+    let pid = window_list()
+        .into_iter()
+        .find(|w| w.id == window_id)
+        .map(|w| w.pid)
+        .ok_or("window not on screen")?;
+    let app = running_application(pid);
+    if app.is_null() {
+        return Err("no running application owns that window".into());
+    }
+    let _ = msg_send0(app, sel(c"unhide"));
+    let _ = msg_send_usize(app, sel(c"activateWithOptions:"), 1 << 1);
+    Ok(())
+}
+
 pub fn list_window_ids() -> Vec<u64> {
     window_list()
         .into_iter()

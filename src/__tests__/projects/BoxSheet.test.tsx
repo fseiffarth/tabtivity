@@ -41,17 +41,25 @@ function answerPatches(read: () => ProjectBox[]) {
         name?: string;
         addMembers?: string[];
         removeMembers?: string[];
+        addMember?: string;
+        removeMember?: string;
         color?: string;
       };
       const held = read().find((b) => b.id === args?.boxId)!;
       const members = [...held.member_ids];
-      for (const id of patch.addMembers ?? []) if (!members.includes(id)) members.push(id);
-      const left = new Set(patch.removeMembers ?? []);
+      for (const id of [...(patch.addMembers ?? []), ...(patch.addMember ? [patch.addMember] : [])]) {
+        if (!members.includes(id)) members.push(id);
+      }
+      const left = new Set([...(patch.removeMembers ?? []), ...(patch.removeMember ? [patch.removeMember] : [])]);
       return {
         ...held,
         name: patch.name ?? held.name,
+        ...(patch.color !== undefined ? { color: patch.color || undefined } : {}),
         member_ids: members.filter((id) => !left.has(id)),
       };
+    }
+    if (cmd === "rename_box") {
+      return { ...read().find((b) => b.id === args?.boxId)!, name: args?.name as string };
     }
     return null;
   });
@@ -90,7 +98,7 @@ describe("one box, no create mode", () => {
     const { dialog } = await openSheet("boxA");
     expect(dialog.querySelector(".box-editor-target")).toBeNull();
     expect(dialog.querySelector(".dropdown")).toBeNull();
-    expect(dialog.getAttribute("aria-label")).toBe("Box: boxA");
+    expect(dialog.querySelector("h2")?.textContent).toContain("Box: boxA");
     expect("openCreate" in useBoxEditorStore.getState()).toBe(false);
     expect("initialMemberIds" in useBoxEditorStore.getState()).toBe(false);
   });
@@ -118,8 +126,10 @@ describe("one box, no create mode", () => {
   });
 });
 
-describe("diffed save", () => {
-  it("sends one patch of what changed; a member added meanwhile survives", async () => {
+describe("every change applies at once", () => {
+  const patchesSent = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box").map(([, args]) => args);
+
+  it("a tick is one additive patch, sent at once; a member added meanwhile survives", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", ["p1"], { name: "Thesis" })] });
     useProjectsStore.setState({
       projects: [proj("p1", 10), proj("p2", 20), proj("p3", 30)],
@@ -133,75 +143,90 @@ describe("diffed save", () => {
     await act(async () => {
       useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p3"], { name: "Thesis" })] });
     });
-
-    fireEvent.click(rowOf(dialog, "p2").querySelector("input")!); // tick p2
-    fireEvent.click(rowOf(dialog, "p1").querySelector("input")!); // untick p1
-    await act(async () => {
-      fireEvent.click(button(dialog, "Save"));
-    });
-
-    const patches = mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box");
-    expect(patches).toHaveLength(1);
-    // Only what the sheet changed against what it loaded: p3 is neither added
-    // nor removed by it, and no whole list is written.
-    expect(patches[0][1]).toEqual({ boxId: "boxA", patch: { addMembers: ["p2"], removeMembers: ["p1"] } });
-    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_box_members" || cmd === "rename_box")).toBe(false);
-    expect(useBoxesStore.getState().boxes[0].member_ids).toEqual(["p3", "p2"]);
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("shows a member added meanwhile as ticked, and unticking it removes it", async () => {
-    useBoxesStore.setState({ boxes: [box("boxA", ["p1"], { name: "Thesis" })] });
-    useProjectsStore.setState({
-      projects: [proj("p1", 10), proj("p3", 30)],
-      activeId: null,
-      loaded: true,
-    });
-    answerPatches(() => useBoxesStore.getState().boxes);
-    const { dialog } = await openSheet("boxA");
-    await act(async () => {
-      useBoxesStore.setState({ boxes: [box("boxA", ["p1", "p3"], { name: "Thesis" })] });
-    });
-    const p3 = rowOf(dialog, "p3").querySelector("input") as HTMLInputElement;
-    expect(p3.checked).toBe(true);
+    expect((rowOf(dialog, "p3").querySelector("input") as HTMLInputElement).checked).toBe(true);
     expect(dialog.querySelector(".box-editor-count")?.textContent).toContain("2");
-    fireEvent.click(p3);
+
     await act(async () => {
-      fireEvent.click(button(dialog, "Save"));
+      fireEvent.click(rowOf(dialog, "p2").querySelector("input")!); // tick p2
     });
-    const [[, args]] = mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box");
-    expect(args).toEqual({ boxId: "boxA", patch: { removeMembers: ["p3"] } });
+    await act(async () => {
+      fireEvent.click(rowOf(dialog, "p1").querySelector("input")!); // untick p1
+    });
+
+    // One singular patch per tick, never a whole member list; p3 is untouched.
+    expect(patchesSent()).toEqual([
+      { boxId: "boxA", patch: { addMember: "p2" } },
+      { boxId: "boxA", patch: { removeMember: "p1" } },
+    ]);
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "set_box_members")).toBe(false);
+    expect(useBoxesStore.getState().boxes[0].member_ids).toEqual(["p3", "p2"]);
+    // Nothing waits for a Save, and a tick does not close the sheet.
+    expect(button(dialog, "Save")).toBeUndefined();
+    expect(button(dialog, "Cancel")).toBeUndefined();
+    expect(onClose).not.toHaveBeenCalled();
+    // The rows keep the order the sheet opened with: p1 does not drop below p2.
+    expect([...dialog.querySelectorAll(".box-editor-member-row")].map((r) => r.getAttribute("data-member-id"))).toEqual([
+      "p1",
+      "p2",
+      "p3",
+    ]);
   });
 
-  it("carries the new name and colour in the same patch, and nothing for an untouched name", async () => {
+  it("writes the name on Enter or when the field loses focus, trimmed, and only when it changed", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", ["p1"], { name: "Thesis" })] });
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
     answerPatches(() => useBoxesStore.getState().boxes);
     const { dialog } = await openSheet("boxA");
+    const field = dialog.querySelector('input[type="text"]') as HTMLInputElement;
+    const renames = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "rename_box").map(([, args]) => args);
 
-    fireEvent.change(dialog.querySelector('input[type="text"]')!, { target: { value: "  Dissertation " } });
-    fireEvent.click(dialog.querySelectorAll(".tab-color-swatches .tab-color-swatch")[1]); // first palette colour
+    // Leaving an untouched name writes nothing.
     await act(async () => {
-      fireEvent.click(button(dialog, "Save"));
+      fireEvent.blur(field);
     });
-    const [[, args]] = mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box");
-    expect((args as { patch: Record<string, unknown> }).patch.name).toBe("Dissertation");
-    expect((args as { patch: { color?: string } }).patch.color).toMatch(/^#[0-9a-f]{6}$/);
-    expect((args as { patch: Record<string, unknown> }).patch).not.toHaveProperty("addMembers");
+    expect(renames()).toEqual([]);
+
+    fireEvent.change(field, { target: { value: "  Dissertation " } });
+    expect(renames()).toEqual([]); // typing alone writes nothing
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(renames()).toEqual([{ boxId: "boxA", name: "Dissertation" }]);
+    expect(useBoxesStore.getState().boxes[0].name).toBe("Dissertation");
+
+    fireEvent.change(field, { target: { value: "Thesis 2" } });
+    await act(async () => {
+      fireEvent.blur(field);
+    });
+    expect(renames()).toHaveLength(2);
+    expect(useBoxesStore.getState().boxes[0].name).toBe("Thesis 2");
   });
 
-  it("an untouched sheet writes nothing", async () => {
+  it("a colour pick is written at once", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"], { name: "Thesis" })] });
+    useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
+    answerPatches(() => useBoxesStore.getState().boxes);
+    const { dialog } = await openSheet("boxA");
+    await act(async () => {
+      fireEvent.click(dialog.querySelectorAll(".tab-color-swatches .tab-color-swatch")[1]); // first palette colour
+    });
+    const [sent] = patchesSent() as { patch: { color?: string } }[];
+    expect(sent.patch.color).toMatch(/^#[0-9a-f]{6}$/);
+    expect(sent.patch).not.toHaveProperty("name");
+  });
+
+  it("an untouched sheet writes nothing, and Close closes it", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
     const { dialog, onClose } = await openSheet("boxA");
     await act(async () => {
-      fireEvent.click(button(dialog, "Save"));
+      fireEvent.click(button(dialog, "Close"));
     });
-    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "patch_box")).toBe(false);
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "patch_box" || cmd === "rename_box")).toBe(false);
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("checks the name inline: a taken name blocks Save, a legacy duplicate left alone does not", async () => {
+  it("checks the name inline: a taken or empty name is never written, a legacy duplicate left alone is no problem", async () => {
     useBoxesStore.setState({
       boxes: [box("boxA", [], { name: "Same" }), box("boxB", [], { name: "Same" }), box("boxC", [], { name: "Other" })],
     });
@@ -209,35 +234,46 @@ describe("diffed save", () => {
     answerPatches(() => useBoxesStore.getState().boxes);
     const { dialog } = await openSheet("boxA");
     const field = dialog.querySelector('input[type="text"]') as HTMLInputElement;
+    const renamed = () => mockInvoke.mock.calls.some(([cmd]) => cmd === "rename_box");
     // The loaded duplicate name is not a problem while it is left as it is.
     expect(dialog.querySelector(".box-editor-name-error")).toBeNull();
-    expect(button(dialog, "Save").disabled).toBe(false);
 
     fireEvent.change(field, { target: { value: "other" } });
     expect(dialog.querySelector(".box-editor-name-error")?.textContent).toBe("A box with that name already exists.");
-    expect(button(dialog, "Save").disabled).toBe(true);
+    await act(async () => {
+      fireEvent.keyDown(field, { key: "Enter" });
+      fireEvent.blur(field);
+    });
+    expect(renamed()).toBe(false);
 
     fireEvent.change(field, { target: { value: "   " } });
     expect(dialog.querySelector(".box-editor-name-error")?.textContent).toBe("Give the box a name.");
-    expect(button(dialog, "Save").disabled).toBe(true);
+    await act(async () => {
+      fireEvent.blur(field);
+    });
+    expect(renamed()).toBe(false);
 
     fireEvent.change(field, { target: { value: "Fresh" } });
     expect(dialog.querySelector(".box-editor-name-error")).toBeNull();
-    expect(button(dialog, "Save").disabled).toBe(false);
+    // A member tick is not held up by the name being edited.
+    await act(async () => {
+      fireEvent.click(rowOf(dialog, "p1").querySelector("input")!);
+    });
+    expect(patchesSent()).toEqual([{ boxId: "boxA", patch: { addMember: "p1" } }]);
   });
 
-  it("a refused write keeps the sheet open and says why", async () => {
+  it("a refused tick is taken back, the sheet stays open and says why", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", [])] });
     useProjectsStore.setState({ projects: [proj("p1", 10)], activeId: null, loaded: true });
     mockInvoke.mockRejectedValue(new Error("disk full"));
     const { dialog, onClose } = await openSheet("boxA");
-    fireEvent.click(rowOf(dialog, "p1").querySelector("input")!);
     await act(async () => {
-      fireEvent.click(button(dialog, "Save"));
+      fireEvent.click(rowOf(dialog, "p1").querySelector("input")!);
     });
     expect(onClose).not.toHaveBeenCalled();
     expect(useProjectsStore.getState().switchToast).toBe("disk full");
-    expect(button(dialog, "Save").disabled).toBe(false);
+    expect((rowOf(dialog, "p1").querySelector("input") as HTMLInputElement).checked).toBe(false);
+    expect(useBoxesStore.getState().boxes[0].member_ids).toEqual([]);
   });
 });
 
@@ -275,14 +311,15 @@ describe("member list", () => {
     expect(rowOf(dialog, "p1").querySelector(".box-editor-badge.is-closed")?.textContent).toBe("closed");
     expect((rowOf(dialog, "p2").querySelector("input") as HTMLInputElement).checked).toBe(true);
 
-    fireEvent.click(rowOf(dialog, "p1").querySelector("input")!);
-    fireEvent.click(rowOf(dialog, "p2").querySelector("input")!);
     await act(async () => {
-      fireEvent.click(button(dialog, "Save"));
+      fireEvent.click(rowOf(dialog, "p1").querySelector("input")!);
     });
-    const [[, args]] = mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box");
-    expect((args as { patch: unknown }).patch).toEqual({ addMembers: ["p1"], removeMembers: ["p2"] });
-    // Closed stays closed: membership is the only thing the save touched.
+    await act(async () => {
+      fireEvent.click(rowOf(dialog, "p2").querySelector("input")!);
+    });
+    const patches = mockInvoke.mock.calls.filter(([cmd]) => cmd === "patch_box").map(([, args]) => (args as { patch: unknown }).patch);
+    expect(patches).toEqual([{ addMember: "p1" }, { removeMember: "p2" }]);
+    // Closed stays closed: membership is the only thing the ticks touched.
     expect(useProjectsStore.getState().projects.map((p) => p.status)).toEqual(["inactive", "inactive"]);
     expect(mockInvoke.mock.calls.map(([cmd]) => cmd as string).filter((cmd) => /project/i.test(cmd))).toEqual([]);
   });

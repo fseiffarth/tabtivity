@@ -82,3 +82,16 @@ export function uninstallSkill(target: SkillTarget, folder: string): Promise<voi
 export function listInstalledSkills(target: SkillTarget): Promise<InstalledSkill[]> {
   return invoke<InstalledSkill[]>("skills_list_installed", { target });
 }
+
+/** Copy an installed skill (`InstalledSkill.folder`) from one target into
+ *  another — project to project, or between a project and the personal scope.
+ *  `overwrite` replaces a copy `to` already holds; without it the backend
+ *  refuses one, so a copy that appeared since the caller looked is not lost. */
+export function copyInstalledSkill(
+  from: SkillTarget,
+  folder: string,
+  to: SkillTarget,
+  overwrite: boolean,
+): Promise<void> {
+  return invoke<void>("skills_copy", { from, folder, to, overwrite });
+}

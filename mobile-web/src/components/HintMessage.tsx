@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useT, type TranslationKey } from "../../../src/lib/i18n";
 import { rollHint } from "../../../src/lib/hintChance";
 import { isUntested } from "../../../src/lib/untested";
+import { CloseIcon } from "../glyphs";
 import { readFlag, readHintReads, readHintShown, readTipShownAt, writeFlag, writeHintReads, writeHintShown, writeTipShownAt, type MobileFlag } from "../prefs";
 
 /** Every phone tip: one short thing each. A tip split from a longer one keeps
@@ -51,55 +52,83 @@ const TARGETS: Partial<Record<HintKey, string>> = {
   composerPlanGoal: ".composer-segment", composerClear: ".composer-tool",
   composerCommit: ".composer-commit", composerMic: ".composer-dictate",
   tabCard: ".tab-card-more", sentFiles: ".terminal-gallery", markup: ".terminal-gallery",
-  mailBack: ".back", mailPickers: ".mail-mobile-switch", mailWrite: ".mail-mobile-reply textarea",
+  mailBack: ".screen-head-back", mailPickers: ".mail-account-switch", mailWrite: ".mail-mobile-reply textarea",
   sendHold: ".send-icon", chatMenu: ".view-pill", chatSwipe: ".readable-output",
   statusLamp: ".fact-action:has(.fact-lamp)",
   statusModel: '[data-phone-hint="model"]', statusMode: '[data-phone-hint="mode"]',
   statusWorktree: ".fact-worktree, .fact-branch",
-  todoDone: ".todo-check", todoEdit: ".todo-mobile-actions > button",
-  todoMove: ".todo-mobile-actions > select", todoFilter: ".todo-mobile-filters",
+  todoDone: ".todo-check", todoEdit: ".todo-card-body",
+  todoMove: ".todo-card-more", todoFilter: ".todo-filter-button",
   todoColumns: ".todo-column-fold", todoAdd: ".todo-fab",
-  calendarViews: '.mobile-calendar-actions[role="group"]', calendarDays: ".mobile-calendar-day",
+  calendarViews: ".mobile-calendar-views", calendarDays: ".mobile-calendar-day",
   calendarEvents: ".mobile-calendar-event",
-  calendarCalendars: ".mobile-calendar-actions:not([role]) > button:nth-child(2)",
-  calendarReminders: ".mobile-calendar-actions:not([role]) > button:nth-child(3)",
+  calendarCalendars: ".mobile-calendar-more",
+  calendarReminders: ".mobile-calendar-more",
 };
 
 /** Tips about a gesture on their target, not a tap: a tap there keeps them. */
 const TAP_KEEPS_TIP: ReadonlySet<HintKey> = new Set(["chatSwipe"]);
 
-type Pointer = { x: number; y: number; width: number; height: number; fromX: number; fromY: number; toX: number; toY: number };
-const POINTER_KEYS = ["x", "y", "width", "height", "fromX", "fromY", "toX", "toY"] as const;
+type Pointer = { fromX: number; fromY: number; toX: number; toY: number };
+const POINTER_KEYS = ["fromX", "fromY", "toX", "toY"] as const;
 
-/** Track layout changes without a painting loop. Decorations never intercept taps. */
+/** The attribute that draws the pulsing ring on the control itself (style.css). */
+const RING = "data-phone-hint-ring";
+
+/** Of the visible matches on screen, the one nearest the card: the control
+ * right below a tip, not whichever comes first in the page. */
+function nearestTarget(root: Element, selector: string, card: DOMRect): HTMLElement | undefined {
+  let best: HTMLElement | undefined;
+  let bestGap = Infinity;
+  for (const el of root.querySelectorAll<HTMLElement>(selector)) {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || r.bottom <= 0 || r.top >= innerHeight || el.checkVisibility?.() === false) continue;
+    const gap = r.top >= card.bottom ? r.top - card.bottom : card.top - r.bottom;
+    if (gap >= 0 && gap < bestGap) { best = el; bestGap = gap; }
+  }
+  return best;
+}
+
+/** The ring is an outline on the control, the connector lives in the card's own
+ * box: both move with what they mark, so scrolling the screen needs no redraw
+ * and neither paints over the sticky header or the bottom bar. Layout changes
+ * are tracked without a painting loop. Decorations never intercept taps. */
 function HintPointer({ card, hint }: { card: RefObject<HTMLElement | null>; hint: HintKey }) {
   const [pointer, setPointer] = useState<Pointer | null>(null);
   useEffect(() => {
     const root = card.current?.closest(".screen, .sheet") ?? card.current?.parentElement;
     const selector = TARGETS[hint];
     if (!root || !selector) return;
+    let ringed: HTMLElement | undefined;
+    const ring = (el: HTMLElement | undefined) => {
+      if (el === ringed) return;
+      ringed?.removeAttribute(RING);
+      el?.setAttribute(RING, "");
+      ringed = el;
+    };
     const update = () => {
-      if (document.hidden) { setPointer(null); return; }
-      const a = card.current?.getBoundingClientRect();
-      const target = [...root.querySelectorAll<HTMLElement>(selector)].find((el) => {
-        const r = el.getBoundingClientRect();
-        return r.width > 0 && r.height > 0 && r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth && el.checkVisibility?.() !== false;
-      });
+      const box = card.current;
+      const a = box?.getBoundingClientRect();
+      const target = box && a && !document.hidden && a.bottom > 0 && a.top < innerHeight
+        && !root.querySelector('[role="dialog"], .focus-menu-backdrop, .sheet-backdrop')
+        ? nearestTarget(root, selector, a) : undefined;
       const b = target?.getBoundingClientRect();
-      if (!a || !b || a.bottom <= 0 || a.top >= innerHeight || root.querySelector('[role="dialog"], .focus-menu-backdrop, .sheet-backdrop')) { setPointer(null); return; }
+      ring(target);
+      if (!box || !a || !b) { setPointer(null); return; }
       const below = b.top >= a.bottom;
-      const above = b.bottom <= a.top;
-      if (!below && !above) { setPointer(null); return; }
+      // Card-relative: the svg is placed at the card's padding box.
+      const ox = a.left + box.clientLeft;
+      const oy = a.top + box.clientTop;
       const x = Math.max(a.left + 12, Math.min(b.left + b.width / 2, a.right - 12));
-      const next: Pointer = { x: b.left - 3, y: b.top - 3, width: b.width + 6, height: b.height + 6,
-        fromX: x, fromY: below ? a.bottom : a.top,
-        toX: b.left + b.width / 2, toY: below ? b.top - 3 : b.bottom + 3 };
+      const next: Pointer = { fromX: x - ox, fromY: (below ? a.bottom : a.top) - oy,
+        toX: b.left + b.width / 2 - ox, toY: (below ? b.top - 3 : b.bottom + 3) - oy };
       // Most of what wakes this moved nothing: keep the pointer, skip the render.
       setPointer((current) => current && POINTER_KEYS.every((key) => current[key] === next[key]) ? current : next);
     };
     update();
     // A streamed token, a scroll: each fires many times a frame, and one
-    // measure per frame is all a pointer can show.
+    // measure per frame is all a pointer can show. A scroll that carries the
+    // card and its control together changes nothing here.
     let frame = 0;
     const changed = () => {
       if (frame) return;
@@ -116,6 +145,7 @@ function HintPointer({ card, hint }: { card: RefObject<HTMLElement | null>; hint
     document.addEventListener("visibilitychange", changed);
     return () => {
       if (frame) cancelAnimationFrame(frame);
+      ring(undefined);
       observer.disconnect(); resize.disconnect();
       window.removeEventListener("scroll", changed, true);
       window.removeEventListener("resize", changed);
@@ -127,7 +157,6 @@ function HintPointer({ card, hint }: { card: RefObject<HTMLElement | null>; hint
   return <svg className="phone-hint-pointer" aria-hidden="true">
     <path d={`M ${pointer.fromX} ${pointer.fromY} L ${pointer.toX} ${pointer.toY}`} />
     <circle cx={pointer.toX} cy={pointer.toY} r="3" />
-    <rect className="phone-hint-ring" x={pointer.x} y={pointer.y} width={pointer.width} height={pointer.height} rx="8" />
   </svg>;
 }
 
@@ -238,18 +267,17 @@ export function HintMessage({ hint, floating = false, vars, onClose }: { hint: H
   return <aside ref={card} className={`hint-message${floating ? " hint-message-floating" : ""}`} aria-label={t("mobile.hints.title")}>
     {view === "tip" && <HintPointer card={card} hint={hint} />}
     <div className="hint-message-head">
-      <strong>{t("mobile.hints.title")}{(isUntested("mobile.hints") || isUntested("mobile.hints.pace") || isUntested("mobile.hints.pointer")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong>
-      <button onClick={close} aria-label={t("mobile.hints.close")}>×</button>
+      <strong>{t("mobile.hints.title")}{(isUntested("mobile.hints") || isUntested("mobile.hints.pace") || isUntested("mobile.hints.pointer") || isUntested("mobile.hints.read") || isUntested("mobile.design.tips")) && <span className="untested">{t("mobile.newTab.untested")}</span>}</strong>
+      <button onClick={close} aria-label={t("mobile.hints.close")}><CloseIcon size="1em" /></button>
     </div>
     {view === "off"
       ? <p role={floating ? "status" : undefined}>{t("mobile.hints.offNote")}</p>
       : <>
         <p role={floating ? "status" : undefined}>{t(text, vars)}</p>
         <div className="hint-message-actions">
-          {isUntested("mobile.hints.read") && <span className="untested">{t("mobile.newTab.untested")}</span>}
-          <button onClick={() => { writeFlag("hintsOff", true); setView("off"); }}>{t("mobile.hints.turnOff")}</button>
-          <button onClick={close}>{t("mobile.hints.skip")}</button>
-          <button onClick={() => { readTip(hint); close(); }}>{t("mobile.hints.read")}</button>
+          <button className="hint-message-off" onClick={() => { writeFlag("hintsOff", true); setView("off"); }}>{t("mobile.hints.turnOff")}</button>
+          <button className="hint-message-skip" onClick={close}>{t("mobile.hints.skip")}</button>
+          <button className="hint-message-read" onClick={() => { readTip(hint); close(); }}>{t("mobile.hints.read")}</button>
         </div>
       </>}
   </aside>;

@@ -236,7 +236,7 @@ describe("boxes store — deleteBox", () => {
     expect(invoke).not.toHaveBeenCalledWith("save_projects", expect.anything());
   });
 
-  it("ends the local sessions its tabs minted, before the box goes, never an attached one", async () => {
+  it("closes the box's own tabs once the box is gone: its minted sessions (never an attached one), its PTYs, its scope", async () => {
     useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
     useProjectsStore.setState({ projects: [proj("p1")] });
     useTabsStore.setState((state) => ({
@@ -251,8 +251,8 @@ describe("boxes store — deleteBox", () => {
       },
     }));
     const calls: string[] = [];
-    invoke.mockImplementation((cmd: string, args?: { session?: string }) => {
-      calls.push(args?.session ? `${cmd} ${args.session}` : cmd);
+    invoke.mockImplementation((cmd: string, args?: { session?: string; scope?: string }) => {
+      calls.push(args?.session ? `${cmd} ${args.session}` : args?.scope ? `${cmd} ${args.scope}` : cmd);
       return Promise.resolve(undefined);
     });
 
@@ -262,8 +262,38 @@ describe("boxes store — deleteBox", () => {
       "local_tmux_kill s-agent",
       "local_tmux_kill s-shell",
     ]);
-    expect(calls.indexOf("delete_box")).toBeGreaterThan(calls.indexOf("local_tmux_kill s-agent"));
+    // The delete first: a refused one must leave the box with its sessions.
+    expect(calls.indexOf("delete_box")).toBe(0);
+    // The PTYs of the scope are reaped and its panes dropped: nothing keeps
+    // running in a scope no pill can reach.
+    expect(calls).toContain("pty_kill_scope box:boxA");
+    expect(useTabsStore.getState().tabsByScope["box:boxA"]).toBeUndefined();
     invoke.mockReset();
+  });
+
+  it("a refused delete ends nothing: the box keeps its tabs and sessions", async () => {
+    useBoxesStore.setState({ boxes: [box("boxA", ["p1"])] });
+    useTabsStore.setState((state) => ({
+      tabsByScope: {
+        ...state.tabsByScope,
+        "box:boxA": [
+          { key: "a1", kind: "agent", cmd: "claude", label: "claude", cwd: "/b", tmuxSession: "s-agent" },
+        ] as TabEntry[],
+      },
+    }));
+    const calls: string[] = [];
+    invoke.mockImplementation((cmd: string) => {
+      calls.push(cmd);
+      return cmd === "delete_box" ? Promise.reject(new Error("locked")) : Promise.resolve(undefined);
+    });
+
+    await expect(useBoxesStore.getState().deleteBox("boxA")).rejects.toThrow("locked");
+
+    expect(calls).toEqual(["delete_box"]);
+    expect(useBoxesStore.getState().boxes).toHaveLength(1);
+    expect(useTabsStore.getState().tabsByScope["box:boxA"]).toHaveLength(1);
+    invoke.mockReset();
+    useTabsStore.getState().unloadScope("box:boxA");
   });
 });
 

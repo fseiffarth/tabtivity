@@ -2134,3 +2134,26 @@ async fn completion_bench() {
         }
     }
 }
+
+#[test]
+fn a_mac_install_that_only_missed_its_sudo_link_succeeded() {
+    // Exit 0 never fails, and never probes.
+    assert!(!install_failed(true, false, || panic!("probed")));
+    assert!(!install_failed(true, true, || panic!("probed")));
+    // macOS: the script stopped at `sudo ln`, but Ollama.app is in place.
+    assert!(!install_failed(false, true, || true));
+    assert!(install_failed(false, true, || false));
+    // Linux keeps its exit status: a binary without its service is no install.
+    assert!(install_failed(false, false, || panic!("probed")));
+}
+
+#[tokio::test]
+async fn the_install_strategy_is_the_script_everywhere_but_windows() {
+    let s = ollama_install_strategy().await;
+    if cfg!(windows) {
+        assert!(s.command.starts_with("winget install"), "{}", s.command);
+    } else {
+        assert!(s.command.contains("https://ollama.com/install.sh"), "{}", s.command);
+    }
+    assert_eq!(s.auto, cfg!(any(windows, target_os = "linux", target_os = "macos")));
+}

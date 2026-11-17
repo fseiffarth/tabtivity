@@ -7,6 +7,27 @@ import type { TranslationKey } from "./i18n";
  *  the publish-to-GitHub/GitLab dialog. */
 export type GitHostProvider = "github" | "gitlab";
 
+/** Homebrew's own installer, as brew.sh gives it. */
+export const HOMEBREW_BOOTSTRAP =
+  '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
+
+/** A `brew …` line for a Mac that may have no Homebrew (2442t): installs it
+ *  first when `brew` is missing, puts it on this shell's PATH (Apple silicon
+ *  `/opt/homebrew`, Intel `/usr/local`), then runs `command`. Plain POSIX
+ *  grouping, so it runs in zsh (the default shell) and bash alike. */
+export function withHomebrew(command: string): string {
+  const shellenv = 'eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv)"';
+  return `{ command -v brew >/dev/null 2>&1 || { ${HOMEBREW_BOOTSTRAP} && ${shellenv}; }; } && ${command}`;
+}
+
+/** The Mac's git comes with Apple's Command Line Tools; their installer is the
+ *  system's own dialog, so no Homebrew is needed for it (2442t). */
+export const MAC_GIT_INSTALL = "xcode-select --install";
+
+/** Installs tmux, which persistent local terminals and phone terminals run in
+ *  (2442r). A Mac ships without it. */
+export const TMUX_INSTALL_CMD = IS_HOST_MAC ? withHomebrew("brew install tmux") : "sudo apt-get install -y tmux";
+
 /** OS-appropriate install command for a hosting provider's own CLI — the tool
  *  that actually talks to the host's API (`gh repo`/`glab repo`, forking,
  *  publishing), which plain `git` cannot do. Shared by the fork-import banner
@@ -18,7 +39,7 @@ export const PROVIDER_CLI_INSTALL: Record<GitHostProvider, { bin: string; cmd: s
     cmd: IS_HOST_WINDOWS
       ? "winget install --id GitHub.cli -e --source winget"
       : IS_HOST_MAC
-        ? "brew install gh"
+        ? withHomebrew("brew install gh")
         : "sudo apt-get install -y gh",
   },
   gitlab: {
@@ -26,7 +47,7 @@ export const PROVIDER_CLI_INSTALL: Record<GitHostProvider, { bin: string; cmd: s
     cmd: IS_HOST_WINDOWS
       ? "winget install --id GitLab.GLab -e --source winget"
       : IS_HOST_MAC
-        ? "brew install glab"
+        ? withHomebrew("brew install glab")
         : "sudo apt-get install -y glab",
   },
 };

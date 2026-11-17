@@ -3,17 +3,21 @@
 //! folder, created since launch for a fresh tab. Never read the user's home.
 //!
 //! Gemini writes JSON (newer versions JSONL with patches/rewinds) under
-//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.5.8) writes SQLite
+//! `.gemini/tmp/<project>/chats`. Antigravity (1.3.3–1.5.9) writes SQLite
 //! trajectories: `steps.step_payload` is a CortexStep protobuf, not plain
 //! text. Its embedded descriptor defines user_input (19).user_response (2),
 //! planner_response (20).response (1), and metadata (5).created_at (1). Only
 //! these fields are decoded; tool output, thoughts, config and context never
 //! become chat.
 //!
-//! Antigravity has no session hook. The Reader's Resume menu lists a folder's
-//! conversations and records the one it takes a tab onto in the tab's
-//! live-session record; the tab reads it, and is relaunched with
-//! `--conversation <id>`, until it begins another conversation.
+//! Antigravity's tab record (`live_sessions/<uid>`) is written by Tabtivity's
+//! `PreInvocation` hook (`antigravity_session`) at each model call of the
+//! tab's own conversation, and by the Reader's Resume menu. A tab whose launch
+//! note says the hook was registered treats the record as its conversation
+//! (relaunched with `--conversation <id>`, read by the Reader); one launched
+//! since the hook runs that recorded nothing starts fresh. A tab from before
+//! the hook reads the Resume menu's pick until it begins another conversation,
+//! else the folder's newest. See [`tab_choice`].
 
 use std::io::Read;
 use std::path::Path;
@@ -275,10 +279,104 @@ fn agy_tab_conversation(store: &AgyStore, ids: &[String], since: Option<i64>, ow
 fn antigravity(home: &Path, directory: &str, since: Option<i64>, own: Option<(&str, i64)>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
     let store = agy_store(home)?;
     let ids = agy_folder(&store, directory)?;
-    match agy_tab_conversation(&store, &ids, since, own) {
-        Some(id) => agy_read(&store, &id, &format!("{since:?}:{own:?}"), version, limit),
+    agy_by_folder(&store, &ids, directory, since, own, version, limit)
+}
+
+/// The tab's conversation by the folder ([`agy_tab_conversation`]), read.
+fn agy_by_folder(store: &AgyStore, ids: &[String], directory: &str, since: Option<i64>, own: Option<(&str, i64)>, version: Option<&str>, limit: usize) -> Option<AgentTranscript> {
+    match agy_tab_conversation(store, ids, since, own) {
+        Some(id) => agy_read(store, &id, &format!("{since:?}:{own:?}"), version, limit),
         None => Some(empty(format!("agy:new:{}:{since:?}:{limit}", key(directory)), version)),
     }
+}
+
+/// The Antigravity tab `uid`'s conversation for the Reader, by
+/// [`tab_choice`]: its hook's record when that is authoritative, nothing yet
+/// for a tab that began fresh, else the folder's (the Resume menu's pick while
+/// the tab began none since, or the newest begun since `since`).
+pub fn antigravity_tab(home: &Path, directory: &str, project_id: Option<&str>, uid: &str, since: Option<i64>, version: Option<&str>, limit: usize) -> AgentTranscript {
+    antigravity_tab_by(home, directory, since, version, limit, |store, ids| tab_choice_for(store, ids, project_id, uid))
+}
+
+/// [`antigravity_tab`] with the tab's [`TabChoice`] made by `choose`.
+fn antigravity_tab_by(home: &Path, directory: &str, since: Option<i64>, version: Option<&str>, limit: usize, choose: impl FnOnce(&AgyStore, &[String]) -> TabChoice) -> AgentTranscript {
+    let read = agy_store(home).and_then(|store| {
+        let ids = agy_folder(&store, directory)?;
+        match choose(&store, &ids) {
+            TabChoice::Own(id) => agy_read(&store, &id, "own", version, limit),
+            TabChoice::Fresh => Some(empty(format!("agy:new:{}:fresh:{limit}", key(directory)), version)),
+            TabChoice::Picked(id, at) => agy_by_folder(&store, &ids, directory, since, Some((&id, at)), version, limit),
+            TabChoice::Unknown => agy_by_folder(&store, &ids, directory, since, None, version, limit),
+        }
+    });
+    read.unwrap_or_else(|| AgentTranscript::unavailable("no_transcript"))
+}
+
+/// The folder's main conversation `id` is: itself, or for a subagent's (its
+/// summary names a parent) the one it was started from.
+fn agy_main(store: &AgyStore, ids: &[String], id: &str) -> Option<String> {
+    let mut id = id.to_string();
+    for _ in 0..8 {
+        if ids.contains(&id) {
+            return Some(id);
+        }
+        let parent: String = store.summaries
+            .query_row("SELECT parent_conversation_id FROM conversation_summaries WHERE conversation_id = ?1", [&id], |row| row.get(0))
+            .ok()?;
+        if !crate::services::agent_session::is_uuid_shaped(&parent) {
+            return None;
+        }
+        id = parent;
+    }
+    None
+}
+
+/// What an Antigravity tab's conversation is, from its launch note, its
+/// record and the hook's proof (`antigravity_session`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TabChoice {
+    /// The record, written by the tab's hook (or the Resume menu) since the
+    /// hook was registered: the tab's own conversation, whatever began since.
+    Own(String),
+    /// The Resume menu's pick from before the hook, and when: the tab's while
+    /// it began no other since ([`agy_tab_conversation`]).
+    Picked(String, i64),
+    /// Launched since the hook runs in its scope, and nothing recorded: the
+    /// tab never took a prompt, so no conversation is its own.
+    Fresh,
+    /// No telling: the folder's newest.
+    Unknown,
+}
+
+/// The resolve table (`docs/context/agent_sessions.md`, Antigravity): `noted`,
+/// a launch note from an earlier spawn; `proven`, the hook's proof in the
+/// scope; `record`, the tab's record and when it was written; `main_of`, the
+/// folder's main conversation a recorded id is, if any.
+fn tab_choice(noted: bool, proven: impl FnOnce() -> bool, record: Option<(String, i64)>, main_of: impl Fn(&str) -> Option<String>) -> TabChoice {
+    match record.and_then(|(id, at)| main_of(&id).map(|main| (main, at))) {
+        Some((id, _)) if noted => TabChoice::Own(id),
+        Some((id, at)) => TabChoice::Picked(id, at),
+        None if noted && proven() => TabChoice::Fresh,
+        None => TabChoice::Unknown,
+    }
+}
+
+fn tab_choice_for(store: &AgyStore, ids: &[String], project_id: Option<&str>, uid: &str) -> TabChoice {
+    tab_choice_in(store, ids, &crate::services::agent_session::live_sessions_dir(), project_id, uid)
+}
+
+/// [`tab_choice_for`] with the launch notes in `notes`.
+fn tab_choice_in(store: &AgyStore, ids: &[String], notes: &Path, project_id: Option<&str>, uid: &str) -> TabChoice {
+    if !crate::services::agent_session::is_uuid_shaped(uid) {
+        return TabChoice::Unknown;
+    }
+    let noted = crate::services::antigravity_session::read_launch_in(notes, uid).is_some();
+    tab_choice(
+        noted,
+        || crate::services::antigravity_session::hook_proven(project_id),
+        recorded_conversation(project_id, uid),
+        |id| agy_main(store, ids, id),
+    )
 }
 
 /// The conversation `id`'s prompts and answers; `went_by` is what else the
@@ -356,9 +454,9 @@ pub fn antigravity_chats(home: &Path, directory: &str, offset: usize, limit: usi
     Some((chats, (at < ids.len()).then_some(at)))
 }
 
-/// The conversation the Resume menu last took the Antigravity tab `uid` onto
-/// (`agent_session::resume_chat_plan`), and when: its live-session record,
-/// which no hook of Antigravity's writes.
+/// The conversation the tab `uid`'s live-session record names, and when it
+/// was written: for Antigravity by the tab's hook (`antigravity_session`) or
+/// by the Resume menu (`agent_session::resume_chat_plan`).
 pub fn recorded_conversation(project_id: Option<&str>, uid: &str) -> Option<(String, i64)> {
     use crate::services::agent_session::{is_uuid_shaped, live_record_dir, read_live_session_in};
     let dir = live_record_dir(project_id, uid)?;
@@ -367,31 +465,96 @@ pub fn recorded_conversation(project_id: Option<&str>, uid: &str) -> Option<(Str
     Some((id, i64::try_from(at.as_millis()).ok()?))
 }
 
-/// The conversation the tab `uid` in `directory` is in by its record — the
-/// one the Resume menu took it onto, while it began none since — for the
-/// menu's This chat mark and the next launch.
+/// The conversation the tab `uid` in `directory` is in by its record (see
+/// [`tab_choice`]), for the Resume menu's This chat mark.
 pub fn recorded_tab_conversation(home: &Path, directory: &str, project_id: Option<&str>, uid: &str) -> Option<String> {
-    let (own, at) = recorded_conversation(project_id, uid)?;
     let store = agy_store(home)?;
     let ids = agy_folder(&store, directory)?;
-    agy_tab_conversation(&store, &ids, None, Some((&own, at))).filter(|id| *id == own)
+    let notes = crate::services::agent_session::live_sessions_dir();
+    choice_conversation(&store, &ids, tab_choice_in(&store, &ids, &notes, project_id, uid))
 }
 
-/// Resolve an Antigravity tab's launch: one restored on `--continue` (the
-/// most recent conversation) goes back with `--conversation <id>` to the one
-/// the Resume menu took it onto, while it began none since. Remote and
-/// local-model tabs are left as they are.
-pub fn resolve(mut opts: PtyOptions) -> PtyOptions {
+/// The conversation a [`TabChoice`] names: its own, or the Resume menu's pick
+/// while the tab began none since.
+fn choice_conversation(store: &AgyStore, ids: &[String], choice: TabChoice) -> Option<String> {
+    match choice {
+        TabChoice::Own(id) => Some(id),
+        TabChoice::Picked(own, at) => agy_tab_conversation(store, ids, None, Some((&own, at))).filter(|id| *id == own),
+        TabChoice::Fresh | TabChoice::Unknown => None,
+    }
+}
+
+/// Resolve an Antigravity tab's launch. One restored on `--continue` (the
+/// folder's newest conversation) goes back with `--conversation <id>` to its
+/// own ([`tab_choice`]); one launched since the hook runs that never recorded
+/// one starts fresh. Every spawn names the tab's CLI in its environment (what
+/// the hook checks), registers the hook in the scope's home and, where it is
+/// registered, leaves the launch note. Remote, local-model and assistant tabs
+/// are left as they are.
+pub fn resolve(opts: PtyOptions) -> PtyOptions {
     let remote = !opts.local_only
         && opts.project_id.as_deref().is_some_and(|id| crate::services::remote::remote_target_for(id).is_some());
-    if remote || opts.local_model || !opts.args.iter().any(|arg| arg == "--continue" || arg == "-c") {
+    if remote || opts.local_model || opts.assistant.is_some() {
         return opts;
     }
-    let Some(uid) = opts.env.get(crate::app_env!("TAB_UID")).cloned() else { return opts };
-    if !Path::new(&opts.cwd).is_absolute() { return opts; }
-    let home = crate::services::agent_home::scope_home(opts.project_id.as_deref());
-    let Some(id) = recorded_tab_conversation(&home, &opts.cwd, opts.project_id.as_deref(), &uid) else { return opts };
-    opts.args = continued_onto(&opts.args, &id);
+    let project_id = opts.project_id.clone();
+    let home = crate::services::agent_home::scope_home(project_id.as_deref());
+    let registered = crate::services::antigravity_session::register_for_spawn(&home);
+    let directory = opts.cwd.clone();
+    let store = Path::new(&directory).is_absolute().then(|| agy_store(&home)).flatten();
+    resolve_in(opts, &crate::services::agent_session::live_sessions_dir(), registered, |uid, notes| {
+        let store = store.as_ref()?;
+        let ids = agy_folder(store, &directory)?;
+        continue_onto(store, &ids, tab_choice_in(store, &ids, notes, project_id.as_deref(), uid))
+    })
+}
+
+/// What a `--continue` becomes for a [`TabChoice`]: `--conversation <id>`
+/// (`Some(Some(id))`), a fresh start (`Some(None)`), or itself (`None`).
+fn continue_onto(store: &AgyStore, ids: &[String], choice: TabChoice) -> Option<Option<String>> {
+    match choice {
+        TabChoice::Fresh => Some(None),
+        choice => Some(Some(choice_conversation(store, ids, choice)?)),
+    }
+}
+
+/// Testable core of [`resolve`]: `notes` holds the launch notes; `choose`
+/// answers a `--continue` with the tab's conversation (`Some(Some(id))`), a
+/// fresh start (`Some(None)`) or no telling (`None`, the flag stays).
+fn resolve_in(
+    mut opts: PtyOptions,
+    notes: &Path,
+    registered: bool,
+    choose: impl FnOnce(&str, &Path) -> Option<Option<String>>,
+) -> PtyOptions {
+    use crate::services::antigravity_session::{write_launch_in, Launch};
+    opts.env.insert(crate::services::agent_session::TAB_AGENT_ENV.to_string(), "agy".to_string());
+    let Some(uid) = opts.env.get(crate::app_env!("TAB_UID")).filter(|uid| crate::services::agent_session::is_uuid_shaped(uid)).cloned() else {
+        return opts;
+    };
+    let now = crate::clock::now_ms() as i64;
+    let launch = if opts.args.iter().any(|arg| arg == "--continue" || arg == "-c") {
+        match choose(&uid, notes) {
+            Some(Some(id)) => {
+                opts.args = continued_onto(&opts.args, &id);
+                Launch::Fresh(now)
+            }
+            Some(None) => {
+                opts.args.retain(|arg| arg != "--continue" && arg != "-c");
+                Launch::Fresh(now)
+            }
+            None => Launch::Continued,
+        }
+    } else {
+        Launch::Fresh(now)
+    };
+    // Without the hook registered the tab records nothing, so it is not told
+    // apart from a tab from before the hook.
+    if registered {
+        if let Err(e) = write_launch_in(notes, &uid, launch) {
+            eprintln!("google_chat: launch note: {e}");
+        }
+    }
     opts
 }
 
@@ -665,6 +828,168 @@ mod tests {
         // A record naming no conversation of the folder is no record.
         assert_eq!(agy_tab_conversation(&store, &ids, None, Some(("31234567-1234-1234-1234-0123456789ab", recorded))).as_deref(), Some(NEW));
         assert_eq!(agy_tab_conversation(&store, &ids, Some(1_791_979_211_000), None), None);
+    }
+
+    const UID_A: &str = "0b9f6a52-3c1d-4e8a-9f00-1a2b3c4d5e6f";
+    const UID_B: &str = "1b9f6a52-3c1d-4e8a-9f00-1a2b3c4d5e6f";
+    const UID_C: &str = "2b9f6a52-3c1d-4e8a-9f00-1a2b3c4d5e6f";
+
+    fn agy_opts(args: &[&str], uid: Option<&str>) -> PtyOptions {
+        let mut o = PtyOptions {
+            login: None,
+            assistant: None,
+            id: "t".to_string(),
+            cmd: "agy".to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            env: Default::default(),
+            cwd: "/".to_string(),
+            cols: 80,
+            rows: 24,
+            local_only: false,
+            sandbox: false,
+            agent: true,
+            project_id: None,
+            remote_host_id: None,
+            tmux_session: None,
+            tmux_attach: None,
+            host_bound_uid: None,
+            local_model: false,
+            schedule_target_id: None,
+            host_session: false,
+            api_key: None,
+            mux_wrapped: false,
+        };
+        if let Some(uid) = uid {
+            o.env.insert(crate::app_env!("TAB_UID").to_string(), uid.to_string());
+        }
+        o
+    }
+
+    /// A folder with OLD (begun at +0 s) and NEW (+10 s), and a subagent of OLD.
+    fn two_conversations(home: &Path) -> (AgyStore, Vec<String>) {
+        const OLD: &str = "01234567-1234-1234-1234-0123456789ab";
+        const NEW: &str = "11234567-1234-1234-1234-0123456789ab";
+        let directory = home.to_str().unwrap();
+        let (summaries, conn) = agy_db(home, directory);
+        insert(&conn, 0, 14, 3, "old question");
+        let second = agy_second(home, &summaries, directory, NEW);
+        insert(&second, 10, 14, 3, "new question");
+        summaries.execute("INSERT INTO conversation_summaries VALUES (?1, ?2, '2026-10-17', ?3)", rusqlite::params![
+            "41234567-1234-1234-1234-0123456789ab",
+            serde_json::to_string(&[url::Url::from_directory_path(directory).unwrap().to_string()]).unwrap(),
+            OLD
+        ]).unwrap();
+        let store = agy_store(home).unwrap();
+        let ids = agy_folder(&store, directory).unwrap();
+        assert_eq!(ids, [NEW, OLD], "a subagent is no conversation of the folder");
+        (store, ids)
+    }
+
+    #[test]
+    fn the_resolve_table_row_by_row() {
+        const OLD: &str = "01234567-1234-1234-1234-0123456789ab";
+        const NEW: &str = "11234567-1234-1234-1234-0123456789ab";
+        const SUB: &str = "41234567-1234-1234-1234-0123456789ab";
+        const GONE: &str = "31234567-1234-1234-1234-0123456789ab";
+        let home = tempfile::tempdir().unwrap();
+        let (store, ids) = two_conversations(home.path());
+        let main = |id: &str| agy_main(&store, &ids, id);
+        let before_new = 1_791_979_201_000;
+        let after_new = 1_791_979_212_000;
+        // A launch note and a record of the folder's: that conversation, though
+        // a newer one began since the record ("began none since" is skipped).
+        let own = tab_choice(true, || unreachable!(), Some((OLD.into(), before_new)), main);
+        assert_eq!(own, TabChoice::Own(OLD.into()));
+        assert_eq!(continue_onto(&store, &ids, own), Some(Some(OLD.into())));
+        // A subagent's id in the record stands for the conversation it ran in.
+        assert_eq!(tab_choice(true, || unreachable!(), Some((SUB.into(), 0)), main), TabChoice::Own(OLD.into()));
+        // No note: today's rule, the Resume menu's pick while the tab began none since.
+        let picked = tab_choice(false, || unreachable!(), Some((OLD.into(), before_new)), main);
+        assert_eq!(picked, TabChoice::Picked(OLD.into(), before_new));
+        assert_eq!(continue_onto(&store, &ids, picked), None);
+        let picked = tab_choice(false, || unreachable!(), Some((OLD.into(), after_new)), main);
+        assert_eq!(continue_onto(&store, &ids, picked), Some(Some(OLD.into())));
+        // A note, no record of the folder's, the hook proven in the scope: fresh.
+        for record in [None, Some((GONE.to_string(), after_new))] {
+            assert_eq!(tab_choice(true, || true, record, main), TabChoice::Fresh);
+        }
+        assert_eq!(continue_onto(&store, &ids, TabChoice::Fresh), Some(None));
+        // Otherwise: today's fallback, the flag as it is.
+        assert_eq!(tab_choice(true, || false, None, main), TabChoice::Unknown);
+        assert_eq!(tab_choice(false, || true, Some((GONE.into(), 0)), main), TabChoice::Unknown);
+        assert_eq!(continue_onto(&store, &ids, TabChoice::Unknown), None);
+        assert_eq!(choice_conversation(&store, &ids, TabChoice::Own(NEW.into())).as_deref(), Some(NEW));
+    }
+
+    #[test]
+    fn two_tabs_of_one_folder_come_back_to_their_own_conversations() {
+        const OLD: &str = "01234567-1234-1234-1234-0123456789ab";
+        const NEW: &str = "11234567-1234-1234-1234-0123456789ab";
+        use crate::services::antigravity_session::{read_launch_in, Launch};
+        let home = tempfile::tempdir().unwrap();
+        let notes = tempfile::tempdir().unwrap();
+        let (store, ids) = two_conversations(home.path());
+        let records = |uid: &str| match uid {
+            UID_A => Some((OLD.to_string(), 0)),
+            UID_B => Some((NEW.to_string(), 0)),
+            _ => None,
+        };
+        let spawn = |args: &[&str], uid: &str| {
+            resolve_in(agy_opts(args, Some(uid)), notes.path(), true, |uid, notes| {
+                let noted = read_launch_in(notes, uid).is_some();
+                continue_onto(&store, &ids, tab_choice(noted, || true, records(uid), |id| agy_main(&store, &ids, id)))
+            })
+        };
+        // Each tab's first launch: no flag to resolve, noted, and told it is Antigravity.
+        for uid in [UID_A, UID_B, UID_C] {
+            let first = spawn(&[], uid);
+            assert!(first.args.is_empty());
+            assert_eq!(first.env.get(crate::services::agent_session::TAB_AGENT_ENV).map(String::as_str), Some("agy"));
+            assert!(matches!(read_launch_in(notes.path(), uid), Some(Launch::Fresh(_))));
+        }
+        // Restored with the continue flag: each into its own; the one that never
+        // took a prompt starts fresh rather than in a sibling's.
+        assert_eq!(spawn(&["--model", "m", "--continue"], UID_A).args, ["--model", "m", "--conversation", OLD]);
+        assert_eq!(spawn(&["-c"], UID_B).args, ["--conversation", NEW]);
+        assert!(spawn(&["--continue"], UID_C).args.is_empty());
+    }
+
+    #[test]
+    fn a_tab_from_before_the_hook_keeps_its_continue_and_is_noted_only_when_registered() {
+        use crate::services::antigravity_session::{read_launch_in, Launch};
+        let notes = tempfile::tempdir().unwrap();
+        let out = resolve_in(agy_opts(&["--continue"], Some(UID_A)), notes.path(), false, |_, _| None);
+        assert_eq!(out.args, ["--continue"]);
+        assert_eq!(read_launch_in(notes.path(), UID_A), None);
+        let out = resolve_in(agy_opts(&["--continue"], Some(UID_A)), notes.path(), true, |_, _| None);
+        assert_eq!(out.args, ["--continue"]);
+        assert_eq!(read_launch_in(notes.path(), UID_A), Some(Launch::Continued));
+        // No tab key: nothing resolved, nothing noted, the CLI still named.
+        let out = resolve_in(agy_opts(&["--continue"], None), notes.path(), true, |_, _| unreachable!());
+        assert_eq!(out.args, ["--continue"]);
+        assert_eq!(out.env.get(crate::services::agent_session::TAB_AGENT_ENV).map(String::as_str), Some("agy"));
+        let bad = resolve_in(agy_opts(&["--continue"], Some("../x")), notes.path(), true, |_, _| unreachable!());
+        assert_eq!(bad.args, ["--continue"]);
+    }
+
+    #[test]
+    fn the_reader_reads_the_authoritative_record_and_nothing_for_a_fresh_tab() {
+        const OLD: &str = "01234567-1234-1234-1234-0123456789ab";
+        let home = tempfile::tempdir().unwrap();
+        two_conversations(home.path());
+        let directory = home.path().to_str().unwrap();
+        let read = |choice: TabChoice, since: Option<i64>| antigravity_tab_by(home.path(), directory, since, None, 60, |_, _| choice);
+        // The tab's own conversation, though the folder has a newer one begun
+        // since its launch.
+        let own = read(TabChoice::Own(OLD.into()), Some(1_791_979_205_000));
+        assert_eq!(texts(&own), [("prompt", "old question")]);
+        assert!(antigravity_tab_by(home.path(), directory, None, own.version.as_deref(), 60, |_, _| TabChoice::Own(OLD.into())).unchanged);
+        // A fresh tab has none yet, not a sibling's.
+        let fresh = read(TabChoice::Fresh, None);
+        assert!(fresh.available && fresh.entries.is_empty());
+        // No telling: the folder's newest, as before.
+        assert_eq!(texts(&read(TabChoice::Unknown, None)), [("prompt", "new question")]);
+        assert_eq!(texts(&read(TabChoice::Picked(OLD.into(), 1_791_979_212_000), None)), [("prompt", "old question")]);
     }
 
     #[test]

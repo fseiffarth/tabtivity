@@ -92,7 +92,7 @@ import { isOpenCodeTab, openCodeDialogCloseKeys } from "../terminal/openCodeMini
 import { groupOpenCodeModels, isOpenCodeModelList, openCodeModelGroupTitle } from "../terminal/openCodeModelGroups";
 import { isAntigravityTab } from "../terminal/antigravity";
 import { isCursorTab } from "../terminal/cursorAgent";
-import { currentMode, modeChoices, modeFixed, shiftTabKey } from "../terminal/agentModes";
+import { currentMode, modeChoices, modeFixed, modeOffered, shiftTabKey } from "../terminal/agentModes";
 import { agentFamily } from "../terminal/composer";
 import { CLAUDE_EFFORTS } from "../../../shared/claudeEfforts";
 import { CommitFiles } from "./CommitFiles";
@@ -1776,6 +1776,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     if (sendAgentText(`/effort ${level}`)) setEffortPicked(level);
   };
   const openModeSheet = () => {
+    if (!modeOffered(agentLabel)) return;
     if (modes.length === 0 && !fixedMode) {
       cycleMode();
       return;
@@ -2922,7 +2923,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           {tab.local_model
             ? <span className="fact-model">{modelChip}</span>
             : !modelPill && <button className="fact-action" disabled={!connected} data-phone-hint="model" onClick={selectModel} aria-haspopup="dialog" aria-expanded={modelSheet} title={t("mobile.facts.modelHint")} aria-label={chipEffort ? `${chipModel} · ${t("terminal.reader.effort", { effort: chipEffort })}` : undefined}><span className="fact-action-label">{chipModel}</span>{chipEffort && <span className="fact-effort" aria-hidden="true"><MeterIcon size="1em" />{chipEffort}</span>}</button>}
-          <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>
+          {modeOffered(agentLabel) && <button className={`fact-action${status?.mode === "plan" ? " fact-action-plan" : ""}`} disabled={!connected} data-phone-hint="mode" onClick={openModeSheet} aria-haspopup={modes.length > 0 ? "dialog" : undefined} aria-expanded={modes.length > 0 ? modeSheet : undefined} title={t(modes.length > 0 ? "mobile.facts.modeHint" : "mobile.facts.modeCycle")}><span className="fact-action-label">{status?.mode ?? activeMode ?? t("terminal.reader.mode")}</span></button>}
           {status?.mode === "plan" && isUntested("mobile.focus.planModeMark") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {openCode && altScreen && status && isUntested("mobile.focus.openCodeComposer") && <em className="composer-untested">{t("mobile.focus.untested")}</em>}
           {(isUntested("mobile.design.rounded") || isUntested("mobile.focus.flatAnswers")) && <em className="composer-untested">{t("mobile.focus.untested")}</em>}

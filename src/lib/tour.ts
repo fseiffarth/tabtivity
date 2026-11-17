@@ -1,4 +1,5 @@
 import { focusModeTip, type HintCtx } from "./shortcuts/hints";
+import { forPlatformKeys } from "./shortcuts/shortcuts";
 import type { TranslationKey } from "./i18n";
 
 /**
@@ -97,6 +98,10 @@ export interface TourStep {
   bodyParams?: (
     t: (key: TranslationKey, params?: Record<string, string | number>) => string,
   ) => Record<string, string | number>;
+  /** The body names a key the program in a terminal reads, not a shortcut of
+   *  the app: Ctrl+C interrupts on a Mac too, so the text is shown as written
+   *  instead of with ⌘ for Ctrl (`stepBody`). */
+  terminalKeys?: boolean;
   /** Eligible only while this holds for the current context (defaults to
    *  always). Ineligible steps are skipped by the Back/Next navigation. */
   when?: (ctx: TourCtx) => boolean;
@@ -326,6 +331,12 @@ export function taskClickSelector(step: TourStep): string | null {
 /** Whether a step waits on the user instead of on Next. */
 export function isInteractive(step: TourStep): boolean {
   return step.task != null;
+}
+
+/** A step's translated body as the host shows it: "Ctrl" reads ⌘ on a Mac
+ *  (2442x), except where the step names a terminal's own keys. */
+export function stepBody(step: TourStep, text: string, mac?: boolean): string {
+  return step.terminalKeys ? text : forPlatformKeys(text, mac);
 }
 
 /** Praise shown when a task is solved, varied by position so a lesson doesn't
