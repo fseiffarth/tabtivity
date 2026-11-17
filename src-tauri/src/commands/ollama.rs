@@ -1266,6 +1266,15 @@ fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
     }
 
     if let Some(err) = last_err {
+        if is_missing_manifest(&err) {
+            // The registry has no such ref (renamed or withdrawn tag, a typo):
+            // no re-pull can ever succeed, so keeping the record would offer a
+            // Continue that fails the same way on every open.
+            mark_pending_pull(model, false);
+            return Err(format!(
+                "{model} is not on the registry (renamed or removed?), so it cannot be downloaded or resumed. Ollama said: {err}"
+            ));
+        }
         return Err(friendly_ollama_error(&err));
     }
     if status_code >= 400 {
@@ -1274,6 +1283,14 @@ fn pull_blocking(ctx: &CoreCtx, model: &str) -> Result<(), String> {
     // Completed cleanly — drop it from the interrupted-pull record.
     mark_pending_pull(model, false);
     Ok(())
+}
+
+/// Ollama's pull error for a ref the registry answers 404 for: its
+/// `pullModelManifest` maps the 404 to `os.ErrNotExist`, so the stream says
+/// `pull model manifest: file does not exist`.
+fn is_missing_manifest(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("manifest") && (lower.contains("does not exist") || lower.contains("not found"))
 }
 
 // ── Update checks ─────────────────────────────────────────────────────────

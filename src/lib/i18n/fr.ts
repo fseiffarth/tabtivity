@@ -3756,6 +3756,7 @@ export const dict: Dict = {
   "ollama.hfBadge": "Hugging Face",
   "ollama.hfTitle": "Dépôt GGUF sur Hugging Face de {user} ; le sélecteur liste ses quantifications",
   "ollama.hfGated": "Dépôt restreint : acceptez ses conditions sur Hugging Face et ajoutez d'abord la clé publique d'Ollama (~/.ollama/id_ed25519.pub) à votre compte",
+  "ollama.hfRealmHost": "Hugging Face demande à Ollama de s'authentifier : ce dépôt est restreint ou privé. Demandez l'accès sur sa page, ajoutez la clé publique d'Ollama (~/.ollama/id_ed25519.pub) à votre compte Hugging Face, puis téléchargez-le comme huggingface.co/<user>/<repo>:<quant> (pas hf.co/…)",
   "ollama.any": "Tous",
   "ollama.cap.tools": "outils",
   "ollama.cap.vision": "vision",

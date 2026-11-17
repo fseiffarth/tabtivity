@@ -3767,6 +3767,8 @@ export const enSource = {
   "ollama.hfBadge": "Hugging Face",
   "ollama.hfTitle": "GGUF repo on Hugging Face by {user}; the picker lists its quantizations",
   "ollama.hfGated": "Gated repo: accept its terms on Hugging Face and add Ollama's public key (~/.ollama/id_ed25519.pub) to your account first",
+  "ollama.hfRealmHost": "Hugging Face asked Ollama to sign in: this repo is gated or private. Request access on its page, add Ollama's public key (~/.ollama/id_ed25519.pub) to your Hugging Face account, then pull it as huggingface.co/<user>/<repo>:<quant> (not hf.co/…)",
+  "ollama.chipDiag": "Filter click trace (temporary diagnostic) — screenshot this",
   "ollama.any": "Any",
   "ollama.cap.tools": "tools",
   "ollama.cap.vision": "vision",
