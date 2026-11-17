@@ -3729,3 +3729,34 @@ fn tabs_tools_are_served_to_the_tabs_identity_alone() {
         assert!(!security::tool(name).unwrap().serves(Caller::Tabs), "{name}");
     }
 }
+
+#[test]
+fn a_cockpit_binding_without_a_session_name_finds_its_tab_by_launch_uid() {
+    use crate::services::{mcp::cockpit_mcp as cockpit, workspace};
+    let state = tempfile::tempdir().unwrap();
+    let path = crate::services::mobile_control::headless::session_file(state.path(), "p");
+    let uid = "0199aaaa-0000-7000-8000-00000000c0de";
+    let tab = |key: &str, uid: &str| serde_json::from_value(json!({"key":key,"label":key,"cmd":"claude",
+        "cwd":state.path().to_string_lossy(),"kind":"agent","env":{crate::app_env!("TAB_UID"): uid}})).unwrap();
+    let mine = workspace::create_tab_in(&path, "p", tab("mine", uid), None).unwrap().tab;
+    workspace::create_tab_in(&path, "p", tab("other", "0199aaaa-0000-7000-8000-0000000000ff"), None).unwrap();
+    let nonce = || Some("n".repeat(32));
+    // No session host (Windows without it, unix without Mobile access): no tmux name.
+    let mut spawn = opts("claude", &[], Some("p"));
+    spawn.tmux_session = None;
+    assert!(cockpit::binding_for_spawn_with(state.path(), &spawn, nonce).is_none(), "no uid: no tab");
+    spawn.env.insert(crate::app_env!("TAB_UID").into(), uid.into());
+    let bound = cockpit::binding_for_spawn_with(state.path(), &spawn, nonce).expect("bound by uid");
+    assert_eq!(Some(bound.id.as_str()), workspace::tab_id(&mine));
+    spawn.env.insert(crate::app_env!("TAB_UID").into(), "../not-a-uid".into());
+    assert!(cockpit::binding_for_spawn_with(state.path(), &spawn, nonce).is_none(), "not uuid-shaped");
+    // Two saved tabs with the same uid are ambiguous: no grant.
+    workspace::create_tab_in(&path, "p", tab("copy", uid), None).unwrap();
+    spawn.env.insert(crate::app_env!("TAB_UID").into(), uid.into());
+    assert!(cockpit::binding_for_spawn_with(state.path(), &spawn, nonce).is_none(), "ambiguous uid");
+    // A session name, when there is one, still decides alone.
+    spawn.tmux_session = workspace::tmux_of(&mine).map(str::to_string);
+    if spawn.tmux_session.is_some() {
+        assert_eq!(cockpit::binding_for_spawn_with(state.path(), &spawn, nonce).map(|b| b.id), workspace::tab_id(&mine).map(str::to_string));
+    }
+}

@@ -68,17 +68,50 @@ pub(crate) fn binding_for_spawn_with(
     let scope = opts.project_id.as_deref().unwrap_or(crate::storage::ROOT_SCOPE);
     if crate::storage::is_reserved_scope(scope) && scope != crate::storage::ROOT_SCOPE { return None; }
     if opts.assistant.is_some() || opts.sandbox || opts.tmux_attach.is_some() { return None; }
-    let tmux = opts.tmux_session.as_deref()?;
+    let key = spawn_tab_key(opts)?;
     let path = super::super::mobile_control::headless::session_file(state, scope);
     let saved: crate::schema::TerminalSession = crate::storage::read_json(&path).ok()?;
     // project-tree-read: ok — the state-dir session file, read/edited by scope id (never the project tree).
     let mut matches = saved.tab_layout.iter().filter(|tab| {
-        workspace::tmux_of(tab) == Some(tmux)
+        key.matches(tab)
             && tab.extra.get("kind").and_then(Value::as_str).is_some_and(|k| matches!(k, "agent" | "local_agent"))
     });
     let tab = matches.next()?;
     if matches.next().is_some() { return None; }
     Some(Binding { state: state.into(), scope: scope.into(), id: workspace::tab_id(tab)?.into(), spawn: mint()? })
+}
+
+/// What names a spawn's saved tab: its own tmux session where it has one, else
+/// its launch uid. An agent tab gets a session name only where a session host
+/// carries it (tmux behind Mobile access on unix, the session host on
+/// Windows); without one, the uid every agent spawn carries in its env — and
+/// its saved tab records the same way — still picks exactly one tab.
+enum SpawnTabKey<'a> {
+    Tmux(&'a str),
+    Uid(&'a str),
+}
+
+impl SpawnTabKey<'_> {
+    fn matches(&self, tab: &crate::schema::project::TabEntry) -> bool {
+        match self {
+            SpawnTabKey::Tmux(tmux) => workspace::tmux_of(tab) == Some(*tmux),
+            SpawnTabKey::Uid(uid) => saved_tab_uid(tab) == Some(*uid),
+        }
+    }
+}
+
+fn spawn_tab_key(opts: &crate::terminal::PtyOptions) -> Option<SpawnTabKey<'_>> {
+    if let Some(tmux) = opts.tmux_session.as_deref() {
+        return Some(SpawnTabKey::Tmux(tmux));
+    }
+    let uid = opts.env.get(crate::app_env!("TAB_UID"))?;
+    crate::services::agent_session::is_uuid_shaped(uid).then_some(SpawnTabKey::Uid(uid))
+}
+
+/// The launch uid a saved tab spawns with (its `env`), when it is uuid-shaped.
+fn saved_tab_uid(tab: &crate::schema::project::TabEntry) -> Option<&str> {
+    let uid = tab.extra.get("env")?.get(crate::app_env!("TAB_UID"))?.as_str()?;
+    crate::services::agent_session::is_uuid_shaped(uid).then_some(uid)
 }
 
 /// A new spawn's grant: activity and a blocker another spawn issued are not
