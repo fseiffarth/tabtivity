@@ -131,7 +131,7 @@ const fullFrame = (footer: string, row = composerRow("Build", "Muse Spark 1.3 Fr
 describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
   it("reads the agent, the model without its provider, the variant and the context", () => {
     expect(sessionStatus(fullFrame(" ~/projects/app                        12.3K (5%) · $0.02  ctrl+p commands"), "OpenCode"))
-      .toEqual({ mode: "build", model: "Muse Spark 1.3 Free", effort: "high", context: "95%" });
+      .toEqual({ path: "~/projects/app", mode: "build", model: "Muse Spark 1.3 Free", effort: "high", context: "95%" });
   });
 
   it("keeps the whole model phrase where the row's colours are unknown", () => {
@@ -140,7 +140,7 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
       " Plan auto · Grok 4.5 GitHub Copilot",
       " ~/projects/app                                   tab agents  ctrl+p commands",
     );
-    expect(sessionStatus(screen, "OpenCode")).toEqual({ mode: "plan", model: "Grok 4.5 GitHub Copilot" });
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ path: "~/projects/app", mode: "plan", model: "Grok 4.5 GitHub Copilot" });
   });
 
   it("reads the composer while the session works", () => {
@@ -179,14 +179,14 @@ describe(`${BRAND.display} Mobile OpenCode full TUI composer`, () => {
       line(`${" ".repeat(113)}2.1.3`),
     ];
     expect(inputFrameStart(screen, "OpenCode")).toBe(0);
-    expect(sessionStatus(screen, "OpenCode")).toEqual({ mode: "build", model: "Flint 40B Free" });
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ path: "/…/scratchpad/oc/proj", mode: "build", model: "Flint 40B Free" });
     // A version printed as output under no box is still not a frame.
     expect(inputFrameStart(lines("Bumped to", "", "2.1.3"), "OpenCode")).toBe(3);
   });
 
   it("names no mode in shell mode", () => {
     const screen = lines("", " Shell", " ~/projects/app                 esc exit shell mode");
-    expect(sessionStatus(screen, "OpenCode")).toEqual({});
+    expect(sessionStatus(screen, "OpenCode")).toEqual({ path: "~/projects/app" });
   });
 
   it("is not found without its footer, or for a tab no label names OpenCode", () => {
@@ -241,7 +241,7 @@ describe(`${BRAND.display} Mobile OpenCode 2 mini status`, () => {
       "",
       "Build · gemma4:26b · Ollama (local) · ctrl+p menu",
     );
-    expect(sessionStatus(start, "gemma4:26b · OpenCode")).toEqual({ mode: "build", model: "gemma4:26b" });
+    expect(sessionStatus(start, "gemma4:26b · OpenCode")).toEqual({ path: "~/projects/app", mode: "build", model: "gemma4:26b" });
     expect(inputFrameStart(start, "gemma4:26b · OpenCode")).toBe(1);
     expect(inputFrameStart(start, "Claude")).toBe(start.length);
   });

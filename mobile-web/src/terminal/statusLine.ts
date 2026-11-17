@@ -29,6 +29,7 @@ import {
   isOpenCodeHomeFooter,
   isOpenCodeTab,
   isOpenCodePlaceholder,
+  openCodeBannerPath,
   openCodeComposer,
   openCodeFullFooter,
   openCodeMiniRow,
@@ -352,6 +353,8 @@ function openCodeFrame(
     else break;
   }
   const status: SessionStatus = { mode: row.mode };
+  const folder = openCodeBannerPath(lines);
+  if (folder) status.path = folder;
   if (row.context) status.context = row.context;
   if (row.model) status.model = row.model;
   if (!status.model) {
@@ -385,6 +388,8 @@ function openCodeMiniV2Frame(
     else break;
   }
   const status: SessionStatus = {};
+  const folder = openCodeBannerPath(lines);
+  if (folder) status.path = folder;
   if (row.mode) status.mode = row.mode;
   if (row.model) status.model = row.model;
   if (row.variant) status.effort = row.variant;
@@ -428,6 +433,8 @@ function openCodeFullFrame(
     else break;
   }
   const status: SessionStatus = {};
+  if (facts.path) status.path = facts.path;
+  if (facts.branch) status.branch = facts.branch;
   if (composer.mode) status.mode = composer.mode;
   if (composer.model) status.model = composer.model;
   if (composer.variant) status.effort = composer.variant;

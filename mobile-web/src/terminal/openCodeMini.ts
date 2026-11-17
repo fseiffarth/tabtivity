@@ -163,6 +163,22 @@ function contextLeft(text: string): string | undefined {
  * column: `model union-alpha`. */
 const MODEL_NOTICE = /(?:^|\s{2,})model\s+([A-Za-z0-9][\w.:/-]*)/u;
 
+/** The folder a mini session's banner names: `▪ oc mini v2.3.0 · ~/work`
+ * (OpenCode 2) or the second row of 1.x's block logo, `█  █  ~/project`. Mini
+ * draws the folder nowhere else, and no branch at all. The newest banner on
+ * screen wins (`/new` prints another). */
+const BANNER_V2_PATH = /^\s*(?:▪|\[O\]) oc mini\b.*? · (\S.*?)\s*$/u;
+const BANNER_V1_PATH = /^[█▀▄▌▐]+\s+[█▀▄▌▐]+\s+((?:~|\/|[A-Za-z]:[\\/])\S*.*?)\s*$/u;
+
+export function openCodeBannerPath(lines: readonly { text: string }[]): string | undefined {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const text = lines[index].text;
+    const path = (BANNER_V2_PATH.exec(text) ?? BANNER_V1_PATH.exec(text))?.[1];
+    if (path) return path;
+  }
+  return undefined;
+}
+
 /** The status the row carries, or `null` when the row is not one. */
 export function openCodeStatusRow(text: string): OpenCodeStatus | null {
   const match = CHIP_ROW.exec(text.replace(/\s+$/u, ""));
@@ -334,8 +350,34 @@ export interface OpenCodeComposer {
 export interface OpenCodeFooter {
   /** The session is working: the row carries the interrupt hint. */
   busy: boolean;
-  /** Context left, from the share the row prints used (`12.3K (5%)` → `95%`). */
+  /** Context left, from the share the row prints used (`12.3K (5%)` → `95%`).
+   * `110 (0%)` is 0% *used*, so 100% left; a model with no known window prints
+   * the count alone and reads as no context. */
   context?: string;
+  /** The folder, as the idle footer's left end prints it (`~/work`). */
+  path?: string;
+  /** The git branch, after the folder's `:` (`~/work:develop`). */
+  branch?: string;
+}
+
+/** The footer's left column when it is the folder: `~/work:develop`, `/…/proj`
+ * (the start screen), `C:\work`. While a turn runs the column is the spinner
+ * and the interrupt hint instead, which is no folder. */
+const FOOTER_FOLDER = /^(?:~|\/|[A-Za-z]:[\\/])/u;
+
+/** The folder and branch the footer's first column names, or `{}`. The branch
+ * is what follows the last `:` past a drive letter; git allows no `:` or space
+ * in one. */
+function footerFolder(text: string): { path?: string; branch?: string } {
+  const column = text.trim().split(/\s{2,}/u)[0];
+  if (!FOOTER_FOLDER.test(column)) return {};
+  const drive = /^[A-Za-z]:/u.test(column) ? 2 : 0;
+  const colon = column.lastIndexOf(":");
+  if (colon > drive) {
+    const branch = column.slice(colon + 1);
+    if (branch && !/\s/u.test(branch)) return { path: column.slice(0, colon), branch };
+  }
+  return { path: column };
 }
 
 /** The row under the full TUI's composer, or `null` when the row is not it. */
@@ -344,6 +386,7 @@ export function openCodeFullFooter(text: string): OpenCodeFooter | null {
   const footer: OpenCodeFooter = { busy: /(?:^|\s)esc (?:again to )?interrupt\b/u.test(text) };
   const context = contextLeft(text);
   if (context) footer.context = context;
+  Object.assign(footer, footerFolder(text));
   return footer;
 }
 
