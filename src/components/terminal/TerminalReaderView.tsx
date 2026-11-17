@@ -56,6 +56,7 @@ import { TerminalReaderChanges } from "./TerminalReaderChanges";
 import { useCheckpointNow, useReaderCheckpoints } from "./ReaderCheckpoints";
 import { TerminalReaderFiles, type ReaderFile } from "./TerminalReaderFiles";
 import { inboxLeaves } from "../../../mobile-web/src/terminal/inboxRefs";
+import { stopKey } from "../../../mobile-web/src/terminal/agentBusy";
 import { useEditorJumpStore } from "../../stores/viewers/editorJump";
 import { chatWhen, resumeChatWithToast } from "./TerminalReaderChats";
 import { chatPosition, stepChat, useReaderChatsStore } from "../../lib/agents/agentChats";
@@ -1535,6 +1536,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     key: (key) => typeIntoPane([key]).then(() => true, () => false),
   }), [ptyId, typeIntoPane]);
   const tabFamily = queueFamily(agentFamily(tab?.cmd ?? ""));
+  /** The key that stops this CLI's turn: Ctrl+C for Copilot, Esc elsewhere. */
+  const stopWith = stopKey(agentFamily(tab?.cmd ?? ""));
   const workingRef = useRef(false);
   workingRef.current = !!live.working;
   const sendTargetRef = useRef(sendTarget);
@@ -1549,7 +1552,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * it is still the newest prompt — the next one Claude records hangs from
    * where it hung, and the transcript read drops it then (`claude_rewound`). */
   const [takenBack, setTakenBack] = useState<string | null>(null);
-  /** Esc, the working row's Stop. With a queue on screen it is Send now where
+  /** The stop key (`stopWith`), the working row's Stop. With a queue on screen it is Send now where
    * a lone Esc would not send it: Codex would drop it into a box the chat
    * does not show, OpenCode asks for a second press. */
   const pressEscape = useCallback(() => {
@@ -1563,7 +1566,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     // next send empties.
     const sent = tabFamily === "claude" && workingRef.current ? stoppableRef.current() : [];
     const before = sent.length > 0 ? claudeBoxWords(driver.rows()) : "";
-    void typeIntoPane(["\u001b"]).then(async () => {
+    void typeIntoPane([stopWith]).then(async () => {
       if (sent.length === 0) return;
       const back = await takeBackStopped(driver, sent.map((item) => item.text), before);
       if (!back) return;
@@ -1572,7 +1575,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
       else setTakenBack(item.text);
       takeBackRef.current?.(item.text, back.cleared);
     }).catch(() => {});
-  }, [paneDriver, tabFamily, typeIntoPane]);
+  }, [paneDriver, tabFamily, stopWith, typeIntoPane]);
   /** The reasoning effort last seen: Claude Code prints it only on its busy
    * row, so the facts row also takes the one its transcript records (every
    * answer, and a `/effort`'s confirmation) and the one just picked there —

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readReaderLive } from "../../lib/agents/readerLive";
 import { changesOffered, readerOffered, readerRequest } from "../../lib/agents/agentReader";
-import { busyRow } from "../../../mobile-web/src/terminal/agentBusy";
+import { busyRow, stopKey } from "../../../mobile-web/src/terminal/agentBusy";
 import type { ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 
 function plainBuffer(rows: string[]): ReadableBufferLike {
@@ -81,6 +81,11 @@ describe("Copilot's screen in the Reader", () => {
     expect(idle.working).toBeNull();
     expect(idle.question).toBeNull();
     expect(idle.stray).toBe(false);
+  });
+
+  it("stops Copilot's turn with Ctrl+C: a lone Esc does nothing mid-turn (1.0.112)", () => {
+    expect(stopKey("copilot")).toBe("\u0003");
+    for (const family of ["claude", "codex", "opencode", "gemini", "agent"]) expect(stopKey(family)).toBe("\u001b");
   });
 
   it("reads the approval dialog as a question with its three answers", () => {

@@ -255,6 +255,3 @@ export { freeTextRow, UNNUMBERED };
 export function tabStepKeys(live: Pick<ReaderLive, "tabKeys">, from: number, to: number): string[] {
   return questionTabKeys(from, to, live.tabKeys);
 }
-
-/** Esc: the key Claude Code, Codex and OpenCode stop a running turn with. */
-export const STOP_KEY = "\u001b";

@@ -10,6 +10,15 @@
  * would say the same, but reading it means a status call that can spawn the
  * CLI; the screen is already streaming to the phone. */
 
+/** The key that stops `family`'s running turn (`agentFamily`): Esc for every
+ * CLI but Copilot. Copilot 1.0.112 ignores a lone Esc mid-turn and stops on
+ * Ctrl+C (its footer's `ctrl+c interrupt`) or Esc Esc; on an idle box Esc Esc
+ * opens its rewind picker, while Ctrl+C only clears the draft (probed offline
+ * 2026-11-17), so a Stop that lands as the turn ends is harmless with Ctrl+C. */
+export function stopKey(family: string): string {
+  return family === "copilot" ? "\u0003" : "\u001b";
+}
+
 /** Rows read from the bottom. The hint sits above the input box, with at most
  * Claude Code's to-do list, the box itself and the footer rows below it. */
 const BUSY_WINDOW = 24;
