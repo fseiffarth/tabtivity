@@ -168,8 +168,15 @@ pub(crate) const AGENTS: &[AgentSpec] = &[
         // `--resume <live id>` once its post-agent hook has recorded a turn.
         resume: Resume::Args(&["--continue"]),
         install_cmd: "curl -LsSf https://mistral.ai/vibe/install.sh | bash",
-        // No one-line Windows installer; the UI points at `docs`.
-        install_cmd_windows: None,
+        // Mistral ships no `install.ps1`; this is `install.sh`'s own sequence
+        // in PowerShell (verified 2026-11-15, vibe 3.1.2, uv 0.13.8): a uv
+        // into the install home's `.local\bin` (`UV_UNMANAGED_INSTALL`: no
+        // receipt, the user's PATH untouched), a GIL CPython 3.14 (no cp314t
+        // wheels), then the tool. `--upgrade` makes a rerun the Update. uv
+        // is called by path: the fresh one is not on this session's PATH.
+        install_cmd_windows: Some(
+            r#"$env:UV_UNMANAGED_INSTALL = "$env:USERPROFILE\.local\bin"; irm https://astral.sh/uv/install.ps1 | iex; $uv = "$env:USERPROFILE\.local\bin\uv.exe"; & $uv python install cpython-3.14; & $uv tool install --upgrade --python cpython-3.14+gil mistral-vibe"#,
+        ),
         extra_paths: &[".local/bin/vibe", ".cargo/bin/vibe"],
         docs: "https://docs.mistral.ai/getting-started/quickstarts/vibe-code/install-cli",
         // `~/.vibe/.env` is loaded as environment: per scope.

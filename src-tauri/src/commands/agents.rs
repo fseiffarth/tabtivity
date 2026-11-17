@@ -2763,8 +2763,22 @@ mod tests {
         assert_eq!(stem(installer_command(claude).unwrap()), "powershell");
         let gemini = find_spec("gemini").unwrap(); // npm install -g …
         assert_eq!(stem(installer_command(gemini).unwrap()), "cmd");
-        let vibe = find_spec("vibe").unwrap(); // no Windows installer
-        assert!(installer_command(vibe).is_err());
+        let vibe = find_spec("vibe").unwrap(); // uv's irm | iex, then uv
+        assert_eq!(stem(installer_command(vibe).unwrap()), "powershell");
+        let kiro = find_spec("kiro").unwrap(); // no Windows installer
+        assert!(installer_command(kiro).is_err());
+    }
+
+    #[test]
+    fn vibe_windows_install_stays_in_the_install_home_and_upgrades() {
+        let cmd = find_spec("vibe").unwrap().install_cmd_windows.unwrap();
+        assert_eq!(windows_shell_kind(cmd), "powershell");
+        // uv lands in the install home and never edits the user's PATH.
+        assert!(cmd.starts_with(r#"$env:UV_UNMANAGED_INSTALL = "$env:USERPROFILE\.local\bin";"#));
+        // A rerun is Manage CLIs' Update: plain `uv tool install` stops at
+        // "already installed" and never upgrades.
+        assert!(cmd.contains("tool install --upgrade --python cpython-3.14+gil mistral-vibe"));
+        assert!(cmd.find("python install cpython-3.14").unwrap() < cmd.find("tool install").unwrap());
     }
 
     #[test]

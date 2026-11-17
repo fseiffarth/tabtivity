@@ -953,6 +953,16 @@ Open gaps that are *not* decided: item 2442 (audit of 2026-11-12).
     - [ ] **2442f — Windows install commands for Muse, Cursor, Kiro, Goose,
       Vibe.** All `None` today; the CLIs reportedly ship for Windows. Verify
       each vendor command, then fill the rows. Plandex: confirm it has none.
+      - [x] **Vibe.** Mistral ships no `install.ps1`; the row is
+        `install.sh`'s sequence in PowerShell (uv into the install home with
+        `UV_UNMANAGED_INSTALL`, CPython 3.14, `uv tool install --upgrade
+        --python cpython-3.14+gil mistral-vibe`). Run against a scratch
+        install home 2026-11-15: vibe 3.1.2, rerun (Update) exit 0, user
+        PATH untouched.
+      - [ ] 🖐️ Manage CLIs → Mistral → Install, then Update, then open a
+        Mistral tab.
+        - [ ] ✅ Works on Windows
+        - [ ] ❌ Doesn't work on Windows
     - [ ] **2442g — agent `git_push` refuses a repo with a pre-push hook.**
       Run the hook under `exec_trust` through `hardened_git_command_in`.
     - [ ] **2442h — PowerShell session hook lacks the stray-`--resume`
