@@ -28,7 +28,8 @@ How to use it:
    drift apart exactly like the two install tables did. Bump `FRONTEND_VERIFIED`
    in `src/stores/agents/agentVersionNotice.ts` as well: it is what lets a
    hot-reloaded window drop its old backend's card, and a test holds it to
-   `VERIFIED`.
+   `VERIFIED`. Every GitHub release lists `VERIFIED` as it stood at the
+   released commit (`scripts/release-cli-notes.mjs`), so a row is a public claim.
 3. A breakage found this way is a normal fix: patch the one place named under
    **Where**, add a test alongside the existing ones, update the version note.
 
