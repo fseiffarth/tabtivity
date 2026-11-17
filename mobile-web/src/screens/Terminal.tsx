@@ -6,6 +6,7 @@ import { HintQueue, type HintKey } from "../components/HintMessage";
 import { RunningShells, shownShells } from "../components/RunningShells";
 import { WorktreeChip, worktreeTitle } from "../components/AgentModeMarks";
 import { useMessageMenu, type TapHandlers } from "../components/MessageMenu";
+import { ArtifactSheet } from "../components/ArtifactSheet";
 import { useChatLinks, type LinkHandlers } from "../components/LinkSheet";
 import { ChatLinksIndex } from "../components/ChatLinksIndex";
 import { chatLinksOf } from "../terminal/chatLinks";
@@ -375,7 +376,7 @@ function SubagentCard({ turn, label, untested, time, busy = false, onOpen }: {
  * holds (`queued`), so the agent at work can be drawn between the two; both
  * halves key and date their bubbles from the whole of `entries`.
  * `queuedActions` goes under every queued prompt's bubble. */
-const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, taskLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles, asyncAsk }: {
+const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel, promptLabel, taskLabel, planLabel = "", planUntested = "", agentLabel = "", agentUntested = "", busy = false, onOpenAgent, onResend, onEdit, queuedActions, posts, renderPost, inbox, answerFiles, asyncAsk, onOpenArtifact }: {
   entries: SessionTranscript["entries"];
   part?: "settled" | "queued";
   cutLabel: string;
@@ -406,6 +407,8 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
   answerFiles?: AnswerFiles;
   /** Answers a question still waiting in Codex's queue (`useAsyncAsk`). */
   asyncAsk?: AsyncAsk;
+  /** Opens a document an Antigravity answer links (`ArtifactSheet`). */
+  onOpenArtifact?: (target: string) => void;
 }) {
   // One bubble per record, keyed by its time (`transcriptTurns`).
   const turns = useMemo(() => transcriptTurns(entries), [entries]);
@@ -414,7 +417,7 @@ const TranscriptTurns = memo(function TranscriptTurns({ entries, part, cutLabel,
     const file = answerFiles?.links.get(path);
     if (file) answerFiles?.open(file);
   }, [answerFiles]);
-  const { links, sheet: linkSheet } = useChatLinks(openPath);
+  const { links, sheet: linkSheet } = useChatLinks(openPath, onOpenArtifact);
   const t = useT();
   // A messenger's day chip over the first message of each day (`dayOpeners`).
   const openers = useMemo(() => dayOpeners(turns.map((turn) => turn.stamp)), [turns]);
@@ -1256,6 +1259,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const toggleChatIndex = (index: NonNullable<typeof openChatIndex>) => setOpenChatIndex((open) => open === index ? null : index);
   const subagentListOpen = openChatIndex === "subagents";
   const { askUrl: askIndexLink, close: closeIndexLink, sheet: indexLinkSheet } = useChatLinks();
+  // The Antigravity document a tapped answer link opened (`ArtifactSheet`).
+  const [artifactTarget, setArtifactTarget] = useState<string | null>(null);
   /** The strip over the chat: a tap anywhere else shuts its open list. */
   const chatIndex = useRef<HTMLDivElement>(null);
   useTapOutside(chatIndex, openChatIndex !== null, closeChatIndex);
@@ -2776,7 +2781,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               : <div className="readable-lines chat transcript" data-testid="session-transcript">
                   {cloudChat}
                   {transcript?.truncated && !sinceClear && <button className="readable-earlier" onClick={() => setTranscriptLimit((limit) => limit + TRANSCRIPT_STEP)} data-prompt={cutPrompt ? pinnedPromptText(cutPrompt.text) : undefined} data-prompt-time={cutPromptTime}>{t("mobile.transcript.earlier")}</button>}
-                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} />
+                  <TranscriptTurns entries={sessionEntries} part="settled" cutLabel={t("mobile.transcript.cut")} promptLabel={t("mobile.transcript.prompt")} planLabel={t("mobile.transcript.plan")} planUntested={planUntested} agentLabel={t("mobile.subagent.region")} agentUntested={subagentUntested} busy={sessionBusy} onOpenAgent={openSubagentTurn} onResend={resendPrompt} onEdit={startEdit} asyncAsk={connected ? asyncAsk : undefined} posts={chatPosts} renderPost={renderPost} inbox={chatInbox} answerFiles={answerFiles} onOpenArtifact={setArtifactTarget} />
                   {liveQuestion && <div className="transcript-screen" role="group" aria-label={t("mobile.transcript.question")}>
                     <small>{t("mobile.transcript.question")}{(isUntested("mobile.focus.onScreen") || (handsFree && isUntested("mobile.voice.handsFreeQuestion"))) && <> · {t("mobile.focus.untested")}</>}</small>
                     {/* The screen the dialog was drawn onto, as the screen drew
@@ -2832,6 +2837,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
               </div>}
         </section>
         {indexLinkSheet}
+        {artifactTarget && <ArtifactSheet tabId={tab.id} target={artifactTarget} onClose={() => setArtifactTarget(null)} />}
         {!openStep && pinnedPrompt && <button className="readable-pinned-prompt" style={pinnedTop ? { top: pinnedTop + 6 } : undefined} aria-label={t("mobile.focus.lastPrompt")}
           onClick={() => pinnedPromptEl.current?.scrollIntoView({ block: "start", behavior: "smooth" })}>
           <span className="readable-pinned-prompt-text">{pinnedPrompt}</span>

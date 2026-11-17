@@ -5272,6 +5272,67 @@ async fn tab_named_files(
     (StatusCode::OK, Json(json!({ "files": found })))
 }
 
+/// `?target=` is the link's target as the agent wrote it (`file://…`).
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ArtifactQuery {
+    target: Option<String>,
+}
+
+/// The longest link target looked at.
+const ARTIFACT_TARGET_MAX: usize = 1024;
+
+/// `GET /api/v1/tabs/{tab_id}/artifact?target=` — the plan or notes an
+/// Antigravity chat wrote and linked from an answer (`agent_artifacts`): the
+/// text of one file of this tab's own conversation folder, read-only, as
+/// `{ "artifact": { name, text } }`. Behind the "Project files on the phone"
+/// switch, like the answers' other file reads. The target is only a name to
+/// look up: the conversation comes from the tab's record, and anything that
+/// is not a text file below it is `artifact_not_found`.
+async fn tab_artifact(
+    State(state): State<HostState>,
+    headers: HeaderMap,
+    Path(tab_id): Path<String>,
+    Query(query): Query<ArtifactQuery>,
+) -> impl IntoResponse {
+    let phone = match authenticate(&headers, &state) {
+        Ok(phone) => phone,
+        Err(error) => return error,
+    };
+    if !files::files_open(&state.config.state_dir) {
+        return api_error(StatusCode::NOT_FOUND, "files_off");
+    }
+    let Ok(snapshot) = catalog(&state, &phone) else {
+        return api_error(StatusCode::SERVICE_UNAVAILABLE, "catalog_unavailable");
+    };
+    let Some((project, tab)) = snapshot.tab(&tab_id) else {
+        return api_error(StatusCode::NOT_FOUND, "tab_not_found");
+    };
+    if !is_git_project(project) {
+        return api_error(StatusCode::NOT_FOUND, "not_a_project");
+    }
+    if tab.public.kind != "agent" || tab.cmd != "agy" {
+        return api_error(StatusCode::BAD_REQUEST, "agent_tab_required");
+    }
+    if let Err(error) = not_on_host(tab) {
+        return error;
+    }
+    let target = query.target.unwrap_or_default();
+    if target.is_empty() || target.len() > ARTIFACT_TARGET_MAX {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_target");
+    }
+    let (project_id, cwd, launch_id) = (project.raw_id.clone(), tab.cwd.clone(), tab.session_id.clone().unwrap_or_default());
+    let found = tokio::task::spawn_blocking(move || {
+        crate::services::agent_artifacts::read_for_tab(Some(&project_id), &cwd, &launch_id, &target)
+    })
+    .await;
+    match found {
+        Ok(Some(artifact)) => (StatusCode::OK, Json(json!({ "artifact": artifact }))),
+        Ok(None) => api_error(StatusCode::NOT_FOUND, "artifact_not_found"),
+        Err(_) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed"),
+    }
+}
+
 /// The running shells cross masked (`shell_mask`, threat model gap 79): the
 /// command line and the agent's description of it with the tab's own folders
 /// made project-relative, every other host path cut to its leaf and anything
@@ -8852,6 +8913,7 @@ fn router(state: HostState) -> Router {
         .route("/api/v1/tabs/{tab_id}/uncommitted", get(tab_uncommitted))
         .route("/api/v1/tabs/{tab_id}/changes", get(tab_changes))
         .route("/api/v1/tabs/{tab_id}/named-files", get(tab_named_files))
+        .route("/api/v1/tabs/{tab_id}/artifact", get(tab_artifact))
         .route("/api/v1/tabs/{tab_id}/terminal", get(terminal))
         // The phone's drop box takes a whole photo; every other body stays at
         // the control-message limit below (the inner layer wins).

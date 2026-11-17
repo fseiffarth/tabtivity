@@ -1078,8 +1078,9 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-md pre code { padding:0; background:none; color:#e3e6f2; white-space:pre; overflow-wrap:normal; }
 .transcript-md blockquote { margin:0 0 .6em; padding:2px 0 2px 10px; border-left:3px solid #4a4f68; color:#b9bdcc; }
 .transcript-md hr { margin:.8em 0; border:0; border-top:1px solid #34384a; }
-.transcript-md .md-link { color:#b7c9ff; }
-.transcript-md .md-link[data-href], .transcript-md [data-path-link] { color:#b7c9ff; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
+/* A link that goes nowhere (no web address, no file found for it) is drawn as
+   the plain text it is: only the two rules below make something look tappable. */
+.transcript-md .md-link[data-href], .transcript-md [data-path-link], .transcript-md [data-artifact] { color:#b7c9ff; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .transcript-md .md-math { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85em; }
 .transcript-md .md-table { display:block; max-width:100%; margin:0 0 .6em; overflow-x:auto; border-collapse:collapse; font-size:.82rem; -webkit-overflow-scrolling:touch; }
 .transcript-md .md-table th,.transcript-md .md-table td { padding:4px 8px; border:1px solid #34384a; text-align:left; vertical-align:top; }
@@ -2652,3 +2653,6 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
 /* Over a screen with no header (splash, pairing, the lock sheet): above the
    lock sheet's backdrop (12). */
 .shell-switch-floating { position:fixed; z-index:13; top:max(10px,env(safe-area-inset-top)); right:max(10px,env(safe-area-inset-right)); border-radius:var(--r-md); }
+
+/* A document an Antigravity chat wrote (`ArtifactSheet`): the answer's own Markdown, scrolling inside the sheet. */
+.artifact-sheet .artifact-body { max-height:68dvh; overflow:auto; padding:0 4px 12px; -webkit-overflow-scrolling:touch; -webkit-user-select:text; user-select:text; }

@@ -137,6 +137,20 @@ function filePathOf(target: string | null): string | null {
   return found.length === 1 ? found[0].path : null;
 }
 
+/** The attribute a link to an Antigravity chat's own document carries its
+ * target in. Only a name to look up: the desktop resolves it inside that
+ * chat's folder and answers nothing for any other file. */
+export const ARTIFACT_ATTR = "data-artifact";
+const ARTIFACT_TARGET_MAX = 1024;
+
+/** A `file://` link into an Antigravity `brain/<conversation>/` folder — the
+ * form it links the plans and notes it writes (`agent_artifacts`) — or null. */
+export function artifactTargetOf(target: string | null | undefined): string | null {
+  const raw = target?.trim() ?? "";
+  if (!raw.startsWith("file:///") || raw.length > ARTIFACT_TARGET_MAX || !/\/brain\/[^/]+\/[^/]/u.test(raw)) return null;
+  return raw;
+}
+
 /** `inLink`: `from` sits inside a link. The renderer formats a link's label
  * as text of its own, so a label that reads as an address comes out as a link
  * inside the link; only the outer one is where the answer points, and the
@@ -170,6 +184,12 @@ function copyChildren(from: Node, to: Node, inLink = false): void {
     }
     const path = link && !inLink && !href ? filePathOf(element.getAttribute("data-href")) : null;
     if (path) copy.setAttribute("data-path", path);
+    const artifact = link && !inLink && !href && !path ? artifactTargetOf(element.getAttribute("data-href")) : null;
+    if (artifact) {
+      copy.setAttribute(ARTIFACT_ATTR, artifact);
+      copy.setAttribute("role", "link");
+      copy.setAttribute("tabindex", "0");
+    }
     copyChildren(element, copy, inLink || link);
     to.appendChild(copy);
   });

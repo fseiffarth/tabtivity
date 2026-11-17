@@ -1293,6 +1293,21 @@ export async function describeNamedFiles(tabId: string, paths: readonly string[]
   return Array.isArray(files) ? files : [];
 }
 
+/** `GET /api/v1/tabs/{id}/artifact` — the text of a document an Antigravity
+ * chat linked from an answer (`target`, the link as written), read from that
+ * chat's own folder on the desktop; null when it names none. Refused while
+ * "Project files on the phone" is off. */
+export async function getArtifact(tabId: string, target: string, signal?: AbortSignal): Promise<{ name: string; text: string } | null> {
+  const query = new URLSearchParams({ target });
+  try {
+    const { artifact } = await api<{ artifact?: { name: string; text: string } }>(`/api/v1/tabs/${encodeURIComponent(tabId)}/artifact?${query}`, { signal });
+    return artifact && typeof artifact.text === "string" ? artifact : null;
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.code === "artifact_not_found") return null;
+    throw reason;
+  }
+}
+
 /** A file the phone dropped into the tab's project inbox. `reference` is
  * project-relative (`.tabtivity/inbox/<file>`) — the one path shape that crosses
  * this boundary, because it carries no host component and is exactly what the

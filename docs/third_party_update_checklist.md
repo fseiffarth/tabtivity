@@ -1263,6 +1263,20 @@ each new release run `scripts/verify-cli/antigravity/hooks.py format` (and
   inherits the CLI's environment (`TABTIVITY_TAB_UID`, `TABTIVITY_TAB_AGENT`,
   `TABTIVITY_PROJECT_DIR`).
 
+How Antigravity links a file it wrote (checked 1.5.9, 2026-11-17): an answer
+carries `[plan.md](file:///<home>/.gemini/antigravity-cli/brain/<conversation>/plan.md)`
+— a path outside the project — and `services::agent_artifacts` opens only such a
+file of the tab's own conversation (read-only, text, no hidden name). On each
+new release have the real binary write a plan and a task list, then grep the
+conversation's `transcript.jsonl` for the link and re-check: it is still a
+`file://` URL (not `[plan](plan.md)` or a bare path), the folder is still
+`brain/<conversation id>/` under `.gemini/antigravity-cli`, a file it names
+exists there (a name inside `.system_generated` is never linked), and the
+answer's link shape still matches the captured sample in
+`src/__tests__/mobile/MobileArtifactLinks.test.tsx`. A new shape fails open: the
+phone draws the link as plain text (`answerMarkdown`'s `data-artifact` is only set
+for the `file:///…/brain/…` form).
+
 The same script writes the tab's turn record and the send hint (follow-up run,
 2026-11-16, 1.5.9; `hooks.py turns` and `events`; `format` on every kept
 baseline, each printing `turn done` and the `STUBMARK-APP-HINT` mark). Each
