@@ -16,6 +16,7 @@ fn spec(user: Option<&str>, port: Option<u16>) -> RemoteSpec {
         auto_connect: None,
         key_auth: None,
         persist_sessions: None,
+        agent_dir: None,
         vm: None,
         remote_only: None,
         label: Some("cluster-a".to_string()),

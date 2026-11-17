@@ -1155,6 +1155,11 @@ export interface RemoteSpec {
    *  picker, the pill's connection lamps, `hostsForProject`). Distinct from the
    *  *project* name — this labels the machine, not the project. */
   label?: string;
+  /** Absolute folder on this machine where agent CLIs install and keep their
+   *  sessions and login instead of the login's home - for a host whose home
+   *  quota is small. Agent tabs launched afterwards run with a `HOME` inside it.
+   *  Absent = the host's own home. */
+  agent_dir?: string;
   /** Persistent remote sessions (TODO #85): run this project's remote shell/script
    *  AND remote agent tabs inside a **tmux** session on the host, so a long run (or a
    *  live agent) survives an SSH drop, a laptop sleep, or Tabtivity quitting. **Default

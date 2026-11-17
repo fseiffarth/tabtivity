@@ -1117,6 +1117,7 @@ mod tests {
             auto_connect: None,
             key_auth: None,
             persist_sessions: None,
+            agent_dir: None,
             vm,
             remote_only,
             label: None,

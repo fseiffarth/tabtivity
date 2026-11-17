@@ -529,6 +529,20 @@ mod tests {
         assert!(bin_dirs_in(Path::new("/s")).contains(&PathBuf::from("/s/agents/install/npm/bin")));
     }
 
+    /// A remote host's agent folder puts these dirs first on PATH
+    /// (`remote_agents::home_prelude`); each must be a launcher dir the local
+    /// install tree knows too, or the two lists name different places.
+    #[test]
+    fn the_remote_launcher_dirs_are_a_subset_of_the_local_ones() {
+        let state = Path::new("/s");
+        let root = install_root_in(state);
+        let local = bin_dirs_for(false, state);
+        for rel in crate::services::remote_agents::LAUNCHER_DIRS {
+            let dir = rel.split('/').fold(root.clone(), |p, seg| p.join(seg));
+            assert!(local.contains(&dir), "{rel} is not a local launcher dir");
+        }
+    }
+
     #[test]
     fn the_windows_installer_env_also_moves_the_profile_and_appdata() {
         let state = Path::new("/s");

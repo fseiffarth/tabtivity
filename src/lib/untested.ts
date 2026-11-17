@@ -1121,6 +1121,7 @@ export const UNTESTED = {
   "remoteConnectDialog.3": { area: "projects", what: "RemoteConnectDialog · Username" },
   "remoteConnectDialog.4": { area: "projects", what: "RemoteConnectDialog · — off while tagged HPC" },
   "remoteConnectDialog.5": { area: "projects", what: "RemoteConnectDialog · Disconnect & end jobs" },
+  "remoteConnectDialog.agentDir": { area: "projects", what: "RemoteConnectDialog · Agent folder: agent CLIs of a host install and keep sessions + login below it instead of the login's home (HOME swap inside the agent's login-shell script; Claude host transcripts + host move read it); never run on a real host" },
   "remoteMachinesWindow.1": { area: "projects", what: "RemoteMachinesWindow · Primary" },
   "remoteMachinesWindow.2": { area: "projects", what: "RemoteMachinesWindow · Your machines" },
   "remoteMachinesWindow.3": { area: "projects", what: "RemoteMachinesWindow · Username" },

@@ -134,9 +134,125 @@ pub fn bootstrap_prelude(recipe: &AgentRecipe) -> String {
     )
 }
 
+/// Launcher dirs (relative to a home) a remote recipe's installer may drop its
+/// binary into, put first on `PATH` once an agent folder stands in for the home.
+/// A subset of `agent_install::bin_dirs_for`'s Unix list (the rows of agents that
+/// have a recipe above); a test there keeps the two from drifting.
+pub const LAUNCHER_DIRS: &[&str] = &[".local/bin", "npm/bin", ".bun/bin", ".cargo/bin", ".opencode/bin"];
+
+/// Name of the folder inside a host's agent folder that stands in for `$HOME`.
+fn home_leaf() -> String {
+    format!("{SLUG}-agent-home")
+}
+
+/// Check and normalise the agent folder a user typed for a host: `Ok(None)` for a
+/// blank one (cleared), the trimmed absolute path otherwise. It is an absolute
+/// path on the *host* (a `~` would be the very home the user is trying to avoid),
+/// without control characters or `..` parts, and not the root.
+pub fn clean_agent_dir(dir: &str) -> Result<Option<String>, String> {
+    let t = dir.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    if !t.starts_with('/') {
+        return Err("the agent folder must be an absolute path on the machine (starting with /)".into());
+    }
+    if t.chars().any(char::is_control) {
+        return Err("the agent folder contains a control character".into());
+    }
+    if t.split('/').any(|part| part == "..") {
+        return Err("the agent folder must not contain \"..\"".into());
+    }
+    let t = t.trim_end_matches('/');
+    if t.is_empty() {
+        return Err("the agent folder must not be the root".into());
+    }
+    Ok(Some(t.to_string()))
+}
+
+/// The folder that stands in for `$HOME` for agents on a host whose agent folder
+/// is `dir` (already [`clean_agent_dir`]ed). Everything an agent CLI keeps in its
+/// home - the binary an installer drops under `~/.local`, `~/.claude`, `~/.codex`,
+/// its login - lands below it.
+pub fn agent_home_in(dir: &str) -> String {
+    format!("{dir}/{}", home_leaf())
+}
+
+/// `s` as one single-quoted POSIX-sh word.
+fn sh_word(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// The POSIX-sh prelude that points an agent (and the installer in front of it) at
+/// `home` instead of the login's home, for a host whose quota the real home
+/// cannot take. Run inside the remote login shell, *after* it has set up `PATH`
+/// from the real home's profile (so nvm/pyenv still resolve), and before the
+/// install probe:
+///
+/// - `HOME` becomes `home` (created if missing; a failure aborts the tab);
+/// - the `XDG_*` bases an environment may pin to the real home are dropped, so
+///   they cannot pull a CLI back there;
+/// - `.ssh`, `.gitconfig` and `.config/git` of the real home are *linked* in
+///   (never copied, never replaced), so `git` and `ssh` inside the agent still
+///   find the user's keys and identity;
+/// - `npm -g` gets a prefix under `home`, and the launcher dirs
+///   ([`LAUNCHER_DIRS`]) come first on `PATH`, so a CLI installed there wins over
+///   none and is found on every later launch.
+///
+/// A CLI already installed in the real home is still found (it stays on `PATH`
+/// behind these); it just runs with its login and sessions in `home`.
+pub fn home_prelude(home: &str) -> String {
+    let path: String = LAUNCHER_DIRS.iter().map(|d| format!("\"$HOME/{d}\":")).collect();
+    format!(
+        "__real_home=\"$HOME\"; export HOME={home}; \
+         mkdir -p \"$HOME\" 2>/dev/null || {{ echo '{SLUG}: cannot create the agent folder' \"$HOME\" >&2; exit 1; }}; \
+         unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME; \
+         for __l in .ssh .gitconfig .config/git; do \
+         if [ -e \"$__real_home/$__l\" ] && [ ! -e \"$HOME/$__l\" ] && [ ! -L \"$HOME/$__l\" ]; then \
+         mkdir -p \"$HOME/$(dirname \"$__l\")\" 2>/dev/null && ln -s \"$__real_home/$__l\" \"$HOME/$__l\" 2>/dev/null; fi; done; \
+         export NPM_CONFIG_PREFIX=\"$HOME/npm\"; export PATH={path}\"$PATH\"",
+        home = sh_word(home),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_blank_agent_folder_clears_and_a_good_one_is_trimmed() {
+        assert_eq!(clean_agent_dir("  ").unwrap(), None);
+        assert_eq!(clean_agent_dir(" /scratch/me/ ").unwrap().as_deref(), Some("/scratch/me"));
+    }
+
+    #[test]
+    fn a_bad_agent_folder_is_refused() {
+        for bad in ["~/agents", "agents", "/", "///", "/a/../b", "/a\nb", "/a\0b"] {
+            assert!(clean_agent_dir(bad).is_err(), "{bad:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn the_agent_home_sits_inside_the_folder() {
+        assert_eq!(agent_home_in("/scratch/me"), format!("/scratch/me/{SLUG}-agent-home"));
+    }
+
+    #[test]
+    fn the_home_prelude_swaps_home_and_keeps_the_real_one_reachable() {
+        let p = home_prelude("/scratch/it's/h");
+        assert!(p.starts_with("__real_home=\"$HOME\"; export HOME='/scratch/it'\\''s/h';"));
+        assert!(p.contains("unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME"));
+        // git and ssh still see the user's identity, by link and never by copy.
+        for linked in [".ssh", ".gitconfig", ".config/git"] {
+            assert!(p.contains(linked), "{linked} is not linked in");
+        }
+        assert!(p.contains("ln -s") && !p.contains("cp "));
+        assert!(p.contains("NPM_CONFIG_PREFIX=\"$HOME/npm\""));
+        // Launcher dirs lead the PATH; the old PATH stays behind them.
+        assert!(p.ends_with("\"$PATH\""));
+        assert!(p.contains("export PATH=\"$HOME/.local/bin\":"));
+        assert!(!p.contains('\n'));
+    }
 
     #[test]
     fn recipe_for_matches_base_name() {

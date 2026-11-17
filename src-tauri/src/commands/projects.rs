@@ -2447,6 +2447,26 @@ pub fn set_project_remote_label(
     Ok(normalized)
 }
 
+/// Set (or clear) the **agent folder** of a remote project's primary machine: the
+/// absolute folder on the host where agent CLIs install and keep their sessions
+/// and login instead of the login's home (`RemoteSpec::agent_dir`), for a host
+/// whose home quota is small. A blank string clears it. Applies to agent tabs
+/// launched after the change; the worker twin is `patch_compute_host`'s
+/// `agent_dir`. Returns the stored folder (`None` when cleared); an invalid path
+/// (relative, `~`, `..`) is refused and nothing is written.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub fn set_project_remote_agent_dir(
+    project_id: String,
+    agent_dir: Option<String>,
+) -> Result<Option<String>, String> {
+    let cleaned = match agent_dir {
+        Some(dir) => crate::services::remote_agents::clean_agent_dir(&dir)?,
+        None => None,
+    };
+    patch_remote_spec(&project_id, |remote| remote.agent_dir = cleaned.clone())?;
+    Ok(cleaned)
+}
+
 /// Set (or clear) the **SSH login name** a remote project's primary host is
 /// reached as. The half of the credential the Connect dialog never let you enter:
 /// the address is fixed at creation (`user@host`), so a project created without a
@@ -2716,7 +2736,7 @@ pub fn remove_compute_host(
 }
 
 /// Patch a worker host's toggles (`sync_code` / `pull_outputs` / `auto_connect` /
-/// `shared_fs` / `label` / `user`). Each argument is applied only when `Some`, so a
+/// `shared_fs` / `label` / `user` / `agent_dir`). Each argument is applied only when `Some`, so a
 /// caller can flip one flag without restating the others. Unknown `host_id` is a
 /// silent no-op (returns the unchanged list). A patch that would turn a worker of a
 /// remote-only project into a synced copy is refused, exactly as
@@ -2735,8 +2755,10 @@ pub fn patch_compute_host(
     shared_fs: Option<bool>,
     label: Option<String>,
     user: Option<String>,
+    agent_dir: Option<String>,
 ) -> Result<Vec<ComputeHost>, String> {
-    let patch = HostPatch { sync_code, pull_outputs, auto_connect, shared_fs, label, user };
+    let agent_dir = agent_dir.map(|dir| crate::services::remote_agents::clean_agent_dir(&dir)).transpose()?;
+    let patch = HostPatch { sync_code, pull_outputs, auto_connect, shared_fs, label, user, agent_dir };
     let spec = crate::services::remote::remote_target_for(&project_id).map(|t| t.spec);
     let refused = std::sync::Mutex::new(None);
     let hosts = patch_compute_hosts(&project_id, |hosts| {
@@ -2761,6 +2783,8 @@ struct HostPatch {
     shared_fs: Option<bool>,
     label: Option<String>,
     user: Option<String>,
+    /// Already checked by `clean_agent_dir`: `Some(None)` clears the folder.
+    agent_dir: Option<Option<String>>,
 }
 
 impl HostPatch {
@@ -2801,6 +2825,9 @@ impl HostPatch {
         }
         if let Some(v) = self.auto_connect {
             h.spec.auto_connect = v.then_some(true);
+        }
+        if let Some(dir) = &self.agent_dir {
+            h.spec.agent_dir = dir.clone();
         }
         if let Some(v) = &self.label {
             let t = v.trim();
@@ -4448,6 +4475,7 @@ pub fn create_project_blocking(mut req: CreateProjectRequest) -> Result<ProjectE
             auto_connect: Some(true),
             key_auth: Some(true),
             persist_sessions: None,
+            agent_dir: None,
             vm: Some(true),
             remote_only: None,
             label: Some("VM".to_string()),

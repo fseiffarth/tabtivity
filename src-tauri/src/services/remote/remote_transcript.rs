@@ -60,6 +60,16 @@ const SEARCH_EVERY: Duration = Duration::from_secs(30);
 /// relative to the login's home.
 const PROJECTS: &str = ".claude/projects";
 const SESSIONS: &str = ".claude/sessions";
+
+/// `rel` (a path under Claude's home) on the host: below the host's agent home
+/// (`RemoteSpec::agent_home`, absolute) when it has one, else relative to the
+/// login's home, which is where SFTP starts.
+pub(crate) fn under(home: Option<&str>, rel: &str) -> String {
+    match home {
+        Some(home) => format!("{home}/{rel}"),
+        None => rel.to_string(),
+    }
+}
 /// The most session records one ask reads, and the largest one it reads.
 const MAX_SESSION_RECORDS: usize = 200;
 const MAX_SESSION_RECORD_BYTES: u64 = 64 * 1024;
@@ -375,7 +385,8 @@ pub async fn host_tab_copy(
         match crate::services::remote::pooled_sftp_host(pool, project_id, host_id).await {
             Some(sftp) => {
                 mirror.checked = Some(Instant::now());
-                if let Err(reason) = sync(&sftp, mirror, &target.spec.remote_path, project_id, launch_id, &local).await {
+                let home = target.spec.agent_home();
+                if let Err(reason) = sync(&sftp, mirror, &target.spec.remote_path, home.as_deref(), project_id, launch_id, &local).await {
                     if !copy_held(mirror) {
                         return Some(HostCopy::Unavailable(reason));
                     }
@@ -407,8 +418,9 @@ pub async fn forget(project_id: &str, host_id: &str, launch_id: &str) {
 /// exports). Both are read over SFTP — the environment from
 /// `/proc/<pid>/environ` — so nothing runs on the host. `None` when no running
 /// CLI of the tab is found: it exited, or the host has no readable `/proc`.
-pub(crate) async fn running_session(sftp: &Sftp, launch_id: &str) -> Option<(String, String)> {
-    let entries = crate::services::sftp::list_dir_raw_on(sftp, SESSIONS).await.ok()?;
+pub(crate) async fn running_session(sftp: &Sftp, home: Option<&str>, launch_id: &str) -> Option<(String, String)> {
+    let sessions = under(home, SESSIONS);
+    let entries = crate::services::sftp::list_dir_raw_on(sftp, &sessions).await.ok()?;
     let pids = entries.iter().filter_map(|entry| {
         let pid = entry.name.strip_suffix(".json")?;
         let record = matches!(entry.kind, SyncKind::File) && entry.size <= MAX_SESSION_RECORD_BYTES;
@@ -424,7 +436,7 @@ pub(crate) async fn running_session(sftp: &Sftp, launch_id: &str) -> Option<(Str
             continue;
         }
         let Ok(Some(bytes)) =
-            crate::services::sftp::read_file_up_to(sftp, &format!("{SESSIONS}/{pid}.json"), MAX_SESSION_RECORD_BYTES).await
+            crate::services::sftp::read_file_up_to(sftp, &format!("{sessions}/{pid}.json"), MAX_SESSION_RECORD_BYTES).await
         else {
             continue;
         };
@@ -481,13 +493,14 @@ async fn sync(
     sftp: &Arc<Sftp>,
     mirror: &mut Mirror,
     project_path: &str,
+    home: Option<&str>,
     project_id: &str,
     launch_id: &str,
     local: &std::path::Path,
 ) -> Result<(), &'static str> {
     if mirror.asked.is_none_or(|at| at.elapsed() >= SEARCH_EVERY) {
         mirror.asked = Some(Instant::now());
-        if let Some((session, cwd)) = running_session(sftp, launch_id).await {
+        if let Some((session, cwd)) = running_session(sftp, home, launch_id).await {
             if mirror.session.as_deref() != Some(session.as_str()) {
                 // Another conversation than the one copied: start over.
                 mirror.remote = None;
@@ -496,7 +509,7 @@ async fn sync(
                 mirror.session = Some(session.clone());
             }
             if mirror.remote.is_none() && !cwd.is_empty() {
-                let own = format!("{PROJECTS}/{}/{session}.jsonl", claude_slug(cwd.trim_end_matches('/')));
+                let own = format!("{}/{}/{session}.jsonl", under(home, PROJECTS), claude_slug(cwd.trim_end_matches('/')));
                 if let Ok(Some(_)) = crate::services::sftp::metadata_opt_on(sftp, &own).await {
                     mirror.remote = Some(own);
                 }
@@ -505,7 +518,7 @@ async fn sync(
     }
     if mirror.remote.is_none() {
         let files = candidates(mirror, project_id, launch_id);
-        mirror.remote = locate(sftp, mirror, project_path, &files).await?;
+        mirror.remote = locate(sftp, mirror, project_path, home, &files).await?;
     }
     let Some(remote) = mirror.remote.clone() else {
         return Ok(());
@@ -530,10 +543,11 @@ async fn sync(
 /// The host path (relative to the login's home) of the first transcript of
 /// `files` found: in the project folder's own slug folder, else — at most
 /// every [`SEARCH_EVERY`] — in any folder of `~/.claude/projects`.
-async fn locate(sftp: &Sftp, mirror: &mut Mirror, project_path: &str, files: &[String]) -> Result<Option<String>, &'static str> {
+async fn locate(sftp: &Sftp, mirror: &mut Mirror, project_path: &str, home: Option<&str>, files: &[String]) -> Result<Option<String>, &'static str> {
+    let projects = under(home, PROJECTS);
     let slug = claude_slug(project_path.trim_end_matches('/'));
     for file in files {
-        let own = format!("{PROJECTS}/{slug}/{file}");
+        let own = format!("{projects}/{slug}/{file}");
         match crate::services::sftp::metadata_opt_on(sftp, &own).await {
             Ok(Some(_)) => return Ok(Some(own)),
             Ok(None) => {}
@@ -544,7 +558,7 @@ async fn locate(sftp: &Sftp, mirror: &mut Mirror, project_path: &str, files: &[S
         return Ok(None);
     }
     mirror.searched = Some(Instant::now());
-    let dirs = match crate::services::sftp::list_dir_raw_on(sftp, PROJECTS).await {
+    let dirs = match crate::services::sftp::list_dir_raw_on(sftp, &projects).await {
         Ok(entries) => entries,
         // No `~/.claude/projects` yet: Claude has stored nothing on this host.
         Err(_) => return Ok(None),
@@ -552,7 +566,7 @@ async fn locate(sftp: &Sftp, mirror: &mut Mirror, project_path: &str, files: &[S
     let dirs = dirs.iter().filter(|e| matches!(e.kind, SyncKind::Dir));
     for dir in dirs.take(MAX_SEARCHED_DIRS) {
         for file in files {
-            let path = format!("{PROJECTS}/{}/{file}", dir.name);
+            let path = format!("{projects}/{}/{file}", dir.name);
             if let Ok(Some(_)) = crate::services::sftp::metadata_opt_on(sftp, &path).await {
                 return Ok(Some(path));
             }

@@ -250,7 +250,12 @@ pub async fn install_agent_project_command(
     }
     let spec = find_spec(&agent_id).ok_or("unknown agent")?;
     let target = remote::remote_target_for_host(&project_id, &host_id).ok_or("not a remote project host")?;
-    let command = format!("\"${{SHELL:-/bin/sh}}\" -lc {}", ssh_exec::shell_quote(&remote_install_script(spec)));
+    // A host with an agent folder installs into it, as its agent tabs will run from it.
+    let script = match target.spec.agent_home() {
+        Some(home) => format!("{}\n{}", crate::services::remote_agents::home_prelude(&home), remote_install_script(spec)),
+        None => remote_install_script(spec),
+    };
+    let command = format!("\"${{SHELL:-/bin/sh}}\" -lc {}", ssh_exec::shell_quote(&script));
     ssh_exec::interactive_exec_command(&target.spec.user, &target.spec.host, target.spec.port, &command)
 }
 
@@ -1260,6 +1265,30 @@ async fn read_host_copy<T: Send + 'static>(
 ) -> Option<T> {
     let path = copy?;
     app_core::rt::spawn_blocking(move || read(&path)).await.ok()
+}
+
+/// The plan or notes an Antigravity chat wrote and linked from an answer
+/// (`[plan.md](file:///…/brain/<id>/plan.md)`), for the Chat's read-only
+/// document dialog: the text of that file of **this tab's own conversation**
+/// (`services::agent_artifacts` — the conversation comes from the tab's hook
+/// record, never from `target`), or `None` for anything else. `session_id` is
+/// the tab's launch id, as `agent_tab_transcript` takes it.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_artifact(
+    project_id: Option<String>,
+    tab_dir: String,
+    session_id: String,
+    target: String,
+) -> Option<crate::services::agent_artifacts::Artifact> {
+    if target.is_empty() || target.len() > 1024 {
+        return None;
+    }
+    app_core::rt::spawn_blocking(move || {
+        crate::services::agent_artifacts::read_for_tab(project_id.as_deref(), &tab_dir, &session_id, &target)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// The stored conversation of the tab launched as `agent` with launch id

@@ -1183,6 +1183,12 @@ interface ProjectsStore {
    *  Distinct from the project name: this labels the host, shown wherever a
    *  project's hosts are listed side by side (System Monitor, pill lamps). */
   setProjectRemoteLabel: (id: string, label: string) => Promise<void>;
+  /** Set (or clear, on blank) the **agent folder** of a remote project's primary
+   *  machine (`RemoteSpec.agent_dir`): where agent CLIs install and keep their
+   *  sessions instead of the login's home. Rejects an invalid path (not absolute,
+   *  `~`, `..`) with the backend's message. A worker's twin is
+   *  `patch_compute_host`'s `agentDir`. */
+  setProjectRemoteAgentDir: (id: string, agentDir: string) => Promise<void>;
   /** Set (or clear, on blank) the **SSH login name** a remote project's primary
    *  host is reached as. The address is fixed at creation, so this is the only way
    *  to correct a project created without a user (ssh then authenticates as the
@@ -2151,6 +2157,14 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
       label,
     });
     patchProjectRemote(id, (remote) => ({ ...remote, label: result ?? undefined }));
+  },
+
+  setProjectRemoteAgentDir: async (id, agentDir) => {
+    const result = await invoke<string | null>("set_project_remote_agent_dir", {
+      projectId: id,
+      agentDir,
+    });
+    patchProjectRemote(id, (remote) => ({ ...remote, agent_dir: result ?? undefined }));
   },
 
   setProjectRemoteUser: async (id, user) => {

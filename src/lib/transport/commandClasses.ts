@@ -643,6 +643,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["set_project_remote_control", "core"],
   ["set_project_remote_label", "core"],
   ["set_project_remote_user", "core"],
+  ["set_project_remote_agent_dir", "core"],
   ["set_project_run_host", "core"],
   ["set_project_sandbox", "core"],
   ["set_project_sandbox_spec", "core"],

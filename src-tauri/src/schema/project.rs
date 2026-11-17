@@ -155,11 +155,26 @@ pub struct RemoteSpec {
     /// share this one field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Absolute folder on this machine where agent CLIs install and keep their
+    /// sessions and login instead of the login's home (a host whose home quota is
+    /// small). Normalised by `remote_agents::clean_agent_dir` on every write; read
+    /// the home an agent runs with through [`RemoteSpec::agent_home`], never raw.
+    /// Absent = the agent uses the host's own home, as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_dir: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
 
 impl RemoteSpec {
+    /// The folder that stands in for `$HOME` for agents on this machine: below
+    /// [`agent_dir`](Self::agent_dir), or `None` when none is set (or a hand-edited
+    /// one fails the check - a bad path never half-applies).
+    pub fn agent_home(&self) -> Option<String> {
+        let dir = crate::services::remote_agents::clean_agent_dir(self.agent_dir.as_deref()?).ok()??;
+        Some(crate::services::remote_agents::agent_home_in(&dir))
+    }
+
     /// This spec's project keeps no local copy: always for a VM spec (a VM
     /// project is remote-only + boot, and its `vm` outranks the flag, as in the
     /// spawn guard's `Pin::of` and the cockpit's `isHostPinned`, so a stray

@@ -516,6 +516,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("hpc_ws_link", "workspacePath", Remote),
     ("hpc_ws_move_root", "newRoot", Remote),
     ("hpc_ws_pull_logs", "logsDir", Remote), // read over SFTP into the mirror
+    ("set_project_remote_agent_dir", "agentDir", Remote), // a folder on the host; only ever the home an agent runs with there
+    ("patch_compute_host", "agentDir", Remote),
     ("remote_download_size", "relPath", Remote),
     ("remote_download_to", "relPath", Remote),
     ("remote_remember_path", "path", Remote),
@@ -559,6 +561,7 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     // recorded `cwd`.
     ("agent_tab_changes", "tabDir", NotAPath),
     ("agent_tab_transcript", "tabDir", NotAPath),
+    ("agent_tab_artifact", "tabDir", NotAPath),
     ("agent_tab_chats", "tabDir", NotAPath),
     ("agent_tab_resume_chat", "tabDir", NotAPath),
     ("claude_folder_trusted", "cwd", NotAPath),
