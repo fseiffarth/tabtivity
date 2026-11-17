@@ -115,7 +115,7 @@ describe(`${BRAND.display} Mobile Gemini CLI approval mode`, () => {
 
 describe("mode control capabilities", () => {
   it("never guesses a mode key for unsupported CLIs", () => {
-    for (const label of ["Claude", "Codex", "Gemini", "Qwen", "OpenCode"]) expect(modeOffered(label)).toBe(true);
-    for (const label of ["Copilot", "Muse", "Antigravity", "Aider", "custom"]) expect(modeOffered(label)).toBe(false);
+    for (const label of ["Claude", "Codex", "Gemini", "Qwen", "OpenCode", "Google Antigravity"]) expect(modeOffered(label)).toBe(true);
+    for (const label of ["Copilot", "Muse", "Aider", "custom"]) expect(modeOffered(label)).toBe(false);
   });
 });

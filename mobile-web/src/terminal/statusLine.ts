@@ -474,6 +474,7 @@ function antigravityFrame(
   const status: SessionStatus = {};
   if (footer) status.model = footer.model;
   if (footer?.effort) status.effort = footer.effort;
+  if (footer?.mode) status.mode = footer.mode;
   const picker = readAntigravityPicker(lines);
   return { ...(picker ? { start: picker.frameStart } : {}), footer: index, status };
 }

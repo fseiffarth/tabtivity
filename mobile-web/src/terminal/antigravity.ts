@@ -45,6 +45,12 @@
  *     two-space gap, or no room for the model at all (1.5.9 at 56 and 44
  *     columns); a known hint is told apart by its words, not the gap.
  *
+ * The footer also names the permission mode, as a lowercase first column of the
+ * right-hand one, while the session is off its default: `plan · Gemini 3.1 Pro ·
+ * low`, `accept-edits · …` (captured on 1.5.9, mode set with `--mode` or
+ * Shift+Tab; no mode word in the default mode). It draws no path, branch or
+ * context, apart from the startup banner's folder, which scrolls away.
+ *
  * Everything here is read off the screen. What is pressed is the caller's.
  */
 
@@ -297,20 +303,32 @@ export function isAntigravityHintRow(text: string): boolean {
   return !!match && match[1] === undefined;
 }
 
-/** The model and effort that row names, or `null` for any other row. */
-export function antigravityFooter(text: string): { model: string; effort?: string } | null {
+/** The footer's permission mode: `accept-edits` or `plan`, the two non-default
+ * modes on the Shift+Tab cycle (default → accept-edits → plan → default, read
+ * off 1.5.9). The default mode, `--mode auto` and `--dangerously-skip-permissions`
+ * draw no word at all. A lowercase word, so never a model (those are
+ * capitalised) nor a gauge's effort label. */
+const MODE_WORD = /^[a-z][a-z-]{1,20}$/u;
+
+/** The mode, model and effort that row names, or `null` for any other row. The
+ * right-hand column is `[mode · ]model[ · effort]`: `accept-edits · Gemini 3.1
+ * Pro · low`. */
+export function antigravityFooter(text: string): { model: string; effort?: string; mode?: string } | null {
   const row = text.replace(/\s+$/u, "");
   const hinted = FOOTER_HINT.exec(row);
   const match = hinted?.[1] === undefined ? FOOTER.exec(row) : hinted;
   if (!match) return null;
-  const columns = match[1].split(/\s+·\s+/u);
-  if (columns.length > 2) return null;
-  const model = columns[0].trim();
+  const columns = match[1].split(/\s+·\s+/u).map((column) => column.trim());
+  if (columns.length > 3) return null;
+  let effort = "";
+  if (columns.length > 1 && EFFORT_WORD.test(columns[columns.length - 1])) effort = columns.pop() as string;
+  let mode = "";
+  if (columns.length === 2 && MODE_WORD.test(columns[0]) && !EFFORT_WORD.test(columns[0])) mode = columns.shift() as string;
+  if (columns.length !== 1) return null;
+  const model = columns[0];
   if (!model || model.length > MAX_MODEL || !MODEL_NAME.test(model) || !isNameLike(model)) return null;
   // The slider's own row of labels ends in one of these words with nothing
   // else beside it; an effort without a model is not a footer.
-  if (columns.length === 1 && EFFORT_WORD.test(model)) return null;
-  const effort = columns.length === 2 ? columns[1].trim() : "";
-  if (effort && !EFFORT_WORD.test(effort)) return null;
-  return effort ? { model, effort: effort.toLowerCase() } : { model };
+  if (!effort && !mode && EFFORT_WORD.test(model)) return null;
+  return { model, ...(effort ? { effort: effort.toLowerCase() } : {}), ...(mode ? { mode } : {}) };
 }

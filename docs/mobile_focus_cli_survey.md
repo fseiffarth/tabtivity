@@ -212,9 +212,14 @@ scoped to a tab whose label names it ("Google Antigravity").
 - **The dialog is drawn under the box**, not over it, so `inputFrameStart` cuts
   the frame at the box above the heading; otherwise a model row reads as the
   input line and the rows under it as the status.
-- Still open: its permission mode (`--mode accept-edits|plan`) is on no row the
-  footer prints, so there is no mode family for it yet; the alternate-screen
-  setting (`altScreenMode`, picked at first run) hands the tab to Terminal view.
+- Its permission mode is the footer's first column off the default (`plan ·
+  Gemini 3.1 Pro · low`, `accept-edits · …`; 1.5.9, `--mode` or Shift+Tab, which
+  cycles default → accept-edits → plan). Default, `--mode auto` and
+  `--dangerously-skip-permissions` draw no word (read as default), and a pane
+  too narrow for the model drops the mode with it. It draws no path, branch or
+  context on the live frame (the banner's folder scrolls away, unread).
+- Still open: the alternate-screen setting (`altScreenMode`, picked at first
+  run) hands the tab to Terminal view.
 
 ## Screen shapes not handled yet
 
