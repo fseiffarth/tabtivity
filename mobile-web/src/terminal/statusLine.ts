@@ -20,6 +20,7 @@
 
 import {
   antigravityFooter,
+  isAntigravityHintRow,
   isAntigravityTab,
   readAntigravityPicker,
 } from "./antigravity";
@@ -451,9 +452,13 @@ function antigravityFrame(
   while (index >= 0 && !lines[index].text.trim()) index -= 1;
   if (index < 0) return null;
   const footer = antigravityFooter(lines[index].text);
-  if (!footer) return null;
-  const status: SessionStatus = { model: footer.model };
-  if (footer.effort) status.effort = footer.effort;
+  // A footer that is only its hint (a narrow pane drops the model beside
+  // `Press up to edit queued messages`) is still this family's frame: it names
+  // no model, and the generic scan must not name one from the rows above it.
+  if (!footer && !isAntigravityHintRow(lines[index].text)) return null;
+  const status: SessionStatus = {};
+  if (footer) status.model = footer.model;
+  if (footer?.effort) status.effort = footer.effort;
   const picker = readAntigravityPicker(lines);
   return { ...(picker ? { start: picker.frameStart } : {}), footer: index, status };
 }

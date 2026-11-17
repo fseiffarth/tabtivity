@@ -15,6 +15,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { keysSent, stubTerminalSideChannels } from "../helpers/mobileTerminalHost";
+import captured159 from "../fixtures/antigravity159.json";
 
 const terminalState = vi.hoisted(() => ({ lines: [] as string[] }));
 
@@ -224,7 +225,52 @@ describe(`${BRAND.display} Mobile — Antigravity's model and effort sheet`, () 
     await paint(DONE);
     await settle(900);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("button", { name: "Gemini 3.8 Flash · high" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Gemini 3.8 Flash · high effort" })).toBeTruthy();
+  });
+
+  it("offers the current model's effort under the models, and a tap applies it with one Enter", async () => {
+    render(<Terminal tab={antigravityTab} back={() => {}} />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    await settle(400);
+    FakeWebSocket.sent = [];
+    // The highlight opens on the current model, its slider drawn: six of
+    // seven rows, so the hidden one is walked to and back first.
+    await paint(picker(SIX(2), MEDIUM));
+    await keysSent(() => FakeWebSocket.sent, 4, 600);
+    // Mid-walk the slider belongs to another row: no effort row.
+    await paint(picker(SEVEN(6)));
+    expect(document.querySelector(".model-effort")).toBeNull();
+    await keysSent(() => FakeWebSocket.sent, 8, 600);
+    await paint(picker(SIX(2), MEDIUM));
+    await settle(300);
+
+    // The chip carries the footer's effort as a gauge, as Claude's does.
+    expect(screen.getByRole("button", { name: "Gemini 3.6 Flash · medium effort" })).toBeTruthy();
+    const levels = Array.from(document.querySelectorAll(".model-effort-levels button"), (button) => button.textContent);
+    expect(levels).toEqual(["low", "medium", "high"]);
+    expect(document.querySelector(".model-effort-levels button.current")?.textContent).toBe("medium");
+
+    FakeWebSocket.sent = [];
+    fireEvent.click(screen.getByRole("button", { name: "low effort" }));
+    expect(await keysSent(() => FakeWebSocket.sent, 2, 400)).toEqual([`${ESC}[D`, "\r"]);
+  });
+
+  it("keeps the model chip while queued prompts crowd the footer's model off a narrow pane", async () => {
+    render(<Terminal tab={antigravityTab} back={() => {}} />);
+    await act(async () => {});
+
+    // agy 1.5.9 at 56 columns: `Press up to edit queued messages` leaves two
+    // spaces before the model, which read as the bare token "Gemini".
+    await paint(captured159["queued@56"].join("\n"));
+    await settle(300);
+    expect(screen.getByRole("button", { name: "Gemini 3.1 Pro · low effort" })).toBeTruthy();
+
+    // At 44 columns the model is dropped from the row; the chip keeps it.
+    await paint(captured159["queued_model@44"].join("\n"));
+    await settle(300);
+    expect(screen.getByRole("button", { name: "Gemini 3.1 Pro · low effort" })).toBeTruthy();
   });
 
   it("accepts a model whose dialog draws no effort as soon as the walk lands", async () => {

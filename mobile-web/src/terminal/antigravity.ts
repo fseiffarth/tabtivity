@@ -40,6 +40,10 @@
  *     dialog redraw, tap the effort it then offers.
  *   - The footer prints model and effort as one right-aligned column, where
  *     `statusLine`'s model *tokens* matched "Gemini" and dropped the rest.
+ *     Its left column is a hint — `? for shortcuts`, or `Press up to edit queued
+ *     messages` while prompts wait — which on a phone-width pane leaves a
+ *     two-space gap, or no room for the model at all (1.5.9 at 56 and 44
+ *     columns); a known hint is told apart by its words, not the gap.
  *
  * Everything here is read off the screen. What is pressed is the caller's.
  */
@@ -259,6 +263,12 @@ export function antigravityEffortKeys(current: number, target: number): string[]
  * the column is found by the run of spaces before it — the CLI's own key hints
  * are columned two spaces apart and are not one. */
 const FOOTER = /^(?:.*\S)? {4,}(\S.*)$/u;
+/** The hint the footer's left column carries: `? for shortcuts` idle,
+ * `esc to cancel` mid-turn, `Press up to edit queued messages` while prompts
+ * wait. The longer ones leave a narrow pane (the phone's) a two-space gap to
+ * the model, or no room for the model at all; a hint is a known string, so the
+ * model after it is told by that and not by the width of the gap. */
+const FOOTER_HINT = /^\s*(?:\? for shortcuts|esc to cancel|Press up to edit queued messages)(?:\s{2,}(\S.*))?$/u;
 /** The effort levels `agy --effort` takes. `max` has its own gauge colour
  * since at least 1.2.14 and 1.3 added `xhigh`; a footer naming either is
  * still the session's model, and a gauge label row ending in one is still not
@@ -269,15 +279,34 @@ const EFFORT_WORD = /^(?:low|medium|high|xhigh|max)$/iu;
  * shape carries the account line of the banner above. */
 const MODEL_NAME = /^\p{L}[\p{L}\p{N}.+\- ]*(?:\([\p{L}\p{N} .-]+\))?$/u;
 const MAX_MODEL = 48;
+/** A model's name is capitalised words and numbers (`Gemini 3.8 Flash`, `GPT-OSS
+ * 120B`), bar a parenthetical (`(Thinking)`). The dialog's one-line note for
+ * the effort stop it is on is prose — `Deeper reasoning for complex problems`
+ * — drawn right under the slider, indented like a lone footer; it has
+ * lowercase words, and is not a model. */
+const NAME_WORD = /^[\p{Lu}\p{N}]/u;
+function isNameLike(model: string): boolean {
+  return model.replace(/\s*\([^)]*\)\s*$/u, "").split(/\s+/u).every((word) => NAME_WORD.test(word));
+}
+
+/** Whether the row is one of the footer's hints with no model beside it —
+ * what a pane too narrow for both draws (`Press up to edit queued messages`
+ * alone). The session's model is then not on screen at all. */
+export function isAntigravityHintRow(text: string): boolean {
+  const match = FOOTER_HINT.exec(text.replace(/\s+$/u, ""));
+  return !!match && match[1] === undefined;
+}
 
 /** The model and effort that row names, or `null` for any other row. */
 export function antigravityFooter(text: string): { model: string; effort?: string } | null {
-  const match = FOOTER.exec(text.replace(/\s+$/u, ""));
+  const row = text.replace(/\s+$/u, "");
+  const hinted = FOOTER_HINT.exec(row);
+  const match = hinted?.[1] === undefined ? FOOTER.exec(row) : hinted;
   if (!match) return null;
   const columns = match[1].split(/\s+·\s+/u);
   if (columns.length > 2) return null;
   const model = columns[0].trim();
-  if (!model || model.length > MAX_MODEL || !MODEL_NAME.test(model)) return null;
+  if (!model || model.length > MAX_MODEL || !MODEL_NAME.test(model) || !isNameLike(model)) return null;
   // The slider's own row of labels ends in one of these words with nothing
   // else beside it; an effort without a model is not a footer.
   if (columns.length === 1 && EFFORT_WORD.test(model)) return null;

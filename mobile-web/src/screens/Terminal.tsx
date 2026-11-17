@@ -24,7 +24,7 @@ import { useScopeKind } from "../scopeKind";
 import { TabbyHead } from "../components/TabbyHead";
 import { ComposerThumb, InboxAlbum, viewableFile } from "../components/InboxPreview";
 import { ProjectFiles } from "../components/ProjectFiles";
-import { Fragment, memo, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import {
   ANY_FILE_ACCEPT,
@@ -2400,12 +2400,25 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * line, then the spinner's `with high effort`), else the level just sent. */
   const effortNow = status?.effort ?? sessionWork?.effort ?? (effortPicked || undefined);
   const effortOffered = tab.kind === "agent" && !tab.local_model && !bare && agentKey === "claude";
-  /** Claude's model chip: the model, then the level as a gauge. The tag's own
+  /** Antigravity prints its effort in the footer beside the model, and the
+   * chip shows it the same way as Claude's: the model, then the level as a gauge. */
+  const effortGauge = effortOffered || (antigravity && !tab.local_model && !bare);
+  /** The model chip: the model, then the level as a gauge. The tag's own
    * ` · <level>` (`statusModelTag`) is taken off, since it may be older than
    * the level just sent; other CLIs keep the tag as it is. */
-  const effortTagged = effortOffered ? CLAUDE_EFFORT_SUFFIX.exec(modelChip) : null;
+  const effortTagged = effortGauge ? CLAUDE_EFFORT_SUFFIX.exec(modelChip) : null;
   const chipModel = effortTagged ? modelChip.slice(0, effortTagged.index) : modelChip;
-  const chipEffort = effortOffered ? effortNow ?? effortTagged?.[1] : undefined;
+  const chipEffort = effortGauge ? effortNow ?? effortTagged?.[1] : undefined;
+  /** Antigravity's slider for the model the session is on. Its dialog draws
+   * the slider only for the highlighted row, and the highlight opens on the
+   * `(current)` one, so the stops are offered under the models while the
+   * highlight is there. Mid-walk, or after a tap, the stops belong to another
+   * row and are not shown. */
+  const highlighted = pickerStep?.options[pickerStep.current];
+  const antigravityStops = antigravity && !effortStep && !effortFor && !reveal && !answered
+    && highlighted?.description === "(current)" && effortSlider && effortSlider.stops.length > 1
+    ? effortSlider
+    : null;
   /** Claude's levels in the model sheet, under the models as the CLI's own
    * `/model` dialog draws its effort line: one tap sends `/effort <level>`
    * and closes the sheet. The model chip carries the level instead of a chip
@@ -2421,7 +2434,21 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
       onClick={() => chooseEffortLevel(level)}
     >{level}</button>)}</div>
     <p className="sheet-note">{t("terminal.reader.effortNote")}</p>
-  </section>;
+  </section>
+    /* Antigravity's stops for the current model: a tap moves its slider and
+     * presses the Enter that applies the model and the effort together. */
+    || antigravityStops && <section className="model-effort" aria-label={t("terminal.reader.effortTitle")}>
+      <h3 className="option-list-group">{t("terminal.reader.effortTitle")}{isUntested("mobile.model.antigravityEffort") && <span className="untested">{t("mobile.focus.untested")}</span>}</h3>
+      <div className="model-effort-levels" style={{ "--effort-levels": antigravityStops.stops.length } as CSSProperties}>{antigravityStops.stops.map((stop, index) => <button
+        key={stop.label}
+        className={index === antigravityStops.current ? "current" : undefined}
+        aria-current={index === antigravityStops.current || undefined}
+        aria-label={t("terminal.reader.effort", { effort: stop.label })}
+        disabled={!connected}
+        onClick={() => chooseEffort(String(index))}
+      >{stop.label}</button>)}</div>
+      <p className="sheet-note">{antigravityStops.stops[antigravityStops.current]?.description ?? t("mobile.model.effortHint")}</p>
+    </section>;
   const modeOptions: SheetOption[] = modes.map((choice) => ({
     key: choice.value,
     label: choice.label,
