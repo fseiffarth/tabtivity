@@ -5793,7 +5793,7 @@ export const enSource = {
   "projectDialog.skipScaffoldLabel": "Skip scaffolding (do not generate any scaffold files)",
   "projectDialog.runInContainerLabel": "Run this project in a container",
   "projectDialog.runInContainerHint": "Every terminal and agent tab runs inside one closed Docker container that can reach this project folder and nothing else. Needs Docker.",
-  "projectDialog.runInContainerImportHint": "On by default for imported code: build scripts and agent instructions you have not read yet run inside a container that can reach this project folder and nothing else. Needs Docker.",
+  "projectDialog.runInContainerImportHint": "For imported code: build scripts and agent instructions you have not read yet run inside a container that can reach this project folder and nothing else. Needs Docker.",
   "projectDialog.trustTierLabel": "Where this project runs",
   "projectDialog.trustTierTitle": "The trust tier: on the host, in a Docker container, or fully inside a virtual machine",
   "projectDialog.tierLocalOpt": "On this machine (no isolation)",

@@ -5616,7 +5616,7 @@ export const dict: Dict = {
   "projectDialog.skipScaffoldLabel": "Scaffolding überspringen (keine Scaffold-Dateien erzeugen)",
   "projectDialog.runInContainerLabel": "Dieses Projekt in einem Container ausführen",
   "projectDialog.runInContainerHint": "Jeder Terminal- und Agenten-Tab läuft in einem geschlossenen Docker-Container, der nur diesen Projektordner erreichen kann. Benötigt Docker.",
-  "projectDialog.runInContainerImportHint": "Bei importiertem Code standardmäßig an: Build-Skripte und Agenten-Anweisungen, die Sie noch nicht gelesen haben, laufen in einem Container, der nur diesen Projektordner erreichen kann. Benötigt Docker.",
+  "projectDialog.runInContainerImportHint": "Für importierten Code: Build-Skripte und Agenten-Anweisungen, die Sie noch nicht gelesen haben, laufen in einem Container, der nur diesen Projektordner erreichen kann. Benötigt Docker.",
   "projectDialog.trustTierLabel": "Wo dieses Projekt läuft",
   "projectDialog.trustTierTitle": "Die Vertrauensstufe: auf dem Host, in einem Docker-Container oder vollständig in einer virtuellen Maschine",
   "projectDialog.tierLocalOpt": "Auf diesem Rechner (keine Isolation)",

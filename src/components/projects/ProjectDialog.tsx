@@ -364,27 +364,19 @@ export function ProjectDialog({
   // Recommended tier: an import (a folder, a clone, a fork) is exactly the
   // case where build scripts and agent-facing docs the user hasn't read are
   // about to run — recommend the **VM** when the doctor probe passes
-  // (`docs/vm_projects_plan.md`), falling back to the container as before. A
-  // new project starts empty; nothing to contain yet, so Local.
+  // (`docs/vm_projects_plan.md`). Otherwise Local: the container is never the
+  // default — it needs Docker, which many machines lack, and a project
+  // defaulted into it would fail at its first tab. It stays one pick away.
+  // A new project starts empty; nothing to contain yet, so Local.
   const tierDefault: "local" | "container" | "vm" =
-    kind === "import"
-      ? vmOk
-        ? "vm"
-        : containerAvailable
-          ? "container"
-          : "local"
-      : "local";
-  // The effective tier: the explicit choice (degraded to an available tier if
-  // the import source moved under it), else the recommendation.
+    kind === "import" && vmOk ? "vm" : "local";
+  // The effective tier: the explicit choice (degraded to Local if the import
+  // source moved under it), else the recommendation.
   const tierRaw = tierChoice ?? tierDefault;
   const tier: "local" | "container" | "vm" =
-    tierRaw === "vm" && !vmOk
-      ? containerAvailable && kind === "import"
-        ? "container"
-        : "local"
-      : tierRaw === "container" && !containerAvailable
-        ? "local"
-        : tierRaw;
+    (tierRaw === "vm" && !vmOk) || (tierRaw === "container" && !containerAvailable)
+      ? "local"
+      : tierRaw;
   const runInContainer = tier === "container";
   const isVmProject = tier === "vm";
   // A git repo is created LOCALLY even for a remote (SSH) project — the local

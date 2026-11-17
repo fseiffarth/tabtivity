@@ -5590,7 +5590,7 @@ export const dict: Dict = {
   "projectDialog.skipScaffoldLabel": "Salta lo scaffolding (non generare alcun file di scaffold)",
   "projectDialog.runInContainerLabel": "Esegui questo progetto in un container",
   "projectDialog.runInContainerHint": "Ogni scheda terminale e agente viene eseguita in un container Docker chiuso che può raggiungere solo questa cartella di progetto. Richiede Docker.",
-  "projectDialog.runInContainerImportHint": "Attivo per impostazione predefinita per il codice importato: gli script di build e le istruzioni per gli agenti che non hai ancora letto vengono eseguiti in un container che può raggiungere solo questa cartella di progetto. Richiede Docker.",
+  "projectDialog.runInContainerImportHint": "Per il codice importato: gli script di build e le istruzioni per gli agenti che non hai ancora letto vengono eseguiti in un container che può raggiungere solo questa cartella di progetto. Richiede Docker.",
   "projectDialog.trustTierLabel": "Dove viene eseguito questo progetto",
   "projectDialog.trustTierTitle": "Il livello di fiducia: sull'host, in un container Docker o interamente dentro una macchina virtuale",
   "projectDialog.tierLocalOpt": "Su questa macchina (nessun isolamento)",

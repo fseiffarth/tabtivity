@@ -5590,7 +5590,7 @@ export const dict: Dict = {
   "projectDialog.skipScaffoldLabel": "Omitir el andamiaje (no generar ningún archivo de scaffold)",
   "projectDialog.runInContainerLabel": "Ejecutar este proyecto en un contenedor",
   "projectDialog.runInContainerHint": "Cada pestaña de terminal y de agente se ejecuta dentro de un contenedor Docker cerrado que solo puede acceder a esta carpeta del proyecto. Requiere Docker.",
-  "projectDialog.runInContainerImportHint": "Activado por defecto para código importado: los scripts de compilación y las instrucciones para agentes que aún no ha leído se ejecutan en un contenedor que solo puede acceder a esta carpeta del proyecto. Requiere Docker.",
+  "projectDialog.runInContainerImportHint": "Para código importado: los scripts de compilación y las instrucciones para agentes que aún no ha leído se ejecutan en un contenedor que solo puede acceder a esta carpeta del proyecto. Requiere Docker.",
   "projectDialog.trustTierLabel": "Dónde se ejecuta este proyecto",
   "projectDialog.trustTierTitle": "El nivel de confianza: en el host, en un contenedor Docker o completamente dentro de una máquina virtual",
   "projectDialog.tierLocalOpt": "En esta máquina (sin aislamiento)",
