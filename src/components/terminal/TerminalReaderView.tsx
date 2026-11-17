@@ -1309,6 +1309,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
           value={draft}
           disabled={inputBlocked}
           rows={3}
+          spellCheck={false}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
             : shownSuggestion ? t("terminal.reader.suggestionPlaceholder", { text: shownSuggestion })
             : t("terminal.reader.placeholder")}
