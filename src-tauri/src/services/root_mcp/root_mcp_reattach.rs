@@ -304,6 +304,10 @@ pub struct Listener {
     pending: std::sync::Mutex<HashSet<String>>,
     /// Set by a clean quit: nothing is written any more.
     stopped: AtomicBool,
+    /// Held across every write of the file and across the clean quit's
+    /// delete: a write that passed the `stopped` check lands before the
+    /// delete, never after it.
+    io: std::sync::Mutex<()>,
 }
 
 static LISTENER: OnceLock<Listener> = OnceLock::new();
@@ -386,6 +390,7 @@ impl Listener {
             lost_port,
             pending: std::sync::Mutex::new(pending),
             stopped: AtomicBool::new(false),
+            io: std::sync::Mutex::new(()),
         }
     }
 
@@ -460,6 +465,7 @@ impl Listener {
     }
 
     fn patch<R>(&self, f: impl FnOnce(&mut Record) -> R) -> Option<R> {
+        let _io = self.io.lock_ok();
         if self.stopped.load(Ordering::Acquire) {
             return None;
         }
@@ -565,6 +571,9 @@ impl Listener {
 
     /// A clean quit: the file goes and nothing is written after.
     pub fn delete(&self) {
+        // After any write in flight (a heartbeat, a commit's row), so that
+        // none lands on the purged name.
+        let _io = self.io.lock_ok();
         self.stopped.store(true, Ordering::Release);
         self.pending.lock_ok().clear();
         purge(&self.file);

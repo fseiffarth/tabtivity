@@ -500,3 +500,28 @@ fn the_stamp_grant_prefers_a_revivable_lane() {
     env.insert(super::super::HELP_TOKEN_ENV.to_string(), "h".to_string());
     assert_eq!(stamp_grant(&env), Some(token_hash("h")));
 }
+
+/// R3 (finding 6): a write already past the `stopped` check when the clean
+/// quit deletes the file lands before the delete, never after it: the
+/// delete waits for it, and no file outlives the quit.
+#[test]
+fn a_write_in_flight_never_lands_after_the_clean_quit() {
+    let (_dir, file) = record_file();
+    let listener = std::sync::Arc::new(Listener::open(file.clone(), PORT, THIS.into(), true, None, NOW));
+    let (entered, in_patch) = std::sync::mpsc::channel();
+    let writer = {
+        let listener = listener.clone();
+        std::thread::spawn(move || {
+            listener.patch(|record| {
+                entered.send(()).unwrap();
+                // The quit runs now, while this write is inside its patch.
+                std::thread::sleep(Duration::from_millis(300));
+                record.sessions.insert("late".into(), row_of(vec![], "g", THIS));
+            });
+        })
+    };
+    in_patch.recv().unwrap();
+    listener.delete();
+    writer.join().unwrap();
+    assert!(!file.exists(), "the in-flight write landed before the delete, not after it");
+}
