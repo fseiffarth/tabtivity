@@ -21,7 +21,7 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { firstLabel, linkedSnapshot, selectDesktop, subscribeLinked } from "./linkedDesktops";
 import { shellOrigin } from "./frameBridge";
-import { FrameGuard } from "./FrameGuard";
+import { FrameGuard } from "./FrameGuardCard";
 import { inAnyFrame } from "./frameGuard";
 import { ShellContext, type DesktopShellApi } from "./shellContext";
 

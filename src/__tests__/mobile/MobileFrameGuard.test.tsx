@@ -10,7 +10,7 @@
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { blockInput, SETTLE_MS, startFrameGuard, VISIBILITY_DELAY_MS, type FrameGuardState } from "../../../mobile-web/src/shell/frameGuard";
-import { FrameGuard as FrameGuardCard } from "../../../mobile-web/src/shell/FrameGuard";
+import { FrameGuard as FrameGuardCard } from "../../../mobile-web/src/shell/FrameGuardCard";
 import { SHELL_CHANNEL } from "../../../mobile-web/src/shell/frameBridge";
 
 type Record_ = { isIntersecting: boolean; isVisible?: boolean };
