@@ -19,6 +19,12 @@
 //! not run (a batch file) stays unmarked, in-process. A viewer that is not a
 //! tab (the phone's bridge) attaches with [`SessionMux::attach_stream`];
 //! [`SessionMux::attach_client`] is `Unavailable` here.
+//!
+//! MCP stamps (`root_mcp_mark`): the `Spawn` carries `PtyOptions::mcp_mark`
+//! and the host keeps it only when that `Spawn` creates the session;
+//! [`SessionMux::mcp_marks`] is one `List` (cached [`MARKS_TTL`] per pipe), and
+//! "unknown" from a host without `CAP_MCP_MARK` or where no host runs or will
+//! run (`route::marks_answer`).
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -26,7 +32,7 @@ use std::time::Duration;
 
 use tokio::net::windows::named_pipe::NamedPipeClient;
 
-use super::{ClientCmd, Key, MuxError, MuxKind, MuxStream, PaneInfo, SessionInfo, SessionMux};
+use super::{ClientCmd, Key, MuxError, MuxKind, MuxStream, PaneInfo, SessionInfo, SessionMarks, SessionMux};
 use crate::services::session_host::client::{Client, ClientError};
 use crate::services::session_host::launch::{self, Launch};
 use crate::services::session_host::protocol::{ErrorCode, SizePolicy};
@@ -46,6 +52,29 @@ pub const LIST_DEADLINE: Duration = Duration::from_secs(3);
 pub const OPEN_DEADLINE: Duration = Duration::from_secs(25);
 /// The `settings.json` key of the experimental switch.
 pub const SETTING_KEY: &str = "windows_session_host";
+/// How long a [`SessionMux::mcp_marks`] listing is reused (tmux's twin): a
+/// restore's burst of tabs reads one `List`.
+pub const MARKS_TTL: Duration = Duration::from_secs(3);
+
+/// A stamp listing per host pipe, with when it was read.
+type MarksCache = std::collections::HashMap<String, (std::time::Instant, SessionMarks)>;
+
+/// The last stamp listing of each host pipe (one in the app; tests run several).
+static MARKS: std::sync::Mutex<Option<MarksCache>> = std::sync::Mutex::new(None);
+
+fn marks_cache() -> std::sync::MutexGuard<'static, Option<MarksCache>> {
+    MARKS.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+impl WinHostMux {
+    /// Forget this host's cached listing (a session was made, killed or
+    /// renamed under it).
+    fn forget_marks(&self) {
+        if let (Ok(launch), Some(cache)) = (self.launch.as_ref(), marks_cache().as_mut()) {
+            cache.remove(&launch.pipe_name());
+        }
+    }
+}
 
 /// Whether the mux is switched on.
 #[derive(Debug, Clone)]
@@ -146,6 +175,8 @@ pub fn host_spawn_for(opts: &PtyOptions, name: &str) -> Result<HostSpawn, String
         // Every agent tab keeps its pane but an assistant chat (plan, Defaults 4).
         remain_on_exit: opts.assistant.is_none(),
         size_policy: SizePolicy::Latest,
+        // Kept by the host only if this Spawn creates the session.
+        mcp_mark: opts.mcp_mark.clone(),
     })
 }
 
@@ -343,11 +374,13 @@ impl SessionMux for WinHostMux {
         let launch = self.ready()?;
         let spawn = host_spawn_for(opts, &name).map_err(MuxError::Refused)?;
         let (cols, rows) = (opts.cols.max(1), opts.rows.max(1));
-        block(move || async move {
+        let spawned = block(move || async move {
             let mut client = launch::connect_host(&launch).await.map_err(mux_err)?;
             client.spawn(spawn.request(cols, rows)).await.map_err(mux_err)?;
             Ok(())
-        })
+        });
+        self.forget_marks();
+        spawned
     }
 
     /// No client process can attach here (the release exe has no console in
@@ -410,6 +443,35 @@ impl SessionMux for WinHostMux {
                 .collect()),
             Err(MuxError::NoServer) => Ok(Vec::new()),
             Err(e) => Err(e),
+        }
+    }
+
+    /// One `List` of any running host, setting or not, under
+    /// [`LIST_DEADLINE`], reused for [`MARKS_TTL`] (the lock is held across
+    /// the listing: a restore's tabs wait on one). Only a host announcing
+    /// `CAP_MCP_MARK` is listed; see [`route::marks_answer`].
+    fn mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        let launch = self.reachable()?;
+        let pipe = launch.pipe_name();
+        let mut cached = marks_cache();
+        let cache = cached.get_or_insert_with(MarksCache::new);
+        if let Some((at, marks)) = cache.get(&pipe) {
+            if at.elapsed() < MARKS_TTL {
+                return Ok(marks.clone());
+            }
+        }
+        let floor = crate::services::session_host::protocol::PROTO_MIN;
+        let listed = self.ask_any_within(LIST_DEADLINE, floor, |mut c| async move { c.mcp_marks().await });
+        let marks = route::marks_answer(listed, self.available())?;
+        cache.retain(|_, (at, _)| at.elapsed() < MARKS_TTL);
+        cache.insert(pipe, (std::time::Instant::now(), marks.clone()));
+        Ok(marks)
+    }
+
+    fn note_mcp_mark(&self, name: &str, mark: &str) {
+        let Ok(launch) = self.launch.as_ref() else { return };
+        if let Some((_, marks)) = marks_cache().as_mut().and_then(|cache| cache.get_mut(&launch.pipe_name())) {
+            marks.note(name, mark);
         }
     }
 
@@ -477,7 +539,9 @@ impl SessionMux for WinHostMux {
         check_name(name)?;
         let name = name.to_string();
         let floor = crate::services::session_host::protocol::REAP_PROTO_MIN;
-        match self.ask_any(floor, move |mut c| async move { c.kill(&name).await }) {
+        let killed = self.ask_any(floor, move |mut c| async move { c.kill(&name).await });
+        self.forget_marks();
+        match killed {
             Ok(()) | Err(MuxError::NoServer | MuxError::NotFound) => Ok(()),
             Err(e) => Err(e),
         }
@@ -487,7 +551,9 @@ impl SessionMux for WinHostMux {
         check_name(old)?;
         check_name(new)?;
         let (old, new) = (old.to_string(), new.to_string());
-        self.ask(move |mut c| async move { c.rename(&old, &new).await })
+        let renamed = self.ask(move |mut c| async move { c.rename(&old, &new).await });
+        self.forget_marks();
+        renamed
     }
 
     /// One `KillPrefix` of the app's prefix: the host only ever ran sessions
@@ -495,7 +561,9 @@ impl SessionMux for WinHostMux {
     fn kill_app_sessions(&self) -> Result<(), MuxError> {
         let prefix = crate::services::tmux_local::LOCAL_TMUX_PREFIX;
         let floor = crate::services::session_host::protocol::REAP_PROTO_MIN;
-        match self.ask_any(floor, move |mut c| async move { c.kill_prefix(prefix).await }) {
+        let killed = self.ask_any(floor, move |mut c| async move { c.kill_prefix(prefix).await });
+        self.forget_marks();
+        match killed {
             Ok(_) | Err(MuxError::NoServer) => Ok(()),
             Err(e) => Err(e),
         }

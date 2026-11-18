@@ -35,8 +35,12 @@ same folder). An unfenced command tab keeps its trailing login shell.
 Scoped to **shell tabs** (Python runs open one; a command runs inside the
 session's login shell, which outlives it → the run reattaches, not re-runs) and,
 **since the remote-agent extension**, to **remote agent tabs** (Claude, Codex,
-any SSH-hosted agent) — never the root scope, and never a **local** agent
-(`local_agent`, host-bound Ollama). An agent tab now carries a persisted tmux name
+any SSH-hosted agent). A **local** agent tab is wrapped like any other once it
+carries a `tmux_session` name (`launch_prep::prepare` wraps whatever the ssh and
+docker branches left local; a fenced agent's pane is the dead-pane case above) —
+the claim that a local agent was never wrapped is long out of date, and it is why
+a reattached local agent can hold MCP credentials nobody honours
+([MCP stamp](#the-mcp-stamp-of-a-local-agent-session)). An agent tab now carries a persisted tmux name
 **in addition to** its `--resume` restore, and the two **compose** through
 `new-session -A`: when the host session is still alive (the laptop-shutdown case)
 the wrap **reattaches** the still-running agent and the `--resume` target is ignored;
@@ -131,3 +135,114 @@ size; the pane's program sees one size per window, and the wrap sets
 `tmux_local::window_size_policy`): the window follows whichever client last
 typed, resized or attached, and the others pan or pad until used. A single
 client gets its own size under any policy.
+
+## The MCP stamp of a local agent session
+
+A reattach (`new-session -A` finding the session alive) ignores the new command
+and `-e` env: the agent keeps the MCP URLs and tokens it was **started** with,
+and tokens live only in the starting process's memory. After a crash they belong
+to nobody. `docs/mcp_reattach_plan.md` is the design; this is how the tmux side
+works.
+
+- **The stamp.** A session `launch_prep::prepare` finds absent is created with a
+  tmux user option, `@<slug>_mcp = <nonce>:<grant>:<port>` (`root_mcp_mark`):
+  `nonce` is random per listener (`Runtime::generation`, new on every start),
+  `grant` the `Session::id` (SHA-256 of the token) of the first revivable lane
+  (`root_mcp_reattach::stamp_grant`; any lane when none is revivable, `-` for a
+  spawn granted nothing), `port` the listener's. It rides `PtyOptions::mcp_mark`
+  (`#[serde(skip)]`: a payload cannot stamp a session) as one more command of the
+  same tmux argv (`tmux_local::mcp_mark_args`, appended in `local_tmux_argv`). A
+  launch that reattaches carries no mark, so the stamp is the one the session was
+  created with. Create-vs-attach is decided in Rust from one listing; a second
+  launch inside the cache's life sees the new session because `commit` notes it
+  (`SessionMux::note_mcp_mark`). The listing can be stale by then (the Mobile
+  host created the session inside the 3 s cache, or two spawns of one id raced),
+  and `new-session -A` then attaches: the stamp is `set-option -q -o`, which sets
+  the option only where it is unset and fails silently otherwise, so an attach
+  never overwrites the stamp of the grant its agent holds (R1's race; the tmux
+  equivalent of the Windows host's `Created::New`). Residual: a session made by
+  a build before stamps (no stamp at all) that loses that race is stamped by the
+  attach.
+- **One listing per restore.** `SessionMux::mcp_marks()` is one
+  `tmux ls -F '#{session_name}\t#{@<slug>_mcp}'`, cached about 3 s behind a single
+  flight (the lock is held across the `tmux ls`), dropped by `kill`, `rename`
+  and the quit reap. It also answers `reattaches_session`. A private socket (a
+  test) is never cached. A backend that cannot answer (the trait default,
+  `Unavailable`) is "unknown": the launch grants as before and `has` answers the
+  rejoin.
+- **Windows session host.** The same stamp rides the host's create-or-attach
+  `Spawn` (`mcp_mark`, kept only when that `Spawn` creates the session, at most
+  256 printable ASCII bytes) and comes back in one `List` (`SessionInfo::mcp_mark`;
+  `WinHostMux::mcp_marks`, the same 3 s cache per pipe). Additive, no protocol
+  bump: a host announces `CAP_MCP_MARK` (`"mcp-mark"`) in `Welcome`, and a host
+  without it (an older one still serving its sessions) is "unknown", never
+  "no stamp", so its tabs are never flagged stale on a guess
+  (`session_host::route::marks_answer`). No host running is "none" (stamp the
+  create) only while the setting is on; off, no session will exist, so
+  "unknown". The stamp never reaches `sessions.json`.
+- **The verdict** (`root_mcp_mark::classify_reattach`, pure):
+
+  | Session | Verdict | Grant | Tab |
+  |---|---|---|---|
+  | absent, or backend cannot tell | Create | as ever, then stamp | tools |
+  | no stamp (older build, hand-made) | Stale | none | flagged |
+  | stamp, no grant (`-`) | NoGrant | none | nothing to report |
+  | this run's nonce, grant still held | Live | none; `TokenStore::adopt` re-keys the held lanes to the new PTY id | tools |
+  | this run's nonce, grant gone | Stale (or revived, below) | none | flagged |
+  | another nonce on this listener's port, grant held here (revived), previous run within the cap | Live | none; adopted | tools |
+  | another nonce on this listener's port, otherwise | Stale (or revived) | none | flagged |
+  | another nonce, listener confirms | Live | none | tools |
+  | another nonce, no confirmation | Stale (or revived) | none | flagged |
+
+  The confirmation is `GET /mcp/grant/<hash>` on the stamp's port
+  (`probe_grant`, 300 ms for connect and answer; no answer is Stale), served by
+  every listener, 204 or 404, no credentials. A stamp on this listener's own
+  port is never probed (it would ask itself), and neither is one on the port
+  this listener remembered but lost (whoever took it would answer). Nothing is
+  minted for Live or Stale: the session ignores a new environment, and
+  `TokenStore::register` would revoke the running agent's tokens (it replaces a
+  tab's token per lane).
+- **Revival** (Phase 2, `root_mcp_reattach`, `docs/context/agent_mcp_wiring.md`
+  §5). A Stale verdict whose session has a row in this listener's reattach
+  record is revived when every guard holds: the remembered port bound on the
+  first try, the stamp's and the row's port this listener's, the stamp's nonce
+  the row's and that one this run's or the previous run's of the same
+  listener, the downtime under 30 minutes, the stamp's grant the row's, and the
+  CLI one that reconnects. The launch then grants as a create, and after the
+  fence each fresh session whose identity matches the recorded one takes the
+  recorded hash; the rest are revoked and the fresh tokens are stripped from the
+  attach's environment. Only cockpit, help, markup and print come back
+  everywhere; git and tabs only on Linux, where a revived token is honoured
+  only over a connection held by processes of the session's own pane tree
+  (`root_mcp_reattach::peer_in_session`, else `401`). A reviving launch only
+  attaches (`host_attach_only`; on tmux the argv becomes the attach client's,
+  `launch_prep::attach_only_client`): a session that ended since the listing
+  is never created again, the tab's client exits, and the commit drops the
+  row. At commit the session is re-stamped with this run's
+  nonce (`SessionMux::restamp_mcp`, `set-option -t =<name>:`; the Windows host
+  cannot, so its revived sessions are found by their grant on the own port
+  instead, only while the previous run's 30 minutes last, and are not revived
+  by a later run). A recorded lane that does not come back (schedule, root, git
+  and tabs off Linux, a lane switched off, a changed identity) leaves the tab
+  Stale.
+- **The record's lifecycle** follows the session: `local_tmux_kill` drops the
+  row, `local_tmux_rename` re-keys it, the Sessions view's end-all clears the
+  rows, the clean quit deletes the file (`commands::root_mcp::stop_for_exit`), and
+  the listener's heartbeat (at start, then every 5 minutes) refreshes
+  `last_alive` and drops rows of sessions the backend no longer lists. A PTY
+  teardown (`root_mcp_review::on_tab_gone`) only releases the tokens in memory
+  (`release_tab`), so a reattach later in the same run is revived from the row;
+  a revoke (`revoke_tab`, `revoke_session`) drops the hashes for good.
+- **Stale** sets `PreparedLaunch::mcp_stale` -> `pty_spawn`'s answer carries
+  `mcpStale`, and `root_mcp::tab_stale` makes `servers_of_tab` empty and
+  `agent_features` report `appMcpStale`. The flag lives until the tab's
+  teardown (`root_mcp_review::on_tab_gone`). What the user can do about it is the
+  frontend's Reconnect (kill the session, relaunch with the CLI's resume).
+- **Stable port.** The window binds `<state_dir>/root_mcp/port` (0600) with a
+  synchronous std bind before restored tabs spawn, falling back to a free port
+  (never the Mobile host's remembered one) and logging the holder. The Mobile
+  host (and a server daemon) remembers its own in `<state_dir>/root_mcp/host-port`
+  and binds it first, never the window's (`bind_host`, `bind_avoiding`). This
+  keeps a stale agent's URLs pointing at this program and fixes the old startup
+  race (a tab restored before the async bind got no lanes). Any fallback purges
+  that listener's reattach record.

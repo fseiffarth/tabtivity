@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use super::{normalize_scrollback, ClientCmd, Key, MuxError, MuxKind, PaneInfo, SessionInfo, SessionMux};
+use super::{normalize_scrollback, ClientCmd, Key, MuxError, MuxKind, PaneInfo, SessionInfo, SessionMarks, SessionMux};
+use app_core::sync::LockExt;
 use crate::services::ssh_exec::{parse_tmux_ls, valid_tmux_session_name, TMUX_VT100_DIM, TMUX_VT100_DIM_MARK};
 use crate::services::tmux_local;
 use crate::terminal::PtyOptions;
@@ -205,6 +206,57 @@ impl TmuxMux {
             )))
         }
     }
+}
+
+/// How long a [`SessionMux::mcp_marks`] listing of the app's server is reused.
+const MARKS_TTL: Duration = Duration::from_secs(3);
+
+/// The app's server's last stamp listing, with when it was read.
+static MARKS: std::sync::Mutex<Option<(std::time::Instant, SessionMarks)>> = std::sync::Mutex::new(None);
+
+/// Forget the cached listing (a session was killed or renamed under it). Also
+/// for a session ended without the mux (`agent_privacy`'s sweep): a launch
+/// within the cache's life would otherwise read it as live and only "reattach"
+/// it, so the session it creates instead would get no grant and no stamp.
+pub(crate) fn forget_marks() {
+    *MARKS.lock_ok() = None;
+}
+
+/// Seed the app server's cached listing, for tests of who drops it.
+#[cfg(test)]
+pub(crate) fn seed_marks_for_test(marks: SessionMarks) {
+    *MARKS.lock_ok() = Some((std::time::Instant::now(), marks));
+}
+
+/// Whether the app server's cached listing names `name`, for those tests.
+#[cfg(test)]
+pub(crate) fn marks_cached_for_test(name: &str) -> bool {
+    MARKS.lock_ok().as_ref().is_some_and(|(_, marks)| marks.contains(name))
+}
+
+impl TmuxMux {
+    /// One `tmux ls` with the stamp column ([`tmux_local::mcp_marks_ls_args`]).
+    fn read_mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        let out = match crate::paths::output_within(self.command_with(tmux_local::mcp_marks_ls_args()), LIST_TIMEOUT) {
+            Ok(out) => out,
+            // No tmux on the app's PATH: no session was ever started in one.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(SessionMarks::default()),
+            Err(error) => return Err(MuxError::Io(format!("tmux ls: {error}"))),
+        };
+        marks_answer(out.status.success(), &out.stdout, &out.stderr)
+    }
+}
+
+/// One stamp-listing exit as an answer: no server is the answer "none".
+pub fn marks_answer(success: bool, stdout: &[u8], stderr: &[u8]) -> Result<SessionMarks, MuxError> {
+    if !success {
+        let stderr = String::from_utf8_lossy(stderr);
+        if says_no_server(&stderr) {
+            return Ok(SessionMarks::default());
+        }
+        return Err(MuxError::Refused(format!("tmux ls failed: {}", stderr.trim())));
+    }
+    Ok(SessionMarks::from_rows(tmux_local::parse_mcp_marks(&String::from_utf8_lossy(stdout))))
 }
 
 /// `=<name>:` — the exact session, its current window.
@@ -417,6 +469,42 @@ impl SessionMux for TmuxMux {
         }
     }
 
+    fn mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        // Only the app's own server is cached: a private socket (a test) is
+        // asked every time.
+        if self.socket.is_some() {
+            return self.read_mcp_marks();
+        }
+        let mut cached = MARKS.lock_ok();
+        if let Some((at, marks)) = cached.as_ref() {
+            if at.elapsed() < MARKS_TTL {
+                return Ok(marks.clone());
+            }
+        }
+        // The lock is held across the listing: concurrent restores of many tabs
+        // wait on one `tmux ls` and then all read its answer.
+        let marks = self.read_mcp_marks()?;
+        *cached = Some((std::time::Instant::now(), marks.clone()));
+        Ok(marks)
+    }
+
+    fn note_mcp_mark(&self, name: &str, mark: &str) {
+        if self.socket.is_some() {
+            return;
+        }
+        if let Some((_, marks)) = MARKS.lock_ok().as_mut() {
+            marks.note(name, mark);
+        }
+    }
+
+    /// `set-option -t =<name>: <option> <mark>`, overwriting: the session
+    /// exists (a revival reattached it), and only its stamp changes.
+    fn restamp_mcp(&self, name: &str, mark: &str) -> Result<(), MuxError> {
+        self.run(&tmux_local::mcp_restamp_args(name, mark))?;
+        self.note_mcp_mark(name, mark);
+        Ok(())
+    }
+
     fn has(&self, name: &str) -> Result<bool, MuxError> {
         Ok(output(self.has_command(name))?.status.success())
     }
@@ -499,6 +587,7 @@ impl SessionMux for TmuxMux {
             crate::terminal::reap_child_subtree(pid, crate::terminal::ReapMode::Graceful);
         }
         let out = output(self.kill_command(name))?;
+        forget_marks();
         tmux_local::remove_launcher(name);
         if out.status.success() {
             return Ok(());
@@ -515,6 +604,7 @@ impl SessionMux for TmuxMux {
             return Err(MuxError::Refused(format!("invalid session name '{new}'")));
         }
         let out = output(self.rename_command(old, new))?;
+        forget_marks();
         if out.status.success() {
             Ok(())
         } else {
@@ -527,6 +617,7 @@ impl SessionMux for TmuxMux {
     /// private server goes through `list` and `kill`.
     fn kill_app_sessions(&self) -> Result<(), MuxError> {
         if self.socket.is_none() {
+            forget_marks();
             return tmux_local::kill_app_sessions().map_err(MuxError::Refused);
         }
         super::kill_app_sessions_in(self)

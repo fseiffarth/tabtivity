@@ -2739,7 +2739,7 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
         }))
         .expect("options")
     };
-    let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: true };
+    let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
     for project in [None, Some("vm-reader")] {
         let mut here = spawn("headless:c", project);
         root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
@@ -2763,7 +2763,7 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
     root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
     root_mcp::grant_lanes(&mut targetless, true, root_mcp::runtime(), other, &state_dir);
-    let not_markup = crate::services::root_mcp::Runtime { port: 9, serves_root: false, serves_markup: false, serves_web: true };
+    let not_markup = crate::services::root_mcp::Runtime { port: 9, serves_root: false, serves_markup: false, serves_web: true, generation: "test-generation".into() };
     root_mcp::grant_lanes(&mut unserved, true, Some(&not_markup), other, &state_dir);
     assert!(here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
     assert!(window.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", window.env.keys());
@@ -2806,7 +2806,7 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     }
     assert_eq!(mcp_status(port, "/mcp", &web).await, 404);
     assert_eq!(admission(other, "/mcp/web", &web).await, Err(StatusCode::UNAUTHORIZED), "another process's listener refuses it");
-    let daemon = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: false };
+    let daemon = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: false, generation: "test-generation".into() };
     let mut none = assistant("headless:web-daemon", "claude");
     root_mcp::grant_lanes(&mut none, true, Some(&daemon), other, &state_dir);
     assert!(!none.env.contains_key(root_mcp::WEB_TOKEN_ENV), "a daemon does not serve the web lane");
@@ -7427,10 +7427,15 @@ fn the_headless_spawn_runs_in_the_session_host_only_what_the_wrap_marked() {
 /// with the switch's code, which the create route answers as `ai_off`.
 #[test]
 fn a_rejoin_only_headless_launch_never_creates_a_session() {
-    assert_eq!(headless_rejoin(true), Ok(()));
-    let refused = headless_rejoin(false).expect_err("refused");
+    assert_eq!(headless_rejoin(true, true), Ok(()));
+    assert_eq!(headless_rejoin(true, false), Ok(()));
+    let refused = headless_rejoin(false, true).expect_err("refused");
     assert_eq!(refused, crate::services::ai_switch::AI_OFF);
     assert_eq!(headless_create_error(headless::CreateRefusal::LaunchFailed(refused)).0, StatusCode::FORBIDDEN);
+    // A revival whose session ended meanwhile says so, not that AI is off.
+    let ended = headless_rejoin(false, false).expect_err("refused");
+    assert_eq!(ended, SESSION_ENDED);
+    assert_ne!(headless_create_error(headless::CreateRefusal::LaunchFailed(ended)).0, StatusCode::FORBIDDEN);
     let body = include_str!("../host.rs");
     let spawner = &body[body.find("impl Default for HeadlessSpawner").unwrap()..];
     let spawner = &spawner[..spawner.find("\n}\n").unwrap()];

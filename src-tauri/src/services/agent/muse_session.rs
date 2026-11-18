@@ -581,6 +581,7 @@ mod tests {
             host_session: false,
             api_key: None,
             mux_wrapped: false,
+            mcp_mark: None,
         };
         o.env.insert(crate::app_env!("TAB_UID").to_string(), uid.to_string());
         o

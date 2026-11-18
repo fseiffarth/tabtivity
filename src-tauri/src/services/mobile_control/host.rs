@@ -236,17 +236,17 @@ impl Default for HeadlessSpawner {
                     // Off the async workers: the session host's connect may
                     // start the host (a lazy start, ≤ 3 s). A launch that may
                     // only rejoin its live session (`host_attach_only`: let
-                    // through the AI switch, or found alive in a host whose
-                    // setting is off) never goes through the create-or-attach
-                    // spawn: alive, there is nothing to start; gone meanwhile,
-                    // it is refused as the switch refuses a new agent.
+                    // through the AI switch, a revival of its MCP lanes, or
+                    // found alive in a host whose setting is off) never goes
+                    // through the create-or-attach spawn: alive, there is
+                    // nothing to start; gone meanwhile, it is refused.
                     let opts = prepared.opts.clone();
                     let attach_only = prepared.host_attach_only;
                     app_core::rt::blocking("headless spawn", move || {
                         if attach_only {
                             let name = opts.tmux_session.as_deref().unwrap_or_default();
                             let alive = mux.holds_sessions() && mux.has(name).unwrap_or(false);
-                            return headless_rejoin(alive);
+                            return headless_rejoin(alive, crate::services::ai_switch::is_off());
                         }
                         mux.spawn_detached(&opts).map_err(|e| e.to_string())
                     })
@@ -291,15 +291,19 @@ fn headless_spawn_refused(kind: crate::services::session_mux::MuxKind, wrapped: 
 
 /// The owner's answer to a launch that may only rejoin its session
 /// (`PreparedLaunch::host_attach_only`): nothing to start while it lives;
-/// ended meanwhile, refused with the AI switch's own code
-/// (`headless_create_error` reads it), never created again.
-fn headless_rejoin(alive: bool) -> Result<(), String> {
-    if alive {
-        Ok(())
-    } else {
-        Err(crate::services::ai_switch::AI_OFF.to_string())
+/// ended meanwhile, never created again — refused with the AI switch's own
+/// code while the switch is off (`headless_create_error` reads it), else
+/// with [`SESSION_ENDED`].
+fn headless_rejoin(alive: bool, ai_off: bool) -> Result<(), String> {
+    match (alive, ai_off) {
+        (true, _) => Ok(()),
+        (false, true) => Err(crate::services::ai_switch::AI_OFF.to_string()),
+        (false, false) => Err(SESSION_ENDED.to_string()),
     }
 }
+
+/// A rejoin-only launch (a revival) whose session ended before the rejoin.
+const SESSION_ENDED: &str = "the tab's session ended before it could be rejoined; start the tab again";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

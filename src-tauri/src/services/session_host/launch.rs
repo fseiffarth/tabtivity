@@ -618,6 +618,7 @@ mod tests {
             remain_on_exit: false,
             size_policy: Default::default(),
             create_only: false,
+            mcp_mark: None,
         };
         assert!(c.spawn(spawn).await.unwrap());
         let pid = c.info("busy").await.unwrap().pid.unwrap();

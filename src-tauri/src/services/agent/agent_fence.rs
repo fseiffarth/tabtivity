@@ -2838,6 +2838,7 @@ pub fn status_for_scope(scope_id: &str) -> AgentFenceStatus {
         host_session: false,
         api_key: None,
         mux_wrapped: false,
+        mcp_mark: None,
     };
     crate::services::sandbox::enforce_spawn_authority(&mut opts);
     let remote_run =

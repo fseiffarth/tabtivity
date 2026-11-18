@@ -94,6 +94,7 @@ fn opts_with_args(args: &[&str]) -> PtyOptions {
         host_session: false,
         api_key: None,
         mux_wrapped: false,
+        mcp_mark: None,
     }
 }
 
