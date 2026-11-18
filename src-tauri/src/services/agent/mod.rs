@@ -9,6 +9,9 @@ pub mod agent_api_keys;
 // Claude rotates that file by rename.
 pub mod agent_auth;
 pub mod agent_bin;
+// "Continue with another CLI": a tab's conversation, notes and working tree written as
+// one HANDOFF.md in the scope's agent home for the next CLI to read.
+pub mod agent_cli_handoff;
 // The files that conversation changed, as the diffs its CLI recorded — the
 // desktop Reader's Changes panel.
 pub mod agent_changes;

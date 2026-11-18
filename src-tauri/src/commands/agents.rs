@@ -1543,6 +1543,58 @@ pub async fn agent_tab_changes(
     .unwrap_or_else(|_| AgentChanges::unavailable("read_failed"))
 }
 
+/// "Continue with another CLI": the tab's conversation, its cockpit notes and
+/// its working tree written as `HANDOFF.md` in the scope's agent home
+/// (`services::agent_cli_handoff`), answered as the path the next agent opens
+/// (`~/handoff/cli-<id>/HANDOFF.md`) beside what is in it. The tab is named by
+/// the identity `agent_tab_transcript` takes, plus `tab_id` (the saved tab's
+/// stable id, for its notes); `target` is the binary of the CLI to continue
+/// with, checked against the registry. `preview_only` writes nothing and
+/// answers the counts alone. An `Err` is a short code: `unknown_target`,
+/// `unsupported` (a remote host's tab, an unreadable CLI), `no_session`,
+/// `no_transcript`, `read_failed`, or the text of a failed write.
+#[cfg_attr(feature = "desktop", tauri::command)]
+#[allow(clippy::too_many_arguments)]
+pub async fn agent_cli_handoff_prepare(
+    agent: String,
+    project_id: Option<String>,
+    tab_dir: Option<String>,
+    since: Option<i64>,
+    session_id: String,
+    local_model: Option<bool>,
+    remote_host: Option<String>,
+    tab_id: Option<String>,
+    target: String,
+    preview_only: bool,
+) -> Result<crate::services::agent_cli_handoff::Prepared, String> {
+    app_core::rt::try_blocking("agent", move || {
+        agent_cli_handoff_prepare_blocking(crate::services::agent_cli_handoff::Request {
+            agent,
+            project_id,
+            tab_dir,
+            since,
+            session_id,
+            local_model: local_model == Some(true),
+            remote_host,
+            tab_id,
+            target,
+            preview_only,
+        })
+    })
+    .await
+}
+
+fn agent_cli_handoff_prepare_blocking(
+    request: crate::services::agent_cli_handoff::Request,
+) -> Result<crate::services::agent_cli_handoff::Prepared, String> {
+    let suffix = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0)
+        & 0xffff) as u16;
+    crate::services::agent_cli_handoff::prepare(&crate::storage::state_dir(), &request, chrono::Utc::now(), suffix)
+}
+
 /// How to take back the tab's last `/clear` (`services::agent_session::undo_clear_plan`):
 /// Claude types `/resume <id>` of the conversation it ended; Codex has its
 /// record pointed back at that conversation and is relaunched onto it. `None`

@@ -570,6 +570,11 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("claude_folder_trusted", "cwd", NotAPath),
     ("agent_tab_changes", "localModel", NotAPath),
     ("agent_tab_transcript", "localModel", NotAPath),
+    // The reader identity (`tabDir`, a key into the CLI's own stores) and the target CLI's
+    // binary, checked against the registry and never put into a path.
+    ("agent_cli_handoff_prepare", "tabDir", NotAPath),
+    ("agent_cli_handoff_prepare", "localModel", NotAPath),
+    ("agent_cli_handoff_prepare", "target", NotAPath),
     ("claude_folder_trusted", "localOnly", NotAPath),
     ("copilot_set_project_policy", "localOnly", NotAPath),
     ("set_remote_mirror_dir", "keepLocalCopy", NotAPath), // a bool: the E8 reverse conversion

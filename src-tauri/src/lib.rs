@@ -2734,6 +2734,7 @@ pub fn run() {
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
             commands::agents::agent_tab_artifact,
+            commands::agents::agent_cli_handoff_prepare,
             commands::agents::agent_tab_changes,
             commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,

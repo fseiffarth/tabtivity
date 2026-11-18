@@ -264,6 +264,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("agent_tab_model", Core),
     ("agent_tab_recent_prompts", Core),
     ("agent_tab_transcript", Core),
+    ("agent_cli_handoff_prepare", Core),
     ("agent_tab_artifact", Core),
     ("agent_transcript_unwatch", Core),
     ("agent_tab_undo_clear", Core),
