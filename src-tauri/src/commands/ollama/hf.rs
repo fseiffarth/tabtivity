@@ -309,9 +309,123 @@ fn manifest_digest_of(out: &[u8]) -> Result<String, String> {
     Ok(format!("{:x}", Sha256::digest(body)))
 }
 
+/// Ollama's public key, for the user to add to their Hugging Face account so a
+/// gated repo pulls. `status`: `ok` (`key` set), `missing` (no key yet: Ollama
+/// writes one on its first start), `unreadable` (it exists but this user may
+/// not read it) or `remote` (the configured server is another machine, whose
+/// key is not here). `path` names the file in every case but `remote`.
+#[derive(serde::Serialize, Default, Debug, PartialEq)]
+pub struct OllamaPublicKey {
+    pub status: &'static str,
+    pub path: String,
+    pub key: String,
+}
+
+/// The key file is one `ssh-ed25519 …` line, well under this.
+const PUBLIC_KEY_MAX_BYTES: u64 = 4096;
+
+/// Where the server keeps its key: `.ollama/id_ed25519.pub` in the home of the
+/// user it runs as. The systemd service runs as `ollama`, whose home the
+/// official installer puts at `/usr/share/ollama` (some packages: `/var/lib`);
+/// any other server is the user's own. Most likely first.
+pub(super) fn public_key_candidates(
+    home: &std::path::Path,
+    os: crate::paths::OsKind,
+    systemd: bool,
+) -> Vec<std::path::PathBuf> {
+    let file = |root: &std::path::Path| root.join(".ollama").join("id_ed25519.pub");
+    let own = file(home);
+    let mut system = Vec::new();
+    if os == crate::paths::OsKind::Unix {
+        system.push(file(std::path::Path::new("/usr/share/ollama")));
+        system.push(file(std::path::Path::new("/var/lib/ollama")));
+    }
+    if systemd {
+        system.push(own);
+        system
+    } else {
+        std::iter::once(own).chain(system).collect()
+    }
+}
+
+/// The first candidate that exists, read and checked to be a public key — the
+/// one line, never more, so a misplaced private key could not be copied out.
+pub(super) fn read_public_key(candidates: &[std::path::PathBuf]) -> OllamaPublicKey {
+    use std::io::Read;
+    let Some(path) = candidates.iter().find(|p| p.exists()) else {
+        let path = candidates.first().map(|p| p.display().to_string()).unwrap_or_default();
+        return OllamaPublicKey { status: "missing", path, key: String::new() };
+    };
+    let shown = path.display().to_string();
+    let mut text = String::new();
+    let read = std::fs::File::open(path)
+        .and_then(|f| f.take(PUBLIC_KEY_MAX_BYTES).read_to_string(&mut text));
+    if read.is_err() {
+        return OllamaPublicKey { status: "unreadable", path: shown, key: String::new() };
+    }
+    let key = text.trim();
+    let one_public_line = key.starts_with("ssh-ed25519 ") && !key.contains(['\n', '\r']);
+    if !one_public_line {
+        return OllamaPublicKey { status: "unreadable", path: shown, key: String::new() };
+    }
+    OllamaPublicKey { status: "ok", path: shown, key: key.to_string() }
+}
+
+/// The body of `ollama_public_key`: the systemd probe spawns `systemctl`.
+pub(super) fn ollama_public_key_blocking() -> OllamaPublicKey {
+    if super::ollama_addr().is_ok_and(|addr| super::server_kind(&addr) == "remote") {
+        return OllamaPublicKey { status: "remote", ..Default::default() };
+    }
+    read_public_key(&public_key_candidates(
+        &crate::paths::home_dir(),
+        crate::paths::OsKind::current(),
+        super::ollama_under_systemd(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_public_key_is_looked_up_where_the_server_runs() {
+        use crate::paths::OsKind;
+        let home = std::path::Path::new("h");
+        let own = home.join(".ollama").join("id_ed25519.pub");
+        let service = std::path::Path::new("/usr/share/ollama").join(".ollama").join("id_ed25519.pub");
+        let user = public_key_candidates(home, OsKind::Unix, false);
+        assert_eq!(user.first(), Some(&own));
+        assert!(user.contains(&service));
+        let unit = public_key_candidates(home, OsKind::Unix, true);
+        assert_eq!(unit.first(), Some(&service));
+        assert_eq!(unit.last(), Some(&own));
+        assert_eq!(public_key_candidates(home, OsKind::Windows, false), vec![own.clone()]);
+        assert_eq!(public_key_candidates(home, OsKind::Macos, false), vec![own]);
+    }
+
+    #[test]
+    fn only_one_public_key_line_is_ever_copied() {
+        let dir = tempfile::tempdir().unwrap();
+        let absent = dir.path().join("absent.pub");
+        let missing = read_public_key(std::slice::from_ref(&absent));
+        assert_eq!((missing.status, missing.path.as_str()), ("missing", absent.to_str().unwrap()));
+
+        let good = dir.path().join("good.pub");
+        std::fs::write(&good, "ssh-ed25519 AAAAC3NzaC1lZDI1\n").unwrap();
+        let found = read_public_key(&[absent.clone(), good.clone()]);
+        assert_eq!(found.status, "ok");
+        assert_eq!(found.key, "ssh-ed25519 AAAAC3NzaC1lZDI1");
+        assert_eq!(found.path, good.display().to_string());
+
+        let private = dir.path().join("private.pub");
+        std::fs::write(&private, "-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn\n").unwrap();
+        let refused = read_public_key(&[private]);
+        assert_eq!((refused.status, refused.key.as_str()), ("unreadable", ""));
+
+        let two = dir.path().join("two.pub");
+        std::fs::write(&two, "ssh-ed25519 AAAA\nssh-ed25519 BBBB\n").unwrap();
+        assert_eq!(read_public_key(&[two]).status, "unreadable");
+    }
 
     #[test]
     fn hugging_face_refs_are_read_from_the_hub() {

@@ -62,8 +62,12 @@ also type such a name into the pull field, for example
   quantization split into several files (`-00001-of-00003`) is not offered:
   Hugging Face does not serve it to Ollama.
 - A **gated** repo needs its terms accepted on Hugging Face and Ollama's public
-  key added to your account (Settings → SSH keys): `~/.ollama/id_ed25519.pub`,
-  or `/usr/share/ollama/.ollama/id_ed25519.pub` for the system service.
+  key added to your account (Settings → SSH keys). **Copy Ollama's key** on the
+  gated card puts it on the clipboard: `~/.ollama/id_ed25519.pub`, or
+  `/usr/share/ollama/.ollama/id_ed25519.pub` for the system service. No Hugging
+  Face token or login is entered in the app: Ollama signs the pull with that key.
+  Pull a gated repo as `huggingface.co/<user>/<repo>:<quant>` (the browse list
+  does this for you); `hf.co/…` is refused even with access granted.
 - Once downloaded, a Hugging Face model works like any other: load it, open a
   Local Model tab with it, check it for updates.
 

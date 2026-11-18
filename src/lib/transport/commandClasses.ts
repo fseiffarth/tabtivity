@@ -519,6 +519,7 @@ export const COMMAND_CLASS_ROWS: readonly (readonly [string, CommandClass])[] = 
   ["ollama_install_strategy", "core"],
   ["ollama_is_installed", "core"],
   ["ollama_models_dir_plan", "core"],
+  ["ollama_public_key", "admin"],
   ["ollama_registry_details", "core"],
   ["ollama_server_kind", "core"],
   ["ollama_status", "core"],

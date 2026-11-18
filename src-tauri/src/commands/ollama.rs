@@ -4439,6 +4439,14 @@ pub async fn search_huggingface_models(
     hf::search_huggingface_models_in(query, sort, cursor).await
 }
 
+/// Ollama's public key, for a gated Hugging Face repo ([`hf::OllamaPublicKey`]).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn ollama_public_key() -> hf::OllamaPublicKey {
+    app_core::rt::spawn_blocking(hf::ollama_public_key_blocking)
+        .await
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests;
 

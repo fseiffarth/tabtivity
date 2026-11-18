@@ -50,6 +50,8 @@
 //!   store) are `Admin`. Completion, chat and local-model tabs stay `Core`;
 //!   because Ollama auto-loads whatever a request names, P2 limits those
 //!   requests to the admin-allowed model list server-side (plan §3.3).
+//!   `ollama_public_key` is `Admin` too: the shared server's key only matters
+//!   to whoever pulls a gated Hugging Face repo through it.
 //! - **`list_recent_downloads` is `Client`**: Recent Downloads are always the
 //!   device the user sits at, never the server's folders.
 //! - **`pty_drop_files` is `Client`**: it reads the absolute paths an OS file
@@ -746,6 +748,7 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("ollama_install_strategy", Core),
     ("ollama_is_installed", Core),
     ("ollama_models_dir_plan", Core),
+    ("ollama_public_key", Admin),
     ("ollama_registry_details", Core),
     ("ollama_server_kind", Core),
     ("ollama_status", Core),
