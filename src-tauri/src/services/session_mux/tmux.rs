@@ -214,9 +214,24 @@ const MARKS_TTL: Duration = Duration::from_secs(3);
 /// The app's server's last stamp listing, with when it was read.
 static MARKS: std::sync::Mutex<Option<(std::time::Instant, SessionMarks)>> = std::sync::Mutex::new(None);
 
-/// Forget the cached listing (a session was killed or renamed under it).
-fn forget_marks() {
+/// Forget the cached listing (a session was killed or renamed under it). Also
+/// for a session ended without the mux (`agent_privacy`'s sweep): a launch
+/// within the cache's life would otherwise read it as live and only "reattach"
+/// it, so the session it creates instead would get no grant and no stamp.
+pub(crate) fn forget_marks() {
     *MARKS.lock_ok() = None;
+}
+
+/// Seed the app server's cached listing, for tests of who drops it.
+#[cfg(test)]
+pub(crate) fn seed_marks_for_test(marks: SessionMarks) {
+    *MARKS.lock_ok() = Some((std::time::Instant::now(), marks));
+}
+
+/// Whether the app server's cached listing names `name`, for those tests.
+#[cfg(test)]
+pub(crate) fn marks_cached_for_test(name: &str) -> bool {
+    MARKS.lock_ok().as_ref().is_some_and(|(_, marks)| marks.contains(name))
 }
 
 impl TmuxMux {

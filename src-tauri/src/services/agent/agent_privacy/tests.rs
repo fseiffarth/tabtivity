@@ -1825,3 +1825,15 @@ fn every_registration_site_rechecks_after_it_registers() {
     let prepare = body_of(&prep, "pub async fn prepare(");
     assert!(prepare.find("agent_privacy::gate(").unwrap() < prepare.find("SpawnCheck::of(").unwrap(), "the check is what the gate handed back");
 }
+
+/// A session the sweep ended leaves the mux's cached stamp listing too: a
+/// relaunch within the cache's life would otherwise read it as live, only
+/// "reattach" it, and create the new session with no MCP grant or stamp.
+#[test]
+fn a_swept_session_leaves_the_stamp_cache() {
+    use crate::services::session_mux::{tmux, SessionMarks};
+    let name = "sweep-forgets-its-stamp";
+    tmux::seed_marks_for_test(SessionMarks::from_rows([(name.to_string(), Some("n:-:1".to_string()))]));
+    forget_sessions(&Sweep { ended: vec![name.to_string()], unconfirmed: Vec::new(), errors: Vec::new() });
+    assert!(!tmux::marks_cached_for_test(name), "the listing is read again");
+}
