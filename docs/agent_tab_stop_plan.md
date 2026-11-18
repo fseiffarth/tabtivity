@@ -1,6 +1,6 @@
 # Stop idle agent tabs, resume them when shown — plan
 
-Status: plan only (2026-11-18, base `7cc15e858`). Nothing implemented.
+Status: being implemented (2026-11-18, base `7cc15e858`); decisions at the end.
 Why: ~210 agent tabs, each live `claude` 0.35–0.45 GB (~50 GiB), systemd-oomd
 killing apps. "Unload hidden tabs after" (`sleep_tabs_after_min`) frees only
 the xterm; the agent process keeps running. This feature ends the process,
@@ -391,12 +391,20 @@ Rust:
 7. Quit and relaunch with 30+ restorable agent tabs: only the cap's worth
    spawn (count `claude` processes); the rest show stopped and wake on click.
 
-## Open questions for the user
+## Decisions (the user, 2026-11-18)
 
-1. Defaults: cap 30, idle 2 h, memory 4 GiB free — right for this machine?
-2. Restore: should a relaunch bring back only the cap's worth (most recently
-   used first), even for projects whose tabs were all running before?
-3. Antigravity / Mistral / OpenCode / Copilot / Muse: worth the extra backend
-   check now, or Claude + Codex first?
-4. Container-run agent tabs: include once the in-container kill is verified,
-   or leave out?
+The open questions, answered:
+
+1. **Defaults:** at most 30 live agent tabs, stop after 2 h idle, and stop
+   least-recently-used tabs while free memory is under 4 GiB. Each trigger
+   can be switched off in Settings.
+2. **Restore:** after a relaunch, only the most recently used tabs, up to the
+   cap, come back running. The rest come back Stopped until shown.
+3. **Other CLIs now, after the check.** The backend check of §5.1
+   (`agent_tab_resume_pinned`) is added for Antigravity, Vibe, OpenCode,
+   Copilot and Muse, so a resume can never open the wrong conversation; each
+   CLI that passes is stoppable, the others stay always-live. The
+   `--continue`-only CLIs (Cursor, Grok, Qwen, Droid, Gemini) are never
+   stopped. No uninstalled CLI is run: the check is the backend's own session
+   resolution.
+4. **Containers:** container agent tabs stay out, never stopped.
