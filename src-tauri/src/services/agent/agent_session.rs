@@ -2499,29 +2499,89 @@ fn write_vibe_hooks(file: &HomeFile, app_owned: bool) -> std::io::Result<()> {
         }
         return Ok(());
     }
-    let mut content = file
+    let content = file
         .read()
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
-    // Per hook, by name: a file from before the turn hooks has the
-    // `post_agent` one alone and gains the rest.
-    let missing: Vec<&str> = VIBE_HOOK_TYPES
-        .iter()
-        .copied()
-        .filter(|kind| {
-            let line = format!("name = \"{}\"", vibe_hook_name(kind));
-            !content.lines().any(|l| l.trim() == line)
-        })
-        .collect();
-    if missing.is_empty() {
+    let merged = merge_vibe_hooks(&content, &hook_command())?;
+    if merged == content {
         return Ok(());
     }
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
+    file.write(merged.as_bytes())
+}
+
+/// `content` (a user's `hooks.toml`) with the session hooks running `command`.
+/// Per hook, by name: a file from before the turn hooks has the `post_agent`
+/// one alone and gains the rest at the end; a session hook already there
+/// stays where it is, and only its `command` line is rewritten when it went
+/// stale (unquoted, `vibe_shell_command`). The user's own hooks are kept as
+/// they are. Unchanged when nothing needs it.
+fn merge_vibe_hooks(content: &str, command: &str) -> std::io::Result<String> {
+    let ours: Vec<String> = VIBE_HOOK_TYPES
+        .iter()
+        .map(|kind| format!("name = \"{}\"", vibe_hook_name(kind)))
+        .collect();
+    let wanted = format!(
+        "command = {}",
+        serde_json::to_string(&vibe_shell_command(command)).map_err(std::io::Error::other)?
+    );
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let mut present: Vec<&str> = Vec::new();
+    let mut table = 0;
+    while table < lines.len() {
+        let mut end = table + 1;
+        while end < lines.len() && !lines[end].trim_start().starts_with('[') {
+            end += 1;
+        }
+        let name = (lines[table].trim() == "[[hooks]]")
+            .then(|| lines[table..end].iter().find_map(|l| ours.iter().find(|o| l.trim() == o.as_str())))
+            .flatten();
+        if let Some(name) = name {
+            present.push(name);
+            for line in &mut lines[table..end] {
+                if line.trim_start().starts_with("command") && line.trim() != wanted {
+                    *line = wanted.clone();
+                }
+            }
+        }
+        table = end;
     }
-    content.push('\n');
-    content.push_str(&vibe_hook_entries(&missing)?);
-    file.write(content.as_bytes())
+    let missing: Vec<&str> = VIBE_HOOK_TYPES
+        .iter()
+        .zip(&ours)
+        .filter(|(_, line)| !present.contains(&line.as_str()))
+        .map(|(kind, _)| *kind)
+        .collect();
+    let mut merged = lines.join("\n");
+    if content.ends_with('\n') || (!merged.is_empty() && !missing.is_empty()) {
+        merged.push('\n');
+    }
+    if !missing.is_empty() {
+        if !merged.is_empty() {
+            merged.push('\n');
+        }
+        merged.push_str(&vibe_hook_entries_running(&missing, command)?);
+    }
+    Ok(merged)
+}
+
+/// The comment line over the session hooks in a `hooks.toml`.
+fn vibe_hook_comment() -> String {
+    format!("# {DISPLAY}: remember the live Vibe session and turn state for this tab.")
+}
+
+/// The `command` Vibe gets for the session hook. Vibe hands it to `/bin/sh` as
+/// written (3.1.2: `…/hooks dir/x.sh` ran as `…/hooks`, "not found",
+/// `scripts/verify-cli/vibe/resume.py`), so a path a shell would split is
+/// quoted: macOS keeps the script under `~/Library/Application Support`. On
+/// Windows it is a PowerShell line whose path is quoted already.
+fn vibe_shell_command(command: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "/._-+:@%,=".contains(c);
+    if cfg!(windows) || command.chars().all(plain) {
+        command.to_string()
+    } else {
+        crate::quote::posix(command)
+    }
 }
 
 /// The Vibe hook types the session hook serves (Vibe 3.1.2, probed offline
@@ -2544,8 +2604,14 @@ fn vibe_hook_name(kind: &str) -> String {
 }
 
 fn vibe_hook_entries(kinds: &[&str]) -> std::io::Result<String> {
-    let cmd = serde_json::to_string(&hook_command()).map_err(std::io::Error::other)?;
-    let mut out = format!("# {DISPLAY}: remember the live Vibe session and turn state for this tab.\n");
+    vibe_hook_entries_running(kinds, &hook_command())
+}
+
+/// [`vibe_hook_entries`] with the hook's `command` given: the app's own script,
+/// or a probe's copy of it (`writes_the_vibe_hook_for_a_probe`).
+fn vibe_hook_entries_running(kinds: &[&str], command: &str) -> std::io::Result<String> {
+    let cmd = serde_json::to_string(&vibe_shell_command(command)).map_err(std::io::Error::other)?;
+    let mut out = format!("{}\n", vibe_hook_comment());
     for (i, kind) in kinds.iter().enumerate() {
         if i > 0 {
             out.push('\n');

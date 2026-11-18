@@ -166,6 +166,41 @@ fn vibe_hook_registration_preserves_existing_hooks_and_is_idempotent() {
     std::fs::remove_dir_all(home).unwrap();
 }
 
+/// Vibe 3.1.2 hands a hook's `command` to `/bin/sh` as written, so the
+/// script's path under macOS's `Application Support` ran as `…/Application`
+/// (`scripts/verify-cli/vibe/resume.py`): such a path is quoted, and an entry
+/// a build wrote unquoted is repaired where it stands.
+#[cfg(unix)]
+#[test]
+fn vibe_hooks_quote_a_path_the_shell_would_split_and_repair_an_old_entry() {
+    let spaced = "/Users/u/Library/Application Support/x/hooks/hook.sh";
+    assert_eq!(vibe_shell_command(spaced), format!("'{spaced}'"));
+    assert_eq!(vibe_shell_command("/home/u/.local/share/x/hooks/hook.sh"), "/home/u/.local/share/x/hooks/hook.sh");
+    let entries = vibe_hook_entries_running(&["post_agent"], spaced).unwrap();
+    assert!(entries.contains(&format!("command = {}", serde_json::to_string(&format!("'{spaced}'")).unwrap())));
+
+    let stale = format!(
+        "[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"/my hook\"\n\n{}",
+        // What a build before the quoting wrote: every hook, unquoted.
+        VIBE_HOOK_TYPES
+            .iter()
+            .map(|kind| format!(
+                "[[hooks]]\nname = \"{}\"\ntype = \"{kind}\"\ncommand = {}\ntimeout = 10.0\n",
+                vibe_hook_name(kind),
+                serde_json::to_string(spaced).unwrap()
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let repaired = merge_vibe_hooks(&stale, spaced).unwrap();
+    let quoted = format!("command = {}", serde_json::to_string(&format!("'{spaced}'")).unwrap());
+    assert_eq!(repaired.matches(&quoted).count(), VIBE_HOOK_TYPES.len(), "{repaired}");
+    // The user's own hook is theirs: its command stays as written.
+    assert!(repaired.starts_with("[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"/my hook\"\n"));
+    assert_eq!(repaired.lines().count(), stale.lines().count(), "rewritten in place, nothing added");
+    assert_eq!(merge_vibe_hooks(&repaired, spaced).unwrap(), repaired);
+}
+
 /// The assistant's local-Claude chats keep their transcripts in the
 /// scope's local-model home, so its Claude roots name both homes; no
 /// other scope's do.
@@ -2962,4 +2997,23 @@ fn both_hook_twins_carry_the_mail_block() {
     }
     let notice = crate::services::tabs_mcp::NOTICE;
     assert!(!notice.contains('\'') && !notice.contains('\n'));
+}
+
+/// Writes the app's hook script and Vibe's `hooks.toml` for an offline probe
+/// (`scripts/verify-cli/vibe/resume.py`): `VIBE_PROBE_SCRIPT=<path the script
+/// goes to> VIBE_PROBE_LIVE=<record folder> VIBE_PROBE_HOME=<scratch VIBE_HOME>`.
+/// Never point these at the app's own folders.
+#[cfg(unix)]
+#[test]
+#[ignore = "writes the hook for scripts/verify-cli/vibe/resume.py"]
+fn writes_the_vibe_hook_for_a_probe() {
+    use std::os::unix::fs::PermissionsExt;
+    let script = std::path::PathBuf::from(std::env::var("VIBE_PROBE_SCRIPT").expect("VIBE_PROBE_SCRIPT"));
+    let live = std::env::var("VIBE_PROBE_LIVE").expect("VIBE_PROBE_LIVE");
+    let home = std::path::PathBuf::from(std::env::var("VIBE_PROBE_HOME").expect("VIBE_PROBE_HOME"));
+    std::fs::write(&script, posix_hook_script_body(&live)).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let block = vibe_hook_entries_running(&VIBE_HOOK_TYPES, &script.to_string_lossy()).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("hooks.toml"), block).unwrap();
 }

@@ -2329,7 +2329,25 @@ TUI: `session_start` (at launch and `/clear`, before any prompt),
 its bash tool fires the same hooks with `VIBE_SESSION=1`; the tab's own never
 carry it. The session hook uses `pre_agent`, `post_agent`, `post_tool`,
 `notification`, `session_end` (`VIBE_HOOK_TYPES`). A turn against a closed
-port retries (still "Retrying…" after 20 s). Cursor 2026.09.28 keeps `-p/--print`,
+port retries (still "Retrying…" after 20 s). First recorded check, **3.1.2**
+(2026-11-17, PyPI's latest, offline: `scripts/verify-cli/vibe/resume.py` with
+the app's own hook and `hooks.toml` block, written by the ignored test
+`writes_the_vibe_hook_for_a_probe`): two tabs of one folder each record their
+own session, `logs/session/unified/<id>/CURRENT` exists for each (what
+`vibe_session_exists` checks), `--resume <id>` comes back in the tab's own
+conversation and keeps the record, a `vibe -p` from the bash tool moves none,
+`/clear` moves it at the next prompt, the turn record reads `done` after a turn
+and `idle` once the window closed (`session_end`), `VIBE_ACTIVE_MODEL` names
+the model the request carries, and the user-level `.vibe/AGENTS.md` reaches
+the model. `--help` still has `--resume [<RESUME>]`, `-c/--continue`,
+`-p/--prompt`; `--version` prints `vibe 3.1.2`. One fix: Vibe runs a hook's
+`command` through `/bin/sh` as written, so a script path with a space ran as
+its first word ("…/hooks: not found" in `vibe.log`). On macOS the script sits
+under `~/Library/Application Support`, so no Vibe hook could have run there:
+no per-tab resume, no turn marks. `vibe_shell_command` quotes such a path, and
+registration rewrites a stale `command` line of the session hooks in place
+(`agent_session` tests). Claude and Codex get the same unquoted
+`hook_command()`: not checked for the same split. Cursor 2026.09.28 keeps `-p/--print`,
 `--continue` and its chats under `~/.cursor`. Aider 0.86.2 (latest) needs
 only its binary name and `aider.chat/install.sh`, still served. Droid, OpenClaw and OpenCode are also `LOCAL_DRIVERS` (Ollama-backed
 tabs via `ollama launch <agent>`).

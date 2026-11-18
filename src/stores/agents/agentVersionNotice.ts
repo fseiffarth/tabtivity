@@ -76,6 +76,7 @@ const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   antigravity: "1.5.10",
   copilot: "1.0.112",
   muse: "1.4.23",
+  vibe: "3.1.2",
 };
 
 interface AgentVersionNoticeStore {

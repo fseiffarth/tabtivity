@@ -9,7 +9,9 @@
 #   STUB:SEQ <tool> <json> ;; <tool> <json>  calls them one per turn step;
 #   STUB:FAIL <status>                       answers that HTTP status with an error body.
 # A Responses tool inside a namespace is named `<namespace>.<tool>`.
-# Every request is logged: offered tools, last prompt, tool results.
+# Every request is logged: offered tools, last prompt, tool results; a chat
+# completion also its `model` and every `STUBMARK-<WORD>` it carries (what an
+# instructions file or a hook put in front of the model).
 import json,os,sys,re,time
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
@@ -50,7 +52,8 @@ class H(BaseHTTPRequestHandler):
         prompt=text_of(users[-1]) if users else ''
         after=[m for m in msgs[msgs.index(users[-1])+1:]] if users else []
         ntool=sum(1 for m in after if m.get('role')=='tool')
-        rec={'path':self.path,'tools':tools,'prompt':prompt[-300:],'last_role':last.get('role'),'tool_results':[text_of(m)[:700] for m in after if m.get('role')=='tool']}
+        rec={'path':self.path,'model':d.get('model'),'tools':tools,'prompt':prompt[-300:],'last_role':last.get('role'),'tool_results':[text_of(m)[:700] for m in after if m.get('role')=='tool'],
+             'marks':sorted(set(re.findall(r'STUBMARK-[A-Z]+',body.decode('utf-8','replace'))))}
         log.write(json.dumps(rec)+'\n')
         if self.fail(prompt): return
         seq=[]

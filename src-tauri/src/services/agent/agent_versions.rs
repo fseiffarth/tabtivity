@@ -159,6 +159,11 @@ const VERIFIED: &[Verified] = &[
         version: "1.4.23",
         surface: "§1.5 — launcher's no-update switch, --model/--reasoning-effort, login file, the ⟩ menu lamp",
     },
+    Verified {
+        agent: "vibe",
+        version: "3.1.2",
+        surface: "§1.5 — hooks.toml session hooks, --resume <id> and the unified store, VIBE_ACTIVE_MODEL, .vibe/AGENTS.md",
+    },
 ];
 
 /// The one-shot version argv for `agent_id`, or `None` when nobody has checked
