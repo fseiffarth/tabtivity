@@ -96,3 +96,19 @@ Commit: see `git log --oneline -1 -- src/components/agents/CliHandoffDialog.tsx`
 **Flagged for user**
 - `scripts/brand-check.sh` FAILS on step B's file, `src-tauri/src/services/agent/agent_cli_handoff.rs:310` and `:363` (the app name spelled in the HANDOFF.md text). Not touched here (Rust is out of scope for C); the fix is a `crate::brand` macro or a `brand-check: allow` line. It needs Rust gates rerun, and blocks `gates.sh` before it reaches the others.
 - Not run live. Step D (file maps, `agent_sessions.md`, todo boxes) is not done.
+
+## Step D
+
+Commits on `cli-handoff`: `58472fa84` `fix(agents): spell the app name in HANDOFF.md through the brand macro`; `be12aa162` `docs(agents): file maps, context and todo for the CLI hand-off (steps A-D)`; this log is committed after them.
+
+**Changed**
+- Brand fix: `agent_cli_handoff.rs` builds the two HANDOFF.md sentences with `concat!(crate::app_name!(), …)`; no test asserted that text. `scripts/brand-check.sh` passes.
+- `docs/filemap_backend.md`: row for `agent/agent_cli_handoff.rs`. `docs/filemap_frontend.md`: the `TerminalLimitHandoff`/`limitHandoff` row now says detection only; new row for `CliHandoffDialog` + `CliHandoffMenuItem` + `cliHandoff.ts`.
+- `docs/context/agent_sessions.md`: section "Continuing in another CLI". `todo/group-s-agents.md`: A–C ticked with shas, manual box and platform pairs left open. `docs/cli_session_handoff_plan.md`: Status line.
+- Help docs: `docs/help/` has no passage on the limit hand-off, so nothing added.
+
+**Gates, `gates-job.sh start --all`** (tree as of `be12aa162`): brand, whitespace, lint, clippy (3), build PASS. `npm test` FAILED on 2 load flakes of 12 884 (12 882 passed): `PdfZoomRaster` "re-arms the commit on every tick" and `TerminalAiSwitch` "an agent tab refused while AI is off"; both files pass on rerun alone (9 tests). The run stopped there, so the two Rust test gates were run by hand with the gate's own commands: `cargo test --workspace` 6 556 passed, 0 failed, 17 ignored; `cargo test -p tabtivity --no-default-features --lib --test server_secrets`: lib 5 940 passed, 1 failed (`host_pty::tests::a_dead_remain_on_exit_pane_stays_open_until_killed`, load flake; passes alone) of 5 957, `server_secrets` 1/1. `git diff --check` clean. No code failure in the branch.
+
+**Flagged for user**
+- The whole-range gate run never came out as one green `--all` result (three load-flaky tests, each green alone); a clean unloaded rerun would give that.
+- Not run live: all of A-D, including both pills (`terminal.limitHandoff`, `agent.cliHandoff`). Backend changed, so `npm run backend:stale` is the main agent's job at landing.
