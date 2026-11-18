@@ -189,7 +189,8 @@ jobs:
     name: lint
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || startsWith(github.head_ref, 'dependabot/')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Green runs reached 29 min by 2026-11 (four clippy builds); 30 cut one off.
+    timeout-minutes: 50
 
     steps:
       - name: Checkout
