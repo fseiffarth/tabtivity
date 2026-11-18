@@ -204,6 +204,12 @@ export async function ensureAgentTabAwake(scheduleTargetId: string, timeoutMs = 
   }
 }
 
+/** {@link ensureAgentTabAwake} for a tab that is stopped now; nothing for
+ *  one that is not (its caller waits for its pane as it always did). */
+export async function wakeStoppedForInput(scheduleTargetId: string): Promise<void> {
+  if (tabOfScheduleTarget(scheduleTargetId)?.tab.stopped) await ensureAgentTabAwake(scheduleTargetId);
+}
+
 /** Test seam. */
 export function _resetAgentTabStopForTest(): void {
   pendingKill.clear();
