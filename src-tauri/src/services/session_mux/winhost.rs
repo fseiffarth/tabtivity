@@ -468,6 +468,11 @@ impl SessionMux for WinHostMux {
         Ok(marks)
     }
 
+    fn fresh_mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        self.forget_marks();
+        self.mcp_marks()
+    }
+
     fn note_mcp_mark(&self, name: &str, mark: &str) {
         let Ok(launch) = self.launch.as_ref() else { return };
         if let Some((_, marks)) = marks_cache().as_mut().and_then(|cache| cache.get_mut(&launch.pipe_name())) {

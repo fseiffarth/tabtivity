@@ -1184,7 +1184,9 @@ pub async fn prepare(
     // started with, and a fresh set would be minted for nobody. The session's
     // MCP stamp says whether those still work (`root_mcp_mark`), read once for
     // every tab of a restore.
-    let local_session = local_session_plan(&opts, agent_spawn, remote_agent_run).await;
+    // An AI-off rejoin (`host_attach_only` so far) was let through on the
+    // mux's live `has`: its plan reads the same, never only the cache.
+    let local_session = local_session_plan(&opts, agent_spawn, remote_agent_run, host_attach_only).await;
     let verdict = local_session.as_ref().map_or(Reattach::Create, |plan| plan.verdict);
     // A stale session whose lanes the reattach record can revive
     // (`root_mcp_reattach`, every guard passed) is granted as a create, against
@@ -2033,7 +2035,10 @@ use crate::services::root_mcp::root_mcp_mark::Reattach;
 /// local agent session (a shell, a remote or container agent, a launch with no
 /// session name): those keep today's grant. Blocking work (one `tmux ls`, and
 /// for another listener's stamp a 300 ms probe), so off the async workers.
-async fn local_session_plan(opts: &PtyOptions, agent: bool, remote_agent_run: bool) -> Option<LocalSessionPlan> {
+///
+/// `rejoin`: the launch only attaches (the AI switch let it through on the
+/// mux's live `has`, [`local_session_live`]), see [`local_session_plan_in`].
+async fn local_session_plan(opts: &PtyOptions, agent: bool, remote_agent_run: bool, rejoin: bool) -> Option<LocalSessionPlan> {
     let session = opts.tmux_session.clone().filter(|s| {
         agent && !remote_agent_run && !opts.sandbox && crate::services::tmux_local::is_app_local_tmux_session(s)
     })?;
@@ -2042,30 +2047,41 @@ async fn local_session_plan(opts: &PtyOptions, agent: bool, remote_agent_run: bo
         if !mux.holds_sessions() {
             return None;
         }
-        Some(local_session_plan_in(&*mux, &session, crate::services::root_mcp::runtime()))
+        Some(local_session_plan_in(&*mux, &session, crate::services::root_mcp::runtime(), rejoin))
     })
     .await
     .ok()
     .flatten()
 }
 
+/// The plan of the local `session`, read off `mux`'s stamp listing.
+///
+/// `rejoin`: the launch only attaches a session the mux's live `has` found
+/// (the AI switch's rejoin). The listing is cached for about 3 s, so it may
+/// not name that session yet: it is then read again past the cache, and a
+/// rejoin whose verdict is still a create mints nothing ([`attach_only`]).
 fn local_session_plan_in(
     mux: &dyn crate::services::session_mux::SessionMux,
     session: &str,
     runtime: Option<&crate::services::root_mcp::Runtime>,
+    rejoin: bool,
 ) -> LocalSessionPlan {
     use crate::services::root_mcp::root_mcp_mark::{probe_grant, Stamp};
     use crate::services::root_mcp::root_mcp_reattach as reattach;
-    let (exists, stamp) = match mux.mcp_marks() {
+    let read = |listing: Result<crate::services::session_mux::SessionMarks, crate::services::session_mux::MuxError>| match listing {
         Ok(marks) => (marks.contains(session), Stamp::of(marks.entry(session))),
         // A backend that cannot read the stamp (an older Windows session host,
         // or none running with its setting off): a create, as before; whether
         // it rejoins is still asked.
         Err(_) => (mux.has(session).unwrap_or(false), Stamp::Unknown),
     };
+    let (mut exists, mut stamp) = read(mux.mcp_marks());
+    if rejoin && !exists {
+        (exists, stamp) = read(mux.fresh_mcp_marks());
+    }
     let record = reattach::listener();
     let now = record.map_or_else(reattach::now_secs, reattach::Listener::clock);
-    plan_for(
+    let plan = plan_for(
         exists,
         &stamp,
         runtime,
@@ -2078,7 +2094,20 @@ fn local_session_plan_in(
         },
         &|nonce| record.is_some_and(|l| l.within_cap(nonce, now)),
         &|mark| record.and_then(|l| l.candidate(session, mark, now)),
-    )
+    );
+    if rejoin { attach_only(plan) } else { plan }
+}
+
+/// The plan of a launch that only attaches: a create verdict (the listing
+/// still lacks the session, or cannot tell its stamp) grants and stamps
+/// nothing, as for a session stamped `-` ([`Reattach::NoGrant`]). An attach
+/// never hands the agent its environment, so tokens minted for it would be
+/// recorded and listed for nobody.
+fn attach_only(plan: LocalSessionPlan) -> LocalSessionPlan {
+    if plan.verdict != Reattach::Create {
+        return plan;
+    }
+    LocalSessionPlan { verdict: Reattach::NoGrant, stamps: false, own_grant: None, revive: None, ..plan }
 }
 
 /// The decision of [`local_session_plan_in`], with what it reads passed in:
@@ -3296,6 +3325,71 @@ mod tests {
                 fn rename(&self, _old: &str, _new: &str) -> Result<(), MuxError> { Ok(()) }
             }
             assert!(!local_session_live(&Ended, "s"), "a session that ended is no rejoin");
+        }
+
+        /// The other way round: the AI switch let a rejoin through on the
+        /// live `has`, while the cached listing does not name the session yet.
+        /// Classified from the cache it was a create, and the launch minted
+        /// and recorded tokens that the attached agent never sees. The plan
+        /// reads the listing again past the cache, and a rejoin it still
+        /// cannot place mints nothing.
+        #[test]
+        fn an_ai_off_rejoin_is_planned_from_a_live_listing_and_never_mints() {
+            use crate::services::session_mux::{ClientCmd, Key, MuxError, MuxKind, PaneInfo, SessionInfo, SessionMarks, SessionMux};
+            /// Live but not in the cached listing; `fresh` is what a read
+            /// past the cache answers.
+            struct Behind {
+                fresh: Option<String>,
+            }
+            impl SessionMux for Behind {
+                fn kind(&self) -> MuxKind { MuxKind::Tmux }
+                fn available(&self) -> bool { true }
+                fn wrap(&self, _opts: &mut PtyOptions) {}
+                fn spawn_detached(&self, _opts: &PtyOptions) -> Result<(), MuxError> { Ok(()) }
+                fn attach_client(&self, _name: &str, _for_phone: bool) -> Result<ClientCmd, MuxError> { Err(MuxError::NotFound) }
+                fn list(&self) -> Result<Vec<SessionInfo>, MuxError> { Ok(Vec::new()) }
+                fn mcp_marks(&self) -> Result<SessionMarks, MuxError> { Ok(SessionMarks::default()) }
+                fn fresh_mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+                    Ok(match &self.fresh {
+                        Some(stamp) => SessionMarks::from_rows([("s".to_string(), Some(stamp.clone()))]),
+                        None => SessionMarks::default(),
+                    })
+                }
+                fn has(&self, _name: &str) -> Result<bool, MuxError> { Ok(true) }
+                fn pane(&self, _name: &str) -> Result<PaneInfo, MuxError> { Err(MuxError::NotFound) }
+                fn screen(&self, _name: &str) -> Result<String, MuxError> { Ok(String::new()) }
+                fn scrollback(&self, _name: &str, _lines: usize) -> Result<Vec<u8>, MuxError> { Ok(Vec::new()) }
+                fn send_keys(&self, _name: &str, _keys: &[Key]) -> Result<(), MuxError> { Ok(()) }
+                fn paste(&self, _name: &str, _text: &str, _bracketed: bool) -> Result<(), MuxError> { Ok(()) }
+                fn env_text(&self, _name: &str) -> Option<String> { None }
+                fn kill(&self, _name: &str) -> Result<(), MuxError> { Ok(()) }
+                fn rename(&self, _old: &str, _new: &str) -> Result<(), MuxError> { Ok(()) }
+            }
+            let rt = runtime();
+            // This run stamped it, and the grant is no longer held: stale.
+            let stamped = Behind { fresh: Some(format!("{NONCE}:{GRANT}:{}", rt.port)) };
+            let rejoin = local_session_plan_in(&stamped, "s", Some(&rt), true);
+            assert!(rejoin.exists, "the live listing names it");
+            assert_eq!(rejoin.verdict, Reattach::Stale, "judged from its stamp, so the card is offered");
+            // A launch that may create keeps the cached answer.
+            assert_eq!(local_session_plan_in(&stamped, "s", Some(&rt), false).verdict, Reattach::Create);
+            // Not even the fresh listing names it (it ended in between): an
+            // attach-only launch still mints nothing.
+            let gone = local_session_plan_in(&Behind { fresh: None }, "s", Some(&rt), true);
+            assert_eq!(gone.verdict, Reattach::NoGrant, "no grant for an attach");
+            assert!(!gone.stamps && gone.own_grant.is_none() && gone.revive.is_none());
+            // A backend that cannot list stamps grants a create as before,
+            // but never an attach.
+            assert_eq!(attach_only(plan(true, &Stamp::Unknown, Some(&rt), &|_| false, &|_| false)).verdict, Reattach::NoGrant);
+            let live = attach_only(plan(true, &mark(NONCE, Some(GRANT)), Some(&rt), &|g| g == GRANT, &|_| panic!("probe?")));
+            assert_eq!(live.verdict, Reattach::Live, "any other verdict stands");
+            // `prepare` plans the AI switch's rejoin as one.
+            let source = include_str!("launch_prep.rs");
+            let start = source.find("pub async fn prepare(").expect("prepare");
+            let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+            let rejoin = body.find("host_attach_only = true;").expect("the AI switch's rejoin");
+            let plan = body.find("local_session_plan(&opts, agent_spawn, remote_agent_run, host_attach_only)").expect("planned as a rejoin");
+            assert!(rejoin < plan);
         }
 
         /// A backend that cannot read stamps keeps today's behaviour and writes
