@@ -152,7 +152,7 @@ Claude's `/fast` — different thing.
 
 **Assumes**
 
-- Turn hooks (2026-11-16, 2.1.325, offline: `scripts/verify-cli/claude/turn_hooks.py`,
+- Turn hooks (2026-11-16, 2.1.325; 2026-11-17, 2.1.326 the same; offline: `scripts/verify-cli/claude/turn_hooks.py`,
   no login, `stub_anthropic.py`): a turn the API refuses fires `StopFailure`
   (`error`: `rate_limit`, `authentication_failed`, `unknown` for a 400) and
   **no** `Stop`; a failed tool fires `PostToolUseFailure` (`error`,
@@ -672,6 +672,31 @@ Claude's `/fast` — different thing.
   data waits for it before its first request, so a warm-up or `/usage` in a
   new home starts a few seconds later. Not exercised: a live tab, the phone, a
   real sign-in.
+- **2.1.326 (2026-11-17), outside Tabtivity, beside 2.1.325** (both from the
+  agent install's `versions/`): `hooks.sh` 19 events with the same keys
+  (`cmp.py`), `sedcheck.py` 0 mismatches over 23 payloads, `meta.py` the same
+  record types, the folder encoded the same; `/usage` the same envelope keys;
+  `turn_hooks.py` (offline, both versions) the same events and keys in every
+  case (`SubagentStart` and the background Agent's `PostToolUse` swap places,
+  a race); `chat_send.py` all five cases submitted word for word; `send_now.py`
+  (tool, stream, early, typed) reads as on 2.1.325. `--help` only rewords:
+  no flag or subcommand added or gone. The queue hint the bridge's Send now
+  keys on (`❯ Press up to edit queued messages`) is unchanged; the line under
+  a queued message now reads `⎿  Queued · ctrl+x ctrl+s to send now` (nothing
+  parses it). One reader fix: a windowed `/model` ("long menus … say how many
+  rows are above and below") marks each hidden side with a row of its own,
+  `↑ 2 more` over the slice and `↓ 1 more` under it, instead of an arrow in a
+  row's number slot and a `… +N models` note. A scrolled slice then read as no
+  dialog at all (it starts past 1 with no window mark) and the top slice lost
+  its hidden count, so the sheet could not reveal the rest. `MORE_ROWS` reads
+  the `↓` row as the old note and the `↑` row as the window's top edge, which
+  starts the slice (`MobileSelectPrompt.test.ts`); all 80×24 and expanded
+  120×40 frames then read the same rows, highlight, title and hidden count as
+  2.1.325. Row 1 (`Default (recommended)`) now names the plan's default model,
+  passed on as drawn. Changelog items near what Tabtivity reads, not exercised:
+  sessions start in auto mode when an organization's policy hasn't loaded; a
+  hook's `"decision": "block"` holds in more cases (Tabtivity's hooks print
+  none). Not exercised: a live tab, the phone, a real sign-in.
 
 **Verify**
 

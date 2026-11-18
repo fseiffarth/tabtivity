@@ -89,7 +89,8 @@ const ESCAPE = "\u001b";
  * moves to the background instead of being killed, a streaming answer stops
  * unmarked, and a turn not yet answering keeps its prompt — where Esc hands
  * it back into the box, unsent. Claude draws `ctrl+x ctrl+s to send now`
- * under a queued message. */
+ * under a queued message (`⎿  Queued · ctrl+x ctrl+s to send now` since
+ * 2.1.326; the keys are unchanged). */
 const CLAUDE_SEND_NOW = "\u0018\u0013";
 /** Most prompts a walk takes: `MAX_PENDING`. */
 const MAX_QUEUED = 50;
