@@ -927,10 +927,11 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     });
   };
 
-  /** The pane's screen and keyboard, for the walks that read Claude's own. */
+  /** The whole pane, for queue and subagent walks: Codex can draw its
+   * queue heading above the last 40 rows in a tall terminal. */
   const paneRows = () => {
     const term = terminalFor(ptyId);
-    return term ? bufferRows(term.buffer.active) : [];
+    return term ? bufferRows(term.buffer.active, term.rows) : [];
   };
   const paneKey = (key: string) => {
     noteUserInput(ptyId);
@@ -1611,7 +1612,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const paneDriver = useCallback((): QueuePullDriver => ({
     rows: () => {
       const term = terminalFor(ptyId);
-      return term ? bufferRows(term.buffer.active) : [];
+      return term ? bufferRows(term.buffer.active, term.rows) : [];
     },
     key: (key) => typeIntoPane([key]).then(() => true, () => false),
   }), [ptyId, typeIntoPane]);

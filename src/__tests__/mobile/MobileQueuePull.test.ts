@@ -164,6 +164,24 @@ describe("queuePull on Codex", () => {
     expect(codexBoxLines(["›⠀Ask Codex"])).toEqual(["Ask Codex"]);
   });
 
+  it("reads a tall box and treats animated blank cells as the box boundary", () => {
+    const body = Array.from({ length: 45 }, (_, index) => `line ${index}`);
+    expect(codexBoxLines([
+      `›⠁${body[0]}`, ...body.slice(1).map((line) => `⠂ ${line}`),
+      "⠄ ⠈", "  GPT default · ~/work", "  ? for shortcuts",
+    ])).toEqual(body);
+    expect(queuedHintShown(["• Queued follow-up inputs⠁"], "codex")).toBe(true);
+  });
+
+  it("takes back a prompt even when the empty box's sparkles repaint", async () => {
+    const { state, driver } = fakeCodex(["first", "second"]);
+    const rows = driver.rows;
+    driver.rows = () => rows().map((row) => row === "" ? "⠂" : row.replace("› ", "›⠁"));
+    expect(await pullQueuedPrompts(driver, ["first", "second"], FAST, "codex"))
+      .toEqual({ ok: true, text: "first\nsecond", pulled: 2, cleared: true });
+    expect(state.box).toBe("");
+  });
+
   it("takes every queued prompt back, oldest first, and leaves the box empty", async () => {
     const { state, driver } = fakeCodex(["first", "line A\nline B"]);
     const result = await pullQueuedPrompts(driver, ["first", "line A\nline B"], FAST, "codex");
