@@ -585,6 +585,14 @@ pub async fn tick(ctx: &Context, now: DateTime<Local>) -> Vec<Event> {
                 }
                 break;
             };
+            // A Codex turn that failed on the API (a usage limit) ended with no
+            // `Stop`: its rollout says so, and the record is set to `done`.
+            if let (Some(uid), "codex") = (target.uid(), target.tab.cmd.as_str()) {
+                let sessions = crate::services::agent_home::scope_home_in(&ctx.state_dir, &target.project_id)
+                    .join(".codex")
+                    .join("sessions");
+                crate::services::agent_turn::settle_codex_turn(&ctx.state_dir.join("live_sessions"), uid, Some(&target.project_id), &sessions);
+            }
             // A Claude question declined with Esc fires no hook: its transcript
             // says so, and the `decision` record is set to `done`.
             if let (Some(uid), "claude") = (target.uid(), target.tab.cmd.as_str()) {

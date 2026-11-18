@@ -134,7 +134,10 @@ gives its usage.
   `codex_hook_hash`'s formula), `added` (a new event appended: the "Hooks
   need review" screen, the new hook inert), `approve` (`PermissionRequest`
   at the dialog, after accept and Esc), `extras` (`spawn_agent`, `/compact`;
-  `--dangerously-bypass-hook-trust`), `apierr` (a closed port). Give the
+  `--dangerously-bypass-hook-trust`), `apierr` (a closed port), `usage`
+  (`STUB:FAIL 429 usage_limit_reached`), `interrupt` (Esc on a `sleep 30`
+  call); the last three also write the rollout's events
+  (`rollout-events.txt`). Give the
   work folder its own `git init`, or the trust question offers to trust
   the enclosing repo.
   `async_question.py <label> <bin> <port> [model]` (same home, model

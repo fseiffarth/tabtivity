@@ -1335,6 +1335,11 @@ pub async fn prepare(
                 _ => false,
             };
             let left = crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs);
+            // A local Codex ends a turn that failed on the API (a usage limit)
+            // without its `Stop` hook; its rollout says so (`agent_turn`).
+            if opts.cmd == "codex" && !remote_agent_run && !assistant {
+                crate::services::agent_turn::watch_codex_rollout(&uid);
+            }
             // A local Claude question declined with Esc fires no hook; its
             // transcript says so (`agent_turn::settle_claude_turn`).
             if opts.cmd == "claude" && !remote_agent_run && !assistant {

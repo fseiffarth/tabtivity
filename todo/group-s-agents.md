@@ -3686,3 +3686,17 @@ unchanged; the new agents are additive.
   - [ ] ❌ Doesn't work on Windows
   - [ ] ✅ Works on macOS
   - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Codex usage-limit stop: in a Codex tab that hits its usage limit
+  ("You've hit your usage limit"), the working mark turns to finished within a
+  few seconds (no `Stop` hook fires; `agent_turn::settle_codex_turn` reads the
+  rollout). A prompt scheduled for after the reset is then typed in at its time,
+  not recorded as missed — with the window open, and with only the phone
+  sidecar running.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS

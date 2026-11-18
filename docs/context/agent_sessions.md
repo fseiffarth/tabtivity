@@ -144,7 +144,18 @@ subagent's own `UserPromptSubmit` carries the parent's `session_id` and an
 `agent_id`, so it counts as the tab working). An interrupted Claude tool fired
 no failure event on 2.1.325 (the `is_interrupt` guard is cheap insurance). A
 Codex or Vibe turn that fails on the API was not seen to end: both retry for
-longer than the probe waited.
+longer than the probe waited. A Codex turn stopped by its usage limit (a 429
+`usage_limit_reached`, never retried; 0.169.0, `turn_hooks.py … usage`,
+2026-11-18, never live) fires `UserPromptSubmit` and **no** `Stop`; its
+rollout ends the turn with `task_complete` carrying `error.codex_error_info:
+"usage_limit_exceeded"`. `agent_turn::settle_codex_turn` reads that: while a
+local Codex tab's record is in flight, the watcher's 2 s poll (and the Mobile
+sidecar's scheduler, with no window) reads the rollout's last 64 KB when it
+grew, and a `task_complete` no older than the record (2 s slack) is written
+over it as `done`, `.ask` removed, as the hook's `Stop` would. Without it a
+prompt scheduled for after the limit's reset found the tab `working` and was
+recorded as missed. An interrupt (`turn_aborted`) is left alone: the probe's
+Esc did not reach the tool call, so its rollout shape is unverified.
 
 Four more CLIs write the same record, each from a hook of its own module and
 never from the shared script (2026-11-16, probed offline, never live):
