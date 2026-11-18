@@ -165,6 +165,44 @@ fn a_file_path_is_project_relative_or_cut_to_its_leaf_as_one_whole() {
 }
 
 #[test]
+fn a_path_that_climbs_out_or_names_another_place_keeps_only_its_leaf() {
+    let path = |p: &str| mask_path(p, &[ROOT]);
+    // Taking the folder off must not leave a way back out of it.
+    assert_eq!(path("/work/me/proj/../../../home/alice/.ssh/id"), "…/id");
+    assert_eq!(path("../../home/alice/.ssh/id"), "…/id");
+    assert_eq!(path("src/../../alice/id"), "…/id");
+    assert_eq!(path(r"..\..\alice\id"), r"…\id");
+    assert_eq!(path("file:///home/alice/.ssh/id"), "…/id");
+    assert_eq!(path("~alice/.ssh/id"), "…/id");
+    assert_eq!(path(r"\Users\alice\id"), r"…\id");
+    assert_eq!(path("notes /home/alice/.ssh/id"), "…/id");
+    assert_eq!(path("C:alice\\id"), r"…\id");
+    for p in ["/work/me/proj/../../../home/alice/.ssh/id", "file:///home/alice/.ssh/id", "~alice/.ssh/id", "notes /home/alice/.ssh/id"] {
+        assert!(!path(p).contains("alice"), "{p}");
+    }
+    // Plain relative ones stay, a `..` inside a name too.
+    assert_eq!(path("src/a..b/c.rs"), "src/a..b/c.rs");
+    assert_eq!(path("my docs/a.txt"), "my docs/a.txt");
+}
+
+#[test]
+fn invisible_and_reordering_characters_are_dropped_from_a_path() {
+    let path = |p: &str| mask_path(p, &[ROOT]);
+    assert_eq!(path("/home/me/evil\u{202E}txt.exe"), "…/eviltxt.exe");
+    assert_eq!(path("src/a\u{200B}.rs\u{2066}"), "src/a.rs");
+    assert_eq!(path("/work/me/proj/a\nb.rs"), "ab.rs");
+}
+
+#[test]
+fn a_host_in_another_script_shows_nothing() {
+    // Cyrillic `а`/`о` look like the Latin letters: the phone could not tell it from the real host.
+    for odd in ["https://p\u{0430}ypal.example.org/x", "https://exampl\u{0435}.org", "https://b\u{fc}cher.example.org"] {
+        assert_eq!(mask_url(odd), "", "{odd}");
+    }
+    assert_eq!(mask_url("https://xn--bcher-kva.example.org/x"), "https://xn--bcher-kva.example.org");
+}
+
+#[test]
 fn a_windows_file_path_keeps_its_leaf_unless_it_is_in_the_tabs_folder() {
     let root = r"C:\Users\me\proj";
     let path = |p: &str| mask_path(p, &[root]);

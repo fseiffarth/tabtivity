@@ -407,6 +407,65 @@ fn waiting_tools_skip_a_subagent_file_odd_names_and_are_bounded() {
 }
 
 #[test]
+fn a_tail_of_unique_tool_calls_and_asks_is_walked_in_linear_time() {
+    // The file is the agent's: every record used to rescan all the calls
+    // still waiting, so a hostile tail made one read quadratic. Four times
+    // the records may take about four times as long, not sixteen: a ratio of
+    // two runs side by side, so a loaded machine does not tip it.
+    let run = |calls: usize| {
+        let mut text = probe_prompt("go");
+        for n in 0..calls {
+            text += &tool_call(&format!("t{n}"), "mcp__srv__tool", serde_json::json!({}), "2026-11-18T09:27:00.000Z");
+        }
+        for n in 0..calls {
+            text += &probe_ask(&format!("q{n}"), r#"[{"question":"Which?","options":[{"label":"A"}]}]"#, "2026-11-18T09:27:00.000Z");
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        let started = std::time::Instant::now();
+        let (entries, _, shell_calls) = parse_entries(&lines, TranscriptKind::Claude, false);
+        (started.elapsed(), entries, shell_calls)
+    };
+    let (small, ..) = run(30_000);
+    let (large, entries, shell_calls) = run(120_000);
+    assert!(large < small * 9, "30k records took {small:?}, 120k took {large:?}");
+    assert_eq!(shell_calls.tools.len(), MAX_WAITING_TOOLS);
+    // Only the newest asks stay, each a blocking entry.
+    assert_eq!(entries.iter().filter(|e| e.blocking).count(), MAX_WALK_ASKS);
+}
+
+#[test]
+fn a_result_ends_the_wait_of_a_call_among_many_unanswered_ones() {
+    let mut text = probe_prompt("go");
+    for n in 0..30 {
+        text += &tool_call(&format!("t{n}"), "mcp__srv__tool", serde_json::json!({}), "2026-11-18T09:27:00.000Z");
+    }
+    for n in (0..30).step_by(2) {
+        text += &tool_result(&format!("t{n}"), false);
+    }
+    let read = read_claude(text);
+    assert_eq!(read.waiting_tools.len(), 15);
+}
+
+#[test]
+fn an_ask_is_held_to_a_few_questions_rows_and_characters() {
+    let rows: Vec<_> = (0..40).map(|n| serde_json::json!({"label": format!("row {n}"), "description": "d"})).collect();
+    let questions: Vec<_> = (0..40).map(|n| serde_json::json!({"question": format!("Q{n}?"), "options": rows})).collect();
+    let read = read_claude(probe_prompt("ask") + &probe_ask("toolu_P", &serde_json::json!(questions).to_string(), "2026-11-18T09:19:13.591Z"));
+    let asked = &read.entries[1].questions;
+    assert_eq!(asked.len(), MAX_ASK_QUESTIONS);
+    assert!(asked.iter().all(|q| q.options.len() == MAX_ASK_OPTIONS));
+    // A few huge rows: the characters in all are bounded, the first question is not emptied.
+    let big = "x".repeat(MAX_QUESTION_CHARS);
+    let rows: Vec<_> = (0..12).map(|n| serde_json::json!({"label": format!("{n}{big}"), "description": big})).collect();
+    let questions: Vec<_> = (0..8).map(|n| serde_json::json!({"question": format!("Q{n}?{big}"), "options": rows})).collect();
+    let read = read_claude(probe_prompt("ask") + &probe_ask("toolu_P", &serde_json::json!(questions).to_string(), "2026-11-18T09:19:13.591Z"));
+    let asked = &read.entries[1].questions;
+    let chars: usize = asked.iter().map(|q| q.question.len() + q.options.iter().map(|o| o.label.len() + o.description.as_deref().map_or(0, str::len)).sum::<usize>()).sum();
+    assert!(chars <= MAX_ASK_CHARS + 4 * MAX_QUESTION_CHARS, "{chars}");
+    assert!(!asked.is_empty() && !asked[0].options.is_empty());
+}
+
+#[test]
 fn a_codex_async_question_shows_while_it_waits_and_takes_its_reply() {
     // The records Codex 0.169.0 wrote (scripts/verify-cli/codex/async_question.py):
     // the call, its `{"accepted":true}` at once, the turn working on; the reply

@@ -991,6 +991,52 @@ async fn a_phone_transcript_masks_the_waiting_tools_subjects() {
     assert!(!command.contains("u:p@") && !command.contains(root.as_str()), "{wire}");
 }
 
+/// The transcript's own `cwd` is the agent's to write: a folder above the
+/// tab's must not make every path below it relative, and the list a remote
+/// host sends is bounded and its stamps checked.
+#[tokio::test]
+async fn a_phone_transcript_trusts_no_cwd_outside_the_tab_and_bounds_the_waiting_tools() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell, WaitingTool, MAX_TOOL_SUBJECT_CHARS, MAX_WAITING_TOOLS};
+    let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(54)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let above = host.root.parent().expect("a parent").to_path_buf();
+    let private = above.join("alice").join(".ssh").join("id_key");
+    let transcript = AgentTranscript {
+        cwd: Some(above.to_string_lossy().into_owned()),
+        shells: vec![RunningShell { command: format!("cat {}", private.display()), ..Default::default() }],
+        waiting_tools: vec![WaitingTool { name: "Edit".into(), subject: private.to_string_lossy().into_owned(), at: None }],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript).await;
+    let text = wire.to_string();
+    assert!(!text.contains("alice") && !text.contains(".ssh"), "{wire}");
+    assert!(text.contains("id_key"), "{wire}");
+
+    // A cwd inside the tab's folder is still used (a worktree below it).
+    let inside = host.root.join("wt");
+    let transcript = AgentTranscript {
+        cwd: Some(inside.to_string_lossy().into_owned()),
+        waiting_tools: vec![WaitingTool { name: "Edit".into(), subject: inside.join("a.rs").to_string_lossy().into_owned(), at: None }],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript).await;
+    assert_eq!(wire["waitingTools"][0]["subject"], "a.rs", "{wire}");
+
+    // Count, subject length and stamp.
+    let tool = |at: &str| WaitingTool { name: "Edit".into(), subject: format!("rel/{}", "d".repeat(MAX_TOOL_SUBJECT_CHARS * 4)), at: Some(at.into()) };
+    let mut tools: Vec<WaitingTool> = (0..100).map(|_| tool("2026-11-18T09:27:00.000Z")).collect();
+    tools.push(tool("<script>alert(1)</script>"));
+    tools.push(tool(&"2".repeat(5000)));
+    let transcript = AgentTranscript { waiting_tools: tools, ..Default::default() };
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
+    let tools = wire["waitingTools"].as_array().expect("waitingTools");
+    assert_eq!(tools.len(), MAX_WAITING_TOOLS);
+    assert!(tools[..MAX_WAITING_TOOLS - 2].iter().all(|t| t["at"] == "2026-11-18T09:27:00.000Z"), "{wire}");
+    assert!(tools[MAX_WAITING_TOOLS - 2..].iter().all(|t| t.get("at").is_none()), "{wire}");
+    assert!(tools.iter().all(|t| t["subject"].as_str().unwrap().chars().count() <= MAX_TOOL_SUBJECT_CHARS), "{wire}");
+}
+
 /// H3 (headless owner plan §3): with no window open, the phone's tab
 /// edits — rename, colour, close, reopen — are the owner's: they land in
 /// the session file through the workspace service, answered as stored

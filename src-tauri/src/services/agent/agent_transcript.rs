@@ -90,9 +90,20 @@ const MAX_PREVIEW_CHARS: usize = 2_000;
 /// Longest name of a tool call the agent waits on; a longer one is no tool's.
 const MAX_TOOL_NAME_CHARS: usize = 120;
 /// Longest subject (file path, URL) of such a call, cut at one line.
-const MAX_TOOL_SUBJECT_CHARS: usize = 500;
+pub(crate) const MAX_TOOL_SUBJECT_CHARS: usize = 500;
 /// The most waiting calls one read lists, the newest.
-const MAX_WAITING_TOOLS: usize = 16;
+pub(crate) const MAX_WAITING_TOOLS: usize = 16;
+/// How many unanswered tool calls / asks the walk keeps at once (a bound on
+/// the per-record rescans, not on what is shown).
+const MAX_WALK_TOOLS: usize = 64;
+const MAX_WALK_ASKS: usize = 8;
+/// What one ask may hold: Claude's own tool takes 1-4 questions of 2-4 rows,
+/// so these are far past use; the file is the agent's, and an ask is sent
+/// again on every poll.
+const MAX_ASK_QUESTIONS: usize = 8;
+const MAX_ASK_OPTIONS: usize = 12;
+/// All the text one ask may hold, in characters.
+const MAX_ASK_CHARS: usize = 64_000;
 /// How deep a subagent's own subagents are followed.
 pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 
@@ -1733,6 +1744,7 @@ fn parse_entries(
                     let (_, questions, at) = asked.remove(pos);
                     entries.extend(question_entry(questions, value.get("toolUseResult"), at));
                 }
+                tools.retain(|(tool_call, _)| *tool_call != call);
                 returned.insert(call);
             }
             backgrounded.extend(claude_backgrounded(&value));
@@ -1812,6 +1824,9 @@ fn parse_entries(
                         tool.at = at.clone();
                         tools.retain(|(tool_call, _)| *tool_call != call);
                         tools.push((call, tool));
+                        // The file is the agent's: a hostile tail of unique
+                        // calls must not make every record rescan them all.
+                        tools.drain(..tools.len().saturating_sub(MAX_WALK_TOOLS));
                     }
                 }
                 Record::Plan(raw) => entries.extend(transcript_entry("answer", &raw, at.clone()).map(|entry| TranscriptEntry { plan: true, ..entry })),
@@ -1821,6 +1836,7 @@ fn parse_entries(
                     if !sidechain {
                         asked.retain(|(asked_call, ..)| *asked_call != call);
                         asked.push((call, questions, at.clone()));
+                        asked.drain(..asked.len().saturating_sub(MAX_WALK_ASKS));
                     }
                 }
                 Record::Workflow { call, title } => {
@@ -2495,7 +2511,38 @@ fn claude_question(block: &Value) -> Option<Record> {
             })
         })
         .collect();
+    let questions = cap_questions(questions);
     (!questions.is_empty()).then_some(Record::Question { call, questions })
+}
+
+/// `questions` held to [`MAX_ASK_QUESTIONS`] questions of [`MAX_ASK_OPTIONS`]
+/// rows and [`MAX_ASK_CHARS`] characters of text in all: what comes past is
+/// dropped, the first question's first rows always kept.
+fn cap_questions(mut questions: Vec<AskedQuestion>) -> Vec<AskedQuestion> {
+    questions.truncate(MAX_ASK_QUESTIONS);
+    let mut used = 0usize;
+    let mut kept = 0;
+    for question in &mut questions {
+        used += question.header.as_deref().map_or(0, |h| h.chars().count()) + question.question.chars().count();
+        if kept > 0 && used > MAX_ASK_CHARS {
+            break;
+        }
+        question.options.truncate(MAX_ASK_OPTIONS);
+        let mut rows = 0;
+        for option in &question.options {
+            used += option.label.chars().count()
+                + option.description.as_deref().map_or(0, |d| d.chars().count())
+                + option.preview.as_deref().map_or(0, |p| p.chars().count());
+            if used > MAX_ASK_CHARS {
+                break;
+            }
+            rows += 1;
+        }
+        question.options.truncate(rows.max(usize::from(kept == 0 && !question.options.is_empty())));
+        kept += 1;
+    }
+    questions.truncate(kept);
+    questions
 }
 
 /// A question's text cleaned and cut at its bound; `None` when empty.
@@ -2591,6 +2638,7 @@ fn codex_async_ask(value: &Value) -> Option<(String, Vec<AskedQuestion>)> {
             Some(AskedQuestion { header, question, options, ..Default::default() })
         })
         .collect();
+    let questions = cap_questions(questions);
     (!questions.is_empty()).then_some((call, questions))
 }
 

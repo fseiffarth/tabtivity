@@ -240,6 +240,7 @@ fn hide_secrets(command: &str) -> String {
 /// relative path the agent wrote stays as it is; a path of one component
 /// (`/tmp`, `~/x`, `C:\Users`) names nothing private and stays.
 pub fn mask_path(path: &str, folders: &[&str]) -> String {
+    let path: String = path.chars().filter(|&c| !is_invisible(c)).collect();
     let relative = relative_to_folders(path.trim(), folders);
     let hidden = hide_secrets(&relative);
     let home = hidden == "~" || hidden.starts_with("~/");
@@ -247,7 +248,10 @@ pub fn mask_path(path: &str, folders: &[&str]) -> String {
     let unc = plain.starts_with(r"\\");
     let drive = !unc && is_windows_absolute(&plain);
     if !(home || unc || drive || hidden.starts_with('/')) {
-        return hidden;
+        // Relative as written, and nothing else: a `..` (it climbs out of the
+        // folder that was just taken off), a scheme or drive colon, a rooted
+        // `\`, a `~user` or a second path after a space are not.
+        return if is_plain_relative(&hidden) { hidden } else { leaf_of(&hidden) };
     }
     let body = if drive {
         &plain[2..]
@@ -265,6 +269,34 @@ pub fn mask_path(path: &str, folders: &[&str]) -> String {
         Some(leaf) => format!("{prefix}…{sep}{leaf}"),
         None if unc => "…".to_string(),
         None => hidden,
+    }
+}
+
+/// Characters that show nothing or reorder what is shown (bidi controls,
+/// zero-width and joiner marks, tags, controls): `evil\u{202E}txt.exe` reads
+/// `evilexe.txt`.
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{AD}' | '\u{61C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}' | '\u{E0000}'..='\u{E007F}')
+}
+
+/// A relative path that stays inside the folder it is relative to and names
+/// no other: no `..` component, no `:`, no leading `\` or `~`, and no later
+/// word that starts an absolute path.
+fn is_plain_relative(path: &str) -> bool {
+    !path.starts_with(['\\', '~'])
+        && !path.contains(':')
+        && !path.split(['/', '\\']).any(|part| part == "..")
+        && !path.split_whitespace().skip(1).any(|word| word.starts_with(['/', '\\', '~']))
+}
+
+/// Only the last component of `path`, after `…/` (`…\` when it is written
+/// with backslashes): what is left of a path that is no plain relative one.
+fn leaf_of(path: &str) -> String {
+    let sep = if path.contains('\\') && !path.contains('/') { '\\' } else { '/' };
+    match path.split(['/', '\\']).rfind(|part| !part.is_empty() && *part != "..") {
+        Some(leaf) => format!("…{sep}{leaf}"),
+        None => "…".to_string(),
     }
 }
 
@@ -295,7 +327,9 @@ pub fn mask_url(url: &str) -> String {
         },
         None => {
             let name = host_port.split(':').next().unwrap_or_default();
-            if name.is_empty() || name.chars().count() > 253 || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_')) {
+            // ASCII only: another script's look-alike letters read as a host
+            // the user knows (`раураl.com`), and the phone cannot tell.
+            if name.is_empty() || name.len() > 253 || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) {
                 return String::new();
             }
             name.to_string()

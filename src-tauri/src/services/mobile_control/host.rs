@@ -5356,15 +5356,42 @@ fn mask_shell_commands(transcript: &mut crate::services::agent_transcript::Agent
 /// read off a remote host is not ours to trust). An entry whose name is no
 /// tool name is dropped.
 fn mask_waiting_tools(transcript: &mut crate::services::agent_transcript::AgentTranscript, folders: &[&str]) {
-    use crate::services::agent_transcript::{subject_kind, tool_name_ok, SubjectKind};
+    use crate::services::agent_transcript::{subject_kind, tool_name_ok, SubjectKind, MAX_TOOL_SUBJECT_CHARS, MAX_WAITING_TOOLS};
     transcript.waiting_tools.retain(|tool| tool_name_ok(&tool.name));
+    // A remote host's list is as long and as odd as its agent made it: the
+    // newest few, each subject cut before it is masked, a stamp that is no
+    // timestamp dropped.
+    let extra = transcript.waiting_tools.len().saturating_sub(MAX_WAITING_TOOLS);
+    transcript.waiting_tools.drain(..extra);
     for tool in &mut transcript.waiting_tools {
+        tool.at = tool.at.take().filter(|at| at.len() <= 40 && chrono::DateTime::parse_from_rfc3339(at).is_ok());
+        tool.subject = tool.subject.chars().take(MAX_TOOL_SUBJECT_CHARS).collect();
         tool.subject = match subject_kind(&tool.name) {
             Some(SubjectKind::Path) => shell_mask::mask_path(&tool.subject, folders),
             Some(SubjectKind::Url) => shell_mask::mask_url(&tool.subject),
             None => String::new(),
         };
     }
+}
+
+/// The folders a phone transcript is made relative to: the catalog's (the
+/// tab's cwd, the project's roots) and the transcript's own newest `cwd` only
+/// when it is one of them or inside one. That `cwd` is written by the agent
+/// (or read off a remote host): taken alone, `/home` would make every path
+/// below it relative and show `alice/.ssh/id` where `…/id` belongs.
+fn masking_folders(mut known: Vec<String>, transcript_cwd: Option<&str>) -> Vec<String> {
+    known.retain(|folder| !folder.is_empty());
+    let inside = |cwd: &std::path::Path| {
+        !cwd.components().any(|part| matches!(part, std::path::Component::ParentDir))
+            && known.iter().any(|folder| {
+                let folder = std::path::Path::new(folder);
+                folder.components().any(|part| matches!(part, std::path::Component::Normal(_))) && cwd.starts_with(folder)
+            })
+    };
+    if let Some(cwd) = transcript_cwd.filter(|cwd| inside(std::path::Path::new(cwd))) {
+        known.push(cwd.to_string());
+    }
+    known
 }
 
 /// Each of `folders` as a command line may spell it: as given, as
@@ -5421,11 +5448,12 @@ async fn phone_transcript(
         .flatten()
         .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone())));
     if !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() {
-        let mut folders: Vec<String> = transcript.cwd.iter().cloned().collect();
+        let mut folders: Vec<String> = Vec::new();
         if let Some((project, cwd)) = &found {
             folders.push(cwd.clone());
             folders.extend(std::iter::once(&project.root).chain(&project.roots).map(|root| root.to_string_lossy().into_owned()));
         }
+        let folders = masking_folders(folders, transcript.cwd.as_deref());
         let folders = folder_spellings(&folders);
         let folders: Vec<&str> = folders.iter().map(String::as_str).collect();
         mask_shell_commands(&mut transcript, &folders);
