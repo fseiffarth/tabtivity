@@ -1767,6 +1767,11 @@ span.files-close { background:transparent; }
 .asked-check { flex:0 0 auto; font-weight:700; }
 .asked-none { padding:0 4px; color:#98a0b4; font-size:.82rem; font-style:italic; }
 /* The pill the sheets' headings wear (`.option-sheet h2 small`). */
+/* The sample an agent put beside an answer (a question's `preview`): plain
+   preformatted text in a bounded box, never rendered as markup. */
+.question-preview { display:block; max-height:11em; margin-top:6px; padding:8px 10px; overflow:auto; white-space:pre; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.74rem; line-height:1.35; color:#c8ccdb; background:#0b0d13; border:1px solid var(--edge); }
+/* The read-only card of a question the terminal has not drawn yet. */
+.question-waiting { display:block; padding:6px 4px 0; color:#98a0b4; font-size:.8rem; }
 .question-recommended { margin-left:6px; color:#8fb8ff; font-size:.62rem; font-style:normal; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
 /* Launch curtain — the desktop app's `.startup-splash` ported (see base.css):
    the Tabtivity mark inside two counter-rotating orbit rings, over the brand name,

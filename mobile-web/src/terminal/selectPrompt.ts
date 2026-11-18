@@ -44,10 +44,25 @@ export interface SelectOption {
   keys?: string[];
   /** OpenCode opens an editor before a custom answer can be typed. */
   input?: "opencode";
+  /** The sample the agent put beside this answer (Claude's `preview`), from
+   * the transcript's waiting entry (`askedQuestion`). Preformatted text, never
+   * markdown or HTML. */
+  preview?: string;
+  /** On a multi-select question read through the waiting entry: whether the
+   * screen shows this answer's box ticked. */
+  ticked?: boolean;
 }
 
 export interface SelectPrompt {
-  source?: "opencode";
+  /** Where the content comes from when not the screen's own rows: OpenCode's
+   * question dialog, or the transcript's waiting entry laid over the screen's
+   * reading (`entry`, `askedQuestion`). */
+  source?: "opencode" | "entry";
+  /** Several rows may be ticked (the entry says so). */
+  multiSelect?: true;
+  /** The card is drawn from the waiting entry before the screen shows the
+   * dialog: nothing can be sent from it, `options` carry no screen rows. */
+  readOnly?: true;
   /** Navigation read from a CLI whose headers have no status glyphs. */
   navigation?: { tabs: QuestionTab[]; focus: number | null; submit: boolean; keys: QuestionStepKeys };
   options: SelectOption[];

@@ -6060,6 +6060,7 @@ export const dict: Dict = {
   "terminal.reader.questionNext": "Domanda successiva",
   "terminal.reader.questionSubmitStep": "Invia",
   "terminal.reader.answering": "Risposta in corso…",
+  "terminal.reader.questionWaiting": "Il terminale sta ancora disegnando questa domanda: potrai rispondere qui tra un attimo.",
   "terminal.reader.working": "L'agente sta lavorando…",
   "terminal.reader.workingModel": "{model} sta lavorando…",
   "terminal.reader.limitWarnSession": "Attenzione: ti resta meno del {percent}% del limite di 5 ore.",

@@ -20,6 +20,17 @@ describe(`${BRAND.display} Mobile stored-session turns`, () => {
     ]);
   });
 
+  it("leaves out the question the agent is blocked on: the live card shows it once", () => {
+    const asking: TranscriptEntry = { kind: "answer", text: "Which one?", at: "10:00:03", blocking: true, questions: [{ question: "Which one?", options: [{ label: "A" }] }] };
+    const turns = transcriptTurns([prompt("ask me", "10:00:00"), answer("Sure.", "10:00:01"), asking, { kind: "prompt", text: "next", pending: 2 }]);
+    expect(turns.map((turn) => turn.text)).toEqual(["ask me", "Sure.", "next"]);
+    // Positions are those of `entries`: the files sent after a record are placed by them.
+    expect(turns.map((turn) => turn.index)).toEqual([0, 1, 3]);
+    // Answered, the same record is the ordinary card; Codex's async one stays as it was.
+    expect(transcriptTurns([{ ...asking, blocking: undefined, questions: [{ question: "Which one?", answer: "A" }] }])[0].questions).toHaveLength(1);
+    expect(transcriptTurns([{ ...asking, blocking: undefined, asking: true }])[0].asking).toBe(true);
+  });
+
   it("marks only an answer that is a plan", () => {
     const turns = transcriptTurns([prompt("plan it"), { ...answer("# Plan"), plan: true }, answer("ok"), { ...prompt("x"), plan: true }]);
     expect(turns.map((turn) => turn.plan === true)).toEqual([false, true, false, false]);

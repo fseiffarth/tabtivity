@@ -105,6 +105,8 @@ import { fileKey, useViewableNamed } from "../terminal/chatFiles";
 import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
+import { entryCardAllowed, mergeAskedQuestion, waitingQuestion } from "../terminal/askedQuestion";
+import { questionParts } from "../terminal/questionParts";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
 import { type OutboxPost as ChatPost } from "../terminal/outboxPosts";
@@ -577,11 +579,15 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
         label: option.label,
         ...(prompt.review ? { title: t("terminal.reader.questionSubmitStep") } : {}),
         description: option.description,
+        ...(option.preview ? { preview: option.preview } : {}),
+        // A multi-select question read through the transcript's entry: the
+        // boxes the screen shows ticked.
+        ...(prompt.multiSelect && option.ticked !== undefined ? { box: true, checked: option.ticked } : {}),
         current: option.index === prompt.current,
         freeText: freeTextRow(option),
         pending: sent === option.number,
       }))}
-      disabled={sent !== undefined}
+      disabled={sent !== undefined || prompt.readOnly === true}
       sendingLabel={sendingLabel}
       onPick={(row) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onPick(option); }}
       onType={(row, text) => { const option = prompt.options.find((entry) => entry.number === row.key); if (option) onType(option, text); }}
@@ -589,6 +595,8 @@ function QuestionList({ prompt, tabs, tabFocus, tabSubmit, question, sent, sendi
       attach={attach}
     />
     {prompt.options.some((option) => option.keys) && isUntested("mobile.question.codexHooksPage") && <em>{t("mobile.focus.untested")}</em>}
+    {prompt.readOnly && <small className="question-waiting" role="status">{t("terminal.reader.questionWaiting")}{isUntested("mobile.question.waiting") && <em> · {t("mobile.focus.untested")}</em>}</small>}
+    {prompt.source === "entry" && !prompt.readOnly && (prompt.multiSelect || prompt.options.some((option) => option.preview)) && isUntested("mobile.question.preview") && <em>{t("mobile.focus.untested")}</em>}
   </>;
 }
 
@@ -2081,10 +2089,31 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * phone it is answered by tapping a row, so what is kept is the dialog
    * itself — its rows, and where on the tail they start — not just that there
    * is one. */
-  const liveQuestion = useMemo(
+  const screenQuestion = useMemo(
     () => readLiveQuestion(liveTail, liveScreen, agentLabel, paneColumns.current),
     [liveTail, liveScreen, agentLabel],
   );
+  /** The question Claude is blocked on, from the stored session
+   * (`askedQuestion`): its words and previews over the screen's rows, or —
+   * while the dialog is not drawn yet — a read-only card of its own. The phone
+   * has no live lamp (`tab.agent_status` is the tab list's snapshot from when
+   * this screen opened), so the entry alone stands only while the screen shows
+   * no input box, or a busy row over one (`entryCardAllowed`); an idle session
+   * with a leftover record shows nothing. */
+  const waitingAsk = useMemo(
+    () => (sessionFocus && tab.kind === "agent" ? waitingQuestion(sessionEntries) : null),
+    [sessionFocus, tab.kind, sessionEntries],
+  );
+  const askedCard = useMemo(() => {
+    if (!waitingAsk) return null;
+    const parts = screenQuestion ? questionParts(liveTail, screenQuestion) : null;
+    return mergeAskedQuestion(
+      waitingAsk,
+      screenQuestion && parts ? { question: screenQuestion, ask: parts.ask.map((line) => line.text), context: parts.context.map((line) => line.text), tabs: parts.tabs, tabFocus: parts.tabFocus, tabSubmit: parts.tabSubmit, tabKeys: parts.tabKeys } : null,
+      !screenQuestion && entryCardAllowed(liveScreen, agentLabel),
+    );
+  }, [waitingAsk, screenQuestion, liveTail, liveScreen, agentLabel]);
+  const liveQuestion = askedCard?.question ?? screenQuestion;
   /** Claude Code's prompt suggestion, dimmed in its own empty box
    * (`promptSuggestion.ts`). It is put into the field in either view — never
    * sent, and only once per suggestion — so the reader edits it or sends it as
@@ -2195,7 +2224,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     questionContextShown, questionSignature, questionHeld, questionSent, sentSignature, answerQuestion,
     stepQuestion, answerQuestionText,
   } = useLiveQuestion({
-    clearPending, deliver, agentLabel, liveTail, liveQuestion,
+    clearPending, deliver, agentLabel, liveTail, liveQuestion, askedCard,
   });
   const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */

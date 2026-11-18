@@ -6255,6 +6255,7 @@ export const enSource = {
   "terminal.reader.questionNext": "Next question",
   "terminal.reader.questionSubmitStep": "Submit",
   "terminal.reader.answering": "Answering…",
+  "terminal.reader.questionWaiting": "The terminal is still drawing this question — you can answer here in a moment.",
   "terminal.reader.answerAiOff": "⏻ AI is off, so this answer was not sent. Switch AI on in the side panel and pick again.",
   "terminal.reader.answerFailed": "The answer did not reach the session (it may have disconnected). Try again, or use the Terminal view.",
   "terminal.reader.working": "Agent is working…",

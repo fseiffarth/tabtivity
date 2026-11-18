@@ -31,7 +31,9 @@ import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry"
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
-import { hookLampHidesCard, withoutCard } from "../../lib/agents/liveCardGate";
+import { hookLampHidesCard, withWaitingEntry, withoutCard } from "../../lib/agents/liveCardGate";
+import { waitingQuestion } from "../../../mobile-web/src/terminal/askedQuestion";
+import { CheckboxIcon, SquareIcon } from "../common/icons/Icon";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
@@ -276,6 +278,8 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
     <div className="terminal-reader-question" role="group" aria-label={t("terminal.reader.question")}>
       <small className="terminal-reader-question-head">{t("terminal.reader.question")} <UntestedTag id="terminal.reader.questionKeys" /> <UntestedTag id="terminal.reader.trustPath" /></small>
       {question.source === "opencode" && <UntestedTag id="agents.opencode.questions" />}
+      {question.readOnly && <UntestedTag id="terminal.reader.questionWaiting" />}
+      {question.source === "entry" && !question.readOnly && (question.multiSelect || question.options.some((option) => option.preview)) && <UntestedTag id="terminal.reader.questionPreview" />}
       {live.context.length > 0 && <pre className="terminal-reader-question-context">{live.context.join("\n")}</pre>}
       {live.tabs.length > 0 && !stepped && (
         <div className="terminal-reader-question-tabs">
@@ -331,22 +335,28 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
           const label = question.review ? t("terminal.reader.questionSubmitStep") : option.label;
           const freeText = !question.review && freeTextRow(option);
           const open = freeText && typing === option.index;
+          const box = question.multiSelect === true && option.ticked !== undefined;
           return (
             <Fragment key={`${option.index}:${option.label}`}>
               <button
                 type="button"
                 className={option.index === question.current ? "terminal-reader-option current" : "terminal-reader-option"}
                 aria-expanded={freeText ? open : undefined}
-                disabled={busy}
+                aria-pressed={box ? option.ticked : undefined}
+                disabled={busy || question.readOnly === true}
                 onClick={() => (freeText ? setTyping(open ? null : option.index) : onAnswer(option.index))}
               >
                 <span className="terminal-reader-option-number">{option.number !== UNNUMBERED && option.number}</span>
                 <span className="terminal-reader-option-label">
                   <span>
+                    {box && <span className="terminal-reader-option-box" aria-hidden="true">{option.ticked ? <CheckboxIcon /> : <SquareIcon />}</span>}
                     {recommended ? option.label.slice(0, recommended.index) : label}
                     {recommended && <em className="terminal-reader-recommended">{t("terminal.reader.recommended")}</em>}
                   </span>
                   {option.description && <small>{option.description}</small>}
+                  {/* The agent's sample, as it wrote it: plain text with its
+                      line breaks, never markdown or HTML. */}
+                  {option.preview && <code className="terminal-reader-option-preview">{option.preview}</code>}
                 </span>
               </button>
               {open && (
@@ -387,6 +397,7 @@ function LiveQuestion({ ptyId, live, answered, failure, busy, onAnswer, onType, 
       </div>
       {question.options.some((option) => option.keys) && <UntestedTag id="terminal.reader.codexHooksPage" />}
       {!!question.hidden && <small className="terminal-reader-question-more">{t("terminal.reader.moreChoices")}</small>}
+      {question.readOnly && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.questionWaiting")}</small>}
       {answered && <small className="terminal-reader-question-more" role="status">{t("terminal.reader.answering")}</small>}
       {pasteError && typing !== null && <small className="terminal-reader-question-more" role="alert">{t(pasteError)}</small>}
       {failure && <small className="terminal-reader-question-more" role="alert">{t(failure === "aiOff" ? "terminal.reader.answerAiOff" : "terminal.reader.answerFailed")}</small>}
@@ -1529,9 +1540,17 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The screen's reading, with a card taken off it that a Claude tab's hooks
    * do not announce (`hookLampHidesCard`): text on screen that only looks like
    * a dialog. Every consumer below reads this, not the raw reading. */
+  /** The question Claude is blocked on, from the stored session: its words and
+   * previews, laid over the screen's rows (or standing alone, read-only, while
+   * the dialog is not drawn yet and the lamp says it asks) — `withWaitingEntry`.
+   * The earlier chat browsed in place of the session has none. */
+  const waitingAsk = useMemo(
+    () => (transcript?.available && !browsed && agentFamily(agentLabel) === "claude" ? waitingQuestion(transcript.entries) : null),
+    [transcript, browsed, agentLabel],
+  );
   const live = useMemo(
-    () => (hookLampHidesCard(ptyId, agentLabel, lampAsking) ? withoutCard(screenLive) : screenLive),
-    [screenLive, ptyId, agentLabel, lampAsking],
+    () => withWaitingEntry(hookLampHidesCard(ptyId, agentLabel, lampAsking) ? withoutCard(screenLive) : screenLive, waitingAsk, lampAsking),
+    [screenLive, ptyId, agentLabel, lampAsking, waitingAsk],
   );
   const use24h = useUse24h();
   const modelTag = useAgentTabModelTag(scope, tab);
@@ -1712,7 +1731,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const answer = (index: number) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered || held) return;
+    if (!question || question.readOnly || !option || answered || held) return;
     const keys = answerKeys(question, option);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -1725,7 +1744,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const answerText = (index: number, text: string) => {
     const question = live.question;
     const option = question?.options.find((entry) => entry.index === index);
-    if (!question || !option || answered || held) return;
+    if (!question || question.readOnly || !option || answered || held) return;
     const keys = answerTextKeys(question, option, text);
     if (keys.length === 0) return;
     setAnswered(live.signature);
@@ -1736,7 +1755,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   };
   const step = (from: number, to: number) => {
     const keys = tabStepKeys(live, from, to);
-    if (!live.question || keys.length === 0 || answered || held) return;
+    if (!live.question || live.question.readOnly || keys.length === 0 || answered || held) return;
     setAnswered(live.signature);
     setAnswerFailure(null);
     setAnsweredBy("step");
@@ -2754,7 +2773,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
             live={browsed ? NO_LIVE : shownLive}
             answered={!!answered && answered === live.signature && answeredBy === "row"}
             failure={answerFailure}
-            busy={held}
+            busy={held || !!shownLive.question?.readOnly}
             onAnswer={answer}
             onType={answerText}
             onStep={step}

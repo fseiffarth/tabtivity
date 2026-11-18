@@ -4593,6 +4593,28 @@ button.terminal-reader-option:hover:not(:disabled) {
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+/* The sample an agent put beside an answer (a question's `preview`): plain
+   preformatted text, bounded, never rendered as markup. */
+.terminal-reader-option-preview {
+  display: block;
+  max-height: 12em;
+  margin-top: 4px;
+  padding: 6px var(--space-2);
+  overflow: auto;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm, 4px);
+}
+.terminal-reader-option-box {
+  display: inline-flex;
+  margin-right: 6px;
+  vertical-align: -2px;
+  color: var(--accent);
+}
+.terminal-reader-option-box svg { width: 14px; height: 14px; }
 .terminal-reader-working {
   align-self: flex-start;
   display: flex;

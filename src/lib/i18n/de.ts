@@ -6086,6 +6086,7 @@ export const dict: Dict = {
   "terminal.reader.questionNext": "Nächste Frage",
   "terminal.reader.questionSubmitStep": "Absenden",
   "terminal.reader.answering": "Wird beantwortet…",
+  "terminal.reader.questionWaiting": "Das Terminal zeichnet diese Frage noch – gleich lässt sie sich hier beantworten.",
   "terminal.reader.working": "Der Agent arbeitet…",
   "terminal.reader.workingModel": "{model} arbeitet…",
   "terminal.reader.limitWarnSession": "Achtung: weniger als {percent} % deines 5-Stunden-Limits übrig.",

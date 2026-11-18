@@ -60,7 +60,9 @@ const GRANTING_ROW = /(?:don'?t|do not|never|stop)\s+ask(?:ing)?\s+again|always\
  * a grant or a saved rule refuses it too.
  */
 export function voicePickable(prompt: SelectPrompt): boolean {
-  if (prompt.review) return false;
+  // A card drawn from the transcript's entry before the dialog is on screen
+  // sends nothing (`askedQuestion`).
+  if (prompt.review || prompt.readOnly) return false;
   if (prompt.navigation === undefined && !prompt.options.some(freeTextRow)) return false;
   return !prompt.options.some((option) => GRANTING_ROW.test(option.label));
 }
