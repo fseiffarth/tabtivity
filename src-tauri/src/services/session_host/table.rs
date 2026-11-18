@@ -76,6 +76,14 @@ pub fn validate_spawn(argv: &[String], env: &[(String, String)], cwd: Option<&st
     Ok(())
 }
 
+/// Whether `mark` may be kept as a session's MCP stamp: at most
+/// [`MAX_MCP_MARK`](super::protocol::MAX_MCP_MARK) bytes of printable ASCII
+/// with no space (`root_mcp_mark::Mark::render` writes hex, `-`, `:` and
+/// digits), so a listing never carries a control byte.
+pub fn valid_mcp_mark(mark: &str) -> bool {
+    !mark.is_empty() && mark.len() <= super::protocol::MAX_MCP_MARK && mark.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// Whether `program` would run as a batch script — `CreateProcess` hands a
 /// `.bat`/`.cmd` to `cmd.exe /c`, which re-parses the whole command line
 /// (`& | ^ % < >`; `%` cannot even be escaped: the BatBadBut class) — or is a
@@ -132,6 +140,8 @@ pub struct Entry {
     pub dead: Option<Option<i32>>,
     /// Created, its child not spawned yet ([`Table::mark_started`]).
     pub starting: bool,
+    /// The MCP stamp the creating `Spawn` carried; an attach never changes it.
+    pub mcp_mark: Option<String>,
 }
 
 impl Entry {
@@ -151,6 +161,8 @@ pub struct NewSession {
     pub policy: SizePolicy,
     pub remain_on_exit: bool,
     pub create_only: bool,
+    /// Kept only if this creates the session.
+    pub mcp_mark: Option<String>,
 }
 
 /// Whether [`Table::create_or_attach`] made the session.
@@ -227,6 +239,7 @@ impl Table {
                 clients: Vec::new(),
                 dead: None,
                 starting: true,
+                mcp_mark: new.mcp_mark,
             },
         );
         Ok(Created::New(id))
@@ -405,7 +418,37 @@ mod tests {
             policy: SizePolicy::Latest,
             remain_on_exit: false,
             create_only: false,
+            mcp_mark: None,
         }
+    }
+
+    #[test]
+    fn the_mcp_stamp_is_set_on_create_only() {
+        let mut t = Table::new();
+        let mut first = new("s");
+        first.mcp_mark = Some("nonce:grant:1".into());
+        t.create_or_attach(first, 0).unwrap();
+        let mut again = new("s");
+        again.mcp_mark = Some("other:grant:2".into());
+        assert!(matches!(t.create_or_attach(again, 1), Ok(Created::Existing(_))));
+        assert_eq!(t.get("s").unwrap().mcp_mark.as_deref(), Some("nonce:grant:1"), "an attach keeps it");
+        t.create_or_attach(new("bare"), 0).unwrap();
+        assert_eq!(t.get("bare").unwrap().mcp_mark, None);
+        t.rename("s", "t").unwrap();
+        assert_eq!(t.get("t").unwrap().mcp_mark.as_deref(), Some("nonce:grant:1"), "a rename keeps it");
+    }
+
+    #[test]
+    fn an_mcp_stamp_is_short_printable_ascii() {
+        let real = format!("{}:{}:49152", "a".repeat(32), "b".repeat(64));
+        assert!(valid_mcp_mark(&real));
+        assert!(valid_mcp_mark(&format!("{}:-:1", "a".repeat(32))));
+        assert!(!valid_mcp_mark(""));
+        assert!(!valid_mcp_mark("a b"));
+        assert!(!valid_mcp_mark("a\nb"));
+        assert!(!valid_mcp_mark("a\u{1b}b"));
+        assert!(!valid_mcp_mark("ä"));
+        assert!(!valid_mcp_mark(&"x".repeat(super::super::protocol::MAX_MCP_MARK + 1)));
     }
 
     #[test]

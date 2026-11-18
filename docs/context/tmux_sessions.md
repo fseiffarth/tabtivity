@@ -157,8 +157,18 @@ works.
   flight (the lock is held across the `tmux ls`), dropped by `kill`, `rename`
   and the quit reap. It also answers `reattaches_session`. A private socket (a
   test) is never cached. A backend that cannot answer (the trait default,
-  `Unavailable`; the Windows session host until it carries a stamp) is "unknown":
-  the launch grants as before and `has` answers the rejoin.
+  `Unavailable`) is "unknown": the launch grants as before and `has` answers the
+  rejoin.
+- **Windows session host.** The same stamp rides the host's create-or-attach
+  `Spawn` (`mcp_mark`, kept only when that `Spawn` creates the session, at most
+  256 printable ASCII bytes) and comes back in one `List` (`SessionInfo::mcp_mark`;
+  `WinHostMux::mcp_marks`, the same 3 s cache per pipe). Additive, no protocol
+  bump: a host announces `CAP_MCP_MARK` (`"mcp-mark"`) in `Welcome`, and a host
+  without it (an older one still serving its sessions) is "unknown", never
+  "no stamp", so its tabs are never flagged stale on a guess
+  (`session_host::route::marks_answer`). No host running is "none" (stamp the
+  create) only while the setting is on; off, no session will exist, so
+  "unknown". The stamp never reaches `sessions.json`.
 - **The verdict** (`root_mcp_mark::classify_reattach`, pure):
 
   | Session | Verdict | Grant | Tab |

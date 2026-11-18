@@ -22,6 +22,9 @@
 //! (the pipe opened and no `Welcome` within [`HANDSHAKE_DEADLINE`], busy,
 //! someone else's pipe, a connection lost mid-request) → the spawn fails with
 //! [`ERR_SILENT`], never a second `--resume` agent on the same conversation.
+//!
+//! **Which MCP stamps it knows** ([`marks_answer`]): the stamps a host of this
+//! build lists, nothing from an older one (unknown, never "no stamp").
 
 use std::time::Duration;
 
@@ -201,6 +204,9 @@ pub struct HostSpawn {
     pub cwd: Option<String>,
     pub remain_on_exit: bool,
     pub size_policy: SizePolicy,
+    /// The session's MCP stamp (`PtyOptions::mcp_mark`), kept by the host
+    /// only if this `Spawn` creates the session.
+    pub mcp_mark: Option<String>,
 }
 
 impl HostSpawn {
@@ -216,6 +222,7 @@ impl HostSpawn {
             remain_on_exit: self.remain_on_exit,
             size_policy: self.size_policy,
             create_only: false,
+            mcp_mark: self.mcp_mark,
         }
     }
 }
@@ -319,9 +326,51 @@ pub fn host_process_env(env: impl IntoIterator<Item = (String, String)>) -> Vec<
         .collect()
 }
 
+/// `session_mux::winhost`'s answer to `SessionMux::mcp_marks`, from how its
+/// one listing went (`Client::mcp_marks`): a host of this build lists every
+/// session with its stamp; a host without `CAP_MCP_MARK` (an older one still
+/// serving its sessions) is "unknown"; no host running is "none" only where a
+/// new session would be made by a host of this build (`creates_here`: the
+/// setting on and a copy to start), else "unknown" — the tab then runs
+/// in-process and has no session to stamp. Any other failure stays an error,
+/// which `launch_prep` reads as "unknown" too: it never breaks a spawn.
+pub fn marks_answer(
+    listed: Result<Option<super::client::MarkRows>, crate::services::session_mux::MuxError>,
+    creates_here: bool,
+) -> Result<crate::services::session_mux::SessionMarks, crate::services::session_mux::MuxError> {
+    use crate::services::session_mux::{MuxError, SessionMarks};
+    match listed {
+        Ok(Some(rows)) => Ok(SessionMarks::from_rows(rows)),
+        Ok(None) => Err(MuxError::Unavailable("the running session host is older and keeps no MCP stamp".into())),
+        Err(MuxError::NoServer) if creates_here => Ok(SessionMarks::default()),
+        Err(MuxError::NoServer) => Err(MuxError::Unavailable("no session host runs or will run".into())),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_marks_are_known_only_from_a_host_of_this_build() {
+        use crate::services::session_mux::{MuxError, SessionMarks};
+        let rows = vec![("a".to_string(), Some("n:g:1".to_string())), ("b".to_string(), None)];
+        for creates_here in [true, false] {
+            let marks = marks_answer(Ok(Some(rows.clone())), creates_here).unwrap();
+            assert_eq!(marks, SessionMarks::from_rows(rows.clone()));
+            assert_eq!(marks.entry("b"), Some(&None), "live, no stamp");
+            assert!(!marks.contains("c"));
+            // An older host: unknown, whatever the setting.
+            assert!(matches!(marks_answer(Ok(None), creates_here), Err(MuxError::Unavailable(_))));
+            // A host that is there and fails stays an error (read as unknown).
+            assert_eq!(marks_answer(Err(MuxError::Io("x".into())), creates_here), Err(MuxError::Io("x".into())));
+        }
+        // No host: a new session is made by this build's host, so stamped...
+        assert_eq!(marks_answer(Err(MuxError::NoServer), true), Ok(SessionMarks::default()));
+        // ...unless none will run (setting off): in-process, unknown.
+        assert!(matches!(marks_answer(Err(MuxError::NoServer), false), Err(MuxError::Unavailable(_))));
+    }
 
     fn agent() -> RouteFacts {
         RouteFacts {
@@ -422,10 +471,12 @@ mod tests {
             cwd: Some("C:\\work".into()),
             remain_on_exit: true,
             size_policy: SizePolicy::Latest,
+            mcp_mark: Some("n:g:9".into()),
         };
         match spawn.request(120, 40) {
-            Request::Spawn { name, argv, env, cols, rows, remain_on_exit, create_only, .. } => {
+            Request::Spawn { name, argv, env, cols, rows, remain_on_exit, create_only, mcp_mark, .. } => {
                 assert_eq!((name.as_str(), cols, rows, remain_on_exit, create_only), ("s", 120, 40, true, false));
+                assert_eq!(mcp_mark.as_deref(), Some("n:g:9"));
                 assert_eq!(argv.len(), 2);
                 assert_eq!(env, vec![("API_KEY".to_string(), "secret".to_string())]);
             }

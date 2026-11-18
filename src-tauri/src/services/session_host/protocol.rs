@@ -29,7 +29,16 @@ pub const PROTO_MIN: u32 = 1;
 /// unchanged since level 1; never raise this unless they change.
 pub const REAP_PROTO_MIN: u32 = 1;
 /// Optional host features, announced in [`Reply::Welcome`].
-pub const CAPS: &[&str] = &["snapshot", "repaint", "paste-bracketed", "osc-cwd", "kill-prefix"];
+pub const CAPS: &[&str] = &["snapshot", "repaint", "paste-bracketed", "osc-cwd", "kill-prefix", CAP_MCP_MARK];
+/// The host keeps the MCP stamp a creating `Spawn` carries
+/// ([`Request::Spawn`]'s `mcp_mark`) and lists it ([`SessionInfo::mcp_mark`]).
+/// Additive, so no [`PROTO`] bump: an older host drops the unknown field and
+/// lists none, and a client that does not see this cap reads the stamps as
+/// unknown, never as "no stamp" (`session_mux::winhost`, `mcp_marks`).
+pub const CAP_MCP_MARK: &str = "mcp-mark";
+/// The longest MCP stamp a `Spawn` may carry (one is about 110 bytes,
+/// `root_mcp_mark::Mark::render`).
+pub const MAX_MCP_MARK: usize = 256;
 
 /// The largest payload one frame may carry (1 MiB).
 pub const MAX_FRAME: usize = 1 << 20;
@@ -175,6 +184,13 @@ pub enum Request {
         size_policy: SizePolicy,
         #[serde(default)]
         create_only: bool,
+        /// The session's MCP stamp (`PtyOptions::mcp_mark`), kept only when
+        /// this `Spawn` creates the session — an attach never changes it —
+        /// and listed back in [`SessionInfo::mcp_mark`]. At most
+        /// [`MAX_MCP_MARK`] printable ASCII bytes. Omitted when absent, and
+        /// ignored by a host without [`CAP_MCP_MARK`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mcp_mark: Option<String>,
     },
     /// Turns the connection into a stream: [`Reply::Snapshot`] and its bytes,
     /// then live output. From then on the client sends [`KIND_INPUT`] frames
@@ -274,6 +290,10 @@ pub struct SessionInfo {
     pub cwd: Option<String>,
     pub argv: Vec<String>,
     pub dead: bool,
+    /// The MCP stamp the session was created with. Meaningful only from a
+    /// host that announces [`CAP_MCP_MARK`]: an older one never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_mark: Option<String>,
 }
 
 /// One session's pane facts, [`Reply::Pane`].
@@ -404,6 +424,7 @@ mod tests {
                 remain_on_exit: true,
                 size_policy: SizePolicy::Largest,
                 create_only: false,
+                mcp_mark: Some("n:g:1".into()),
             },
             Request::Attach { name: "s".into(), cols: 1, rows: 2, history_lines: 3 },
             Request::Input { name: "s".into(), bytes: vec![0, 3, 255] },
@@ -433,6 +454,43 @@ mod tests {
         });
         let back: Reply = serde_json::from_slice(&control_payload(&reply)).unwrap();
         assert_eq!(back, reply);
+    }
+
+    #[test]
+    fn the_mcp_stamp_is_additive_on_the_wire() {
+        // Without a stamp a Spawn is byte-for-byte what an older host reads.
+        let spawn = |mcp_mark| Request::Spawn {
+            name: "s".into(),
+            argv: vec!["x".into()],
+            env: vec![],
+            cwd: None,
+            cols: 80,
+            rows: 24,
+            remain_on_exit: false,
+            size_policy: SizePolicy::Latest,
+            create_only: false,
+            mcp_mark,
+        };
+        let plain = String::from_utf8(control_payload(&spawn(None))).unwrap();
+        assert!(!plain.contains("mcp_mark"), "{plain}");
+        let stamped = String::from_utf8(control_payload(&spawn(Some("n:g:7".into())))).unwrap();
+        assert!(stamped.contains(r#""mcp_mark":"n:g:7""#), "{stamped}");
+        // An older client's Spawn (no field) decodes with no stamp.
+        let old: Request = serde_json::from_str(
+            r#"{"op":"spawn","name":"s","argv":["x"],"cols":80,"rows":24}"#,
+        )
+        .unwrap();
+        assert_eq!(old, spawn(None));
+        // An older host's listing (no field) decodes with no stamp: only the
+        // missing cap tells "unknown" from "no stamp".
+        let row = r#"{"name":"s","created":1,"activity":2,"attached":0,"cwd":null,"argv":[],"dead":false}"#;
+        let old: SessionInfo = serde_json::from_str(row).unwrap();
+        assert_eq!(old.mcp_mark, None);
+        let new = SessionInfo { mcp_mark: Some("n:-:7".into()), ..old.clone() };
+        let back: SessionInfo = serde_json::from_slice(&control_payload(&new)).unwrap();
+        assert_eq!(back, new);
+        assert!(!String::from_utf8(control_payload(&old)).unwrap().contains("mcp_mark"));
+        assert!(CAPS.contains(&CAP_MCP_MARK));
     }
 
     #[test]
