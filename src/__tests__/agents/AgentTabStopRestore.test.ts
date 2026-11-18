@@ -78,3 +78,14 @@ describe("restoring with the cap off", () => {
     expect(takeRestoredStopped().size).toBe(0);
   });
 });
+
+describe("restoring before the settings have loaded", () => {
+  // The current scope restores on its own (CenterPanel, the runtime-switch
+  // event), not behind `whenSettingsLoaded`: an unloaded store must not read
+  // as the default cap, or a user who switched the cap off gets stopped tabs.
+  it("brings every tab back running", () => {
+    useSettingsStore.setState({ settings: null, loaded: false });
+    expect(load("p", [saved(1), saved(2, { cmd: "codex" })]).some((t) => t.stopped)).toBe(false);
+    expect(takeRestoredStopped().size).toBe(0);
+  });
+});

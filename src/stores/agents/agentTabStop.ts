@@ -181,9 +181,12 @@ export function wakeAgentTab(scope: string, key: string): boolean {
 }
 
 /** The restore's rule (`loadFromLayout`): with the cap on, a tab no static
- *  guard holds for comes back stopped. With the cap off, none does. */
+ *  guard holds for comes back stopped. With the cap off, none does — nor
+ *  while the settings have not loaded: the current scope restores without
+ *  waiting for them, and an unloaded store would read as the default cap. */
 export function restoredStopped(scope: string, tab: TabEntry): boolean {
-  if (stopAgentTabsCap(useSettingsStore.getState().settings) === null) return false;
+  const { settings, loaded } = useSettingsStore.getState();
+  if (!loaded || stopAgentTabsCap(settings) === null) return false;
   return staticStopBlockers(tab, stopPlaceOf(scope, tab)).length === 0;
 }
 setRestoreStopRule(restoredStopped);
