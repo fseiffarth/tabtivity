@@ -6057,6 +6057,8 @@ export const enSource = {
   "terminal.reader.title": "Chat",
   "terminal.reader.showReader": "Chat",
   "terminal.reader.showReaderHint": "Talk to this agent as a chat — its conversation as messages, over the terminal",
+  "terminal.reader.schedule": "Schedule",
+  "terminal.reader.scheduleHint": "Schedule prompts for this agent — send one at a time or repeatedly",
   "terminal.reader.showTerminal": "Terminal",
   "terminal.reader.showTerminalHint": "Back to the terminal",
   "terminal.reader.changes": "Diffs",

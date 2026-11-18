@@ -109,8 +109,7 @@ import { MenuShortcut } from "../common/MenuShortcut";
 import { useT } from "../../lib/i18n";
 import { useChordHint } from "../../lib/shortcuts/shortcutHint";
 import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
-import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
-import { nextScheduleOccurrence } from "../../lib/agents/agentSchedule";
+import { useTabSchedule } from "../../lib/agents/useTabSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
 import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
 import { ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, CloseIcon, GripIcon, PencilIcon, SearchIcon, WindowIcon } from "../common/icons/Icon";
@@ -294,35 +293,7 @@ const TabItem = memo(function TabItem({
   const isAgent = tab.kind === "agent" || tab.kind === "local_agent";
   // Which member of the box this tab works in (a box scope only), from its cwd.
   const memberInfo = tabMemberInfo(tab, useScopeMemberTable(scope));
-  // This tab's own schedules (none for a non-agent or an unscheduled tab): a
-  // store reference, so the next-occurrence sort below runs once per change
-  // of the list rather than per render of the bar.
-  const schedules = useAgentSchedulesStore((s) =>
-    isAgent && tab.scheduleTargetId
-      ? s.byTarget[scheduleCacheKey(scope, tab.scheduleTargetId)]
-      : undefined,
-  );
-  // Recomputed against a fresh "now" on every list change, and again (via the
-  // epoch) when the indicator is hovered after the shown occurrence has
-  // passed: the title used to be worked out on every bar render, so it never
-  // named a past slot, and a cached one must refresh itself once the clock
-  // crosses it — a run or an edit republishes the list, a skipped slot does not.
-  const [scheduleEpoch, setScheduleEpoch] = useState(0);
-  const schedule = useMemo(() => {
-    const enabled = (schedules ?? []).filter((item) => item.enabled);
-    const now = new Date();
-    const next = enabled
-      .map((item) => nextScheduleOccurrence(item, now)?.at)
-      .filter((at): at is Date => !!at)
-      .sort((a, b) => a.getTime() - b.getTime())[0];
-    return { count: enabled.length, next };
-    // `scheduleEpoch` looks unnecessary to the linter because the body reads
-    // the clock, which it cannot see — the bump is what re-reads it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schedules, scheduleEpoch]);
-  const refreshScheduleNext = () => {
-    if (schedule.next && schedule.next.getTime() <= Date.now()) setScheduleEpoch((n) => n + 1);
-  };
+  const schedule = useTabSchedule(scope, tab.scheduleTargetId, isAgent);
   // Expose the kind colour to CSS on every tab (not just the active one)
   // so the top stripe reads as the tab-group colour consistently — plain
   // themes draw the rail above, fancy themes move it below. Inactive tabs
@@ -405,7 +376,7 @@ const TabItem = memo(function TabItem({
         <span
           className="tab-schedule-indicator"
           // The hover that is about to read the title refreshes a stale one.
-          onMouseEnter={refreshScheduleNext}
+          onMouseEnter={schedule.refreshNext}
           title={schedule.next
             ? t("agentSchedule.indicatorNext", { count: schedule.count, value: schedule.next.toLocaleString() })
             : t("agentSchedule.indicator", { count: schedule.count })}

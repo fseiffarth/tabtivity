@@ -5860,6 +5860,8 @@ export const dict: Dict = {
   "terminal.reader.title": "Chat",
   "terminal.reader.showReader": "Chat",
   "terminal.reader.showReaderHint": "Habla con este agente como en un chat — su conversación como mensajes, sobre el terminal",
+  "terminal.reader.schedule": "Programar",
+  "terminal.reader.scheduleHint": "Programar prompts para este agente — enviarlos una vez o de forma repetida",
   "terminal.reader.showTerminal": "Terminal",
   "terminal.reader.showTerminalHint": "Volver al terminal",
   "terminal.reader.changes": "Diffs",
