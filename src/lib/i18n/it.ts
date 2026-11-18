@@ -6057,6 +6057,7 @@ export const dict: Dict = {
   "terminal.reader.sendFailed": "Non inviato — il terminale dell'agente non accetta input. Il tuo testo è ancora qui.",
   "terminal.reader.sendPickerOpen": "Non inviato — nell'agente è aperto un elenco di modelli o modalità. Scegli dall'elenco o chiudilo, poi invia. Il tuo testo è ancora qui.",
   "terminal.reader.waitsForQuestion": "Attende la tua risposta alla domanda sopra — viene inviato non appena hai risposto.",
+  "terminal.reader.notStarted": "Non inviato — l'agente si sta ancora avviando. Invia di nuovo quando compare il suo campo di inserimento; il testo resta qui.",
   "terminal.reader.answerQuestionFirst": "Non inviato — l'agente sta facendo una domanda. Rispondi prima, poi riprova.",
   "terminal.reader.clearBusy": "Codex sta ancora lavorando e non può iniziare una nuova conversazione ora. Fermalo con Esc, poi invia di nuovo.",
   "terminal.reader.artifact.title": "Documento",

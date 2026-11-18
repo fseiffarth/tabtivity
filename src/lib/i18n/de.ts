@@ -6083,6 +6083,7 @@ export const dict: Dict = {
   "terminal.reader.sendFailed": "Nicht gesendet — das Terminal des Agenten nimmt keine Eingabe an. Dein Text bleibt hier.",
   "terminal.reader.sendPickerOpen": "Nicht gesendet — im Agenten ist eine Modell- oder Modusliste offen. Wähle daraus oder schließe sie, dann sende. Dein Text bleibt hier.",
   "terminal.reader.waitsForQuestion": "Wartet auf deine Antwort auf die Frage oben — wird gesendet, sobald sie beantwortet ist.",
+  "terminal.reader.notStarted": "Nicht gesendet — der Agent startet noch. Sende erneut, sobald sein Eingabefeld da ist; dein Text bleibt hier.",
   "terminal.reader.answerQuestionFirst": "Nicht gesendet — der Agent stellt gerade eine Frage. Beantworte sie zuerst, dann versuche es erneut.",
   "terminal.reader.clearBusy": "Codex arbeitet noch und kann gerade kein neues Gespräch beginnen. Mit Esc anhalten, dann erneut senden.",
   "terminal.reader.artifact.title": "Dokument",

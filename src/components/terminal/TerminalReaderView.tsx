@@ -825,12 +825,12 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     setSteerOpen(level);
     return true;
   };
-  // Only a composer on show that takes text answers the key; else the prompt
-  // box over the window does.
-  const steerable = visible && !inputBlocked;
+  // A composer on show answers the key, also while its CLI is starting or asks
+  // something (shown by the key it takes text; Enter keeps it then, saying
+  // why). Only a pane without one gets the prompt box over the window.
   useEffect(
-    () => steerable ? registerReaderComposer(ptyId, (level, lead) => openForSteering.current(level, lead)) : undefined,
-    [ptyId, steerable],
+    () => visible ? registerReaderComposer(ptyId, (level, lead) => openForSteering.current(level, lead)) : undefined,
+    [ptyId, visible],
   );
   // Shown with the keyboard, caret at the end of the text.
   useLayoutEffect(() => {
@@ -849,13 +849,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     check(useKeyboardSteeringStore.getState().handedTo);
     return useKeyboardSteeringStore.subscribe((state) => check(state.handedTo));
   }, [steerOpen]);
-  // A dialog came up, or the Chat went out of view: steering takes it from here.
+  // The Chat went out of view: steering takes it from here.
   useEffect(() => {
-    if (steerOpen === null || steerable) return;
+    if (steerOpen === null || visible) return;
     setSteerOpen(null);
     const steeringState = useKeyboardSteeringStore.getState();
     if (steeringState.handedTo === "prompt") steeringState.enter(steerOpen);
-  }, [steerOpen, steerable]);
+  }, [steerOpen, visible]);
   // A press outside the composer and its chips: the pointer has taken over,
   // nothing waits to come back (the composer stays, as without steering).
   useEffect(() => {
@@ -1020,7 +1020,13 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
     // The ref, not the state: a spoken send calls this in the same tick the
     // dictated words went into the draft.
     const text = draftRef.current.trim();
-    if (!current || !text || sending || inputBlocked) return;
+    if (!current || !text || sending) return;
+    // Only a box the Prompt key showed takes text while the session cannot take
+    // it: the text stays, and the user sends it again once it can.
+    if (inputBlocked) {
+      setSendError(t(questionOpen ? "terminal.reader.answerQuestionFirst" : "terminal.reader.notStarted"));
+      return;
+    }
     // Any send stops the voice reading the last answer.
     voiceLoop.stopReading();
     // A Tabby chat has no facts row to open the panel in: the CLI answers.
@@ -1333,7 +1339,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <textarea
           ref={composerRef}
           value={draft}
-          disabled={inputBlocked}
+          disabled={inputBlocked && steerOpen === null}
           rows={3}
           spellCheck={false}
           placeholder={subagent ? t("terminal.reader.subagentPlaceholder")
@@ -1351,7 +1357,7 @@ function ReaderComposer({ scope, tabKey, tabRef, ptyId, cli, subagent, history, 
         <button
           type="button"
           className="terminal-reader-send"
-          disabled={!draft.trim() || sending || inputBlocked}
+          disabled={!draft.trim() || sending || (inputBlocked && steerOpen === null)}
           onClick={() => void send()}
           aria-label={t("terminal.reader.send")}
           title={t("terminal.reader.send")}

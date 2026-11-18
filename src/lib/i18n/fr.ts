@@ -6059,6 +6059,7 @@ export const dict: Dict = {
   "terminal.reader.sendFailed": "Non envoyé — le terminal de l'agent n'accepte pas de saisie. Votre texte est conservé.",
   "terminal.reader.sendPickerOpen": "Non envoyé — une liste de modèles ou de modes est ouverte dans l'agent. Choisissez-y ou fermez-la, puis envoyez. Votre texte est conservé.",
   "terminal.reader.waitsForQuestion": "Attend votre réponse à la question ci-dessus — envoyé dès qu'elle a une réponse.",
+  "terminal.reader.notStarted": "Non envoyé — l'agent démarre encore. Renvoyez dès que sa zone de saisie apparaît ; votre texte reste ici.",
   "terminal.reader.answerQuestionFirst": "Non envoyé — l'agent pose une question. Répondez-y d'abord, puis réessayez.",
   "terminal.reader.clearBusy": "Codex travaille encore et ne peut pas démarrer une nouvelle conversation maintenant. Arrêtez-le avec Échap, puis renvoyez.",
   "terminal.reader.artifact.title": "Document",

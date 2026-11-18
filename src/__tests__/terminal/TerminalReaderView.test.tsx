@@ -327,6 +327,44 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it.each(["Send now", "Cancel and edit"])("%s reaches Codex's queue above the last 40 rows", async (action) => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const queue = ["queued follow-up"];
+    let box = "";
+    const rows: string[] = [];
+    const draw = () => rows.splice(0, rows.length,
+      "• Working (5s • esc to interrupt)", "",
+      ...(queue.length ? ["• Queued follow-up inputs", "  ↳ queued follow-up", "    shift+← edit last queued message"] : []),
+      ...Array<string>(50).fill(""),
+      `› ${box || "Ask Codex to do anything"}`, "", "  GPT default · ~/work", "  ? for shortcuts",
+    );
+    draw();
+    const term = fakeTerminal(rows);
+    Object.defineProperty(term, "rows", { get: () => rows.length });
+    const hear = (key: string) => {
+      if (key === "\u001b[1;2D") box = queue.pop() ?? "";
+      else if (key === "\u0015") box = "";
+      else if (key === "\u001b") box = queue.splice(0).join("\n");
+      else if (key === "\r") box = "";
+      draw();
+    };
+    registerTerminal("p:agent-1", term);
+    onWritten.add(hear);
+    try {
+      reader(host);
+      await waitFor(() => expect(host.querySelector(".terminal-reader-working")).not.toBeNull());
+      act(() => noteSentPrompt("st-1", "queued follow-up"));
+      await act(async () => fireEvent.click(within(host).getByRole("button", { name: action })));
+      await waitFor(() => expect(queue).toEqual([]));
+      if (action === "Send now") await waitFor(() => expect(written).toContain("\r"));
+      else await waitFor(() => expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("queued follow-up"));
+      expect(box).toBe("");
+    } finally {
+      onWritten.delete(hear);
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
   it("starts a new conversation the way the Clear key does, not as a prompt", async () => {
     clearAgentTab.mockReset();
     clearAgentTab.mockResolvedValue(true);
@@ -525,6 +563,50 @@ describe("the agent pane's Reader", () => {
       expect(written).not.toContain("\x1b");
     } finally {
       act(() => useKeyboardSteeringStore.getState().exit());
+    }
+  });
+
+  it("answers steering's Prompt key while a new chat's CLI is starting, keeping the text until it is up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // No input box yet: the CLI is still starting.
+    const rows = ["", "Starting…"];
+    const term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    act(() => useKeyboardSteeringStore.getState().enter("tabs"));
+    try {
+      sendSteeringPrompt.mockResolvedValue(undefined);
+      reader(host);
+      await screen.findByText("fix the parser");
+      let opened = false;
+      act(() => {
+        opened = openReaderComposer("p:agent-1", "tabs");
+        if (opened) useKeyboardSteeringStore.getState().handOff("prompt");
+      });
+      // The Chat's composer, not the prompt box over the window.
+      expect(opened).toBe(true);
+      const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+      expect(box.disabled).toBe(false);
+      expect(document.activeElement).toBe(box);
+      fireEvent.change(box, { target: { value: "first prompt" } });
+      await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+      expect(sendSteeringPrompt).not.toHaveBeenCalled();
+      expect(box.value).toBe("first prompt");
+      expect(screen.getByRole("alert").textContent).toContain("the agent is still starting");
+      // Up: nothing goes by itself; Enter sends it.
+      await act(async () => {
+        rows.splice(0, rows.length, "> ", "  ? for shortcuts");
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(sendSteeringPrompt).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+      expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "first prompt");
+      const steering = useKeyboardSteeringStore.getState();
+      expect(steering.active).toBe(true);
+      expect(steering.level).toBe("tabs");
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
     }
   });
 
