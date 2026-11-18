@@ -339,23 +339,31 @@ mod tests {
     #[test]
     fn signals_and_open_files_match_the_portable_pty_spawn() {
         let script = r#"echo "sig=$(grep -E '^(SigIgn|SigBlk)' /proc/$$/status | tr -d '\t ' | tr '\n' ',')" "fds=$(ls /proc/$$/fd | tr '\n' ',') end=1""#;
+        // An fd the test process got already open and inheritable from
+        // whatever started it (CI's runner hands down two) reaches every
+        // `posix_spawn` of it, not just this one; the app opens none such.
+        // `portable-pty` closes those too, so they are left out here.
+        // Taken before either spawn, so nothing of theirs is left out.
+        let outside = inheritable_fds();
         let mut old = Session::through_portable_pty(script);
         let old_text = old.wait_for("end=1");
-        // Another test of this binary can be between `openpty` and setting
-        // close-on-exec on its fds just as this spawn runs, and the child
-        // inherits them (CI saw two such strays). Spawning again finds the
-        // window closed; a leak of this spawn's own would show every time.
-        let mut new_text = String::new();
-        for _ in 0..5 {
-            let mut new = Session::through_setsid(script);
-            new_text = new.wait_for("end=1");
-            if field(&new_text, "fds") == field(&old_text, "fds") {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        let mut new = Session::through_setsid(script);
+        let new_text = new.wait_for("end=1");
+        let own = |text: &str| -> String {
+            field(text, "fds").split(',').filter(|fd| !fd.is_empty() && !outside.iter().any(|out| out == fd)).map(|fd| format!("{fd},")).collect()
+        };
         assert_eq!(field(&new_text, "sig"), field(&old_text, "sig"), "{new_text} vs {old_text}");
-        assert_eq!(field(&new_text, "fds"), field(&old_text, "fds"), "{new_text} vs {old_text}");
+        assert_eq!(own(&new_text), own(&old_text), "{new_text} vs {old_text} (left out: {outside:?})");
+    }
+
+    /// This process's fds above 2 without close-on-exec.
+    fn inheritable_fds() -> Vec<String> {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter(|&fd| fd > 2 && unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC == 0)
+            .map(|fd| fd.to_string())
+            .collect()
     }
 
     /// The environment is the builder's alone, a relative directory that is
