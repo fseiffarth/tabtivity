@@ -25,6 +25,7 @@ import {
 } from "../../stores/agents/agentTabStop";
 import { _resetAgentTabStopMarksForTest, noteAgentPaneShown, noteAgentTabStarted } from "../../lib/agents/agentTabStopMarks";
 import type { ProjectEntry } from "../../types";
+import { BRAND } from "../../lib/brand";
 import type { ScheduledAgentPrompt } from "../../lib/agents/agentSchedule";
 
 const SCOPE = "p1";
@@ -41,7 +42,7 @@ function agent(over: Partial<TabEntry> = {}): TabEntry {
     kind: "agent",
     sessionId: SESSION,
     scheduleTargetId: TARGET,
-    tmuxSession: "tabtivity-p1-agent-x",
+    tmuxSession: `${BRAND.slug}-p1-agent-x`,
     ...over,
   };
 }
@@ -76,7 +77,7 @@ describe("stopAgentTab", () => {
     expect(stopAgentTab(SCOPE, "agent-1", PINNED, "cap")).toEqual([]);
     expect(tabNow()?.stopped).toBe(true);
     await Promise.resolve();
-    expect(tmuxKills()).toEqual(["tabtivity-p1-agent-x"]);
+    expect(tmuxKills()).toEqual([`${BRAND.slug}-p1-agent-x`]);
   });
 
   it("never ends a session the tab only attached to", () => {

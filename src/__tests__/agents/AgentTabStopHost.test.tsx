@@ -26,6 +26,7 @@ import { usePrintRequestsStore } from "../../stores/printRequests";
 import { _resetAgentTabStopForTest } from "../../stores/agents/agentTabStop";
 import { _resetAgentTabStopMarksForTest, noteRestoredStopped } from "../../lib/agents/agentTabStopMarks";
 import type { ProjectEntry, Settings } from "../../types";
+import { BRAND } from "../../lib/brand";
 
 const SCOPE = "p1";
 const HOUR = 3_600_000;
@@ -45,7 +46,7 @@ function agent(n: number, over: Partial<TabEntry> = {}): TabEntry {
     kind: "agent",
     sessionId: `00000000-0000-4000-8000-00000000000${n}`,
     scheduleTargetId: `target-${n}`,
-    tmuxSession: `tabtivity-p1--agent-${n}`,
+    tmuxSession: `${BRAND.slug}-p1--agent-${n}`,
     ...over,
   };
 }
@@ -124,7 +125,7 @@ describe("the sweep", () => {
     await run(35_000);
     expect(stoppedKeys()).toEqual(["agent-3", "agent-4"]);
     const kills = vi.mocked(invoke).mock.calls.filter(([c]) => c === "local_tmux_kill").map(([, a]) => (a as { session: string }).session);
-    expect(kills.sort()).toEqual(["tabtivity-p1--agent-3", "tabtivity-p1--agent-4"]);
+    expect(kills.sort()).toEqual([`${BRAND.slug}-p1--agent-3`, `${BRAND.slug}-p1--agent-4`]);
   });
 
   it("stops idle tabs only", async () => {
@@ -181,7 +182,7 @@ describe("the restore wake", () => {
       agent(4, { stopped: true, lastUsedAt: NOW - 3 * HOUR }),
       agent(5, { lastUsedAt: NOW }),
     ]);
-    alive = ["tabtivity-p1--agent-1"];
+    alive = [`${BRAND.slug}-p1--agent-1`];
     noteRestoredStopped(SCOPE, ["agent-1", "agent-2", "agent-3", "agent-4"]);
     useProjectsStore.setState({ projects: [] });
     await restoreActiveProjectScopes();
