@@ -64,6 +64,7 @@ import { SyncHostOnlyFiles } from "./SyncHostOnlyFiles";
 import { AgentSchedulesView } from "../agents/AgentSchedulesView";
 import { CliOverviewView } from "../agents/CliOverviewView";
 import { useDialogs } from "../common/PromptDialogs";
+import { ensureMobileSessions } from "../mobile/mobileSessionGate";
 import { ROOT_SCOPE, useTabsStore, type TabEntry } from "../../stores/tabs";
 import { persistentSessionOf } from "../../lib/remote/closeRemoteTab";
 import { hostAgentTabSpec, reopenClosedHostSession } from "../../lib/remote/hostSessionTab";
@@ -496,16 +497,21 @@ export function ProjectFilesView({
     active && mobileHostConnected && mobileEligible && mobileAccessOn && mobileDevices !== undefined,
   );
   const mobileReach = phoneReach(mobileAccessOn, mobileDevices, pairedPhones);
-  const applyMobileAccess = (enabled: boolean, devices: string[] | null) => {
-    if (!projectId) return Promise.resolve();
+  const applyMobileAccess = async (enabled: boolean, devices: string[] | null) => {
+    if (!projectId) return;
     setMobileAccessBusy(true);
     setMobileAccessError(null);
-    return setProjectMobileAccess(projectId, enabled, devices)
-      .catch((reason) => {
-        setMobileAccessError(String(reason));
-        throw reason;
-      })
-      .finally(() => setMobileAccessBusy(false));
+    try {
+      // Switching on without persistent local sessions (Windows: the session
+      // host) asks to turn them on instead of failing; a no leaves it off.
+      if (enabled && !mobileAccessOn && !(await ensureMobileSessions(confirmAction))) return;
+      await setProjectMobileAccess(projectId, enabled, devices);
+    } catch (reason) {
+      setMobileAccessError(String(reason));
+      throw reason;
+    } finally {
+      setMobileAccessBusy(false);
+    }
   };
 
   // Seeded from the last snapshot of this repo so a reveal (the whole view is

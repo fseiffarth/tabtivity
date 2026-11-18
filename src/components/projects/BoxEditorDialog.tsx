@@ -17,6 +17,7 @@ import { isLocalModelsOnly } from "../../lib/projects/localModelsOnly";
 import { ToggleRow } from "../layout/settingsUi";
 import { MobileAccessPicker, PhoneReachButton } from "../mobile/MobileAccessPicker";
 import { usePairedPhones } from "../mobile/usePairedPhones";
+import { ensureMobileSessions } from "../mobile/mobileSessionGate";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY } from "../../lib/brand";
 import { useLocalSessionBackendOn } from "../../lib/terminal/localSessions";
 import { boxColor, isBoxColor } from "../../lib/theme/boxColor";
@@ -348,24 +349,15 @@ function BoxPhoneRow({
   // (the backend checks nothing when disabling). So a box whose access is already
   // on keeps its switch, with a line on why it cannot work right now: access that
   // was granted can always be taken back.
-  if (blocked && !on) return <BoxPhoneNote text={t(`boxEditor.phone${blocked}`)} />;
+  // Switching ON without them asks to turn them on (`ensureMobileSessions`),
+  // so the switch is offered either way; the line says why it is needed.
   return (
     <BoxPhoneSwitch
       box={box}
       picker={picker}
       setPicker={setPicker}
-      note={blocked ? t(`boxEditor.phoneOn${blocked}`) : undefined}
+      note={blocked ? t(on ? `boxEditor.phoneOn${blocked}` : `boxEditor.phone${blocked}`) : undefined}
     />
-  );
-}
-
-function BoxPhoneNote({ text }: { text: string }) {
-  const t = useT();
-  return (
-    <div className="box-editor-field">
-      <span className="box-editor-field-label">{t("boxEditor.phoneLabel")}</span>
-      <span className="box-editor-help">{text}</span>
-    </div>
   );
 }
 
@@ -384,6 +376,7 @@ function BoxPhoneSwitch({
   const setBoxMobileAccess = useBoxesStore((s) => s.setBoxMobileAccess);
   const { phones } = usePairedPhones();
   const [error, setError] = useState<string | null>(null);
+  const { confirmAction, dialogs } = useDialogs();
   const on = box[MOBILE_ACCESS_KEY] ?? false;
   const devices = box[MOBILE_DEVICES_KEY];
   return (
@@ -396,9 +389,11 @@ function BoxPhoneSwitch({
           setError(null);
           // The box as it is NOW: its per-phone list is kept, never widened.
           const live = useBoxesStore.getState().boxes.find((b) => b.id === box.id);
-          void setBoxMobileAccess(box.id, event.target.checked, live?.[MOBILE_DEVICES_KEY] ?? null).catch((reason) =>
-            setError(String(reason)),
-          );
+          const next = event.target.checked;
+          void (async () => {
+            if (next && !(await ensureMobileSessions(confirmAction))) return;
+            await setBoxMobileAccess(box.id, next, live?.[MOBILE_DEVICES_KEY] ?? null);
+          })().catch((reason) => setError(String(reason)));
         }}
         aside={
           on ? (
@@ -413,6 +408,7 @@ function BoxPhoneSwitch({
       />
       {note && <span className="box-editor-help">{note}</span>}
       {error && <ErrorNote error={error} className="project-dialog-error" />}
+      {dialogs}
       {picker && (
         <MobileAccessPicker
           x={picker.x}
@@ -420,7 +416,10 @@ function BoxPhoneSwitch({
           kind="box"
           enabled={on}
           devices={devices}
-          onApply={(enabled, list) => setBoxMobileAccess(box.id, enabled, list)}
+          onApply={async (enabled, list) => {
+            if (enabled && !on && !(await ensureMobileSessions(confirmAction))) return;
+            await setBoxMobileAccess(box.id, enabled, list);
+          }}
           onClose={() => setPicker(null)}
         />
       )}

@@ -7,7 +7,9 @@ import { useBoxesStore } from "../../stores/boxes";
 import { SettingsCard, SettingsList, ToggleRow } from "../layout/settingsUi";
 import { UntestedTag } from "../common/UntestedTag";
 import { IS_HOST_WINDOWS } from "../../lib/platform";
-import { runInstallInTab } from "../../lib/installCommand";
+import { runInstallInTab, TMUX_INSTALL_CMD } from "../../lib/installCommand";
+import { useTmuxAvailable } from "../../lib/tmuxAvailable";
+import { ensureMobileSessions } from "./mobileSessionGate";
 import { tailscaleServeCommand } from "../../lib/tailscaleServeCommand";
 import { useT, translateNow } from "../../lib/i18n";
 import { ErrorNote } from "../common/ErrorNote";
@@ -134,6 +136,7 @@ export function MobileSettings() {
   const t = useT();
   const assistantOn = useExperimental("assistant");
   const sessionHostOn = useExperimental("windows_session_host");
+  const tmuxAvailable = useTmuxAvailable();
   const { confirmAction, dialogs } = useDialogs();
   const settings = useSettingsStore((state) => state.settings);
   const updateSettings = useSettingsStore((state) => state.updateSettings);
@@ -469,6 +472,21 @@ export function MobileSettings() {
     }
   };
 
+  /** Windows: the phone reaches agent tabs only through the session host, which
+   *  needs Persistent local sessions too, so one confirmed click sets both
+   *  (the same two switches Settings → Experimental and → Terminal hold).
+   *  Turning it back off stays with those switches, which end the host's
+   *  sessions first. */
+  const turnOnSessionHost = async () => {
+    const ok = await confirmAction({
+      title: translateNow("mobile.windowsTerminalsTurnOnTitle"),
+      body: translateNow("mobile.windowsTerminalsTurnOnBody"),
+      confirmLabel: translateNow("mobile.windowsTerminalsTurnOn"),
+    });
+    if (!ok) return;
+    await updateSettings({ windows_session_host: true, persist_local_sessions: true });
+  };
+
   const lockDownNow = async () => {
     const ok = await confirmAction({
       title: translateNow("mobile.lockdownNow"),
@@ -574,11 +592,35 @@ export function MobileSettings() {
       </div>
       {addDevice.pairing && <AddDevicePanel pairing={addDevice.pairing} />}
       {/* Windows without the session host, or with persistent sessions off
-          (the phone then still gets `unsupported`): how to turn them on. With
-          both on the phone reaches agent tabs, so there is nothing to say. */}
+          (the phone then still gets `unsupported`): one click turns both on,
+          after a confirm (the host is experimental and moves new agent tabs
+          into another process). With both on the phone reaches agent tabs, so
+          there is nothing to say. */}
       {IS_HOST_WINDOWS && !(sessionHostOn && settings?.persist_local_sessions !== false) && (
         <p className="settings-help">
-          {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />
+          {t("mobile.windowsTerminalsNote")} <UntestedTag id="mobile.windowsTerminalsNote" />{" "}
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => void turnOnSessionHost()}
+          >
+            {t("mobile.windowsTerminalsTurnOn")}
+          </button>
+        </p>
+      )}
+      {/* Linux/macOS without tmux: the phone lists agent tabs but cannot open
+          them (the sidecar attaches through tmux), so say so and offer the
+          one-click install. Re-probed on window focus. */}
+      {!IS_HOST_WINDOWS && tmuxAvailable === false && (
+        <p className="settings-help">
+          {t("mobile.noTmuxNote")} <UntestedTag id="mobile.noTmuxInstall" />{" "}
+          <button
+            type="button"
+            className="settings-btn sm"
+            onClick={() => runInstallInTab(t("settings.installTmux"), TMUX_INSTALL_CMD, "default")}
+          >
+            {t("settings.installTmux")}
+          </button>
         </p>
       )}
       <details
@@ -777,7 +819,11 @@ export function MobileSettings() {
               setError(null);
               touchRow(`project:${project.id}`);
               // One click on = every phone; narrowing is the ▾ button's job.
-              void setProjectMobileAccess(project.id, event.target.checked, null).catch((reason) => setError(String(reason)));
+              const on = event.target.checked;
+              void (async () => {
+                if (on && !(await ensureMobileSessions(confirmAction))) return;
+                await setProjectMobileAccess(project.id, on, null);
+              })().catch((reason) => setError(String(reason)));
             }}
             aside={phoneScopeButton("project", project.id, project.name, project[MOBILE_ACCESS_KEY] ?? false, project[MOBILE_DEVICES_KEY])}
           />
@@ -798,7 +844,11 @@ export function MobileSettings() {
               onChange={(event) => {
                 setError(null);
                 touchRow(`box:${box.id}`);
-                void setBoxMobileAccess(box.id, event.target.checked, null).catch((reason) => setError(String(reason)));
+                const on = event.target.checked;
+                void (async () => {
+                  if (on && !(await ensureMobileSessions(confirmAction))) return;
+                  await setBoxMobileAccess(box.id, on, null);
+                })().catch((reason) => setError(String(reason)));
               }}
               aside={phoneScopeButton("box", box.id, box.name, box[MOBILE_ACCESS_KEY] ?? false, box[MOBILE_DEVICES_KEY])}
             />
@@ -843,9 +893,12 @@ export function MobileSettings() {
             host={phonePicker.kind === "project" ? phoneReachHost(target as ProjectEntry) : undefined}
             enabled={target[MOBILE_ACCESS_KEY] ?? false}
             devices={target[MOBILE_DEVICES_KEY]}
-            onApply={(enabled, list) => phonePicker.kind === "project"
-              ? setProjectMobileAccess(phonePicker.id, enabled, list)
-              : setBoxMobileAccess(phonePicker.id, enabled, list)}
+            onApply={async (enabled, list) => {
+              if (enabled && !(target[MOBILE_ACCESS_KEY] ?? false) && !(await ensureMobileSessions(confirmAction))) return;
+              await (phonePicker.kind === "project"
+                ? setProjectMobileAccess(phonePicker.id, enabled, list)
+                : setBoxMobileAccess(phonePicker.id, enabled, list));
+            }}
             onClose={() => setPhonePicker(null)}
           />
         );
