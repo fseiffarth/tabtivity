@@ -29,6 +29,12 @@ as `NN-<event>.json`, plus `events.txt` (the order they fired). Cases:
                          the hooks say about a question that is gone
   tui_ask_multi          the same with two boxes ticked: how several answers come back
   tui_bash               a Bash approval with the same timing log (hook / transcript / dialog)
+  tui_edit tui_write tui_fetch
+                         the Edit (after a Read), Write and WebFetch approval dialogs: their
+                         wording (frames) and timing, then Esc
+  tui_ask_chat           a one-question ask answered with its `Chat about this` row: what the
+                         transcript and the hooks record for it
+  tui_bash_no            a Bash approval answered with its `No` row plus typed feedback
 
 Default: every case. The tab variables are unset (common.Tui / clean_environ);
 the hooks are a dumper only, never the app's session hook.
@@ -49,7 +55,8 @@ EVENTS = ["SessionStart", "Stop", "StopFailure", "UserPromptSubmit", "PreToolUse
           "ElicitationResult", "SubagentStart", "SubagentStop", "PreCompact", "PostCompact", "CwdChanged",
           "SessionEnd"]
 CASES = ["err400", "err401", "err429", "toolok", "toolfail", "subagent", "compact", "cwd", "denied", "auto",
-         "tui_deny", "tui_elicit", "tui_interrupt", "tui_err", "tui_ask", "tui_ask_esc", "tui_ask_multi", "tui_bash"]
+         "tui_deny", "tui_elicit", "tui_interrupt", "tui_err", "tui_ask", "tui_ask_esc", "tui_ask_multi", "tui_bash",
+         "tui_edit", "tui_write", "tui_fetch", "tui_ask_chat", "tui_bash_no"]
 BASH = lambda cmd: json.dumps({"command": cmd, "description": "probe"})  # noqa: E731
 ASK = json.dumps({"questions": [
     {"header": "Colours", "question": "Which colours should the probe use?", "multiSelect": True,
@@ -82,6 +89,9 @@ for line in sys.stdin:
     elif "id" in m and meth:
         send({"jsonrpc":"2.0","id":m["id"],"result":{}})
 '''
+
+ASK1 = json.dumps({"questions": [{"header": "Pick", "question": "Which one should the probe take?", "multiSelect": False,
+                                   "options": [{"label": "Alpha", "description": "first"}, {"label": "Beta", "description": "second"}]}]})
 
 
 def setup(base, case, port):
@@ -200,7 +210,8 @@ def hooks_so_far(dump):
     return rows
 
 
-def tui_ask(binary, work, home, sid, dump, env, out, args, keys, tool="AskUserQuestion", call=None, marker="☐ Colours"):
+def tui_ask(binary, work, home, sid, dump, env, out, args, keys, tool="AskUserQuestion", call=None, marker="☐ Colours",
+            prompt=None):
     """Make `tool` run (`call`: its input JSON, the question by default), then press `keys`
     one at a time; log when the hook, the transcript and the screen (`marker`) first had it."""
     t = common.Tui(out, [binary, *args], work, dict(env, CLAUDECODE=""), size=(110, 40))
@@ -214,7 +225,7 @@ def tui_ask(binary, work, home, sid, dump, env, out, args, keys, tool="AskUserQu
                 break
             time.sleep(0.5)
         t.cap("ready")
-        t.type(f"STUB:CALL {tool} {call or ASK}")
+        t.type(prompt or f"STUB:CALL {tool} {call or ASK}")
         t0 = time.time()
         t.keys("Enter", pause=0)
         first = {}
@@ -332,6 +343,31 @@ def main():
                 # Q1: tick Red and Blue, down to Next; Q2: Grid; Submit.
                 tui_ask(binary, work, home, sid, dump, env, out, base_args,
                         ["Enter", "Down", "Enter", "Down", "Down", "Down", "Enter", "Enter", "Enter"])
+            elif case == "tui_edit":
+                with open(os.path.join(work, "notes.txt"), "w") as f:
+                    f.write("old line\n")
+                path = os.path.join(work, "notes.txt")
+                seq = (f"STUB:SEQ Read {json.dumps({'file_path': path})} ;; "
+                       f"Edit {json.dumps({'file_path': path, 'old_string': 'old line', 'new_string': 'new line'})}")
+                tui_ask(binary, work, home, sid, dump, env, out, base_args, ["Escape"], tool="Edit",
+                        marker="Do you want", prompt=seq)
+            elif case == "tui_write":
+                call = json.dumps({"file_path": os.path.join(work, "fresh.txt"), "content": "hello\n"})
+                tui_ask(binary, work, home, sid, dump, env, out, base_args, ["Escape"], tool="Write", call=call,
+                        marker="Do you want")
+            elif case == "tui_fetch":
+                call = json.dumps({"url": "https://example.com/probe", "prompt": "summarise"})
+                tui_ask(binary, work, home, sid, dump, env, out, base_args, ["Escape"], tool="WebFetch", call=call,
+                        marker="Do you want")
+            elif case == "tui_ask_chat":
+                # Rows: 1 Alpha, 2 Beta, 3 Type something, rule, 4 Chat about this.
+                tui_ask(binary, work, home, sid, dump, env, out, base_args, ["Down", "Down", "Down", "Enter"],
+                        call=ASK1, marker="☐ Pick")
+            elif case == "tui_bash_no":
+                # Rows: 1 Yes, 2 Yes always, 3 Yes + auto mode, 4 No; then feedback words and Enter.
+                tui_ask(binary, work, home, sid, dump, env, out, base_args,
+                        ["Down", "Down", "Down", "Enter", "use echo instead", "Enter"], tool="Bash",
+                        call=BASH("touch tui.txt"), marker="Do you want to proceed?")
             elif case == "tui_bash":
                 # A Bash approval: is the tool_use in the transcript when the dialog opens? Esc after.
                 tui_ask(binary, work, home, sid, dump, env, out, base_args, ["Escape"], tool="Bash",
