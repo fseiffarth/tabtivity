@@ -296,13 +296,15 @@ fn existing_gitlab_fork(repo: &RepoRef) -> Result<Fork, String> {
 
 /// Run the provider CLI's `api` subcommand and parse its JSON response.
 ///
-/// The CLI authenticates itself; the stored global token is passed through its
-/// env var (never argv) when set, and a non-default host is pointed at through
-/// the CLI's own host env var so a self-hosted instance works.
+/// The CLI authenticates itself; the stored token for the repo's host (Settings
+/// → Git Hosting) is passed through its env var (never argv) when set, and a
+/// non-default host is pointed at through the CLI's own host env var so a
+/// self-hosted instance works.
 fn provider_api(provider: Provider, repo: &RepoRef, args: &[&str]) -> Result<Value, String> {
     let mut cmd = crate::paths::command_no_window(provider.cli());
     cmd.arg("api").args(args);
-    if let Some(tok) = crate::commands::git_hosting::global_git_token() {
+    let origin = format!("https://{}", repo.host.to_ascii_lowercase());
+    if let Some(tok) = crate::services::git_hosting::host_token(&origin) {
         cmd.env(provider.token_env(), tok);
     }
     if !provider.is_default_host(&repo.host) {

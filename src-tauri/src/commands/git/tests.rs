@@ -1987,7 +1987,8 @@ fn the_common_dir_pin_spares_linked_worktrees() {
 
 #[test]
 fn token_helper_is_registered_only_for_the_given_origins() {
-    let args = scoped_token_config(&["https://github.com".to_string()], "x-access-token");
+    let auth = crate::services::git_hosting::GitAuth::single("t0ken-value", &["https://github.com".to_string()]);
+    let args = auth.git_args("x-access-token");
     assert_eq!(&args[..2], ["-c", "credential.helper="]);
     let helpers: Vec<&String> = args.iter().filter(|a| a.contains(".helper=!")).collect();
     assert_eq!(helpers.len(), 1);

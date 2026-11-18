@@ -71,6 +71,7 @@ import { NAMES } from "../../lib/brand";
 import { internalViewerFor, type FileEntry } from "../../lib/viewers/fileUtils";
 import { TabStatusMark } from "../tabs/TabLocalityBadges";
 import { ARTIFACT_ATTR, answerHtml, chatLinkUrl, promptHtml } from "../../../mobile-web/src/terminal/answerMarkdown";
+import { parseAppLink } from "../../lib/navigation/appLinks";
 import { ReaderArtifactDialog } from "./ReaderArtifactDialog";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../../../mobile-web/src/terminal/chatTimes";
 import { bufferRows, isViewedSubagent, sendToSubagent, viewedSubagent, viewSession, type SubagentSendFailure } from "../../../mobile-web/src/terminal/subagentInput";
@@ -1822,6 +1823,13 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   // A web link (`dressWebLink`) never opens straight away: `onOpenUrl` asks
   // first, naming the address, as a link the terminal printed does.
   const openWebAt = (target: EventTarget | null): boolean => {
+    const app = onOpenUrl && target instanceof Element ? target.closest<HTMLElement>(".md-link[data-app-link]") : null;
+    const appUrl = app?.getAttribute("data-app-link");
+    if (appUrl && parseAppLink(appUrl)) {
+      setPathHover(null);
+      onOpenUrl?.(appUrl);
+      return true;
+    }
     const el = onOpenUrl && target instanceof Element ? target.closest<HTMLElement>(".web-link[data-href]") : null;
     const url = el ? chatLinkUrl(el.getAttribute("data-href")) : null;
     if (!url) return false;

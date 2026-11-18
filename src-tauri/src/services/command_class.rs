@@ -532,7 +532,9 @@ static TABLE: &[(&str, CommandClass)] = &[
     ("git_fork_clone", Core),
     ("provider_cli_available", Core),
     // commands/git_hosting.rs
+    ("get_git_hosts", Core),
     ("get_project_git_hosting", Core),
+    ("set_git_hosts", Core),
     ("set_project_git_hosting", Core),
     // commands/git_peer.rs
     ("git_peer_backups", Core),

@@ -4,6 +4,7 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { PATH_LINK_ATTR } from "../../../src/lib/terminal/pathCandidates";
 import { ARTIFACT_ATTR, chatLinkUrl } from "../terminal/answerMarkdown";
+import { parseAppLink } from "../../../src/lib/navigation/appLinks";
 import { HOLD_MS } from "./MessageMenu";
 import { useBackLayer } from "../backStack";
 
@@ -20,6 +21,7 @@ function LinkSheet({ url, onClose }: { url: string; onClose: () => void }) {
   const t = useT();
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
   const host = new URL(url).host;
+  const internal = parseAppLink(url) !== null;
   const open = () => {
     // Checked again at the moment of opening: only what the sheet showed goes.
     const target = chatLinkUrl(url);
@@ -43,18 +45,18 @@ function LinkSheet({ url, onClose }: { url: string; onClose: () => void }) {
         <h2>{title} {isUntested("mobile.link.title") && <small>{t("mobile.focus.untested")}</small>}</h2>
         <span className="sheet-close" aria-hidden="true" />
       </header>
-      <p className={note?.error ? "sheet-note error" : "sheet-note"} role={note ? "status" : undefined}>{note ? note.text : t("mobile.link.body")}</p>
+      <p className={note?.error ? "sheet-note error" : "sheet-note"} role={note ? "status" : undefined}>{note ? note.text : t(internal ? "appLink.desktopOnly" : "mobile.link.body")}</p>
       <div className="link-sheet-target">
         <strong>{host}</strong>
         <code data-testid="link-sheet-url">{url}</code>
       </div>
       <ul className="option-list">
-        <li>
+        {!internal && <li>
           <button onClick={open}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
             <span><strong>{t("mobile.link.open")}</strong></span>
           </button>
-        </li>
+        </li>}
         <li>
           <button onClick={copy}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h8" /></svg>
@@ -91,6 +93,10 @@ export function useChatLinks(openPath?: (path: string) => void, openArtifact?: (
   const artifactOpener = useRef(openArtifact);
   artifactOpener.current = openArtifact;
   const askUrl = useCallback((address?: string): boolean => {
+    if (address && parseAppLink(address)) {
+      setUrl(address);
+      return true;
+    }
     const href = chatLinkUrl(address);
     if (!href) return false;
     setUrl(href);
@@ -107,8 +113,8 @@ export function useChatLinks(openPath?: (path: string) => void, openArtifact?: (
       artifactOpener.current(doc);
       return true;
     }
-    const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href]") : null;
-    return askUrl(link?.dataset.href);
+    const link = target instanceof Element ? target.closest<HTMLElement>(".md-link[data-href], .md-link[data-app-link]") : null;
+    return askUrl(link?.dataset.appLink ?? link?.dataset.href);
   }, [askUrl]);
   const links = useMemo<LinkHandlers>(() => ({
     onPointerDown: (event) => { downAt.current = event.timeStamp; },

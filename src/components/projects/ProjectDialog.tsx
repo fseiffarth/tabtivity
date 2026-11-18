@@ -1,6 +1,7 @@
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { hasTokenFor, useGitHosts } from "../../lib/gitHosts";
 import { Toggle } from "../common/Toggle";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -57,6 +58,9 @@ const GIT_INSTALL_CMD = IS_HOST_WINDOWS
     ? MAC_GIT_INSTALL
     : "sudo apt-get install -y git";
 
+/** One step of a create/import submit, as the footer's progress list names it. */
+type SubmitStep = "clone" | "register" | "container" | "hostSetup" | "agents" | "publish";
+
 /** Where an import's files come from: a folder already on this machine, a
  *  repository cloned from GitHub/GitLab (any git URL), or a *fork* of one —
  *  the same clone, preceded by creating the user's own copy of the repository
@@ -100,15 +104,14 @@ export function ProjectDialog({
   const t = useT();
   const { confirmAction, dialogs } = useDialogs();
   const defaultAgentCmd = useSettingsStore((s) => s.settings?.default_agent_cmd ?? "claude");
-  // A GitHub/GitLab "connection through Tabtivity" = a global access token saved in
+  // A GitHub/GitLab "connection through Tabtivity" = a host token saved in
   // Settings → Git Hosting (the credential publishing actually uses). Used to
   // decide whether picking a "Push to GitHub/GitLab" git type can proceed or
   // should first send the user to set the connection up.
-  const gitToken = useSettingsStore((s) => s.settings?.git_token ?? "");
-  // The same setting's profile URL, which is what says *which* provider that
-  // global connection belongs to (Settings → Git Hosting derives its own token
-  // hints from it the same way).
-  const gitProfileUrl = useSettingsStore((s) => s.settings?.git_profile_url ?? "");
+  const gitHosts = useGitHosts();
+  // The default (first) host's profile URL says which provider a publish goes
+  // to when none was picked.
+  const gitProfileUrl = gitHosts?.[0]?.profile_url ?? "";
   const [projectsRoot, setProjectsRoot] = useState("");
   // Remote (SSH) projects only: the chosen parent dir for the LOCAL mirror (the
   // synced working copy). The mirror lands at `<mirrorParent>/<name>`. Seeded
@@ -213,7 +216,25 @@ export function ProjectDialog({
   // pre-check effect): the backend refuses to create a project over it.
   const [folderExists, setFolderExists] = useState(false);
   const [busy, setBusy] = useState(false);
-  const modalRef = useModalFocus(onClose);
+  // What a running submit is doing, shown as a step list in the footer instead
+  // of a bare "Working…": the steps this submit will run, the one it is on and
+  // since when. Null outside the main create/import path (the publish/host-setup
+  // retries and the VM path keep their own one-line messages).
+  const [progress, setProgress] = useState<{
+    steps: SubmitStep[];
+    current: number;
+    since: number;
+  } | null>(null);
+  const [progressNow, setProgressNow] = useState(() => Date.now());
+  const tickProgress = useCallback(() => setProgressNow(Date.now()), []);
+  usePoll(tickProgress, 1000, { enabled: progress !== null });
+  // A stray click outside or an Escape must not hide a running submit: the
+  // backend work carries on regardless, but its progress and any error would
+  // have nowhere to show. Cancel and the close button still close it.
+  const dismissUnlessBusy = () => {
+    if (!busy) onClose();
+  };
+  const modalRef = useModalFocus(dismissUnlessBusy);
   // Whether `git` is on PATH on this machine. `null` while still probing (never
   // block submit or show the install banner on that transient state); checked
   // once per dialog open since installing git mid-dialog is rare enough not to
@@ -336,11 +357,19 @@ export function ProjectDialog({
     : kind === "new" || isCloneImport || mode === "copy"
       ? targetDir
       : sourceDir;
+  // Which provider the publish goes through: the explicit pick, else what the
+  // default host's profile URL says (GitHub when it says nothing).
+  const publishProviderResolved: GitProvider =
+    publishProvider === "github" || publishProvider === "gitlab"
+      ? publishProvider
+      : gitProfileUrl.toLowerCase().includes("gitlab")
+        ? "gitlab"
+        : "github";
   // "Push to GitHub/GitLab" was chosen, but no Tabtivity connection is set up yet.
   // Here "remote" is the git push target (a hosting service), distinct from the
   // SSH host the files may live on — see the git-hosting hint below.
   const wantsRemoteGit = gitType === "remote-private" || gitType === "remote-public";
-  const gitConnected = gitToken.trim() !== "";
+  const gitConnected = hasTokenFor(gitHosts, publishProviderResolved);
   // A clone (or a folder with an origin) is exempt: the gate exists because
   // publishing a *new* repo needs a token, and a hosted repo already has an
   // origin to push back to. (The clone itself only needs the token when the
@@ -364,27 +393,19 @@ export function ProjectDialog({
   // Recommended tier: an import (a folder, a clone, a fork) is exactly the
   // case where build scripts and agent-facing docs the user hasn't read are
   // about to run — recommend the **VM** when the doctor probe passes
-  // (`docs/vm_projects_plan.md`), falling back to the container as before. A
-  // new project starts empty; nothing to contain yet, so Local.
+  // (`docs/vm_projects_plan.md`). Otherwise Local: the container is never the
+  // default — it needs Docker, which many machines lack, and a project
+  // defaulted into it would fail at its first tab. It stays one pick away.
+  // A new project starts empty; nothing to contain yet, so Local.
   const tierDefault: "local" | "container" | "vm" =
-    kind === "import"
-      ? vmOk
-        ? "vm"
-        : containerAvailable
-          ? "container"
-          : "local"
-      : "local";
-  // The effective tier: the explicit choice (degraded to an available tier if
-  // the import source moved under it), else the recommendation.
+    kind === "import" && vmOk ? "vm" : "local";
+  // The effective tier: the explicit choice (degraded to Local if the import
+  // source moved under it), else the recommendation.
   const tierRaw = tierChoice ?? tierDefault;
   const tier: "local" | "container" | "vm" =
-    tierRaw === "vm" && !vmOk
-      ? containerAvailable && kind === "import"
-        ? "container"
-        : "local"
-      : tierRaw === "container" && !containerAvailable
-        ? "local"
-        : tierRaw;
+    (tierRaw === "vm" && !vmOk) || (tierRaw === "container" && !containerAvailable)
+      ? "local"
+      : tierRaw;
   const runInContainer = tier === "container";
   const isVmProject = tier === "vm";
   // A git repo is created LOCALLY even for a remote (SSH) project — the local
@@ -400,14 +421,6 @@ export function ProjectDialog({
     gitAvailable === false &&
     (gitType !== "none" || isCloneImport);
 
-  // Which provider the publish goes through: the explicit pick, else what the
-  // global connection's profile URL says (GitHub when it says nothing).
-  const publishProviderResolved: GitProvider =
-    publishProvider === "github" || publishProvider === "gitlab"
-      ? publishProvider
-      : gitProfileUrl.toLowerCase().includes("gitlab")
-        ? "gitlab"
-        : "github";
   // Whether *this* creation publishes the repository itself.
   //
   // "Push to GitHub/GitLab" used to be recorded and nothing more: the project
@@ -988,6 +1001,24 @@ export function ProjectDialog({
       const builtSpec = buildRemoteSpec(hostFolderName, remoteJoinsName);
       // D14: the remote-only auto-connect card rides the spec as `auto_connect`.
       const remoteSpec = builtSpec && autoConnect ? { ...builtSpec, auto_connect: true } : builtSpec;
+      const willOpenAgentTabs =
+        !hostClone && (scaffoldAgentFills.size > 0 || descriptionAgent !== "");
+      const steps: SubmitStep[] = [
+        ...(isCloneImport && !hostClone ? (["clone"] as const) : []),
+        "register",
+        ...(runInContainer ? (["container"] as const) : []),
+        ...(remoteOnly && kind === "new" ? (["hostSetup"] as const) : []),
+        ...(willOpenAgentTabs ? (["agents"] as const) : []),
+        ...(publishesAtCreation && !hostClone && !(remoteOnly && kind === "new")
+          ? (["publish"] as const)
+          : []),
+      ];
+      const enterStep = (s: SubmitStep) => {
+        const now = Date.now();
+        setProgressNow(now);
+        setProgress({ steps, current: steps.indexOf(s), since: now });
+      };
+      enterStep(steps[0]);
       // Clone first, then import the resulting directory in place: the clone owns
       // getting the files onto the disk, `import_project` owns registering them.
       // A failed clone throws here, so nothing is registered for a tree that
@@ -1015,6 +1046,7 @@ export function ProjectDialog({
           setCloning(false);
         }
       }
+      enterStep("register");
       // A host clone is *created* (the backend makes `<browsed>/<name>` empty on
       // the host and inits nothing), then cloned into by a host tab below.
       const project =
@@ -1065,6 +1097,7 @@ export function ProjectDialog({
       // still a created project, and the toggle is one right-click away.
       let created = project;
       if (runInContainer) {
+        enterStep("container");
         try {
           let outcome = await invoke<SandboxToggleOutcome>("set_project_sandbox", {
             projectId: project.id,
@@ -1107,6 +1140,7 @@ export function ProjectDialog({
       }
       await onProject(created);
       if (remoteOnly && kind === "new") {
+        enterStep("hostSetup");
         if (await setUpHostFolder(created, descriptionAgent)) onClose();
         return;
       }
@@ -1119,16 +1153,19 @@ export function ProjectDialog({
       // the typed password, or `viaLogin` when it rides the login terminal's master —
       // never a bare credential-less connect the backend would read as key auth.
       if (isRemoteProject) void connectCreatedRemoteProject(created.id, remote.remotePassword);
+      if (willOpenAgentTabs) enterStep("agents");
       await openScaffoldAgentTabs(created, scaffoldAgentFills);
       await openDescriptionAgentTab(created, descriptionAgent);
       // Last, because it is the one step that can fail with the project already
       // made: everything above has to have happened either way.
+      if (publishesAtCreation) enterStep("publish");
       if (publishesAtCreation && !(await publishCreated(created))) return;
       onClose();
     } catch (err) {
       setError(String(err));
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -1219,6 +1256,64 @@ export function ProjectDialog({
       : base;
   };
 
+  const stepLabel = (s: SubmitStep): string => {
+    switch (s) {
+      case "clone":
+        return t(isForkImport ? "projectDialog.stepFork" : "projectDialog.stepClone");
+      case "register":
+        return t(kind === "new" ? "projectDialog.stepCreate" : "projectDialog.stepRegister");
+      case "container":
+        return t("projectDialog.stepContainer");
+      case "hostSetup":
+        return t("projectDialog.stepHostSetup");
+      case "agents":
+        return t("projectDialog.stepAgents");
+      case "publish":
+        return t("projectDialog.stepPublish");
+    }
+  };
+
+  // What the backend does inside one step, so a slow one says why. Mirrors
+  // `import_project`/`create_project`: a folder with no `.git` gets `git init`
+  // plus a commit of everything the `.gitignore` lets through (unless scaffolding
+  // is skipped), which is the slow part on a big tree.
+  const stepDetail = (s: SubmitStep): string => {
+    if (s === "clone") return targetDir ? t("projectDialog.stepDetailCloneInto", { path: targetDir }) : "";
+    if (s === "container") return t("projectDialog.stepDetailContainer");
+    if (s !== "register") return "";
+    const wantsGit = gitType !== "none";
+    const parts: string[] = [];
+    if (isRemoteProject) {
+      if (wantsGit) parts.push(t("projectDialog.stepDetailRemoteGit"));
+    } else if (kind === "new") {
+      parts.push(t("projectDialog.stepDetailCreateFolder"));
+      if (!skipScaffold) parts.push(t("projectDialog.stepDetailStarterFiles"));
+      if (wantsGit) parts.push(t("projectDialog.stepDetailGitInit"));
+    } else {
+      if (!isCloneImport && mode === "copy") parts.push(t("projectDialog.stepDetailCopy"));
+      if (!isCloneImport && mode === "move") parts.push(t("projectDialog.stepDetailMove"));
+      if (!skipScaffold && missingFillableScaffoldCount > 0)
+        parts.push(t("projectDialog.stepDetailMissingFiles"));
+      const gitMissing =
+        !isCloneImport && scaffoldPreview.some((i) => i.path === ".git" && !i.exists);
+      if (wantsGit && gitMissing)
+        parts.push(
+          t(skipScaffold ? "projectDialog.stepDetailGitInit" : "projectDialog.stepDetailGitCommitAll"),
+        );
+    }
+    parts.push(t("projectDialog.stepDetailProjectJson"));
+    return parts.join(" · ");
+  };
+
+  const formatElapsed = (ms: number): string => {
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m > 0
+      ? t("projectDialog.stepElapsedMinutes", { m: String(m), s: String(s).padStart(2, "0") })
+      : t("projectDialog.stepElapsedSeconds", { s: String(s) });
+  };
+
   // The shared project name + description fields. They live in the always-visible
   // remote-basics block for a remote project (so name/description are editable
   // from the moment SSH is toggled on), and inside the details section for a local
@@ -1306,7 +1401,7 @@ export function ProjectDialog({
   );
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) dismissUnlessBusy(); }}>
       <div ref={modalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="project-dialog-title" className="project-dialog dialog-framed" onMouseDown={(e) => e.stopPropagation()}>
         <div className="settings-title-row">
           <h2 id="project-dialog-title">{kind === "new" ? t("projectDialog.titleNew") : t("projectDialog.titleImport")} <UntestedTag id="desktop.projectForms" /></h2>
@@ -1978,7 +2073,33 @@ export function ProjectDialog({
         </div>
         <div className="dialog-fixed-footer">
           {error && <ErrorNote className="project-dialog-error" role="alert" error={error} />}
-          {busy && <div role="status" className="project-dialog-path">{cloning ? t("projectDialog.cloningEllipsis") : publishing ? t("projectDialog.publishingEllipsis") : bootingVm ? t("projectDialog.vmBooting") : initializing ? t("projectDialog.initHostWorking") : t("projectDialog.working")}</div>}
+          {busy && progress && (
+            <ol role="status" className="project-dialog-progress">
+              {progress.steps.map((s, i) => {
+                const state = i < progress.current ? "done" : i === progress.current ? "active" : "pending";
+                const detail = state === "active" ? stepDetail(s) : "";
+                return (
+                  <li key={s} data-state={state}>
+                    <span className="project-dialog-progress-mark" aria-hidden="true">
+                      {state === "done" ? "✓" : state === "active" ? "›" : "·"}
+                    </span>
+                    <span className="project-dialog-progress-body">
+                      <span className="project-dialog-progress-label">
+                        {stepLabel(s)}
+                        {state === "active" && (
+                          <span className="project-dialog-progress-elapsed">
+                            {formatElapsed(progressNow - progress.since)}
+                          </span>
+                        )}
+                      </span>
+                      {detail && <span className="project-dialog-progress-detail">{detail}</span>}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+          {busy && !progress && <div role="status" className="project-dialog-path">{cloning ? t("projectDialog.cloningEllipsis") : publishing ? t("projectDialog.publishingEllipsis") : bootingVm ? t("projectDialog.vmBooting") : initializing ? t("projectDialog.initHostWorking") : t("projectDialog.working")}</div>}
         <div className="project-dialog-actions">
           <button type="button" onClick={onClose}>{t("common.cancel")}</button>
           {isRemoteProject && stepIdx > 0 && (

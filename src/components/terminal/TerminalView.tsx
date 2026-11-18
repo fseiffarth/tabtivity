@@ -32,6 +32,7 @@ import {
 } from "../../lib/terminal/terminalBus";
 import { noteTerminalSpawnFailed } from "../../lib/terminal/terminalSpawnFailed";
 import { clearSessionHostState, reportSessionHostSpawnError } from "../../lib/terminal/sessionHostNotice";
+import { clearContainerNotice, reportContainerSpawnError } from "../../lib/terminal/containerSpawnNotice";
 import { TERMINAL_MIN_CONTRAST, terminalPalette } from "../../lib/terminal/terminalPalette";
 import { hpcGuardRefusal } from "../../lib/remote/hpc/hpcGuard";
 import { useHpcGuardStore } from "../../stores/remote/hpc/hpcGuardPrompt";
@@ -61,6 +62,8 @@ import { terminalChordFor, zoomFor, type ShortcutMap } from "../../lib/shortcuts
 import { copyableSelection, installMouseModeGuard, joinedSelectionText } from "../../lib/terminal/terminalSelection";
 import { keySelectHighlight, keySelectRange, keySelectStep, scrollToShow, startKeySelect, type KeySelectState } from "../../lib/terminal/keyboardSelect";
 import { findSignInDone, findSignInRequest, findWrappedUrls, type SignInRequest } from "../../lib/terminal/terminalUrls";
+import { isAppLink, parseAppLink } from "../../lib/navigation/appLinks";
+import { openAppLink } from "../../lib/navigation/openAppLink";
 import { openPathLink } from "../../lib/terminal/pathLinks";
 import { registerPathLinkProvider } from "../../lib/terminal/pathLinkProvider";
 import { usePathLinkContext } from "../../lib/terminal/usePathLinkContext";
@@ -87,6 +90,7 @@ import { usePaneTab } from "../tabs/paneTabContext";
 import { TerminalUndoClearCard } from "./TerminalUndoClearCard";
 import { TerminalDeadPaneCard } from "./TerminalDeadPaneCard";
 import { TerminalSessionHostCard } from "./TerminalSessionHostCard";
+import { TerminalContainerCard } from "./TerminalContainerCard";
 import { TerminalAgentsEmptyCard, agentsEmptyDismissed, dismissAgentsEmpty } from "./TerminalAgentsEmptyCard";
 import { buildScaffoldFillPrompt } from "../../lib/projects/scaffold";
 import { TerminalVersionCard } from "./TerminalVersionCard";
@@ -491,6 +495,15 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
   // a container's loopback cannot be reached yet.
   const openLinkRef = useRef<(url: string) => Promise<void>>(() => Promise.resolve());
   openLinkRef.current = async (url) => {
+    if (isAppLink(url)) {
+      const target = parseAppLink(url);
+      try {
+        if (!target || !await openAppLink(target)) toast(t("appLink.unavailable"));
+      } catch {
+        toast(t("appLink.unavailable"));
+      }
+      return;
+    }
     const route = routeLink(url, localityRef.current);
     if (route === "unsupported") {
       toast(t("terminal.remoteLoopback.unsupported"));
@@ -700,7 +713,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       // A URL an agent CLI cut across rows with hard newlines (a sign-in link,
       // above all) is one link on every row it covers, opened whole. Registered
       // before the web-links addon because the first provider with a link at the
-      // cell wins; it answers nothing for a URL that fits one row.
+      // cell wins. It also recognizes single-row internal navigation URLs.
       termDisposables.push(term.registerLinkProvider({
         provideLinks(row, reply) {
           const buf = term.buffer.active;
@@ -1845,6 +1858,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       const spawn = async () => {
         // A new attempt: whatever the session host said about the last one is over.
         clearSessionHostState(id);
+        clearContainerNotice(id);
         if ((kind === "agent" || kind === "local_agent") && !attachOnly && (tmuxSession || tmuxAttach)) {
           const owner = splitPtyId(id)?.scope;
           // A workspace identity is required for self-targeted MCP grants.
@@ -1927,6 +1941,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
               if (!isAiOffRefusal(retryErr)) {
                 writeTerm(spawnErrorNote(retryErr));
                 reportSessionHostSpawnError(id, retryErr);
+                if (sandbox && projectId) reportContainerSpawnError(id, projectId);
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, pause));
@@ -1968,6 +1983,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
             if (!cancelled) {
               writeTerm(spawnErrorNote(retryErr));
               reportSessionHostSpawnError(id, retryErr);
+              if (sandbox && projectId) reportContainerSpawnError(id, projectId);
             }
           }
           return;
@@ -1976,6 +1992,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
         if (!refusal) {
           writeTerm(spawnErrorNote(e));
           reportSessionHostSpawnError(id, e);
+          if (sandbox && projectId) reportContainerSpawnError(id, projectId);
           return;
         }
         const ok = await useHpcGuardStore.getState().request(refusal.kind, refusal.target);
@@ -2005,6 +2022,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
           if (!cancelled) {
             writeTerm(spawnErrorNote(retryErr));
             reportSessionHostSpawnError(id, retryErr);
+            if (sandbox && projectId) reportContainerSpawnError(id, projectId);
           }
         }
       }
@@ -2370,6 +2388,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       } else if (!attachOnly && !isDetachedPtyId(id) && !persistOnUnmount) {
         invoke("pty_kill", { id }).catch(() => {});
         clearSessionHostState(id);
+        clearContainerNotice(id);
         // Drop the captured agent-task title so a closed tab's summary can't
         // linger against a future tab that reuses the key. Through the shared
         // parser: splitting on every colon left a box tab's key as
@@ -2886,6 +2905,7 @@ export function TerminalView({ id, cmd, args = [], env = {}, initialInput, login
       <TerminalDeadPaneCard host={host} ptyId={id} visible={visible} />
     )}
     {agentPane && !attachOnly && host && <TerminalSessionHostCard host={host} ptyId={id} visible={visible} />}
+    {sandbox && projectId && !attachOnly && host && <TerminalContainerCard host={host} ptyId={id} visible={visible} />}
     {agentPane && projectId && agentsEmpty && !undoClearOffered && !signIn && !signInDone && host && (
       <TerminalAgentsEmptyCard
         host={host}

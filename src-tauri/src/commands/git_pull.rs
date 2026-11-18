@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::git::{
     selected_git_context, GitWorktreeSelection, check_rev, hardened_git_command_in, local_non_repo, require_hook_trust, run_git,
-    run_git_hooked, scoped_token_config,
+    run_git_hooked,
 };
 use crate::services::remote::{remote_target_for_dir, RemoteTarget};
 
@@ -205,10 +205,8 @@ pub async fn git_fetch(
         let out = if let Some(target) = target {
             run_git(Some(&target), &dir, &["fetch"])?
         } else {
-            let token = project_id
-                .as_deref()
-                .and_then(|id| crate::commands::git_hosting::effective_git_creds(id).1);
-            fetch_local(Path::new(&dir), token.as_deref(), project_id.as_deref())?
+            let auth = project_id.as_deref().map(crate::commands::git_hosting::project_auth).unwrap_or_default();
+            fetch_local(Path::new(&dir), &auth)?
         };
         if !out.status.success() {
             return Err(err_of(&out));
@@ -225,17 +223,13 @@ pub async fn git_fetch(
 /// `credential.helper`, `remote.*.uploadpack`, `url.*.insteadOf`), which a
 /// downloaded or imported repo can carry — and the gate's fingerprint covers
 /// exactly those.
-fn fetch_local(dir: &Path, token: Option<&str>, project_id: Option<&str>) -> Result<std::process::Output, String> {
+fn fetch_local(dir: &Path, auth: &crate::services::git_hosting::GitAuth) -> Result<std::process::Output, String> {
     crate::services::exec_trust::require(crate::services::exec_trust::TrustKind::GitHooks, dir)?;
-    let mut args: Vec<String> = Vec::new();
-    if token.is_some() {
-        let origins = crate::commands::git_hosting::token_origins(project_id, None);
-        args.extend(scoped_token_config(&origins, "x-access-token"));
-    }
+    let mut args = auth.git_args("x-access-token");
     args.push("fetch".to_string());
     let mut cmd = hardened_git_command_in(dir, &args);
-    if let Some(tok) = token {
-        cmd.env(crate::app_env!("GIT_TOKEN"), tok);
+    if !auth.is_empty() {
+        auth.apply_env(&mut cmd);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
     }
     // Bounded (#2349), like `git::push_local`.
@@ -249,16 +243,14 @@ fn git_fetch_blocking(project_dir: String, project_id: Option<String>) -> Result
     let out = if let Some(target) = remote_target_for_dir(&project_dir) {
         match crate::commands::git_publish::mirror_origin_repo(&target.project_id) {
             Some(mirror) => {
-                let token = crate::commands::git_hosting::effective_git_creds(&target.project_id).1;
-                fetch_local(&mirror, token.as_deref(), Some(&target.project_id))?
+                let auth = crate::commands::git_hosting::project_auth(&target.project_id);
+                fetch_local(&mirror, &auth)?
             }
             None => run_git(Some(&target), &project_dir, &["fetch"])?,
         }
     } else {
-        let token = project_id
-            .as_deref()
-            .and_then(|id| crate::commands::git_hosting::effective_git_creds(id).1);
-        fetch_local(Path::new(&project_dir), token.as_deref(), project_id.as_deref())?
+        let auth = project_id.as_deref().map(crate::commands::git_hosting::project_auth).unwrap_or_default();
+        fetch_local(Path::new(&project_dir), &auth)?
     };
     if !out.status.success() {
         return Err(err_of(&out));

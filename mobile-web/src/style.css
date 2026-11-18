@@ -1082,7 +1082,7 @@ body.terminal-open { min-height:0; overflow:hidden; }
 .transcript-md hr { margin:.8em 0; border:0; border-top:1px solid #34384a; }
 /* A link that goes nowhere (no web address, no file found for it) is drawn as
    the plain text it is: only the two rules below make something look tappable. */
-.transcript-md .md-link[data-href], .transcript-md [data-path-link], .transcript-md [data-artifact] { color:#b7c9ff; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
+.transcript-md .md-link[data-href], .transcript-md .md-link[data-app-link], .transcript-md [data-path-link], .transcript-md [data-artifact] { color:#b7c9ff; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
 .transcript-md .md-math { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.85em; }
 .transcript-md .md-table { display:block; max-width:100%; margin:0 0 .6em; overflow-x:auto; border-collapse:collapse; font-size:.82rem; -webkit-overflow-scrolling:touch; }
 .transcript-md .md-table th,.transcript-md .md-table td { padding:4px 8px; border:1px solid #34384a; text-align:left; vertical-align:top; }

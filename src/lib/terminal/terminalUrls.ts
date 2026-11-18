@@ -9,6 +9,7 @@
  * handed Google a cut-off `redirect_uri` — "Error 400: redirect_uri_mismatch".
  */
 import { urlContinuation, type LineLike } from "./terminalSelection";
+import { APP_LINK_SCHEME, isAppLink, parseAppLink } from "../navigation/appLinks";
 
 /** A URL and the cells it covers: 0-based, `end` exclusive on its row. */
 export interface WrappedUrl {
@@ -17,7 +18,7 @@ export interface WrappedUrl {
   end: { x: number; y: number };
 }
 
-const URL_START = /https?:\/\/[^\s"'<>`]+/gu;
+const URL_START = new RegExp(`(?:https?:\\/\\/|${APP_LINK_SCHEME})[^\\s"'<>\x60]+`, "gu");
 // Sentence punctuation that ends a line of prose, not the URL before it.
 const TRAILING_PUNCT = /[.,:;!?'")\]]+$/u;
 /** The most rows one URL is followed across — a sign-in URL runs to ~10. */
@@ -37,7 +38,9 @@ export function cellAt(line: LineLike, cols: number, index: number): number {
 /**
  * Every URL that starts on a row in `[fromY, toY]`, followed across the rows
  * it was wrapped onto. Only URLs spanning more than one row are reported
- * unless `singleRow` is set — a one-row URL is already xterm's to handle.
+ * unless `singleRow` is set — a one-row web URL is already xterm's to handle.
+ * Internal navigation URLs are also returned on one row, since the web addon
+ * does not recognize their scheme.
  */
 export function findWrappedUrls(
   getLine: (y: number) => LineLike | undefined,
@@ -73,7 +76,8 @@ export function findWrappedUrls(
       }
       const trimmed = url.replace(TRAILING_PUNCT, "");
       endX -= url.length - trimmed.length;
-      if (endY === y && !singleRow) continue;
+      if (isAppLink(trimmed) && !parseAppLink(trimmed)) continue;
+      if (endY === y && !singleRow && !isAppLink(trimmed)) continue;
       found.push({ url: trimmed, start: { x: startX, y }, end: { x: endX, y: endY } });
     }
   }

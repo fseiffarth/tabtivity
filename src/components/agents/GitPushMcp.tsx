@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { subscribeTauri } from "../../hooks/useTauriListener";
 import { useT, type TranslationKey } from "../../lib/i18n";
+import { useExecTrustStore } from "../../stores/execTrust";
 import { useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
 import type { GitPushMcpLevel as Level, GitPushProposal } from "../../types";
@@ -101,6 +102,18 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
     finally { setBusy(false); }
   };
   const decide = (approve: boolean) => run("git_push_mcp_decide", { approve });
+  // The pre-push hook would run on this computer unapproved: show it in the
+  // shared hook dialog, record the approval, and let the push run again.
+  const hooksTrust = proposal.hooks_trust ?? null;
+  const reviewHooks = async () => {
+    if (!hooksTrust) return;
+    if (!(await useExecTrustStore.getState().ask(hooksTrust))) return;
+    setBusy(true);
+    try {
+      await invoke("exec_trust_approve", { kind: hooksTrust.kind, dir: hooksTrust.dir, fingerprint: hooksTrust.fingerprint });
+    } catch (cause) { setError(String(cause)); setBusy(false); return; }
+    await decide(true);
+  };
   const pending = proposal.status === "pending";
   const finished = !pending && proposal.status !== "running";
   const release = proposal.kind === "release";
@@ -130,6 +143,7 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
     {proposal.needs_url_confirm && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.confirmUrl")}</small>}
     {proposal.to_default && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.toDefault")}{filesTotal > 0 && <> {t("gitPushMcp.filesTouched", { count: filesTotal })}</>} <UntestedTag id="gitPushMcp.toDefault" /></small>}
     {ciRepo && pending && <small className="git-push-proposal-confirm">{t("gitPushMcp.ciAllowHelp")}</small>}
+    {hooksTrust && pending && <small className="git-push-proposal-confirm">{t(hooksTrust.changed ? "gitPushMcp.hooksChanged" : "gitPushMcp.hooksReview")} <UntestedTag id="gitPushMcp.hooksReview" /></small>}
     {proposal.note && <p className="git-push-proposal-note">{t("gitPushMcp.note", { note: proposal.note })}</p>}
     {proposal.commits.length > 0 && <ul className="git-push-proposal-commits">
       {proposal.commits.map((line) => <li key={line}><code>{line}</code></li>)}
@@ -147,7 +161,8 @@ export function GitPushProposalCard({ proposal, onDecided }: { proposal: GitPush
       {showOutput && <pre className="git-push-proposal-output">{output}</pre>}
     </>}
     {pending && <div className="git-push-proposal-actions">
-      <button className="settings-btn sm primary" disabled={busy} onClick={() => void decide(true)}>{t(ciRepo ? "gitPushMcp.ciAllow" : release ? "gitPushMcp.release" : proposal.needs_url_confirm ? "gitPushMcp.confirmAndPush" : "gitPushMcp.push")}</button>
+      {hooksTrust ? <button className="settings-btn sm primary" disabled={busy} onClick={() => void reviewHooks()}>{t("gitPushMcp.reviewHooks")}</button>
+      : <button className="settings-btn sm primary" disabled={busy} onClick={() => void decide(true)}>{t(ciRepo ? "gitPushMcp.ciAllow" : release ? "gitPushMcp.release" : proposal.needs_url_confirm ? "gitPushMcp.confirmAndPush" : "gitPushMcp.push")}</button>}
       <button className="settings-btn sm" disabled={busy} onClick={() => void decide(false)}>{t("gitPushMcp.dismiss")}</button>
     </div>}
     {finished && <div className="git-push-proposal-actions">

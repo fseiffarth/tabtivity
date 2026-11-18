@@ -3,6 +3,7 @@ import type { PyMainVerdict } from "../lib/terminal/pythonMainCache";
 import type { AgentCron } from "../lib/agents/agentCron";
 import type { CursorPack } from "../lib/theme/cursorPacks";
 import type { TranslationKey } from "../lib/i18n";
+import type { TrustRequest } from "../lib/execTrust";
 import { MOBILE_ACCESS_KEY, MOBILE_DEVICES_KEY, MOBILE_HOST_KEY } from "../lib/brand";
 
 export interface GlobalAppEntry {
@@ -272,8 +273,11 @@ export interface Settings {
    *  `lib/window/printerNetworkDefaults`. Joining a keyed network makes that
    *  printer the user's default. Unset/empty → nothing is ever switched. */
   printer_network_defaults?: Record<string, { printer: string; label: string }>;
+  /** The default (first) host of Settings → Git Hosting, kept for older
+   *  builds; the list itself is `git_hosts`, edited through `lib/gitHosts`.
+   *  Tokens never reach the renderer. */
   git_profile_url?: string;
-  git_token?: string;
+  git_hosts?: string[];
   color_scheme?: string;
   /** UI language for Tabtivity's interface. Unset/unknown falls back to English.
    *  Applied live via `lib/i18n` (`applyLanguage`); the backend round-trips it. */
@@ -1401,6 +1405,9 @@ export interface GitPushProposal {
   preflight_output: string;
   /** The user closed the finished card (`git_push_mcp_clear`). */
   cleared: boolean;
+  /** A pending push whose pre-push hook would run on this computer and is not
+   *  approved: the hooks to review (`exec_trust`). Approving re-runs the push. */
+  hooks_trust?: TrustRequest | null;
   state: { branch: string | null; head: string | null; remote: string | null; upstream: string | null; url: string | null; remote_sha: string | null; ahead: number; behind: number };
 }
 

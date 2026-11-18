@@ -1996,6 +1996,49 @@ label.settings-toggle-card-row {
   word-break: break-all;
 }
 
+/* A running create/import's steps (ProjectDialog footer). */
+.project-dialog-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-md);
+}
+
+.project-dialog-progress li {
+  display: flex;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.project-dialog-progress li[data-state="active"] {
+  color: var(--text-primary);
+}
+
+.project-dialog-progress-mark {
+  flex: 0 0 12px;
+  text-align: center;
+}
+
+.project-dialog-progress-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.project-dialog-progress-elapsed {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.project-dialog-progress-detail {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 /* Remote machines manager (multi-host remote, docs/multi_host_remote_plan.md).
    Reuses the app's dialog surface; each worker is a bordered card matching the
    settings toggle-card look. */
