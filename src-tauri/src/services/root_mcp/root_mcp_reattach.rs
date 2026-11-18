@@ -654,7 +654,8 @@ pub fn pending_bearer(header: Option<&str>) -> bool {
 
 /// The row of a session this launch creates: the lanes `store` holds under
 /// the tokens in `env`, each with the identity it was bound to (a lane that is
-/// never revived is listed without its hash).
+/// never revived is listed without its hash). `None` when no lane is
+/// revivable.
 pub fn created_row(
     store: &TokenStore,
     env: &std::collections::HashMap<String, String>,
@@ -673,7 +674,10 @@ pub fn created_row(
             .filter_map(|hash| map.get(&hash).map(|s| LaneRow::of(&s.identity, &hash)))
             .collect()
     };
-    if lanes.is_empty() {
+    // Nothing to revive without a revivable lane: no row, so the grant
+    // ([`stamp_grant`]'s fallback, a schedule or root hash) never reaches
+    // the disk, and the session goes the Phase 1 way.
+    if !lanes.iter().any(|lane| lane.hash.is_some()) {
         return None;
     }
     Some(Row {

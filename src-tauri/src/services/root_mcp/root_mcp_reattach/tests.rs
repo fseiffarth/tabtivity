@@ -501,6 +501,22 @@ fn the_stamp_grant_prefers_a_revivable_lane() {
     assert_eq!(stamp_grant(&env), Some(token_hash("h")));
 }
 
+/// R3 (finding 5): a session granted no revivable lane gets no row, so its
+/// stamp's fallback grant (a schedule or root hash) is never written.
+#[test]
+fn a_session_with_no_revivable_lane_writes_no_row() {
+    let (_dir, file) = record_file();
+    let listener = Listener::open(file, PORT, THIS.into(), true, None, NOW);
+    let store = TokenStore::default();
+    let mut env = std::collections::HashMap::new();
+    for (var, caller) in [(super::super::SCHEDULE_TOKEN_ENV, Caller::Scheduler), (super::super::TOKEN_ENV, Caller::Agent)] {
+        let (token, _) = grant(&store, "t", caller);
+        env.insert(var.to_string(), token);
+    }
+    assert!(stamp_grant(&env).is_some(), "the stamp still names a grant");
+    assert_eq!(created_row(&store, &env, &listener, Some("p1".into()), "claude", false), None);
+}
+
 /// R3 (finding 6): a write already past the `stopped` check when the clean
 /// quit deletes the file lands before the delete, never after it: the
 /// delete waits for it, and no file outlives the quit.
