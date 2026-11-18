@@ -405,3 +405,170 @@ fixes are one commit each, with a regression test (`31cdbb6d8`, `4c18ef897`, `ed
 * Nothing was run live. The Windows code is still never compiled
   (`cfg(windows)`); Windows CI compiles it first.
 * The hookless "when this turn ends" trigger (above) is a design call to make.
+
+## I4: Phase 2, revival without restart
+
+Branch `worktree-agent-a6176a1d14ec85ad4`, reset to the integration commit
+`d9ae7d698` (`mcp-reattach-int`: I1 + I3 + I2 + R1 + V0 on `a245d4593`).
+Commits: see `git log d9ae7d698..` (code + tests + docs in one, then this
+section).
+
+### What landed
+
+1. **Hash-keyed `TokenStore`** (`services/root_mcp.rs`). The map key is
+   `token_hash(token)` (= `Session::id`); `authenticate` hashes the bearer
+   (`bearer_hash`) and looks it up, so a hash presented as a bearer is hashed
+   again and opens nothing. `register`, `stamp_push_*`, `revoke_token`
+   (`revoke_hash`), `holds_session`, `set_access`, `revoke_session`,
+   `session_alive` and `SpawnTokenGuard` (now holds hashes, `retarget`) go by
+   hash. `release_tab` (memory only, the PTY teardown in
+   `root_mcp_review::on_tab_gone`) vs `revoke_tab` / `revoke_session` (also
+   drop the hashes from the record). `Session.revived`.
+2. **Record** (`services/root_mcp/root_mcp_reattach.rs`, new). One file per
+   listener (`Role::record`: `reattach.json`, `reattach-host.json`), only
+   through `patch_private_json`, unknown fields kept at every level
+   (`#[serde(flatten)] extra`). Top level: the writing run's `nonce`, `port`,
+   `last_alive`; per session: `port, nonce, grant, project, cmd_stem,
+   local_model, created, lanes[caller, hash?, project, schedule_target/agent,
+   push_dir, git_at_spawn, fence_scope, unfenced_host]`. A non-revivable lane
+   is listed **without** its hash (so its loss still reads stale; a schedule
+   hash is never written). Written at `PreparedLaunch::commit` for a create
+   (`McpRecord::Created`, built after the fence stamps), not for an assistant
+   chat.
+3. **Revive on reattach** (`launch_prep.rs`). `plan_for` asks the record only
+   for a Stale stamp with a grant (`Listener::candidate` → `judge`); a passing
+   row makes the launch grant as a create (`verdict == Create || reviving`),
+   then after the fence `root_mcp_reattach::revive` swaps each fresh session
+   whose identity matches the recorded lane (`LaneRow::matches`: caller,
+   project, schedule target + agent, push dir, fence scope, unfenced host; no
+   endpoint/model) for the recorded hash (`rekey`, `git_at_spawn` from the
+   record, tabs seat re-enrolled), revokes the rest, and strips every lane token
+   from `opts.env`. `mcp_stale = outcome.lost` (any recorded lane that did not
+   come back). At commit the session is re-stamped with this run's nonce and its
+   first revived hash (`SessionMux::restamp_mcp`, tmux `set-option -t =<s>:`;
+   the default — Windows host — cannot) and the row rewritten (`revived_row`).
+4. **Guards** (`Listener::judge`, each a `Refusal`): first-try bind, stamp port =
+   row port = own, stamp nonce = row nonce ∈ {this run, the previous run that
+   passed at start}, downtime `< 30 min`, stamp grant = row grant,
+   `cli_revives`. Plus in `revive`: the launch's project = the row's, and no
+   recorded hash already held (fail closed). A refused row is dropped.
+5. **Listener start** (`commands/root_mcp.rs`). `bind_window` → `Bound
+   {first_try, lost}` (its fallback avoids the host's port); `bind_host` binds
+   `host-port` first (never the window's port), remembers a new one;
+   `open_reattach_record` opens and installs the record: a fallback purges it,
+   a record past the cap or on another port loses its rows, rows of any older
+   run go, and the file is rewritten as this run's. `reattach_heartbeat`
+   (immediately, then every 5 min) refreshes `last_alive` and drops rows of
+   sessions the mux no longer lists. `stop_for_exit` deletes the window's file.
+   `start_headless` remembers nothing under `cfg(test)`.
+6. **R1's own-port note.** `classify_reattach` takes `own_port`: a foreign
+   nonce on this listener's port is an own-store lookup (never a probe), and
+   `plan_for` honours it only while `within_cap` → `adopt`. A stamp on the
+   port this listener lost is never probed (R1's squatter nit).
+7. **R1's race (fixed).** The create stamp is `set-option -q -o`: set only where
+   unset, silent and successful otherwise, so an attach never overwrites a
+   stamp. Regression test on a real tmux (private socket).
+8. **503 while pending.** `admit` answers `503` (audit `revival_pending`) to a
+   bearer whose hash is a previous run's revivable lane not yet revived or
+   refused, within the cap (`pending_bearer`), instead of `401`.
+9. **Lifecycle hooks**: `local_tmux_kill` → `on_session_gone`,
+   `local_tmux_rename` → `on_session_renamed`, `local_tmux_kill_app_sessions`
+   → `on_all_sessions_gone` (rows cleared), `stop_for_exit` → `on_clean_quit`.
+
+### Deviations from the plan
+
+* **In-run revival.** A row of *this* run is revivable too (a PTY teardown
+  released the tokens in memory, the session lives on: a popout move, a
+  webview reload): downtime 0, same guards otherwise. It is what "release_tab
+  keeps the row" buys.
+* **No revival at all in a fallback run**, in-run included (the guard is
+  per listener, not per row).
+* **CLI rule**: Claude/Codex/OpenCode yes; Copilot only under 50 s (with a
+  5-minute heartbeat that is rare); a local Vibe model never; an unwired CLI
+  (env pair → `tabtivity-mcp`, stateless per call) yes; any other wired CLI no.
+  The CLI checked is the record's `cmd_stem` (the agent running), not the
+  relaunch's.
+* **Stamp grant** is the first *revivable* lane's hash (`stamp_grant`), not
+  the first lane's, so a revived session's stamp names a session the store
+  holds. Phase 1 reads any held lane the same.
+* **A partially revived tab is Stale** (plan step 7). `servers_of_tab` is then
+  empty although the revived lanes work; the card says "disconnected".
+* **Assistant chats** keep the Phase 1 way (no row).
+* **`last_alive` is per listener**, not per row.
+* **The 503** is beyond the plan (see "For R2/R3").
+* **No frontend change**: Stale already covers every case the plan names; the
+  per-CLI expectations live in `agent_mcp_wiring.md` §5.
+
+### Tests run (targeted, one at a time; no gates)
+
+* `cargo test -p tabtivity --lib root_mcp_reattach`: 19 passed (record round-trip
+  with older/unknown fields and 0600; open: fallback purge, cap, other port,
+  corrupt file, older runs; every guard; CLI table; refused row dropped;
+  revive: all six lanes, schedule/root/web never, lane switched off, project /
+  target / push dir / fence scope / unfenced-host mismatch, other project, held
+  hash; no plaintext in store or record; lifecycle incl. clean quit; pending;
+  revived row; `adopt` after revival; stamp grant; the global
+  release-vs-revoke test).
+* `cargo test -p tabtivity --lib -- launch_prep agent_privacy session_mux root_mcp
+  tmux_local tabs_mcp markup_mcp mobile_control::host`: 625 passed (new:
+  own-port lookup within/past the cap, revival only for a stale stamp, the
+  real-tmux race test `a_stamp_rides_a_create_only_and_never_overwrites_on_an_attach`,
+  restamp argv, the updated source scan of `prepare`).
+* `cargo test -p tabtivity --lib -- terminal api_proxy agent_fence`: 225 passed.
+* `cargo clippy -p tabtivity --lib -- -D warnings`: clean.
+* Not run: gates, `--all-targets` clippy, `--no-default-features`, app-serverd,
+  Windows, vitest (no frontend change).
+
+### For R2/R3 (security review): attack these
+
+1. **The interception residual itself** (`threat_model.md`, loopback row): a
+   local process binds the freed port while the app is down, collects bearers,
+   releases the port before the restart, and the revival makes them live. Is
+   "first-try bind" + 30 min cap + no schedule enough? Can a fenced agent hold
+   the port across the restart *and* still not trigger the purge (e.g. bind
+   only on IPv6 `::1`, `SO_REUSEPORT`, bind after our bind)?
+2. **The record as an oracle or a lever**: can anything that can write
+   `<state_dir>/root_mcp/reattach.json` (it is fence-hidden — verify) plant a
+   row that revives a hash it knows into another identity? Note `revive`
+   re-derives every identity field from the *fresh* grant and only takes the
+   hash and `git_at_spawn` from the row; is `git_at_spawn` from disk a hole
+   (gap 19)?
+3. **Hash as credential**: every path that takes an id/hash from outside
+   (`/mcp/grant/{hash}`, `revoke_session(id)`, `set_access(id)`,
+   `holds_session`) — none may accept a hash where a token is meant.
+4. **Stamp forgery / race**: `-q -o` on create; a tmux stamp an agent could
+   set (the tmux socket is outside the fence — verify for the Host session and
+   unfenced Windows); `restamp_mcp` targets `=<name>:` exactly.
+5. **`adopt` after revival**: never carries schedule/root/reader/web
+   (`unrevivable` revoke), cap enforced before it through `within_cap`.
+   Can an own-nonce stamp naming a revived hash be used to move lanes into
+   another tab?
+6. **The 503**: does it leak anything beyond "this bearer is a pending
+   revivable token" to someone who already holds the token? Can it be used to
+   keep a CLI retrying against a squatter?
+7. **Lifecycle holes**: rows surviving a kill that does not go through
+   `local_tmux_kill` (the Mobile host's `runner.kill`, the privacy sweep,
+   `end_sessions`) — they keep hashes until the heartbeat prunes the session;
+   a session name reused before that gets a new stamp (nonce mismatch), but
+   check. The quit race: a heartbeat patch landing after `delete`.
+8. **Mobile host**: own port/record/nonce; the window never revives a
+   host-stamped session (it probes the host); `bind_host` never takes the
+   window's port. A host restart keeps its file (only the window's clean quit
+   deletes one).
+9. **`SpawnTokenGuard::retarget`**: a failed spawn after a revival releases the
+   revived sessions (memory only), and the row stays — is a retry then
+   correctly revived again or refused?
+
+### Flags for the user
+
+* Nothing was run live; the Windows host path is not compiled here.
+* **Unverified CLI behaviour**: V0 measured "connection refused" outages only.
+  Between the listener start and the tab's restore a previous run's token now
+  gets `503`; how Claude/Codex/OpenCode/Copilot treat a `503` (or a `401`
+  before revival, for a tab restored past the cap) is not measured. Worth a
+  verify-cli pass.
+* **Copilot** is effectively never revived (50 s cap vs a 5-minute heartbeat).
+  A shorter heartbeat would help it at the cost of more writes.
+* **Residual of the race fix**: a session from a pre-stamp build (no stamp)
+  that loses the listing race is stamped by the attach.
+* The plan file `docs/mcp_reattach_plan.md` still says "Nothing implemented".

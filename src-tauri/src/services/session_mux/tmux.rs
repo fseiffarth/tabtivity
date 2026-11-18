@@ -497,6 +497,14 @@ impl SessionMux for TmuxMux {
         }
     }
 
+    /// `set-option -t =<name>: <option> <mark>`, overwriting: the session
+    /// exists (a revival reattached it), and only its stamp changes.
+    fn restamp_mcp(&self, name: &str, mark: &str) -> Result<(), MuxError> {
+        self.run(&tmux_local::mcp_restamp_args(name, mark))?;
+        self.note_mcp_mark(name, mark);
+        Ok(())
+    }
+
     fn has(&self, name: &str) -> Result<bool, MuxError> {
         Ok(output(self.has_command(name))?.status.success())
     }

@@ -126,13 +126,20 @@ pub enum Reattach {
 
 /// The verdict for a launch whose session looks like `stamp`.
 ///
-/// * `own_nonce`: this process's listener nonce;
+/// * `own_nonce`, `own_port`: this process's listener nonce and port;
 /// * `grant_held(id)`: this process's store still holds that session;
 /// * `foreign_live(mark)`: the stamp's own listener (another process) confirms
 ///   its grant — asked only for a foreign stamp.
+///
+/// A foreign nonce on this listener's own port is a previous run of this very
+/// listener: only this store can hold its grant (a revival,
+/// `root_mcp_reattach`), so it is looked up here, never probed — the probe
+/// would ask this listener itself and read `204` as "live elsewhere", with
+/// nothing re-keyed.
 pub fn classify_reattach(
     stamp: &Stamp,
     own_nonce: &str,
+    own_port: u16,
     grant_held: impl FnOnce(&str) -> bool,
     foreign_live: impl FnOnce(&Mark) -> bool,
 ) -> Reattach {
@@ -142,7 +149,7 @@ pub fn classify_reattach(
         Stamp::Marked(mark) => mark,
     };
     let Some(grant) = mark.grant.as_deref() else { return Reattach::NoGrant };
-    let live = if mark.nonce == own_nonce { grant_held(grant) } else { foreign_live(mark) };
+    let live = if mark.nonce == own_nonce || mark.port == own_port { grant_held(grant) } else { foreign_live(mark) };
     if live { Reattach::Live } else { Reattach::Stale }
 }
 
@@ -239,22 +246,27 @@ mod tests {
         let never = |_: &str| -> bool { panic!("asked when it must not be") };
         let never_foreign = |_: &Mark| -> bool { panic!("probed when it must not be") };
         use Reattach::*;
+        const OWN_PORT: u16 = 5151;
         // No session / cannot tell: create, nothing asked.
-        assert_eq!(classify_reattach(&Stamp::Absent, NONCE, never, never_foreign), Create);
-        assert_eq!(classify_reattach(&Stamp::Unknown, NONCE, never, never_foreign), Create);
+        assert_eq!(classify_reattach(&Stamp::Absent, NONCE, OWN_PORT, never, never_foreign), Create);
+        assert_eq!(classify_reattach(&Stamp::Unknown, NONCE, OWN_PORT, never, never_foreign), Create);
         // A session with no stamp: its credentials are unknown to us.
-        assert_eq!(classify_reattach(&Stamp::Unmarked, NONCE, never, never_foreign), Stale);
+        assert_eq!(classify_reattach(&Stamp::Unmarked, NONCE, OWN_PORT, never, never_foreign), Stale);
         // Started with no grant: nothing to report, nothing asked.
-        assert_eq!(classify_reattach(&Stamp::Marked(mark(NONCE, None)), NONCE, never, never_foreign), NoGrant);
-        assert_eq!(classify_reattach(&Stamp::Marked(mark(OTHER, None)), NONCE, never, never_foreign), NoGrant);
+        assert_eq!(classify_reattach(&Stamp::Marked(mark(NONCE, None)), NONCE, OWN_PORT, never, never_foreign), NoGrant);
+        assert_eq!(classify_reattach(&Stamp::Marked(mark(OTHER, None)), NONCE, OWN_PORT, never, never_foreign), NoGrant);
         // This run's stamp: the store decides, the probe is never made.
         let own = Stamp::Marked(mark(NONCE, Some(GRANT)));
-        assert_eq!(classify_reattach(&own, NONCE, |id| id == GRANT, never_foreign), Live);
-        assert_eq!(classify_reattach(&own, NONCE, |_| false, never_foreign), Stale, "revoked or released since");
+        assert_eq!(classify_reattach(&own, NONCE, OWN_PORT, |id| id == GRANT, never_foreign), Live);
+        assert_eq!(classify_reattach(&own, NONCE, OWN_PORT, |_| false, never_foreign), Stale, "revoked or released since");
         // Another run's or process's stamp: only its listener can confirm it.
         let foreign = Stamp::Marked(mark(OTHER, Some(GRANT)));
-        assert_eq!(classify_reattach(&foreign, NONCE, never, |m| m.port == 4242 && m.grant.as_deref() == Some(GRANT)), Live);
-        assert_eq!(classify_reattach(&foreign, NONCE, never, |_| false), Stale, "dead listener, revoked grant or no answer");
+        assert_eq!(classify_reattach(&foreign, NONCE, OWN_PORT, never, |m| m.port == 4242 && m.grant.as_deref() == Some(GRANT)), Live);
+        assert_eq!(classify_reattach(&foreign, NONCE, OWN_PORT, never, |_| false), Stale, "dead listener, revoked grant or no answer");
+        // A previous run of this listener (its port, another nonce): this
+        // store decides, the probe would only ask this listener itself.
+        assert_eq!(classify_reattach(&foreign, NONCE, 4242, |id| id == GRANT, never_foreign), Live, "revived here");
+        assert_eq!(classify_reattach(&foreign, NONCE, 4242, |_| false, never_foreign), Stale);
     }
 
     /// A one-shot HTTP server answering with `status`, recording the request line.

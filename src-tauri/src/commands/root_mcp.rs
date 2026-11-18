@@ -168,8 +168,13 @@ async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Res
         return Err(StatusCode::FORBIDDEN);
     }
     if headers.get_all(header::AUTHORIZATION).iter().count() != 1 { return Err(StatusCode::UNAUTHORIZED); }
-    let session = store.authenticate(headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()))
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok());
+    // A token of the previous run's session that a reattach may still revive
+    // (`root_mcp_reattach`) is told to come back, not refused: a `401` can
+    // send a CLI into a sign-in flow for a server that answers in a moment.
+    let session = store.authenticate(bearer).ok_or_else(|| {
+        if root_mcp::root_mcp_reattach::pending_bearer(bearer) { StatusCode::SERVICE_UNAVAILABLE } else { StatusCode::UNAUTHORIZED }
+    })?;
     if !path_serves(request.uri().path(), session.identity.caller) { return Err(StatusCode::UNAUTHORIZED); }
     if authority == Some(guest.as_str()) && session.identity.caller != root_mcp::Caller::Reader {
         return Err(StatusCode::FORBIDDEN);
@@ -208,6 +213,7 @@ fn admission_reason(status: StatusCode) -> Option<&'static str> {
         StatusCode::FORBIDDEN => "forbidden_origin_or_host",
         StatusCode::HTTP_VERSION_NOT_SUPPORTED => "http_version",
         StatusCode::UNSUPPORTED_MEDIA_TYPE => "media_type",
+        StatusCode::SERVICE_UNAVAILABLE => "revival_pending",
         // Authenticated by then: the session's own audit row is the record.
         _ => return None,
     })
@@ -551,6 +557,9 @@ pub fn stop_for_exit() {
         });
     }
     crate::services::root_mcp_review::sweep_sandboxes(&storage::state_dir());
+    // The quit ends every session the app made (`kill_app_sessions`): no
+    // agent is left to revive, so its token hashes leave the disk too.
+    root_mcp::root_mcp_reattach::on_clean_quit();
 }
 
 pub fn start(ctx: CoreCtx) {
@@ -561,21 +570,57 @@ pub fn start(ctx: CoreCtx) {
     // Bound here, synchronously, and the runtime published with it: a tab
     // restored a moment later finds the listener and gets its lanes, and its
     // URLs name the port of the last run again (`bind_window`).
-    let listener = match bind_window() {
-        Ok(listener) => listener,
+    let bound = match bind_window() {
+        Ok(bound) => bound,
         Err(error) => {
             eprintln!("[root-mcp] {error}");
             return;
         }
     };
-    let served = serve(listener, Some(ctx), true, notify, async { SHUTDOWN.notified().await });
+    let served = serve(bound.listener, Some(ctx), true, notify, async { SHUTDOWN.notified().await });
+    // The reattach record, opened before any tab is restored: revival needs
+    // the remembered port bound on the first try (`root_mcp_reattach`).
+    if let Ok((port, _)) = served.as_ref() {
+        open_reattach_record(&storage::state_dir(), reattach::Role::Window, *port, bound.first_try, bound.lost);
+    }
     let handle = app_core::rt::spawn(async move {
         match served {
-            Ok((_, server)) => server.await,
+            Ok((_, server)) => {
+                let heartbeat = tokio::spawn(reattach_heartbeat());
+                server.await;
+                heartbeat.abort();
+            }
             Err(error) => eprintln!("[root-mcp] {error}"),
         }
     });
     *SERVER.lock_ok() = Some(handle);
+}
+
+use crate::services::root_mcp::root_mcp_reattach as reattach;
+
+/// Open and install this process's reattach record for the listener just
+/// published on `port` (its nonce is the runtime's).
+fn open_reattach_record(state: &std::path::Path, role: reattach::Role, port: u16, first_try: bool, lost: Option<u16>) {
+    let Some(runtime) = root_mcp::runtime().filter(|r| r.port == port) else { return };
+    reattach::install(reattach::Listener::open(
+        role.record(state),
+        port,
+        runtime.generation.clone(),
+        first_try,
+        lost,
+        reattach::now_secs(),
+    ));
+}
+
+/// The record's `last_alive`, every [`reattach::HEARTBEAT`] while the
+/// listener serves; the first beat (at once) drops the rows of sessions that
+/// ended while the app was down.
+async fn reattach_heartbeat() {
+    let mut beat = tokio::time::interval(reattach::HEARTBEAT);
+    loop {
+        beat.tick().await;
+        let _ = tokio::task::spawn_blocking(reattach::heartbeat_now).await;
+    }
 }
 
 /// Where the window's port is remembered (not a secret): `<state_dir>/root_mcp/port`.
@@ -594,25 +639,39 @@ fn remembered_port() -> Option<u16> {
 }
 
 /// A loopback listener on `preferred` when it can be bound, else on any free
-/// port. Whether the preferred port was the one bound.
-fn bind_preferred(preferred: Option<u16>) -> std::io::Result<(std::net::TcpListener, bool)> {
+/// port other than `avoid` ([`bind_avoiding`]). Whether the preferred port
+/// was the one bound.
+fn bind_preferred(preferred: Option<u16>, avoid: Option<u16>) -> std::io::Result<(std::net::TcpListener, bool)> {
     let kept = preferred
         .and_then(|p| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, p)).ok());
     let was_kept = kept.is_some();
     let listener = match kept {
         Some(listener) => listener,
-        None => std::net::TcpListener::bind(LOOPBACK)?,
+        None => bind_avoiding(|| std::net::TcpListener::bind(LOOPBACK), avoid)?,
     };
     listener.set_nonblocking(true)?;
     Ok((listener, was_kept))
 }
 
+/// A listener bound for the window or the Mobile host, and what the reattach
+/// record needs to know of the bind.
+struct Bound {
+    listener: std::net::TcpListener,
+    /// The remembered port was bound on the first try: only then can a
+    /// running agent's lanes be revived (`root_mcp_reattach`).
+    first_try: bool,
+    /// The remembered port, when someone else held it.
+    lost: Option<u16>,
+}
+
 /// The window's listener: its remembered port when free. When someone else
 /// holds it the holder is looked up and said (gap 50b's lesson: a stale agent's
 /// requests go to whoever holds its port), and the new port is remembered.
-fn bind_window() -> Result<std::net::TcpListener, String> {
+/// The fallback avoids the Mobile host's remembered port.
+fn bind_window() -> Result<Bound, String> {
     let preferred = remembered_port();
-    let (listener, kept) = bind_preferred(preferred).map_err(|e| format!("bind failed: {e}"))?;
+    let (listener, kept) = bind_preferred(preferred, read_port(&host_port_file(&storage::state_dir())))
+        .map_err(|e| format!("bind failed: {e}"))?;
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     if !kept {
         if let Some(taken) = preferred {
@@ -623,7 +682,44 @@ fn bind_window() -> Result<std::net::TcpListener, String> {
             eprintln!("[root-mcp] could not remember port {port}: {error}");
         }
     }
-    Ok(listener)
+    Ok(Bound { listener, first_try: kept, lost: preferred.filter(|_| !kept) })
+}
+
+/// Where the Mobile host's port is remembered: `<state>/root_mcp/host-port`
+/// (fixed decision 7). Never the window's: see [`bind_host`].
+fn host_port_file(state: &std::path::Path) -> std::path::PathBuf {
+    state.join("root_mcp").join("host-port")
+}
+
+fn read_port(file: &std::path::Path) -> Option<u16> {
+    std::fs::read_to_string(file).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p != 0)
+}
+
+/// The Mobile host's listener on `addr`, or for a free-port `addr` its own
+/// remembered port first (`host-port` under `state`) — never the window's
+/// remembered one, which a free-port bind avoids too ([`bind`]). The new
+/// port is remembered when it changed.
+fn bind_host(addr: std::net::SocketAddr, state: &std::path::Path) -> Result<Bound, String> {
+    let window = remembered_port();
+    let file = host_port_file(state);
+    let preferred = read_port(&file).filter(|p| addr.port() == 0 && Some(*p) != window);
+    let kept = preferred.and_then(|p| {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, p)).ok()?;
+        listener.set_nonblocking(true).ok()?;
+        Some(listener)
+    });
+    let first_try = kept.is_some();
+    let listener = match kept {
+        Some(listener) => listener,
+        None => bind(addr)?,
+    };
+    let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
+    if !first_try && addr.port() == 0 {
+        if let Err(error) = storage::write_private_atomic_mode(&file, port.to_string().as_bytes(), 0o600) {
+            eprintln!("[root-mcp] could not remember the host's port {port}: {error}");
+        }
+    }
+    Ok(Bound { listener, first_try, lost: preferred.filter(|_| !first_try) })
 }
 
 /// The remembered port is held by another listener: say who, once.
@@ -698,7 +794,10 @@ pub async fn start_headless(
             notify
         }
     };
-    start_headless_on(LOOPBACK, notify, server.cloned(), shutdown).await
+    // The host's own remembered port and reattach record live in the state
+    // dir; a test of the host never touches the developer's.
+    let memory = (!cfg!(test)).then(storage::state_dir);
+    start_headless_on(LOOPBACK, notify, server.cloned(), shutdown, memory).await
 }
 
 /// A desktop's Mobile host: whenever one of its tabs' asks or ticks changes,
@@ -714,20 +813,39 @@ fn markup_notice_hook(notify: NoticeSink) -> Box<dyn Fn() + Send + Sync> {
 /// Any free loopback port.
 const LOOPBACK: std::net::SocketAddr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 0);
 
-/// [`start_headless`] on a chosen address (a test occupies one).
+/// [`start_headless`] on a chosen address (a test occupies one). `memory`:
+/// the state dir the host remembers its port and keeps its reattach record
+/// in (`host-port`, `reattach-host.json`); `None` remembers nothing.
 async fn start_headless_on(
     addr: std::net::SocketAddr,
     notify: NoticeSink,
     ctx: Option<CoreCtx>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    memory: Option<std::path::PathBuf>,
 ) -> Result<u16, String> {
-    let first = match bind(addr) {
-        Ok(listener) => serve(listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone())),
+    let bound = match memory.as_deref() {
+        Some(state) => bind_host(addr, state),
+        None => bind(addr).map(|listener| Bound { listener, first_try: false, lost: None }),
+    };
+    let (first_try, lost) = bound.as_ref().map_or((false, None), |b| (b.first_try, b.lost));
+    let first = match bound {
+        Ok(bound) => serve(bound.listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone())),
         Err(error) => Err(error),
     };
+    // Its own record (fixed decision 7): a retried bind below is never a
+    // first try, and opening it then purges the file.
     match first {
         Ok((port, server)) => {
-            tokio::spawn(server);
+            if let Some(state) = memory.as_deref() {
+                open_reattach_record(state, reattach::Role::Host, port, first_try, lost);
+            }
+            let heartbeat = memory.is_some().then(|| tokio::spawn(reattach_heartbeat()));
+            tokio::spawn(async move {
+                server.await;
+                if let Some(heartbeat) = heartbeat {
+                    heartbeat.abort();
+                }
+            });
             Ok(port)
         }
         Err(error) => {
@@ -745,7 +863,14 @@ async fn start_headless_on(
                     let Ok(listener) = bind(addr) else { continue };
                     if let Ok((port, server)) = serve(listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone())) {
                         eprintln!("[root-mcp] bound on port {port} after {attempt} retries");
+                        if let Some(state) = memory.as_deref() {
+                            open_reattach_record(state, reattach::Role::Host, port, false, None);
+                        }
+                        let heartbeat = memory.is_some().then(|| tokio::spawn(reattach_heartbeat()));
                         server.await;
+                        if let Some(heartbeat) = heartbeat {
+                            heartbeat.abort();
+                        }
                         return;
                     }
                 }
@@ -1411,7 +1536,7 @@ mod security_tests {
         let taken = tokio::net::TcpListener::bind(LOOPBACK).await.unwrap();
         let addr = taken.local_addr().unwrap();
         let (stop, stopped) = tokio::sync::watch::channel(false);
-        let error = start_headless_on(addr, Arc::new(|_| {}), None, stopped).await.unwrap_err();
+        let error = start_headless_on(addr, Arc::new(|_| {}), None, stopped, None).await.unwrap_err();
         assert!(error.starts_with("bind failed:"), "{error}");
         assert!(root_mcp::runtime().is_none_or(|r| r.port != addr.port()), "nothing was published for the taken port");
         assert_eq!(bind_retry_delay(0), Duration::from_secs(5));
@@ -1573,7 +1698,7 @@ mod security_tests {
         let probe = std::net::TcpListener::bind(LOOPBACK).unwrap();
         let port = probe.local_addr().unwrap().port();
         drop(probe);
-        let (listener, kept) = bind_preferred(Some(port)).unwrap();
+        let (listener, kept) = bind_preferred(Some(port), None).unwrap();
         assert!(kept);
         assert_eq!(listener.local_addr().unwrap().port(), port);
     }
@@ -1584,10 +1709,10 @@ mod security_tests {
     fn an_occupied_remembered_port_falls_back_to_a_free_one() {
         let holder = std::net::TcpListener::bind(LOOPBACK).unwrap();
         let taken = holder.local_addr().unwrap().port();
-        let (listener, kept) = bind_preferred(Some(taken)).unwrap();
+        let (listener, kept) = bind_preferred(Some(taken), None).unwrap();
         assert!(!kept);
         assert_ne!(listener.local_addr().unwrap().port(), taken);
-        let (fresh, kept) = bind_preferred(None).unwrap();
+        let (fresh, kept) = bind_preferred(None, None).unwrap();
         assert!(!kept && fresh.local_addr().unwrap().port() != 0);
     }
 

@@ -804,11 +804,32 @@ pub fn parse_mcp_marks(stdout: &str) -> Vec<(String, Option<String>)> {
 
 /// The argv tail that stamps a freshly created `session` with `mark`
 /// (`PtyOptions::mcp_mark`): one more command of the same tmux invocation.
+///
+/// `-o` sets the option only where it is unset, so it rides a create alone:
+/// `new-session -A` attaches instead when the session appeared after the
+/// listing that judged it absent (the Mobile host created it inside the 3 s
+/// cache, or two spawns of one id raced), and an attach must never overwrite
+/// the stamp of the grant its agent really holds. `-q` keeps that refusal
+/// silent and successful: an error would end tmux's command chain there, show
+/// on the attached client and fail a detached spawn's exit status.
 fn mcp_mark_args(session: &str, mark: &str) -> Vec<String> {
-    [";", "set-option", "-t", session, crate::services::root_mcp::root_mcp_mark::OPTION, mark]
+    [";", "set-option", "-q", "-o", "-t", session, crate::services::root_mcp::root_mcp_mark::OPTION, mark]
         .into_iter()
         .map(str::to_string)
         .collect()
+}
+
+/// `set-option -t =<session>: <option> <mark>`: overwrite a live session's
+/// stamp (a revival renews it with this run's nonce, `root_mcp_reattach`).
+/// The exact target, never a prefix match onto another session.
+pub fn mcp_restamp_args(session: &str, mark: &str) -> Vec<String> {
+    vec![
+        "set-option".to_string(),
+        "-t".to_string(),
+        format!("={session}:"),
+        crate::services::root_mcp::root_mcp_mark::OPTION.to_string(),
+        mark.to_string(),
+    ]
 }
 
 /// Rewrite `opts` to spawn the tab inside a **local** tmux session when it carries
@@ -1914,11 +1935,11 @@ mod tests {
         assert!(!local_tmux_argv(session, &opts, false).iter().any(|a| a == crate::services::root_mcp::root_mcp_mark::OPTION));
         opts.mcp_mark = Some(STAMP.to_string());
         let args = local_tmux_argv(session, &opts, false);
-        let tail = &args[args.len() - 6..];
-        assert_eq!(tail, [";", "set-option", "-t", session, crate::services::root_mcp::root_mcp_mark::OPTION, STAMP]);
+        let tail = &args[args.len() - 8..];
+        assert_eq!(tail, [";", "set-option", "-q", "-o", "-t", session, crate::services::root_mcp::root_mcp_mark::OPTION, STAMP]);
         assert!(!STAMP.contains(['\'', ' ']), "one argv item, never quoted");
         let detached = local_tmux_argv(session, &opts, true);
-        assert_eq!(&detached[detached.len() - 6..], tail, "detached starts the same way");
+        assert_eq!(&detached[detached.len() - 8..], tail, "detached starts the same way");
         // The mark is the backend's alone: a payload cannot carry one.
         let json = serde_json::to_value(&opts).unwrap();
         assert!(json.get("mcp_mark").is_none(), "never written out");
@@ -1960,5 +1981,56 @@ mod tests {
         assert!(marks.contains(stamped) && marks.contains(bare) && !marks.contains("nothing-here"));
         // With the server gone the listing is empty, not an error.
         assert_eq!(mux.mcp_marks().unwrap(), crate::services::session_mux::SessionMarks::default());
+    }
+
+    /// R1's race: the listing judged the session absent, but by the spawn it
+    /// exists (the Mobile host created it inside the 3 s cache, or two spawns
+    /// of one id raced), so `new-session -A` attaches and the stamp tail runs
+    /// against a live, stamped session. It must keep the stamp of the grant
+    /// its agent holds, succeed quietly, and leave the rest of the chain to
+    /// run. (An attach needs a terminal, so the tail runs on its own here.)
+    /// A revival's re-stamp, by contrast, overwrites.
+    #[cfg(unix)]
+    #[test]
+    fn a_stamp_rides_a_create_only_and_never_overwrites_on_an_attach() {
+        if !tmux_available() {
+            return;
+        }
+        use crate::services::session_mux::{tmux::TmuxMux, SessionMux};
+        const OTHER: &str = "fedcba9876543210fedcba9876543210:-:4343";
+        let socket = format!(concat!(crate::app_slug!(), "-test-mcprace-{}"), std::process::id());
+        let session = concat!(crate::app_slug!(), "-p--agent-race");
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = detached_fixture(session, &dir.path().to_string_lossy());
+        opts.cmd = "sleep".into();
+        opts.args = vec!["30".into()];
+        opts.mcp_mark = Some(STAMP.to_string());
+        let tmux = |args: &[String]| {
+            std::process::Command::new("tmux").args(["-L", &socket, "-f", "/dev/null"]).args(args).output()
+        };
+        let created = spawn_detached_with(&opts, Some(&socket));
+        // The second launch's stamp tail, then one more command of the chain.
+        let mut tail: Vec<String> = mcp_mark_args(session, OTHER).into_iter().skip(1).collect();
+        tail.extend([";", "set-option", "-t", session, "@race_probe", "ran"].map(str::to_string));
+        let attached = tmux(&tail);
+        let probe = tmux(&["show-option".into(), "-t".into(), session.into(), "-v".into(), "@race_probe".into()]);
+        let mux = TmuxMux::isolated(socket.clone());
+        let kept = mux.mcp_marks();
+        let restamped = mux.restamp_mcp(session, OTHER).and_then(|()| mux.mcp_marks());
+        let _ = tmux(&["kill-server".into()]);
+        created.unwrap();
+        let attached = attached.unwrap();
+        assert!(attached.status.success(), "quiet: {}", String::from_utf8_lossy(&attached.stderr));
+        assert_eq!(String::from_utf8_lossy(&probe.unwrap().stdout).trim(), "ran", "the chain went on");
+        assert_eq!(kept.unwrap().entry(session), Some(&Some(STAMP.to_string())), "the creating stamp is kept");
+        assert_eq!(restamped.unwrap().entry(session), Some(&Some(OTHER.to_string())), "a re-stamp overwrites");
+    }
+
+    #[test]
+    fn a_restamp_names_the_exact_session() {
+        assert_eq!(
+            mcp_restamp_args("s-1", STAMP),
+            ["set-option", "-t", "=s-1:", crate::services::root_mcp::root_mcp_mark::OPTION, STAMP]
+        );
     }
 }

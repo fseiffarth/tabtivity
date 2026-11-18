@@ -11,7 +11,11 @@
 //!
 //! - minted per agent spawn from the OS CSPRNG, held in memory, **never written to
 //!   disk** — a project agent's fence sees `/` read-only, so a token in a file
-//!   would be a token it can read. Each process keeps its own ([`TokenStore`]):
+//!   would be a token it can read. The store is keyed by the token's SHA-256
+//!   ([`Session::id`]); only that hash is ever written, to the private reattach
+//!   record a restart revives a running agent's lanes from
+//!   ([`root_mcp_reattach`]), and a hash never authenticates. Each process
+//!   keeps its own ([`TokenStore`]):
 //!   the Mobile host serves the tabs it spawns with no window open on a
 //!   listener of its own, never the root lane (`docs/headless_mcp_plan.md`);
 //! - handed out in exactly one place, [`grant_lanes`], which hands the root
@@ -42,6 +46,7 @@
 pub mod root_mcp_import;
 pub mod root_mcp_mail;
 pub mod root_mcp_mark;
+pub mod root_mcp_reattach;
 pub mod root_mcp_review;
 pub mod root_mcp_security;
 
@@ -234,14 +239,13 @@ impl TokenStore {
     fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
         self.0.lock_ok()
     }
-    /// The session `header` (the raw `Authorization` value) opens here.
+    /// The session `header` (the raw `Authorization` value) opens here: the
+    /// bearer is hashed and looked up by that hash ([`Session::id`]), so no
+    /// token is kept in the map. A hash presented as the bearer is hashed
+    /// again and opens nothing: the hash is a lookup key, never a credential.
     pub fn authenticate(&self, header: Option<&str>) -> Option<Session> {
-        let map = self.map();
-        let mut found = None;
-        for (token, session) in map.iter() {
-            if authorized(header, token) { found = Some(session.clone()); }
-        }
-        found
+        let hash = bearer_hash(header)?;
+        self.map().get(&hash).cloned()
     }
     /// Record on `token`'s Pusher binding the fence scope its tab was spawned
     /// into. Called from the spawn path before the agent process exists, so no
@@ -249,7 +253,7 @@ impl TokenStore {
     /// none, is left alone; whether a binding was stamped.
     pub fn stamp_push_fence_scope(&self, token: &str, scope: &str) -> bool {
         let mut map = self.map();
-        let Some(binding) = map.get_mut(token)
+        let Some(binding) = map.get_mut(&token_hash(token))
             .filter(|s| s.identity.caller == Caller::Pusher)
             .and_then(|s| s.identity.push.as_mut()) else { return false };
         binding.fence_scope = Some(scope.to_string());
@@ -260,7 +264,7 @@ impl TokenStore {
     /// Same caller and timing as [`Self::stamp_push_fence_scope`].
     pub fn stamp_push_unfenced_host(&self, token: &str) -> bool {
         let mut map = self.map();
-        let Some(binding) = map.get_mut(token)
+        let Some(binding) = map.get_mut(&token_hash(token))
             .filter(|s| s.identity.caller == Caller::Pusher)
             .and_then(|s| s.identity.push.as_mut()) else { return false };
         binding.unfenced_host = true;
@@ -280,7 +284,8 @@ impl TokenStore {
             cockpit: None,
             tabs: None,
             cockpit_rate: Arc::default(),
-            id: crate::digest::sha256_hex(token.as_bytes()),
+            id: token_hash(&token),
+            revived: false,
             access: Access::initial(identity.caller), identity,
             revoked: Arc::new(AtomicBool::new(false)),
             read_mail: Arc::new(AtomicBool::new(read_mail)),
@@ -290,7 +295,7 @@ impl TokenStore {
             schedule_rate: Arc::default(),
             push_rate: Arc::default(),
         };
-        map.insert(token, session);
+        map.insert(session.id.clone(), session);
     }
     /// A session in this store, for the listener's tests (`register` is private).
     #[cfg(test)]
@@ -300,11 +305,11 @@ impl TokenStore {
     /// End the session of `token` in this store, for the listener's tests.
     #[cfg(test)]
     pub(crate) fn revoke_for_test(&self, token: &str) {
-        if let Some(s) = self.map().remove(token) { s.revoked.store(true, Ordering::Release); }
+        if let Some(s) = self.map().remove(&token_hash(token)) { s.revoked.store(true, Ordering::Release); }
     }
     /// Whether the session `id` ([`Session::id`]) is held here and not revoked.
     pub fn holds_session(&self, id: &str) -> bool {
-        self.map().values().any(|s| s.id == id && !s.revoked.load(Ordering::Acquire))
+        self.map().get(id).is_some_and(|s| !s.revoked.load(Ordering::Acquire))
     }
     /// A reattached session keeps the tokens it was started with: re-key every
     /// lane of the tab that holds the session `grant` to `tab`, the PTY id of
@@ -313,16 +318,26 @@ impl TokenStore {
     /// nothing is revoked, except what `tab` held already: a lane the new PTY
     /// id was granted by an earlier spawn would otherwise sit in the same lane
     /// as the adopted one. Whether the grant was held.
+    ///
+    /// A tab whose lanes were revived from the reattach record
+    /// ([`root_mcp_reattach`]) carries only those: a session of a lane that is
+    /// never revived (root, reader, schedule, web) found beside a revived one
+    /// is revoked here rather than carried, so `adopt` never extends what a
+    /// revival was allowed to bring back. The downtime cap is applied before
+    /// `adopt` is reached (`launch_prep`'s plan for a previous run's stamp).
     pub fn adopt(&self, grant: &str, tab: &str) -> bool {
         let mut map = self.map();
-        let Some(old) = map.values().find(|s| s.id == grant && !s.revoked.load(Ordering::Acquire)).map(|s| s.identity.tab.clone()) else {
+        let Some(old) = map.get(grant).filter(|s| !s.revoked.load(Ordering::Acquire)).map(|s| s.identity.tab.clone()) else {
             return false;
         };
         if old == tab {
             return true;
         }
+        let revived = map.values().any(|s| s.identity.tab == old && s.revived);
         map.retain(|_, s| {
-            if s.identity.tab == tab { s.revoked.store(true, Ordering::Release); false } else { true }
+            let foreign = s.identity.tab == tab;
+            let unrevivable = revived && s.identity.tab == old && !root_mcp_reattach::revivable(s.identity.caller);
+            if foreign || unrevivable { s.revoked.store(true, Ordering::Release); false } else { true }
         });
         for s in map.values_mut().filter(|s| s.identity.tab == old) {
             s.identity.tab = tab.to_string();
@@ -385,13 +400,29 @@ pub enum ProjectsGrant {
     /// The tab runs unfenced and already reads everything.
     All,
 }
-/// Whether the tab held a token.
-pub fn revoke_tab(tab: &str) -> bool {
-    let mut held = false;
+/// End every session `tab` holds in this process, in memory only: the tab's
+/// PTY is gone (`root_mcp_review::on_tab_gone`), but its tmux session and the
+/// agent in it may live on, so the reattach record keeps its row and a later
+/// reattach can revive the lanes ([`root_mcp_reattach`]). Whether the tab
+/// held a token.
+pub fn release_tab(tab: &str) -> bool {
+    !release_tab_ids(tab).is_empty()
+}
+/// [`release_tab`], answering the session ids that ended.
+fn release_tab_ids(tab: &str) -> Vec<String> {
+    let mut ids = Vec::new();
     tokens().map().retain(|_, s| {
-        if s.identity.tab == tab { s.revoked.store(true, Ordering::Release); held = true; false } else { true }
+        if s.identity.tab == tab { s.revoked.store(true, Ordering::Release); ids.push(s.id.clone()); false } else { true }
     });
-    held
+    ids
+}
+/// End every session `tab` holds for good: [`release_tab`], and their hashes
+/// leave the reattach record, so no restart revives them. Whether the tab
+/// held a token.
+pub fn revoke_tab(tab: &str) -> bool {
+    let ids = release_tab_ids(tab);
+    root_mcp_reattach::forget_hashes(&ids);
+    !ids.is_empty()
 }
 /// Tabs whose running agent holds credentials nobody honours any more: a
 /// reattach found its session stamped by a listener that is gone
@@ -555,7 +586,7 @@ pub(crate) fn test_session_tabs(tab: &str, binding: super::tabs_mcp::Binding) ->
         tab: tab.to_string(), caller: Caller::Tabs, project: Some(binding.seat.scope.clone()),
         schedule_target: None, push: None, endpoint: None, model: None,
     }, false);
-    if let Some(session) = tokens().map().get_mut(&token) { session.tabs = Some(binding.clone()); }
+    if let Some(session) = tokens().map().get_mut(&token_hash(&token)) { session.tabs = Some(binding.clone()); }
     let session = authenticate(Some(&format!("Bearer {token}"))).unwrap();
     super::tabs_mcp::enrol(binding, tab, &session.id);
     (token, session)
@@ -642,6 +673,10 @@ pub struct Session {
     pub identity: Identity,
     pub access: Access,
     pub(crate) cockpit: Option<super::cockpit_mcp::Binding>,
+    /// Revived from the reattach record after a restart
+    /// ([`root_mcp_reattach`]): a previous run minted it, this run never
+    /// held its token.
+    pub(crate) revived: bool,
     /// A [`Caller::Tabs`] session's seat (`services::tabs_mcp`), set at grant.
     pub(crate) tabs: Option<super::tabs_mcp::Binding>,
     cockpit_rate: Arc<std::sync::Mutex<RollingWindow>>,
@@ -766,7 +801,7 @@ pub fn sessions() -> Vec<SessionInfo> {
 pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     access.validate()?;
     let mut map = tokens().map();
-    let s = map.values_mut().find(|s| s.id == id).ok_or("MCP session is closed")?;
+    let s = map.get_mut(id).ok_or("MCP session is closed")?;
     if matches!(s.identity.caller, Caller::Scheduler | Caller::Pusher | Caller::Helper | Caller::Marker | Caller::Web | Caller::Cockpit | Caller::Printer | Caller::Tabs) { return Err("this session's scope is fixed at spawn".into()); }
     s.revoked.store(true, Ordering::Release);
     s.revoked = Arc::new(AtomicBool::new(false));
@@ -776,24 +811,35 @@ pub fn set_access(id: &str, access: Access) -> Result<(), String> {
     let _guard = super::root_mcp_review::lock();
     Ok(())
 }
+/// The user (or the Mobile host's sweep) ends one session for good: it leaves
+/// the store and its hash leaves the reattach record ([`root_mcp_reattach`]).
 pub fn revoke_session(id: &str) -> Result<String, String> {
-    let mut map = tokens().map();
-    let key = map.iter().find(|(_, s)| s.id == id).map(|(k, _)| k.clone()).ok_or("MCP session is closed")?;
-    let s = map.remove(&key).unwrap();
+    let s = tokens().map().remove(id).ok_or("MCP session is closed")?;
     s.revoked.store(true, Ordering::Release);
+    root_mcp_reattach::forget_hashes(std::slice::from_ref(&s.id));
     Ok(s.identity.tab)
 }
 /// Whether the session `id` (a [`Session::id`]) still holds an unrevoked
 /// token — what a record bound to a session checks before it trusts it.
 pub fn session_alive(id: &str) -> bool {
-    tokens().map().values()
-        .any(|s| s.id == id && !s.revoked.load(Ordering::Acquire))
+    tokens().holds_session(id)
 }
 pub fn authenticate(header: Option<&str>) -> Option<Session> {
     tokens().authenticate(header)
 }
 pub fn caller(header: Option<&str>) -> Option<Identity> {
     authenticate(header).map(|s| s.identity)
+}
+
+/// A token's key in a [`TokenStore`] and its [`Session::id`]: its SHA-256, hex.
+pub fn token_hash(token: &str) -> String {
+    crate::digest::sha256_hex(token.as_bytes())
+}
+/// The [`token_hash`] of the bearer `header` (the raw `Authorization` value)
+/// presents; `None` without a `Bearer ` token.
+pub fn bearer_hash(header: Option<&str>) -> Option<String> {
+    let presented = header?.strip_prefix("Bearer ")?;
+    (!presented.is_empty()).then(|| token_hash(presented))
 }
 
 /// Constant-time bearer check. `header` is the raw `Authorization` value.
@@ -813,7 +859,7 @@ pub fn is_root_agent(opts: &PtyOptions, is_agent: bool) -> bool {
     is_agent && opts.project_id.is_none()
 }
 
-fn basename(cmd: &str) -> &str {
+pub(crate) fn basename(cmd: &str) -> &str {
     cmd.rsplit(['/', '\\']).next().unwrap_or(cmd)
 }
 
@@ -1019,7 +1065,7 @@ pub fn merge_opencode_mcp(base: &str, lanes: &str) -> String {
 
 /// Whether this spawn is a local-model tab: Vibe, pointed at an Ollama model
 /// by the env pair `NewTabMenu` sets. A bare `vibe` is Mistral's cloud CLI.
-fn is_local_model(opts: &PtyOptions) -> bool {
+pub(crate) fn is_local_model(opts: &PtyOptions) -> bool {
     basename(&opts.cmd) == "vibe"
         && (opts.env.contains_key(crate::app_env!("LOCAL_MODEL")) || opts.env.contains_key("VIBE_ACTIVE_MODEL"))
 }
@@ -1037,17 +1083,28 @@ fn local_model_has_tools(opts: &PtyOptions, tool_models: &[String]) -> bool {
 }
 
 /// Roll back a handed-out token if wrapping or spawning the PTY fails.
-/// Every lane's token ([`LANE_TOKEN_ENVS`]) is taken, so no lane is left out.
-pub struct SpawnTokenGuard { tokens: Vec<String>, listed: bool, armed: bool }
+/// Every lane's token ([`LANE_TOKEN_ENVS`]) is taken, so no lane is left out;
+/// the guard holds their hashes ([`Session::id`]), never the tokens.
+pub struct SpawnTokenGuard { hashes: Vec<String>, listed: bool, armed: bool }
 impl SpawnTokenGuard {
     pub fn new(opts: &PtyOptions) -> Self {
         Self {
-            tokens: LANE_TOKEN_ENVS.iter().filter_map(|var| opts.env.get(*var).cloned()).collect(),
+            hashes: LANE_TOKEN_ENVS.iter().filter_map(|var| opts.env.get(*var)).map(|token| token_hash(token)).collect(),
             listed: [TOKEN_ENV, SCHEDULE_TOKEN_ENV, GIT_TOKEN_ENV].iter().any(|var| opts.env.contains_key(*var)),
             armed: true,
         }
     }
     pub fn keep(&mut self) { self.armed = false; }
+    /// A revival moved fresh sessions to recorded hashes
+    /// ([`root_mcp_reattach::revive`]): a failed spawn rolls those back
+    /// instead (in memory; the record keeps its row).
+    pub fn retarget(&mut self, swaps: &[(String, String)]) {
+        for (fresh, recorded) in swaps {
+            for hash in self.hashes.iter_mut().filter(|h| *h == fresh) {
+                *hash = recorded.clone();
+            }
+        }
+    }
     /// Whether this spawn was handed a listed token (root, reader, schedule
     /// or push); the cockpit, help, markup, print and web tokens alone do not
     /// count.
@@ -1056,12 +1113,19 @@ impl SpawnTokenGuard {
 impl Drop for SpawnTokenGuard {
     fn drop(&mut self) {
         if self.armed {
-            for token in &self.tokens { revoke_token(token); }
+            for hash in &self.hashes { revoke_hash(hash); }
         }
     }
 }
+/// End the session of `token` in memory (a failed spawn's rollback, a lane
+/// whose spawn ended): the reattach record is left alone, as by
+/// [`release_tab`].
 pub fn revoke_token(token: &str) -> Option<Identity> {
-    tokens().map().remove(token).map(|s| {
+    revoke_hash(&token_hash(token))
+}
+/// [`revoke_token`] by the token's hash ([`Session::id`]).
+pub fn revoke_hash(hash: &str) -> Option<Identity> {
+    tokens().map().remove(hash).map(|s| {
         s.revoked.store(true, Ordering::Release);
         s.identity
     })
@@ -1454,7 +1518,7 @@ fn grant_cockpit(opts: &mut PtyOptions, runtime: &Runtime, store: &TokenStore, s
     if opts.env.get(COCKPIT_TOKEN_ENV) != Some(&token) { return; }
     store.register(token.clone(), Identity { tab: opts.id.clone(), caller: Caller::Cockpit,
         project: Some(binding.scope.clone()), schedule_target: None, push: None, endpoint: None, model: None }, false);
-    if let Some(session) = store.map().get_mut(&token) { session.cockpit = Some(binding.clone()); }
+    if let Some(session) = store.map().get_mut(&token_hash(&token)) { session.cockpit = Some(binding.clone()); }
     // The previous spawn's token is gone by now (`register` revokes it): what
     // it published as current activity is not this spawn's.
     super::cockpit_mcp::clear_foreign_activity(&binding);
@@ -1649,7 +1713,7 @@ pub(crate) fn grant_tabs(opts: &mut PtyOptions, runtime: &Runtime, store: &Token
         project: Some(binding.seat.scope.clone()), schedule_target: None, push: None, endpoint: None, model: None }, false);
     let session = {
         let mut map = store.map();
-        let Some(session) = map.get_mut(&token) else { return };
+        let Some(session) = map.get_mut(&token_hash(&token)) else { return };
         session.tabs = Some(binding.clone());
         session.id.clone()
     };

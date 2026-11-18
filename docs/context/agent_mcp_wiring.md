@@ -91,8 +91,10 @@ new PTY id; a **Stale** one mints nothing and flags the tab (`mcpStale` on the
 spawn answer, `appMcpStale` in the hover card's features, `servers_of_tab`
 empty). Minting for a reattach would be wrong twice: nobody receives the
 tokens, and `TokenStore::register` revokes the tab's earlier token per lane.
-The listener's port is stable across runs (`<state_dir>/root_mcp/port`), so a
-stale agent's calls reach this program's refusal, not another listener.
+The listener's port is stable across runs (`<state_dir>/root_mcp/port`, the
+Mobile host's `host-port`), so a stale agent's calls reach this program's
+refusal, not another listener. Where the guards allow, a stale reattach is
+**revived** instead (section 5).
 
 Which CLIs retry an MCP server after it refused connections: section 4.
 
@@ -125,3 +127,30 @@ OpenCode 2.3.0 does not list MCP tools to the model: it calls them through the
 `--standalone`, OpenCode 2.x's TUI is a client of a shared background service
 (`opencode serve --service`, one fixed port) that keeps the config of whoever
 started it, so a probe needs `--standalone`.
+
+## 5. Revival after a restart: what each CLI gets
+
+`services::root_mcp::root_mcp_reattach` (`docs/context/tmux_sessions.md`, "Revival")
+makes the restarted listener honour a surviving agent's old tokens again: same
+port, same bearer, so to the CLI the app was only down. Revived lanes: git,
+cockpit, help, markup, print, tabs. Never schedule, root, reader, local model or
+web: a tab that held one of those stays **Stale** and needs Reconnect. Past
+30 minutes of downtime (`now - last_alive`, which reads up to 5 minutes long)
+nothing is revived. Per CLI (`root_mcp_reattach::cli_revives`, the record's
+`cmd_stem`):
+
+| CLI | Revived? | What the user sees |
+|---|---|---|
+| Claude | yes | Tools answer again at the next call; nothing to press. |
+| Codex, OpenCode | yes | Tools answer again: the agent connected at its start (it was created by the run that granted it), and both retry after an outage. |
+| Copilot | only under 50 s of downtime | Under: as above. Over (the usual case, since `last_alive` is up to 5 minutes old): Stale, Reconnect; Copilot has dropped the server for good. |
+| a CLI with no wiring (env pair → `tabtivity-mcp`) | yes | Each `tabtivity-mcp` call is a fresh, stateless request with the env's token. |
+| local Vibe model (`VIBE_MCP_SERVERS`) | no | Stale: its client was never checked. |
+| assistant chat (Tabby) | no record | The Phase 1 way. |
+
+Between the listener's start and the tab's restore, a previous run's token of
+a revivable lane gets `503` (not `401`) while its row may still be revived
+(`pending_bearer`): a CLI that reads `401` as "sign in" is not sent down that
+path. How each CLI treats a `503` is **not verified**; nor is a `401` after a
+CLI was told `503`. Claude, Codex and OpenCode's retry above was seen against
+connection refused only.

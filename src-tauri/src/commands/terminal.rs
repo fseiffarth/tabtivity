@@ -255,6 +255,8 @@ pub async fn local_tmux_kill(session: String) -> Result<(), String> {
         // serve (the mux dropped its launcher).
         if !matches!(killed, Err(MuxError::Io(_))) {
             crate::services::api_proxy::on_tmux_session_gone(&session);
+            // Nothing left to revive: the reattach record drops its row.
+            crate::services::root_mcp::root_mcp_reattach::on_session_gone(&session);
         }
         killed.map_err(|e| match e {
             MuxError::Refused(why) => {
@@ -284,7 +286,12 @@ pub async fn local_tmux_kill_app_sessions() -> Result<(), String> {
     if !mux.holds_sessions() {
         return Ok(());
     }
-    app_core::rt::try_blocking("terminal", move || mux.kill_app_sessions().map_err(|e| e.to_string())).await
+    app_core::rt::try_blocking("terminal", move || {
+        let ended = mux.kill_app_sessions().map_err(|e| e.to_string());
+        crate::services::root_mcp::root_mcp_reattach::on_all_sessions_gone();
+        ended
+    })
+    .await
 }
 
 /// Whether a **local** tmux session's pane has ended and stays on screen — a
@@ -329,6 +336,8 @@ pub async fn local_tmux_rename(session: String, new_name: String) -> Result<(), 
         // session's new name instead of being swept as gone.
         if mux.rename(&session, &new_name).is_ok() {
             crate::services::api_proxy::on_tmux_renamed(&session, &new_name);
+            // Its stamp moved with it; so does its reattach row.
+            crate::services::root_mcp::root_mcp_reattach::on_session_renamed(&session, &new_name);
         }
     })
     .await

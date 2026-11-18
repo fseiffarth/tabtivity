@@ -276,6 +276,16 @@ pub trait SessionMux: Send + Sync {
     fn note_mcp_mark(&self, name: &str, mark: &str) {
         let _ = (name, mark);
     }
+    /// Overwrite the live session `name`'s stamp with `mark`: a revival
+    /// (`root_mcp_reattach`) renews the nonce, so the next reattach in this
+    /// run reads the stamp as its own and adopts. The default cannot
+    /// (`Unavailable`): the session keeps its old stamp, and a revived
+    /// session is then found on this listener's port by its grant
+    /// (`root_mcp_mark::classify_reattach`) but not revived by a later run.
+    fn restamp_mcp(&self, name: &str, mark: &str) -> Result<(), MuxError> {
+        let _ = (name, mark);
+        Err(MuxError::Unavailable("this backend cannot re-stamp a session".into()))
+    }
     fn has(&self, name: &str) -> Result<bool, MuxError>;
     fn pane(&self, name: &str) -> Result<PaneInfo, MuxError>;
     /// The window's `(cols, rows)`. A backend may answer it more cheaply than

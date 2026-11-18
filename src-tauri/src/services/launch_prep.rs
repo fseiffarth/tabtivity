@@ -669,6 +669,8 @@ pub struct PreparedLaunch {
     /// A session this launch creates, with the stamp it gets: noted into the
     /// mux's listing cache once the process exists ([`PreparedLaunch::commit`]).
     mcp_stamped: Option<(String, String)>,
+    /// The reattach record's row this launch writes at commit.
+    mcp_record: Option<McpRecord>,
     mcp_spawn_guard: Option<crate::services::root_mcp::SpawnTokenGuard>,
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     /// The fence scope the spawn runs in, `None` for an unfenced one.
@@ -841,6 +843,9 @@ impl PreparedLaunch {
         crate::services::root_mcp::set_tab_stale(&self.spawned_tab_id, self.mcp_stale);
         if let Some((session, mark)) = self.mcp_stamped.take() {
             crate::services::session_mux::mux().note_mcp_mark(&session, &mark);
+        }
+        if let Some(record) = self.mcp_record.take() {
+            record.apply();
         }
         match self.features.take() {
             Some(f) => crate::services::agent_features::record(&self.spawned_tab_id, crate::services::agent_features::Spawn {
@@ -1181,9 +1186,20 @@ pub async fn prepare(
     // every tab of a restore.
     let local_session = local_session_plan(&opts, agent_spawn, remote_agent_run).await;
     let verdict = local_session.as_ref().map_or(Reattach::Create, |plan| plan.verdict);
+    // A stale session whose lanes the reattach record can revive
+    // (`root_mcp_reattach`, every guard passed) is granted as a create, against
+    // the current settings and trusted entries; once the fence is decided
+    // below, each fresh session either takes the recorded token's place or is
+    // revoked, and nothing fresh reaches the session.
+    let revive_row = local_session.as_ref().and_then(|plan| plan.revive.clone());
+    let reviving = revive_row.is_some();
+    // The agent's own program, before any wrap renames it: what a revival
+    // later asks about its reconnecting (`root_mcp_reattach::cli_revives`).
+    let agent_stem = crate::services::root_mcp::basename(&opts.cmd).to_string();
+    let agent_local_model = crate::services::root_mcp::is_local_model(&opts);
     let mut mcp_adopted = false;
     let mut mcp_stamped = None;
-    let root_agent = if verdict == Reattach::Create {
+    let root_agent = if verdict == Reattach::Create || reviving {
         let root_agent = crate::services::root_mcp::grant_lanes(
             &mut opts,
             agent_spawn,
@@ -1192,12 +1208,9 @@ pub async fn prepare(
             &storage::state_dir(),
         );
         // A session created now is stamped with the grant it was given.
-        if let (Some(plan), Some(runtime)) = (local_session.as_ref(), crate::services::root_mcp::runtime()) {
+        if let (Some(plan), Some(runtime), false) = (local_session.as_ref(), crate::services::root_mcp::runtime(), reviving) {
             if plan.stamps {
-                let grant = crate::services::root_mcp::LANE_TOKEN_ENVS
-                    .iter()
-                    .find_map(|var| opts.env.get(*var))
-                    .map(|token| crate::digest::sha256_hex(token.as_bytes()));
+                let grant = crate::services::root_mcp::root_mcp_reattach::stamp_grant(&opts.env);
                 let mark = crate::services::root_mcp::root_mcp_mark::Mark {
                     nonce: runtime.generation.clone(),
                     grant,
@@ -1217,8 +1230,8 @@ pub async fn prepare(
         }
         crate::services::root_mcp::is_root_agent(&opts, agent_spawn)
     };
-    let mcp_stale = verdict == Reattach::Stale;
-    let mcp_spawn_guard = agent_spawn
+    let mut mcp_stale = verdict == Reattach::Stale && !reviving;
+    let mut mcp_spawn_guard = agent_spawn
         .then(|| crate::services::root_mcp::SpawnTokenGuard::new(&opts));
     // The push token, if `grant_lanes` minted one; its binding learns the fence
     // scope once the fence is decided below.
@@ -1698,6 +1711,46 @@ pub async fn prepare(
         }
     }
 
+    // Phase 2 of the reattach (`root_mcp_reattach`), once every binding is
+    // final (the push binding's fence scope just above). A revival swaps each
+    // fresh session whose identity matches the recorded one for the recorded
+    // hash and revokes the rest; a lane that does not come back leaves the tab
+    // stale. A session this launch creates gets its row, written at commit.
+    let mut mcp_record = None;
+    if let Some(listener) = crate::services::root_mcp::root_mcp_reattach::listener() {
+        use crate::services::root_mcp::root_mcp_reattach as reattach;
+        if let (Some(row), Some(session)) = (revive_row, opts.tmux_session.clone()) {
+            let fresh: Vec<String> = crate::services::root_mcp::LANE_TOKEN_ENVS
+                .iter()
+                .filter_map(|var| opts.env.get(*var))
+                .map(|token| crate::services::root_mcp::token_hash(token))
+                .collect();
+            let outcome = reattach::revive(crate::services::root_mcp::tokens(), &opts.id, opts.project_id.as_deref(), &row, &fresh);
+            if let Some(guard) = mcp_spawn_guard.as_mut() {
+                guard.retarget(&outcome.retarget);
+            }
+            mcp_stale = outcome.lost;
+            mcp_record = Some(McpRecord::Revived { session, row, outcome });
+        } else if let (Some((session, _)), false) = (mcp_stamped.as_ref(), assistant) {
+            mcp_record = reattach::created_row(
+                crate::services::root_mcp::tokens(),
+                &opts.env,
+                listener,
+                opts.project_id.clone(),
+                &agent_stem,
+                agent_local_model,
+            )
+            .map(|row| McpRecord::Created { session: String::clone(session), row });
+        }
+    }
+    // A revived session is attached, never created: its environment is not
+    // the agent's, and no fresh token rides into it.
+    if reviving {
+        for var in crate::services::root_mcp::LANE_TOKEN_ENVS {
+            opts.env.remove(*var);
+        }
+    }
+
     // Before the agent process exists, so no tool call can see the default.
     if root_agent && root_projects != crate::services::root_mcp::ProjectsGrant::Hidden {
         crate::services::root_mcp::mark_tab_projects_readable(&opts.id, root_projects);
@@ -1779,7 +1832,50 @@ pub async fn prepare(
         mcp_stale,
         mcp_adopted,
         mcp_stamped,
+        mcp_record,
     })
+}
+
+/// What a launch writes to the reattach record at commit
+/// (`root_mcp_reattach`).
+enum McpRecord {
+    /// A session this launch creates, with the lanes it was granted.
+    Created { session: String, row: crate::services::root_mcp::root_mcp_reattach::Row },
+    /// A session this launch revived from `row`.
+    Revived {
+        session: String,
+        row: crate::services::root_mcp::root_mcp_reattach::Row,
+        outcome: crate::services::root_mcp::root_mcp_reattach::Outcome,
+    },
+}
+
+impl McpRecord {
+    /// Write the row. A revival first re-stamps the session with this run's
+    /// nonce and its first revived lane's hash, so the next reattach in this
+    /// run reads its own stamp and adopts; where the backend cannot re-stamp,
+    /// the row keeps the old nonce and no later run revives it again.
+    fn apply(self) {
+        use crate::services::root_mcp::root_mcp_reattach as reattach;
+        let Some(listener) = reattach::listener() else { return };
+        match self {
+            McpRecord::Created { session, row } => listener.write_row(&session, row),
+            McpRecord::Revived { session, row, outcome } => {
+                let Some(first) = outcome.revived.iter().find_map(|lane| lane.hash.clone()) else {
+                    listener.drop_session(&session);
+                    return;
+                };
+                let mark = crate::services::root_mcp::root_mcp_mark::Mark {
+                    nonce: listener.nonce().to_string(),
+                    grant: Some(first.clone()),
+                    port: listener.port(),
+                }
+                .render();
+                let restamped = crate::services::session_mux::mux().restamp_mcp(&session, &mark).is_ok();
+                let row = reattach::revived_row(row, &outcome, restamped.then_some((listener.nonce(), first.as_str())));
+                listener.write_row(&session, row);
+            }
+        }
+    }
 }
 
 /// The Local models only re-check once a spawn is registered (the window's PTY, the
@@ -1886,6 +1982,9 @@ struct LocalSessionPlan {
     stamps: bool,
     /// The grant of this run's own stamp, to adopt on a [`Reattach::Live`].
     own_grant: Option<String>,
+    /// A [`Reattach::Stale`] session the reattach record can revive
+    /// (`root_mcp_reattach`): its row passed every guard.
+    revive: Option<crate::services::root_mcp::root_mcp_reattach::Row>,
 }
 
 use crate::services::root_mcp::root_mcp_mark::Reattach;
@@ -1916,6 +2015,7 @@ fn local_session_plan_in(
     runtime: Option<&crate::services::root_mcp::Runtime>,
 ) -> LocalSessionPlan {
     use crate::services::root_mcp::root_mcp_mark::{probe_grant, Stamp};
+    use crate::services::root_mcp::root_mcp_reattach as reattach;
     let (exists, stamp) = match mux.mcp_marks() {
         Ok(marks) => (marks.contains(session), Stamp::of(marks.entry(session))),
         // A backend that cannot read the stamp (an older Windows session host,
@@ -1923,34 +2023,57 @@ fn local_session_plan_in(
         // it rejoins is still asked.
         Err(_) => (mux.has(session).unwrap_or(false), Stamp::Unknown),
     };
+    let record = reattach::listener();
+    let now = reattach::now_secs();
     plan_for(
         exists,
         &stamp,
         runtime,
         &|grant| crate::services::root_mcp::tokens().holds_session(grant),
-        &|mark| mark.grant.as_deref().is_some_and(|grant| probe_grant(mark.port, grant)),
+        // The port this listener remembered and lost is held by someone else:
+        // a stamp naming it is stale, and its grant is not sent there.
+        &|mark| {
+            record.and_then(|l| l.lost_port()) != Some(mark.port)
+                && mark.grant.as_deref().is_some_and(|grant| probe_grant(mark.port, grant))
+        },
+        &|nonce| record.is_some_and(|l| l.within_cap(nonce, now)),
+        &|mark| record.and_then(|l| l.candidate(session, mark, now)),
     )
 }
 
-/// The decision of [`local_session_plan_in`], with what it reads passed in.
+/// The decision of [`local_session_plan_in`], with what it reads passed in:
+/// `previous_ok(nonce)` — a previous run's stamp on this listener's port is
+/// still within the downtime cap (`root_mcp_reattach::Listener::within_cap`);
+/// `revival(mark)` — the record's row for a stale session, when every
+/// revival guard holds.
 fn plan_for(
     exists: bool,
     stamp: &crate::services::root_mcp::root_mcp_mark::Stamp,
     runtime: Option<&crate::services::root_mcp::Runtime>,
     grant_held: &dyn Fn(&str) -> bool,
     foreign_live: &dyn Fn(&crate::services::root_mcp::root_mcp_mark::Mark) -> bool,
+    previous_ok: &dyn Fn(&str) -> bool,
+    revival: &dyn Fn(&crate::services::root_mcp::root_mcp_mark::Mark) -> Option<crate::services::root_mcp::root_mcp_reattach::Row>,
 ) -> LocalSessionPlan {
     use crate::services::root_mcp::root_mcp_mark::{classify_reattach, Stamp};
     let Some(runtime) = runtime else {
         // No listener in this process: nothing is granted, nothing stamped.
-        return LocalSessionPlan { exists, verdict: Reattach::Create, stamps: false, own_grant: None };
+        return LocalSessionPlan { exists, verdict: Reattach::Create, stamps: false, own_grant: None, revive: None };
+    };
+    let mark = match stamp {
+        Stamp::Marked(mark) => Some(mark),
+        _ => None,
     };
     let mut own_grant = None;
     let verdict = classify_reattach(
         stamp,
         &runtime.generation,
+        runtime.port,
         |grant| {
-            let held = grant_held(grant);
+            // A previous run's grant on this port is held only after a
+            // revival; it is adopted only while the cap still allows it.
+            let honoured = mark.is_none_or(|m| m.nonce == runtime.generation || previous_ok(&m.nonce));
+            let held = honoured && grant_held(grant);
             if held {
                 own_grant = Some(grant.to_string());
             }
@@ -1958,7 +2081,11 @@ fn plan_for(
         },
         foreign_live,
     );
-    LocalSessionPlan { exists, verdict, stamps: *stamp != Stamp::Unknown, own_grant }
+    let revive = match (verdict, mark) {
+        (Reattach::Stale, Some(mark)) if mark.grant.is_some() => revival(mark),
+        _ => None,
+    };
+    LocalSessionPlan { exists, verdict, stamps: *stamp != Stamp::Unknown, own_grant, revive }
 }
 
 /// Whether a spawn wrapped in the tab's tmux `session` (`new-session -A`)
@@ -2087,7 +2214,7 @@ mod tests {
             mcp_mark: None,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, live_turn: None, checkpoint_key: None, drop_dir: None, ai: true, host_attach_only: false, mcp_stale: false, mcp_adopted: false, mcp_stamped: None, mcp_spawn_guard: None,
+            opts, named: false, interrupted: false, resting: false, live_turn: None, checkpoint_key: None, drop_dir: None, ai: true, host_attach_only: false, mcp_stale: false, mcp_adopted: false, mcp_stamped: None, mcp_record: None, mcp_spawn_guard: None,
             resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, privacy_check: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
@@ -3019,19 +3146,29 @@ mod tests {
         fn mark(nonce: &str, grant: Option<&str>) -> Stamp {
             Stamp::Marked(Mark { nonce: nonce.into(), grant: grant.map(str::to_string), port: 4001 })
         }
+        /// [`plan_for`] with no previous run and no record to revive from.
+        fn plan(
+            exists: bool,
+            stamp: &Stamp,
+            runtime: Option<&Runtime>,
+            held: &dyn Fn(&str) -> bool,
+            probe: &dyn Fn(&Mark) -> bool,
+        ) -> LocalSessionPlan {
+            plan_for(exists, stamp, runtime, held, probe, &|_| false, &|_| None)
+        }
 
         #[test]
         fn a_missing_session_is_created_and_stamped() {
-            let plan = plan_for(false, &Stamp::Absent, Some(&runtime()), &|_| panic!("held?"), &|_| panic!("probe?"));
+            let plan = plan(false, &Stamp::Absent, Some(&runtime()), &|_| panic!("held?"), &|_| panic!("probe?"));
             assert!(!plan.exists && plan.verdict == Reattach::Create && plan.stamps && plan.own_grant.is_none());
         }
 
         #[test]
         fn a_stamp_this_run_made_is_live_while_its_grant_is_held() {
-            let held = plan_for(true, &mark(NONCE, Some(GRANT)), Some(&runtime()), &|g| g == GRANT, &|_| panic!("probe?"));
+            let held = plan(true, &mark(NONCE, Some(GRANT)), Some(&runtime()), &|g| g == GRANT, &|_| panic!("probe?"));
             assert!(held.exists && held.verdict == Reattach::Live);
             assert_eq!(held.own_grant.as_deref(), Some(GRANT), "what to adopt");
-            let gone = plan_for(true, &mark(NONCE, Some(GRANT)), Some(&runtime()), &|_| false, &|_| panic!("probe?"));
+            let gone = plan(true, &mark(NONCE, Some(GRANT)), Some(&runtime()), &|_| false, &|_| panic!("probe?"));
             assert_eq!(gone.verdict, Reattach::Stale);
             assert!(gone.own_grant.is_none());
         }
@@ -3039,17 +3176,53 @@ mod tests {
         #[test]
         fn another_listeners_stamp_is_live_only_when_it_confirms() {
             let stamp = mark(OTHER, Some(GRANT));
-            let yes = plan_for(true, &stamp, Some(&runtime()), &|_| panic!("held?"), &|m| m.port == 4001);
+            let yes = plan(true, &stamp, Some(&runtime()), &|_| panic!("held?"), &|m| m.port == 4001);
             assert_eq!(yes.verdict, Reattach::Live);
             assert!(yes.own_grant.is_none(), "nothing of another process's store is adopted");
-            let no = plan_for(true, &stamp, Some(&runtime()), &|_| panic!("held?"), &|_| false);
+            let no = plan(true, &stamp, Some(&runtime()), &|_| panic!("held?"), &|_| false);
             assert_eq!(no.verdict, Reattach::Stale);
         }
 
         #[test]
         fn a_session_with_no_stamp_or_no_grant() {
-            assert_eq!(plan_for(true, &Stamp::Unmarked, Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::Stale);
-            assert_eq!(plan_for(true, &mark(OTHER, None), Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::NoGrant);
+            assert_eq!(plan(true, &Stamp::Unmarked, Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::Stale);
+            assert_eq!(plan(true, &mark(OTHER, None), Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::NoGrant);
+        }
+
+        /// R1: after a revival the stamp may still carry the previous run's
+        /// nonce on this listener's own port. It is looked up in this store
+        /// (never probed: that would ask this listener itself) and adopted —
+        /// but only while the downtime cap still allows the previous run.
+        #[test]
+        fn a_previous_runs_stamp_on_the_own_port_is_looked_up_and_adopted_within_the_cap() {
+            let own_port = Stamp::Marked(Mark { nonce: OTHER.into(), grant: Some(GRANT.into()), port: 4000 });
+            let within = plan_for(true, &own_port, Some(&runtime()), &|g| g == GRANT, &|_| panic!("probe?"), &|n| n == OTHER, &|_| None);
+            assert_eq!(within.verdict, Reattach::Live);
+            assert_eq!(within.own_grant.as_deref(), Some(GRANT), "adopted, so its lanes follow the new PTY id");
+            let past = plan_for(true, &own_port, Some(&runtime()), &|_| panic!("held?"), &|_| panic!("probe?"), &|_| false, &|_| None);
+            assert_eq!(past.verdict, Reattach::Stale, "past the cap nothing of the previous run is adopted");
+            assert!(past.own_grant.is_none());
+        }
+
+        /// A stale stamp whose row passes every guard is revived; any other
+        /// verdict never asks the record.
+        #[test]
+        fn a_stale_session_is_revived_when_its_record_passes() {
+            use crate::services::root_mcp::root_mcp_reattach::Row;
+            let row = Row { grant: GRANT.into(), ..Row::default() };
+            let revived = plan_for(true, &mark(OTHER, Some(GRANT)), Some(&runtime()), &|_| false, &|_| false, &|_| false, &|m| {
+                (m.grant.as_deref() == Some(GRANT)).then(|| row.clone())
+            });
+            assert_eq!(revived.verdict, Reattach::Stale);
+            assert_eq!(revived.revive, Some(row.clone()));
+            let refused = plan_for(true, &mark(OTHER, Some(GRANT)), Some(&runtime()), &|_| false, &|_| false, &|_| false, &|_| None);
+            assert!(refused.verdict == Reattach::Stale && refused.revive.is_none(), "the Phase 1 way");
+            let never = |_: &Mark| -> Option<Row> { panic!("the record is asked only for a stale stamp") };
+            for (stamp, held) in [(mark(NONCE, Some(GRANT)), true), (mark(OTHER, None), false)] {
+                let plan = plan_for(true, &stamp, Some(&runtime()), &|_| held, &|_| false, &|_| false, &never);
+                assert!(plan.revive.is_none());
+            }
+            assert!(plan_for(true, &Stamp::Unmarked, Some(&runtime()), &|_| false, &|_| false, &|_| false, &never).revive.is_none());
         }
 
         /// The AI switch lets a launch through only as a rejoin of a live
@@ -3089,9 +3262,9 @@ mod tests {
         /// none; so does a process with no listener.
         #[test]
         fn what_cannot_be_stamped_is_granted_as_before() {
-            let unknown = plan_for(true, &Stamp::Unknown, Some(&runtime()), &|_| false, &|_| false);
+            let unknown = plan(true, &Stamp::Unknown, Some(&runtime()), &|_| false, &|_| false);
             assert!(unknown.exists && unknown.verdict == Reattach::Create && !unknown.stamps);
-            let none = plan_for(true, &mark(NONCE, Some(GRANT)), None, &|_| true, &|_| true);
+            let none = plan(true, &mark(NONCE, Some(GRANT)), None, &|_| true, &|_| true);
             assert!(none.verdict == Reattach::Create && !none.stamps);
         }
 
@@ -3106,11 +3279,21 @@ mod tests {
             let grant = body.find("root_mcp::grant_lanes(").expect("the grant");
             assert!(plan < grant, "the verdict comes first");
             assert_eq!(body.matches("root_mcp::grant_lanes(").count(), 1, "one grant site");
-            let gate = body.find("if verdict == Reattach::Create {").expect("the grant is behind the verdict");
-            assert!(gate < grant && grant - gate < 200, "grant_lanes is the first thing a create does");
+            let gate = body.find("if verdict == Reattach::Create || reviving {").expect("the grant is behind the verdict");
+            assert!(gate < grant && grant - gate < 200, "grant_lanes is the first thing a create (or a revival) does");
             assert!(body.contains("tokens().adopt("), "a live reattach re-keys the held grant");
             assert!(body.contains("opts.mcp_mark = Some(mark);"), "a created session is stamped");
-            assert!(body.contains("let mcp_stale = verdict == Reattach::Stale;"), "a stale verdict reaches the launch");
+            assert!(body.contains("let mut mcp_stale = verdict == Reattach::Stale && !reviving;"), "a stale verdict reaches the launch");
+            // A revival swaps after the fence stamped the push binding, keeps
+            // nothing fresh in the session's environment, and decides the
+            // stale flag from what came back.
+            let fence = body.find("stamp_push_fence_scope(").expect("the push binding's fence scope");
+            let revive = body.find("reattach::revive(").expect("the revival");
+            assert!(fence < revive, "identities are compared once every binding is final");
+            assert!(body.contains("mcp_stale = outcome.lost;"));
+            let strip = body.find("if reviving {").expect("the fresh tokens are stripped");
+            assert!(revive < strip && body[strip..].contains("opts.env.remove(*var);"));
+            assert!(body.contains("reattach::stamp_grant(&opts.env)"), "a stamp names a revivable lane first");
         }
     }
 }
