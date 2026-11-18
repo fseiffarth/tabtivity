@@ -1767,6 +1767,11 @@ fn parse_entries(
                 if let Some(entry) = transcript_entry("answer", &asked_text(&questions), at) {
                     async_asks.insert(call.clone(), entries.len());
                     async_open.push(call);
+                    // Bounded like Claude's asks: the reply's `retain` above
+                    // must not rescan an unbounded list per record.
+                    if async_open.len() > MAX_WALK_ASKS {
+                        async_open.remove(0);
+                    }
                     entries.push(TranscriptEntry { questions, ..entry });
                 }
             }

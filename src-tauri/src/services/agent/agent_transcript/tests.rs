@@ -522,6 +522,29 @@ fn a_codex_async_question_shows_while_it_waits_and_takes_its_reply() {
 }
 
 #[test]
+fn codex_async_asks_left_open_are_bounded_to_the_newest() {
+    // A hostile rollout can leave any number of async asks open in one turn;
+    // the walk keeps only the newest `MAX_WALK_ASKS` (each reply rescans them).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let ask = |call: &str| {
+        let args = serde_json::json!({"questions": [{"title": format!("Ask {call}?"), "options": ["Yes", "No"]}]}).to_string();
+        serde_json::json!({"type": "response_item", "payload": {"type": "function_call", "name": "request_user_input_async", "arguments": args, "call_id": call}}).to_string() + "\n"
+    };
+    let mut text = serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go"}]}}).to_string() + "\n";
+    let total = MAX_WALK_ASKS + 4;
+    for n in 0..total {
+        text += &ask(&format!("call_{n}"));
+    }
+    std::fs::write(&path, &text).unwrap();
+    let read = read_transcript(&path, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
+    let asking: Vec<bool> = read.entries.iter().filter(|e| !e.questions.is_empty()).map(|e| e.asking).collect();
+    assert_eq!(asking.len(), total);
+    assert!(asking[..total - MAX_WALK_ASKS].iter().all(|a| !a));
+    assert!(asking[total - MAX_WALK_ASKS..].iter().all(|a| *a));
+}
+
+#[test]
 fn a_slash_command_recorded_as_a_local_command_is_a_prompt() {
     // Claude 2.1.30x writes a command typed at its prompt as a `system`
     // record, not a `user` one: `/login` never showed, and the Chat view's
