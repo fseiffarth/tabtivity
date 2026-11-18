@@ -80,30 +80,32 @@ impl axum::serve::Listener for BoundedListener {
 #[derive(Clone, Debug)]
 struct Peer {
     addr: std::net::SocketAddr,
-    verdicts: Arc<std::sync::Mutex<std::collections::HashMap<String, bool>>>,
+    verdicts: Arc<std::sync::Mutex<std::collections::HashMap<String, PeerTree>>>,
 }
+use root_mcp::root_mcp_reattach::PeerTree;
 impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, BoundedListener>> for Peer {
     fn connect_info(stream: axum::serve::IncomingStream<'_, BoundedListener>) -> Self {
         Peer { addr: *stream.remote_addr(), verdicts: Arc::default() }
     }
 }
 
-/// Whether the revived session `id` (bound to the mux session `session`) may
-/// be used over the connection `peer`: on Linux only from its own pane tree,
-/// and never without a known peer. Elsewhere a revived session is not checked
-/// (its git and tabs lanes were never revived there).
-async fn revived_peer_ok(peer: Option<Peer>, port: u16, id: &str, session: &str) -> bool {
+/// Where the connection `peer` stands to the revived session `id` (bound to
+/// the mux session `session`); only [`PeerTree::Inside`] may use it: on Linux
+/// only its own pane tree, and never without a known peer (`Unknown`).
+/// Elsewhere a revived session is not checked (its git and tabs lanes were
+/// never revived there).
+async fn revived_peer(peer: Option<Peer>, port: u16, id: &str, session: &str) -> PeerTree {
     if !root_mcp::root_mcp_reattach::PEER_CHECK {
-        return true;
+        return PeerTree::Inside;
     }
-    let Some(peer) = peer else { return false };
+    let Some(peer) = peer else { return PeerTree::Unknown };
     if let Some(verdict) = peer.verdicts.lock_ok().get(id) {
         return *verdict;
     }
     let (addr, session) = (peer.addr, session.to_string());
     let verdict = tokio::task::spawn_blocking(move || root_mcp::root_mcp_reattach::peer_in_session(addr, port, &session))
         .await
-        .unwrap_or(false);
+        .unwrap_or(PeerTree::Unknown);
     peer.verdicts.lock_ok().insert(id.to_string(), verdict);
     verdict
 }
@@ -134,7 +136,10 @@ impl AsyncWrite for BoundedStream {
 /// `services::root_mcp::Change`.
 const CHANGED_EVENT: &str = "root-mcp-changed";
 /// The set of live MCP sessions changed: a token was handed out, revoked or
-/// re-granted. No payload; the settings fold re-reads `root_mcp_security_status`.
+/// re-granted, and the settings fold re-reads `root_mcp_security_status`.
+/// No payload, except `{ "staleTab": "<PTY id>" }` when a running tab's
+/// tools were found dead after its launch ([`Notice::TabStale`]): the
+/// terminal's stale card (`stores/agents/mcpStale`) raises it.
 pub const SESSIONS_EVENT: &str = "root-mcp-sessions-changed";
 
 /// What a lane changed, for whoever shows it: the window turns it into its
@@ -150,6 +155,10 @@ pub enum Notice {
     Markup,
     /// A committed self-rename: re-read this scope without changing focus.
     Workspace { scope: String, version: u64 },
+    /// The running tab `tab` (its PTY id) was flagged stale after its launch
+    /// ([`root_mcp::mark_tab_stale`]): a revived token of it was refused. The
+    /// window rings [`SESSIONS_EVENT`] with `{ "staleTab": tab }`.
+    TabStale { tab: String },
 }
 pub type NoticeSink = Arc<dyn Fn(Notice) + Send + Sync>;
 
@@ -187,9 +196,19 @@ fn request_pool(caller: root_mcp::Caller) -> Arc<tokio::sync::Semaphore> {
 /// 15 s of work it stays inside a socket's 30 s lifetime.
 const PERMIT_WAIT: Duration = Duration::from_secs(8);
 
+type Admitted = (root_mcp::Session, Value, tokio::sync::OwnedSemaphorePermit, tokio::sync::OwnedSemaphorePermit);
+
+/// [`admit_with`] with nobody told of a tab gone stale: the transport tests.
+#[cfg(test)]
+async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Result<Admitted, StatusCode> {
+    let quiet: NoticeSink = Arc::new(|_| {});
+    admit_with(request, port, store, &quiet).await
+}
+
 /// Runs before body collection or JSON parsing. Kept independent of Tauri for
-/// adversarial transport tests using real request bodies.
-async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Result<(root_mcp::Session, Value, tokio::sync::OwnedSemaphorePermit, tokio::sync::OwnedSemaphorePermit), StatusCode> {
+/// adversarial transport tests using real request bodies. `notify` hears of a
+/// tab this admission flagged stale ([`Notice::TabStale`]).
+async fn admit_with(request: Request, port: u16, store: &root_mcp::TokenStore, notify: &NoticeSink) -> Result<Admitted, StatusCode> {
     if !matches!(request.version(), axum::http::Version::HTTP_10 | axum::http::Version::HTTP_11) {
         return Err(StatusCode::HTTP_VERSION_NOT_SUPPORTED);
     }
@@ -217,7 +236,16 @@ async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Res
     // was down may hold it too. Freshly minted tokens are not checked.
     if let Some(revived_into) = session.revived.as_deref() {
         let peer = request.extensions().get::<axum::extract::ConnectInfo<Peer>>().map(|info| info.0.clone());
-        if !revived_peer_ok(peer, port, &session.id, revived_into).await {
+        let verdict = revived_peer(peer, port, &session.id, revived_into).await;
+        if verdict != PeerTree::Inside {
+            // Nobody could be seen holding the socket: most likely the tab's
+            // own CLI made itself non-dumpable, and every call it makes is
+            // refused. Its tools are dead, so the tab says so (the card and
+            // Reconnect) instead of listing them as live.
+            if root_mcp::root_mcp_reattach::refusal_marks_stale(verdict) && root_mcp::mark_tab_stale(&session.identity.tab) {
+                eprintln!("[root-mcp] a revived token's client could not be identified (a non-dumpable process?): its tab now reads stale");
+                notify(Notice::TabStale { tab: session.identity.tab.clone() });
+            }
             return Err(StatusCode::UNAUTHORIZED);
         }
     }
@@ -266,7 +294,7 @@ fn admission_reason(status: StatusCode) -> Option<&'static str> {
 
 async fn handle(State(state): State<ServerState>, request: Request) -> Response {
     let started = Instant::now();
-    let (session, message, global, own) = match admit(request, state.port, state.store).await {
+    let (session, message, global, own) = match admit_with(request, state.port, state.store, &state.notify).await {
         Ok(admitted) => admitted,
         Err(status) => {
             if let Some(reason) = admission_reason(status) { security::audit_admission(reason); }
@@ -788,6 +816,11 @@ fn report_taken_port(taken: u16, now: u16) {
 /// proposals and markup asks ring their events through `ctx` (the services
 /// stay AppHandle-free), and `notify` — a caller's own sink, called first —
 /// is wrapped to ring the schedule and push events too.
+/// [`SESSIONS_EVENT`]'s payload for a tab flagged stale ([`Notice::TabStale`]).
+fn stale_payload(tab: &str) -> Value {
+    serde_json::json!({ "staleTab": tab })
+}
+
 fn serve_everything(ctx: &CoreCtx, notify: NoticeSink) -> NoticeSink {
     crate::services::root_mcp_review::sweep_sandboxes(&storage::state_dir());
     let push_events = ctx.clone();
@@ -809,6 +842,7 @@ fn serve_everything(ctx: &CoreCtx, notify: NoticeSink) -> NoticeSink {
             Notice::Markup => {}
             Notice::Workspace { scope, version } => events.emit(crate::commands::projects::WORKSPACE_PATCH_EVENT,
                 serde_json::json!({ "scope": scope, "version": version, "ops": [] })),
+            Notice::TabStale { tab } => events.emit(SESSIONS_EVENT, stale_payload(&tab)),
         };
     })
 }
@@ -1418,8 +1452,58 @@ mod security_tests {
         let mut req = post(&token);
         req.extensions_mut().insert(axum::extract::ConnectInfo(peer.clone()));
         assert!(matches!(admit(req, 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "no pane, no socket");
-        assert_eq!(peer.verdicts.lock_ok().get(&helper.id), Some(&false), "cached for the connection");
+        assert_eq!(peer.verdicts.lock_ok().get(&helper.id), Some(&PeerTree::Unknown), "cached for the connection");
+        assert!(!root_mcp::tab_stale(&helper.identity.tab), "a pane that is gone flags nothing");
         root_mcp::revoke_tab(&helper.identity.tab);
+    }
+
+    /// A revived token refused because nobody can be seen holding the
+    /// client socket (a non-dumpable CLI: `PeerTree::Hidden`) leaves the tab
+    /// stale, so its card offers Reconnect and its hover card lists no tools,
+    /// and the window hears it once (`root-mcp-sessions-changed` with
+    /// `staleTab`). A refusal of an outsider seen outside the tree, or of an
+    /// unknown peer, flags nothing.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_revived_token_from_a_hidden_peer_flags_its_tab_stale() {
+        let post = |token: &str, verdict: Option<PeerTree>, id: &str| {
+            let mut req = Request::builder().method("POST").uri("/mcp/help").header("host", "127.0.0.1:8765")
+                .header("content-type", "application/json").header("authorization", format!("Bearer {token}"))
+                .body(axum::body::Body::from("not json")).unwrap();
+            if let Some(verdict) = verdict {
+                // The check's answer for this connection, as `revived_peer` caches it.
+                let peer = Peer { addr: "127.0.0.1:1".parse().unwrap(), verdicts: Arc::default() };
+                peer.verdicts.lock_ok().insert(id.to_string(), verdict);
+                req.extensions_mut().insert(axum::extract::ConnectInfo(peer));
+            }
+            req
+        };
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let notify: NoticeSink = { let seen = seen.clone(); Arc::new(move |n| seen.lock().unwrap().push(n)) };
+        let (token, helper) = root_mcp::test_session(root_mcp::Caller::Helper);
+        let tab = helper.identity.tab.clone();
+        root_mcp::tokens().mark_revived_for_test(&helper.id, "r3-hidden-session");
+        assert_eq!(root_mcp::servers_of_tab(&tab), vec![crate::services::help_mcp::SERVER_NAME]);
+        for verdict in [None, Some(PeerTree::Outside), Some(PeerTree::Unknown)] {
+            let refused = admit_with(post(&token, verdict, &helper.id), 8765, root_mcp::tokens(), &notify).await;
+            assert!(matches!(refused, Err(StatusCode::UNAUTHORIZED)), "{verdict:?}");
+            assert!(!root_mcp::tab_stale(&tab), "{verdict:?}: no flag");
+        }
+        assert!(seen.lock().unwrap().is_empty());
+        let refused = admit_with(post(&token, Some(PeerTree::Hidden), &helper.id), 8765, root_mcp::tokens(), &notify).await;
+        assert!(matches!(refused, Err(StatusCode::UNAUTHORIZED)), "still refused");
+        assert!(root_mcp::tab_stale(&tab), "flagged stale");
+        assert!(root_mcp::servers_of_tab(&tab).is_empty(), "the hover card lists no live tools");
+        assert_eq!(*seen.lock().unwrap(), vec![Notice::TabStale { tab: tab.clone() }]);
+        let _ = admit_with(post(&token, Some(PeerTree::Hidden), &helper.id), 8765, root_mcp::tokens(), &notify).await;
+        assert_eq!(seen.lock().unwrap().len(), 1, "told once");
+        // From inside its tree the revived token still works (admitted as far
+        // as the body, which is not JSON): the flag revokes nothing.
+        let inside = admit_with(post(&token, Some(PeerTree::Inside), &helper.id), 8765, root_mcp::tokens(), &notify).await;
+        assert!(matches!(inside, Err(StatusCode::BAD_REQUEST)));
+        assert_eq!(stale_payload(&tab), serde_json::json!({ "staleTab": tab }));
+        root_mcp::revoke_tab(&tab);
+        root_mcp::forget_stale(&tab);
     }
 
     /// The help identity reaches `/mcp/help` and nothing else; no other

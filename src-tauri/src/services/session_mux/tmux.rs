@@ -488,6 +488,16 @@ impl SessionMux for TmuxMux {
         Ok(marks)
     }
 
+    fn fresh_mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        if self.socket.is_some() {
+            return self.read_mcp_marks();
+        }
+        let mut cached = MARKS.lock_ok();
+        let marks = self.read_mcp_marks()?;
+        *cached = Some((std::time::Instant::now(), marks.clone()));
+        Ok(marks)
+    }
+
     fn note_mcp_mark(&self, name: &str, mark: &str) {
         if self.socket.is_some() {
             return;

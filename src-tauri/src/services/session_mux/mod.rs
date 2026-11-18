@@ -269,6 +269,12 @@ pub trait SessionMux: Send + Sync {
     fn mcp_marks(&self) -> Result<SessionMarks, MuxError> {
         Err(MuxError::Unavailable("this backend keeps no MCP stamp".into()))
     }
+    /// [`SessionMux::mcp_marks`] read now, past any cache (which it then
+    /// refreshes): for a launch whose live [`SessionMux::has`] found a session
+    /// the cached listing does not name yet (`launch_prep`'s AI-off rejoin).
+    fn fresh_mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        self.mcp_marks()
+    }
     /// `mark` was just set on the new session `name` (`launch_prep` decided a
     /// create): a backend that caches [`SessionMux::mcp_marks`] folds it in, so
     /// a second launch of the same session within the cache's life does not

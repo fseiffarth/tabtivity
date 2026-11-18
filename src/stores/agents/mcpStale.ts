@@ -16,7 +16,9 @@ import { relaunch, runsLocally, type UndoClearResult } from "./agentClearUndo";
  * A local agent tab that rejoins its surviving tmux session after a crash or a
  * restart keeps the agent process the earlier run started, and with it that
  * run's MCP port and tokens. The backend tells (`pty_spawn`'s `mcpStale`,
- * `root_mcp_mark::classify_reattach`); this store keeps the answer per PTY and
+ * `root_mcp_mark::classify_reattach`; or later, when the peer check refused a
+ * revived token nobody could be seen presenting: `MCP_SESSIONS_EVENT` with
+ * `staleTab`); this store keeps the answer per PTY and
  * offers the one way back, a restart onto the same conversation
  * (`agentClearUndo::relaunch`). Never automatic: a restart drops what the user
  * typed and not sent, background shells and the session's approvals.
@@ -102,8 +104,7 @@ export function noteMcpStale(ptyId: string, stale: boolean): void {
   spawnWaiters.delete(ptyId);
   const state = useMcpStaleStore.getState();
   if (stale) {
-    if (!state.stale[ptyId]) useMcpStaleStore.setState({ stale: { ...state.stale, [ptyId]: true } });
-    scheduleToast();
+    markStale(ptyId);
   } else if (state.stale[ptyId] || state.armed[ptyId] || state.dismissed[ptyId] || state.turns[ptyId]) {
     useMcpStaleStore.setState({
       stale: without(state.stale, ptyId),
@@ -114,6 +115,48 @@ export function noteMcpStale(ptyId: string, stale: boolean): void {
     announced.delete(ptyId);
   }
   syncWatchers();
+}
+
+function markStale(ptyId: string): void {
+  const state = useMcpStaleStore.getState();
+  if (!state.stale[ptyId]) useMcpStaleStore.setState({ stale: { ...state.stale, [ptyId]: true } });
+  scheduleToast();
+}
+
+/** `root-mcp-sessions-changed` (`commands::root_mcp::SESSIONS_EVENT`): its
+ *  payload names a running tab when the backend found its tools dead after
+ *  the spawn answered, i.e. a revived token of it was refused because nobody
+ *  could be seen holding the connection (a non-dumpable CLI). Any other
+ *  payload is the session list's own cue. */
+export const MCP_SESSIONS_EVENT = "root-mcp-sessions-changed";
+
+/** Flag a running tab the backend found stale after its spawn: the same card
+ *  and toast as a stale spawn answer; its next spawn answers afresh. */
+export function noteMcpStaleLater(payload: unknown): void {
+  const tab = (payload as { staleTab?: unknown } | null)?.staleTab;
+  if (typeof tab !== "string" || !tab) return;
+  markStale(tab);
+  syncWatchers();
+}
+
+let noticeWatchers = 0;
+let stopNotices: (() => void) | undefined;
+
+/** Hear the backend's later stale flags while an agent terminal is mounted in
+ *  this window (`TerminalMcpStaleCard`). */
+export function watchMcpStaleNotices(): () => void {
+  noticeWatchers += 1;
+  if (!stopNotices) {
+    stopNotices = subscribeTauri(() => listen<unknown>(MCP_SESSIONS_EVENT, (ev) => noteMcpStaleLater(ev.payload)));
+  }
+  return () => {
+    noticeWatchers -= 1;
+    if (noticeWatchers <= 0 && stopNotices) {
+      noticeWatchers = 0;
+      stopNotices();
+      stopNotices = undefined;
+    }
+  };
 }
 
 export function dismissMcpStale(ptyId: string): void {

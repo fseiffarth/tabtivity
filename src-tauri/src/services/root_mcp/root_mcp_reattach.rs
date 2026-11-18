@@ -42,6 +42,10 @@
 //! answers only a connection whose client socket is held by processes of its
 //! own mux session's pane tree ([`peer_in_session`], cached per connection
 //! by the listener); anything else, or anything unreadable, gets `401`.
+//! A refusal because no holder of the client socket can be read
+//! ([`PeerTree::Hidden`]: a non-dumpable CLI) flags the tab stale
+//! ([`super::mark_tab_stale`]), so the user is offered Reconnect instead of
+//! tools that silently fail; a peer seen outside the tree does not.
 //! Freshly minted tokens are not checked. macOS and Windows have no such
 //! check, so the two lanes whose harvest reaches beyond the tab — git (a
 //! push) and tabs (messages to sibling tabs) — are not revived there
@@ -694,23 +698,44 @@ pub fn on_session_renamed(old: &str, new: &str) {
     }
 }
 
+pub use crate::services::loopback_owner::PeerTree;
+
 /// Whether the client end `peer` of a connection to this listener's `port`
 /// belongs to the mux session `session`: every process holding it descends
 /// from the session's pane process (a fenced one through its bwrap parent).
-/// Fails closed: no pane, no pid, no socket, another account's, or any
-/// unreadable `/proc` entry. Blocking (one `tmux` call, a `/proc` walk).
-/// Only asked where [`PEER_CHECK`] holds.
-pub fn peer_in_session(peer: std::net::SocketAddr, port: u16, session: &str) -> bool {
+/// Only [`PeerTree::Inside`] passes. Fails closed: no pane or pid
+/// (`Unknown`), no socket, another account's, or any unreadable `/proc`
+/// entry. Blocking (one `tmux` call, a `/proc` walk). Only asked where
+/// [`PEER_CHECK`] holds.
+pub fn peer_in_session(peer: std::net::SocketAddr, port: u16, session: &str) -> PeerTree {
     let Some(root) = crate::services::session_mux::mux().pane(session).ok().and_then(|pane| pane.pid) else {
-        return false;
+        return PeerTree::Unknown;
     };
     peer_in_tree(peer, port, root)
 }
 
 /// [`peer_in_session`] with the pane process `root` known.
-pub fn peer_in_tree(peer: std::net::SocketAddr, port: u16, root: u32) -> bool {
+pub fn peer_in_tree(peer: std::net::SocketAddr, port: u16, root: u32) -> PeerTree {
     let server = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
-    crate::services::loopback_owner::peer_descends_from(peer, server, root)
+    crate::services::loopback_owner::peer_tree(peer, server, root)
+}
+
+/// Whether a revived token refused for `verdict` leaves its tab stale: only
+/// when nobody could be seen holding the client socket (a CLI that made
+/// itself non-dumpable presents its own token and is refused every time, so
+/// its tools are dead). A peer seen outside the tree (another account's, or a
+/// process of another tree) is an outsider and changes nothing for the tab;
+/// nor does a connection that closed before it was looked at, or a session
+/// whose pane is gone.
+///
+/// An outsider that hides itself the same way (any process may make itself
+/// non-dumpable) and holds a harvested revived token can thereby flag its
+/// victim's tab stale: a nuisance only. The flag revokes nothing, the
+/// victim's own connections are still judged on their own, and the card's
+/// Reconnect relaunches the agent with fresh tokens, which ends the
+/// harvested ones' use too.
+pub fn refusal_marks_stale(verdict: PeerTree) -> bool {
+    verdict == PeerTree::Hidden
 }
 
 /// [`Listener::delete`] on this process's listener: the clean quit ended
