@@ -341,8 +341,19 @@ mod tests {
         let script = r#"echo "sig=$(grep -E '^(SigIgn|SigBlk)' /proc/$$/status | tr -d '\t ' | tr '\n' ',')" "fds=$(ls /proc/$$/fd | tr '\n' ',') end=1""#;
         let mut old = Session::through_portable_pty(script);
         let old_text = old.wait_for("end=1");
-        let mut new = Session::through_setsid(script);
-        let new_text = new.wait_for("end=1");
+        // Another test of this binary can be between `openpty` and setting
+        // close-on-exec on its fds just as this spawn runs, and the child
+        // inherits them (CI saw two such strays). Spawning again finds the
+        // window closed; a leak of this spawn's own would show every time.
+        let mut new_text = String::new();
+        for _ in 0..5 {
+            let mut new = Session::through_setsid(script);
+            new_text = new.wait_for("end=1");
+            if field(&new_text, "fds") == field(&old_text, "fds") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         assert_eq!(field(&new_text, "sig"), field(&old_text, "sig"), "{new_text} vs {old_text}");
         assert_eq!(field(&new_text, "fds"), field(&old_text, "fds"), "{new_text} vs {old_text}");
     }

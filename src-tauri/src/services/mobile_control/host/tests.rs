@@ -1059,6 +1059,7 @@ async fn a_phone_transcript_keeps_a_waiting_question_only_while_the_turn_says_de
 /// the phone gets the entries through `phone_transcript` (the no-window route
 /// calls the same function with the CLI's own transcript read off the tab
 /// record, so the rule holds for the headless sidecar too).
+#[cfg(unix)]
 #[tokio::test]
 async fn the_window_route_drops_a_waiting_question_unless_the_turn_says_decision() {
     use crate::services::agent_transcript::{AgentTranscript, AskedQuestion, TranscriptEntry};

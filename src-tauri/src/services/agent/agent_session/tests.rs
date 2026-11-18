@@ -153,7 +153,7 @@ fn vibe_hook_registration_preserves_existing_hooks_and_is_idempotent() {
         "[[hooks]]\nname = \"mine\"\ntype = \"post_agent\"\ncommand = \"true\"\n\n[[hooks]]\nname = \"{}\"\n\
          type = \"post_agent\"\ncommand = {}\ntimeout = 10.0\n",
         crate::brand::VIBE_SESSION_HOOK,
-        serde_json::to_string(&hook_command()).unwrap()
+        serde_json::to_string(&vibe_shell_command(&hook_command())).unwrap()
     );
     std::fs::write(&hooks, &old).unwrap();
     register_vibe_hook_in(&home).unwrap();
