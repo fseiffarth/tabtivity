@@ -536,6 +536,13 @@ pub struct Settings {
     /// resumable download in the custom dir is still found.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama_models_path: Option<String>,
+    /// The context window (tokens) a server **Tabtivity starts itself** gets, as
+    /// `OLLAMA_CONTEXT_LENGTH`. `None` is automatic (`commands::ollama::
+    /// spawned_context_length`). Like `ollama_models_path` it never reaches a
+    /// server someone else started, nor wins over the variable the user set in
+    /// the environment; Restart Ollama is what applies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_context_length: Option<u32>,
     /// Preserved for Python rollback; not used by the Tauri app.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ollama_model: Option<String>,
