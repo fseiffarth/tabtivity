@@ -5350,6 +5350,23 @@ fn mask_shell_commands(transcript: &mut crate::services::agent_transcript::Agent
     }
 }
 
+/// The waiting tool calls cross masked the same way: a file tool's path
+/// project-relative or cut to its leaf, `WebFetch`'s URL to its scheme and
+/// host, any other tool's subject dropped (the backend sets none; a transcript
+/// read off a remote host is not ours to trust). An entry whose name is no
+/// tool name is dropped.
+fn mask_waiting_tools(transcript: &mut crate::services::agent_transcript::AgentTranscript, folders: &[&str]) {
+    use crate::services::agent_transcript::{subject_kind, tool_name_ok, SubjectKind};
+    transcript.waiting_tools.retain(|tool| tool_name_ok(&tool.name));
+    for tool in &mut transcript.waiting_tools {
+        tool.subject = match subject_kind(&tool.name) {
+            Some(SubjectKind::Path) => shell_mask::mask_path(&tool.subject, folders),
+            Some(SubjectKind::Url) => shell_mask::mask_url(&tool.subject),
+            None => String::new(),
+        };
+    }
+}
+
 /// Each of `folders` as a command line may spell it: as given, as
 /// `canonicalize` resolves it (links followed; on Windows the long names,
 /// without the `\\?\` prefix) and, on Windows, by its 8.3 short name (a CI
@@ -5388,8 +5405,9 @@ fn short_path_name(path: &std::path::Path) -> Option<String> {
 /// subagents work in are paths, which do not cross the browser API. A
 /// subagent's folder in a linked worktree of the tab's project crosses as that
 /// worktree's name and branch instead (`worktree` on its `agent` entry), as the
-/// tab cards name it. The running shells cross masked
-/// ([`mask_shell_commands`]).
+/// tab cards name it. The running shells and the waiting tool calls cross
+/// masked ([`mask_shell_commands`], [`mask_waiting_tools`]): no raw command,
+/// path or URL reaches `json!(transcript)`.
 async fn phone_transcript(
     state: &HostState,
     phone: &Phone,
@@ -5397,12 +5415,12 @@ async fn phone_transcript(
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
     let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
-    let wants_tab = !transcript.shells.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
+    let wants_tab = !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
     let found = wants_tab
         .then(|| catalog(state, phone).ok())
         .flatten()
         .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone())));
-    if !transcript.shells.is_empty() {
+    if !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() {
         let mut folders: Vec<String> = transcript.cwd.iter().cloned().collect();
         if let Some((project, cwd)) = &found {
             folders.push(cwd.clone());
@@ -5411,6 +5429,7 @@ async fn phone_transcript(
         let folders = folder_spellings(&folders);
         let folders: Vec<&str> = folders.iter().map(String::as_str).collect();
         mask_shell_commands(&mut transcript, &folders);
+        mask_waiting_tools(&mut transcript, &folders);
     }
     transcript.context_card = None;
     transcript.cwd = None;

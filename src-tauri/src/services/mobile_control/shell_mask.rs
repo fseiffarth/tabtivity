@@ -232,6 +232,79 @@ fn hide_secrets(command: &str) -> String {
         .into_owned()
 }
 
+/// A file path (an `Edit`/`Write` permission dialog's subject) as the phone
+/// may see it: the tab's own `folders` made project-relative, secret-shaped
+/// text hidden, and a path still absolute (or `~/…`) cut to its leaf after
+/// `…/`. The whole string is one path, so a space inside a folder name does
+/// not let the rest of the folders through as [`mask_command`] would. A
+/// relative path the agent wrote stays as it is; a path of one component
+/// (`/tmp`, `~/x`, `C:\Users`) names nothing private and stays.
+pub fn mask_path(path: &str, folders: &[&str]) -> String {
+    let relative = relative_to_folders(path.trim(), folders);
+    let hidden = hide_secrets(&relative);
+    let home = hidden == "~" || hidden.starts_with("~/");
+    let plain = without_verbatim(&hidden).unwrap_or_else(|| hidden.clone());
+    let unc = plain.starts_with(r"\\");
+    let drive = !unc && is_windows_absolute(&plain);
+    if !(home || unc || drive || hidden.starts_with('/')) {
+        return hidden;
+    }
+    let body = if drive {
+        &plain[2..]
+    } else if home {
+        &plain[1..]
+    } else {
+        plain.as_str()
+    };
+    let parts: Vec<&str> = body.split(['\\', '/']).filter(|part| !part.is_empty()).collect();
+    // A UNC path shows no more than what follows its server and share.
+    let shown = if unc { 2 } else { 1 };
+    let sep = if plain.contains('\\') { '\\' } else { '/' };
+    let prefix = if home { "~/" } else { "" };
+    match parts.last().filter(|_| parts.len() > shown) {
+        Some(leaf) => format!("{prefix}…{sep}{leaf}"),
+        None if unc => "…".to_string(),
+        None => hidden,
+    }
+}
+
+/// A URL (a `WebFetch` permission dialog's subject) as the phone may see it:
+/// its scheme and host and nothing else — no user info, port, path, query or
+/// fragment, all of which can hold what the host must not show. Empty for
+/// anything that is no `scheme://host` (a `data:` or `file:` URL, a host with
+/// a character no host name has): the phone then shows the tool's name alone.
+pub fn mask_url(url: &str) -> String {
+    let url = url.trim();
+    let Some((scheme, rest)) = url.split_once("://") else { return String::new() };
+    let scheme_ok = scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme.len() <= 16
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'));
+    if !scheme_ok {
+        return String::new();
+    }
+    // The authority ends at the first `/`, `?`, `#` or `\`; user info is
+    // everything before its last `@`.
+    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or_default();
+    let host_port = authority.rsplit('@').next().unwrap_or_default();
+    let host = match host_port.strip_prefix('[') {
+        Some(v6) => match v6.split_once(']') {
+            Some((address, _)) if !address.is_empty() && address.chars().all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.')) => {
+                format!("[{address}]")
+            }
+            _ => return String::new(),
+        },
+        None => {
+            let name = host_port.split(':').next().unwrap_or_default();
+            if name.is_empty() || name.chars().count() > 253 || !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_')) {
+                return String::new();
+            }
+            name.to_string()
+        }
+    };
+    // A host label can itself be a random run (a token in a sub-domain).
+    hide_secrets(&format!("{scheme}://{host}"))
+}
+
 /// An absolute (`/a/b`, not `//host`) or home (`~/a`) path, starting the line
 /// or after whitespace, a quote, `=`, `:`, `(` or `,`.
 static PATH: LazyLock<Regex> =

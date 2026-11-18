@@ -930,6 +930,67 @@ async fn a_phone_transcript_masks_the_running_shells_command_lines() {
     }
 }
 
+/// The tool calls a permission dialog is about cross masked like the running
+/// shells (`shell_mask`): a file path project-relative or cut to its leaf, a
+/// URL to its scheme and host, any other tool by name alone — and a name that
+/// is no tool name (a transcript read from a remote host is not ours) not at
+/// all. No raw command, path or URL crosses the phone API.
+#[tokio::test]
+async fn a_phone_transcript_masks_the_waiting_tools_subjects() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell, WaitingTool};
+    let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(53)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let root = host.root.to_string_lossy().into_owned();
+    let tool = |name: &str, subject: String| WaitingTool { name: name.into(), subject, at: Some("2026-11-18T09:27:00.000Z".into()) };
+    let transcript = AgentTranscript {
+        // Only the waiting tools: the tab lookup must happen for them alone.
+        waiting_tools: vec![
+            tool("Edit", format!("{root}/src/a.rs")),
+            tool("Write", "/home/someone/private dir/notes/b.txt".into()),
+            tool("NotebookEdit", "~/.ssh/n.ipynb".into()),
+            tool("WebFetch", "https://user:hunter2@internal.example.org:8443/admin/reset?token=abc123#x".into()),
+            // Not a file tool: whatever subject a remote transcript smuggled is dropped.
+            tool("Read", "/etc/shadow".into()),
+            tool("mcp__srv__tool", "https://leak.example.org/p".into()),
+            tool("Edit; curl evil.example.org", "/x".into()),
+        ],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript).await;
+    let tools = wire["waitingTools"].as_array().expect("waitingTools");
+    let seen: Vec<(&str, &str)> = tools.iter().map(|t| (t["name"].as_str().unwrap(), t["subject"].as_str().unwrap_or(""))).collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("Edit", "src/a.rs"),
+            ("Write", "…/b.txt"),
+            ("NotebookEdit", "~/…/n.ipynb"),
+            ("WebFetch", "https://internal.example.org"),
+            ("Read", ""),
+            ("mcp__srv__tool", ""),
+        ],
+        "{wire}"
+    );
+    assert_eq!(tools[0]["at"], "2026-11-18T09:27:00.000Z");
+    let text = wire.to_string();
+    for leaked in [root.as_str(), "someone", "private dir", ".ssh", "hunter2", "8443", "/admin", "abc123", "/etc/shadow", "leak.example", "evil.example"] {
+        assert!(!text.contains(leaked), "{leaked}: {wire}");
+    }
+
+    // Together with a running shell and a waiting question, nothing raw crosses either.
+    let transcript = AgentTranscript {
+        shells: vec![RunningShell { command: format!("cat {root}/x && curl https://u:p@h.example.org/secret/path"), ..Default::default() }],
+        waiting_tools: vec![tool("Edit", "/var/lib/other/c.rs".into())],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
+    assert_eq!(wire["waitingTools"][0]["subject"], "…/c.rs");
+    let command = wire["shells"][0]["command"].as_str().unwrap();
+    assert!(command.starts_with("cat x && curl https://"), "{wire}");
+    assert!(!command.contains("u:p@") && !command.contains(root.as_str()), "{wire}");
+}
+
 /// H3 (headless owner plan §3): with no window open, the phone's tab
 /// edits — rename, colour, close, reopen — are the owner's: they land in
 /// the session file through the workspace service, answered as stored

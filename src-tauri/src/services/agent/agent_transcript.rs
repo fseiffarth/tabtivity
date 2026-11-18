@@ -87,6 +87,12 @@ const MAX_QUESTION_CHARS: usize = 2_000;
 /// line breaks, so it is cut here and not by [`bounded_line`].
 const MAX_PREVIEW_LINES: usize = 40;
 const MAX_PREVIEW_CHARS: usize = 2_000;
+/// Longest name of a tool call the agent waits on; a longer one is no tool's.
+const MAX_TOOL_NAME_CHARS: usize = 120;
+/// Longest subject (file path, URL) of such a call, cut at one line.
+const MAX_TOOL_SUBJECT_CHARS: usize = 500;
+/// The most waiting calls one read lists, the newest.
+const MAX_WAITING_TOOLS: usize = 16;
 /// How deep a subagent's own subagents are followed.
 pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 
@@ -269,6 +275,15 @@ pub struct AgentTranscript {
     /// line is not something that crosses to the browser.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shells: Vec<RunningShell>,
+    /// The other tool calls the agent waits on — every `tool_use` since the
+    /// last prompt that has no result yet and is no `Bash` call (those are
+    /// `shells`) nor an `AskUserQuestion` (a `blocking` entry), oldest first.
+    /// A running approved call has no result either, so a reader uses the
+    /// list as a permission dialog's subject only while the tab's lamp says
+    /// the agent asks. Desktop Reader only as it stands: the phone's API
+    /// masks every subject (`mobile_control`).
+    #[serde(default, rename = "waitingTools", skip_serializing_if = "Vec::is_empty")]
+    pub waiting_tools: Vec<WaitingTool>,
     /// The newest `/context` card Claude printed (its `local_command` stdout,
     /// colour codes stripped). The fullscreen renderer draws it in the
     /// alternate screen, which keeps no scrollback, so the Reader's Context
@@ -314,6 +329,47 @@ pub struct RunningShell {
     pub background: bool,
 }
 
+/// A tool call the agent waits on: which tool, and what it acts on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WaitingTool {
+    /// The tool's name as Claude calls it (`Edit`, `WebFetch`, `mcp__…`).
+    pub name: String,
+    /// What it acts on, for the few tools that name one ([`subject_kind`]):
+    /// a file path or a URL, cut at its bound. Empty for any other tool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    /// When the call was written (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+/// What a [`WaitingTool::subject`] is, so that whoever shows it to the phone
+/// masks it the way that kind needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubjectKind {
+    Path,
+    Url,
+}
+
+/// The kind of subject `tool` carries: the file tools a path, `WebFetch` a
+/// URL; any other tool none.
+pub(crate) fn subject_kind(tool: &str) -> Option<SubjectKind> {
+    match tool {
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => Some(SubjectKind::Path),
+        "WebFetch" => Some(SubjectKind::Url),
+        _ => None,
+    }
+}
+
+/// `name` could be a tool's name: letters, digits and `_ - . :` only, and not
+/// long. The phone's API lists no other (a transcript read off a remote host
+/// is not this machine's own).
+pub(crate) fn tool_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_TOOL_NAME_CHARS
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+}
+
 /// The shells a transcript says are running: calls still waiting on their
 /// result, and background ones that no notification has ended yet — each
 /// with the output file its CLI named, by which [`running_outputs`] tells
@@ -321,6 +377,8 @@ pub struct RunningShell {
 #[derive(Debug, Default)]
 struct ShellCalls {
     waiting: Vec<RunningShell>,
+    /// The other tool calls still waiting on their result ([`WaitingTool`]).
+    tools: Vec<WaitingTool>,
     background: Vec<(RunningShell, String)>,
 }
 
@@ -1170,6 +1228,7 @@ fn read_transcript_in(
     let tokens = newest_tokens(&lines, kind);
     let context_card = newest_context_card(&lines, kind);
     let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain);
+    let waiting_tools = shell_calls.tools.clone();
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
     let mut spawned_tokens: Vec<String> = Vec::new();
@@ -1233,6 +1292,7 @@ fn read_transcript_in(
         effort,
         tokens,
         shells,
+        waiting_tools,
         context_card,
         cwd,
         running_cwds,
@@ -1619,6 +1679,9 @@ fn parse_entries(
     // Shell calls since the last prompt, by call id: one an earlier turn
     // never got a result for (the CLI was killed mid-call) is not running.
     let mut shells: Vec<(String, RunningShell)> = Vec::new();
+    // The same for every other tool call, by call id (a subagent's file has
+    // none: its calls are not this session's screen).
+    let mut tools: Vec<(String, WaitingTool)> = Vec::new();
     // Every shell call read, for a background one's command; the calls sent
     // to the background, with their output files; and those a notification
     // has since ended.
@@ -1716,11 +1779,13 @@ fn parse_entries(
                 Record::Turn(role, raw) => {
                     if typed && role == "prompt" {
                         shells.clear();
+                        tools.clear();
                         asked.clear();
                         turn_start = entries.len();
                     }
                     if role == "interrupted" {
                         asked.clear();
+                        tools.clear();
                     }
                     entries.extend(transcript_entry(role, &raw, at.clone()));
                 }
@@ -1741,6 +1806,13 @@ fn parse_entries(
                     shell.at = at.clone();
                     commands.insert(call.clone(), shell.clone());
                     shells.push((call, shell));
+                }
+                Record::Tool { call, mut tool } => {
+                    if !sidechain {
+                        tool.at = at.clone();
+                        tools.retain(|(tool_call, _)| *tool_call != call);
+                        tools.push((call, tool));
+                    }
                 }
                 Record::Plan(raw) => entries.extend(transcript_entry("answer", &raw, at.clone()).map(|entry| TranscriptEntry { plan: true, ..entry })),
                 Record::Question { call, questions } => {
@@ -1795,13 +1867,15 @@ fn parse_entries(
     for (_, questions, at) in asked {
         entries.extend(waiting_question_entry(questions, at));
     }
+    let mut tools: Vec<WaitingTool> = tools.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, tool)| tool).collect();
+    tools.drain(..tools.len().saturating_sub(MAX_WAITING_TOOLS));
     let waiting = shells.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, shell)| shell).collect();
     let background = backgrounded
         .into_iter()
         .filter(|(call, _)| !ended.contains(call))
         .filter_map(|(call, output)| Some((RunningShell { background: true, ..commands.remove(&call)? }, output)))
         .collect();
-    (entries, calls, ShellCalls { waiting, background })
+    (entries, calls, ShellCalls { waiting, tools, background })
 }
 
 /// Claude's background subagents (`Agent` calls whose result is only the
@@ -2084,6 +2158,8 @@ enum Record {
     Spawn { call: String, task: String, kind: Option<String> },
     /// A `Workflow` run started by tool call `call`, titled `title`.
     Workflow { call: String, title: String },
+    /// A tool call other than a shell, a question or a spawn's own record.
+    Tool { call: String, tool: WaitingTool },
     /// A shell command started by tool call `call`.
     Shell { call: String, shell: RunningShell },
     /// Questions put to the user by tool call `call`, not yet answered.
@@ -2187,13 +2263,14 @@ fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
                         .join("\n\n"),
                     blocks
                         .iter()
-                        .filter_map(|b| {
-                            claude_plan(b)
+                        .flat_map(|b| {
+                            let specific = claude_plan(b)
                                 .or_else(|| claude_spawn(b))
                                 .or_else(|| claude_workflow(b))
                                 .or_else(|| claude_shell(b))
                                 .or_else(|| claude_question(b))
-                                .or_else(|| subagent_file.then(|| claude_handback_answer(b)).flatten())
+                                .or_else(|| subagent_file.then(|| claude_handback_answer(b)).flatten());
+                            claude_tool(b).into_iter().chain(specific)
                         })
                         .collect(),
                 ),
@@ -2341,6 +2418,33 @@ fn copilot_records(value: &Value) -> Vec<Record> {
         return vec![Record::Shell { call, shell: RunningShell { command, description, cut, ..Default::default() } }];
     }
     Vec::new()
+}
+
+/// Any `tool_use` block but a shell's (`shells`) and a question's (`blocking`
+/// entry): the tool and, for the file tools and `WebFetch`, what it acts on.
+/// A name that is no tool name (other characters, too long) is not listed.
+fn claude_tool(block: &Value) -> Option<Record> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+        return None;
+    }
+    let name = block.get("name")?.as_str()?;
+    if !tool_name_ok(name) || matches!(name, "Bash" | "AskUserQuestion") {
+        return None;
+    }
+    let key = match subject_kind(name) {
+        Some(SubjectKind::Path) if name == "NotebookEdit" => "notebook_path",
+        Some(SubjectKind::Path) => "file_path",
+        Some(SubjectKind::Url) => "url",
+        None => "",
+    };
+    let subject = block
+        .get("input")
+        .and_then(|input| input.get(key))
+        .and_then(Value::as_str)
+        .and_then(clean_text)
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TOOL_SUBJECT_CHARS).collect())
+        .unwrap_or_default();
+    Some(Record::Tool { call: block.get("id")?.as_str()?.to_string(), tool: WaitingTool { name: name.to_string(), subject, at: None } })
 }
 
 /// An `ExitPlanMode` `tool_use` block: the plan Claude put up for approval.

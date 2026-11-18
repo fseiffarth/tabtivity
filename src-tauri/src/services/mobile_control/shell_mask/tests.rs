@@ -1,4 +1,4 @@
-use super::{mask_command, HIDDEN};
+use super::{mask_command, mask_path, mask_url, HIDDEN};
 
 const ROOT: &str = "/work/me/proj";
 
@@ -139,4 +139,69 @@ fn other_windows_paths_keep_only_their_leaf() {
             assert!(!masked(command).contains(leaked), "{leaked}: {command}");
         }
     }
+}
+
+#[test]
+fn a_file_path_is_project_relative_or_cut_to_its_leaf_as_one_whole() {
+    let path = |p: &str| mask_path(p, &[ROOT]);
+    assert_eq!(path("/work/me/proj/src/a.rs"), "src/a.rs");
+    assert_eq!(path("/work/me/proj"), ".");
+    // A relative path the agent wrote stays.
+    assert_eq!(path("src/a.rs"), "src/a.rs");
+    // Anything else absolute keeps its leaf; a space in a folder name lets nothing through.
+    assert_eq!(path("/home/me/other/b.txt"), "…/b.txt");
+    assert_eq!(path("/home/my user/secret dir/b.txt"), "…/b.txt");
+    assert_eq!(path("~/.ssh/config"), "~/…/config");
+    assert_eq!(path("~/x"), "~/x");
+    assert_eq!(path("/tmp"), "/tmp");
+    assert_eq!(path("/work/me/project/a"), "…/a");
+    // Secret-shaped text in the leaf goes too.
+    assert_eq!(path("/work/me/proj/token=abcdef.txt"), format!("token={HIDDEN}"));
+    for leaked in ["home", "me/other", "secret dir", ".ssh"] {
+        for p in ["/home/me/other/b.txt", "/home/my user/secret dir/b.txt", "~/.ssh/config"] {
+            assert!(!path(p).contains(leaked), "{leaked}: {p}");
+        }
+    }
+}
+
+#[test]
+fn a_windows_file_path_keeps_its_leaf_unless_it_is_in_the_tabs_folder() {
+    let root = r"C:\Users\me\proj";
+    let path = |p: &str| mask_path(p, &[root]);
+    assert_eq!(path(r"C:\Users\me\proj\src\a.rs"), r"src\a.rs");
+    assert_eq!(path("c:/users/ME/proj/src/a.rs"), "src/a.rs");
+    assert_eq!(path(r"C:\Users\me\out\b.txt"), r"…\b.txt");
+    assert_eq!(path("C:/Users/me/.ssh/config"), "…/config");
+    assert_eq!(path(r"C:\Users"), r"C:\Users");
+    assert_eq!(path(r"\\?\D:\deep\a.txt"), r"…\a.txt");
+    assert_eq!(path(r"\\fileserver\team\docs\a.txt"), r"…\a.txt");
+    assert_eq!(path(r"\\fileserver\team"), "…");
+    for leaked in ["fileserver", "deep", ".ssh", "me"] {
+        for p in [r"\\fileserver\team\docs\a.txt", r"\\?\D:\deep\a.txt", "C:/Users/me/.ssh/config", r"C:\Users\me\out\b.txt"] {
+            assert!(!path(p).contains(leaked), "{leaked}: {p}");
+        }
+    }
+}
+
+#[test]
+fn a_url_shows_its_scheme_and_host_and_nothing_else() {
+    assert_eq!(mask_url("https://example.org/a/b?q=1#f"), "https://example.org");
+    assert_eq!(mask_url("  http://docs.example.org  "), "http://docs.example.org");
+    assert_eq!(mask_url("https://user:pw@example.org:8443/a"), "https://example.org");
+    assert_eq!(mask_url("https://tok@example.org"), "https://example.org");
+    // User info that holds an `@` or a `/`-less secret: everything before the last `@` goes.
+    assert_eq!(mask_url("https://a@b@example.org/x"), "https://example.org");
+    assert_eq!(mask_url("https://example.org?token=abc"), "https://example.org");
+    assert_eq!(mask_url("https://example.org#frag"), "https://example.org");
+    assert_eq!(mask_url("http://[::1]:8080/x"), "http://[::1]");
+    assert_eq!(mask_url("http://203.0.113.7:3000/admin"), "http://203.0.113.7");
+    // A backslash ends the host as browsers read it: nothing after it crosses.
+    assert_eq!(mask_url(r"https://example.org\@evil.test/x"), "https://example.org");
+    // No host, no URL: nothing crosses.
+    for odd in ["", "example.org/a", "data:text/plain;base64,AAAA", "file:///etc/passwd", "https://", "https:///x", "://host", "ht tp://x.org", "https://exa mple.org", "https://[zz]/x", "https://exa%6Dple.org/"] {
+        assert_eq!(mask_url(odd), "", "{odd}");
+    }
+    // A random run as a host label is hidden.
+    let token = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+    assert_eq!(mask_url(&format!("https://{token}.example.org/x")), format!("https://{HIDDEN}.example.org"));
 }

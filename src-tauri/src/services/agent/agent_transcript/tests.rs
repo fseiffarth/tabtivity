@@ -310,6 +310,102 @@ fn a_preview_is_bounded_by_lines_and_characters_and_keeps_its_breaks() {
     assert_eq!(question.options[3].preview, None);
 }
 
+// The tool calls a permission dialog is about. `Bash` is the probe's own record
+// (tui_bash, 2.1.327, scrubbed); `Edit`/`Write`/`WebFetch` are unprobed and
+// follow the same `tool_use` block shape with the inputs Claude's tools take.
+fn tool_call(call: &str, name: &str, input: serde_json::Value, at: &str) -> String {
+    serde_json::json!({
+        "isSidechain": false, "type": "assistant", "timestamp": at,
+        "message": {"role": "assistant", "model": "claude-stub", "content": [{"type": "tool_use", "id": call, "name": name, "input": input}], "stop_reason": "tool_use"}
+    })
+    .to_string()
+        + "\n"
+}
+
+fn tool_result(call: &str, rejected: bool) -> String {
+    let mut block = serde_json::json!({"type": "tool_result", "tool_use_id": call, "content": "done"});
+    if rejected {
+        block["is_error"] = serde_json::json!(true);
+    }
+    serde_json::json!({"isSidechain": false, "type": "user", "message": {"role": "user", "content": [block]}}).to_string() + "\n"
+}
+
+#[test]
+fn the_tool_calls_with_no_result_are_listed_with_what_they_act_on() {
+    let text = probe_prompt("go")
+        + &tool_call("toolu_B", "Bash", serde_json::json!({"command": "touch tui.txt", "description": "probe"}), "2026-11-18T09:26:52.899Z")
+        + &tool_call("toolu_E", "Edit", serde_json::json!({"file_path": "/work/proj/src/a.rs", "old_string": "x", "new_string": "y"}), "2026-11-18T09:27:00.000Z")
+        + &tool_call("toolu_N", "NotebookEdit", serde_json::json!({"notebook_path": "/work/proj/n.ipynb", "new_source": "1"}), "2026-11-18T09:27:01.000Z")
+        + &tool_call("toolu_W", "WebFetch", serde_json::json!({"url": "https://user:pw@example.org:8443/a/b?q=secret#f", "prompt": "summarise"}), "2026-11-18T09:27:02.000Z")
+        + &tool_call("toolu_R", "Read", serde_json::json!({"file_path": "/work/proj/read.txt"}), "2026-11-18T09:27:03.000Z")
+        + &tool_call("toolu_Done", "Write", serde_json::json!({"file_path": "/work/proj/done.txt", "content": "z"}), "2026-11-18T09:27:04.000Z")
+        + &tool_result("toolu_Done", false)
+        + &tool_call("toolu_Q", "AskUserQuestion", serde_json::from_str(r#"{"questions":[{"question":"Which?","options":[{"label":"A"}]}]}"#).unwrap(), "2026-11-18T09:27:05.000Z");
+    let read = read_claude(text);
+    // The shell stays `shells`' business, the question the blocking entry's.
+    assert_eq!(read.shells.len(), 1);
+    assert_eq!(read.shells[0].command, "touch tui.txt");
+    assert_eq!(
+        read.waiting_tools.iter().map(|t| (t.name.as_str(), t.subject.as_str(), t.at.as_deref())).collect::<Vec<_>>(),
+        vec![
+            ("Edit", "/work/proj/src/a.rs", Some("2026-11-18T09:27:00.000Z")),
+            ("NotebookEdit", "/work/proj/n.ipynb", Some("2026-11-18T09:27:01.000Z")),
+            ("WebFetch", "https://user:pw@example.org:8443/a/b?q=secret#f", Some("2026-11-18T09:27:02.000Z")),
+            // Any other tool: its name only.
+            ("Read", "", Some("2026-11-18T09:27:03.000Z")),
+        ]
+    );
+    assert!(read.entries.iter().any(|e| e.blocking));
+    // The wire shape: camelCase list, an empty subject left out.
+    let json = serde_json::to_value(&read).unwrap();
+    assert_eq!(json["waitingTools"][0]["subject"], "/work/proj/src/a.rs");
+    assert!(json["waitingTools"][3].get("subject").is_none());
+    assert!(serde_json::to_value(AgentTranscript::default()).unwrap().get("waitingTools").is_none());
+}
+
+#[test]
+fn a_rejected_call_a_new_prompt_or_an_interrupt_ends_the_wait() {
+    let edit = |call: &str| tool_call(call, "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
+    // A declined call has its (error) result, the interrupt notice follows.
+    let declined = probe_prompt("go") + &edit("toolu_1") + &tool_result("toolu_1", true) + PROBE_INTERRUPT;
+    assert!(read_claude(declined).waiting_tools.is_empty());
+    // Never answered, then the user typed on: an earlier turn's call is not waiting.
+    let later = probe_prompt("go") + &edit("toolu_1") + &probe_prompt("again") + &edit("toolu_2");
+    let read = read_claude(later);
+    assert_eq!(read.waiting_tools.len(), 1);
+    // An interrupt notice with no result in between.
+    let cut = probe_prompt("go") + &edit("toolu_1") + PROBE_INTERRUPT;
+    assert!(read_claude(cut).waiting_tools.is_empty());
+}
+
+#[test]
+fn waiting_tools_skip_a_subagent_file_odd_names_and_are_bounded() {
+    let call = tool_call("toolu_S", "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
+    let lines: Vec<&str> = call.lines().collect();
+    let (_, _, sidechain) = parse_entries(&lines, TranscriptKind::Claude, true);
+    assert!(sidechain.tools.is_empty());
+    let (_, _, own) = parse_entries(&lines, TranscriptKind::Claude, false);
+    assert_eq!(own.tools.len(), 1);
+
+    let mut text = probe_prompt("go");
+    text += &tool_call("toolu_bad", "Edit; rm -rf /", serde_json::json!({"file_path": "/work/x"}), "2026-11-18T09:27:00.000Z");
+    text += &tool_call("toolu_long", "Write", serde_json::json!({"file_path": format!("/work/{}\n/second line", "d".repeat(2000))}), "2026-11-18T09:27:00.000Z");
+    for n in 0..20 {
+        text += &tool_call(&format!("toolu_{n}"), "mcp__srv__tool", serde_json::json!({}), "2026-11-18T09:27:00.000Z");
+    }
+    let read = read_claude(text);
+    assert!(read.waiting_tools.iter().all(|t| t.name != "Edit; rm -rf /"));
+    // Only the newest MAX_WAITING_TOOLS: the long path is among the older ones.
+    assert_eq!(read.waiting_tools.len(), MAX_WAITING_TOOLS);
+    assert!(read.waiting_tools.iter().all(|t| t.name == "mcp__srv__tool"));
+    let read = read_claude(
+        probe_prompt("go") + &tool_call("toolu_long", "Write", serde_json::json!({"file_path": format!("/work/{}\n/second line", "d".repeat(2000))}), "2026-11-18T09:27:00.000Z"),
+    );
+    let subject = &read.waiting_tools[0].subject;
+    assert_eq!(subject.chars().count(), MAX_TOOL_SUBJECT_CHARS);
+    assert!(!subject.contains('\n'));
+}
+
 #[test]
 fn a_codex_async_question_shows_while_it_waits_and_takes_its_reply() {
     // The records Codex 0.169.0 wrote (scripts/verify-cli/codex/async_question.py):
