@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 
-import { ROOT_SCOPE, useTabsStore, type SavedTabEntry } from "../../stores/tabs";
+import { ROOT_SCOPE, toSavedTabEntry, useTabsStore, type SavedTabEntry } from "../../stores/tabs";
+import { AGENT_ITEMS, buildStaticTabSpec, customAgentToItem } from "../../lib/tabs/newTabItems";
 import { useSettingsStore } from "../../stores/settings";
 import { useProjectsStore } from "../../stores/projects";
 // Importing the store registers the restore's rule, as the app does.
@@ -68,6 +69,30 @@ describe("restoring with the cap on", () => {
     expect(load(ROOT_SCOPE, [saved(1), saved(2, { hostSession: true })]).some((t) => t.stopped)).toBe(false);
     expect(load("boxed", [saved(1)]).some((t) => t.stopped)).toBe(false);
     expect(takeRestoredStopped().size).toBe(0);
+  });
+});
+
+describe("a custom agent", () => {
+  it("is marked at launch, keeps the mark through a save and comes back running", () => {
+    const spec = buildStaticTabSpec(
+      customAgentToItem({ id: "c1", label: "My Claude", cmd: "claude", args: ["--model", "opus"] }),
+      "/p",
+      "P",
+      (k) => k,
+    );
+    expect(spec.customAgent).toBe(true);
+    const savedTab = toSavedTabEntry({ ...spec, key: "agent-9" });
+    expect(savedTab.customAgent).toBe(true);
+    const tabs = load("p", [savedTab, saved(1)]);
+    expect(tabs.map((t) => [!!t.customAgent, !!t.stopped])).toEqual([
+      [true, false],
+      [false, true],
+    ]);
+  });
+
+  it("a built-in launch is not marked", () => {
+    const spec = buildStaticTabSpec(AGENT_ITEMS.find((i) => i.cmd === "claude")!, "/p", "P", (k) => k);
+    expect(spec.customAgent).toBeUndefined();
   });
 });
 

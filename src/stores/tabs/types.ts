@@ -462,6 +462,11 @@ export interface TabEntry {
   // respawns on its resume args. Never saved, never copied by a duplicate or
   // kept by the closed-tab record.
   stopped?: boolean;
+  // Launched from a custom agent (`CustomAgent`, `customAgentToItem`), whatever
+  // binary it runs. Persisted. Such a tab is never stopped
+  // (`lib/agents/agentTabStop`): its wake respawns on the built-in's resume
+  // args, which would drop the custom agent's own.
+  customAgent?: boolean;
   // Epoch ms the tab was last used (shown, typed into, a turn), written
   // coarsely (`noteAgentTabUsed`). Persisted, so a relaunch ranks which tabs
   // come back running; validated on the way in (`restoredLastUsedAt`).
@@ -790,6 +795,8 @@ export interface SavedTabEntry {
   assistant?: AssistantLaunch;
   // Persisted last-use mark (see TabEntry.lastUsedAt).
   lastUsedAt?: number;
+  // Launched from a custom agent (see TabEntry.customAgent).
+  customAgent?: boolean;
 }
 
 /** Serialized layout tree as persisted in project.json's `tab_groups`. */

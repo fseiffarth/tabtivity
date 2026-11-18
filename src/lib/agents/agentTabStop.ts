@@ -67,6 +67,7 @@ export type StopBlocker =
   // static
   | "not_agent"
   | "cli"
+  | "custom"
   | "no_session"
   | "reserved_scope"
   | "host_session"
@@ -97,6 +98,11 @@ export interface StopTab {
   kind: string;
   cmd: string;
   sessionId?: string;
+  /** Launched from a custom agent (`TabEntry.customAgent`). */
+  customAgent?: boolean;
+  /** A custom agent's own resume flag: only custom agents carry one, so it
+   *  marks one launched before `customAgent` existed. */
+  resumeArgs?: string[];
   hostSession?: boolean;
   autoContinue?: boolean;
   signIn?: unknown;
@@ -122,6 +128,9 @@ export function staticStopBlockers(tab: StopTab, place: StopPlace): StopBlocker[
   const out: StopBlocker[] = [];
   if (tab.kind !== "agent") out.push("not_agent");
   if (!isStoppableCli(tab.cmd)) out.push("cli");
+  // A custom agent is decided by what it is, not the binary it names: its
+  // wake would respawn on the built-in's resume args and drop its own.
+  if (tab.customAgent || tab.resumeArgs?.length) out.push("custom");
   if (!tab.sessionId) out.push("no_session");
   if (place.reservedScope || tab.assistant) out.push("reserved_scope");
   if (tab.hostSession) out.push("host_session");

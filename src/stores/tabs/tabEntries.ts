@@ -302,6 +302,8 @@ export function restoreSavedTab(
       // again on the way in, and never written back from here.
       cockpitMeta: readCockpitMeta(t.cockpitMeta),
       lastUsedAt: restoredLastUsedAt(t.lastUsedAt),
+      // Only ever makes the tab less stoppable, so the file's word is enough.
+      customAgent: t.customAgent === true || undefined,
     };
 }
 

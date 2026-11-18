@@ -379,6 +379,7 @@ export function toSavedTabEntry(t: TabEntry): SavedTabEntry {
     signIn: t.signIn || undefined,
     cloud: t.cloud || undefined,
     lastUsedAt: t.lastUsedAt,
+    customAgent: t.customAgent || undefined,
   };
 }
 

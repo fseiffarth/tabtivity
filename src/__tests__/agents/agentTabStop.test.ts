@@ -78,6 +78,10 @@ describe("stopBlockers", () => {
     ["sign_in", tab({ cloud: true }), place()],
     ["sign_in", tab({ login: {} }), place()],
     ["attach", tab({ tmuxAttach: "work" }), place()],
+    // A custom agent is never stopped, whatever binary it runs: its wake
+    // would drop its own args.
+    ["custom", tab({ customAgent: true }), place()],
+    ["custom", tab({ resumeArgs: ["--continue"] }), place()],
   ] as const)("static %s", (blocker, t, p) => {
     expect(staticStopBlockers(t, p)).toContain(blocker);
     expect(stopBlockers(t, p, quiet())).toContain(blocker);
