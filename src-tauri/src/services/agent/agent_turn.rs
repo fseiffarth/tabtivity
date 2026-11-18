@@ -1135,7 +1135,14 @@ pub fn start(ctx: CoreCtx) {
         // when the sender side is dropped, i.e. never before the app exits. The
         // timeout is the tool-shell poll, which costs nothing while no tab is
         // bound.
+        let mut last_settle = Instant::now();
         loop {
+            // Whichever arm woke the loop: any tab's record writes restart
+            // `recv_timeout`'s clock, so a busy neighbour must not keep a
+            // declined question's `decision` from being retired.
+            if settle_due(&mut last_settle, Instant::now()) {
+                settle_claude_turns();
+            }
             match rx.recv_timeout(JOB_POLL) {
                 Ok(path) => {
                     // A source record says how the session rolled (a `/clear`,
@@ -1163,9 +1170,6 @@ pub fn start(ctx: CoreCtx) {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    // Before the job-poll gate: a `decision` tab is settled for
-                    // the job scan, which then runs only every 30 s.
-                    settle_claude_turns();
                     if !job_poll_due() {
                         continue;
                     }
@@ -1388,6 +1392,17 @@ pub fn settle_claude_turn(live_root: &Path, uid: &str, project_id: Option<&str>,
         remember();
     }
     wrote
+}
+
+/// Whether the Claude settle is due: at most once per [`JOB_POLL`], on the
+/// watcher's own clock rather than the channel's timeout (which every record
+/// write of any tab restarts). Marks `now` as the last run when it is.
+fn settle_due(last: &mut Instant, now: Instant) -> bool {
+    if now.saturating_duration_since(*last) < JOB_POLL {
+        return false;
+    }
+    *last = now;
+    true
 }
 
 /// [`settle_claude_turn`] for every bound Claude tab whose hooks last said it
@@ -2403,6 +2418,27 @@ mod tests {
         std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(now), claude_declined(esc, "[Request interrupted by user]", false))).unwrap();
         assert!(!tab.settle());
         assert_eq!(tab.read_record(), "decision");
+    }
+
+    #[test]
+    fn the_claude_settle_runs_on_its_own_clock_not_the_channels_timeout() {
+        // A neighbour's records arrive every 500 ms and the channel never
+        // times out: the settle must still come round every `JOB_POLL`.
+        let start = Instant::now();
+        let mut last = start;
+        let mut runs = 0;
+        for tick in 1..=20u32 {
+            if settle_due(&mut last, start + Duration::from_millis(500) * tick) {
+                runs += 1;
+            }
+        }
+        // 10 s of events: due at 2 s, 4 s, ... 10 s.
+        assert_eq!(runs, 5);
+        // Not before the interval has passed.
+        let mut last = start;
+        assert!(!settle_due(&mut last, start + JOB_POLL - Duration::from_millis(1)));
+        assert!(settle_due(&mut last, start + JOB_POLL));
+        assert_eq!(last, start + JOB_POLL);
     }
 
     #[test]
