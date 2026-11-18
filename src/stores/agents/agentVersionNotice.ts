@@ -73,7 +73,7 @@ const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   claude: "2.1.326",
   codex: "0.169.0",
   opencode: "2.3.0",
-  antigravity: "1.5.9",
+  antigravity: "1.5.10",
   copilot: "1.0.112",
   muse: "1.4.15",
 };

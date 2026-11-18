@@ -109,6 +109,10 @@ gives its usage.
   conversation; `format` whether a release runs the hook and sets
   `ANTIGRAVITY_AGENT` for tool commands (run it on every baseline).
   `stub_gemini.py` forces the tool calls (`STUB:CALL <tool> <json>`).
+  `queued.py <label> <bin> <port> <cols> [rows]` holds a turn, queues two
+  prompts behind it and opens `/model` over them (`busy`, `queued`,
+  `queued_model`), for the phone's footer read beside `Press up to edit queued
+  messages`; run it at 44 and 56 columns.
   A pinned build: the updater manifest (`agent_latest::Source::Manifest`)
   names the tarball and its sha512.
 - **Codex** (`codex/`): `writer_lock.py <label> <bin> [model]` opens a

@@ -1271,7 +1271,7 @@ Antigravity's newest release comes from the manifest its installer reads
 is read-only, so neither `agy update` nor its background self-update can work.
 
 Antigravity's per-tab resume depends on its user hooks
-(`services::antigravity_session`, since 2026-11-16, probed on 1.5.2–1.5.9). On
+(`services::antigravity_session`, since 2026-11-16, probed on 1.5.2–1.5.10). On
 each new release run `scripts/verify-cli/antigravity/hooks.py format` (and
 `events`, `tabs`) and re-check:
 
@@ -2220,6 +2220,28 @@ naming an unknown id instead of opening the picker (Tabtivity resumes with
 `--conversation <id>`), implausible window-size reports ignored, and `agy acp`,
 Windows, macOS keychain and MCP fixes. Not reached: swarms, workflows and a
 real sign-in.
+1.5.10 on 2026-11-17 (the updater manifest's tarball, sha512 checked, in a
+read-only directory, beside 1.5.9): `main.py` prints the same lines at 80 and
+42 columns, `second.py` shows the notice with the history, `store.py` reads
+the same three turns with identical schemas, and `--help` and `models --help`
+are identical. `hooks.py format`, `tabs` and `turns` print the same on both;
+`events` differs in one place: while a subagent runs, the parent no longer
+fires an early `Stop` (`fullyIdle: false`) and the subagent's call no
+`PostInvocation` (its "OSC 7501 … done while … waiting for background
+subagents" fix). The hook writes `done` on `Stop` only and skips the
+subagent's (empty `lastUserInput`), so the record now stays `working` through
+a subagent instead of flicking to `done`. The new `queued.py` (a held turn,
+two prompts queued, `/model` over them, at 44 and 56 columns) reads the same
+footer beside `Press up to edit queued messages` on both. 81 of 89 frames
+read the same; the rest are the sign-in frames' PKCE challenge. The `brain/<conversation
+id>/` folder (with `scratch`, `.system_generated`, `.user_uploaded`) is laid out
+as before. `agy changelog` for 1.5.10: an `Orchestrator` `/model` row for
+Gemini Enterprise and ADC sign-ins only (not reachable from an API-key
+stub; with more than one planner it is one row with a `Planner` choice),
+rate-limit waits of up to 4 minutes retried inside the turn, the terminal
+sandbox blocking `~/.config`, `accept-edits` for `--remote-agent`, and Remote
+Control and `agy acp` fixes. Not reached: the Orchestrator row, a real
+sign-in, and a real model writing a plan (the link shape above).
 `--version` alone updated nothing, which the daily probe relies on: a writable
 1.4.5 stayed 1.4.5 for 90 s after one, in an empty home and a configured one
 (2026-10-30). Since at least 1.2.9 an underline row

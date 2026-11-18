@@ -3,7 +3,7 @@
 //! Antigravity mints its conversation ids, and a restored tab used to come
 //! back on `--continue`, the folder's newest conversation: two tabs of one
 //! folder reopened the same chat. Antigravity runs user hooks from
-//! `.gemini/config/hooks.json` (probed on 1.5.2–1.5.9,
+//! `.gemini/config/hooks.json` (probed on 1.5.2–1.5.10,
 //! `scripts/verify-cli/antigravity/hooks.py`), so each tab now records the
 //! conversation it is in, as the other CLIs' hooks do:
 //!
@@ -45,7 +45,7 @@ use crate::storage;
 pub(crate) const HOOKS_FILE: &str = ".gemini/config/hooks.json";
 /// Tabtivity's hook in that file: the one top-level name it owns.
 const HOOK_NAME: &str = concat!(crate::app_slug!(), "-session");
-/// The events the script runs on (probed on 1.5.9, `hooks.py turns`):
+/// The events the script runs on (probed on 1.5.9 and 1.5.10, `hooks.py turns`):
 /// `PreInvocation`, before each model call with the conversation's id — the
 /// record, and `working`; it fires on a resumed conversation's turns too,
 /// unlike `SessionStart`. `Stop`, once per turn whatever ended it (no tool
