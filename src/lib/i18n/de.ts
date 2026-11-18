@@ -7481,6 +7481,7 @@ export const dict: Dict = {
   "gitPull.checkoutChanged": "Arbeitskopie oder Upstream hat sich beim Abrufen geändert. Erneut abrufen, um den aktuellen Stand zu prüfen.",
   "gitPull.stale": "Arbeitskopie oder Branch-Spitze hat sich seit der Vorschau geändert. Erneut abrufen und die Änderungen prüfen.",
   "gitPull.backendRequired": "Diese Pull-Vorschau benötigt das aktuelle Desktop-Backend.",
+  "projectFilesView.publishCheckout": "Quell-Arbeitskopie {checkout}",
   "gitChangeTree.noChanges": "Keine Änderungen",
   "importDrop.title": "Datei existiert bereits",
   "importDrop.existsIn": "existiert bereits in",

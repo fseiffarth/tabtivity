@@ -8226,6 +8226,7 @@ export const enSource = {
   "projectFilesView.commitStagedTitle": "Commit {count} staged",
   "projectFilesView.commit": "Commit ({count})",
   "projectFilesView.showStagedFiles": "Show staged files",
+  "projectFilesView.publishCheckout": "Source checkout {checkout}",
   "projectFilesView.pushCommitOneTitle": "Push {count} commit to remote",
   "projectFilesView.pushCommitManyTitle": "Push {count} commits to remote",
   "projectFilesView.push": "Push ({count})",

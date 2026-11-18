@@ -7475,6 +7475,7 @@ export const dict: Dict = {
   "gitPull.checkoutChanged": "La copia di lavoro o il branch upstream è cambiato durante il fetch. Ripeti il fetch per verificare lo stato attuale.",
   "gitPull.stale": "La copia di lavoro o uno dei branch è cambiato dopo l’anteprima. Ripeti il fetch e controlla il pull aggiornato.",
   "gitPull.backendRequired": "Questa anteprima del pull richiede il backend desktop aggiornato.",
+  "projectFilesView.publishCheckout": "Copia di lavoro di origine {checkout}",
   "gitChangeTree.noChanges": "Nessuna modifica",
   "importDrop.title": "Il file esiste già",
   "importDrop.existsIn": "esiste già in",

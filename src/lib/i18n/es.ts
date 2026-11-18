@@ -7475,6 +7475,7 @@ export const dict: Dict = {
   "gitPull.checkoutChanged": "La copia de trabajo o la rama de seguimiento cambió durante el fetch. Vuelve a traer los cambios para revisar el estado actual.",
   "gitPull.stale": "La copia de trabajo o una de las ramas cambió desde la revisión. Vuelve a traer los cambios y revisa el pull.",
   "gitPull.backendRequired": "Esta revisión del pull requiere el backend de escritorio actualizado.",
+  "projectFilesView.publishCheckout": "Copia de trabajo de origen {checkout}",
   "gitChangeTree.noChanges": "Sin cambios",
   "importDrop.title": "El archivo ya existe",
   "importDrop.existsIn": "ya existe en",
