@@ -112,3 +112,24 @@ Commits on `cli-handoff`: `58472fa84` `fix(agents): spell the app name in HANDOF
 **Flagged for user**
 - The whole-range gate run never came out as one green `--all` result (three load-flaky tests, each green alone); a clean unloaded rerun would give that.
 - Not run live: all of A-D, including both pills (`terminal.limitHandoff`, `agent.cliHandoff`). Backend changed, so `npm run backend:stale` is the main agent's job at landing.
+
+## Final review
+
+Range `7cc15e858..3be507eca`, reviewed against `AGENTS.md` and the plan's Decisions.
+
+**Fixed**
+- `ba03f3c12`: `core_dispatch` classed `agent_cli_handoff_prepare.tabDir` as `NotAPath`, but the body runs `git status` in it and writes the names into the agent home. A hosted user account could list any folder the daemon reads. Now `UserPathOpt` (held to the user's roots, empty is absent). Test `a_users_cli_handoff_folder_is_held_to_their_roots`, red without the fix.
+- `3c46ad9c1`: HANDOFF.md's "Not included" listed the skipped middle only for a truncated read, not when the 48 KiB budget cut it (the coverage line did say so). Test `turns_the_budget_left_out_are_listed_as_not_included`, red without the fix. Also corrected the `changedFiles` doc in `cliHandoff.ts`: it counts the CLI's recorded edits, not `git status`.
+
+**Rejected**
+- Command class `Core` kept. `Core` means "data on the user's daemon", like `agent_tab_transcript` and the `git_*` commands. The hosted web client is the user's own UI, and its path exposure is what `USER_CONFINED` is for (fixed above). The result carries only `~/handoff/…`: no raw project id or path. The phone PWA has no entry, and `mobile_control`'s phone verbs don't expose the command.
+- Fence break-out: the fence is longer than any backtick run, and one-line items are flattened (tested). Pruning touches only ledger ids that pass `is_handoff_id`, and the ledger lives in the state dir. The symlink, exclusive-create and `home_io` paths are sound.
+- Async over blocking (`try_blocking`); the source scan covers every `commands/*.rs`. No `use tauri` outside `desktop`; reserved scopes go through `storage::is_reserved_scope`; `target` is validated first.
+- Frontend: arg names match B; error mapping covers every reader reason (`no_subagent` can't occur); a stale preview is dropped by the per-run `stopped` flag; the successor goes through `newAgentTabForDraft` with `cwd`/`location` and the bootstrap prompt; the `handled` dedupe survives; `.project-dialog` sets `color`; i18n keys are complete in all five locales with no orphans; pills and register rows are present.
+
+**Flagged for user**
+- Host session tabs (root console, unfenced, home `agent-homes/host`). Both the menu entry and the limit notice offer the hand-off. The backend reads the root scope's home, so the read fails as "could not be read yet". Moving an unfenced session's work into a fenced tab is also a trust-level choice. Suggest excluding `tab.hostSession` in `canContinueInAnotherCli` and in the notice.
+- A remote project's tab that runs locally passes the frontend's `runsLocally` gate. The backend `gate` refuses every remote project (`runs_remote`) with `unsupported`. It fails closed, but the plan's "local tabs (`runsLocally`)" suggests these should work. Before this branch the limit notice handled them.
+- `preview.entries` doesn't count an original request recovered from the file head. The dialog shows it on its own line ("original request is included").
+
+**Gates** (`gates-job.sh start --all` on `3c46ad9c1`): brand, whitespace, lint, clippy ×3 and build PASS. `npm test` reported 3 failures of 12 884 (12 881 passed), plus teardown errors in `DetachedRetire`. Those were the load flakes `PdfZoomRaster` "re-arms the commit" and `TerminalAiSwitch` "refused while AI is off", plus a 20 s timeout in `GitCommitSleepHold`. All four files pass when rerun alone (24/24). The Rust test gates never ran inside the job: it stops after vitest fails. The hand run of `cargo test --workspace` and the daemon-lib tests was stopped at the user's request. The targeted Rust tests passed (`agent_cli_handoff` + the dispatch test, 18/18), as did `privacy-check.sh 7cc15e858 HEAD` and `git diff --check`. Not run live.
