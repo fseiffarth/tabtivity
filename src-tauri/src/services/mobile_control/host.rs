@@ -5445,15 +5445,35 @@ async fn phone_transcript(
     tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
-    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
-    let wants_tab = !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
+    let mut entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
+    let has_blocking = transcript.entries.iter().any(|entry| entry.blocking);
+    let wants_tab = has_blocking || !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
     let found = wants_tab
         .then(|| catalog(state, phone).ok())
         .flatten()
-        .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone())));
+        .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone(), tab.session_id.clone().filter(|_| !tab.place.on_host()))));
+    if has_blocking {
+        // The phone has no live "asking" state, so a question the agent is
+        // blocked on stands only while the tab's turn record says `decision`;
+        // a leftover one (dead or resumed session, a question the phone never
+        // saw while Claude works) would be a phantom card. Fail closed.
+        let record = match found.as_ref().and_then(|(project, _, uid)| uid.clone().map(|uid| (project.raw_id.clone(), uid))) {
+            Some((project_id, uid)) => {
+                let state_dir = state.config.state_dir.clone();
+                tokio::task::spawn_blocking(move || headless::turn_record(&state_dir, &project_id, &uid)).await.ok().flatten()
+            }
+            None => None,
+        };
+        if !matches!(record, Some((crate::services::agent_turn::TurnState::Decision, _))) {
+            // `entry_cwds` is positional with the entries: drop in step.
+            let mut keep = transcript.entries.iter().map(|entry| !entry.blocking).collect::<Vec<_>>().into_iter();
+            entry_cwds.retain(|_| keep.next().unwrap_or(true));
+            transcript.entries.retain(|entry| !entry.blocking);
+        }
+    }
     if !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() {
         let mut folders: Vec<String> = Vec::new();
-        if let Some((project, cwd)) = &found {
+        if let Some((project, cwd, _)) = &found {
             folders.push(cwd.clone());
             folders.extend(std::iter::once(&project.root).chain(&project.roots).map(|root| root.to_string_lossy().into_owned()));
         }
@@ -5472,7 +5492,7 @@ async fn phone_transcript(
     let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
     let project = found
         .filter(|_| entry_cwds.iter().any(|cwd| !cwd.is_empty()))
-        .map(|(project, _)| project)
+        .map(|(project, _, _)| project)
         .filter(is_git_project);
     if let Some(project) = project {
         let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();

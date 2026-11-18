@@ -991,6 +991,112 @@ async fn a_phone_transcript_masks_the_waiting_tools_subjects() {
     assert!(!command.contains("u:p@") && !command.contains(root.as_str()), "{wire}");
 }
 
+/// The phone has no live "asking" state, so a question the agent is blocked
+/// on (`blocking`) crosses only while the tab's turn record says `decision`;
+/// a working, done, idle, unreadable or missing record drops it (a dead or
+/// resumed session's leftover would be a phantom card). The other entries
+/// keep their place.
+#[tokio::test]
+async fn a_phone_transcript_keeps_a_waiting_question_only_while_the_turn_says_decision() {
+    use crate::services::agent_transcript::{AgentTranscript, AskedQuestion, TranscriptEntry};
+    let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(55)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let live = host.state.config.state_dir.join("live_sessions");
+    let record = live.join("9d0f-session.turn");
+    let transcript = || AgentTranscript {
+        entries: vec![
+            TranscriptEntry { kind: "prompt".into(), text: "ask me".into(), ..Default::default() },
+            TranscriptEntry {
+                kind: "answer".into(),
+                text: "Q".into(),
+                questions: vec![AskedQuestion { question: "Which?".into(), ..Default::default() }],
+                blocking: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let kinds = |wire: &Value| -> Vec<(String, bool)> {
+        wire["entries"].as_array().unwrap().iter().map(|e| (e["kind"].as_str().unwrap().to_string(), e["blocking"] == true)).collect()
+    };
+    let kept = vec![("prompt".to_string(), false), ("answer".to_string(), true)];
+    let dropped = vec![("prompt".to_string(), false)];
+
+    // No record at all, and a record that is no turn word: fail closed.
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+    std::fs::create_dir_all(&live).unwrap();
+    std::fs::write(&record, "garbage 1").unwrap();
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+
+    for (text, keeps) in [("decision 100", true), ("working 100", false), ("done 100", false), ("idle 100", false)] {
+        std::fs::write(&record, text).unwrap();
+        let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+        assert_eq!(kinds(&wire), if keeps { kept.clone() } else { dropped.clone() }, "{text}: {wire}");
+    }
+
+    // The project's own slice (where a fenced agent's hook writes) counts too,
+    // the newer stamp winning.
+    std::fs::write(&record, "working 100").unwrap();
+    let slice = live.join(crate::storage::project_key(RAW_PROJECT));
+    std::fs::create_dir_all(&slice).unwrap();
+    std::fs::write(slice.join("9d0f-session.turn"), "decision 200").unwrap();
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), kept, "{wire}");
+    std::fs::write(slice.join("9d0f-session.turn"), "decision 50").unwrap();
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+
+    // A transcript with no waiting question never needs the record.
+    let plain = AgentTranscript { entries: vec![TranscriptEntry { kind: "prompt".into(), text: "hi".into(), ..Default::default() }], ..Default::default() };
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, plain).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+}
+
+/// The same rule on the route: the window answers over the control socket and
+/// the phone gets the entries through `phone_transcript` (the no-window route
+/// calls the same function with the CLI's own transcript read off the tab
+/// record, so the rule holds for the headless sidecar too).
+#[tokio::test]
+async fn the_window_route_drops_a_waiting_question_unless_the_turn_says_decision() {
+    use crate::services::agent_transcript::{AgentTranscript, AskedQuestion, TranscriptEntry};
+    let host = Fixture::with_project();
+    let (cookie, _) = host.pair_device(&signing_key(56)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            if admin::read_frame::<DesktopRequest>(&mut stream).await.is_err() {
+                continue;
+            }
+            let transcript = AgentTranscript {
+                entries: vec![TranscriptEntry {
+                    kind: "answer".into(),
+                    text: "Q".into(),
+                    questions: vec![AskedQuestion { question: "Which?".into(), ..Default::default() }],
+                    blocking: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            admin::write_frame(&mut stream, &DesktopResponse::AgentTranscript { transcript }).await.expect("answer");
+        }
+    });
+    let live = host.state.config.state_dir.join("live_sessions");
+    std::fs::create_dir_all(&live).unwrap();
+    for (text, count) in [("working 1", 0), ("decision 2", 1), ("done 3", 0)] {
+        std::fs::write(live.join("9d0f-session.turn"), text).unwrap();
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/transcript"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["transcript"]["entries"].as_array().unwrap().len(), count, "{text}: {body}");
+    }
+    desktop.abort();
+}
+
 /// The transcript's own `cwd` is the agent's to write: a folder above the
 /// tab's must not make every path below it relative, and the list a remote
 /// host sends is bounded and its stamps checked.
