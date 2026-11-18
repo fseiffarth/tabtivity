@@ -132,9 +132,14 @@ started it, so a probe needs `--standalone`.
 
 `services::root_mcp::root_mcp_reattach` (`docs/context/tmux_sessions.md`, "Revival")
 makes the restarted listener honour a surviving agent's old tokens again: same
-port, same bearer, so to the CLI the app was only down. Revived lanes: git,
-cockpit, help, markup, print, tabs. Never schedule, root, reader, local model or
-web: a tab that held one of those stays **Stale** and needs Reconnect. Past
+port, same bearer, so to the CLI the app was only down. Revived lanes:
+cockpit, help, markup, print, and on Linux git and tabs. Never schedule, root,
+reader, local model or web (nor git/tabs on macOS and Windows): a tab that held
+one of those stays **Stale** and needs Reconnect. On Linux a revived token
+answers only a connection held by processes of its own tmux pane tree
+(`root_mcp_reattach::peer_in_session`): a CLI's MCP client that is not a
+descendant of the pane, or hides its `/proc/<pid>/fd` (non-dumpable), gets
+`401`. Past
 30 minutes of downtime (`now - last_alive`, which reads up to 5 minutes long)
 nothing is revived. Per CLI (`root_mcp_reattach::cli_revives`, the record's
 `cmd_stem`):

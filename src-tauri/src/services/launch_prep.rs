@@ -1731,7 +1731,7 @@ pub async fn prepare(
                 .filter_map(|var| opts.env.get(*var))
                 .map(|token| crate::services::root_mcp::token_hash(token))
                 .collect();
-            let outcome = reattach::revive(crate::services::root_mcp::tokens(), &opts.id, opts.project_id.as_deref(), &row, &fresh);
+            let outcome = reattach::revive(crate::services::root_mcp::tokens(), &opts.id, &session, opts.project_id.as_deref(), &row, &fresh);
             if let Some(guard) = mcp_spawn_guard.as_mut() {
                 guard.retarget(&outcome.retarget);
             }

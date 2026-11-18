@@ -285,7 +285,7 @@ impl TokenStore {
             tabs: None,
             cockpit_rate: Arc::default(),
             id: token_hash(&token),
-            revived: false,
+            revived: None,
             access: Access::initial(identity.caller), identity,
             revoked: Arc::new(AtomicBool::new(false)),
             read_mail: Arc::new(AtomicBool::new(read_mail)),
@@ -311,6 +311,21 @@ impl TokenStore {
     pub fn holds_session(&self, id: &str) -> bool {
         self.map().get(id).is_some_and(|s| !s.revoked.load(Ordering::Acquire))
     }
+    /// Mark the session `id` revived into the mux session `into`, for tests
+    /// of who may present a revived token.
+    #[cfg(test)]
+    pub(crate) fn mark_revived_for_test(&self, id: &str, into: &str) {
+        if let Some(s) = self.map().get_mut(id) {
+            s.revived = Some(into.to_string());
+        }
+    }
+    /// The mux session `old` was renamed `new`: the sessions revived into it
+    /// follow ([`Session::revived`]).
+    pub fn rename_revived(&self, old: &str, new: &str) {
+        for s in self.map().values_mut().filter(|s| s.revived.as_deref() == Some(old)) {
+            s.revived = Some(new.to_string());
+        }
+    }
     /// A reattached session keeps the tokens it was started with: re-key every
     /// lane of the tab that holds the session `grant` to `tab`, the PTY id of
     /// the launch that reattached it, so the revoke paths that name a tab (its
@@ -333,7 +348,7 @@ impl TokenStore {
         if old == tab {
             return true;
         }
-        let revived = map.values().any(|s| s.identity.tab == old && s.revived);
+        let revived = map.values().any(|s| s.identity.tab == old && s.revived.is_some());
         map.retain(|_, s| {
             let foreign = s.identity.tab == tab;
             let unrevivable = revived && s.identity.tab == old && !root_mcp_reattach::revivable(s.identity.caller);
@@ -675,8 +690,10 @@ pub struct Session {
     pub(crate) cockpit: Option<super::cockpit_mcp::Binding>,
     /// Revived from the reattach record after a restart
     /// ([`root_mcp_reattach`]): a previous run minted it, this run never
-    /// held its token.
-    pub(crate) revived: bool,
+    /// held its token. The mux session it was revived into: on Linux only a
+    /// process of that session's pane tree may present it
+    /// ([`root_mcp_reattach::peer_in_session`]).
+    pub(crate) revived: Option<String>,
     /// A [`Caller::Tabs`] session's seat (`services::tabs_mcp`), set at grant.
     pub(crate) tabs: Option<super::tabs_mcp::Binding>,
     cockpit_rate: Arc<std::sync::Mutex<RollingWindow>>,

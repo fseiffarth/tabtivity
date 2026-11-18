@@ -7320,10 +7320,15 @@ fn the_headless_spawn_runs_in_the_session_host_only_what_the_wrap_marked() {
 /// with the switch's code, which the create route answers as `ai_off`.
 #[test]
 fn a_rejoin_only_headless_launch_never_creates_a_session() {
-    assert_eq!(headless_rejoin(true), Ok(()));
-    let refused = headless_rejoin(false).expect_err("refused");
+    assert_eq!(headless_rejoin(true, true), Ok(()));
+    assert_eq!(headless_rejoin(true, false), Ok(()));
+    let refused = headless_rejoin(false, true).expect_err("refused");
     assert_eq!(refused, crate::services::ai_switch::AI_OFF);
     assert_eq!(headless_create_error(headless::CreateRefusal::LaunchFailed(refused)).0, StatusCode::FORBIDDEN);
+    // A revival whose session ended meanwhile says so, not that AI is off.
+    let ended = headless_rejoin(false, false).expect_err("refused");
+    assert_eq!(ended, SESSION_ENDED);
+    assert_ne!(headless_create_error(headless::CreateRefusal::LaunchFailed(ended)).0, StatusCode::FORBIDDEN);
     let body = include_str!("../host.rs");
     let spawner = &body[body.find("impl Default for HeadlessSpawner").unwrap()..];
     let spawner = &spawner[..spawner.find("\n}\n").unwrap()];

@@ -114,7 +114,7 @@ fn the_record_round_trips_older_and_unknown_fields() {
 #[test]
 fn a_lane_row_keeps_the_identity_and_the_hash_of_revivable_lanes_only() {
     let pusher = LaneRow::of(&identity("x", Caller::Pusher), "h1");
-    assert_eq!(pusher.hash.as_deref(), Some("h1"));
+    assert_eq!(pusher.hash.is_some(), revivable(Caller::Pusher), "a hash only where git is revived");
     assert_eq!(pusher.caller, "pusher");
     assert_eq!(pusher.git_at_spawn(), Some((7, 9)));
     assert_eq!(pusher.fence_scope.as_deref(), Some("p1"));
@@ -124,7 +124,7 @@ fn a_lane_row_keeps_the_identity_and_the_hash_of_revivable_lanes_only() {
         assert!(!revivable(caller));
     }
     for caller in [Caller::Pusher, Caller::Cockpit, Caller::Helper, Caller::Marker, Caller::Printer, Caller::Tabs] {
-        assert!(revivable(caller), "{caller:?}");
+        assert!(revivable_on(caller, true), "{caller:?}");
     }
 }
 
@@ -277,22 +277,27 @@ fn revival(callers: &[Caller], fresh_callers: &[Caller], tweak: impl Fn(&mut Ide
 
 #[test]
 fn matching_lanes_come_back_under_their_recorded_token() {
-    let all = [Caller::Helper, Caller::Pusher, Caller::Marker, Caller::Printer, Caller::Cockpit, Caller::Tabs];
+    let all: Vec<Caller> = [Caller::Helper, Caller::Pusher, Caller::Marker, Caller::Printer, Caller::Cockpit, Caller::Tabs]
+        .into_iter()
+        .filter(|c| revivable(*c))
+        .collect();
     let r = revival(&all, &all, |_| {});
-    let out = revive(&r.store, "new", Some("p1"), &r.row, &r.fresh);
+    let out = revive(&r.store, "new", "sess", Some("p1"), &r.row, &r.fresh);
     assert!(!out.lost, "{out:?}");
     assert_eq!(out.revived.len(), all.len());
     for (caller, token, hash) in &r.old {
         let session = r.store.authenticate(Some(&bearer(token))).unwrap_or_else(|| panic!("{caller:?} revived"));
-        assert_eq!((session.identity.tab.as_str(), session.id.as_str(), session.revived), ("new", hash.as_str(), true));
+        assert_eq!((session.identity.tab.as_str(), session.id.as_str(), session.revived.as_deref()), ("new", hash.as_str(), Some("sess")));
         // The hash itself is never a bearer: it is hashed again.
         assert!(r.store.authenticate(Some(&bearer(hash))).is_none(), "a hash is no credential");
     }
     for fresh in &r.fresh {
         assert!(!r.store.holds_session(fresh), "no fresh session survives a revival");
     }
-    let git = r.store.authenticate(Some(&bearer(&r.old[1].1))).unwrap();
-    assert_eq!(git.identity.push.unwrap().git_at_spawn, Some((7, 9)), "git_at_spawn comes from the record");
+    if let Some((_, token, _)) = r.old.iter().find(|(c, _, _)| *c == Caller::Pusher) {
+        let git = r.store.authenticate(Some(&bearer(token))).unwrap();
+        assert_eq!(git.identity.push.unwrap().git_at_spawn, Some((7, 9)), "git_at_spawn comes from the record");
+    }
     assert_eq!(out.retarget.len(), all.len());
 }
 
@@ -300,7 +305,7 @@ fn matching_lanes_come_back_under_their_recorded_token() {
 fn schedule_and_root_are_never_revived_and_leave_the_tab_stale() {
     for never in [Caller::Scheduler, Caller::Agent, Caller::Web] {
         let r = revival(&[Caller::Helper, never], &[Caller::Helper, never], |_| {});
-        let out = revive(&r.store, "new", Some("p1"), &r.row, &r.fresh);
+        let out = revive(&r.store, "new", "sess", Some("p1"), &r.row, &r.fresh);
         assert_eq!(out.revived.len(), 1, "{never:?}");
         assert!(out.lost, "{never:?}: its loss reads as stale");
         assert!(r.store.authenticate(Some(&bearer(&r.old[1].1))).is_none(), "{never:?} stays dead");
@@ -312,7 +317,7 @@ fn schedule_and_root_are_never_revived_and_leave_the_tab_stale() {
 #[test]
 fn a_lane_switched_off_since_the_crash_is_not_revived() {
     let r = revival(&[Caller::Helper, Caller::Printer], &[Caller::Helper], |_| {});
-    let out = revive(&r.store, "new", Some("p1"), &r.row, &r.fresh);
+    let out = revive(&r.store, "new", "sess", Some("p1"), &r.row, &r.fresh);
     assert_eq!(out.revived.len(), 1);
     assert!(out.lost, "the agent still names the print server, which no longer answers");
     assert!(r.store.authenticate(Some(&bearer(&r.old[1].1))).is_none());
@@ -330,7 +335,7 @@ fn a_changed_identity_is_not_revived() {
     ];
     for (what, caller, tweak) in cases {
         let r = revival(&[caller], &[caller], tweak);
-        let out = revive(&r.store, "new", Some("p1"), &r.row, &r.fresh);
+        let out = revive(&r.store, "new", "sess", Some("p1"), &r.row, &r.fresh);
         assert!(out.revived.is_empty() && out.lost, "{what}");
         assert!(r.store.authenticate(Some(&bearer(&r.old[0].1))).is_none(), "{what}");
         assert!(r.store.map().is_empty(), "{what}: the fresh one is revoked");
@@ -340,12 +345,12 @@ fn a_changed_identity_is_not_revived() {
 #[test]
 fn a_launch_into_another_project_or_a_held_hash_revives_nothing() {
     let r = revival(&[Caller::Helper], &[Caller::Helper], |_| {});
-    let out = revive(&r.store, "new", Some("p2"), &r.row, &r.fresh);
+    let out = revive(&r.store, "new", "sess", Some("p2"), &r.row, &r.fresh);
     assert!(out.revived.is_empty() && out.lost);
 
     let r = revival(&[Caller::Helper], &[Caller::Helper], |_| {});
     r.store.register(r.old[0].1.clone(), identity("elsewhere", Caller::Helper), false);
-    let out = revive(&r.store, "new", Some("p1"), &r.row, &r.fresh);
+    let out = revive(&r.store, "new", "sess", Some("p1"), &r.row, &r.fresh);
     assert!(out.revived.is_empty(), "a recorded hash held already: fail closed");
     assert_eq!(r.store.authenticate(Some(&bearer(&r.old[0].1))).unwrap().identity.tab, "elsewhere", "left alone");
 }
@@ -365,7 +370,8 @@ fn no_plaintext_token_in_the_store_or_the_record() {
         tokens.push(token);
     }
     let row = created_row(&store, &env, &listener, Some("p1".into()), "claude", false).unwrap();
-    assert_eq!(row.grant, token_hash(&env[super::super::GIT_TOKEN_ENV]), "the stamp names a revivable lane first");
+    let first = if revivable(Caller::Pusher) { super::super::GIT_TOKEN_ENV } else { super::super::HELP_TOKEN_ENV };
+    assert_eq!(row.grant, token_hash(&env[first]), "the stamp names a revivable lane first");
     listener.write_row("s", row);
     let written = std::fs::read_to_string(&file).unwrap();
     for token in &tokens {
@@ -447,7 +453,7 @@ fn a_revived_row_keeps_lost_lanes_without_a_hash_and_takes_the_new_stamp() {
 #[test]
 fn adopt_never_carries_an_unrevivable_lane_of_a_revived_tab() {
     let r = revival(&[Caller::Helper], &[Caller::Helper], |_| {});
-    let out = revive(&r.store, "new", Some("p1"), &r.row, &r.fresh);
+    let out = revive(&r.store, "new", "sess", Some("p1"), &r.row, &r.fresh);
     assert_eq!(out.revived.len(), 1);
     let (schedule, schedule_hash) = grant(&r.store, "new", Caller::Scheduler);
     assert!(r.store.adopt(&r.old[0].2, "newer"));
@@ -603,4 +609,57 @@ fn a_write_in_flight_never_lands_after_the_clean_quit() {
     listener.delete();
     writer.join().unwrap();
     assert!(!file.exists(), "the in-flight write landed before the delete, not after it");
+}
+
+/// R3 (finding 1, the user's decision): where no peer check guards a
+/// revived token, git and tabs are not revived; the other four are. Pure,
+/// so both platforms' rule is checked on every platform.
+#[test]
+fn git_and_tabs_are_revived_only_where_the_peer_is_checked() {
+    for caller in [Caller::Cockpit, Caller::Helper, Caller::Marker, Caller::Printer] {
+        assert!(revivable_on(caller, true) && revivable_on(caller, false), "{caller:?}");
+    }
+    for caller in [Caller::Pusher, Caller::Tabs] {
+        assert!(revivable_on(caller, true), "{caller:?} with the peer check");
+        assert!(!revivable_on(caller, false), "{caller:?} without it");
+    }
+    for caller in [Caller::Scheduler, Caller::Agent, Caller::Reader, Caller::LocalModel, Caller::Web] {
+        assert!(!revivable_on(caller, true) && !revivable_on(caller, false), "{caller:?}");
+    }
+    assert_eq!(PEER_CHECK, cfg!(target_os = "linux"));
+    // The stamp's grant skips a lane this platform does not revive.
+    let mut env = std::collections::HashMap::new();
+    env.insert(super::super::GIT_TOKEN_ENV.to_string(), "g".to_string());
+    env.insert(super::super::PRINT_TOKEN_ENV.to_string(), "p".to_string());
+    let want = if PEER_CHECK { "g" } else { "p" };
+    assert_eq!(stamp_grant(&env), Some(token_hash(want)));
+}
+
+/// R3 (finding 1): a revived session is honoured only from a process of its
+/// own pane tree. A real connection: this test process stands in for the
+/// pane (inside), a child it started for another tab's pane (outside).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_revived_token_is_honoured_only_from_its_own_pane_tree() {
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = server.local_addr().unwrap().port();
+    let _client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let (_accepted, peer) = server.accept().unwrap();
+    assert!(peer_in_tree(peer, port, std::process::id()), "inside the tree: accepted");
+    let mut other = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+    let outside = peer_in_tree(peer, port, other.id());
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(!outside, "outside the tree: refused");
+    assert!(!peer_in_session(peer, port, "r3-no-such-session"), "no pane: refused");
+}
+
+/// A rename moves the revived sessions' binding with the mux session.
+#[test]
+fn a_rename_moves_a_revived_sessions_binding() {
+    let r = revival(&[Caller::Helper], &[Caller::Helper], |_| {});
+    let out = revive(&r.store, "new", "sess", Some("p1"), &r.row, &r.fresh);
+    assert_eq!(out.revived.len(), 1);
+    r.store.rename_revived("sess", "sess2");
+    assert_eq!(r.store.map()[&r.old[0].2].revived.as_deref(), Some("sess2"));
 }

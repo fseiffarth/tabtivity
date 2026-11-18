@@ -72,6 +72,42 @@ impl axum::serve::Listener for BoundedListener {
     }
     fn local_addr(&self) -> std::io::Result<Self::Addr> { self.tcp.local_addr() }
 }
+/// The client end of one accepted connection, with what the listener found
+/// out about it: each revived session's peer verdict
+/// ([`root_mcp::root_mcp_reattach::peer_in_session`]), asked once per
+/// connection rather than per request. A fresh one per connection
+/// (`into_make_service_with_connect_info`).
+#[derive(Clone, Debug)]
+struct Peer {
+    addr: std::net::SocketAddr,
+    verdicts: Arc<std::sync::Mutex<std::collections::HashMap<String, bool>>>,
+}
+impl axum::extract::connect_info::Connected<axum::serve::IncomingStream<'_, BoundedListener>> for Peer {
+    fn connect_info(stream: axum::serve::IncomingStream<'_, BoundedListener>) -> Self {
+        Peer { addr: *stream.remote_addr(), verdicts: Arc::default() }
+    }
+}
+
+/// Whether the revived session `id` (bound to the mux session `session`) may
+/// be used over the connection `peer`: on Linux only from its own pane tree,
+/// and never without a known peer. Elsewhere a revived session is not checked
+/// (its git and tabs lanes were never revived there).
+async fn revived_peer_ok(peer: Option<Peer>, port: u16, id: &str, session: &str) -> bool {
+    if !root_mcp::root_mcp_reattach::PEER_CHECK {
+        return true;
+    }
+    let Some(peer) = peer else { return false };
+    if let Some(verdict) = peer.verdicts.lock_ok().get(id) {
+        return *verdict;
+    }
+    let (addr, session) = (peer.addr, session.to_string());
+    let verdict = tokio::task::spawn_blocking(move || root_mcp::root_mcp_reattach::peer_in_session(addr, port, &session))
+        .await
+        .unwrap_or(false);
+    peer.verdicts.lock_ok().insert(id.to_string(), verdict);
+    verdict
+}
+
 impl AsyncRead for BoundedStream {
     fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         if self.expires.as_mut().poll(cx).is_ready() || (!self.seen_bytes && self.idle.as_mut().poll(cx).is_ready()) {
@@ -176,6 +212,15 @@ async fn admit(request: Request, port: u16, store: &root_mcp::TokenStore) -> Res
         if root_mcp::root_mcp_reattach::pending_bearer(bearer) { StatusCode::SERVICE_UNAVAILABLE } else { StatusCode::UNAUTHORIZED }
     })?;
     if !path_serves(request.uri().path(), session.identity.caller) { return Err(StatusCode::UNAUTHORIZED); }
+    // A token revived from a previous run (`root_mcp_reattach`) answers only
+    // its own session's processes: whoever squatted the port while the app
+    // was down may hold it too. Freshly minted tokens are not checked.
+    if let Some(revived_into) = session.revived.as_deref() {
+        let peer = request.extensions().get::<axum::extract::ConnectInfo<Peer>>().map(|info| info.0.clone());
+        if !revived_peer_ok(peer, port, &session.id, revived_into).await {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
     if authority == Some(guest.as_str()) && session.identity.caller != root_mcp::Caller::Reader {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -991,7 +1036,8 @@ fn serve(
             }
         };
         let listener = BoundedListener { tcp, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
-        if let Err(error) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
+        let service = router.into_make_service_with_connect_info::<Peer>();
+        if let Err(error) = axum::serve(listener, service).with_graceful_shutdown(shutdown).await {
             eprintln!("[root-mcp] server stopped: {error}");
         }
     }))
@@ -1355,6 +1401,27 @@ mod security_tests {
             root_mcp::revoke_tab(&session.identity.tab);
         }
     }
+    /// R3 (finding 1): a revived token is refused (`401`, before the body)
+    /// with no known peer, and from a real connection whose session has no
+    /// pane; the same token, freshly minted, is admitted as before.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_revived_token_from_an_unknown_peer_is_refused() {
+        let post = |token: &str| Request::builder().method("POST").uri("/mcp/help").header("host", "127.0.0.1:8765")
+            .header("content-type", "application/json").header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::from("not json")).unwrap();
+        let (token, helper) = root_mcp::test_session(root_mcp::Caller::Helper);
+        assert!(matches!(admit(post(&token), 8765, root_mcp::tokens()).await, Err(StatusCode::BAD_REQUEST)), "fresh: not checked");
+        root_mcp::tokens().mark_revived_for_test(&helper.id, "r3-no-such-session");
+        assert!(matches!(admit(post(&token), 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "no peer known");
+        let peer = Peer { addr: "127.0.0.1:1".parse().unwrap(), verdicts: Arc::default() };
+        let mut req = post(&token);
+        req.extensions_mut().insert(axum::extract::ConnectInfo(peer.clone()));
+        assert!(matches!(admit(req, 8765, root_mcp::tokens()).await, Err(StatusCode::UNAUTHORIZED)), "no pane, no socket");
+        assert_eq!(peer.verdicts.lock_ok().get(&helper.id), Some(&false), "cached for the connection");
+        root_mcp::revoke_tab(&helper.identity.tab);
+    }
+
     /// The help identity reaches `/mcp/help` and nothing else; no other
     /// class reaches `/mcp/help`. Refused at admission, before the body.
     #[tokio::test]

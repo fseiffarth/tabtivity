@@ -31,9 +31,21 @@
 //! and trusted entries, and [`revive`] swaps each fresh session for the
 //! recorded hash when the recomputed identity matches the recorded one
 //! ([`LaneRow::matches`]) — or revokes it. Only [`revivable`] lanes come back:
-//! git, cockpit, help, markup, print and tabs. Never schedule (a
-//! cross-project prompt injection if intercepted), root, reader, local model
-//! or web. A recorded lane that does not come back leaves the tab stale.
+//! cockpit, help, markup and print, and on Linux git and tabs. Never schedule
+//! (a cross-project prompt injection if intercepted), root, reader, local
+//! model or web. A recorded lane that does not come back leaves the tab stale.
+//!
+//! **Who may present a revived token** (R3, the user's decision on R2's
+//! interception finding): a process that squatted the port while the app was
+//! down holds every bearer a retrying agent sent it, and binding the port
+//! back on the first try does not prove it left. On Linux a revived session
+//! answers only a connection whose client socket is held by processes of its
+//! own mux session's pane tree ([`peer_in_session`], cached per connection
+//! by the listener); anything else, or anything unreadable, gets `401`.
+//! Freshly minted tokens are not checked. macOS and Windows have no such
+//! check, so the two lanes whose harvest reaches beyond the tab — git (a
+//! push) and tabs (messages to sibling tabs) — are not revived there
+//! ([`revivable_on`]); Reconnect brings them back.
 //!
 //! `AppHandle`-free; the listener wiring is in `commands::root_mcp`, the
 //! launch's in `launch_prep`.
@@ -80,20 +92,36 @@ impl Role {
     }
 }
 
-/// The lanes a revival may bring back (fixed decision 6).
+/// This platform checks who presents a revived token ([`peer_in_session`]).
+pub const PEER_CHECK: bool = cfg!(target_os = "linux");
+
+/// The lanes a revival may bring back on this platform (fixed decision 6,
+/// narrowed by R3): [`revivable_on`] with [`PEER_CHECK`].
 pub fn revivable(caller: Caller) -> bool {
-    matches!(caller, Caller::Pusher | Caller::Cockpit | Caller::Helper | Caller::Marker | Caller::Printer | Caller::Tabs)
+    revivable_on(caller, PEER_CHECK)
+}
+
+/// The lanes a revival may bring back where `peer_checked` says whether a
+/// revived token is honoured only from its own session's processes. Without
+/// that check, git and tabs — whose harvested token reaches beyond its tab
+/// (a push, a sibling's inbox) — stay dead. Pure.
+pub fn revivable_on(caller: Caller, peer_checked: bool) -> bool {
+    match caller {
+        Caller::Cockpit | Caller::Helper | Caller::Marker | Caller::Printer => true,
+        Caller::Pusher | Caller::Tabs => peer_checked,
+        _ => false,
+    }
 }
 
 /// The revivable lanes' token variables, in the order a stamp's grant is
-/// chosen from ([`stamp_grant`]).
-const REVIVABLE_TOKEN_ENVS: &[&str] = &[
-    super::GIT_TOKEN_ENV,
-    super::COCKPIT_TOKEN_ENV,
-    super::HELP_TOKEN_ENV,
-    super::MARKUP_TOKEN_ENV,
-    super::PRINT_TOKEN_ENV,
-    super::TABS_TOKEN_ENV,
+/// chosen from ([`stamp_grant`]); only those [`revivable`] here count.
+const REVIVABLE_TOKEN_ENVS: &[(&str, Caller)] = &[
+    (super::GIT_TOKEN_ENV, Caller::Pusher),
+    (super::COCKPIT_TOKEN_ENV, Caller::Cockpit),
+    (super::HELP_TOKEN_ENV, Caller::Helper),
+    (super::MARKUP_TOKEN_ENV, Caller::Marker),
+    (super::PRINT_TOKEN_ENV, Caller::Printer),
+    (super::TABS_TOKEN_ENV, Caller::Tabs),
 ];
 
 /// The grant a new session's stamp names: the hash of its first revivable
@@ -103,6 +131,8 @@ const REVIVABLE_TOKEN_ENVS: &[&str] = &[
 pub fn stamp_grant(env: &std::collections::HashMap<String, String>) -> Option<String> {
     REVIVABLE_TOKEN_ENVS
         .iter()
+        .filter(|(_, caller)| revivable(*caller))
+        .map(|(var, _)| var)
         .chain(super::LANE_TOKEN_ENVS)
         .find_map(|var| env.get(*var))
         .map(|token| super::token_hash(token))
@@ -655,11 +685,32 @@ pub fn on_session_gone(session: &str) {
     }
 }
 
-/// [`Listener::rename`] on this process's listener.
+/// [`Listener::rename`] on this process's listener; the revived sessions
+/// bound to `old` follow too, so the peer check finds the pane again.
 pub fn on_session_renamed(old: &str, new: &str) {
+    super::tokens().rename_revived(old, new);
     if let Some(listener) = listener() {
         listener.rename(old, new);
     }
+}
+
+/// Whether the client end `peer` of a connection to this listener's `port`
+/// belongs to the mux session `session`: every process holding it descends
+/// from the session's pane process (a fenced one through its bwrap parent).
+/// Fails closed: no pane, no pid, no socket, another account's, or any
+/// unreadable `/proc` entry. Blocking (one `tmux` call, a `/proc` walk).
+/// Only asked where [`PEER_CHECK`] holds.
+pub fn peer_in_session(peer: std::net::SocketAddr, port: u16, session: &str) -> bool {
+    let Some(root) = crate::services::session_mux::mux().pane(session).ok().and_then(|pane| pane.pid) else {
+        return false;
+    };
+    peer_in_tree(peer, port, root)
+}
+
+/// [`peer_in_session`] with the pane process `root` known.
+pub fn peer_in_tree(peer: std::net::SocketAddr, port: u16, root: u32) -> bool {
+    let server = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    crate::services::loopback_owner::peer_descends_from(peer, server, root)
 }
 
 /// [`Listener::delete`] on this process's listener: the clean quit ended
@@ -751,11 +802,12 @@ pub struct Outcome {
 }
 
 /// Swap the fresh sessions this launch was granted (`fresh`: their hashes,
-/// all bound to `tab`, a launch into `project`) for the recorded ones of `row`
+/// all bound to `tab`, a launch into `project`, reattaching the mux session
+/// `session`) for the recorded ones of `row`
 /// where the identities match; revoke every other fresh session. Fails
 /// closed: when the launch's project is not the row's, or any recorded hash
 /// is held in `store` already, nothing is revived.
-pub fn revive(store: &TokenStore, tab: &str, project: Option<&str>, row: &Row, fresh: &[String]) -> Outcome {
+pub fn revive(store: &TokenStore, tab: &str, session: &str, project: Option<&str>, row: &Row, fresh: &[String]) -> Outcome {
     let mut out = Outcome::default();
     let held = row.project.as_deref() != project
         || row.lanes.iter().filter_map(|l| l.hash.as_deref()).any(|h| store.holds_session(h));
@@ -769,7 +821,7 @@ pub fn revive(store: &TokenStore, tab: &str, project: Option<&str>, row: &Row, f
             .find(|lane| lane.matches(&identity));
         let swapped = lane.and_then(|lane| {
             let recorded = lane.hash.clone()?;
-            rekey(store, fresh_hash, &recorded, lane.git_at_spawn()).map(|()| (lane.clone(), recorded))
+            rekey(store, fresh_hash, &recorded, lane.git_at_spawn(), session).map(|()| (lane.clone(), recorded))
         });
         match swapped {
             Some((lane, recorded)) => {
@@ -790,10 +842,11 @@ pub fn revive(store: &TokenStore, tab: &str, project: Option<&str>, row: &Row, f
     out
 }
 
-/// Move the session `fresh` to the key `recorded`, as a revived session: its
-/// id becomes the recorded hash, its push binding takes the recorded
-/// `git_at_spawn`, and a tab messaging seat is enrolled under the new id.
-fn rekey(store: &TokenStore, fresh: &str, recorded: &str, git_at_spawn: Option<(u64, u128)>) -> Option<()> {
+/// Move the session `fresh` to the key `recorded`, as a session revived into
+/// the mux session `into`: its id becomes the recorded hash, its push
+/// binding takes the recorded `git_at_spawn`, and a tab messaging seat is
+/// enrolled under the new id.
+fn rekey(store: &TokenStore, fresh: &str, recorded: &str, git_at_spawn: Option<(u64, u128)>, into: &str) -> Option<()> {
     let session = {
         let mut map = store.map();
         if map.contains_key(recorded) {
@@ -801,7 +854,7 @@ fn rekey(store: &TokenStore, fresh: &str, recorded: &str, git_at_spawn: Option<(
         }
         let mut session = map.remove(fresh)?;
         session.id = recorded.to_string();
-        session.revived = true;
+        session.revived = Some(into.to_string());
         if let Some(push) = session.identity.push.as_mut() {
             push.git_at_spawn = git_at_spawn;
         }

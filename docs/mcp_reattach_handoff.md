@@ -581,8 +581,8 @@ commit each with a regression test that fails without it
 
 ### Verdicts
 
-1. **Medium, interception survives the first-try bind: CONFIRMED (facts),
-   not fixed — needs the user's decision.** A std-socket test on Linux: a
+1. **Medium, interception survives the first-try bind: CONFIRMED, fixed by
+   the peer check the user chose (see "Finding 1: the peer check" below).** A std-socket test on Linux: a
    squatter that set `SO_REUSEADDR` keeps its accepted connection after
    closing its listener, the app's bind (Rust sets `SO_REUSEADDR` on Unix)
    succeeds on the first try, the old connection still delivers to the
@@ -624,12 +624,45 @@ commit each with a regression test that fails without it
 * `cargo test -p tabtivity --lib -- root_mcp launch_prep session_mux tmux_local mobile_control::host terminal agent_privacy tabs_mcp`: 725 passed.
 * `cargo clippy -p tabtivity --lib -- -D warnings`: clean. Not run: gates, `--all-targets`, `--no-default-features`, Windows (`attach_only_client` is unused there: `allow(dead_code)`).
 
+### Finding 1: the peer check
+
+* `Session::revived` is now `Option<String>`: the mux session the token was
+  revived into (`revive(.., session, ..)` → `rekey`; a rename follows through
+  `TokenStore::rename_revived`).
+* `commands::root_mcp`: the server runs with
+  `into_make_service_with_connect_info::<Peer>`; `Peer` (one per accepted
+  connection) carries the client address and a verdict cache keyed by session
+  id. `admit` asks `revived_peer_ok` for a revived session only, after the
+  route check and before the body: no `ConnectInfo` → `401`.
+* `root_mcp_reattach::peer_in_session` (blocking, `spawn_blocking`): the
+  session's pane pid (`SessionMux::pane`), then
+  `loopback_owner::peer_descends_from`: the client socket's row in
+  `/proc/net/tcp{,6}` (`connection`: local = peer, remote = 127.0.0.1:port),
+  same uid, its holders through `/proc/*/fd` (`proc::walk`, uncached), each of
+  whose `PPid` chain must reach the pane pid (`descends_from`, bounded).
+* `revivable_on(caller, peer_checked)`, `PEER_CHECK = cfg!(target_os =
+  "linux")`: without the check git and tabs are not revived (no hash
+  written, `stamp_grant` skips them).
+* The Mobile host's rejoin of a session that ended meanwhile says so
+  (`SESSION_ENDED`); the AI switch's code only while the switch is off.
+* Tests: `loopback_owner` (connection parse, `PPid` parse, ancestry through a
+  fence, a real socket inside/outside), `root_mcp_reattach`
+  (`git_and_tabs_are_revived_only_where_the_peer_is_checked`,
+  `a_revived_token_is_honoured_only_from_its_own_pane_tree`,
+  `a_rename_moves_a_revived_sessions_binding`), `commands::root_mcp`
+  (`a_revived_token_from_an_unknown_peer_is_refused`), the host's rejoin test.
+  `cargo test -p tabtivity --lib -- root_mcp loopback_owner launch_prep
+  session_mux tmux_local mobile_control::host terminal agent_privacy tabs_mcp
+  api_proxy ollama_client sign_in`: 796 passed; `cargo clippy -p tabtivity
+  --lib -- -D warnings`: clean. Not run: gates, `--all-targets`, macOS,
+  Windows.
+
 ### Flags for the user
 
-* Finding 1 needs a decision (see the R3 report): a peer check on revived
-  sessions (Linux: the connection's peer socket → its process → inside the
-  session's pane tree or fence), or not reviving git and tabs, or keep the
-  residual as documented.
-* A Mobile-host revival whose session ended meanwhile is refused with the
-  AI switch's message (`headless_rejoin`), which reads oddly.
-* Nothing was run live.
+* **Unverified: a CLI that makes itself non-dumpable** (Codex's process
+  hardening may set `PR_SET_DUMPABLE 0`) hides `/proc/<pid>/fd`, so its
+  revived tokens would always be refused (fail closed, the tab stale until
+  Reconnect). Worth one live check per CLI.
+* The phone gets the generic launch-failed code for a revival whose session
+  ended; the text (logged) now says the session ended.
+* Nothing was run live; macOS/Windows paths not compiled here.
