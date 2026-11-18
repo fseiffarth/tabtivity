@@ -10,6 +10,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve([])
 import { toSavedTabEntry, useTabsStore, type SavedTabEntry, type TabEntry } from "../../stores/tabs";
 import { duplicateSpec, restoreSavedTab, restoredLastUsedAt } from "../../stores/tabs/tabEntries";
 import { reopenSpec } from "../../stores/agents/closedAgentTabs";
+import { costBytes, describeTabCost, tabCost } from "../../lib/tabCost";
+import { translate, type TranslationKey } from "../../lib/i18n";
 
 const NOW = Date.now();
 
@@ -77,6 +79,16 @@ describe("copies", () => {
   it("a reopened closed tab drops stopped", () => {
     const spec = reopenSpec({ id: "c1", tab: agent("agent-1", { stopped: true }), closedAt: NOW, sessionEnded: true });
     expect(spec.stopped).toBeUndefined();
+  });
+});
+
+describe("the hover card's memory row", () => {
+  it("says a stopped agent tab resumes when shown", () => {
+    const cost = tabCost("p1", agent("agent-1", { stopped: true }));
+    expect(cost).toEqual({ kind: "terminal", state: "stopped" });
+    const t = (key: TranslationKey, params?: Record<string, string | number>) => translate("en", key, params);
+    expect(describeTabCost(cost!, t)).toBe("Stopped — resumes when shown");
+    expect(costBytes(cost)).toBeUndefined();
   });
 });
 
