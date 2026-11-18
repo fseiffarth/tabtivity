@@ -209,6 +209,10 @@ export interface Settings {
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
     shell_tabs?: boolean;
+    /** A paired phone may list and attach this desktop's clipboard image and
+     * newest screenshots, downloads and pictures (+ → Desktop). Unset is off;
+     * read by the sidecar per request and repeated by the window's commands. */
+    desktop_images?: boolean;
     /** A paired phone may list the Ollama models installed here and load or
      * unload them (never download or delete). Unset is on; an explicit false
      * closes the routes. Read by the sidecar per request and repeated by the

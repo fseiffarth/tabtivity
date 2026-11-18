@@ -184,6 +184,7 @@ const UPLOAD_FAILURES: Record<string, TranslationKey> = {
   no_clipboard_image: "mobile.inbox.failed.clipboardGone",
   project_ineligible: "mobile.projectInbox.notShared",
   desktop_unavailable: "mobile.inbox.failed.desktopDown",
+  desktop_images_off: "mobile.inbox.failed.desktopImagesOff",
 };
 
 /** Why the desktop could not say what it has to attach. */
@@ -193,6 +194,8 @@ const DESKTOP_LIST_FAILURES: Record<string, TranslationKey> = {
   project_ineligible: "mobile.desktopImages.failed.notShared",
   timeout: "mobile.desktopImages.failed.timeout",
   offline: "mobile.desktopImages.failed.offline",
+  // "Desktop pictures on the phone" is off on the desktop (gap 65).
+  desktop_images_off: "mobile.desktopImages.failed.off",
 };
 
 /** "Screenshots · 3 min ago · 1.2 MB", or "Clipboard · 1920×1080". */
@@ -1208,6 +1211,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const [filesLabel, setFilesLabel] = useState<string | null>(null);
   /** Which sides the drawer's library has (`detail.files`, `detail.host_files`). */
   const [filesSides, setFilesSides] = useState<{ here: boolean; host: boolean; hostLabel?: string }>({ here: true, host: false });
+  /** The desktop's "Desktop pictures on the phone" switch is off
+   * (`detail.desktop_images === false`): the ＋ sheet drops its Desktop tile.
+   * Unknown or an older desktop keeps it, and the routes' own refusal says why. */
+  const [desktopImagesOff, setDesktopImagesOff] = useState(false);
   /** The files drawer, the project screen's own, opened here by a right→left
    * swipe over the output. */
   /** The tablet tier (`useTier`): a tablet's header carries the model and the
@@ -2012,6 +2019,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
           setFilesLabel(detail.files || detail.host_files ? detail.project.label : null);
           setFilesSides({ here: !!detail.files, host: !!detail.host_files, hostLabel: detail.host_label });
           setProjectName(detail.project?.label ?? null);
+          setDesktopImagesOff(detail.desktop_images === false);
         })
         .catch(() => {});
     };
@@ -2494,9 +2502,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     { key: "project", tone: "project", label: t("mobile.add.project"), hint: t("mobile.add.projectHint"),
       icon: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" /></svg> },
   ];
-  const attachTiles = tab.on_host ? allAttachTiles.filter((tile) => tile.key === "project")
-    : bare ? allAttachTiles.filter((tile) => tile.key !== "project").map((tile) => tile.untested ? tile : { ...tile, untested: "mobile.tabby.attach" })
-    : allAttachTiles;
+  const shownAttachTiles = desktopImagesOff ? allAttachTiles.filter((tile) => tile.key !== "desktop") : allAttachTiles;
+  const attachTiles = tab.on_host ? shownAttachTiles.filter((tile) => tile.key === "project")
+    : bare ? shownAttachTiles.filter((tile) => tile.key !== "project").map((tile) => tile.untested ? tile : { ...tile, untested: "mobile.tabby.attach" })
+    : shownAttachTiles;
   const desktopOptions: SheetOption[] = (desktopImages ?? []).map((image) => ({
     key: image.id,
     label: image.name,

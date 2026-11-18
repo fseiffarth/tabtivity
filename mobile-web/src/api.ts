@@ -262,6 +262,10 @@ export interface ProjectDetail {
   create?: CreateVerdict;
   /** The phone may open shell tabs (`shell_tabs` on the desktop); absent is off. */
   shells?: boolean;
+  /** The phone may list and attach the desktop's pictures (`desktop_images` on
+   * the desktop, default off). Absent (an older desktop) keeps the ＋ sheet's
+   * Desktop tile. */
+  desktop_images?: boolean;
   /** How the host's tabs reach the phone: `tmux`, `native` (Windows with its
    * experimental session host on), or `unsupported` on a host with neither
    * (Windows with the host off), where nothing can be opened, scheduled or

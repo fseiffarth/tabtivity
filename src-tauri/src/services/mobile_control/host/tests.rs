@@ -1328,8 +1328,12 @@ async fn writes_with_side_effects_are_the_owners_with_no_window() {
     assert_eq!(options["worktrees"], json!([]));
     assert_eq!(options["sign_in"], json!([]));
 
-    // Desktop images: a file in Tabtivity's own screenshot folder is listed
+    // Desktop images: closed until "Desktop pictures on the phone" is on
+    // (gap 65); then a file in Tabtivity's own screenshot folder is listed
     // (no clipboard) and attached into the project inbox.
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie)).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::FORBIDDEN, Some("desktop_images_off")), "{body}");
+    open_desktop_images(&state_dir);
     let shots = state_dir.join("screenshots-pending");
     std::fs::create_dir_all(&shots).expect("shots dir");
     std::fs::write(shots.join("shot.png"), b"\x89PNG\r\n\x1a\nnot really").expect("shot");
@@ -1968,6 +1972,7 @@ async fn a_tabby_chat_takes_the_phones_files_into_its_own_folder() {
     let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/inbox?names={leaf}"), &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(json(&body)["files"].as_array().map(Vec::len), Some(1), "{body}");
+    open_desktop_images(&state_dir);
     let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
@@ -2050,6 +2055,7 @@ fn host_tab_fixture(reachable: bool) -> Fixture {
 #[tokio::test]
 async fn a_host_tab_is_listed_on_host_and_refuses_what_would_act_here() {
     let host = host_tab_fixture(true);
+    open_desktop_images(&host.state.config.state_dir);
     let cookie = host.pair_device(&signing_key(71)).await.0;
     let (p, t) = project_and_tab(&host, &cookie).await;
     let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
@@ -4152,9 +4158,71 @@ fn inbox_request(tab_id: &str, name: &str, cookie: &str, bytes: Vec<u8>) -> Requ
         .expect("request")
 }
 
+/// Turns "Desktop pictures on the phone" on (gap 65), keeping whatever
+/// `settings.json` already held.
+fn open_desktop_images(state_dir: &std::path::Path) {
+    set_desktop_images(state_dir, true);
+}
+
+fn set_desktop_images(state_dir: &std::path::Path, on: bool) {
+    let file = state_dir.join("settings.json");
+    let mut settings: Value = std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| json!({}));
+    settings[crate::brand::MOBILE_HOST_KEY]["desktop_images"] = json!(on);
+    std::fs::write(&file, settings.to_string()).expect("settings");
+}
+
+/// Gap 65: the desktop's pictures and clipboard image are the user's, not a
+/// project's. With the switch unset or off both routes refuse
+/// `403 desktop_images_off` before any desktop call or folder scan, and
+/// nothing reaches the project inbox; turning it on opens them, and turning
+/// it off again closes them at once (read per request).
+#[tokio::test]
+async fn desktop_images_stay_closed_until_the_switch_is_on() {
+    let host = Fixture::with_project();
+    let state_dir = host.state.config.state_dir.clone();
+    let cookie = host.pair_device(&signing_key(36)).await.0;
+    let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+    let offered = || async {
+        let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        json(&detail)["desktop_images"].as_bool()
+    };
+    let shots = state_dir.join("screenshots-pending");
+    std::fs::create_dir_all(&shots).expect("shots dir");
+    std::fs::write(shots.join("shot.png"), b"\x89PNG\r\n\x1a\nnot really").expect("shot");
+    let list = format!("/api/v1/tabs/{tab_id}/desktop-images");
+    let closed = |status: StatusCode, body: &str| {
+        assert_eq!((status, json(body)["error"].as_str()), (StatusCode::FORBIDDEN, Some("desktop_images_off")), "{body}");
+        assert!(!body.contains("shot.png"), "{body}");
+    };
+
+    for setting in [None, Some(false)] {
+        if let Some(on) = setting {
+            set_desktop_images(&state_dir, on);
+        }
+        let (status, _, body) = host.send(get_as(&list, &cookie)).await;
+        closed(status, &body);
+        let (status, _, body) = host.send(request_as("POST", &list, &cookie, Some(json!({ "image_id": desktop_images::CLIPBOARD_ID })))).await;
+        closed(status, &body);
+        assert_eq!(offered().await, Some(false), "the ＋ sheet hides Desktop");
+    }
+    assert!(!host.root.join(inbox::INBOX_DIR).exists());
+
+    set_desktop_images(&state_dir, true);
+    assert_eq!(offered().await, Some(true));
+    let (status, _, body) = host.send(get_as(&list, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = json(&body)["images"].as_array().unwrap().iter().find(|i| i["name"] == "shot.png").expect("listed")["id"].as_str().unwrap().to_string();
+
+    set_desktop_images(&state_dir, false);
+    let (status, _, body) = host.send(request_as("POST", &list, &cookie, Some(json!({ "image_id": id })))).await;
+    closed(status, &body);
+    assert!(!host.root.join(inbox::INBOX_DIR).exists());
+}
+
 #[tokio::test]
 async fn desktop_images_need_the_bridge_a_known_tab_a_same_origin_and_a_listed_id() {
     let host = Fixture::with_project();
+    open_desktop_images(&host.state.config.state_dir);
     let cookie = host.pair_device(&signing_key(31)).await.0;
     let tab_id = fixture_tab_id(&host, &cookie).await;
     let attach = |tab: &str, origin: &str, body: Value| {

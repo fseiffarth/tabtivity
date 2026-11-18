@@ -289,7 +289,7 @@ export function MobileSettings() {
    * read by the desktop bridge alone — the sidecar never sees mail settings.
    * They ride on the stored host settings untouched otherwise, so flipping one
    * never re-verifies Serve or restarts the host. */
-  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "project_sync" | "project_remarks" | "stay_after_quit" | "shell_tabs" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
+  const setMailGate = async (gate: "mail_read" | "mail_actions" | "mail_reply" | "root_access" | "project_files" | "project_uploads" | "project_sync" | "project_remarks" | "stay_after_quit" | "shell_tabs" | "desktop_images" | "browser_client" | "local_models" | "assistant_access", on: boolean) => {
     setError(null);
     try {
       await updateSettings({
@@ -733,6 +733,12 @@ export function MobileSettings() {
         checked={stored?.shell_tabs !== true}
         disabled={busy}
         onChange={(event) => void setMailGate("shell_tabs", !event.target.checked)}
+      />
+      <ToggleRow
+        label={<><Hint help={t("mobile.desktopImagesGateHelp")}>{t("mobile.desktopImagesGate")}</Hint> <UntestedTag id="mobile.desktopImagesGate" /></>}
+        checked={stored?.desktop_images ?? false}
+        disabled={busy}
+        onChange={(event) => void setMailGate("desktop_images", event.target.checked)}
       />
       <ToggleRow
         label={<><Hint help={t("mobile.localModelsGateHelp")}>{t("mobile.localModelsGate")}</Hint> <UntestedTag id="mobile.localModelsGate" /></>}

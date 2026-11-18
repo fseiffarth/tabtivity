@@ -106,6 +106,13 @@ pub struct AppMobileHostSettings {
     /// bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_tabs: Option<bool>,
+    /// May a paired phone list and attach the desktop's clipboard image and
+    /// newest screenshots, downloads and pictures (composer + → From the
+    /// desktop)? Default off (threat model gap 65). Read by the sidecar per
+    /// request (`mobile_control::discovery::desktop_images_open`) and repeated
+    /// by the window's commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_images: Option<bool>,
     /// May a paired phone list the desktop's Ollama models and load/unload them
     /// (never download or delete)? Unset is **on**; `false` closes the routes.
     /// Read by the sidecar per request

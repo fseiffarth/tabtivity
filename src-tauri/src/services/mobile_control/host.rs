@@ -36,7 +36,7 @@ use super::{
     config::{verify_tailscale_serve, HostConfig},
     deadline,
     diverged,
-    discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     files_zip,
     git_overview,
@@ -1547,6 +1547,8 @@ async fn project(
                 "create": project.create,
                 // Whether the phone may offer a new shell (`shells_open`).
                 "shells": shells_open(&state.config.state_dir),
+                // Whether the ＋ sheet offers Desktop (`desktop_images_open`).
+                "desktop_images": desktop_images_open(&state.config.state_dir),
                 // `tmux` where tabs attach through tmux; `unsupported` on a
                 // host with none (Windows), where the phone hides ＋, Schedule
                 // and Mark up's Submit (`terminals_support`).
@@ -6705,6 +6707,7 @@ fn desktop_image_error(code: &str) -> (StatusCode, Json<serde_json::Value>) {
             "file_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "inbox_full" => StatusCode::INSUFFICIENT_STORAGE,
             "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+            "desktop_images_off" => StatusCode::FORBIDDEN,
             _ => StatusCode::BAD_REQUEST,
         },
         code,
@@ -6714,7 +6717,8 @@ fn desktop_image_error(code: &str) -> (StatusCode, Json<serde_json::Value>) {
 /// `GET /api/v1/tabs/{tab_id}/desktop-images` — the composer's **+ → From the
 /// desktop**: what the desktop would copy into this tab's project inbox (its
 /// clipboard image, recent screenshots and pictures). Opaque ids and folder
-/// labels only; the desktop keeps every path.
+/// labels only; the desktop keeps every path. Closed unless the desktop's
+/// "Desktop pictures on the phone" switch is on (`desktop_images_open`).
 async fn desktop_images(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -6724,6 +6728,9 @@ async fn desktop_images(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if !desktop_images_open(&state.config.state_dir) {
+        return desktop_image_error("desktop_images_off");
+    }
     let (project_id, _) = match inbox_project(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
@@ -6772,6 +6779,9 @@ async fn attach_desktop_image(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if !desktop_images_open(&state.config.state_dir) {
+        return desktop_image_error("desktop_images_off");
+    }
     let Ok(request) = serde_json::from_slice::<AttachDesktopImageBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
