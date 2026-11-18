@@ -1,13 +1,22 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
-- [ ] **Continue work with another CLI** — planned, not implemented.
-  `docs/cli_session_handoff_plan.md`: manual Claude ↔ Codex handoff in local
-  project tabs, usable after a quota limit without another source-model call;
-  durable context, linked sessions, safe stop/delivery and retry recovery.
-  - [ ] Context collector and preview with explicit history coverage.
-  - [ ] Persisted lifecycle, source stop/continuation hold and crash recovery.
-  - [ ] Destination adapters, prompt receipts and linked-session restore.
-  - [ ] Shared desktop picker, i18n, untested register and regression coverage.
+- [ ] **Continue work with another CLI** — v0 on develop since 2026-11-04
+  (`TerminalLimitHandoff`, pill `terminal.limitHandoff`, never live); plan
+  `docs/cli_session_handoff_plan.md` (rewritten 2026-11-18) hardens it.
+  - [ ] A. Successor tab through `newAgentTabForDraft` (resumable, `TAB_UID`).
+  - [ ] B. `agent_cli_handoff_prepare`: `HANDOFF.md` in the target's agent home
+    (first request, recent turns in a budget, cockpit notes, working tree).
+  - [ ] C. Shared `CliHandoffDialog`: limit notice + tab-menu entry, CLI picker,
+    preview, short bootstrap prompt.
+  - [ ] 🖐️ Manual: Claude → Codex, Codex → Claude, restart resumes the successor.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [ ] **Notes on diff lines, added to the Chat draft** (implemented 2026-11-13, never
   live; frontend only). Plan `docs/diff_notes_plan.md`, handoff

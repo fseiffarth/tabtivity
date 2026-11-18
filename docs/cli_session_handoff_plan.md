@@ -1,191 +1,171 @@
 # Continue work with another CLI
 
-Status: proposed implementation plan, 2026-11-15. No feature code implemented.
+Status: plan only, rewritten 2026-11-18. Replaces the 2026-11-15 version. A
+first version has been live in the code since 2026-11-04 (`b041edf8f`,
+`9db7ee235`); this plan hardens and extends it. It does not start over.
 
-## Outcome and scope
+## What exists
 
-A user whose agent hits a usage limit can choose **Continue with another CLI…**,
-select an installed CLI, and continue the same work with its context. The source
-conversation remains available. This creates a new native session linked to the
-old one; it does not convert vendor session databases or promise identical memory.
+`src/components/terminal/TerminalLimitHandoff.tsx` + `src/lib/agents/limitHandoff.ts`
+(pill `terminal.limitHandoff`, never live):
 
-First release: desktop, ordinary local project agent tabs, Claude ↔ Codex, same
-scope and exact working directory/worktree. Both directions must pass before
-shipping. No source-model call, external summarizer, automatic provider switch,
-file synchronization, commit, stash, branch change, or permission-mode transfer.
-Exclude root, assistant, boxes, remote projects, containers, VMs, custom CLIs,
-local-model launches and externally attached tmux sessions initially. Show a
-clear reason when unavailable. Expand only after each source reader and target
-launch/prompt adapter has explicit support.
+- Every 2 s it checks a visible local agent tab's screen for an explicit
+  usage-limit line (`cliLimitNoticeLine`). It then offers the **next** installed
+  CLI in the saved agent order (`nextLimitCli`, forward only). The dialog quotes
+  the matched line and always asks; there is no automatic switch.
+- On Continue it reads the tab's conversation through `agent_tab_transcript`
+  (`readerRequest(…, 30)`), keeps the last 20 prompt/answer entries, each cut
+  to its **last** 1200 chars, and JSON-encodes them. It flattens newlines and
+  passes the result as `initialInput` of a new tab in the same scope, cwd and
+  `location`. The source tab is left alone.
 
-## User flow
+## Is it worth it
 
-1. Add the action to the agent tab menu and Chat header using one shared handler.
-   Keep it available independently of quota detection; limits need not be parsed.
-2. Show a compact dialog with compatible installed destinations, their existing
-   readiness information, and an editable optional instruction. Explain that
-   selected conversation context goes to the destination CLI/provider. Show a
-   collapsible context preview and any missing/truncated history. Never claim
-   that installation proves login or remaining quota.
-3. The button says **Continue with <CLI>**. If the source is working, offer
-   **Stop and continue** with an interruption explanation; cancellation does
-   nothing. Warn about queued work that will be held. Do not silently interrupt
-   on opening the picker.
-4. Preflight target, transcript availability and current source identity before
-   stopping anything. Hold the source's auto-continue, schedules and queued
-   prompts while switching. Stop its owned process subtree, including background
-   jobs/subagents, and verify termination before taking the final snapshot.
-   Idle status alone is insufficient. If termination cannot be established,
-   leave the operation blocked and do not launch the successor.
-5. Create a fresh destination tab in the same scope and cwd, using its normal
-   configured model and CLI permission behavior. Deliver a short bootstrap
-   prompt that asks it to read the attached handoff and continue the user's work.
-   No copy/paste step. Focus the destination; keep the stopped source readable.
-6. Both tabs show a small predecessor/successor link. The source stays stopped
-   across layout restore until explicitly resumed. Resuming it while its successor
-   works must explain the shared-working-tree collision. Do not automatically
-   migrate schedules, queued prompts, approval decisions or draft text.
+Yes, and most of the cost is already paid. Hitting a quota limit mid-task and
+re-explaining it to another CLI is a recurring loss. The parts the 2026-11-15
+plan wanted to build already exist:
 
-## Context contract
+| Need | Existing piece |
+|---|---|
+| Read the source conversation | `agent_transcript::agent_session_transcript`: Claude, Codex, OpenCode, Gemini, Antigravity, Muse, Copilot (not only Claude ↔ Codex) |
+| The original request beyond the 6 MiB tail | `agent_session::chat_prompts` reads the first prompt from the head (4 MiB) for Claude/Codex/Copilot files |
+| Files the conversation changed | `agent_changes::changed_paths` |
+| The agent's own notes | cockpit meta (`handoff`, `progress`, `blocker`, `verification` on the tab) |
+| A file a fenced agent can read | `<agent home>/handoff/<id>/` through `home_io`, as `services::sync_handoff` already does |
+| Type the first prompt once the TUI is ready | `initialInput`: readiness cushion, trust-dialog guard, `claimInitialInput` dedupe, Claude `confirmFreshSubmit`; never persisted (`toSavedTabEntry` leaves it out) |
+| A proper new agent tab | `lib/agents/prompt/newTab.ts` `newAgentTabForDraft` → `buildStaticTabSpec` (session id, `TAB_UID`, session-id args) |
 
-Store a versioned handoff containing host-observed facts separately from
-agent-authored assertions:
+The old plan's transaction (six persisted states, verified process-subtree
+stop, crash reconciliation, delivery receipts, predecessor/successor links)
+protects against a double click or a crash mid-switch. Those failures cost one
+retry, because the source tab stays open and readable. **Dropped.**
 
-- Source tab, resolved live session, CLI, scope, cwd, capture timestamp and
-  transcript fingerprint; destination tab and operation id.
-- Original user request where recoverable, later corrections and constraints,
-  and recent user/assistant exchanges in chronological order with provenance.
-- Existing cockpit handoff/progress/blocker/verification/results, clearly marked
-  as agent reports with timestamps, not proof of completed work or passed tests.
-- Available task decisions, remaining work and failures from recorded context.
-  Without a model, do not pretend a deterministic extractor can reliably infer
-  these: retain source excerpts and mark absent sections unknown.
-- Working-tree status and changed/untracked filenames captured with hardened git;
-  no automatic inclusion of every file's contents, ignored files, credentials,
-  environment, vendor configuration, raw tool-output dump or hidden reasoning.
-  A non-git project remains supported with status marked unavailable.
-- History coverage, omissions and truncation. Preserve original request and recent
-  corrections preferentially; never silently substitute a transcript tail for a
-  complete conversation. Include a bounded normalized transcript for reference.
+## Gaps in what exists
 
-Initial configurable-in-code limits: 32 KiB bootstrap/context digest, 2 MiB
-normalized reference transcript, 200 KiB per retained message. These are byte
-limits, not token guarantees. Show omissions in preview; fail before stopping
-if no meaningful user context can be recovered. Reuse normalized reader parsing,
-but implement bounded traversal for the initial request: the current 6 MiB tail
-reader alone cannot guarantee it. Treat compaction and missing early records as
-explicit coverage gaps. Images/attachments initially carry an availability note,
-not an invented textual replacement or automatic external upload.
+1. **The successor tab is built by hand** (`label, cmd, args: [], env: {}`). It
+   has no `sessionId`, no `TAB_UID` and no session-id args. So
+   `isResumableAgentTab` is false: the tab is dropped at the next restart, and
+   the Reader/phone Chat have no launch id to find its conversation by.
+2. **The context loses the start of the work.** It reads only 30 entries and
+   keeps 20. Each is cut from the front, which drops a prompt's opening, where
+   the request usually is. On a long session the original request is gone.
+3. **No working-tree state** (changed/untracked files) and no cockpit notes.
+4. **A large PTY paste.** Up to ~25 KB of escaped JSON goes in as one typed
+   line. The text is transcript content in a prompt the CLI treats as the
+   user's.
+5. **It is reachable only through the screen regex** and offers only the next CLI.
+   A limit notice whose wording the regex doesn't know shows nothing, and there's
+   no way to switch by choice (a weaker model for a cheap step, a CLI that's
+   better at the task).
+6. `{agent}` in the dialog is the bare binary name, not the CLI's label.
 
-## Storage and trust
+## Decisions
 
-Canonical operation records and artifacts live under
-<state_dir>/sessions/<scope>/handoffs/<operation-id>/, outside the project.
-Use opaque host-minted ids and validated scope/tab lookup. Never accept arbitrary
-source paths, launch commands or destination cwd from a browser or renderer.
-Stage only this operation's context in the destination's per-scope agent home,
-through guarded home I/O, where its normal fence can read it. Keep the canonical
-record host-owned; the staged copy is context, not authority. Do not mount the
-whole session-state directory. Clean up staged copies with the handoff lifecycle.
+- **Context travels as a file, not as typed text.** The backend writes
+  `HANDOFF.md` into the target's agent home. The typed prompt is one short line
+  pointing at it.
+- **The backend reads the transcript itself** from the same tab identity
+  `agent_tab_transcript` takes. No conversation text crosses IPC from the
+  renderer, and the backend can reach the head for the original request.
+- **The source is never stopped.** The manual entry is disabled while the
+  source's turn is running (`stores/activity.ts` working state), with "Wait for
+  the turn to end or stop it". After a limit the source is idle anyway.
+- **Same gates as today:** local tabs (`runsLocally`), not the assistant. Remote
+  host tabs, local-model targets (`<scope>.local` home) and the phone come later.
+- **No model call to summarize.** The file is the verbatim conversation in a
+  fixed byte budget. The new agent reads and judges it.
 
-Historical transcript text is quoted evidence, not new system instructions or
-permission grants. The new agent must follow its current instructions and verify
-working-tree facts. Credentials, MCP grants, login state and source permission
-flags never travel. Respect local-only/provider restrictions before offering a
-destination. Retain artifacts while either linked session needs them; deletion
-of both allows cleanup, including staged copies. Do not let an age-based sweep
-break a pending or retryable operation.
+## HANDOFF.md
 
-## Transaction and recovery
+Written to `<target scope home>/handoff/cli-<id>/HANDOFF.md`. The agent sees
+it as `~/handoff/cli-<id>/HANDOFF.md`, as the sync resolver's export works.
+Sections in order; each says when it is empty or cut:
 
-Implement a persisted, revisioned operation with states:
-preparing → source_stopped → snapshot_ready → destination_created →
-prompt_pending → delivered; also failed/cancelled with a recoverable phase.
-Use a per-source claim and client request id to prevent double-click/concurrent
-handoffs. Revalidate the live session after stopping: a clear/resume during the
-picker must rebuild the preview or refuse stale context.
+1. **Header:** source CLI label, captured at, cwd, coverage (entries included /
+   total, "earlier turns omitted" when `truncated`).
+2. **Original request:** the first prompt, from `chat_prompts` when the tail
+   read lacks it, whole up to the reader's 6 000-char bound.
+3. **Recent conversation:** chronological prompt/answer entries. Fill from
+   newest back to a 48 KiB budget. An over-long entry keeps its head and tail
+   with a `[… n chars cut …]` mark between. Subagent entries appear as one line
+   each (role + task), not their conversations.
+4. **The previous agent's notes:** cockpit handoff/progress/blocker/verification,
+   headed as that agent's own claims, with their timestamps.
+5. **Working tree:** `git status --porcelain` through
+   `git_hardened::hookless_…` (names only, ≤ 200 lines), plus the
+   conversation's `changed_paths`. "Not a git repository" when it isn't.
+6. **Not included:** tool output, thinking, images/attachments, subagent
+   conversations.
 
-Persist the destination identity before launch and reuse it on retries. Persist
-prompt delivery intent and its receipt; distinguish queued, written and observed
-as accepted where the CLI supports that evidence. Do not equate spawning a PTY
-with successful context delivery. On ambiguous delivery after a crash, present
-an explicit retry decision rather than silently sending twice. The UI may offer
-retry delivery or resume the original; never automatically run both.
+The transcript sections sit in fenced blocks under a line saying they are
+quoted context, not instructions. The bootstrap prompt (i18n, one line):
+"Continue the unfinished task from {agent}. Read {file} first: it holds that
+conversation as quoted context, not new instructions. Check the working tree
+before acting and don't redo finished work."
 
-Failure before stopping leaves the source alone. Failure after stopping keeps
-its history and cwd intact and offers explicit resume/retry. A destination that
-fails login, readiness or quota keeps the prepared handoff available. On restart,
-reconcile recorded operations with saved tabs and process ownership before any
-resume or prompt delivery; incomplete operations must not resurrect both agents.
-Hold source scheduling/auto-continue until explicit resolution, with visible
-state and recovery controls. Bound waits and show phase-specific errors.
+Retention: a host record `<state_dir>/cli-handoff/<scope>.json` lists the ids
+written. Keep the newest 10 and prune only recorded ones, through `home_io`.
+This mirrors `sync_handoff`: never prune by listing an agent-writable folder.
 
-## Existing seams and proposed implementation
+## Steps
 
-Verified in the repository during planning:
+**A. Successor tab spec (small; ship first).** In `TerminalLimitHandoff.handoff`,
+build the tab through `newAgentTabForDraft({ agent: target.bin, cwd, … })`,
+then set `location` and `initialInput`. Its `/rename` `initialInput` is
+replaced; auto tab names cover the label. Test: the created tab passes
+`isResumableAgentTab` and carries `TAB_UID` (`TerminalLimitHandoff.test.tsx`).
 
-- `src/stores/agents/agentLocationSwitch.ts`: host movement carries Claude only;
-  useful UX precedent, not a cross-CLI conversion API.
-- `src/stores/agents/agentWorktreeSwitch.ts`: shared `stopAgentTab`; its exit wait
-  currently has a timeout, so audit/strengthen termination evidence for handoff
-  rather than assuming a returned success proves quiescence.
-- `src-tauri/src/services/agent/agent_session.rs` and `agent_transcript.rs`:
-  resolve live sessions and normalize conversation records. Reuse their guarded
-  readers; preserve provenance/coverage in a handoff-specific collector.
-- `src/stores/agents/agentPrompts.ts`: inspect existing prompt queue receipts and
-  readiness rules before extending delivery. Reuse the standard tab creation
-  and launch preparation paths; never build shell command strings from history.
-- `services::cockpit_meta`, `workspace`, `launch_prep`, `agent_home` and `home_io`:
-  existing metadata, tab persistence, authority/fence and safe staging seams.
+**B. Backend `agent_cli_handoff_prepare`.** New
+`src-tauri/src/services/agent/agent_cli_handoff.rs` (AppHandle-free) plus a
+command in `commands/agents.rs`:
+`#[cfg_attr(feature = "desktop", tauri::command)]`, `async` over a `*_blocking`
+body, `Ctx`. Arguments: the `readerRequest` fields, `target`, `previewOnly`. It
+returns `{ preview: { entries, total, truncated, firstRequest: bool,
+changedFiles, notes: bool }, file?: "~/handoff/cli-<id>/HANDOFF.md" }`. Writing
+uses `sync_handoff`'s `safe_rel` + exclusive-create pattern. Give it a
+`services::command_class` row (the class `agent_tab_transcript` has) and
+regenerate `src/lib/transport/commandClasses.ts`.
+Rust tests: first prompt outside the tail; head+tail cut mark; budget fill
+order; notes headed as claims; non-git cwd; an unsupported CLI → `unsupported`;
+prune touches only recorded ids; a planted symlink at `handoff/` refused.
 
-Add an AppHandle-free `services/agent/agent_handoff.rs` for collection, lifecycle,
-validation and recovery, plus a frontend `stores/agents/agentCliHandoff.ts`
-orchestrator and shared picker. Prefer backend-owned transitions for persistence
-and race safety. New commands use Ctx and cfg_attr, receive camelCase payloads,
-get command-class rows and regenerated TS classes. Keep v1 operations desktop
-only; do not expose raw paths or transcripts through a phone route accidentally.
+**C. One dialog, two entries.** Move the modal out of `TerminalLimitHandoff`
+into `components/agents/CliHandoffDialog.tsx`, on the shared dialog frame
+(`add-menu` skill). It has an installed-CLI picker (default: `nextLimitCli`),
+the preview counts, and **Continue with <label>**. Triggers:
+- the limit notice (unchanged detection; it opens the dialog with the quoted line);
+- **Continue with another CLI…** in the agent tab's context menu, disabled
+  while the source is working.
+Continue calls prepare, then opens the tab (step A) with the short bootstrap
+prompt. A failure keeps the dialog open with the existing `failed` text. Use
+CLI labels, not binaries (gap 6). New i18n keys go in `en.ts` and the four
+other locales, like the existing `terminal.limitHandoff.*`. Add untested row
+`agent.cliHandoff` for the menu entry and pill it. Update
+`terminal.limitHandoff`'s `what`.
 
-Add English i18n keys for every display string, shared dialog styling and an
-`UntestedTag` register entry `agent.cli-handoff`. Update file-map rows for added
-load-bearing files and the session context doc when implementation lands.
+**D. Docs.** Add rows for `agent_cli_handoff.rs` and `CliHandoffDialog.tsx` to
+the file maps. Add a short section to `docs/context/agent_sessions.md`. Update
+the `todo/group-s-agents.md` entry's boxes to A–C with 🖐️ platform pairs.
 
-## Delivery sequence
+## Later
 
-1. Fixtures and collector: Claude/Codex live resolution, normalization, bounded
-   first/recent history, coverage markers, artifact preview; no process mutation.
-2. Durable lifecycle: operation claims, guarded storage/staging, source stop and
-   continuation hold, restart reconciliation and failure recovery.
-3. Destination adapters: fresh session creation, readiness and prompt delivery,
-   predecessor/successor persistence, idempotent retry and source resume controls.
-4. Desktop UI and integration: picker, preview, progress, links, recovery, i18n
-   and untested pill; verify both directions including an exhausted source.
-5. Later: additional CLI adapters, phone/headless controls using opaque ids,
-   same-host remote support, and a shortcut beside reliable limit notices.
-   Cross-host plus cross-CLI switching remains a separate composed operation;
-   read the remote-sync guide before designing any file transfer.
+Remote host tabs (the read through `remote_transcript`, the file staged on the
+host's agent folder). Local-model targets (stage into `<scope>.local`). The
+phone (a bridge verb taking an opaque tab id). Limit lines for CLIs whose
+wording the regex misses, added from captured screens (`scripts/verify-cli`).
 
-## Verification and acceptance
+## Verification
 
-Unit/integration tests must cover both directions; original request outside the
-reader tail; source compaction/clear; malformed, oversized and missing transcripts;
-non-git projects; unusual paths; no-follow staging; forged scope/tab/path inputs;
-active jobs; stop timeout; target login/quota failure; double click; stale source;
-crash at every persisted phase; ambiguous delivery; and retry without duplicate
-sessions/prompts. Include scheduling/auto-continue and restoration regressions.
-Cross-platform paths use component joins; avoid platform-specific executable
-comparisons. Fixture assertions must exercise user-visible behavior, not merely
-mirror implementation.
+`scripts/gates-job.sh start`, then its status; `git diff --check`;
+`npm run backend:stale` after B. Not run live by the agent. The user checks
+these by hand:
 
-Acceptance scenario: a source changes a tracked file, creates an untracked file,
-records a correction and a failing test, then reaches a limit. Switch without
-another source API response. Destination reads the correction, sees the existing
-files and failure, and continues in the same cwd. Source history remains readable;
-no permission mode, secret, schedule or queued prompt was silently transferred.
-Repeat with launch failure and app interruption; recovery never runs both agents
-or silently resends the bootstrap. Verify actual CLI interactions manually on
-Linux X11/Wayland, Windows and macOS before clearing the pill.
-
-Implementation gates: `scripts/gates-job.sh start`, then its saved final status;
-`git diff --check`; after Rust edits `npm run backend:stale`. Do not launch or
-restart Tabtivity for verification. This documentation-only plan needs no build
-or test gate run.
+1. Claude tab with a few turns, one tracked edit, one untracked file → tab
+   menu → Continue with another CLI… → Codex. The Codex tab opens in the same
+   folder, reads `HANDOFF.md`, names the first request and both files, and
+   doesn't redo the edit.
+2. The same from Codex → Claude, and from one more reader CLI (OpenCode).
+3. Restart Tabtivity: the successor tab comes back resumed (gap 1).
+4. While the source works, the menu entry is disabled.
+5. Usage-limit screen on the source → the dialog appears quoting the line,
+   with the next CLI preselected.
