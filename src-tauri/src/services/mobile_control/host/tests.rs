@@ -1081,6 +1081,7 @@ async fn the_window_route_drops_a_waiting_question_unless_the_turn_says_decision
                     blocking: true,
                     ..Default::default()
                 }],
+                version: Some("v1".into()),
                 ..Default::default()
             };
             admin::write_frame(&mut stream, &DesktopResponse::AgentTranscript { transcript }).await.expect("answer");
@@ -1093,6 +1094,10 @@ async fn the_window_route_drops_a_waiting_question_unless_the_turn_says_decision
         let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/transcript"), &cookie)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(json(&body)["transcript"]["entries"].as_array().unwrap().len(), count, "{text}: {body}");
+        // A read that dropped the question hands out no version: the file does
+        // not move when `decision` lands, so the phone's next poll must not be
+        // answered `unchanged` and miss the entry for good.
+        assert_eq!(json(&body)["transcript"].get("version").is_some(), count == 1, "{text}: {body}");
     }
     desktop.abort();
 }

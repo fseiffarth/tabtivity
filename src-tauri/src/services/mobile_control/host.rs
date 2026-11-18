@@ -5469,6 +5469,11 @@ async fn phone_transcript(
             let mut keep = transcript.entries.iter().map(|entry| !entry.blocking).collect::<Vec<_>>().into_iter();
             entry_cwds.retain(|_| keep.next().unwrap_or(true));
             transcript.entries.retain(|entry| !entry.blocking);
+            // The `version` fingerprints the file, which does not move when
+            // the hook writes `decision` a moment later: handing it out would
+            // answer the phone's next poll `unchanged` and the question would
+            // never arrive. No version, a full read until the record says so.
+            transcript.version = None;
         }
     }
     if !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() {
