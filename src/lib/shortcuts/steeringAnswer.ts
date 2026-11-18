@@ -19,6 +19,7 @@ import { answerKeys, freeTextRow, readReaderLive } from "../agents/readerLive";
 import { openQuestionField } from "../agents/readerSteering";
 import { typePaneKeys } from "../agents/paneKeys";
 import { dialogOnScreen } from "../agents/dialogOnScreen";
+import { lampHidesCardNow } from "../agents/liveCardGate";
 import { optionForDigit, selectMoveKeys, type SelectPrompt } from "../../../mobile-web/src/terminal/selectPrompt";
 import { agentTabLabel } from "../../stores/agents/agentModels";
 import { useActivityStore } from "../../stores/activity";
@@ -60,6 +61,9 @@ function liveQuestion(scope: string, tab: TabEntry): LiveQuestion | null {
   const term = terminalFor(ptyId);
   if (!term) return null;
   const agentLabel = agentTabLabel(tab);
+  // A Claude tab whose hooks do not announce a question has none, whatever its
+  // screen looks like: a digit then keeps its other meaning, not answers text.
+  if (lampHidesCardNow(ptyId, agentLabel)) return null;
   const live = readReaderLive(term.buffer.active, agentLabel, term.cols);
   return live.question ? { ptyId, agentLabel, question: live.question, signature: live.signature } : null;
 }

@@ -31,6 +31,7 @@ import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry"
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
+import { hookLampHidesCard, withoutCard } from "../../lib/agents/liveCardGate";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { useUse24h } from "../../lib/timeFormat";
 import { registerQuestionField, registerQueueMoves, registerReaderComposer } from "../../lib/agents/readerSteering";
@@ -1499,7 +1500,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const chatId = browsed?.chat.id;
   const regionRef = useRef<HTMLDivElement>(null);
 
-  const [live, setLive] = useState<ReaderLive>(NO_LIVE);
+  const [screenLive, setLive] = useState<ReaderLive>(NO_LIVE);
   /** When a read last saw the agent at work: a sent prompt waits from then. */
   const workingSeenAt = useRef(0);
   const [answered, setAnswered] = useState("");
@@ -1523,6 +1524,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
    * Prompt key shows it again with the keyboard (`registerReaderComposer`). */
   const steering = useKeyboardSteeringStore((state) => state.active || state.handedTo !== null);
   const agentLabel = tab ? agentTabLabel(tab) : "";
+  /** The tab's lamp says it asks (its hooks, else the screen). */
+  const lampAsking = useActivityStore((state) => state.attentionByTab[ptyId] === "decision");
+  /** The screen's reading, with a card taken off it that a Claude tab's hooks
+   * do not announce (`hookLampHidesCard`): text on screen that only looks like
+   * a dialog. Every consumer below reads this, not the raw reading. */
+  const live = useMemo(
+    () => (hookLampHidesCard(ptyId, agentLabel, lampAsking) ? withoutCard(screenLive) : screenLive),
+    [screenLive, ptyId, agentLabel, lampAsking],
+  );
   const use24h = useUse24h();
   const modelTag = useAgentTabModelTag(scope, tab);
   /** The working row's name for the agent, as the phone's says it: the model

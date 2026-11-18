@@ -70,6 +70,7 @@ import { liveModelPick } from "../terminal/modelRows";
 import { type TerminalControl } from "../terminal/protocol";
 import { inputFrameStart, sessionStatus, statusModelTag, type SessionStatus } from "../terminal/statusLine";
 import { readPromptSuggestion } from "../terminal/promptSuggestion";
+import { readLiveQuestion } from "../terminal/liveDialog";
 import { transcriptModelTag } from "../../../src/lib/agents/agentModel";
 import { worktreeChoiceText, worktreeMoveNote } from "../../../src/lib/agents/agentWorktrees";
 import { sessionLimits } from "../terminal/sessionUsage";
@@ -78,9 +79,7 @@ import { BackNest } from "../backStack";
 import {
   freeTextRow,
   readCodexHooksPage,
-  readReviewStep,
   readSelectPrompt,
-  readStrayDialog,
   pressHintShown,
   dialogFooterShown,
   selectKeys,
@@ -2083,14 +2082,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * itself — its rows, and where on the tail they start — not just that there
    * is one. */
   const liveQuestion = useMemo(
-    () => (liveTail.length > 0
-      ? readCodexHooksPage(liveTail, agentLabel) ?? readSelectPrompt(liveTail, agentLabel, paneColumns.current) ?? readReviewStep(liveTail, agentLabel)
-        // No input box and no busy row: a first run's own screen (Claude
-        // Code's theme picker, a `Press Enter to continue`).
-        ?? ((pressHintShown(liveScreen) || inputFrameStart(liveScreen, agentLabel) >= liveScreen.length) && !agentWork(liveScreen)
-          ? readStrayDialog(liveTail, paneColumns.current)
-          : null)
-      : null),
+    () => readLiveQuestion(liveTail, liveScreen, agentLabel, paneColumns.current),
     [liveTail, liveScreen, agentLabel],
   );
   /** Claude Code's prompt suggestion, dimmed in its own empty box
