@@ -47,6 +47,11 @@ pub struct PtySpawned {
     /// tab has none.
     #[serde(rename = "checkpointKey", skip_serializing_if = "Option::is_none")]
     pub checkpoint_key: Option<String>,
+    /// The tab reattached an agent session whose Tabtivity MCP credentials
+    /// nobody honours any more (`root_mcp_mark::Reattach::Stale`): its tools
+    /// do not answer until the agent is restarted. Left out when unset.
+    #[serde(rename = "mcpStale", skip_serializing_if = "std::ops::Not::not")]
+    pub mcp_stale: bool,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -108,6 +113,7 @@ pub async fn pty_spawn(
 
     let mcp_token_handed_out = prepared.mcp_token_handed_out();
     let (named, interrupted, resting) = (prepared.named, prepared.interrupted, prepared.resting);
+    let mcp_stale = prepared.mcp_stale;
     let turn = prepared.live_turn.map(crate::services::agent_turn::TurnState::as_str);
     let checkpoint_key = prepared.checkpoint_key.clone();
     let drop_dir = prepared.drop_dir.clone();
@@ -160,7 +166,7 @@ pub async fn pty_spawn(
             });
         }
     }
-    result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn, checkpoint_key })
+    result.map(|()| PtySpawned { named, interrupted, attached: false, resting, turn, checkpoint_key, mcp_stale })
 }
 
 /// Whether a server client's spawn of `id` would join the tab another client
@@ -777,6 +783,16 @@ pub fn register_host_bound_tab(project_id: String, uid: String) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The frontend reads `mcpStale` (camelCase) off the spawn's answer, and
+    /// only when it is set.
+    #[test]
+    fn a_stale_spawn_answers_mcp_stale_in_camel_case() {
+        let json = serde_json::to_value(PtySpawned { mcp_stale: true, ..PtySpawned::default() }).unwrap();
+        assert_eq!(json["mcpStale"], true);
+        let json = serde_json::to_value(PtySpawned::default()).unwrap();
+        assert!(json.get("mcpStale").is_none() && json.get("mcp_stale").is_none(), "left out when unset");
+    }
 
     /// A client can name no tmux pattern or special target: `*`, `$0`, `%1`
     /// would end a session the app never made (screen 2026-11-12 H9). The

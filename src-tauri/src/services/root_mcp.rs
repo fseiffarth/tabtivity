@@ -41,6 +41,7 @@
 
 pub mod root_mcp_import;
 pub mod root_mcp_mail;
+pub mod root_mcp_mark;
 pub mod root_mcp_review;
 pub mod root_mcp_security;
 
@@ -131,8 +132,13 @@ const PROTOCOL_VERSION: &str = "2025-03-26";
 /// ([`grant_lanes`]'s assistant arm). The window and a desktop's Mobile host
 /// do; the server daemon never does (the assistant is not offered on a hosted
 /// server in v1).
+///
+/// `generation`: a random nonce of this listener, new on every start
+/// ([`root_mcp_mark::new_nonce`]). A local agent session is stamped with it
+/// when it is created ([`root_mcp_mark`]), so a reattach tells a stamp this run
+/// made from one a previous run or the other process left.
 #[derive(Debug, Clone)]
-pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool, pub serves_web: bool }
+pub struct Runtime { pub port: u16, pub serves_root: bool, pub serves_markup: bool, pub serves_web: bool, pub generation: String }
 impl Runtime {
     /// This process approves agent print requests (`services::print_mcp`):
     /// the window alone — the one listener that serves both the root lane
@@ -286,6 +292,45 @@ impl TokenStore {
         };
         map.insert(token, session);
     }
+    /// A session in this store, for the listener's tests (`register` is private).
+    #[cfg(test)]
+    pub(crate) fn register_for_test(&self, token: String, identity: Identity) {
+        self.register(token, identity, false);
+    }
+    /// End the session of `token` in this store, for the listener's tests.
+    #[cfg(test)]
+    pub(crate) fn revoke_for_test(&self, token: &str) {
+        if let Some(s) = self.map().remove(token) { s.revoked.store(true, Ordering::Release); }
+    }
+    /// Whether the session `id` ([`Session::id`]) is held here and not revoked.
+    pub fn holds_session(&self, id: &str) -> bool {
+        self.map().values().any(|s| s.id == id && !s.revoked.load(Ordering::Acquire))
+    }
+    /// A reattached session keeps the tokens it was started with: re-key every
+    /// lane of the tab that holds the session `grant` to `tab`, the PTY id of
+    /// the launch that reattached it, so the revoke paths that name a tab (its
+    /// PTY's exit, the review sandbox) still reach them. Nothing is minted and
+    /// nothing is revoked, except what `tab` held already: a lane the new PTY
+    /// id was granted by an earlier spawn would otherwise sit in the same lane
+    /// as the adopted one. Whether the grant was held.
+    pub fn adopt(&self, grant: &str, tab: &str) -> bool {
+        let mut map = self.map();
+        let Some(old) = map.values().find(|s| s.id == grant && !s.revoked.load(Ordering::Acquire)).map(|s| s.identity.tab.clone()) else {
+            return false;
+        };
+        if old == tab {
+            return true;
+        }
+        map.retain(|_, s| {
+            if s.identity.tab == tab { s.revoked.store(true, Ordering::Release); false } else { true }
+        });
+        for s in map.values_mut().filter(|s| s.identity.tab == old) {
+            s.identity.tab = tab.to_string();
+        }
+        drop(map);
+        super::tabs_mcp::rebind_pty(&old, tab);
+        true
+    }
 }
 static TOKENS: OnceLock<TokenStore> = OnceLock::new();
 /// This process's token store.
@@ -348,9 +393,37 @@ pub fn revoke_tab(tab: &str) -> bool {
     });
     held
 }
+/// Tabs whose running agent holds credentials nobody honours any more: a
+/// reattach found its session stamped by a listener that is gone
+/// ([`root_mcp_mark::Reattach::Stale`]). Marked at the launch's commit, cleared
+/// with the tab's teardown ([`forget_stale`]). Per process, like the tokens.
+fn stale_tabs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static STALE: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    STALE.get_or_init(Default::default)
+}
+/// Record whether `tab`'s agent lost its Tabtivity tools (a [`Reattach::Stale`]
+/// reattach); `false` clears the record.
+///
+/// [`Reattach::Stale`]: root_mcp_mark::Reattach::Stale
+pub fn set_tab_stale(tab: &str, stale: bool) {
+    let mut set = stale_tabs().lock_ok();
+    if stale { set.insert(tab.to_string()); } else { set.remove(tab); }
+}
+/// The tab's agent was started by a listener that is gone, so its Tabtivity
+/// tools do not answer ([`set_tab_stale`]).
+pub fn tab_stale(tab: &str) -> bool {
+    stale_tabs().lock_ok().contains(tab)
+}
+/// The tab ended: drop its stale record.
+pub fn forget_stale(tab: &str) {
+    set_tab_stale(tab, false);
+}
 /// The servers `tab` holds a live token for in this process, in lane order —
-/// the hover card's Tabtivity MCP row (`services::agent_features`).
+/// the hover card's Tabtivity MCP row (`services::agent_features`). Empty for
+/// a stale tab ([`tab_stale`]): the tokens it may still be listed under are
+/// not the ones its agent holds, and the row must not claim tools it lacks.
 pub fn servers_of_tab(tab: &str) -> Vec<&'static str> {
+    if tab_stale(tab) { return Vec::new(); }
     let mut callers: Vec<Caller> = tokens().map().values().filter(|s| s.identity.tab == tab).map(|s| s.identity.caller).collect();
     callers.sort_by_key(|c| lane(*c));
     let mut names: Vec<&'static str> = callers.into_iter().map(|caller| match caller {

@@ -11,7 +11,7 @@ use axum::{
     extract::{State, Request},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use app_core::sync::LockExt;
@@ -503,6 +503,27 @@ impl Refusal {
     }
 }
 
+/// `GET /mcp/grant/<hash>`: `204` when this listener's store holds the session
+/// whose id (SHA-256 of its token) is `hash` and it is not revoked, `404`
+/// otherwise. Unauthenticated by design: the asker is a launch that holds no
+/// token, only the hash a tmux session was stamped with. It answers nothing
+/// but that bit, about a value an asker cannot guess. A browser's request (an
+/// `Origin`), a Host that is not this listener's loopback address (DNS
+/// rebinding) and a path that is not a hash are all refused alike.
+async fn grant_held(
+    State(state): State<ServerState>,
+    axum::extract::Path(hash): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+) -> StatusCode {
+    if headers.contains_key(header::ORIGIN) { return StatusCode::FORBIDDEN; }
+    let local = format!("127.0.0.1:{}", state.port);
+    let host_ok = headers.get_all(header::HOST).iter().count() == 1
+        && headers.get(header::HOST).and_then(|v| v.to_str().ok()).is_some_and(|h| h == local);
+    if !host_ok { return StatusCode::FORBIDDEN; }
+    let hash_shaped = hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if hash_shaped && state.store.holds_session(&hash) { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
+}
+
 async fn close_connection(mut response: Response) -> Response {
     // A new socket per RPC avoids expiring a reused connection in the middle
     // of a later write. Loopback setup is cheap and HTTP clients reconnect.
@@ -537,17 +558,86 @@ pub fn start(ctx: CoreCtx) {
     // the window's markup commands read them over its admin socket.
     crate::commands::markup_mcp::use_host_peer(crate::services::mobile_control::config::admin_socket(&storage::state_dir()));
     let notify = serve_everything(&ctx, Arc::new(|_| {}));
+    // Bound here, synchronously, and the runtime published with it: a tab
+    // restored a moment later finds the listener and gets its lanes, and its
+    // URLs name the port of the last run again (`bind_window`).
+    let listener = match bind_window() {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("[root-mcp] {error}");
+            return;
+        }
+    };
+    let served = serve(listener, Some(ctx), true, notify, async { SHUTDOWN.notified().await });
     let handle = app_core::rt::spawn(async move {
-        let served = match bind(LOOPBACK).await {
-            Ok(listener) => serve(listener, Some(ctx), true, notify, async { SHUTDOWN.notified().await }),
-            Err(error) => Err(error),
-        };
         match served {
             Ok((_, server)) => server.await,
             Err(error) => eprintln!("[root-mcp] {error}"),
         }
     });
     *SERVER.lock_ok() = Some(handle);
+}
+
+/// Where the window's port is remembered (not a secret): `<state_dir>/root_mcp/port`.
+/// An agent that outlives a crash in its tmux session keeps this port in its
+/// MCP URLs, so binding it again keeps them pointing at this program rather
+/// than at whatever took the port meanwhile. The tokens are not remembered
+/// (`docs/mcp_reattach_plan.md`): such an agent's tools stay refused until it
+/// is reconnected.
+fn port_file() -> std::path::PathBuf {
+    storage::state_dir().join("root_mcp").join("port")
+}
+
+/// The window's port of an earlier run.
+fn remembered_port() -> Option<u16> {
+    std::fs::read_to_string(port_file()).ok().and_then(|s| s.trim().parse::<u16>().ok()).filter(|p| *p != 0)
+}
+
+/// A loopback listener on `preferred` when it can be bound, else on any free
+/// port. Whether the preferred port was the one bound.
+fn bind_preferred(preferred: Option<u16>) -> std::io::Result<(std::net::TcpListener, bool)> {
+    let kept = preferred
+        .and_then(|p| std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, p)).ok());
+    let was_kept = kept.is_some();
+    let listener = match kept {
+        Some(listener) => listener,
+        None => std::net::TcpListener::bind(LOOPBACK)?,
+    };
+    listener.set_nonblocking(true)?;
+    Ok((listener, was_kept))
+}
+
+/// The window's listener: its remembered port when free. When someone else
+/// holds it the holder is looked up and said (gap 50b's lesson: a stale agent's
+/// requests go to whoever holds its port), and the new port is remembered.
+fn bind_window() -> Result<std::net::TcpListener, String> {
+    let preferred = remembered_port();
+    let (listener, kept) = bind_preferred(preferred).map_err(|e| format!("bind failed: {e}"))?;
+    let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
+    if !kept {
+        if let Some(taken) = preferred {
+            report_taken_port(taken, port);
+        }
+        let file = port_file();
+        if let Err(error) = storage::write_private_atomic_mode(&file, port.to_string().as_bytes(), 0o600) {
+            eprintln!("[root-mcp] could not remember port {port}: {error}");
+        }
+    }
+    Ok(listener)
+}
+
+/// The remembered port is held by another listener: say who, once.
+fn report_taken_port(taken: u16, now: u16) {
+    #[cfg(unix)]
+    // SAFETY: getuid has no preconditions.
+    let own = unsafe { libc::getuid() };
+    #[cfg(not(unix))]
+    let own = u32::MAX;
+    let occupants = crate::services::loopback_owner::occupants(taken);
+    match crate::services::api_proxy_port::classify(&occupants, own) {
+        Some(holder) => eprintln!("[root-mcp] port {taken} is held by {holder:?}; serving on {now}"),
+        None => eprintln!("[root-mcp] port {taken} is held by another instance of this program; serving on {now}"),
+    }
 }
 
 /// What a listener that serves every lane sets up first — the window's, and
@@ -631,7 +721,7 @@ async fn start_headless_on(
     ctx: Option<CoreCtx>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<u16, String> {
-    let first = match bind(addr).await {
+    let first = match bind(addr) {
         Ok(listener) => serve(listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone())),
         Err(error) => Err(error),
     };
@@ -652,7 +742,7 @@ async fn start_headless_on(
                         }
                     }
                     attempt = attempt.saturating_add(1);
-                    let Ok(listener) = bind(addr).await else { continue };
+                    let Ok(listener) = bind(addr) else { continue };
                     if let Ok((port, server)) = serve(listener, ctx.clone(), ctx.is_none(), notify.clone(), until_true(shutdown.clone())) {
                         eprintln!("[root-mcp] bound on port {port} after {attempt} retries");
                         server.await;
@@ -703,14 +793,47 @@ fn router(state: ServerState) -> Router {
     // The tab messages lane: only the window grants its tokens
     // (`Runtime::serves_tabs`), so elsewhere the route authenticates nobody.
     router = router.route("/mcp/tabs", post(handle));
+    // The one unauthenticated route: whether this listener holds a grant, for
+    // the launch that finds a session another process stamped
+    // (`root_mcp_mark::probe_grant`).
+    router = router.route("/mcp/grant/{hash}", get(grant_held));
     if state.ctx.is_some() {
         router = router.route("/mcp", post(handle));
     }
     router.layer(axum::middleware::map_response(close_connection)).with_state(state)
 }
 
-async fn bind(addr: std::net::SocketAddr) -> Result<tokio::net::TcpListener, String> {
-    tokio::net::TcpListener::bind(addr).await.map_err(|e| format!("bind failed: {e}"))
+/// A non-blocking std listener on `addr`. The Mobile host's own port is never
+/// the one the window remembers ([`bind_avoiding`]): a free-port bind is asked
+/// again until it lands elsewhere.
+fn bind(addr: std::net::SocketAddr) -> Result<std::net::TcpListener, String> {
+    let avoid = remembered_port().filter(|_| addr.port() == 0);
+    bind_avoiding(|| {
+        let listener = std::net::TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        Ok(listener)
+    }, avoid)
+    .map_err(|e| format!("bind failed: {e}"))
+}
+
+/// The listener `bind` yields, asked again while it lands on `avoid`: the
+/// window's remembered port, which a Mobile host that came up first would
+/// otherwise take from the window (and from the agents that still name it).
+/// Each rejected listener is held until the end, so the next ask cannot get the
+/// same port again.
+fn bind_avoiding(
+    mut bind: impl FnMut() -> std::io::Result<std::net::TcpListener>,
+    avoid: Option<u16>,
+) -> std::io::Result<std::net::TcpListener> {
+    let mut rejected = Vec::new();
+    for _ in 0..16 {
+        let listener = bind()?;
+        if avoid != Some(listener.local_addr()?.port()) {
+            return Ok(listener);
+        }
+        rejected.push(listener);
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "no free port other than the window's remembered one"))
 }
 
 /// Publish a bound listener as this process's [`Runtime`] and hand back its
@@ -719,7 +842,7 @@ async fn bind(addr: std::net::SocketAddr) -> Result<tokio::net::TcpListener, Str
 /// desktop's Mobile host, never a server daemon (the assistant is not offered
 /// on a hosted server in v1).
 fn serve(
-    listener: tokio::net::TcpListener,
+    listener: std::net::TcpListener,
     ctx: Option<CoreCtx>,
     serves_web: bool,
     notify: NoticeSink,
@@ -727,10 +850,22 @@ fn serve(
 ) -> Result<(u16, impl std::future::Future<Output = ()> + Send), String> {
     let port = listener.local_addr().map_err(|e| format!("bind failed: {e}"))?.port();
     let serves = ctx.is_some();
-    root_mcp::set_runtime(Runtime { port, serves_root: serves, serves_markup: true, serves_web });
+    root_mcp::set_runtime(Runtime {
+        port, serves_root: serves, serves_markup: true, serves_web,
+        generation: root_mcp::root_mcp_mark::new_nonce(),
+    });
     let router = router(ServerState { ctx, port, store: root_mcp::tokens(), notify });
-    let listener = BoundedListener { tcp: listener, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
     Ok((port, async move {
+        // The std listener was bound synchronously (so the runtime above is
+        // published before any tab spawns); the reactor takes it over here.
+        let tcp = match tokio::net::TcpListener::from_std(listener) {
+            Ok(tcp) => tcp,
+            Err(error) => {
+                eprintln!("[root-mcp] listener: {error}");
+                return;
+            }
+        };
+        let listener = BoundedListener { tcp, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) };
         if let Err(error) = axum::serve(listener, router).with_graceful_shutdown(shutdown).await {
             eprintln!("[root-mcp] server stopped: {error}");
         }
@@ -1247,7 +1382,7 @@ mod security_tests {
     async fn a_token_is_admitted_only_by_the_listener_whose_process_minted_it() {
         let host: &'static root_mcp::TokenStore = Box::leak(Box::default());
         let window: &'static root_mcp::TokenStore = Box::leak(Box::default());
-        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false, serves_web: false };
+        let runtime = Runtime { port: 8765, serves_root: false, serves_markup: false, serves_web: false, generation: "test-generation".into() };
         let mut opts: crate::terminal::PtyOptions = serde_json::from_value(serde_json::json!({
             "id": "headless:t", "cmd": "claude", "args": [], "env": {}, "cwd": "/w", "cols": 80, "rows": 24,
             "local_only": false, "sandbox": false, "agent": true, "project_id": "p", "schedule_target_id": "target-1",
@@ -1428,5 +1563,135 @@ mod security_tests {
         drop((first, second));
         root_mcp::revoke_tab(&session.identity.tab);
         assert_eq!(admit(request(&token, body()), 4321, root_mcp::tokens()).await.err(), Some(StatusCode::UNAUTHORIZED));
+    }
+
+    // ── the stable port and the grant probe (docs/mcp_reattach_plan.md) ─────
+
+    /// The remembered port is bound again when it is free.
+    #[test]
+    fn the_remembered_port_is_bound_again_when_free() {
+        let probe = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (listener, kept) = bind_preferred(Some(port)).unwrap();
+        assert!(kept);
+        assert_eq!(listener.local_addr().unwrap().port(), port);
+    }
+
+    /// An occupied remembered port falls back to a free one, and says it did
+    /// not keep the port; no remembered port is a plain free bind.
+    #[test]
+    fn an_occupied_remembered_port_falls_back_to_a_free_one() {
+        let holder = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        let taken = holder.local_addr().unwrap().port();
+        let (listener, kept) = bind_preferred(Some(taken)).unwrap();
+        assert!(!kept);
+        assert_ne!(listener.local_addr().unwrap().port(), taken);
+        let (fresh, kept) = bind_preferred(None).unwrap();
+        assert!(!kept && fresh.local_addr().unwrap().port() != 0);
+    }
+
+    /// The Mobile host never takes the window's remembered port: a bind that
+    /// lands on it is rejected (and held, so the retry cannot land on it again).
+    #[test]
+    fn a_bind_that_lands_on_the_avoided_port_is_asked_again() {
+        let avoided = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        let avoid = avoided.local_addr().unwrap().port();
+        let other = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        let other_port = other.local_addr().unwrap().port();
+        let mut answers = vec![other, avoided]; // popped from the end: the avoided port first
+        let mut asked = 0;
+        let got = bind_avoiding(|| { asked += 1; Ok(answers.pop().unwrap()) }, Some(avoid)).unwrap();
+        assert_eq!((asked, got.local_addr().unwrap().port()), (2, other_port));
+        // Nothing to avoid: the first answer stands.
+        let first = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        let first_port = first.local_addr().unwrap().port();
+        let got = bind_avoiding(|| Ok(first.try_clone().unwrap()), None).unwrap();
+        assert_eq!(got.local_addr().unwrap().port(), first_port);
+        // A listener that always lands on it gives up with an error.
+        let stuck = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        let stuck_port = stuck.local_addr().unwrap().port();
+        assert!(bind_avoiding(|| stuck.try_clone(), Some(stuck_port)).is_err());
+    }
+
+    /// The window's port file round-trips through the private writer.
+    #[test]
+    fn the_port_file_lives_under_the_root_mcp_state() {
+        let file = port_file();
+        assert!(file.ends_with(std::path::Path::new("root_mcp").join("port")), "{file:?}");
+    }
+
+    fn grant_request(hash: &str, port: u16, host: Option<&str>, origin: bool) -> Request {
+        let mut builder = Request::builder().method("GET").uri(format!("/mcp/grant/{hash}"));
+        if let Some(host) = host {
+            builder = builder.header("host", host.replace("{port}", &port.to_string()));
+        }
+        if origin {
+            builder = builder.header("origin", "http://evil.example");
+        }
+        builder.body(axum::body::Body::empty()).unwrap()
+    }
+
+    /// `GET /mcp/grant/<hash>`: 204 for a held session, 404 for any other
+    /// hash, a revoked one and a malformed one; 403 for a browser's request or a
+    /// foreign Host. No credentials are needed or read.
+    #[tokio::test]
+    async fn the_grant_probe_answers_held_or_not() {
+        use tower::ServiceExt;
+        let store: &'static root_mcp::TokenStore = Box::leak(Box::default());
+        let token = root_mcp::mint_token().unwrap();
+        let identity = root_mcp::Identity {
+            tab: "probe:tab".into(), caller: root_mcp::Caller::Helper, project: None,
+            schedule_target: None, push: None, endpoint: None, model: None,
+        };
+        store.register_for_test(token.clone(), identity);
+        let hash = crate::digest::sha256_hex(token.as_bytes());
+        let state = ServerState { ctx: None, port: 8765, store, notify: Arc::new(|_| {}) };
+        let ask = |request: Request| {
+            let app = router(state.clone());
+            async move { app.oneshot(request).await.unwrap().status() }
+        };
+        let local = Some("127.0.0.1:{port}");
+        assert_eq!(ask(grant_request(&hash, 8765, local, false)).await, StatusCode::NO_CONTENT);
+        assert_eq!(ask(grant_request(&crate::digest::sha256_hex(b"other"), 8765, local, false)).await, StatusCode::NOT_FOUND);
+        assert_eq!(ask(grant_request("../mcp", 8765, local, false)).await, StatusCode::NOT_FOUND, "not a hash");
+        assert_eq!(ask(grant_request(&hash.to_uppercase(), 8765, local, false)).await, StatusCode::NOT_FOUND, "hex is lower case");
+        assert_eq!(ask(grant_request(&hash, 8765, local, true)).await, StatusCode::FORBIDDEN, "a browser's request");
+        assert_eq!(ask(grant_request(&hash, 8765, Some("attacker.invalid:8765"), false)).await, StatusCode::FORBIDDEN, "a rebound Host");
+        assert_eq!(ask(grant_request(&hash, 8765, None, false)).await, StatusCode::FORBIDDEN, "no Host");
+        // A revoked session is no longer held.
+        store.revoke_for_test(&token);
+        assert_eq!(ask(grant_request(&hash, 8765, local, false)).await, StatusCode::NOT_FOUND);
+        // The route is on the Mobile host's router too (this one has no context).
+        assert!(state.ctx.is_none());
+    }
+
+    /// The probe a launch makes ([`root_mcp::root_mcp_mark::probe_grant`])
+    /// reaches a real listener's route over a socket.
+    #[tokio::test]
+    async fn the_probe_reaches_a_live_listener() {
+        let store: &'static root_mcp::TokenStore = Box::leak(Box::default());
+        let token = root_mcp::mint_token().unwrap();
+        store.register_for_test(token.clone(), root_mcp::Identity {
+            tab: "probe:live".into(), caller: root_mcp::Caller::Helper, project: None,
+            schedule_target: None, push: None, endpoint: None, model: None,
+        });
+        let hash = crate::digest::sha256_hex(token.as_bytes());
+        let tcp = std::net::TcpListener::bind(LOOPBACK).unwrap();
+        tcp.set_nonblocking(true).unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        let app = router(ServerState { ctx: None, port, store, notify: Arc::new(|_| {}) });
+        let server = tokio::spawn(async move {
+            let tcp = tokio::net::TcpListener::from_std(tcp).unwrap();
+            let _ = axum::serve(BoundedListener { tcp, slots: Arc::new(tokio::sync::Semaphore::new(SOCKETS)) }, app).await;
+        });
+        let asked = hash.clone();
+        let (held, unknown) = tokio::task::spawn_blocking(move || (
+            root_mcp::root_mcp_mark::probe_grant(port, &asked),
+            root_mcp::root_mcp_mark::probe_grant(port, &crate::digest::sha256_hex(b"nobody")),
+        )).await.unwrap();
+        assert!(held, "204 from the listener that holds it");
+        assert!(!unknown);
+        server.abort();
     }
 }

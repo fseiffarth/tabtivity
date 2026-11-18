@@ -41,6 +41,7 @@ fn opts(cmd: &str, args: &[&str], project: Option<&str>, cwd: &Path) -> PtyOptio
         host_session: false,
         api_key: None,
         mux_wrapped: false,
+        mcp_mark: None,
     }
 }
 

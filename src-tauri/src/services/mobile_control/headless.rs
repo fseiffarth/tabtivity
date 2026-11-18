@@ -908,6 +908,7 @@ fn options_for(state_dir: &Path, project_id: &str, tab: &TabEntry, restart: bool
         // The ＋ menu's login-or-key pick, as the window would pass it.
         api_key: tab.extra.get(crate::services::terminal_service::API_KEY_KEY).and_then(serde_json::Value::as_bool),
         mux_wrapped: false,
+        mcp_mark: None,
     })
 }
 
@@ -955,6 +956,7 @@ fn assistant_launch_options(tab: &TabEntry) -> PtyOptions {
         api_key: None,
         assistant: launch,
         mux_wrapped: false,
+        mcp_mark: None,
     }
 }
 

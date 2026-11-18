@@ -647,6 +647,18 @@ pub struct PreparedLaunch {
     /// (`session_host::route::on_live_probe`). The Windows host spawn sends
     /// `Attach` alone (`terminal::spawn_pty_attach_only`).
     pub host_attach_only: bool,
+    /// The launch reattached a session whose agent holds Tabtivity MCP
+    /// credentials nobody honours any more (`root_mcp_mark::Reattach::Stale`):
+    /// nothing was minted for it, its tools do not answer, and the tab is
+    /// flagged ([`crate::services::root_mcp::tab_stale`]). The window's
+    /// `pty_spawn` answers it as `mcpStale`.
+    pub mcp_stale: bool,
+    /// The launch reattached a session whose agent still holds a working grant
+    /// and re-keyed it to this PTY id ([`crate::services::root_mcp::TokenStore::adopt`]).
+    mcp_adopted: bool,
+    /// A session this launch creates, with the stamp it gets: noted into the
+    /// mux's listing cache once the process exists ([`PreparedLaunch::commit`]).
+    mcp_stamped: Option<(String, String)>,
     mcp_spawn_guard: Option<crate::services::root_mcp::SpawnTokenGuard>,
     resume_claim: Option<crate::services::codex_bind::ResumeClaim>,
     /// The fence scope the spawn runs in, `None` for an unfenced one.
@@ -781,7 +793,7 @@ impl PreparedLaunch {
     /// Whether the spawn was handed a root/push MCP token (the sessions fold
     /// lists live tokens; the window emits its event on that).
     pub fn mcp_token_handed_out(&self) -> bool {
-        self.mcp_spawn_guard.as_ref().is_some_and(|g| g.holds_token())
+        self.mcp_adopted || self.mcp_spawn_guard.as_ref().is_some_and(|g| g.holds_token())
     }
 
     /// The spawn's sequence number: the PTY entry and its output route carry
@@ -815,6 +827,10 @@ impl PreparedLaunch {
         );
         if !current {
             return;
+        }
+        crate::services::root_mcp::set_tab_stale(&self.spawned_tab_id, self.mcp_stale);
+        if let Some((session, mark)) = self.mcp_stamped.take() {
+            crate::services::session_mux::mux().note_mcp_mark(&session, &mark);
         }
         match self.features.take() {
             Some(f) => crate::services::agent_features::record(&self.spawned_tab_id, crate::services::agent_features::Spawn {
@@ -1147,13 +1163,51 @@ pub async fn prepare(
     // their MCP servers into one (below, the local-models config yields only
     // to that earlier one).
     let opencode_inline_before_lanes = opts.env.contains_key(crate::services::agent_api_keys::OPENCODE_INLINE_ENV);
-    let root_agent = crate::services::root_mcp::grant_lanes(
-        &mut opts,
-        agent_spawn,
-        crate::services::root_mcp::runtime(),
-        crate::services::root_mcp::tokens(),
-        &storage::state_dir(),
-    );
+    //
+    // A launch that only *reattaches* a local agent session gets no grant: the
+    // session ignores the new environment, so its agent keeps the tokens it
+    // started with, and a fresh set would be minted for nobody. The session's
+    // MCP stamp says whether those still work (`root_mcp_mark`), read once for
+    // every tab of a restore.
+    let local_session = local_session_plan(&opts, agent_spawn, remote_agent_run).await;
+    let verdict = local_session.as_ref().map_or(Reattach::Create, |plan| plan.verdict);
+    let mut mcp_adopted = false;
+    let mut mcp_stamped = None;
+    let root_agent = if verdict == Reattach::Create {
+        let root_agent = crate::services::root_mcp::grant_lanes(
+            &mut opts,
+            agent_spawn,
+            crate::services::root_mcp::runtime(),
+            crate::services::root_mcp::tokens(),
+            &storage::state_dir(),
+        );
+        // A session created now is stamped with the grant it was given.
+        if let (Some(plan), Some(runtime)) = (local_session.as_ref(), crate::services::root_mcp::runtime()) {
+            if plan.stamps {
+                let grant = crate::services::root_mcp::LANE_TOKEN_ENVS
+                    .iter()
+                    .find_map(|var| opts.env.get(*var))
+                    .map(|token| crate::digest::sha256_hex(token.as_bytes()));
+                let mark = crate::services::root_mcp::root_mcp_mark::Mark {
+                    nonce: runtime.generation.clone(),
+                    grant,
+                    port: runtime.port,
+                }
+                .render();
+                mcp_stamped = opts.tmux_session.clone().map(|session| (session, mark.clone()));
+                opts.mcp_mark = Some(mark);
+            }
+        }
+        root_agent
+    } else {
+        if verdict == Reattach::Live {
+            if let Some(grant) = local_session.as_ref().and_then(|plan| plan.own_grant.as_deref()) {
+                mcp_adopted = crate::services::root_mcp::tokens().adopt(grant, &opts.id);
+            }
+        }
+        crate::services::root_mcp::is_root_agent(&opts, agent_spawn)
+    };
+    let mcp_stale = verdict == Reattach::Stale;
     let mcp_spawn_guard = agent_spawn
         .then(|| crate::services::root_mcp::SpawnTokenGuard::new(&opts));
     // The push token, if `grant_lanes` minted one; its binding learns the fence
@@ -1232,6 +1286,8 @@ pub async fn prepare(
         Some(uid) => {
             let project = opts.project_id.clone();
             let session_runs = match opts.tmux_session.clone() {
+                // The listing above already knows (one `tmux ls` for the tab).
+                Some(_) if local_session.is_some() => local_session.as_ref().is_some_and(|plan| plan.exists),
                 Some(session) if crate::services::agent_turn::turn_in_flight(&uid, project.as_deref()) => {
                     let (host, local_only) = (opts.remote_host_id.clone(), opts.local_only);
                     let project = project.clone();
@@ -1704,6 +1760,9 @@ pub async fn prepare(
         drop_dir,
         ai,
         host_attach_only,
+        mcp_stale,
+        mcp_adopted,
+        mcp_stamped,
     })
 }
 
@@ -1791,6 +1850,101 @@ fn host_launch_via(
     }
 }
 
+/// Whether the local session `session` is live, from the mux's one listing
+/// (cached for a restore's burst) and, where a backend keeps no listing with
+/// stamps, from its `has`.
+fn local_session_exists(mux: &dyn crate::services::session_mux::SessionMux, session: &str) -> bool {
+    match mux.mcp_marks() {
+        Ok(marks) => marks.contains(session),
+        Err(_) => mux.has(session).unwrap_or(false),
+    }
+}
+
+/// What a launch learned about the local tmux session it names, before its MCP
+/// lanes are granted.
+struct LocalSessionPlan {
+    /// The session is live: the launch would only reattach it.
+    exists: bool,
+    verdict: Reattach,
+    /// A new session of this launch is stamped (a backend that carries the
+    /// stamp is there, and the process has a listener to name).
+    stamps: bool,
+    /// The grant of this run's own stamp, to adopt on a [`Reattach::Live`].
+    own_grant: Option<String>,
+}
+
+use crate::services::root_mcp::root_mcp_mark::Reattach;
+
+/// The [`LocalSessionPlan`] of `opts`, or `None` for a launch that is not a
+/// local agent session (a shell, a remote or container agent, a launch with no
+/// session name): those keep today's grant. Blocking work (one `tmux ls`, and
+/// for another listener's stamp a 300 ms probe), so off the async workers.
+async fn local_session_plan(opts: &PtyOptions, agent: bool, remote_agent_run: bool) -> Option<LocalSessionPlan> {
+    let session = opts.tmux_session.clone().filter(|s| {
+        agent && !remote_agent_run && !opts.sandbox && crate::services::tmux_local::is_app_local_tmux_session(s)
+    })?;
+    app_core::rt::spawn_blocking(move || {
+        let mux = crate::services::session_mux::mux();
+        if !mux.holds_sessions() {
+            return None;
+        }
+        Some(local_session_plan_in(&*mux, &session, crate::services::root_mcp::runtime()))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+fn local_session_plan_in(
+    mux: &dyn crate::services::session_mux::SessionMux,
+    session: &str,
+    runtime: Option<&crate::services::root_mcp::Runtime>,
+) -> LocalSessionPlan {
+    use crate::services::root_mcp::root_mcp_mark::{probe_grant, Stamp};
+    let (exists, stamp) = match mux.mcp_marks() {
+        Ok(marks) => (marks.contains(session), Stamp::of(marks.entry(session))),
+        // A backend that cannot read the stamp (the Windows session host until
+        // it carries one): a create, as before; whether it rejoins is still asked.
+        Err(_) => (mux.has(session).unwrap_or(false), Stamp::Unknown),
+    };
+    plan_for(
+        exists,
+        &stamp,
+        runtime,
+        &|grant| crate::services::root_mcp::tokens().holds_session(grant),
+        &|mark| mark.grant.as_deref().is_some_and(|grant| probe_grant(mark.port, grant)),
+    )
+}
+
+/// The decision of [`local_session_plan_in`], with what it reads passed in.
+fn plan_for(
+    exists: bool,
+    stamp: &crate::services::root_mcp::root_mcp_mark::Stamp,
+    runtime: Option<&crate::services::root_mcp::Runtime>,
+    grant_held: &dyn Fn(&str) -> bool,
+    foreign_live: &dyn Fn(&crate::services::root_mcp::root_mcp_mark::Mark) -> bool,
+) -> LocalSessionPlan {
+    use crate::services::root_mcp::root_mcp_mark::{classify_reattach, Stamp};
+    let Some(runtime) = runtime else {
+        // No listener in this process: nothing is granted, nothing stamped.
+        return LocalSessionPlan { exists, verdict: Reattach::Create, stamps: false, own_grant: None };
+    };
+    let mut own_grant = None;
+    let verdict = classify_reattach(
+        stamp,
+        &runtime.generation,
+        |grant| {
+            let held = grant_held(grant);
+            if held {
+                own_grant = Some(grant.to_string());
+            }
+            held
+        },
+        foreign_live,
+    );
+    LocalSessionPlan { exists, verdict, stamps: *stamp != Stamp::Unknown, own_grant }
+}
+
 /// Whether a spawn wrapped in the tab's tmux `session` (`new-session -A`)
 /// would only reattach it — the session still runs, here or on the tab's
 /// remote host — and so start no program. Blocking: the remote answer is one
@@ -1805,7 +1959,7 @@ fn reattaches_session(project: Option<&str>, host: Option<&str>, session: &str, 
         None => {
             crate::services::tmux_local::is_app_local_tmux_session(session) && {
                 let mux = crate::services::session_mux::mux();
-                mux.holds_sessions() && mux.has(session).unwrap_or(false)
+                mux.holds_sessions() && local_session_exists(&*mux, session)
             }
         }
         Some(target) => {
@@ -1878,6 +2032,7 @@ mod tests {
             agent: true, project_id: None, remote_host_id: None, tmux_session: None, tmux_attach: None,
             host_bound_uid: None, local_model: false, schedule_target_id: None, host_session: false, api_key: None,
             mux_wrapped: false,
+            mcp_mark: None,
         };
         assert!(is_ai_spawn(&opts("claude", &[])));
         assert!(is_ai_spawn(&opts("claude", &["--resume", "x"])));
@@ -1915,9 +2070,10 @@ mod tests {
             remote_host_id: None, tmux_session: None, tmux_attach: None, host_bound_uid: None,
             local_model: false, schedule_target_id: None, host_session: false, api_key: None,
             mux_wrapped: false,
+            mcp_mark: None,
         };
         PreparedLaunch {
-            opts, named: false, interrupted: false, resting: false, live_turn: None, checkpoint_key: None, drop_dir: None, ai: true, host_attach_only: false, mcp_spawn_guard: None,
+            opts, named: false, interrupted: false, resting: false, live_turn: None, checkpoint_key: None, drop_dir: None, ai: true, host_attach_only: false, mcp_stale: false, mcp_adopted: false, mcp_stamped: None, mcp_spawn_guard: None,
             resume_claim: None, fenced_scope, fence_view: None, host_agent_tab: None, features: None, privacy_check: None, spawned_tab_id: tab.into(), generation,
         }.commit();
     }
@@ -2520,6 +2676,7 @@ mod tests {
             host_session: false,
             api_key: None,
             mux_wrapped: false,
+            mcp_mark: None,
         }
     }
 
@@ -2698,7 +2855,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let everything = Runtime { port: 1, serves_root: true, serves_markup: true, serves_web: true };
+        let everything = Runtime { port: 1, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
         for runtime in [Some(&everything), None] {
             for sandbox in [false, true] {
                 let mut opts = chat_opts(AssistantCli::OpenCodeLocal, Some("m"));
@@ -2801,5 +2958,84 @@ mod tests {
         opts.cwd = "/tmp".into();
         let err = prepare(opts, None, None).await.err().expect("refused");
         assert!(err.contains("needs its launch"), "{err}");
+    }
+
+    // ── reattach: the MCP stamp decides the grant (docs/mcp_reattach_plan.md) ──
+
+    mod reattach {
+        use super::*;
+        use crate::services::root_mcp::root_mcp_mark::{Mark, Reattach, Stamp};
+        use crate::services::root_mcp::Runtime;
+
+        const NONCE: &str = "0123456789abcdef0123456789abcdef";
+        const OTHER: &str = "fedcba9876543210fedcba9876543210";
+        const GRANT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        fn runtime() -> Runtime {
+            Runtime { port: 4000, serves_root: true, serves_markup: true, serves_web: true, generation: NONCE.into() }
+        }
+        fn mark(nonce: &str, grant: Option<&str>) -> Stamp {
+            Stamp::Marked(Mark { nonce: nonce.into(), grant: grant.map(str::to_string), port: 4001 })
+        }
+
+        #[test]
+        fn a_missing_session_is_created_and_stamped() {
+            let plan = plan_for(false, &Stamp::Absent, Some(&runtime()), &|_| panic!("held?"), &|_| panic!("probe?"));
+            assert!(!plan.exists && plan.verdict == Reattach::Create && plan.stamps && plan.own_grant.is_none());
+        }
+
+        #[test]
+        fn a_stamp_this_run_made_is_live_while_its_grant_is_held() {
+            let held = plan_for(true, &mark(NONCE, Some(GRANT)), Some(&runtime()), &|g| g == GRANT, &|_| panic!("probe?"));
+            assert!(held.exists && held.verdict == Reattach::Live);
+            assert_eq!(held.own_grant.as_deref(), Some(GRANT), "what to adopt");
+            let gone = plan_for(true, &mark(NONCE, Some(GRANT)), Some(&runtime()), &|_| false, &|_| panic!("probe?"));
+            assert_eq!(gone.verdict, Reattach::Stale);
+            assert!(gone.own_grant.is_none());
+        }
+
+        #[test]
+        fn another_listeners_stamp_is_live_only_when_it_confirms() {
+            let stamp = mark(OTHER, Some(GRANT));
+            let yes = plan_for(true, &stamp, Some(&runtime()), &|_| panic!("held?"), &|m| m.port == 4001);
+            assert_eq!(yes.verdict, Reattach::Live);
+            assert!(yes.own_grant.is_none(), "nothing of another process's store is adopted");
+            let no = plan_for(true, &stamp, Some(&runtime()), &|_| panic!("held?"), &|_| false);
+            assert_eq!(no.verdict, Reattach::Stale);
+        }
+
+        #[test]
+        fn a_session_with_no_stamp_or_no_grant() {
+            assert_eq!(plan_for(true, &Stamp::Unmarked, Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::Stale);
+            assert_eq!(plan_for(true, &mark(OTHER, None), Some(&runtime()), &|_| false, &|_| false).verdict, Reattach::NoGrant);
+        }
+
+        /// A backend that cannot read stamps keeps today's behaviour and writes
+        /// none; so does a process with no listener.
+        #[test]
+        fn what_cannot_be_stamped_is_granted_as_before() {
+            let unknown = plan_for(true, &Stamp::Unknown, Some(&runtime()), &|_| false, &|_| false);
+            assert!(unknown.exists && unknown.verdict == Reattach::Create && !unknown.stamps);
+            let none = plan_for(true, &mark(NONCE, Some(GRANT)), None, &|_| true, &|_| true);
+            assert!(none.verdict == Reattach::Create && !none.stamps);
+        }
+
+        /// `prepare` reads the stamp before it grants, grants only on a create
+        /// and never mints on a reattach; the grant stamps the new session.
+        #[test]
+        fn prepare_grants_only_on_a_create() {
+            let source = include_str!("launch_prep.rs");
+            let start = source.find("pub async fn prepare(").expect("prepare");
+            let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+            let plan = body.find("local_session_plan(").expect("the stamp is read");
+            let grant = body.find("root_mcp::grant_lanes(").expect("the grant");
+            assert!(plan < grant, "the verdict comes first");
+            assert_eq!(body.matches("root_mcp::grant_lanes(").count(), 1, "one grant site");
+            let gate = body.find("if verdict == Reattach::Create {").expect("the grant is behind the verdict");
+            assert!(gate < grant && grant - gate < 200, "grant_lanes is the first thing a create does");
+            assert!(body.contains("tokens().adopt("), "a live reattach re-keys the held grant");
+            assert!(body.contains("opts.mcp_mark = Some(mark);"), "a created session is stamped");
+            assert!(body.contains("let mcp_stale = verdict == Reattach::Stale;"), "a stale verdict reaches the launch");
+        }
     }
 }

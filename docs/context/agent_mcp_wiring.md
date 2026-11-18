@@ -78,3 +78,21 @@ tabtivity-mcp call print print_request '{"path":"out.pdf"}'
   command still works when the user names it.
 - Each call is an ordinary shell command, so the CLI's own permission mode
   decides whether it asks first.
+
+## 3. After a reattach (a crash left the session running)
+
+A local agent session outlives a crash; the next launch reattaches it and its
+agent keeps the URLs and tokens it started with, which the new process does not
+know. `launch_prep::prepare` therefore reads the session's MCP stamp before it
+grants (`root_mcp_mark`, `docs/context/tmux_sessions.md`): a **Create** grants as
+above and stamps the session; a **Live** reattach (this run's grant still held,
+or another listener confirms it) mints nothing and re-keys the held lanes to the
+new PTY id; a **Stale** one mints nothing and flags the tab (`mcpStale` on the
+spawn answer, `appMcpStale` in the hover card's features, `servers_of_tab`
+empty). Minting for a reattach would be wrong twice: nobody receives the
+tokens, and `TokenStore::register` revokes the tab's earlier token per lane.
+The listener's port is stable across runs (`<state_dir>/root_mcp/port`), so a
+stale agent's calls reach this program's refusal, not another listener.
+
+Which CLIs retry an MCP server after it refused connections is **unverified**
+(Phase 2's first step, `docs/mcp_reattach_plan.md`).

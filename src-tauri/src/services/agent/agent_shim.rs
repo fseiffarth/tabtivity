@@ -281,6 +281,7 @@ fn shim_pty_options(
         host_session: false,
         api_key: None,
         mux_wrapped: false,
+        mcp_mark: None,
     }
 }
 

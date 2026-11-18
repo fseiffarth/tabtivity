@@ -298,6 +298,16 @@ pub(crate) fn enrol(binding: Binding, pty: &str, session: &str) {
     changed();
 }
 
+/// A reattached session keeps its lane tokens under a new PTY id
+/// (`TokenStore::adopt`): the member seated for the old PTY id follows, so the
+/// hook marker and a wake still reach the PTY that runs it now.
+pub(crate) fn rebind_pty(old: &str, new: &str) {
+    let mut w = world().lock_ok();
+    for member in w.members.iter_mut().filter(|m| m.pty == old) {
+        member.pty = new.to_string();
+    }
+}
+
 /// Drop what has run out: members whose session is gone (a closed or exited
 /// tab stops being listed) and messages past [`LIFE`]. Called at a PTY's exit
 /// (`terminal`), and rings the window when anything went. A respawn of the
