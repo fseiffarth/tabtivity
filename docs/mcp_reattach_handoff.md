@@ -118,7 +118,7 @@ Commits: `31c8d7f64` (the whole step: code, tests, docs, this file) plus a one-l
 
 ## I3: Phase 1 frontend
 
-Branch `worktree-agent-a345e92f66fd1b56e`, based on I1's `4c0ea87dc`.
+Branch `worktree-agent-a345e92f66fd1b56e`, based on I1's `4c0ea87dc`. Commit `9d9f361a3` (the whole step) plus this one-line docs follow-up.
 
 ### What landed
 
