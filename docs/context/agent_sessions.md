@@ -597,3 +597,29 @@ every place a log can be has to be probed:
   its handle), a subagent's own file or a `Workflow` run's journal only when
   it is opened — and emptied when the copied session changes. A host
   tab of any other CLI has no chat.
+
+## Continuing in another CLI
+
+Code: `agent/agent_cli_handoff.rs` (backend), `CliHandoffDialog.tsx` +
+`CliHandoffMenuItem.tsx` + `lib/agents/cliHandoff.ts` (frontend); plan and
+history in `docs/cli_session_handoff_plan.md`.
+
+- The dialog opens from a limit notice (`TerminalLimitHandoff`) or the tab
+  menu. Both start a *new* tab on the chosen CLI through `newAgentTabForDraft`,
+  so it is resumable (`TAB_UID`, session id) like any "+" menu tab. The source
+  tab is never stopped or touched; the menu row is disabled only while an agent
+  turn runs.
+- The context travels as a file, not as typed text: `HANDOFF.md` in the
+  successor's agent home, `~/handoff/cli-<id>/` (the target's CLI shares the
+  scope's `agent-homes/<scope>`, so the path is the same fenced mount). The
+  first input is a short prompt naming that path.
+- The backend reads the transcript (`agent_cli_handoff_prepare` takes the
+  Reader's tab identity, never conversation text from the renderer or phone). No
+  summarizer runs; the file holds the first request, the newest turns that fit a
+  budget, the previous agent's cockpit notes (claims, with times) and
+  `git status`. Everything agent- or project-written is quoted in a fence.
+- Local tabs only: remote-host tabs, remote projects, reserved scopes (the
+  assistant) and CLIs whose transcript is not read are refused with the
+  `unsupported` code.
+- Old files are pruned only by ids the ledger recorded; nothing else in the
+  shared `handoff/` folder (byte-sync's `conflicts-*`) is ever deleted.

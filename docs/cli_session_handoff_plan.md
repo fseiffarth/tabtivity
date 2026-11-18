@@ -1,6 +1,6 @@
 # Continue work with another CLI
 
-Status: plan only, rewritten 2026-11-18. Replaces the 2026-11-15 version. A
+Status: steps A–D implemented on branch `cli-handoff`, never live. Rewritten 2026-11-18. Replaces the 2026-11-15 version. A
 first version has been live in the code since 2026-11-04 (`b041edf8f`,
 `9db7ee235`); this plan hardens and extends it. It does not start over.
 

@@ -1,13 +1,17 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
 - [ ] **Continue work with another CLI** — v0 on develop since 2026-11-04
-  (`TerminalLimitHandoff`, pill `terminal.limitHandoff`, never live); plan
+  (`TerminalLimitHandoff`, pill `terminal.limitHandoff`); plan
   `docs/cli_session_handoff_plan.md` (rewritten 2026-11-18) hardens it.
-  - [ ] A. Successor tab through `newAgentTabForDraft` (resumable, `TAB_UID`).
-  - [ ] B. `agent_cli_handoff_prepare`: `HANDOFF.md` in the target's agent home
+  Steps A–D implemented on branch `cli-handoff`, never live; new pill
+  `agent.cliHandoff` (tab menu).
+  - [x] A. Successor tab through `newAgentTabForDraft` (resumable, `TAB_UID`).
+    `9e10db308`
+  - [x] B. `agent_cli_handoff_prepare`: `HANDOFF.md` in the target's agent home
     (first request, recent turns in a budget, cockpit notes, working tree).
-  - [ ] C. Shared `CliHandoffDialog`: limit notice + tab-menu entry, CLI picker,
-    preview, short bootstrap prompt.
+    `9f537d75a`
+  - [x] C. Shared `CliHandoffDialog`: limit notice + tab-menu entry, CLI picker,
+    preview, short bootstrap prompt. `275d12367`
   - [ ] 🖐️ Manual: Claude → Codex, Codex → Claude, restart resumes the successor.
     - [ ] ✅ Works on Linux (X11)
     - [ ] ❌ Doesn't work on Linux (X11)
