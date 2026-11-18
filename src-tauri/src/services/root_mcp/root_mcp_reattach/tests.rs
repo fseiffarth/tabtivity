@@ -501,6 +501,49 @@ fn the_stamp_grant_prefers_a_revivable_lane() {
     assert_eq!(stamp_grant(&env), Some(token_hash("h")));
 }
 
+/// R3 (finding 2): a revoke that lands between a launch building its row
+/// (`prepare`) and writing it (`commit`) finds no row to clear; the write
+/// that follows must not put the revoked hash back — a created row or a
+/// revived one alike.
+#[test]
+fn a_row_written_after_a_revoke_never_carries_the_revoked_hash() {
+    let (_dir, file) = record_file();
+    let listener = Listener::open(file.clone(), PORT, THIS.into(), true, None, NOW);
+    let lanes = vec![LaneRow::of(&identity("t", Caller::Helper), "h1"), LaneRow::of(&identity("t", Caller::Printer), "h2")];
+    let built = row_of(lanes.clone(), "h1", THIS);
+    listener.forget_hashes(&["h1".to_string()]);
+    listener.write_row("created", built);
+    let outcome = Outcome { revived: lanes.clone(), lost: false, retarget: vec![] };
+    listener.write_row("revived", revived_row(row_of(lanes, "h1", PREV), &outcome, Some((THIS, "h1"))));
+    let record: Record = crate::storage::read_json(&file).unwrap();
+    for session in ["created", "revived"] {
+        let hashes: Vec<_> = record.sessions[session].lanes.iter().map(|l| l.hash.as_deref()).collect();
+        assert_eq!(hashes, [None, Some("h2")], "{session}: the revoked hash stays off the disk");
+    }
+}
+
+/// R3 (finding 2): a revoke whose write fails removes the record rather
+/// than leave the hash for a later run, and within this run a row that
+/// still names a revoked hash revives nothing of it.
+#[test]
+fn a_revoke_that_cannot_write_still_revives_nothing() {
+    let (_dir, file) = record_file();
+    let lanes = vec![LaneRow::of(&identity("t", Caller::Helper), "h1"), LaneRow::of(&identity("t", Caller::Printer), "h2")];
+    let row = row_of(lanes, "h1", PREV);
+    let listener = previous_run(&file, "s", row.clone(), NOW - 60);
+    // The revoke's write fails (here: the file cannot be parsed back).
+    std::fs::write(&file, "{ not json").unwrap();
+    listener.forget_hashes(&["h1".to_string()]);
+    assert!(!file.exists(), "the record goes rather than keep the hash");
+    // A row naming it anyway (a file the purge could not remove).
+    let mut record = Record { nonce: THIS.into(), port: PORT, last_alive: NOW, ..Record::default() };
+    record.sessions.insert("s".into(), row);
+    write(&file, &record);
+    let found = listener.candidate("s", &mark(PREV, "h1"), NOW).expect("the row still passes the guards");
+    let hashes: Vec<_> = found.lanes.iter().map(|l| l.hash.as_deref()).collect();
+    assert_eq!(hashes, [None, Some("h2")]);
+}
+
 /// R3 (finding 3): a wall clock stepped back behind the previous run's
 /// `last_alive` refuses, instead of reading as no downtime at all (which
 /// kept the cap open for as long as the step); and the listener's own clock

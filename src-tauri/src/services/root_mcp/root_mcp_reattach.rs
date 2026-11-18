@@ -311,6 +311,11 @@ pub struct Listener {
     /// The wall clock at open and the monotonic instant it was read at
     /// ([`Listener::clock`]).
     opened: (u64, std::time::Instant),
+    /// Every hash this run revoked ([`Listener::forget_hashes`]): stripped
+    /// from each write, so a row built before the revoke and written after it
+    /// (a launch's commit) cannot put it back, and from each row read, so a
+    /// revoke whose own write failed still revives nothing in this run.
+    forgotten: std::sync::Mutex<HashSet<String>>,
 }
 
 static LISTENER: OnceLock<Listener> = OnceLock::new();
@@ -338,6 +343,19 @@ fn purge(file: &Path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => eprintln!("[root-mcp] could not remove the reattach record: {error}"),
+    }
+}
+
+/// Drop the hash of each of `lanes` that `forgotten` names: the lane stays
+/// listed, so its loss still reads as stale.
+fn strip_forgotten<'a>(lanes: impl Iterator<Item = &'a mut LaneRow>, forgotten: &HashSet<String>) {
+    if forgotten.is_empty() {
+        return;
+    }
+    for lane in lanes {
+        if lane.hash.as_ref().is_some_and(|h| forgotten.contains(h)) {
+            lane.hash = None;
+        }
     }
 }
 
@@ -395,6 +413,7 @@ impl Listener {
             stopped: AtomicBool::new(false),
             io: std::sync::Mutex::new(()),
             opened: (now, std::time::Instant::now()),
+            forgotten: std::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -462,7 +481,10 @@ impl Listener {
         if self.stopped.load(Ordering::Acquire) {
             return None;
         }
-        let row = read_record(&self.file).ok()?.sessions.remove(session);
+        let mut row = read_record(&self.file).ok()?.sessions.remove(session);
+        if let Some(row) = row.as_mut() {
+            strip_forgotten(row.lanes.iter_mut(), &self.forgotten.lock_ok());
+        }
         match self.judge(row.as_ref(), mark, now) {
             Ok(_) => row,
             Err(Refusal::NoRecord) => None,
@@ -485,6 +507,12 @@ impl Listener {
         if self.stopped.load(Ordering::Acquire) {
             return None;
         }
+        self.patch_locked(f).map_err(|error| eprintln!("[root-mcp] reattach record: {error}")).ok()
+    }
+
+    /// One write of the file, `io` held by the caller. Whatever `f` leaves,
+    /// no hash this run revoked is written.
+    fn patch_locked<R>(&self, f: impl FnOnce(&mut Record) -> R) -> Result<R, String> {
         crate::storage::patch_private_json(&self.file, Record::default(), |record: &mut Record| {
             // A file purged under a run (a crash of the patch, a hand edit)
             // starts again as this run's.
@@ -493,10 +521,10 @@ impl Listener {
                 record.port = self.port;
                 record.last_alive = now_secs();
             }
-            Ok(f(record))
+            let out = f(record);
+            strip_forgotten(record.sessions.values_mut().flat_map(|row| row.lanes.iter_mut()), &self.forgotten.lock_ok());
+            Ok(out)
         })
-        .map_err(|error| eprintln!("[root-mcp] reattach record: {error}"))
-        .ok()
     }
 
     /// Record the row of a session this run created (or revived).
@@ -538,18 +566,20 @@ impl Listener {
                 pending.remove(hash);
             }
         }
-        // A file that names none of them is not rewritten.
-        let named = read_record(&self.file).is_ok_and(|record| {
-            record.sessions.values().flat_map(row_hashes).any(|h| hashes.contains(&h))
-        });
-        if named {
-            self.patch(|record| {
-                for lane in record.sessions.values_mut().flat_map(|row| row.lanes.iter_mut()) {
-                    if lane.hash.as_ref().is_some_and(|h| hashes.contains(h)) {
-                        lane.hash = None;
-                    }
-                }
-            });
+        // Before the write below: every later write strips them too.
+        self.forgotten.lock_ok().extend(hashes.iter().cloned());
+        let _io = self.io.lock_ok();
+        // No write of this run is in flight while `io` is held: a missing
+        // file names nothing, and one that names none of them is left
+        // byte-for-byte (`patch_json` skips an unchanged write).
+        if self.stopped.load(Ordering::Acquire) || !self.file.exists() {
+            return;
+        }
+        if let Err(error) = self.patch_locked(|_| ()) {
+            // The hash would outlive the revoke on disk, for a later run to
+            // revive: the record goes instead (nothing of it is revived).
+            eprintln!("[root-mcp] reattach record: {error}; removing it");
+            purge(&self.file);
         }
     }
 
