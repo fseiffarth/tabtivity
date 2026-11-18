@@ -76,7 +76,7 @@ afterEach(() => {
   _clearPtyActivityForTest();
 });
 
-describe("stale Tabtivity tools", () => {
+describe("stale app tools", () => {
   it("resumes Claude, Codex, Mistral and OpenCode by id, the continue-latest CLIs not, Aider not at all", () => {
     const kind = (cmd: string, extra: Partial<TabEntry> = {}) => mcpReconnectKind("p1", agentTab("a", { cmd, ...extra }));
     expect(["claude", "codex", "vibe", "opencode"].map((cmd) => kind(cmd))).toEqual(["byId", "byId", "byId", "byId"]);

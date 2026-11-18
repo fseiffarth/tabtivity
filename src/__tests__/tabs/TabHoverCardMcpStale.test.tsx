@@ -32,7 +32,7 @@ afterEach(() => {
 });
 
 describe("tab hover card of a stale agent tab", () => {
-  it("says its Tabtivity tools are disconnected", async () => {
+  it("says its app tools are disconnected", async () => {
     invoke.mockImplementation((cmd) =>
       Promise.resolve(
         cmd === "agent_tab_features"

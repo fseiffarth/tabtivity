@@ -48,7 +48,7 @@ function host() {
 
 const relaunchSeq = () => useTabsStore.getState().tabsByScope.p1.find((tab) => tab.key === "agent-1")?.relaunchSeq ?? 0;
 
-describe("stale Tabtivity tools card", () => {
+describe("stale app tools card", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(() => Promise.resolve(null));
