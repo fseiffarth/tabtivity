@@ -1979,8 +1979,20 @@ mod tests {
         assert_eq!(marks.entry(bare), Some(&None));
         assert_eq!(marks.entry("nothing-here"), None);
         assert!(marks.contains(stamped) && marks.contains(bare) && !marks.contains("nothing-here"));
-        // With the server gone the listing is empty, not an error.
-        assert_eq!(mux.mcp_marks().unwrap(), crate::services::session_mux::SessionMarks::default());
+        // With the server gone the listing is empty, not an error. A listing
+        // that reaches it while it is still exiting reads "server exited
+        // unexpectedly" (CI, 2026-11-18), which stays an error by design:
+        // wait for the exit to finish.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let gone = loop {
+            match mux.mcp_marks() {
+                Err(e) if std::time::Instant::now() < deadline && format!("{e:?}").contains("server exited") => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                other => break other,
+            }
+        };
+        assert_eq!(gone.unwrap(), crate::services::session_mux::SessionMarks::default());
     }
 
     /// R1's race: the listing judged the session absent, but by the spawn it
