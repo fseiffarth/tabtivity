@@ -82,6 +82,11 @@ const MAX_SHELL_CHARS: usize = 8_000;
 const MAX_SHELL_DESCRIPTION_CHARS: usize = 200;
 /// Longest question, option label or note of a question the agent asked.
 const MAX_QUESTION_CHARS: usize = 2_000;
+/// Most lines and characters of one option's preview (the sample a question
+/// shows beside a row, often a bit of code or a layout sketch): kept with its
+/// line breaks, so it is cut here and not by [`bounded_line`].
+const MAX_PREVIEW_LINES: usize = 40;
+const MAX_PREVIEW_CHARS: usize = 2_000;
 /// How deep a subagent's own subagents are followed.
 pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 
@@ -132,10 +137,11 @@ pub struct TranscriptEntry {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub workflow: bool,
     /// On an `answer` entry: the questions the agent asked the user (Claude's
-    /// `AskUserQuestion`), each with the answer it got. The entry is written
-    /// once the call has its result, so a question still waiting is the live
-    /// screen's and never in the chat twice; `text` is the same exchange as
-    /// plain text.
+    /// `AskUserQuestion`), each with the answer it got. Claude's entry is
+    /// written where the call has its result; a call still waiting is the
+    /// last entry of the read, marked [`blocking`](Self::blocking), and the
+    /// live card shows it, not the chat. `text` is the same exchange as plain
+    /// text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskedQuestion>,
     /// On an `answer` entry with `questions`: still waiting for the user's
@@ -145,6 +151,14 @@ pub struct TranscriptEntry {
     /// chat is where it shows. Dropped, by Codex too, when the turn ends.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub asking: bool,
+    /// On an `answer` entry with `questions`: the agent is blocked on this
+    /// question *on its own screen* (Claude's `AskUserQuestion` call that has
+    /// no result yet). The live card shows it, so the chat leaves it out; the
+    /// entry loses the mark once the call has its result and is then the
+    /// ordinary answered (or declined) card. Not [`asking`](Self::asking):
+    /// that is Codex's queue, answered by another route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blocking: bool,
     /// On an `agent` entry: the folder the subagent works in — the worktree
     /// Claude made for it (`isolation: "worktree"`, named in its `.meta.json`),
     /// else the session's own folder when it was spawned. A path, so the
@@ -160,6 +174,9 @@ pub struct AskedQuestion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<String>,
     pub question: String,
+    /// Several rows may be ticked (Claude's `multiSelect`).
+    #[serde(rename = "multiSelect", default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_select: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<AskedOption>,
     /// What the user answered — a row's label, several joined by `, ` on a
@@ -175,6 +192,11 @@ pub struct AskedOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The sample the dialog shows beside the row, with its line breaks
+    /// (bounded by [`MAX_PREVIEW_LINES`] and [`MAX_PREVIEW_CHARS`]).
+    /// Preformatted text, never markdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chosen: bool,
 }
@@ -1618,7 +1640,10 @@ fn parse_entries(
     // Questions asked, by call id, until their result comes: the exchange is
     // one entry, placed where the result lands — the agent waits on it, so
     // nothing of its own comes in between.
-    let mut asked: std::collections::HashMap<String, (Vec<AskedQuestion>, Option<String>)> = std::collections::HashMap::new();
+    // A call still waiting at the end is the agent blocked on its own screen
+    // (`blocking`): kept in ask order, dropped by the next typed prompt or an
+    // interrupt notice (the CLI went on, or the call can never be answered).
+    let mut asked: Vec<(String, Vec<AskedQuestion>, Option<String>)> = Vec::new();
     // Codex's async questions by call: their entry, written when asked, and
     // whether the turn they wait in is still going.
     let mut async_asks: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1641,7 +1666,8 @@ fn parse_entries(
         }
         if kind == TranscriptKind::Claude {
             for call in claude_tool_results(&value) {
-                if let Some((questions, at)) = asked.remove(&call) {
+                if let Some(pos) = asked.iter().position(|(asked_call, ..)| *asked_call == call) {
+                    let (_, questions, at) = asked.remove(pos);
                     entries.extend(question_entry(questions, value.get("toolUseResult"), at));
                 }
                 returned.insert(call);
@@ -1690,7 +1716,11 @@ fn parse_entries(
                 Record::Turn(role, raw) => {
                     if typed && role == "prompt" {
                         shells.clear();
+                        asked.clear();
                         turn_start = entries.len();
+                    }
+                    if role == "interrupted" {
+                        asked.clear();
                     }
                     entries.extend(transcript_entry(role, &raw, at.clone()));
                 }
@@ -1714,7 +1744,12 @@ fn parse_entries(
                 }
                 Record::Plan(raw) => entries.extend(transcript_entry("answer", &raw, at.clone()).map(|entry| TranscriptEntry { plan: true, ..entry })),
                 Record::Question { call, questions } => {
-                    asked.insert(call, (questions, at.clone()));
+                    // A subagent's own file: its questions are not this
+                    // session's screen.
+                    if !sidechain {
+                        asked.retain(|(asked_call, ..)| *asked_call != call);
+                        asked.push((call, questions, at.clone()));
+                    }
                 }
                 Record::Workflow { call, title } => {
                     if let Some(mut entry) = agent_entry(&title, Some("workflow"), at.clone()) {
@@ -1756,6 +1791,9 @@ fn parse_entries(
         if let Some(entry) = async_asks.get(call).and_then(|&at| entries.get_mut(at)) {
             entry.asking = true;
         }
+    }
+    for (_, questions, at) in asked {
+        entries.extend(waiting_question_entry(questions, at));
     }
     let waiting = shells.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, shell)| shell).collect();
     let background = backgrounded
@@ -2339,8 +2377,16 @@ fn claude_question(block: &Value) -> Option<Record> {
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter_map(|o| Some(AskedOption { label: field(o, "label")?, description: field(o, "description"), chosen: false }))
+                    .filter_map(|o| {
+                        Some(AskedOption {
+                            label: field(o, "label")?,
+                            description: field(o, "description"),
+                            preview: o.get("preview").and_then(Value::as_str).and_then(bounded_preview),
+                            chosen: false,
+                        })
+                    })
                     .collect(),
+                multi_select: q.get("multiSelect").and_then(Value::as_bool) == Some(true),
                 answer: None,
             })
         })
@@ -2351,6 +2397,23 @@ fn claude_question(block: &Value) -> Option<Record> {
 /// A question's text cleaned and cut at its bound; `None` when empty.
 fn bounded_line(raw: &str) -> Option<String> {
     Some(clean_text(raw)?.chars().take(MAX_QUESTION_CHARS).collect())
+}
+
+/// An option's preview cleaned (line breaks and tabs kept) and cut at
+/// [`MAX_PREVIEW_LINES`] lines and [`MAX_PREVIEW_CHARS`] characters; `None`
+/// when empty. Trailing blanks of each line go, its indentation stays.
+fn bounded_preview(raw: &str) -> Option<String> {
+    let text = clean_text(raw)?;
+    let lines: Vec<&str> = text.lines().take(MAX_PREVIEW_LINES).map(str::trim_end).collect();
+    Some(lines.join("\n").chars().take(MAX_PREVIEW_CHARS).collect())
+}
+
+/// The entry for a question whose call has no result yet: the agent waits on
+/// it on its own screen. `text` holds the questions alone; the entry is
+/// marked `blocking` and is placed after every other.
+fn waiting_question_entry(questions: Vec<AskedQuestion>, at: Option<String>) -> Option<TranscriptEntry> {
+    let text = questions.iter().map(|q| q.question.as_str()).collect::<Vec<_>>().join("\n\n");
+    transcript_entry("answer", &text, at).map(|entry| TranscriptEntry { questions, blocking: true, ..entry })
 }
 
 /// The entry for questions whose call has its result: each answer read off
@@ -2415,13 +2478,13 @@ fn codex_async_ask(value: &Value) -> Option<(String, Vec<AskedQuestion>)> {
                                 Value::String(label) => (label.as_str(), None),
                                 _ => (row.get("label")?.as_str()?, row.get("description").and_then(Value::as_str)),
                             };
-                            Some(AskedOption { label: bounded_line(label)?, description: description.and_then(bounded_line), chosen: false })
+                            Some(AskedOption { label: bounded_line(label)?, description: description.and_then(bounded_line), ..Default::default() })
                         })
                         .collect()
                 })
                 .unwrap_or_default();
             let header = q.get("header").and_then(Value::as_str).and_then(bounded_line);
-            Some(AskedQuestion { header, question, options, answer: None })
+            Some(AskedQuestion { header, question, options, ..Default::default() })
         })
         .collect();
     (!questions.is_empty()).then_some((call, questions))

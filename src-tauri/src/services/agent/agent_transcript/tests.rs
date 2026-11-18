@@ -109,14 +109,22 @@ fn a_claude_question_stays_in_the_chat_with_its_answer_once_answered() {
     text += &ask("toolu_B", "Which one?");
     text += "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_B\",\"content\":\"The user doesn't want to proceed\",\"is_error\":true}]},\"toolUseResult\":\"User rejected tool use\"}\n";
     text += "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Noted.\"}]}}\n";
-    // Still waiting: the live screen shows it, the chat does not yet.
+    // Still waiting: the entry comes last, marked blocking (the live card shows it).
     text += &ask("toolu_C", "Still open?");
     std::fs::write(&path, text).unwrap();
     let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
     assert_eq!(
         kinds(&read),
-        vec![("prompt", "ask me"), ("answer", "Which colours?\n→ Red, Blue"), ("answer", "Which one?\n→ —"), ("answer", "Noted.")]
+        vec![
+            ("prompt", "ask me"),
+            ("answer", "Which colours?\n→ Red, Blue"),
+            ("answer", "Which one?\n→ —"),
+            ("answer", "Noted."),
+            ("answer", "Still open?")
+        ]
     );
+    assert!(read.entries[..4].iter().all(|e| !e.blocking));
+    assert!(read.entries[4].blocking);
     let answered = &read.entries[1];
     // Placed at the question's own time, not the answer's.
     assert_eq!(answered.at.as_deref(), Some("2026-10-02T10:00:00Z"));
@@ -131,6 +139,175 @@ fn a_claude_question_stays_in_the_chat_with_its_answer_once_answered() {
     assert_eq!(declined.answer, None);
     assert!(declined.options.iter().all(|o| !o.chosen));
     assert!(serde_json::to_value(&read.entries[3]).unwrap().get("questions").is_none());
+}
+
+// The records Claude 2.1.327 wrote for an `AskUserQuestion` (scripts/verify-cli/claude/turn_hooks.py,
+// tui_ask / tui_ask_esc), keeping only what the reader reads; ids and the working folder are scrubbed.
+const PROBE_QUESTIONS: &str = r#"[{"header":"Colours","question":"Which colours should the probe use?","multiSelect":true,"options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"},{"label":"Green","description":"calm"}]},{"header":"Layout","question":"Which layout should the probe draw?","multiSelect":false,"options":[{"label":"Grid","description":"rows and columns","preview":"+--+--+\n|  |  |\n+--+--+"},{"label":"List","description":"one column","preview":"- one\n- two"}]}]"#;
+
+fn probe_prompt(text: &str) -> String {
+    format!("{{\"type\":\"user\",\"timestamp\":\"2026-11-18T09:19:13.492Z\",\"message\":{{\"role\":\"user\",\"content\":{}}}}}\n", serde_json::json!(text))
+}
+
+fn probe_ask(call: &str, questions: &str, at: &str) -> String {
+    format!(
+        "{{\"isSidechain\":false,\"type\":\"assistant\",\"timestamp\":\"{at}\",\"message\":{{\"role\":\"assistant\",\"model\":\"claude-stub\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"{call}\",\"name\":\"AskUserQuestion\",\"input\":{{\"questions\":{questions}}}}}],\"stop_reason\":\"tool_use\"}}}}\n"
+    )
+}
+
+const PROBE_ANSWERED: &str = r#"{"isSidechain":false,"type":"user","timestamp":"2026-11-18T09:19:25.513Z","message":{"role":"user","content":[{"type":"tool_result","content":"Your questions have been answered","tool_use_id":"toolu_P"}]},"toolUseResult":{"questions":[],"answers":{"Which colours should the probe use?":"Red","Which layout should the probe draw?":"Grid"},"annotations":{"Which layout should the probe draw?":{"preview":"+--+--+\n|  |  |\n+--+--+"}}}}
+"#;
+const PROBE_REJECTED: &str = r#"{"isSidechain":false,"type":"user","timestamp":"2026-11-18T09:19:39.183Z","message":{"role":"user","content":[{"type":"tool_result","content":"The user doesn't want to proceed with this tool use.","is_error":true,"tool_use_id":"toolu_P"}]},"toolUseResult":"User rejected tool use","toolDenialKind":"user-rejected"}
+"#;
+const PROBE_INTERRUPT: &str = r#"{"isSidechain":false,"type":"user","timestamp":"2026-11-18T09:19:39.185Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}
+"#;
+
+fn read_claude(text: String) -> AgentTranscript {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    std::fs::write(&path, text).unwrap();
+    read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap()
+}
+
+#[test]
+fn a_claude_question_still_waiting_is_the_last_entry_marked_blocking() {
+    let read = read_claude(probe_prompt("ask me") + &probe_ask("toolu_P", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z"));
+    assert_eq!(read.entries.len(), 2);
+    let waiting = &read.entries[1];
+    assert!(waiting.blocking && !waiting.asking);
+    assert_eq!(waiting.kind, "answer");
+    assert_eq!(waiting.at.as_deref(), Some("2026-11-18T09:19:13.591Z"));
+    assert_eq!(waiting.text, "Which colours should the probe use?\n\nWhich layout should the probe draw?");
+    assert_eq!(waiting.questions.len(), 2);
+    let colours = &waiting.questions[0];
+    assert_eq!((colours.header.as_deref(), colours.multi_select, colours.answer.clone()), (Some("Colours"), true, None));
+    assert_eq!(colours.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["Red", "Blue", "Green"]);
+    assert_eq!(colours.options[0].description.as_deref(), Some("warm"));
+    assert_eq!(colours.options[0].preview, None);
+    let layout = &waiting.questions[1];
+    assert!(!layout.multi_select);
+    // A preview keeps its line breaks and its inner spacing.
+    assert_eq!(layout.options[0].preview.as_deref(), Some("+--+--+\n|  |  |\n+--+--+"));
+    assert_eq!(layout.options[1].preview.as_deref(), Some("- one\n- two"));
+    // The wire shape the phone and the Reader read.
+    let json = serde_json::to_value(waiting).unwrap();
+    assert_eq!(json["blocking"], true);
+    assert_eq!(json["questions"][0]["multiSelect"], true);
+    assert!(json["questions"][1].get("multiSelect").is_none());
+    assert_eq!(json["questions"][1]["options"][0]["preview"], "+--+--+\n|  |  |\n+--+--+");
+    assert!(json.get("asking").is_none());
+    // An ordinary entry carries neither mark.
+    let prompt = serde_json::to_value(&read.entries[0]).unwrap();
+    assert!(prompt.get("blocking").is_none());
+}
+
+#[test]
+fn an_answered_claude_question_loses_its_blocking_mark_and_keeps_rows_and_previews() {
+    let text = probe_prompt("ask me")
+        + &probe_ask("toolu_P", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z")
+        + PROBE_ANSWERED
+        + "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"stub answer done\"}]}}\n";
+    let read = read_claude(text);
+    assert_eq!(read.entries.len(), 3);
+    assert!(read.entries.iter().all(|e| !e.blocking));
+    let answered = &read.entries[1];
+    assert_eq!(answered.at.as_deref(), Some("2026-11-18T09:19:13.591Z"));
+    assert_eq!(answered.questions[0].answer.as_deref(), Some("Red"));
+    assert_eq!(answered.questions[1].answer.as_deref(), Some("Grid"));
+    assert!(answered.questions[1].options[0].chosen && !answered.questions[1].options[1].chosen);
+    assert!(answered.questions[0].multi_select);
+    assert_eq!(answered.questions[1].options[0].preview.as_deref(), Some("+--+--+\n|  |  |\n+--+--+"));
+}
+
+#[test]
+fn a_declined_claude_question_is_the_plain_card_with_no_answer_and_the_interrupt_notice() {
+    let read = read_claude(probe_prompt("ask me") + &probe_ask("toolu_P", PROBE_QUESTIONS, "2026-11-18T09:19:37.511Z") + PROBE_REJECTED + PROBE_INTERRUPT);
+    assert_eq!(read.entries.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), vec!["prompt", "answer", "interrupted"]);
+    assert!(read.entries.iter().all(|e| !e.blocking));
+    assert!(read.entries[1].questions.iter().all(|q| q.answer.is_none() && q.options.iter().all(|o| !o.chosen)));
+}
+
+#[test]
+fn a_waiting_question_of_an_earlier_turn_or_before_an_interrupt_is_not_waiting() {
+    // Asked, never answered, then the user typed a new prompt.
+    let later = probe_prompt("ask me") + &probe_ask("toolu_A", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z") + &probe_prompt("never mind, do this instead");
+    let read = read_claude(later);
+    assert_eq!(kinds(&read), vec![("prompt", "ask me"), ("prompt", "never mind, do this instead")]);
+    // Asked, then the interrupt notice with no result in between.
+    let interrupted = probe_prompt("ask me") + &probe_ask("toolu_A", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z") + PROBE_INTERRUPT;
+    let read = read_claude(interrupted);
+    assert_eq!(read.entries.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), vec!["prompt", "interrupted"]);
+    // A question of the new turn is waiting even so.
+    let again = probe_prompt("ask me")
+        + &probe_ask("toolu_A", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z")
+        + &probe_prompt("again")
+        + &probe_ask("toolu_B", PROBE_QUESTIONS, "2026-11-18T09:20:00.000Z");
+    let read = read_claude(again);
+    assert_eq!(read.entries.iter().map(|e| (e.kind.as_str(), e.blocking)).collect::<Vec<_>>(), vec![("prompt", false), ("prompt", false), ("answer", true)]);
+    assert_eq!(read.entries[2].at.as_deref(), Some("2026-11-18T09:20:00.000Z"));
+}
+
+#[test]
+fn two_waiting_claude_questions_come_last_in_the_order_they_were_asked() {
+    let one = r#"[{"question":"First?","options":[{"label":"Yes"}]}]"#;
+    let two = r#"[{"question":"Second?","options":[{"label":"No"}]}]"#;
+    let text = probe_prompt("ask me")
+        + &probe_ask("toolu_1", one, "2026-11-18T09:19:13.591Z")
+        + &probe_ask("toolu_2", two, "2026-11-18T09:19:14.000Z")
+        + "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Meanwhile.\"}]}}\n";
+    let read = read_claude(text);
+    // The text came after the asks in the file but the waiting ones close the list.
+    assert_eq!(kinds(&read), vec![("prompt", "ask me"), ("answer", "Meanwhile."), ("answer", "First?"), ("answer", "Second?")]);
+    assert!(read.entries[2].blocking && read.entries[3].blocking && !read.entries[1].blocking);
+    // Answering the first leaves the second waiting.
+    let answered = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"toolUseResult":{"answers":{"First?":"Yes"}}}"#;
+    let text = probe_prompt("ask me") + &probe_ask("toolu_1", one, "2026-11-18T09:19:13.591Z") + &probe_ask("toolu_2", two, "2026-11-18T09:19:14.000Z") + answered + "\n";
+    let read = read_claude(text);
+    assert_eq!(
+        read.entries.iter().map(|e| (e.text.as_str(), e.blocking)).collect::<Vec<_>>(),
+        vec![("ask me", false), ("First?\n→ Yes", false), ("Second?", true)]
+    );
+}
+
+#[test]
+fn a_subagent_files_questions_are_never_waiting() {
+    let line = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z").replace("\"isSidechain\":false", "\"isSidechain\":true");
+    let lines: Vec<&str> = line.lines().collect();
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, true);
+    assert!(entries.iter().all(|e| e.questions.is_empty()), "{entries:?}");
+    // The same call in the session's own file does wait.
+    let own = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z");
+    let lines: Vec<&str> = own.lines().collect();
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, false);
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].blocking);
+}
+
+#[test]
+fn a_preview_is_bounded_by_lines_and_characters_and_keeps_its_breaks() {
+    let long_lines = (0..100).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
+    let wide = "x".repeat(MAX_PREVIEW_CHARS * 3);
+    let questions = serde_json::json!([{
+        "question": "Pick?", "multiSelect": "yes",
+        "options": [
+            {"label": "Lines", "preview": long_lines},
+            {"label": "Wide", "preview": wide},
+            {"label": "Code", "preview": "fn main() {\n\tprintln!(\"hi\");   \n}\u{7}\n"},
+            {"label": "Blank", "preview": "  \n "}
+        ]
+    }])
+    .to_string();
+    let read = read_claude(probe_prompt("ask me") + &probe_ask("toolu_P", &questions, "2026-11-18T09:19:13.591Z"));
+    let question = &read.entries[1].questions[0];
+    // A non-boolean `multiSelect` is not one.
+    assert!(!question.multi_select);
+    let lines = question.options[0].preview.as_deref().unwrap();
+    assert_eq!(lines.lines().count(), MAX_PREVIEW_LINES);
+    assert!(lines.ends_with(&format!("line {}", MAX_PREVIEW_LINES - 1)));
+    assert_eq!(question.options[1].preview.as_deref().unwrap().chars().count(), MAX_PREVIEW_CHARS);
+    // Tab kept, trailing blanks and the control character dropped, indentation untouched.
+    assert_eq!(question.options[2].preview.as_deref(), Some("fn main() {\n\tprintln!(\"hi\");\n}"));
+    assert_eq!(question.options[3].preview, None);
 }
 
 #[test]

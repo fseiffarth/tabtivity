@@ -1052,11 +1052,21 @@ export async function getAgentStatus(tabId: string, refresh = false): Promise<Ag
 }
 
 /** A question the agent asked, as answered: its rows, the ones the answer
- * took marked, and the answer itself — absent when it was turned down. */
+ * took marked, and the answer itself — absent when it was turned down. A
+ * `blocking` entry's questions are still waiting, with no answer. */
 export interface AskedQuestion {
   header?: string;
   question: string;
-  options?: { label: string; description?: string; chosen?: boolean }[];
+  /** Several rows may be ticked (Claude's `multiSelect`); absent when not. */
+  multiSelect?: boolean;
+  options?: {
+    label: string;
+    description?: string;
+    /** The sample shown beside the row, line breaks kept (bounded by the
+     * desktop). Preformatted text, never markdown. */
+    preview?: string;
+    chosen?: boolean;
+  }[];
   answer?: string;
 }
 
@@ -1077,12 +1087,18 @@ export interface TranscriptEntry {
    * `ExitPlanMode`), set apart from its ordinary answers. */
   plan?: boolean;
   /** On an `answer`: the questions the agent asked (Claude's
-   * `AskUserQuestion`), with the answers they got — sent once answered, so
-   * the one still waiting is the live screen's. `text` says the same plainly. */
+   * `AskUserQuestion`), with the answers they got. One still waiting is the
+   * last entry, marked `blocking`. `text` says the same plainly. */
   questions?: AskedQuestion[];
   /** On an `answer` with `questions`: still waiting for the reply — Codex's
    * async question, written when asked while the agent works on. */
   asking?: boolean;
+  /** On an `answer` with `questions`: the agent is blocked on this question
+   * on its own screen (Claude's `AskUserQuestion` call with no result yet).
+   * The live card shows it, so the chat must leave the entry out; it is the
+   * ordinary answered (or declined) card once the mark is gone. Not `asking`
+   * (Codex's queue). */
+  blocking?: boolean;
   /** On an `agent`: it has not reported back yet (Claude's spawn call has
    * no result in the transcript). */
   running?: boolean;
