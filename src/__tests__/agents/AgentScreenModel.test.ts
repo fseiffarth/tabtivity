@@ -53,9 +53,24 @@ describe("the one model tag both phone surfaces show", () => {
   });
 
   it("names a stored session's model in the status line's words, never by family alone", () => {
-    expect(transcriptModelTag("claude-fable-5-1-20260801", true)).toBe("Fable 5.1");
+    expect(transcriptModelTag("claude-fable-5-1-20260801", "claude")).toBe("Fable 5.1");
     // The desktop holds the id already shortened; it reads the same.
-    expect(transcriptModelTag("fable-5-1", true)).toBe("Fable 5.1");
-    expect(transcriptModelTag("gpt-5-codex", false)).toBe("gpt-5-codex");
+    expect(transcriptModelTag("fable-5-1", "claude")).toBe("Fable 5.1");
+    expect(transcriptModelTag("gpt-5-codex")).toBe("gpt-5-codex");
+  });
+
+  it("names an Antigravity store's id in its footer's words, and nothing else", () => {
+    // The ids its conversations' gen_metadata held (1.5.9, 2026-11-18).
+    expect(transcriptModelTag("gemini-3.8-flash-high", "antigravity")).toBe("Gemini 3.8 Flash · high");
+    expect(transcriptModelTag("gemini-3.1-pro-low", "antigravity")).toBe("Gemini 3.1 Pro · low");
+    expect(transcriptModelTag("gemini-3.1-flash-lite", "antigravity")).toBe("Gemini 3.1 Flash Lite");
+    expect(transcriptModelTag("gemini-4-carbon", "antigravity")).toBe("Gemini 4 Carbon");
+    // Its footer composes the same tag off the screen (`statusModelTag`).
+    expect(transcriptModelTag("gemini-3.8-flash-high", "antigravity")).toBe(statusModelTag({ model: "Gemini 3.8 Flash", effort: "high" }));
+    // Not that shape: as it is — the dialog's "(Thinking)" is not in the id.
+    expect(transcriptModelTag("claude-sonnet-4-6", "antigravity")).toBe("sonnet-4-6");
+    expect(transcriptModelTag("gpt-oss-120b-medium", "antigravity")).toBe("gpt-oss-120b-medium");
+    // A Gemini CLI tab's id is its own words.
+    expect(transcriptModelTag("gemini-2.5-pro")).toBe("gemini-2.5-pro");
   });
 });

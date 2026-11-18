@@ -81,10 +81,13 @@ export function openSubagentRunning(path: readonly SubagentStep[], entries: read
 
 /** The name a working row gives the model a transcript names: a Claude id by
  * its family, as the session's own row says it (`claude-haiku-4-5-20251001`
- * → `Haiku`); any other id as it is (`gpt-5-codex`). */
+ * → `Haiku`), a Gemini id by its first word as the row says a screen's
+ * `Gemini 3.8 Flash` (`gemini-3.8-flash-high` → `Gemini`, Antigravity's
+ * store); any other id as it is (`gpt-5-codex`). */
 export function workingModelName(model: string | undefined): string | undefined {
   const id = model?.trim();
   if (!id) return undefined;
+  if (/^gemini-\d/.test(id)) return "Gemini";
   const family = /^claude-([a-z]+)-\d/.exec(id)?.[1];
   return family ? `${family[0].toUpperCase()}${family.slice(1)}` : id;
 }

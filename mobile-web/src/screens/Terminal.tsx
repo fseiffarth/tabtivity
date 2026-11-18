@@ -2404,7 +2404,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * session's model by the one fallback (`transcriptModelTag`); else the
    * tab's published tag. */
   const modelChip = shownScreenModel
-    ?? (storedModelId ? transcriptModelTag(storedModelId, /^claude$/iu.test(agentLabel)) : undefined)
+    ?? (storedModelId ? transcriptModelTag(storedModelId, /^claude$/iu.test(agentLabel) ? "claude" : isAntigravityTab(agentLabel) ? "antigravity" : undefined) : undefined)
     ?? tab.agent_model
     ?? t("terminal.reader.model");
   const shownStep = modelPreview ?? listedStep ?? (answered && picker ? answered : null);

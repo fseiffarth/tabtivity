@@ -8,7 +8,8 @@
 //! text. Its embedded descriptor defines user_input (19).user_response (2),
 //! planner_response (20).response (1), and metadata (5).created_at (1). Only
 //! these fields are decoded; tool output, thoughts, config and context never
-//! become chat.
+//! become chat. The model is the newest `gen_metadata` row's request (3).28
+//! ([`agy_model`]), the tab tag's fallback when the footer shows none.
 //!
 //! Antigravity's tab record (`live_sessions/<uid>`) is written by Tabtivity's
 //! `PreInvocation` hook (`antigravity_session`) at each model call of the
@@ -204,7 +205,43 @@ fn gemini_record(raw: &str, jsonl: bool) -> Option<Value> {
 
 fn database(file: &HomeFile) -> Option<Connection> {
     let limits = Limits { deadline: std::time::Duration::from_millis(500), max_len: MAX_STEP_BYTES as i32, busy: std::time::Duration::from_millis(100) };
-    open_read(file, limits, &["steps", "conversation_summaries"])
+    open_read(file, limits, &["steps", "conversation_summaries", "gen_metadata"])
+}
+
+/// The longest model id taken from a conversation's store.
+const MAX_MODEL_ID: usize = 80;
+
+/// The model id of the conversation's newest model call
+/// (`gemini-3.8-flash-high`, model and effort in one): field 28 of field 3 of
+/// the newest `gen_metadata` row, the request Antigravity sent (read off the
+/// user's 1.5.9 conversations and the 1.5.9–1.5.11 verify runs' stores,
+/// 2026-11-18; `scripts/verify-cli/antigravity/store.py` prints it). The row carries the whole request,
+/// about a megabyte, so only the newest is read; one over the step limit is
+/// not read at all. Only a bounded id of the characters model ids use is
+/// taken — anything else in that field is not a model.
+fn agy_model(conn: &Connection) -> Option<String> {
+    let data: Vec<u8> = conn.query_row("SELECT data FROM gen_metadata ORDER BY idx DESC LIMIT 1", [], |row| row.get(0)).ok()?;
+    let id = std::str::from_utf8(proto_bytes(proto_bytes(&data, 3)?, 28)?).ok()?;
+    let valid = !id.is_empty() && id.len() <= MAX_MODEL_ID
+        && id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_'));
+    valid.then(|| id.to_string())
+}
+
+/// The model the Antigravity tab `uid` last called, from its own conversation
+/// — the one its hook recorded, and only for a tab launched since the hook
+/// (its launch note), where that record is authoritative ([`tab_choice`]).
+/// `None` for any other tab: a folder's newest conversation may be a
+/// sibling tab's, and its model is not this tab's.
+pub fn antigravity_tab_model(home: &Path, project_id: Option<&str>, uid: &str) -> Option<String> {
+    crate::services::antigravity_session::read_launch(uid)?;
+    let (id, _) = recorded_conversation(project_id, uid)?;
+    agy_conversation_model(home, &id)
+}
+
+fn agy_conversation_model(home: &Path, id: &str) -> Option<String> {
+    let store = agy_store(home)?;
+    let (_, conn) = agy_conversation(&store, id)?;
+    agy_model(&conn)
 }
 
 /// Antigravity's store in an agent home: the conversations' summaries and the
@@ -401,6 +438,7 @@ fn agy_read(store: &AgyStore, id: &str, went_by: &str, version: Option<&str>, li
         read.entries.extend(transcript_entry(role, step_text(kind, &payload).unwrap_or(""), step_time(&payload).map(crate::services::prompt_blame::epoch_ms_to_iso)));
     }
     read.entries.reverse();
+    read.model = agy_model(&conn);
     Some(finish(read, limit))
 }
 
@@ -763,6 +801,43 @@ mod tests {
         let tail = transcript("agy", home.path(), directory, None, None, updated.version.as_deref(), 1);
         assert!(tail.truncated);
         assert_eq!(texts(&tail), [("answer", "partial answer")]);
+    }
+
+    /// A `gen_metadata` row as 1.5.9 writes one: the request in field 3, its
+    /// model id in that request's field 28, among other fields.
+    fn gen_metadata(model: &[u8]) -> Vec<u8> {
+        let request = [bytes(1, b"context"), bytes(28, model), bytes(30, b"more")].concat();
+        [bytes(1, b"header"), bytes(3, &request)].concat()
+    }
+
+    #[test]
+    fn antigravity_reads_the_model_its_newest_call_went_to() {
+        const ID: &str = "01234567-1234-1234-1234-0123456789ab";
+        let home = tempfile::tempdir().unwrap();
+        let directory = home.path().to_str().unwrap();
+        let (_summaries, conn) = agy_db(home.path(), directory);
+        insert(&conn, 0, 14, 3, "fix it");
+        insert(&conn, 1, 15, 3, "Fixed.");
+        // No table yet (a conversation before its first call): no model.
+        assert_eq!(transcript("agy", home.path(), directory, None, None, None, 60).model, None);
+        conn.execute_batch("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER NOT NULL DEFAULT 0)").unwrap();
+        let row = |index: i64, data: Vec<u8>| conn.execute("INSERT INTO gen_metadata (idx, data) VALUES (?1, ?2)", rusqlite::params![index, data]).unwrap();
+        row(0, gen_metadata(b"gemini-3.1-pro-low"));
+        row(1, gen_metadata(b"gemini-3.8-flash-high"));
+        let read = transcript("agy", home.path(), directory, None, None, None, 60);
+        assert_eq!(read.model.as_deref(), Some("gemini-3.8-flash-high"));
+        assert_eq!(agy_conversation_model(home.path(), ID).as_deref(), Some("gemini-3.8-flash-high"));
+        // What is not a model id is not taken, and a row with no request is none.
+        row(2, gen_metadata(b"Gemini 3.8 Flash"));
+        assert_eq!(agy_conversation_model(home.path(), ID), None);
+        row(3, gen_metadata(&[b'a'; MAX_MODEL_ID + 1]));
+        assert_eq!(agy_conversation_model(home.path(), ID), None);
+        row(4, bytes(1, b"header"));
+        assert_eq!(agy_conversation_model(home.path(), ID), None);
+        row(5, gen_metadata(b"claude-opus-4-6-thinking"));
+        assert_eq!(agy_conversation_model(home.path(), ID).as_deref(), Some("claude-opus-4-6-thinking"));
+        // An unknown conversation has none.
+        assert_eq!(agy_conversation_model(home.path(), "11111111-1234-1234-1234-0123456789ab"), None);
     }
 
     /// A second conversation of `directory`, modified after the fixture's.

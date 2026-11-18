@@ -1314,6 +1314,16 @@ answer's link shape still matches the captured sample in
 phone draws the link as plain text (`answerMarkdown`'s `data-artifact` is only set
 for the `file:///…/brain/…` form).
 
+Antigravity's stored model (since 2026-11-18, `google_chat::agy_model`): the
+newest `gen_metadata` row's request, field 3 → 28, an id like
+`gemini-3.8-flash-high` that the tab tag words as its footer does
+(`antigravityModelLabel` → `Gemini 3.8 Flash · high`). It answers the tag and
+the phone's chip whenever the footer shows no model (a narrow pane, a dialog
+open). On each new release `store.py` prints it per conversation (`model …`;
+1.5.9–1.5.11 runs: `gemini-4-hydrogen-high`, footer `Gemini 4 Hydrogen ·
+high`): `model None` or an id that no longer matches the footer means the field
+moved. A moved field fails safe — no stored tag, the screen's still answers.
+
 The same script writes the tab's turn record and the send hint (follow-up run,
 2026-11-16, 1.5.9; `hooks.py turns` and `events`; `format` on every kept
 baseline, each printing `turn done` and the `STUBMARK-APP-HINT` mark). Each

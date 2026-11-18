@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { screenModelTag, shortModelName, textScreenModelTag, textScreenModeMarks, transcriptModelTag, type AgentModeMarks } from "../../lib/agents/agentModel";
 import { isClaudeCommand } from "../../lib/terminal/terminalControl";
+import { isAntigravityTab } from "../../../mobile-web/src/terminal/antigravity";
 import { envName } from "../../lib/brand";
 import { AGENT_ITEMS } from "../../lib/tabs/newTabItems";
 import { adoptTranscriptPrompts, adoptTypedPrompt, type TranscriptPrompt } from "../../lib/agents/prompt/adopt";
@@ -165,7 +166,7 @@ export function agentTabModelTag(
   // Claude's slug is put in the screen's words, so a tag reads the same
   // whichever source answered.
   const read = byTab[ptyId];
-  if (read) return transcriptModelTag(read, isClaudeCommand(tab.cmd));
+  if (read) return transcriptModelTag(read, isClaudeCommand(tab.cmd) ? "claude" : isAntigravityTab(agentTabLabel(tab)) ? "antigravity" : undefined);
   return tab.kind === "local_agent" ? tab.env?.[envName("LOCAL_MODEL")] : undefined;
 }
 

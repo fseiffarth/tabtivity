@@ -492,6 +492,16 @@ pub enum TranscriptKind {
 /// with, or `None` when there is no transcript, no answer in it yet, or the
 /// agent is one whose transcript Tabtivity does not read.
 pub fn agent_session_model(cmd: &str, project_id: Option<&str>, launch_id: &str) -> Option<String> {
+    if cmd == "agy" {
+        // Antigravity keeps no transcript file: its tab's own conversation
+        // database says which model it called (`google_chat`). A remote
+        // project's store is on its host, not in this scope's home.
+        if project_id.is_some_and(|id| crate::services::remote::remote_target_for(id).is_some()) {
+            return None;
+        }
+        let home = crate::services::agent_home::scope_home(project_id);
+        return crate::services::google_chat::antigravity_tab_model(&home, project_id, launch_id);
+    }
     read_agent_transcript(
         cmd,
         project_id,

@@ -8,6 +8,9 @@ and each conversation's finished prompts and answers, decoded with the
 fields `services::google_chat` takes — user input (type 14) field 19 → 2,
 answer (type 15) field 20 → 1, created_at field 5 → 1, status 3. With two
 labels, the statements that differ from the first label's are printed.
+Each conversation's model is the newest `gen_metadata` row's field 3 → 28
+(`gemini-3.8-flash-high`, `google_chat::agy_model`); `model None` means the
+tab card's stored model is gone.
 1.5.6 added `conversation_parents`, the search index's companion table (the
 binary joins it to `conversations_fts`); the reader's `parent_conversation_id`
 column stayed. Read-only: the databases open with `mode=ro`.
@@ -99,7 +102,13 @@ def read(label):
             at = field(path(payload, 5) or b"", 1)
             turns.append((kind, status, text.decode("utf-8", "replace")[:60] if text else None,
                           "time" if at else "no time"))
-        out["chats"][cid] = {"workspace": uris, "turns": turns}
+        with connect(db) as c:
+            try:
+                row = c.execute("SELECT data FROM gen_metadata ORDER BY idx DESC LIMIT 1").fetchone()
+            except sqlite3.Error:
+                row = None
+        model = path(row[0], 3, 28) if row and row[0] else None
+        out["chats"][cid] = {"workspace": uris, "turns": turns, "model": model.decode("utf-8", "replace") if model else None}
     return out
 
 
@@ -109,6 +118,7 @@ for label, r in reads.items():
     for cid, chat in r["chats"].items():
         print(" ", cid, chat if isinstance(chat, str) else chat["workspace"])
         if isinstance(chat, dict):
+            print(f"    model {chat['model']}")
             for kind, status, text, at in chat["turns"]:
                 tag = "prompt" if kind == USER else "answer"
                 print(f"    {tag:6} status={status} {at:7} {text!r}" + ("" if status == DONE and text else "  <- not read"))
