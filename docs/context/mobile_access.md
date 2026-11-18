@@ -115,8 +115,13 @@ list, the microphone and speech recognition delegable to it, and no
 `{ok:true}` only); status carries `linked_desktops`. `/api/*`, `/assets/*` and
 `/desktop/*` stay closed, and `exact_origin` is unchanged: a link is never a
 session. A framed page signs in as a device of this host like any other, so
-every layer above still decides what it reaches. Known gap: a linked origin
-could overlay this host's framed UI (clickjacking) — the link is the consent.
+every layer above still decides what it reaches. Clickjacking by a linked
+origin (covering, fading or moving this host's framed UI to steer taps) is
+answered in the framed page itself, since the framer is the untrusted side:
+`mobile-web/src/shell/frameGuard.ts` takes no input until IntersectionObserver
+v2 reports the page visible for 500 ms, and fails closed where the browser
+cannot report it (iOS Safari, Firefox: a card offers this desktop on its own).
+Left open: a frame cropped by its parent still shows its own real pixels.
 A service worker serves its cached shell with the headers it was cached
 with, so a list change reaches an open phone at the shell's next update.
 The desktop edits the list in Settings → Mobile → Linked desktops

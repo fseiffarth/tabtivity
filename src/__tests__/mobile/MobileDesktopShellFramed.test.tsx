@@ -30,6 +30,16 @@ vi.mock("../../../mobile-web/src/screens/LocalUnlock", () => ({
   LocalUnlock: ({ onUnlocked }: { onUnlocked: () => void }) => <button onClick={onUnlocked}>Unlock now</button>,
 }));
 vi.mock("../../../mobile-web/src/screens/Terminal", () => ({ Terminal: () => <div>terminal</div> }));
+// jsdom reports no visibility, so the frame's clickjacking guard would fail
+// closed; these tests are about the page behind it (`MobileFrameGuard.test.tsx`).
+vi.mock("../../../mobile-web/src/shell/frameGuard", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../mobile-web/src/shell/frameGuard")>()),
+  visibilitySupported: () => true,
+  startFrameGuard: (_target: Element, onChange: (state: "clear") => void) => {
+    onChange("clear");
+    return { state: () => "clear" as const, stop: () => undefined };
+  },
+}));
 
 import { DesktopShell } from "../../../mobile-web/src/shell/DesktopShell";
 import { SHELL_CHANNEL } from "../../../mobile-web/src/shell/frameBridge";

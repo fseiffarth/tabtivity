@@ -186,7 +186,8 @@ file-map rows and the help section's switcher paragraph are done too.
 
 `docs/context/mobile_access.md`: a "Linked desktops" layer (the new trust
 edge: a listed origin may frame this desktop's phone UI; known gap:
-clickjacking by a linked origin; machine host names reach paired phones),
+clickjacking by a linked origin — since closed by the frame's own guard,
+`shell/frameGuard.ts`; machine host names reach paired phones),
 one line in `mobile_sidecar.md`, file-map rows for `mobile-web/src/shell/`
 and `MobileSettings`, DOCUMENTATION.md § Tabtivity Mobile.
 

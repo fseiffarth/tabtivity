@@ -21,6 +21,8 @@ import { useT } from "../../../src/lib/i18n";
 import { isUntested } from "../../../src/lib/untested";
 import { firstLabel, linkedSnapshot, selectDesktop, subscribeLinked } from "./linkedDesktops";
 import { shellOrigin } from "./frameBridge";
+import { FrameGuard } from "./FrameGuard";
+import { inAnyFrame } from "./frameGuard";
 import { ShellContext, type DesktopShellApi } from "./shellContext";
 
 /** The page's root: the shell at the top, the plain app inside a frame. */
@@ -29,15 +31,8 @@ export function DesktopShell() {
   // parent counts, even one whose origin cannot be known (no
   // `ancestorOrigins`, no referrer): a frame is never a shell of its own.
   const [framed] = useState(() => shellOrigin() !== null || inAnyFrame());
-  return framed ? <App /> : <TopShell />;
-}
-
-function inAnyFrame(): boolean {
-  try {
-    return window.parent !== window;
-  } catch {
-    return true;
-  }
+  // A frame guards its own input: the page framing it is not trusted.
+  return framed ? <><App /><FrameGuard /></> : <TopShell />;
 }
 
 function TopShell() {
@@ -92,6 +87,6 @@ function DesktopPicker({ onClose }: { onClose: () => void }) {
       onClose();
     }}
     onClose={onClose}
-  >{isUntested("mobile.shell.switcher") && <p className="sheet-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}</OptionSheet>;
+  >{(isUntested("mobile.shell.switcher") || isUntested("mobile.shell.framedDesktop")) && <p className="sheet-note"><span className="untested">{t("mobile.newTab.untested")}</span></p>}</OptionSheet>;
 }
 
