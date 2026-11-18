@@ -69,7 +69,10 @@ gives its usage.
   answers which event ends or opens a turn — an API error (`StopFailure`, no
   `Stop`), a failed tool (`PostToolUseFailure`), an Esc on a running tool, a
   permission dialog declined, an MCP elicitation (a stdio server inside the
-  script), a subagent, `/compact`, a `cd`, auto mode's classifier. Its
+  script), a subagent, `/compact`, a `cd`, auto mode's classifier, an
+  `AskUserQuestion` answered page by page or declined (`tui_ask`,
+  `tui_ask_esc`: payloads plus `timing.json`, i.e. hook vs transcript vs
+  screen). Its
   scratch work dir sits under the repo, so the TUI cases answer the repo
   `CLAUDE.md`'s external-imports question with its default.
 - **OpenCode** (`opencode/`): `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`

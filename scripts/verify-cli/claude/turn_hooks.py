@@ -20,6 +20,15 @@ as `NN-<event>.json`, plus `events.txt` (the order they fired). Cases:
                          what fires at the dialog and after Esc
   tui_interrupt          Esc on a running Bash call: does a failure event come after the key?
   tui_err                a TUI turn the API refuses (401)
+  tui_ask                an AskUserQuestion with two questions (one multiSelect, one with
+                         previews), answered page by page: the PermissionRequest payload,
+                         and `timing.json` — when the hook fired, the dialog drew and the
+                         tool_use reached the transcript JSONL (seconds after Enter), plus
+                         the transcript lines after each answer key
+  tui_ask_esc            the same question turned down with Esc: what the transcript and
+                         the hooks say about a question that is gone
+  tui_ask_multi          the same with two boxes ticked: how several answers come back
+  tui_bash               a Bash approval with the same timing log (hook / transcript / dialog)
 
 Default: every case. The tab variables are unset (common.Tui / clean_environ);
 the hooks are a dumper only, never the app's session hook.
@@ -40,8 +49,16 @@ EVENTS = ["SessionStart", "Stop", "StopFailure", "UserPromptSubmit", "PreToolUse
           "ElicitationResult", "SubagentStart", "SubagentStop", "PreCompact", "PostCompact", "CwdChanged",
           "SessionEnd"]
 CASES = ["err400", "err401", "err429", "toolok", "toolfail", "subagent", "compact", "cwd", "denied", "auto",
-         "tui_deny", "tui_elicit", "tui_interrupt", "tui_err"]
+         "tui_deny", "tui_elicit", "tui_interrupt", "tui_err", "tui_ask", "tui_ask_esc", "tui_ask_multi", "tui_bash"]
 BASH = lambda cmd: json.dumps({"command": cmd, "description": "probe"})  # noqa: E731
+ASK = json.dumps({"questions": [
+    {"header": "Colours", "question": "Which colours should the probe use?", "multiSelect": True,
+     "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"},
+                 {"label": "Green", "description": "calm"}]},
+    {"header": "Layout", "question": "Which layout should the probe draw?", "multiSelect": False,
+     "options": [{"label": "Grid", "description": "rows and columns", "preview": "+--+--+\n|  |  |\n+--+--+"},
+                 {"label": "List", "description": "one column", "preview": "- one\n- two"}]},
+]})
 
 # A stdio MCP server whose one tool asks the client an elicitation first.
 MCP = r'''
@@ -143,6 +160,101 @@ def tui(binary, work, env, out, args, prompt, after, settle=8):
         t.close()
 
 
+def transcript_lines(home, sid):
+    """The session's transcript records so far (none before the file exists)."""
+    root = os.path.join(home, ".claude", "projects")
+    for d, _, files in os.walk(root):
+        if f"{sid}.jsonl" in files:
+            rows = []
+            for line in open(os.path.join(d, f"{sid}.jsonl")):
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    pass
+            return rows
+    return []
+
+
+def ask_blocks(rows, tool="AskUserQuestion"):
+    """(kind, call id) of every `tool` tool_use, and every tool_result, in the records."""
+    seen = []
+    for r in rows:
+        content = (r.get("message") or {}).get("content")
+        for b in content if isinstance(content, list) else []:
+            if b.get("type") == "tool_use" and b.get("name") == tool:
+                seen.append(("tool_use", b.get("id")))
+            elif b.get("type") == "tool_result":
+                seen.append(("tool_result", b.get("tool_use_id")))
+    return seen
+
+
+def hooks_so_far(dump):
+    """Event names of the payloads the dumper wrote, by the nanosecond in their name."""
+    rows = []
+    for name in sorted(os.listdir(dump)):
+        try:
+            v = json.load(open(os.path.join(dump, name)))
+        except (ValueError, OSError):
+            continue
+        rows.append((int(name.split(".")[0]) / 1e9, v.get("hook_event_name"), v.get("tool_name")))
+    return rows
+
+
+def tui_ask(binary, work, home, sid, dump, env, out, args, keys, tool="AskUserQuestion", call=None, marker="☐ Colours"):
+    """Make `tool` run (`call`: its input JSON, the question by default), then press `keys`
+    one at a time; log when the hook, the transcript and the screen (`marker`) first had it."""
+    t = common.Tui(out, [binary, *args], work, dict(env, CLAUDECODE=""), size=(110, 40))
+    log = {"keys": []}
+    try:
+        for _ in range(60):
+            s = t.plain()
+            if "Enter to confirm" in s or ("trust" in s.lower() and "folder" in s.lower()):
+                t.keys("Enter")
+            elif "─" in s and ("for agents" in s or "for shortcuts" in s):
+                break
+            time.sleep(0.5)
+        t.cap("ready")
+        t.type(f"STUB:CALL {tool} {call or ASK}")
+        t0 = time.time()
+        t.keys("Enter", pause=0)
+        first = {}
+        while time.time() - t0 < 20 and len(first) < 3:
+            now = time.time() - t0
+            if "screen" not in first and marker in t.plain():
+                first["screen"] = round(now, 3)
+            if "transcript" not in first and any(k == "tool_use" for k, _ in ask_blocks(transcript_lines(home, sid), tool)):
+                first["transcript"] = round(now, 3)
+            if "hook" not in first:
+                for at, ev, name in hooks_so_far(dump):
+                    if ev == "PermissionRequest" and name == tool:
+                        first["hook"] = round(at - t0, 3)
+            time.sleep(0.05)
+        log["first_seen_s_after_enter"] = first
+        time.sleep(1)
+        t.cap("open")
+        for i, k in enumerate(keys):
+            before = len(hooks_so_far(dump))
+            t.keys(k)
+            time.sleep(1.2)
+            t.cap(f"key{i:02d}-{k}")
+            hooks = hooks_so_far(dump)
+            log["keys"].append({"key": k, "new_hooks": [ev for _, ev, _ in hooks[before:]],
+                                "transcript_ask_blocks": ask_blocks(transcript_lines(home, sid), tool)})
+        time.sleep(4)
+        t.cap("after")
+        rows = transcript_lines(home, sid)
+        log["transcript_tail"] = [{"type": r.get("type"), "content": (r.get("message") or {}).get("content"),
+                                   "toolUseResult": r.get("toolUseResult")}
+                                  for r in rows if r.get("type") in ("assistant", "user")][-4:]
+        t.keys("C-c")
+        time.sleep(0.5)
+        t.keys("C-c")
+        time.sleep(2)
+    finally:
+        t.close()
+    common.write_json(os.path.join(out, "timing.json"), log)
+
+
 def summarize(out, dump):
     rows = []
     for name in sorted(os.listdir(dump)):
@@ -210,6 +322,20 @@ def main():
                     f"STUB:CALL Bash {BASH('python3 -c \'import time; time.sleep(30)\'')}", ["Escape"], settle=5)
             elif case == "tui_err":
                 tui(binary, work, env, out, base_args, "STUB:ERR 401 authentication_error", [])
+            elif case == "tui_ask":
+                # Q1 (multiSelect): tick Red, down to Next; Q2: Grid; then Submit on the review.
+                tui_ask(binary, work, home, sid, dump, env, out, base_args,
+                        ["Enter", "Down", "Down", "Down", "Down", "Enter", "Enter", "Enter"])
+            elif case == "tui_ask_esc":
+                tui_ask(binary, work, home, sid, dump, env, out, base_args, ["Escape"])
+            elif case == "tui_ask_multi":
+                # Q1: tick Red and Blue, down to Next; Q2: Grid; Submit.
+                tui_ask(binary, work, home, sid, dump, env, out, base_args,
+                        ["Enter", "Down", "Enter", "Down", "Down", "Down", "Enter", "Enter", "Enter"])
+            elif case == "tui_bash":
+                # A Bash approval: is the tool_use in the transcript when the dialog opens? Esc after.
+                tui_ask(binary, work, home, sid, dump, env, out, base_args, ["Escape"], tool="Bash",
+                        call=BASH("touch tui.txt"), marker="Do you want to proceed?")
             time.sleep(1)
             rows = summarize(out, dump)
             print(f"== {case}")
