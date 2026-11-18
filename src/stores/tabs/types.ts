@@ -350,6 +350,8 @@ export interface TabEntry {
   viewer?: InternalViewer;
   /** Session-only return path for a new markdown tab opened from a link graph. */
   mdGraphOriginKey?: string;
+  /** Commit IDs for a session-only read-only pull comparison tab. */
+  gitPullTips?: { local_oid: string; incoming_oid: string };
   // For in-app `viewer` embeds: the reader's last scroll/zoom/pan, so reopening
   // the file (or restarting) restores the position instead of jumping to the top
   // (see ViewerState). Written by the viewer panes, persisted in project.json.
