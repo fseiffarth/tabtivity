@@ -585,6 +585,14 @@ pub async fn tick(ctx: &Context, now: DateTime<Local>) -> Vec<Event> {
                 }
                 break;
             };
+            // A Claude question declined with Esc fires no hook: its transcript
+            // says so, and the `decision` record is set to `done`.
+            if let (Some(uid), "claude") = (target.uid(), target.tab.cmd.as_str()) {
+                let projects = crate::services::agent_home::scope_home_in(&ctx.state_dir, &target.project_id)
+                    .join(".claude")
+                    .join("projects");
+                crate::services::agent_turn::settle_claude_turn(&ctx.state_dir.join("live_sessions"), uid, Some(&target.project_id), &projects);
+            }
             let record = target.uid().and_then(|uid| headless::turn_record(&ctx.state_dir, &target.project_id, uid));
             if !ready(record, probe, secs) {
                 // Only a phone prompt goes in meanwhile.

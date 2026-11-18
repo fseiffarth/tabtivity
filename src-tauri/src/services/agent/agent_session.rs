@@ -437,7 +437,7 @@ pub(crate) fn claude_session_exists(projects: &std::path::Path, uuid: &str) -> b
 }
 
 /// The session log behind [`claude_session_exists`], when there is one.
-fn claude_session_log(projects: &std::path::Path, uuid: &str) -> Option<PathBuf> {
+pub(crate) fn claude_session_log(projects: &std::path::Path, uuid: &str) -> Option<PathBuf> {
     let file = format!("{uuid}.jsonl");
     // By handle from the home: a slug folder the agent linked elsewhere is
     // another scope's conversations, not this one's.

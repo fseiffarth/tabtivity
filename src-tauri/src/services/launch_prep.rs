@@ -1244,6 +1244,11 @@ pub async fn prepare(
                 _ => false,
             };
             let left = crate::services::agent_turn::bind_tab(&uid, &opts.id, project.as_deref(), session_runs);
+            // A local Claude question declined with Esc fires no hook; its
+            // transcript says so (`agent_turn::settle_claude_turn`).
+            if opts.cmd == "claude" && !remote_agent_run && !assistant {
+                crate::services::agent_turn::watch_claude_transcript(&uid);
+            }
             // Per-turn checkpoints (`services::checkpoints`): only a local
             // project's agent tab gets a folder; remote, root, Host-session
             // and assistant tabs are unbound. The folder is found among the

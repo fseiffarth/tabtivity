@@ -167,6 +167,7 @@ pub fn bind_tab(uid: &str, pty_id: &str, project_id: Option<&str>, session_runs:
     settled().lock_ok().remove(uid);
     turn_ends().lock_ok().remove(uid);
     bg_tasks().lock_ok().remove(uid);
+    forget_claude(uid);
     take_left_turn(uid, &record_paths(uid, project_id), session_runs)
 }
 
@@ -250,6 +251,7 @@ pub fn on_tab_gone(pty_id: &str) {
         settled.remove(&uid);
         ends.remove(&uid);
         bg.remove(&uid);
+        forget_claude(&uid);
     }
 }
 
@@ -1161,6 +1163,9 @@ pub fn start(ctx: CoreCtx) {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
+                    // Before the job-poll gate: a `decision` tab is settled for
+                    // the job scan, which then runs only every 30 s.
+                    settle_claude_turns();
                     if !job_poll_due() {
                         continue;
                     }
@@ -1173,6 +1178,244 @@ pub fn start(ctx: CoreCtx) {
         }
         drop(watcher);
     });
+}
+
+// ── A Claude question or approval declined with Esc ───────────────────────────
+//
+// Claude fires no hook when the user declines an `AskUserQuestion` or a tool
+// approval (probed on 2.1.326/2.1.327, `tui_ask_esc` / `tui_bash`): the turn
+// record keeps saying `decision` until the next prompt. What it does write, at
+// once, is the user record `[Request interrupted by user for tool use]` into
+// the session's transcript. While a local Claude tab's record reads `decision`,
+// the watcher's poll reads the transcript's tail for that notice.
+
+/// How much of a Claude transcript's end [`settle_claude_turn`] reads. The
+/// notice is small and the last thing written but a few bookkeeping lines;
+/// the big lines (a prompt snapshot) come before it.
+const CLAUDE_TAIL: u64 = 64 * 1024;
+/// How often a session id whose transcript was not found is looked up again.
+const CLAUDE_LOG_RETRY: Duration = Duration::from_secs(30);
+/// The user record Claude writes when a tool approval or question is declined.
+/// A plain Esc mid-turn writes `[Request interrupted by user]` instead, which
+/// does not end a `decision`; neither does feedback on a rejection.
+const CLAUDE_TOOL_NOTICE: &str = "[Request interrupted by user for tool use]";
+
+/// When the user declined the call Claude was waiting on, per the transcript's
+/// `tail`: the epoch milliseconds of the newest `[Request interrupted by user
+/// for tool use]` notice, provided no tool call follows it (a call after it is
+/// the turn going on). A subagent's (`isSidechain`) and a meta record are
+/// stepped over, and so is a line cut by the tail's start.
+fn claude_tool_declined_at(tail: &str) -> Option<i64> {
+    use serde_json::Value;
+    for line in tail.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("isSidechain").and_then(Value::as_bool) == Some(true)
+            || v.get("isMeta").and_then(Value::as_bool) == Some(true)
+        {
+            continue;
+        }
+        match v.get("type").and_then(Value::as_str) {
+            Some("assistant") => {
+                let calls = v
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|blocks| blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_use")));
+                if calls {
+                    return None;
+                }
+            }
+            Some("user") => {
+                let text = match v.pointer("/message/content") {
+                    Some(Value::String(text)) => Some(text.as_str()),
+                    Some(Value::Array(blocks)) => match blocks.as_slice() {
+                        [block] if block.get("type").and_then(Value::as_str) == Some("text") => {
+                            block.get("text").and_then(Value::as_str)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if text.is_some_and(|t| t.trim() == CLAUDE_TOOL_NOTICE) {
+                    return v
+                        .get("timestamp")
+                        .and_then(Value::as_str)
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|t| t.timestamp_millis());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// What [`settle_claude_turn`] remembers per uid: the transcript found for its
+/// session id (or when it last looked and found none), and the file's length
+/// when it was last read, so an unchanged file is not read again.
+struct ClaudeLog {
+    sid: String,
+    path: Option<PathBuf>,
+    looked: Instant,
+    read_len: Option<u64>,
+}
+
+fn claude_logs() -> &'static Mutex<HashMap<String, ClaudeLog>> {
+    static L: OnceLock<Mutex<HashMap<String, ClaudeLog>>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// uids of the bound tabs that run a local Claude ([`watch_claude_transcript`]).
+fn claude_uids() -> &'static Mutex<HashSet<String>> {
+    static U: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    U.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Mark the bound tab `uid` as a local Claude: while its turn record says
+/// `decision`, the watcher's poll asks its transcript whether the question or
+/// approval was declined ([`settle_claude_turn`]).
+pub fn watch_claude_transcript(uid: &str) {
+    if valid_uid(uid) {
+        claude_uids().lock_ok().insert(uid.to_string());
+    }
+}
+
+fn forget_claude(uid: &str) {
+    claude_uids().lock_ok().remove(uid);
+    claude_logs().lock_ok().remove(uid);
+}
+
+/// Write `done` over a Claude tab's `decision` record when its transcript says
+/// the call it waited on was declined after the record was written — the end
+/// Claude reports with no hook. `done`, not `working`: the turn is over (the
+/// frontend keeps its own "interrupted" mark from the Esc). Only `decision`
+/// is settled; an answer is `PostToolUse`'s to report, and a rejection with
+/// feedback or "Chat about this" writes no such notice, so it stays as it is.
+/// The record is written the way the hook writes it (`done <epoch secs>`), in
+/// whichever of the root's and the project slice's copies reads `decision`,
+/// through a directory handle (the slice is agent-writable). The transcript is
+/// agent-written too: it is opened without following links and only its tail
+/// is read. `projects_root` is the scope's `<home>/.claude/projects`. Returns
+/// whether it wrote.
+pub fn settle_claude_turn(live_root: &Path, uid: &str, project_id: Option<&str>, projects_root: &Path) -> bool {
+    if !valid_uid(uid) {
+        return false;
+    }
+    let mut dirs = vec![String::new()];
+    if let Some(pid) = project_id {
+        dirs.push(format!("{}/", crate::storage::project_key(pid)));
+    }
+    let asking: Vec<(String, i64)> = dirs
+        .into_iter()
+        .filter_map(|dir| {
+            let path = live_root.join(format!("{dir}{uid}{TURN_SUFFIX}"));
+            let state = home_io::read_record(&path).and_then(|text| parse_turn_record(&text))?;
+            (state == TurnState::Decision).then(|| record_written_ms(&path).map(|ms| (dir, ms as i64))).flatten()
+        })
+        .collect();
+    let Some(written) = asking.iter().map(|(_, ms)| *ms).max() else {
+        return false;
+    };
+    // The session id sits beside the record it was written with.
+    let Some(sid) = asking.iter().find_map(|(dir, _)| {
+        crate::services::agent_session::read_live_session_in(&live_root.join(dir.trim_end_matches('/')), uid)
+    }) else {
+        return false;
+    };
+    let path = {
+        let mut cache = claude_logs().lock_ok();
+        let stale = cache.get(uid).is_none_or(|c| c.sid != sid || (c.path.is_none() && c.looked.elapsed() >= CLAUDE_LOG_RETRY));
+        if stale {
+            let path = crate::services::agent_session::claude_session_log(projects_root, &sid);
+            cache.insert(uid.to_string(), ClaudeLog { sid: sid.clone(), path, looked: Instant::now(), read_len: None });
+        }
+        match cache.get(uid).and_then(|c| c.path.clone()) {
+            Some(path) => path,
+            None => return false,
+        }
+    };
+    let Some(mut file) = home_io::open_regular(&path) else {
+        return false;
+    };
+    let Some(len) = file.metadata().ok().map(|m| m.len()) else {
+        return false;
+    };
+    if claude_logs().lock_ok().get(uid).and_then(|c| c.read_len) == Some(len) {
+        return false;
+    }
+    let tail = {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut bytes = Vec::new();
+        if file.seek(SeekFrom::Start(len.saturating_sub(CLAUDE_TAIL))).is_err()
+            || file.take(CLAUDE_TAIL).read_to_end(&mut bytes).is_err()
+        {
+            return false;
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    // An unchanged transcript says the same next time — unless the write below
+    // fails, which the next poll tries again.
+    let remember = || {
+        if let Some(c) = claude_logs().lock_ok().get_mut(uid) {
+            c.read_len = Some(len);
+        }
+    };
+    // Strictly newer: a notice from an earlier question of the same turn
+    // belongs to that one, not to the question this record is about.
+    if !claude_tool_declined_at(&tail).is_some_and(|at| at > written) {
+        remember();
+        return false;
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut wrote = false;
+    for (dir, ms) in &asking {
+        let rel = format!("{dir}{uid}{TURN_SUFFIX}");
+        let path = live_root.join(&rel);
+        // The next prompt's hook may have written `working` since the read
+        // above: only a record still untouched is overwritten.
+        let untouched = record_written_ms(&path).is_some_and(|now| now as i64 == *ms)
+            && home_io::read_record(&path).and_then(|text| parse_turn_record(&text)) == Some(TurnState::Decision);
+        if !untouched {
+            continue;
+        }
+        if let Some(record) = home_io::HomeFile::open(live_root, &rel) {
+            wrote |= record.write(format!("done {secs}").as_bytes()).is_ok();
+        }
+    }
+    if wrote {
+        remember();
+    }
+    wrote
+}
+
+/// [`settle_claude_turn`] for every bound Claude tab whose hooks last said it
+/// waits on the user: the watcher's poll, on its own thread.
+fn settle_claude_turns() {
+    let claude: Vec<String> = claude_uids().lock_ok().iter().cloned().collect();
+    if claude.is_empty() {
+        return;
+    }
+    let tabs: Vec<(String, Option<String>)> = {
+        let states = states().lock_ok();
+        let projects = bound_projects().lock_ok();
+        claude
+            .into_iter()
+            .filter(|uid| states.get(uid) == Some(&TurnState::Decision))
+            .map(|uid| {
+                let project = projects.get(&uid).cloned();
+                (uid, project)
+            })
+            .collect()
+    };
+    let root = live_sessions_dir();
+    for (uid, project) in tabs {
+        let Some(projects) = crate::services::agent_session::claude_projects_roots(project.as_deref()).into_iter().next() else {
+            continue;
+        };
+        settle_claude_turn(&root, &uid, project.as_deref(), &projects);
+    }
 }
 
 #[cfg(test)]
@@ -1985,5 +2228,201 @@ mod tests {
         assert!(win_cmdline_writes_task("x > \"C:\\t\\tasks\\abc1.output\" 2>&1", &tasks));
         assert!(win_cmdline_writes_task("x > /c/t/tasks/abc1.output", &tasks));
         assert!(!win_cmdline_writes_task("x > \"C:\\t\\tasks\\abc12.output\"", &tasks));
+    }
+
+    // ── A Claude question declined with Esc ──────────────────────────────
+
+    fn claude_line(at: chrono::DateTime<chrono::Utc>, mut value: serde_json::Value) -> String {
+        value["timestamp"] = at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true).into();
+        value.to_string()
+    }
+
+    /// The probe's records (`tui_ask_esc`, Claude 2.1.327), paths and ids
+    /// scrubbed: the prompt, the `AskUserQuestion` call.
+    fn claude_asked(at: chrono::DateTime<chrono::Utc>) -> String {
+        let ask = serde_json::json!({"questions": [{"header": "Colours", "question": "Which colours?", "multiSelect": true,
+            "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"}]}]});
+        [
+            claude_line(at, serde_json::json!({"type": "user", "isSidechain": false, "message": {"role": "user", "content": "ask me"}})),
+            claude_line(at, serde_json::json!({"type": "assistant", "isSidechain": false, "message": {"role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "AskUserQuestion", "input": ask}]}})),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    /// What Esc on the dialog adds: the rejected result, then the notice.
+    fn claude_declined(at: chrono::DateTime<chrono::Utc>, notice: &str, sidechain: bool) -> String {
+        [
+            claude_line(at, serde_json::json!({"type": "user", "isSidechain": false, "message": {"role": "user",
+                "content": [{"type": "tool_result", "content": "The user doesn't want to proceed with this tool use.",
+                    "is_error": true, "tool_use_id": "toolu_1"}]}, "toolUseResult": "User rejected tool use"})),
+            claude_line(at, serde_json::json!({"type": "user", "isSidechain": sidechain, "message": {"role": "user",
+                "content": [{"type": "text", "text": notice}]}})),
+            serde_json::json!({"type": "last-prompt", "lastPrompt": "ask me"}).to_string(),
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    const TOOL_NOTICE: &str = "[Request interrupted by user for tool use]";
+
+    #[test]
+    fn a_claude_transcript_says_when_a_call_was_declined() {
+        let t0 = chrono::DateTime::parse_from_rfc3339("2026-11-18T09:19:37.511Z").unwrap().to_utc();
+        let t1 = chrono::DateTime::parse_from_rfc3339("2026-11-18T09:19:39.185Z").unwrap().to_utc();
+        let declined = format!("{}{}", claude_asked(t0), claude_declined(t1, TOOL_NOTICE, false));
+        assert_eq!(claude_tool_declined_at(&declined), Some(t1.timestamp_millis()));
+        // A line cut by the tail's start is skipped, not fatal.
+        assert_eq!(claude_tool_declined_at(&declined[40..]), Some(t1.timestamp_millis()));
+        // Still waiting, a plain interrupt, a subagent's notice and a call
+        // after the notice (the turn went on) are not declines.
+        assert_eq!(claude_tool_declined_at(&claude_asked(t0)), None);
+        assert_eq!(claude_tool_declined_at(&claude_declined(t1, "[Request interrupted by user]", false)), None);
+        assert_eq!(claude_tool_declined_at(&claude_declined(t1, TOOL_NOTICE, true)), None);
+        let again = format!("{declined}{}", claude_asked(t1 + chrono::Duration::seconds(1)));
+        assert_eq!(claude_tool_declined_at(&again), None);
+        assert_eq!(claude_tool_declined_at(""), None);
+    }
+
+    /// A tab with a turn record in the project's slice (a fenced tab's hooks
+    /// write there), its session id beside it, and a transcripts folder.
+    struct ClaudeTab {
+        dir: tempfile::TempDir,
+        uid: &'static str,
+        project: &'static str,
+        sid: &'static str,
+    }
+
+    impl ClaudeTab {
+        fn new(uid: &'static str) -> Self {
+            let tab = ClaudeTab {
+                dir: tempfile::tempdir().unwrap(),
+                uid,
+                project: "proj/claude",
+                sid: "0b0e1d2c-3a4b-4c5d-8e6f-708192a3b4c5",
+            };
+            std::fs::create_dir_all(tab.slice()).unwrap();
+            std::fs::create_dir_all(tab.projects().join("-scrubbed-work")).unwrap();
+            std::fs::write(tab.slice().join(uid), tab.sid).unwrap();
+            tab
+        }
+        fn root(&self) -> PathBuf {
+            self.dir.path().join("live_sessions")
+        }
+        fn slice(&self) -> PathBuf {
+            self.root().join(crate::storage::project_key(self.project))
+        }
+        fn projects(&self) -> PathBuf {
+            self.dir.path().join("projects")
+        }
+        fn log(&self, sid: &str) -> PathBuf {
+            self.projects().join("-scrubbed-work").join(format!("{sid}.jsonl"))
+        }
+        fn record(&self, text: &str) {
+            std::fs::write(self.slice().join(format!("{}{TURN_SUFFIX}", self.uid)), text).unwrap();
+        }
+        fn read_record(&self) -> String {
+            std::fs::read_to_string(self.slice().join(format!("{}{TURN_SUFFIX}", self.uid))).unwrap()
+        }
+        fn settle(&self) -> bool {
+            settle_claude_turn(&self.root(), self.uid, Some(self.project), &self.projects())
+        }
+    }
+
+    #[test]
+    fn a_declined_claude_question_is_recorded_done() {
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556601");
+        let now = chrono::Utc::now();
+        tab.record("decision");
+        // Waiting on the question: nothing written.
+        std::fs::write(tab.log(tab.sid), claude_asked(now)).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Esc: the rejected result and the notice land after the record.
+        let esc = now + chrono::Duration::seconds(2);
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(now), claude_declined(esc, TOOL_NOTICE, false))).unwrap();
+        assert!(tab.settle());
+        assert_eq!(parse_turn_record(&tab.read_record()), Some(TurnState::Done), "{}", tab.read_record());
+        // Done already: nothing more to do.
+        assert!(!tab.settle());
+        // A link planted at the record is never written through.
+        #[cfg(unix)]
+        {
+            let target = tab.dir.path().join("users-file");
+            std::fs::write(&target, "decision").unwrap();
+            let name = tab.slice().join(format!("{}{TURN_SUFFIX}", tab.uid));
+            std::fs::remove_file(&name).unwrap();
+            std::os::unix::fs::symlink(&target, &name).unwrap();
+            std::fs::write(tab.log(tab.sid), format!("{}{}\n", claude_asked(now), claude_declined(esc, TOOL_NOTICE, false))).unwrap();
+            assert!(!tab.settle());
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "decision");
+        }
+        forget_claude(tab.uid);
+        assert!(!settle_claude_turn(&tab.root(), "../escape", Some(tab.project), &tab.projects()));
+    }
+
+    #[test]
+    fn a_claude_record_is_left_alone_unless_a_newer_notice_ends_its_decision() {
+        let now = chrono::Utc::now();
+        let esc = now + chrono::Duration::seconds(2);
+        let declined = format!("{}{}", claude_asked(now), claude_declined(esc, TOOL_NOTICE, false));
+        // Answered: the result is not an error and no notice follows.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556602");
+        tab.record("decision");
+        let answered = claude_line(esc, serde_json::json!({"type": "user", "isSidechain": false, "message": {"role": "user",
+            "content": [{"type": "tool_result", "content": "answered", "tool_use_id": "toolu_1"}]}}));
+        std::fs::write(tab.log(tab.sid), format!("{}{answered}\n", claude_asked(now))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // A stale notice, from before the record was written (an earlier
+        // question of the turn), belongs to that question.
+        let old = now - chrono::Duration::minutes(5);
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556603");
+        tab.record("decision");
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(old), claude_declined(old, TOOL_NOTICE, false))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Never `working`: a turn in flight is the next hook's to end.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556604");
+        tab.record("working 1");
+        std::fs::write(tab.log(tab.sid), &declined).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "working 1");
+        // Another session's transcript, and a subagent's notice in this one.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556605");
+        tab.record("decision");
+        std::fs::write(tab.log("9f9f9f9f-0000-4000-8000-000000000000"), &declined).unwrap();
+        assert!(!tab.settle());
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(now), claude_declined(esc, TOOL_NOTICE, true))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Declined another way (the notice differs): stays a decision.
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556606");
+        tab.record("decision");
+        std::fs::write(tab.log(tab.sid), format!("{}{}", claude_asked(now), claude_declined(esc, "[Request interrupted by user]", false))).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+    }
+
+    #[test]
+    fn an_unchanged_claude_transcript_is_not_read_again() {
+        let tab = ClaudeTab::new("0c1a0de0-1111-4222-8333-444455556607");
+        let now = chrono::Utc::now();
+        tab.record("decision");
+        let declined = format!("{}{}", claude_asked(now), claude_declined(now + chrono::Duration::seconds(2), TOOL_NOTICE, false));
+        // The same bytes with every `user` spelled `usex`: no notice to find.
+        let blind = declined.replace("\"type\":\"user\"", "\"type\":\"usex\"");
+        assert_eq!(blind.len(), declined.len());
+        std::fs::write(tab.log(tab.sid), &blind).unwrap();
+        assert!(!tab.settle());
+        // Swapped in at the same length: the remembered length says nothing new.
+        std::fs::write(tab.log(tab.sid), &declined).unwrap();
+        assert!(!tab.settle());
+        assert_eq!(tab.read_record(), "decision");
+        // Any growth reads it again.
+        std::fs::write(tab.log(tab.sid), format!("{declined}\n")).unwrap();
+        assert!(tab.settle());
+        forget_claude(tab.uid);
     }
 }
