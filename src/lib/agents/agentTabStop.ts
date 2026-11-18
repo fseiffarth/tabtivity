@@ -20,10 +20,24 @@ export const STOP_AGENT_TABS_MIN_FREE_CHOICES_MB = [2048, 4096, 8192] as const;
 
 type StopSettings = Pick<Settings, "stop_agent_tabs_cap" | "stop_agent_tabs_idle_min" | "stop_agent_tabs_min_free_mb">;
 
+/** A stored count as the readers apply it: absent or junk → `fallback`; `0` is off. */
+function storedCount(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+}
+
 /** A stored count: absent or junk → `fallback`, `0` → off (null). */
 function stored(value: unknown, fallback: number): number | null {
-  const n = typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+  const n = storedCount(value, fallback);
   return n === 0 ? null : n;
+}
+
+/** A settings row's menu: the value the readers apply (`0` = off) and the
+ *  choices, with that value among them when it is not one (set by hand or by
+ *  an older list), so the row shows what the sweep does, never a blank. */
+export function stopSettingMenu(value: unknown, fallback: number, choices: readonly number[]): { value: number; choices: number[] } {
+  const current = storedCount(value, fallback);
+  const all = current === 0 || choices.includes(current) ? [...choices] : [...choices, current].sort((a, b) => a - b);
+  return { value: current, choices: all };
 }
 
 /** The cap on live agent tabs, or null when that trigger is off. */

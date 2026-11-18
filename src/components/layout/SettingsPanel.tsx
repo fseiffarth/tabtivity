@@ -21,6 +21,7 @@ import {
   STOP_AGENT_TABS_IDLE_DEFAULT_MIN,
   STOP_AGENT_TABS_MIN_FREE_CHOICES_MB,
   STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB,
+  stopSettingMenu,
 } from "../../lib/agents/agentTabStop";
 import { AGENT_SCROLLBACK_ROWS, SHELL_SCROLLBACK_CHOICES, shellScrollbackRows } from "../../lib/terminal/scrollback";
 import { experimentalEnabled } from "../../lib/experimental";
@@ -1250,6 +1251,14 @@ export function SettingsDialog({
   initialReveal?: { path: string[]; open?: boolean };
 }) {
   const { settings, setTheme, setLanguage, updateSettings } = useSettingsStore();
+  // The stop-agent-tab rows show the value the sweep applies, an off-list one included.
+  const stopCapMenu = stopSettingMenu(settings?.stop_agent_tabs_cap, STOP_AGENT_TABS_CAP_DEFAULT, STOP_AGENT_TABS_CAP_CHOICES);
+  const stopIdleMenu = stopSettingMenu(settings?.stop_agent_tabs_idle_min, STOP_AGENT_TABS_IDLE_DEFAULT_MIN, STOP_AGENT_TABS_IDLE_CHOICES_MIN);
+  const stopMemoryMenu = stopSettingMenu(
+    settings?.stop_agent_tabs_min_free_mb,
+    STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB,
+    STOP_AGENT_TABS_MIN_FREE_CHOICES_MB,
+  );
   const [panel, changePanel] = useState<SettingsPanelKind>(initialPanel);
   const [section, changeSection] = useState<MainSection>(sectionOfAnchor(initialAnchor));
   const [query, setQuery] = useState("");
@@ -2154,11 +2163,11 @@ export function SettingsDialog({
               help={t("settings.stopAgentTabsCapHelp")}
               control={
                 <Dropdown
-                  value={String(settings?.stop_agent_tabs_cap ?? STOP_AGENT_TABS_CAP_DEFAULT)}
+                  value={String(stopCapMenu.value)}
                   onChange={(v) => void updateSettings({ stop_agent_tabs_cap: Number(v) })}
                   options={[
                     { value: "0", label: t("settings.stopAgentTabsOff") },
-                    ...STOP_AGENT_TABS_CAP_CHOICES.map((n) => ({
+                    ...stopCapMenu.choices.map((n) => ({
                       value: String(n),
                       label: t("settings.stopAgentTabsCapCount", { n }),
                     })),
@@ -2175,13 +2184,13 @@ export function SettingsDialog({
               help={t("settings.stopAgentTabsIdleHelp")}
               control={
                 <Dropdown
-                  value={String(settings?.stop_agent_tabs_idle_min ?? STOP_AGENT_TABS_IDLE_DEFAULT_MIN)}
+                  value={String(stopIdleMenu.value)}
                   onChange={(v) => void updateSettings({ stop_agent_tabs_idle_min: Number(v) })}
                   options={[
                     { value: "0", label: t("settings.stopAgentTabsOff") },
-                    ...STOP_AGENT_TABS_IDLE_CHOICES_MIN.map((n) => ({
+                    ...stopIdleMenu.choices.map((n) => ({
                       value: String(n),
-                      label: n < 60 ? t("settings.sleepTabsMinutes", { n }) : t("settings.stopAgentTabsHours", { n: n / 60 }),
+                      label: n < 60 ? t("settings.sleepTabsMinutes", { n }) : t("settings.stopAgentTabsHours", { n: Math.round((n / 60) * 10) / 10 }),
                     })),
                   ]}
                 />
@@ -2196,13 +2205,13 @@ export function SettingsDialog({
               help={t("settings.stopAgentTabsMemoryHelp")}
               control={
                 <Dropdown
-                  value={String(settings?.stop_agent_tabs_min_free_mb ?? STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB)}
+                  value={String(stopMemoryMenu.value)}
                   onChange={(v) => void updateSettings({ stop_agent_tabs_min_free_mb: Number(v) })}
                   options={[
                     { value: "0", label: t("settings.stopAgentTabsOff") },
-                    ...STOP_AGENT_TABS_MIN_FREE_CHOICES_MB.map((n) => ({
+                    ...stopMemoryMenu.choices.map((n) => ({
                       value: String(n),
-                      label: t("settings.stopAgentTabsGiB", { n: n / 1024 }),
+                      label: t("settings.stopAgentTabsGiB", { n: Math.round((n / 1024) * 10) / 10 }),
                     })),
                   ]}
                 />
