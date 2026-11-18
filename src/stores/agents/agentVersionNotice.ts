@@ -75,7 +75,7 @@ const FRONTEND_VERIFIED: Readonly<Record<string, string>> = {
   opencode: "2.3.0",
   antigravity: "1.5.10",
   copilot: "1.0.112",
-  muse: "1.4.15",
+  muse: "1.4.23",
 };
 
 interface AgentVersionNoticeStore {

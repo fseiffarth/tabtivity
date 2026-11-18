@@ -1478,6 +1478,28 @@ local Responses stub was not a reliable way to force calls. With
 `META_API_KEY=test`, one turn's answer did not come from the stub, and its
 endpoint is unknown. Don't drive Muse's `meta` provider from a probe until that
 is understood: offline work uses `--provider echo`.
+
+**1.4.23** (2026-11-17, the channel's version, beside 1.4.15; the binary from
+the release manifest, sha256 and size checked, outside Tabtivity, scratch
+homes): `--version` keeps its shape; `--help` adds the `acp` subcommand and
+rewords `--reasoning-effort`'s default (same eight levels); `resume`, `exec`,
+`auth` and `login` help are unchanged. `resume.py` passes all 14 checks on both
+versions. `turns.py events` and `shared` name the same events with the same
+fields (background-subagent events land in another order, a race). The echo
+frames (trust, idle, a reply, the `/` menu, `/model`, 60 columns) read the
+same through the readers. The public changelog
+(`dev.meta.ai/docs/muse-code/changelog`) stops at 1.4.18. Of note there: a
+prompt queued behind a running turn now reaches `UserPromptSubmit` with its
+text (1.4.17), and settings without `schema_version` get a clearer error.
+Manage CLIs could not update Muse: `agent_latest` had no source for it, so
+the card never knew a newer release and offered no Update. Its channel
+(`api.meta.ai/muse-code/channels/muse-stable`, `Source::Channel`, the
+`-R<build>` dropped) is the source now; Update runs `install.sh` into the
+install home as before, which puts launcher and binary in
+`agents/install/.local/bin`, ahead of a host `~/.local/bin/muse` on PATH. A
+fenced Muse gets `MUSE_NO_AUTO_UPDATE=1` (`agent_install::autoupdate_off`):
+its launcher would otherwise start a ~470 MB download into a read-only
+folder. Not verified: the Update click itself, a real model, sign-in.
 Copilot's row started at 1.0.89 (2026-09-30, from the npm package, not live): `-p`,
 `--continue`, `session-state` under `COPILOT_HOME`/home, and `authTokens` /
 `storeTokenPlaintext` in the runtime it unpacks into `~/.cache/copilot/pkg/`.

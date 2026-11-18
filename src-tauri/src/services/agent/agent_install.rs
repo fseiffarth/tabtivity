@@ -313,6 +313,10 @@ fn autoupdate_off(bin: &str) -> &'static [(&'static str, &'static str)] {
         // tmpfs in the fence: "restart to update" then restarted on the old
         // version, every time.
         "copilot" => &[("COPILOT_AUTO_UPDATE", "false")],
+        // Its launcher (version 3, 1.4.15–1.4.23) forks a background download of
+        // the whole ~470 MB binary once its interval has passed, beside itself
+        // in a folder the fence keeps read-only. Manage CLIs' Update is the way.
+        "muse" => &[("MUSE_NO_AUTO_UPDATE", "1")],
         _ => &[],
     }
 }
@@ -592,6 +596,9 @@ mod tests {
         let mut env = std::collections::HashMap::new();
         apply_fence_env("/s/agents/install/npm/bin/copilot", &mut env);
         assert_eq!(env.get("COPILOT_AUTO_UPDATE").map(String::as_str), Some("false"));
+        let mut env = std::collections::HashMap::new();
+        apply_fence_env("/s/agents/install/.local/bin/muse", &mut env);
+        assert_eq!(env.get("MUSE_NO_AUTO_UPDATE").map(String::as_str), Some("1"));
         let mut env = std::collections::HashMap::new();
         apply_fence_env("codex", &mut env);
         assert!(env.is_empty());

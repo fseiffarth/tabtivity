@@ -156,7 +156,7 @@ const VERIFIED: &[Verified] = &[
     },
     Verified {
         agent: "muse",
-        version: "1.4.15",
+        version: "1.4.23",
         surface: "§1.5 — launcher's no-update switch, --model/--reasoning-effort, login file, the ⟩ menu lamp",
     },
 ];
@@ -842,7 +842,7 @@ mod tests {
         // A recipe with no recorded check — the honest answer is "nobody has
         // verified this", not a tick.
         assert_eq!(drift_in(&[], "muse", Some("1.3.0")).0, DriftState::Unverified);
-        // Muse's first check was 1.4.15; the 1.3.0 many still run is older.
+        // Muse's first check was 1.4.15 (now 1.4.23); the 1.3.0 many still run is older.
         let (state, stale) = drift("muse", Some("1.3.0"));
         assert_eq!(state, DriftState::Moved);
         assert!(stale.iter().all(|note| note.direction == Direction::Older));
