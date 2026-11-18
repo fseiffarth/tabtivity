@@ -208,12 +208,20 @@ works.
   CLI one that reconnects. The launch then grants as a create, and after the
   fence each fresh session whose identity matches the recorded one takes the
   recorded hash; the rest are revoked and the fresh tokens are stripped from the
-  attach's environment. At commit the session is re-stamped with this run's
+  attach's environment. Only cockpit, help, markup and print come back
+  everywhere; git and tabs only on Linux, where a revived token is honoured
+  only over a connection held by processes of the session's own pane tree
+  (`root_mcp_reattach::peer_in_session`, else `401`). A reviving launch only
+  attaches (`host_attach_only`; on tmux the argv becomes the attach client's,
+  `launch_prep::attach_only_client`): a session that ended since the listing
+  is never created again, the tab's client exits, and the commit drops the
+  row. At commit the session is re-stamped with this run's
   nonce (`SessionMux::restamp_mcp`, `set-option -t =<name>:`; the Windows host
   cannot, so its revived sessions are found by their grant on the own port
-  instead and are not revived by a later run). A recorded lane that does not
-  come back (schedule, root, a lane switched off, a changed identity) leaves the
-  tab Stale.
+  instead, only while the previous run's 30 minutes last, and are not revived
+  by a later run). A recorded lane that does not come back (schedule, root, git
+  and tabs off Linux, a lane switched off, a changed identity) leaves the tab
+  Stale.
 - **The record's lifecycle** follows the session: `local_tmux_kill` drops the
   row, `local_tmux_rename` re-keys it, the Sessions view's end-all clears the
   rows, the clean quit deletes the file (`commands::root_mcp::stop_for_exit`), and
