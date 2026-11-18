@@ -1759,15 +1759,23 @@ mod security_tests {
 
     // ── the stable port and the grant probe (docs/mcp_reattach_plan.md) ─────
 
-    /// The remembered port is bound again when it is free.
+    /// The remembered port is bound again when it is free. The port is
+    /// freed before the bind, so a test running in parallel can take it in
+    /// between: a lost race retries with a fresh port, and only a bind that
+    /// never keeps a free port fails.
     #[test]
     fn the_remembered_port_is_bound_again_when_free() {
-        let probe = std::net::TcpListener::bind(LOOPBACK).unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
-        let (listener, kept) = bind_preferred(Some(port), None).unwrap();
-        assert!(kept);
-        assert_eq!(listener.local_addr().unwrap().port(), port);
+        for _ in 0..5 {
+            let probe = std::net::TcpListener::bind(LOOPBACK).unwrap();
+            let port = probe.local_addr().unwrap().port();
+            drop(probe);
+            let (listener, kept) = bind_preferred(Some(port), None).unwrap();
+            if kept {
+                assert_eq!(listener.local_addr().unwrap().port(), port);
+                return;
+            }
+        }
+        panic!("a freed port was never bound again in five tries");
     }
 
     /// An occupied remembered port falls back to a free one, and says it did
