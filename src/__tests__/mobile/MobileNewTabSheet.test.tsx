@@ -375,8 +375,10 @@ describe("Mobile ＋ sheet — no window", () => {
     });
     const onPick = vi.fn();
     render(<NewTabSheet projectId="p" agents={agents} shells={false} busy={false} headless onPick={onPick} onSendFile={() => undefined} onClose={() => undefined} />);
-    const where = await screen.findByRole("group", { name: "Agents start in" });
-    fireEvent.click(within(where).getByText("fix-build"));
+    // The worktree dropdown stands with no window too: its field opens the
+    // list, a row picks.
+    fireEvent.click(await screen.findByRole("button", { name: /^Agents start in/ }));
+    fireEvent.click(within(screen.getByRole("list", { name: /^Agents start in/ })).getByText("fix-build"));
     fireEvent.click(screen.getByRole("button", { name: "Claude" }));
     expect(onPick).toHaveBeenLastCalledWith("agent", agents[0], undefined, { worktree: "w1" });
     // The mode still waits for the window; the worktree no longer does.
