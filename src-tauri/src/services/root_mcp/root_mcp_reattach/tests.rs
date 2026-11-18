@@ -646,13 +646,15 @@ fn a_revived_token_is_honoured_only_from_its_own_pane_tree() {
     let port = server.local_addr().unwrap().port();
     let _client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     let (_accepted, peer) = server.accept().unwrap();
-    assert!(peer_in_tree(peer, port, std::process::id()), "inside the tree: accepted");
+    assert_eq!(peer_in_tree(peer, port, std::process::id()), PeerTree::Inside, "inside the tree: accepted");
     let mut other = std::process::Command::new("sleep").arg("5").spawn().unwrap();
     let outside = peer_in_tree(peer, port, other.id());
     let _ = other.kill();
     let _ = other.wait();
-    assert!(!outside, "outside the tree: refused");
-    assert!(!peer_in_session(peer, port, "r3-no-such-session"), "no pane: refused");
+    assert_eq!(outside, PeerTree::Outside, "outside the tree: refused");
+    assert!(!refusal_marks_stale(outside), "an outsider flags nothing");
+    assert_eq!(peer_in_session(peer, port, "r3-no-such-session"), PeerTree::Unknown, "no pane: refused");
+    assert!(refusal_marks_stale(PeerTree::Hidden) && !refusal_marks_stale(PeerTree::Unknown), "only a hidden holder flags the tab");
 }
 
 /// A rename moves the revived sessions' binding with the mux session.

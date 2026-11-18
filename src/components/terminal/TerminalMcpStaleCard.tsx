@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 import { agentLabelOfCmd } from "../../lib/agents/dialogOnScreen";
@@ -12,6 +12,7 @@ import {
   mcpStaleTurnInFlight,
   reconnectMcpStale,
   useMcpStaleStore,
+  watchMcpStaleNotices,
 } from "../../stores/agents/mcpStale";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { useDialogs } from "../common/PromptDialogs";
@@ -37,6 +38,9 @@ export function TerminalMcpStaleCard({ host, ptyId }: { host: HTMLElement; ptyId
   // `mcpStaleTurnInFlight`.
   useMcpStaleStore((s) => s.turns[ptyId]?.state);
   useActivityStore((s) => !!s.busyByTab[ptyId]);
+  // A tab can also go stale after its spawn answered (a revived token the
+  // backend then refused): hear that while any agent terminal is here.
+  useEffect(() => watchMcpStaleNotices(), []);
   const parts = splitPtyId(ptyId);
   const tab = usePaneTab(parts?.scope, parts?.key);
   const [busy, setBusy] = useState(false);

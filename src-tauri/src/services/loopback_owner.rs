@@ -113,27 +113,63 @@ pub fn descends_from(pid: u32, root: u32, parent: impl Fn(u32) -> Option<u32>) -
     false
 }
 
+/// Where the client end of a connection sits against a pane tree
+/// ([`peer_tree`]). Only [`PeerTree::Inside`] is accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerTree {
+    /// Held, and every holder found descends from the root.
+    Inside,
+    /// Seen to be someone else's: another account's socket, or a holder of
+    /// this account outside the tree.
+    Outside,
+    /// This account's socket, but no process could be read holding it: a
+    /// non-dumpable process hides its `/proc/<pid>/fd` (and its `/proc/<pid>`
+    /// reads as root's), so who it is cannot be told.
+    Hidden,
+    /// No such connection (it closed meanwhile), or no `/proc` to read.
+    Unknown,
+}
+
+/// [`peer_tree`]'s judgement, with what it reads passed in: the client
+/// `socket` (if found), this account's uid, the pids `holders` of an inode
+/// finds, and whether a pid `descends` from the root.
+pub fn judge_peer(socket: Option<Connection>, uid: u32, holders: impl FnOnce(u64) -> Vec<u32>, descends: impl Fn(u32) -> bool) -> PeerTree {
+    let Some(socket) = socket else { return PeerTree::Unknown };
+    if socket.uid != uid {
+        return PeerTree::Outside;
+    }
+    let held = holders(socket.inode);
+    if held.is_empty() {
+        PeerTree::Hidden
+    } else if held.iter().all(|pid| descends(*pid)) {
+        PeerTree::Inside
+    } else {
+        PeerTree::Outside
+    }
+}
+
 /// Whether the client end `peer` of a connection to `server` belongs to
 /// processes of this account that all descend from `root` (host pid
 /// namespace: a fenced process's bwrap parent sits under the pane that
-/// started it). Fails closed: no such socket, another account's, no holder
-/// found (an unreadable `/proc/<pid>/fd`, a non-dumpable process), or any
-/// holder outside the tree. Linux only; `false` elsewhere.
-pub fn peer_descends_from(peer: SocketAddr, server: SocketAddr, root: u32) -> bool {
+/// started it), and when not, why ([`PeerTree`]). Only `Inside` passes: no
+/// such socket, another account's, no holder found (an unreadable
+/// `/proc/<pid>/fd`, a non-dumpable process), or any holder outside the tree
+/// fail closed. Linux only; [`PeerTree::Unknown`] elsewhere.
+pub fn peer_tree(peer: SocketAddr, server: SocketAddr, root: u32) -> PeerTree {
     #[cfg(target_os = "linux")]
     {
-        let Some(socket) = connection(&read_tables(), peer, server) else { return false };
-        if socket.uid != own_uid() {
-            return false;
-        }
-        let holders = proc::walk(socket.inode);
         let parent = |pid: u32| std::fs::read_to_string(format!("/proc/{pid}/status")).ok().as_deref().and_then(parent_pid);
-        !holders.is_empty() && holders.iter().all(|h| descends_from(h.pid, root, parent))
+        judge_peer(
+            connection(&read_tables(), peer, server),
+            own_uid(),
+            |inode| proc::walk(inode).into_iter().map(|h| h.pid).collect(),
+            |pid| descends_from(pid, root, parent),
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (peer, server, root);
-        false
+        PeerTree::Unknown
     }
 }
 
@@ -677,13 +713,75 @@ mod tests {
         let client = std::net::TcpStream::connect(addr).unwrap();
         let (_accepted, peer) = server.accept().unwrap();
         assert_eq!(peer, client.local_addr().unwrap());
-        assert!(peer_descends_from(peer, addr, std::process::id()), "inside");
+        assert_eq!(peer_tree(peer, addr, std::process::id()), PeerTree::Inside);
         let mut child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
-        let outside = peer_descends_from(peer, addr, child.id());
+        let outside = peer_tree(peer, addr, child.id());
         let _ = child.kill();
         let _ = child.wait();
-        assert!(!outside, "outside");
+        assert_eq!(outside, PeerTree::Outside);
         let unknown: SocketAddr = "127.0.0.1:1".parse().unwrap();
-        assert!(!peer_descends_from(unknown, addr, std::process::id()), "no such socket");
+        assert_eq!(peer_tree(unknown, addr, std::process::id()), PeerTree::Unknown, "no such socket");
+    }
+
+    /// Why a peer is refused: only a socket of this account that nobody can
+    /// be seen holding is `Hidden` (the case a revived token's tab is then
+    /// flagged stale for); someone seen outside the tree is `Outside`.
+    #[test]
+    fn a_refused_peer_says_why() {
+        let socket = Connection { local: "127.0.0.1:5000".parse().unwrap(), remote: "127.0.0.1:4000".parse().unwrap(), uid: 1000, inode: 77 };
+        let inside = |pid: u32| pid < 100;
+        assert_eq!(judge_peer(None, 1000, |_| panic!("no socket, no walk"), inside), PeerTree::Unknown);
+        assert_eq!(judge_peer(Some(Connection { uid: 1001, ..socket }), 1000, |_| panic!("not ours"), inside), PeerTree::Outside);
+        assert_eq!(judge_peer(Some(socket), 1000, |inode| { assert_eq!(inode, 77); vec![10, 20] }, inside), PeerTree::Inside);
+        assert_eq!(judge_peer(Some(socket), 1000, |_| vec![10, 200], inside), PeerTree::Outside, "one holder outside");
+        assert_eq!(judge_peer(Some(socket), 1000, |_| Vec::new(), inside), PeerTree::Hidden);
+    }
+
+    /// A real non-dumpable client (what Codex's process hardening may make
+    /// itself): its socket is this account's, but no `/proc/<pid>/fd` shows
+    /// who holds it, so the peer reads `Hidden`, inside its tree or not.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_non_dumpable_client_is_hidden() {
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+        // Built before the fork: the child only makes raw system calls.
+        // SAFETY: zeroed is a valid sockaddr_in.
+        let mut sin: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        sin.sin_family = libc::AF_INET as libc::sa_family_t;
+        sin.sin_port = addr.port().to_be();
+        sin.sin_addr = libc::in_addr { s_addr: u32::from(Ipv4Addr::LOCALHOST).to_be() };
+        // SAFETY: the child calls only async-signal-safe functions, then exits.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork");
+        if pid == 0 {
+            // SAFETY: plain system calls on values owned by the child.
+            unsafe {
+                libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+                let fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+                let ok = fd >= 0
+                    && libc::connect(fd, std::ptr::addr_of!(sin).cast(), std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t) == 0;
+                if ok {
+                    libc::sleep(10);
+                }
+                libc::_exit(0);
+            }
+        }
+        server.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let accepted = loop {
+            match server.accept() {
+                Ok(accepted) => break Some(accepted),
+                Err(_) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(_) => break None,
+            }
+        };
+        let verdict = accepted.as_ref().map(|(_, peer)| peer_tree(*peer, addr, pid as u32));
+        // SAFETY: the child is ours to end and reap.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            libc::waitpid(pid, std::ptr::null_mut(), 0);
+        }
+        assert_eq!(verdict, Some(PeerTree::Hidden), "even from the root of its own tree");
     }
 }

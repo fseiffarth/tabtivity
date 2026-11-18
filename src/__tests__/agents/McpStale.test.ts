@@ -11,13 +11,17 @@ const invokeMock = vi.fn((_cmd: string, _args?: unknown): Promise<unknown> => Pr
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (cmd: string, args?: unknown) => invokeMock(cmd, args) }));
 type TurnHandler = (ev: { payload: { id: string; state: string; job?: boolean } }) => void;
 const turnHandlers: TurnHandler[] = [];
+type SessionsHandler = (ev: { payload: unknown }) => void;
+const sessionsHandlers: SessionsHandler[] = [];
 vi.mock("@tauri-apps/api/event", () => ({
   emit: vi.fn(() => Promise.resolve()),
-  listen: vi.fn((name: string, handler: TurnHandler) => {
-    if (name === "agent-turn") turnHandlers.push(handler);
+  listen: vi.fn((name: string, handler: TurnHandler & SessionsHandler) => {
+    const list: unknown[] | null =
+      name === "agent-turn" ? turnHandlers : name === "root-mcp-sessions-changed" ? sessionsHandlers : null;
+    list?.push(handler);
     return Promise.resolve(() => {
-      const at = turnHandlers.indexOf(handler);
-      if (at >= 0) turnHandlers.splice(at, 1);
+      const at = list?.indexOf(handler) ?? -1;
+      if (at >= 0) list?.splice(at, 1);
     });
   }),
 }));
@@ -31,6 +35,7 @@ import {
   reconnectIdleMcpStale,
   TOAST_SETTLE_MS,
   useMcpStaleStore,
+  watchMcpStaleNotices,
 } from "../../stores/agents/mcpStale";
 import { _clearPtyActivityForTest, noteAgentTurn } from "../../stores/activity";
 import { useProjectsStore } from "../../stores/projects";
@@ -183,5 +188,41 @@ describe("stale app tools", () => {
     vi.advanceTimersByTime(TOAST_SETTLE_MS);
     expect(useProjectsStore.getState().switchToast).toBe(`1 agent tab lost its ${BRAND.display} tools`);
     expect(useProjectsStore.getState().switchToastAction).toBeNull();
+  });
+
+  it("flags a running tab the backend finds stale after its spawn: card, bulk toast, and its next spawn clears it", async () => {
+    // The unlisten arrives a few microtasks after `listen` answers.
+    const ticks = async () => {
+      for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    };
+    vi.useFakeTimers();
+    seed([agentTab("a")]);
+    noteMcpStale("p1:a", false);
+    // No agent terminal mounted: nobody listens.
+    expect(sessionsHandlers).toHaveLength(0);
+    const stops = [watchMcpStaleNotices(), watchMcpStaleNotices()];
+    expect(sessionsHandlers).toHaveLength(1);
+    const ring = (payload: unknown) => sessionsHandlers.forEach((handler) => handler({ payload }));
+    // The session list's own cue (no payload) and junk flag nothing.
+    ring(null);
+    ring({ staleTab: 7 });
+    expect(useMcpStaleStore.getState().stale).toEqual({});
+    // A revived token of it was refused: nobody could be seen presenting it.
+    ring({ staleTab: "p1:a" });
+    expect(useMcpStaleStore.getState().stale["p1:a"]).toBe(true);
+    expect(mcpStaleBulkCandidates()).toEqual(["p1:a"]);
+    vi.advanceTimersByTime(TOAST_SETTLE_MS);
+    expect(useProjectsStore.getState().switchToast).toBe(`1 agent tab lost its ${BRAND.display} tools`);
+    expect(useProjectsStore.getState().switchToastAction).toMatchObject({ label: "Reconnect idle ones" });
+    // Reconnect's respawn answers afresh.
+    noteMcpStale("p1:a", false);
+    expect(useMcpStaleStore.getState().stale["p1:a"]).toBeUndefined();
+    await ticks();
+    stops[0]();
+    await ticks();
+    expect(sessionsHandlers).toHaveLength(1);
+    stops[1]();
+    await ticks();
+    expect(sessionsHandlers).toHaveLength(0);
   });
 });

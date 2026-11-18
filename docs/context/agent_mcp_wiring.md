@@ -91,6 +91,9 @@ new PTY id; a **Stale** one mints nothing and flags the tab (`mcpStale` on the
 spawn answer, `appMcpStale` in the hover card's features, `servers_of_tab`
 empty). Minting for a reattach would be wrong twice: nobody receives the
 tokens, and `TokenStore::register` revokes the tab's earlier token per lane.
+For the same reason a launch that only attaches (the AI switch's rejoin) never
+mints: its plan is read past the stamp cache, and a create verdict becomes
+NoGrant (`launch_prep::attach_only`).
 The listener's port is stable across runs (`<state_dir>/root_mcp/port`, the
 Mobile host's `host-port`), so a stale agent's calls reach this program's
 refusal, not another listener. Where the guards allow, a stale reattach is
@@ -139,7 +142,13 @@ one of those stays **Stale** and needs Reconnect. On Linux a revived token
 answers only a connection held by processes of its own tmux pane tree
 (`root_mcp_reattach::peer_in_session`): a CLI's MCP client that is not a
 descendant of the pane, or hides its `/proc/<pid>/fd` (non-dumpable), gets
-`401`. Past
+`401`. The hidden case also flags the tab **Stale** at that first refusal
+(`root_mcp_reattach::refusal_marks_stale`): a CLI that makes itself
+non-dumpable (Codex's process hardening may) would otherwise keep tools that
+silently fail while its card and hover card said they were live. A peer seen
+outside the tree flags nothing; an outsider that hides itself the same way and
+holds a harvested revived token can flag the victim's tab, a nuisance only
+(nothing is revoked; Reconnect gives fresh tokens). Past
 30 minutes of downtime (`now - last_alive`, which reads up to 5 minutes long)
 nothing is revived. Per CLI (`root_mcp_reattach::cli_revives`, the record's
 `cmd_stem`):

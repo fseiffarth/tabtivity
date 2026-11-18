@@ -33,8 +33,12 @@ differs from the plan below:
 - **Beyond the plan:** `503` to a previous run's revivable bearer until its row
   is settled; a revoke stays revoked across a write in flight; the cap reads a
   clock anchored on the monotonic clock.
-- **Unverified:** how each CLI treats `503` or a later `401`; a CLI that makes
-  itself non-dumpable fails the peer check (its tab then has dead tools).
+- **Unverified:** how each CLI treats `503` or a later `401`; whether a CLI
+  makes itself non-dumpable. One that does fails the peer check, and since the
+  follow-up fix its first refused call flags the tab stale (card, Reconnect)
+  instead of leaving dead tools listed as live.
+- **Follow-up fix:** an AI-off rejoin is planned from a live listing and an
+  attach-only launch never mints (`launch_prep::attach_only`).
 
 ## The bug
 

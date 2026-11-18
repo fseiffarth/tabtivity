@@ -166,8 +166,14 @@ works.
 - **One listing per restore.** `SessionMux::mcp_marks()` is one
   `tmux ls -F '#{session_name}\t#{@<slug>_mcp}'`, cached about 3 s behind a single
   flight (the lock is held across the `tmux ls`), dropped by `kill`, `rename`
-  and the quit reap. It also answers `reattaches_session`. A private socket (a
-  test) is never cached. A backend that cannot answer (the trait default,
+  and the quit reap. The AI switch's rejoin is never judged from it: with
+  AI off a launch goes through only when the mux's live `has` finds the session
+  (`launch_prep::local_session_live`), and is then attach-only. Its plan reads
+  the listing again past the cache when the cached one does not name the
+  session yet (`SessionMux::fresh_mcp_marks`), and a create verdict for an
+  attach-only launch becomes NoGrant (`launch_prep::attach_only`): an attach
+  never hands the agent its environment, so nothing is minted or recorded for
+  nobody. A private socket (a test) is never cached. A backend that cannot answer (the trait default,
   `Unavailable`) is "unknown": the launch grants as before and `has` answers the
   rejoin.
 - **Windows session host.** The same stamp rides the host's create-or-attach
@@ -235,7 +241,15 @@ works.
   a revoke (`revoke_tab`, `revoke_session`) drops the hashes for good.
 - **Stale** sets `PreparedLaunch::mcp_stale` -> `pty_spawn`'s answer carries
   `mcpStale`, and `root_mcp::tab_stale` makes `servers_of_tab` empty and
-  `agent_features` report `appMcpStale`. The flag lives until the tab's
+  `agent_features` report `appMcpStale`. A revived tab can also go stale
+  later: when the peer check refuses a revived token because no holder of
+  the client socket can be read (`loopback_owner::PeerTree::Hidden`, a
+  non-dumpable CLI), `commands::root_mcp::admit_with` sets
+  `root_mcp::mark_tab_stale` and rings `root-mcp-sessions-changed` with
+  `{ "staleTab": <PTY id> }` once; the terminal's store
+  (`stores/agents/mcpStale`, listening while an agent terminal is mounted)
+  raises the card and the bulk toast. A peer seen outside the tree does not
+  flag the tab. The flag lives until the tab's next launch or its
   teardown (`root_mcp_review::on_tab_gone`). What the user can do about it is the
   frontend's Reconnect (kill the session, relaunch with the CLI's resume).
 - **Stable port.** The window binds `<state_dir>/root_mcp/port` (0600) with a

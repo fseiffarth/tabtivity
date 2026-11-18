@@ -9366,6 +9366,11 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
                 Notice::Markup => poke_desktop(&notice_dir, None, &["markup"]),
                 Notice::GitPush => {}
                 Notice::Workspace { scope, .. } => poke_desktop(&notice_dir, Some(&scope), &["workspace"]),
+                // A tab this host spawned: the window only joins its PTY and
+                // shows no stale card for it (`TerminalView`), so the flag
+                // stays this process's (a server daemon's clients hear it
+                // through `serve_everything`).
+                Notice::TabStale { .. } => {}
             }
         }),
         on_server.then_some(&core_ctx),

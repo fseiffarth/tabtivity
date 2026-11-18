@@ -441,8 +441,10 @@ pub fn revoke_tab(tab: &str) -> bool {
 }
 /// Tabs whose running agent holds credentials nobody honours any more: a
 /// reattach found its session stamped by a listener that is gone
-/// ([`root_mcp_mark::Reattach::Stale`]). Marked at the launch's commit, cleared
-/// with the tab's teardown ([`forget_stale`]). Per process, like the tokens.
+/// ([`root_mcp_mark::Reattach::Stale`]), or whose revived token the peer check
+/// refused ([`mark_tab_stale`]). Set at the launch's commit, marked later by
+/// the listener, cleared with the tab's teardown ([`forget_stale`]). Per
+/// process, like the tokens.
 fn stale_tabs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
     static STALE: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = OnceLock::new();
     STALE.get_or_init(Default::default)
@@ -454,6 +456,14 @@ fn stale_tabs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> 
 pub fn set_tab_stale(tab: &str, stale: bool) {
     let mut set = stale_tabs().lock_ok();
     if stale { set.insert(tab.to_string()); } else { set.remove(tab); }
+}
+/// Flag `tab` stale after its launch committed: a revived token of it was
+/// refused because nobody could be seen presenting it
+/// ([`root_mcp_reattach::refusal_marks_stale`]). Whether the flag is new, so
+/// the listener tells the window once. The tab's next launch sets the flag
+/// afresh ([`set_tab_stale`]); its teardown clears it.
+pub fn mark_tab_stale(tab: &str) -> bool {
+    stale_tabs().lock_ok().insert(tab.to_string())
 }
 /// The tab's agent was started by a listener that is gone, so its Tabtivity
 /// tools do not answer ([`set_tab_stale`]).
