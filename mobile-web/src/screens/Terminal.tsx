@@ -105,8 +105,8 @@ import { fileKey, useViewableNamed } from "../terminal/chatFiles";
 import { linkPathsInHtml } from "../../../src/lib/terminal/pathCandidates";
 import { chatDayLabel, chatMoment, chatTime, dayOpeners } from "../terminal/chatTimes";
 import { commandArgsInline, pinnedPromptText, slashCommand, transcriptTurns, type SlashCommand, type TranscriptTurn } from "../terminal/transcriptTurns";
-import { entryCardAllowed, mergeAskedQuestion, waitingQuestion } from "../terminal/askedQuestion";
-import { questionParts } from "../terminal/questionParts";
+import { waitingQuestion } from "../terminal/askedQuestion";
+import { useAskedCard } from "./terminal/useAskedCard";
 import { isPermissionDialog, permissionSubject, permissionSubjectLabel } from "../terminal/permissionSubject";
 import { compactTokens, openSubagentRunning, siblingPosition, splitByWork, subagentAtWork, workingElapsed, workingModelName, type SubagentStep } from "../terminal/subagents";
 import { MAX_PENDING, pendingPrompt, withPending, type PendingPrompt } from "../terminal/pendingPrompts";
@@ -2105,15 +2105,7 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
     () => (sessionFocus && tab.kind === "agent" ? waitingQuestion(sessionEntries) : null),
     [sessionFocus, tab.kind, sessionEntries],
   );
-  const askedCard = useMemo(() => {
-    if (!waitingAsk) return null;
-    const parts = screenQuestion ? questionParts(liveTail, screenQuestion) : null;
-    return mergeAskedQuestion(
-      waitingAsk,
-      screenQuestion && parts ? { question: screenQuestion, ask: parts.ask.map((line) => line.text), context: parts.context.map((line) => line.text), tabs: parts.tabs, tabFocus: parts.tabFocus, tabSubmit: parts.tabSubmit, tabKeys: parts.tabKeys } : null,
-      !screenQuestion && entryCardAllowed(liveScreen, agentLabel),
-    );
-  }, [waitingAsk, screenQuestion, liveTail, liveScreen, agentLabel]);
+  const askedCard = useAskedCard({ waitingAsk, screenQuestion, liveTail, liveScreen, agentLabel });
   const liveQuestion = askedCard?.question ?? screenQuestion;
   /** Claude Code's prompt suggestion, dimmed in its own empty box
    * (`promptSuggestion.ts`). It is put into the field in either view — never

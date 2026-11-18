@@ -6,6 +6,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
+import { useAskedCard } from "../../../mobile-web/src/screens/terminal/useAskedCard";
 import { useLiveQuestion } from "../../../mobile-web/src/screens/terminal/useLiveQuestion";
 import { mergeAskedQuestion, type LiveDialog } from "../../../mobile-web/src/terminal/askedQuestion";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
@@ -74,5 +75,29 @@ describe("the phone's live question over the waiting entry", () => {
     act(() => result.current.stepQuestion(0, 1));
     act(() => result.current.answerQuestionText(card.question.options[0], "words"));
     expect(deliver).not.toHaveBeenCalled();
+  });
+});
+
+describe("the phone's card for a waiting entry whose dialog has come and gone", () => {
+  const BOX = [`${"─".repeat(60)} my-project ─`, "❯ ", "─".repeat(76), "  ? for shortcuts"];
+  const BUSY = ["❯ ask me", "", "✻ Thinking… (3s · ↓ 120 tokens · esc to interrupt)", "", ...BOX];
+  const read = (rows: string[]) => readableScreen(plainBuffer(rows), 300).lines;
+
+  it("stands alone before the dialog is drawn, but not again once the dialog was on screen", () => {
+    const { tail, question } = phoneReads(SCREEN);
+    const dialogScreen = read(SCREEN);
+    const busy = read(BUSY);
+    const { result, rerender } = renderHook((props: { question: typeof question; tail: typeof tail; screen: typeof busy }) => useAskedCard({
+      waitingAsk: ENTRY, screenQuestion: props.question, liveTail: props.tail, liveScreen: props.screen, agentLabel: "Claude",
+    }), { initialProps: { question: null as typeof question, tail: [] as typeof tail, screen: busy } });
+    // The tool call is recorded, the dialog is not drawn: the read-only card.
+    expect(result.current?.kind).toBe("entry");
+    // The dialog is drawn: the entry over the screen's rows.
+    rerender({ question, tail, screen: dialogScreen });
+    expect(result.current?.kind).toBe("merged");
+    // Answered: the screen is busy again and the stored session, read late,
+    // still holds the call. No card for a question that was answered.
+    rerender({ question: null, tail: [], screen: busy });
+    expect(result.current).toBeNull();
   });
 });
