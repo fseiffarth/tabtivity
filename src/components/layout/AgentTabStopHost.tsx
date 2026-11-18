@@ -2,10 +2,10 @@ import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { useSettingsStore } from "../../stores/settings";
-import { lastUserInputAt, useActivityStore } from "../../stores/activity";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { activeProjectScopesRestored } from "../../stores/projects";
 import {
+  agentTabLastUsedAt,
   noteAgentTabUsed,
   stopAgentTab,
   stopPlaceOf,
@@ -18,7 +18,6 @@ import {
   PINNED_ONLY_CLIS,
   STOPS_PER_TICK,
   freeMemoryBytes,
-  lastUsedOf,
   pickRestoreWakes,
   pickStops,
   staticStopBlockers,
@@ -28,7 +27,7 @@ import {
   stopBlockers,
   type StopCandidate,
 } from "../../lib/agents/agentTabStop";
-import { agentPaneLastShownAt, agentTabStartedAt, takeRestoredStopped } from "../../lib/agents/agentTabStopMarks";
+import { takeRestoredStopped } from "../../lib/agents/agentTabStopMarks";
 import { readerRequest } from "../../lib/agents/agentReader";
 import { listMarkupQuestions } from "../../lib/viewers/markupQuestions";
 import { projectIdOfScope } from "../../lib/terminal/ptyId";
@@ -64,15 +63,7 @@ function liveCount(agents: readonly Agent[]): number {
 
 /** When the tab was last used, from this window's marks and its saved one. */
 function lastUsedOfTab(a: Agent, withStart = true): number {
-  const activity = useActivityStore.getState();
-  return lastUsedOf({
-    lastShownAt: agentPaneLastShownAt(a.ptyId),
-    lastUserInputAt: lastUserInputAt(a.ptyId),
-    lastDoneAt: activity.lastDoneByTab[a.ptyId],
-    lastWorkingAt: activity.busyByTab[a.ptyId] ? Date.now() : activity.lastWorkingByTab[a.ptyId],
-    restoredLastUsedAt: a.tab.lastUsedAt,
-    startedAt: withStart ? agentTabStartedAt(a.ptyId) : undefined,
-  });
+  return agentTabLastUsedAt(a.scope, a.tab, withStart);
 }
 
 /** Free memory is under the floor; false when off or the reading is missing. */

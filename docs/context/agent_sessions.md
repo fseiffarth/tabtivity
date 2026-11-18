@@ -574,7 +574,10 @@ saved, so a relaunch ranks which tabs come back running.
   (30 s under memory pressure) with the pure policy in
   `lib/agents/agentTabStop` (guards, LRU ranking, `pickStops`); the three
   triggers are settings (`stop_agent_tabs_cap` 30, `_idle_min` 120,
-  `_min_free_mb` 4096; `0` = off).
+  `_min_free_mb` 4096; `0` = off). No trigger takes a tab used (shown,
+  prompted, a turn) or spawned/woken within 10 min: the cap counts every live
+  agent tab, stoppable or not, so without that floor a cap filled by Gemini
+  tabs took a tab used a minute ago, and low memory had none at all.
 - **Stop** (`stores/agents/agentTabStop.stopAgentTab`): every guard read again,
   `stopped` set (the pane unmounts → `pty_kill`; a sleeping pane's parked PTY
   is killed by `PaneSlot`), then the tab's own minted tmux session ended

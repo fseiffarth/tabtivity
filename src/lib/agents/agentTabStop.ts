@@ -88,6 +88,7 @@ export type StopBlocker =
   | "queued"
   | "print"
   | "fresh"
+  | "recent"
   // final-candidate checks (one IPC each)
   | "subagents"
   | "markup"
@@ -148,6 +149,11 @@ export const BACKGROUND_GRACE_MS = 10 * 60_000;
 export const PHONE_GRACE_MS = 15 * 60_000;
 /** A tab spawned or woken within this long is never stopped (anti-thrash). */
 export const FRESH_GRACE_MS = 10 * 60_000;
+/** A tab used (shown, prompted, a turn worked or finished) within this long is
+ *  never stopped, by any trigger: the cap and low memory ignore the idle time,
+ *  and without this floor a cap filled by tabs that can never be stopped took
+ *  a tab used a minute ago. */
+export const RECENT_USE_GRACE_MS = 10 * 60_000;
 /** A scheduled prompt due within this long blocks a stop. */
 export const SCHEDULE_SOON_MS = 15 * 60_000;
 
@@ -175,6 +181,8 @@ export interface StopSignals {
   printPending: boolean;
   /** When this window last spawned or woke the tab. */
   startedAt?: number;
+  /** When the tab was last used: {@link lastUsedOf} without its spawn. */
+  lastUsedAt?: number;
   /** Subagents still running (Claude's transcript read). */
   runningSubagents?: number;
   /** A markup question of the tab is open. */
@@ -198,6 +206,7 @@ export function stopBlockers(tab: StopTab, place: StopPlace, signals: StopSignal
   if (signals.queuedPrompt) out.push("queued");
   if (signals.printPending) out.push("print");
   if (signals.startedAt !== undefined && now - signals.startedAt < FRESH_GRACE_MS) out.push("fresh");
+  if (signals.lastUsedAt !== undefined && now - signals.lastUsedAt < RECENT_USE_GRACE_MS) out.push("recent");
   if ((signals.runningSubagents ?? 0) > 0) out.push("subagents");
   if (signals.markupAsk) out.push("markup");
   if (signals.resumePinned === false) out.push("no_conversation");

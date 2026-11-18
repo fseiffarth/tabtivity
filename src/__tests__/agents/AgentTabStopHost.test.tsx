@@ -20,7 +20,7 @@ import { AgentTabStopHost } from "../../components/layout/AgentTabStopHost";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { restoreActiveProjectScopes, useProjectsStore } from "../../stores/projects";
 import { useSettingsStore } from "../../stores/settings";
-import { _clearPtyActivityForTest, useActivityStore } from "../../stores/activity";
+import { _clearPtyActivityForTest, noteUserInput, useActivityStore } from "../../stores/activity";
 import { scheduleCacheKey, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
 import { usePrintRequestsStore } from "../../stores/printRequests";
 import { _resetAgentTabStopForTest } from "../../stores/agents/agentTabStop";
@@ -139,7 +139,8 @@ describe("the sweep", () => {
   it("stops for low memory at most three a sweep, idle or not", async () => {
     settings({ stop_agent_tabs_cap: 0, stop_agent_tabs_idle_min: 0, stop_agent_tabs_min_free_mb: 4096 });
     freeBytes = 1 * GiB;
-    setTabs([1, 2, 3, 4, 5].map((n) => agent(n, { lastUsedAt: NOW - n * 60_000 })));
+    // Used 11–15 minutes ago: long before the idle time, just past the recency grace.
+    setTabs([1, 2, 3, 4, 5].map((n) => agent(n, { lastUsedAt: NOW - (10 + n) * 60_000 })));
     render(<AgentTabStopHost />);
     await run(65_000);
     expect(stoppedKeys()).toEqual(["agent-3", "agent-4", "agent-5"]);
@@ -161,6 +162,25 @@ describe("the sweep", () => {
     render(<AgentTabStopHost />);
     await run(65_000);
     expect(stoppedKeys()).toEqual([]);
+  });
+
+  it("never lets the cap or low memory stop a tab used within the grace", async () => {
+    // Three Gemini tabs (never stoppable) already fill a cap of 2: the cap
+    // stays over, and must still leave a Claude tab typed into a minute ago.
+    settings({ stop_agent_tabs_cap: 2, stop_agent_tabs_idle_min: 0, stop_agent_tabs_min_free_mb: 4096 });
+    freeBytes = 1 * GiB;
+    setTabs([
+      agent(1, { cmd: "gemini", lastUsedAt: NOW - 5 * HOUR }),
+      agent(2, { cmd: "gemini", lastUsedAt: NOW - 5 * HOUR }),
+      agent(3, { cmd: "gemini", lastUsedAt: NOW - 5 * HOUR }),
+      agent(4, { lastUsedAt: NOW - 5 * HOUR }),
+      agent(5, { lastUsedAt: NOW - 5 * HOUR }),
+    ]);
+    render(<AgentTabStopHost />);
+    await run(10_000);
+    noteUserInput(`${SCOPE}:agent-4`);
+    await run(55_000);
+    expect(stoppedKeys()).toEqual(["agent-5"]);
   });
 
   it("does nothing with every trigger off", async () => {

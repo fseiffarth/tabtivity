@@ -3,6 +3,7 @@ import {
   BACKGROUND_GRACE_MS,
   FRESH_GRACE_MS,
   PHONE_GRACE_MS,
+  RECENT_USE_GRACE_MS,
   freeMemoryBytes,
   isStoppableCli,
   lastUsedOf,
@@ -99,6 +100,9 @@ describe("stopBlockers", () => {
     ["queued", tab(), quiet({ queuedPrompt: true })],
     ["print", tab(), quiet({ printPending: true })],
     ["fresh", tab(), quiet({ startedAt: NOW - FRESH_GRACE_MS + 1000 })],
+    // Shown, prompted or finishing a turn within the grace: never stopped,
+    // by any trigger (the cap and low memory ignore the idle time).
+    ["recent", tab(), quiet({ lastUsedAt: NOW - RECENT_USE_GRACE_MS + 1000 })],
     ["subagents", tab(), quiet({ runningSubagents: 2 })],
     ["markup", tab(), quiet({ markupAsk: true })],
     ["no_conversation", tab(), quiet({ resumePinned: false })],
@@ -111,6 +115,7 @@ describe("stopBlockers", () => {
       backgroundAt: NOW - BACKGROUND_GRACE_MS - 1,
       phoneSeenAt: NOW - PHONE_GRACE_MS - 1,
       startedAt: NOW - FRESH_GRACE_MS - 1,
+      lastUsedAt: NOW - RECENT_USE_GRACE_MS - 1,
     });
     expect(stopBlockers(tab(), place(), s)).toEqual([]);
   });

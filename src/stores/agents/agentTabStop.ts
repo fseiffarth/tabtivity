@@ -16,7 +16,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ROOT_SCOPE, resumeArgsOf, useTabsStore, type TabEntry } from "../tabs";
 import { useProjectsStore } from "../projects";
-import { agentDeliveryReady, lastBackgroundWorkAt, useActivityStore } from "../activity";
+import { agentDeliveryReady, lastBackgroundWorkAt, lastUserInputAt, useActivityStore } from "../activity";
 import { useAgentSchedulesStore, scheduleCacheKey } from "./agentSchedules";
 import { usePrintRequestsStore } from "../printRequests";
 import { runsLocally } from "./agentClearUndo";
@@ -28,6 +28,7 @@ import { isAgentProposal, nextScheduleOccurrence, scheduleVerdict, type Schedule
 import { scheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import {
   SCHEDULE_SOON_MS,
+  lastUsedOf,
   staticStopBlockers,
   stopAgentTabsCap,
   stopBlockers,
@@ -37,6 +38,7 @@ import {
   type StopTrigger,
 } from "../../lib/agents/agentTabStop";
 import {
+  agentPaneLastShownAt,
   agentPaneShown,
   agentTabStartedAt,
   noteAgentTabStarted,
@@ -78,6 +80,23 @@ export function stopPlaceOf(scope: string, tab: TabEntry): StopPlace {
   };
 }
 
+/** When the tab was last used, from this window's marks and its saved one:
+ *  shown, typed into, a turn worked or finished — and, `withStart`, its spawn
+ *  or wake (the ranking's clock; the recency grace leaves it out, the fresh
+ *  grace covers it). */
+export function agentTabLastUsedAt(scope: string, tab: TabEntry, withStart = true, now = Date.now()): number {
+  const ptyId = `${scope}:${tab.key}`;
+  const activity = useActivityStore.getState();
+  return lastUsedOf({
+    lastShownAt: agentPaneLastShownAt(ptyId, now),
+    lastUserInputAt: lastUserInputAt(ptyId),
+    lastDoneAt: activity.lastDoneByTab[ptyId],
+    lastWorkingAt: activity.busyByTab[ptyId] ? now : activity.lastWorkingByTab[ptyId],
+    restoredLastUsedAt: tab.lastUsedAt,
+    startedAt: withStart ? agentTabStartedAt(ptyId) : undefined,
+  });
+}
+
 /** Whether a prompt is waiting for the tab, or due soon: a send-now or due
  *  rule, a phone hold, an agent's proposal, or a rule firing within
  *  {@link SCHEDULE_SOON_MS}. */
@@ -111,6 +130,7 @@ export function stopSignalsOf(scope: string, tab: TabEntry, now = Date.now()): S
     queuedPrompt: schedules === undefined || promptQueued(schedules, new Date(now)),
     printPending: usePrintRequestsStore.getState().requests.some((r) => r.tab === ptyId),
     startedAt: agentTabStartedAt(ptyId),
+    lastUsedAt: agentTabLastUsedAt(scope, tab, false, now) || undefined,
   };
 }
 
