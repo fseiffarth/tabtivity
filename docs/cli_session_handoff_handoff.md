@@ -69,3 +69,30 @@ Errors are short codes (the Promise rejects with the string): `unknown_target` (
 **Flagged for user**
 - Not run live; backend change, so `npm run backend:stale` is the main agent's job at landing.
 - The `unsupported` code covers several causes; step C shows one text for it.
+
+## Step C
+
+Commit: see `git log --oneline -1 -- src/components/agents/CliHandoffDialog.tsx` on `cli-handoff`.
+
+**Changed**
+- New `src/components/agents/CliHandoffDialog.tsx` (on `DialogShell`, `frame="project-dialog"`): the one dialog. It fetches `list_agents` itself, lists installed CLIs except the source's own by label (`Dropdown`), default `nextLimitCli(...)` (then the first target). A 200 ms-settled effect on the pick calls `agent_cli_handoff_prepare` with `previewOnly: true` and renders the counts; **Continue with <label>** calls it with `previewOnly: false`, then `newAgentTabForDraft` + `addTabToScope(scope, {...spec, location: tab.location, initialInput})`. `initialInput` is the new `cliHandoff.prompt` (`{agent}` = source label, `{file}` = B's `~/handoff/...` path) and nothing else.
+- New `src/components/agents/CliHandoffMenuItem.tsx`: the tab menu row (`canContinueInAnotherCli`: `kind === "agent"`, not assistant, `runsLocally`). It subscribes to its own `busyByTab`/`busyKindByTab` entry and is disabled while `busy && kind !== "shell"` (an agent turn, alone or with a job; a bare shell command does not count) with the `cliHandoff.menuBusy` title. Wired into `TabBar.tsx` before Archive, with a `cliHandoffKey` state that renders the dialog like `scheduleDialogKey`.
+- New `src/lib/agents/cliHandoff.ts`: types, `cliHandoffRequest` (reader identity fields + `tabId` + `target` + `previewOnly`; no `chat`), error-code to i18n-key mapping (`unsupported`; `no_session`/`no_transcript`/`read_failed`; anything else the old `terminal.limitHandoff.failed`).
+- `TerminalLimitHandoff.tsx` keeps only detection; it renders the dialog with `line`. Dialog dismissal is its own effect keyed on `identity`/`visible`, so a store update to the same tab no longer closes it (before, any `tab` identity change did).
+- i18n: `cliHandoff.*` in en/de/es/fr/it; `terminal.limitHandoff.body` reworded (no `{next}`, no "text will be sent"); `terminal.limitHandoff.prompt` and `.switch` removed from all five. Register: `agent.cliHandoff` added, `terminal.limitHandoff.what` updated. `DialogShellRatchet` list: `terminal/TerminalLimitHandoff.tsx` removed.
+- Tests: new `CliHandoffDialog.test.tsx` (13 incl. each), `CliHandoffMenuItem.test.tsx` (7 incl. each); `TerminalLimitHandoff.test.tsx` rewritten for the moved modal (6).
+
+**Choices**
+- Title/pill: opened from the notice (`line` set) it wears the limit title and the `terminal.limitHandoff` pill; from the menu, `cliHandoff.title` and `agent.cliHandoff`.
+- A preview that fails with a permanent code (`unsupported`, `no_session`, `no_transcript`, `read_failed`) shows the reason up front and disables Continue; a generic preview error leaves Continue enabled.
+- The dialog works from the tab object it is given (via a ref kept current by an effect) and re-previews only when the pick, scope or cwd changes. Opening costs one `previewOnly` call.
+- Menu entry is in `TabBar` only; the popout strip has no Archive row either, and its `addTabToScope` would need checking before adding it there.
+
+**Gotchas**
+- The pick falls back to the first target when `nextLimitCli` has none (e.g. the source is last in the saved order); the notice itself still opens only when a next CLI exists.
+
+**Gates**: `scripts/gates-job.sh start` stopped at its first gate, brand, which fails on step B's Rust file (see Flagged), so the rest ran by hand: `npm run lint` 0 errors (30 warnings, none in touched files; eslint on the touched files is clean), `npm run build` PASS, `npx vitest run --changed` 914 files: first run 2 failed (BibCards, a load flake that passes alone; and `UntestedRegistry`: its audit cannot read a conditional `<UntestedTag id={…}/>`, fixed with two literal tags), then rerun green for that, 9 276 tests incl. the 26 new/rewritten; `src/__tests__/theme` 22 files PASS. Rust gates skipped (no Rust change). `git diff --check` clean.
+
+**Flagged for user**
+- `scripts/brand-check.sh` FAILS on step B's file, `src-tauri/src/services/agent/agent_cli_handoff.rs:310` and `:363` (the app name spelled in the HANDOFF.md text). Not touched here (Rust is out of scope for C); the fix is a `crate::brand` macro or a `brand-check: allow` line. It needs Rust gates rerun, and blocks `gates.sh` before it reaches the others.
+- Not run live. Step D (file maps, `agent_sessions.md`, todo boxes) is not done.

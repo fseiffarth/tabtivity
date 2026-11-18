@@ -1,75 +1,32 @@
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { useT } from "../../lib/i18n";
-import { useModalFocus } from "../../hooks/useModalFocus";
 import { useSettingsStore } from "../../stores/settings";
-import { useTabsStore } from "../../stores/tabs";
 import { usePaneTab } from "../tabs/paneTabContext";
 import { splitPtyId } from "../../lib/terminal/ptyId";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { cliLimitNoticeLine, nextLimitCli, type HandoffCli } from "../../lib/agents/limitHandoff";
 import { runsLocally } from "../../stores/agents/agentClearUndo";
-import { readerRequest, type SessionTranscript } from "../../lib/agents/agentReader";
 import { aiIsOff } from "../../lib/aiSwitch";
-import { newAgentTabForDraft } from "../../lib/agents/prompt/newTab";
-import { UntestedTag } from "../common/UntestedTag";
+import { CliHandoffDialog } from "../agents/CliHandoffDialog";
 
 // Keep a dismissed notice dismissed across pane remounts until it leaves the screen.
 const handled = new Set<string>();
 
 export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; visible: boolean; cwd: string }) {
-  const t = useT();
   const parts = splitPtyId(ptyId);
   const scope = parts?.scope;
   const tab = usePaneTab(scope, parts?.key);
-  const [next, setNext] = useState<HandoffCli | null>(null);
-  /** The screen line that matched, as the dialog quotes it. */
-  const [line, setLine] = useState("");
-  const [failed, setFailed] = useState(false);
-  const [busy, setBusy] = useState(false);
+  /** The screen line that matched, as the dialog quotes it; null while the dialog is closed. */
+  const [line, setLine] = useState<string | null>(null);
   const attempted = useRef(false);
-  const dismiss = () => { if (!busy) setNext(null); };
-  const modal = useModalFocus(dismiss, !!next && visible);
   const identity = `${ptyId}:${tab?.sessionId ?? ""}:${tab?.relaunchSeq ?? 0}`;
 
-  // Always the user's click: a line on the screen is the agent's own output, so it never switches by itself.
-  const handoff = async (target: HandoffCli) => {
-    if (!parts || !tab || aiIsOff()) return;
-    setBusy(true);
-    setFailed(false);
-    try {
-      const request = readerRequest(parts.scope, tab, cwd, undefined, 30);
-      if (!request) throw new Error("no transcript");
-      const transcript = await invoke<SessionTranscript>("agent_tab_transcript", request);
-      if (!transcript.available || !transcript.entries.some((entry) => entry.kind === "prompt")) throw new Error("no conversation");
-      const context = JSON.stringify(transcript.entries.filter((entry) => entry.kind === "prompt" || entry.kind === "answer")
-        .slice(-20).map((entry) => ({ role: entry.kind, text: entry.text.slice(-1200) })));
-      if (aiIsOff()) return;
-      // The "+" menu's own tab spec: session id, tab uid env and session-id args, so the tab is
-      // resumable (kept at restart) and the Reader can find its conversation. Its `/rename`
-      // initialInput is replaced by the hand-off prompt; auto tab names cover the label.
-      const { tab: spec } = newAgentTabForDraft({
-        agent: target.bin, customAgents: useSettingsStore.getState().settings?.custom_agents,
-        cwd: tab.cwd || cwd, projectName: "", t,
-      });
-      useTabsStore.getState().addTabToScope(parts.scope, {
-        ...spec, location: tab.location,
-        initialInput: t("terminal.limitHandoff.prompt", { agent: tab.cmd, context }).replace(/\r?\n/g, " "),
-      });
-      setNext(null);
-    } catch {
-      setFailed(true);
-      setNext(target);
-    } finally { setBusy(false); }
-  };
+  // A different tab, relaunch or hidden pane closes the dialog; a store update to the same tab does not.
+  useEffect(() => { setLine(null); }, [identity, visible]);
 
   useEffect(() => {
     attempted.current = false;
-    setNext(null);
-    setFailed(false);
-    setLine("");
     if (!visible || !scope || !tab || tab.kind !== "agent" || tab.assistant || !runsLocally(scope, tab)) return;
     let stopped = false;
     let checking = false;
@@ -89,12 +46,11 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
         const rows = await invoke<HandoffCli[]>("list_agents");
         if (stopped) return;
         const settings = useSettingsStore.getState().settings;
-        const target = nextLimitCli(tab.cmd, rows, settings?.agent_order, settings?.default_agent_cmd ?? "claude");
-        if (!target) return;
+        // Only a notice with somewhere to go opens the dialog; it preselects the same next CLI.
+        if (!nextLimitCli(tab.cmd, rows, settings?.agent_order, settings?.default_agent_cmd ?? "claude")) return;
         attempted.current = true;
         handled.add(identity);
         setLine(matched);
-        setNext(target);
       } catch { /* Retry a transient registry read on the next screen check. */ }
       finally { checking = false; }
     };
@@ -103,17 +59,6 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
     return () => { stopped = true; clearInterval(timer); };
   }, [visible, identity, ptyId, scope, tab]);
 
-  if (!next || !visible) return null;
-  return createPortal(<div className="modal-backdrop" onClick={dismiss}>
-    <div className="project-dialog" ref={modal} role="dialog" aria-modal="true" aria-labelledby="cli-limit-title" style={{ color: "var(--text-primary)" }} onClick={(event) => event.stopPropagation()}>
-      <h2 id="cli-limit-title">{t("terminal.limitHandoff.title")} <UntestedTag id="terminal.limitHandoff" /></h2>
-      <p>{t("terminal.limitHandoff.body", { agent: tab?.cmd ?? "", next: next.label })}</p>
-      {line && <p data-testid="limit-line">{t("terminal.limitHandoff.line", { line })}</p>}
-      {failed && <p role="alert">{t("terminal.limitHandoff.failed")}</p>}
-      <div className="project-dialog-actions">
-        <button type="button" disabled={busy} onClick={dismiss}>{t("common.cancel")}</button>
-        <button type="button" disabled={busy} onClick={() => void handoff(next)}>{t("terminal.limitHandoff.switch", { next: next.label })}</button>
-      </div>
-    </div>
-  </div>, document.body);
+  if (line === null || !visible || !scope || !tab) return null;
+  return <CliHandoffDialog scope={scope} tab={tab} cwd={cwd} line={line} onClose={() => setLine(null)} />;
 }

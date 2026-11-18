@@ -109,6 +109,8 @@ import { MenuShortcut } from "../common/MenuShortcut";
 import { useT } from "../../lib/i18n";
 import { useChordHint } from "../../lib/shortcuts/shortcutHint";
 import { AgentScheduleDialog } from "../agents/AgentScheduleDialog";
+import { CliHandoffDialog } from "../agents/CliHandoffDialog";
+import { CliHandoffMenuItem } from "../agents/CliHandoffMenuItem";
 import { useTabSchedule } from "../../lib/agents/useTabSchedule";
 import { observeStripResize } from "../../lib/observeStripResize";
 import { useHoverAnchorGuard } from "../../lib/useHoverAnchorGuard";
@@ -680,6 +682,7 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
   // Naming a new tab group, renaming one, or renaming a tab hidden in one.
   const { promptText, showMessage, dialogs } = useDialogs();
   const [scheduleDialogKey, setScheduleDialogKey] = useState<string | null>(null);
+  const [cliHandoffKey, setCliHandoffKey] = useState<string | null>(null);
   const addBtnRef = useRef<HTMLButtonElement>(null);
   // The tabs live in their own horizontally-scrolling strip; chevrons flank it
   // and appear only when the strip overflows in that direction (the native
@@ -2145,6 +2148,12 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
           <AgentScheduleDialog scope={scope} tab={tab} onClose={() => setScheduleDialogKey(null)} />
         ) : null;
       })()}
+      {cliHandoffKey && (() => {
+        const tab = tabs.find((item) => item.key === cliHandoffKey);
+        return tab ? (
+          <CliHandoffDialog scope={scope} tab={tab} cwd={tab.cwd || projectCwd} onClose={() => setCliHandoffKey(null)} />
+        ) : null;
+      })()}
       {localityMenu && (() => {
         const tab = tabs.find((tb) => tb.key === localityMenu.key);
         return (
@@ -2268,6 +2277,19 @@ export function TabBar({ groupId, projectCwd, showGroupClose, filesReserveWidth 
               <UntestedTag id="tabBar.2" />
             </button>
           )}
+          {(() => {
+            const menuTab = tabs.find((tb) => tb.key === tabMenu.key);
+            return menuTab ? (
+              <CliHandoffMenuItem
+                scope={scope}
+                tab={menuTab}
+                onOpen={() => {
+                  setCliHandoffKey(menuTab.key);
+                  setTabMenu(null);
+                }}
+              />
+            ) : null;
+          })()}
           {tabs.some((tab) => tab.key === tabMenu.key && canArchiveTab(scope, tab)) && (
             <button
               className="tab-new-menu-item"
