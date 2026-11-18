@@ -567,6 +567,8 @@ const USER_CONFINED: &[(&str, &str, Kind)] = &[
     ("agent_tab_artifact", "target", NotAPath),
     ("agent_tab_chats", "tabDir", NotAPath),
     ("agent_tab_resume_chat", "tabDir", NotAPath),
+    // The stop sweep's resume check: the same store keys as the Resume menu.
+    ("agent_tab_resume_pinned", "cwd", NotAPath),
     ("claude_folder_trusted", "cwd", NotAPath),
     ("agent_tab_changes", "localModel", NotAPath),
     ("agent_tab_transcript", "localModel", NotAPath),
