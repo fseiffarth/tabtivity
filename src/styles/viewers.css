@@ -6608,6 +6608,10 @@ select.file-viewer-run-args-input {
 
 .markdown-body ul,
 .markdown-body ol { margin: 0.55em 0; padding-left: 1.6em; }
+/* reset.css (the vendored preflight) takes every list's markers away. */
+.markdown-body ul { list-style: disc; }
+.markdown-body ul ul { list-style: circle; }
+.markdown-body ol { list-style: decimal; }
 .markdown-body li { margin: 0.22em 0; }
 .markdown-body li > ul,
 .markdown-body li > ol { margin: 0.22em 0; }
