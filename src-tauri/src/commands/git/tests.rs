@@ -8,6 +8,28 @@ fn git_available() -> bool {
     super::git_available_blocking()
 }
 
+#[test]
+fn selective_staging_preserves_siblings_and_unstage_keeps_working_bytes() {
+    if !git_available() { return; }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    init_repo(dir);
+    let root = dir.to_string_lossy().into_owned();
+    let selected = "row[1].txt";
+    fs::write(dir.join(selected), "staged version").unwrap();
+    fs::write(dir.join("row1.txt"), "sibling").unwrap();
+    change_index_path(root.clone(), selected.into(), false, None).unwrap();
+    fs::write(dir.join(selected), "working version").unwrap();
+    let staged = change_list(&root, None, "staged").unwrap();
+    assert_eq!(staged.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(), [selected]);
+    let blob = run_git(None, &root, &["show", &format!(":{selected}")]).unwrap();
+    assert_eq!(blob.stdout, b"staged version");
+    change_index_path(root.clone(), selected.into(), true, None).unwrap();
+    assert!(change_list(&root, None, "staged").unwrap().is_empty());
+    assert_eq!(fs::read(dir.join(selected)).unwrap(), b"working version");
+    assert!(change_list(&root, None, "unstaged").unwrap().iter().all(|row| row.needs_count));
+}
+
 /// The import dialog's origin read answers for the folder's own repository
 /// only — a plain folder inside a hosted checkout must not borrow its origin.
 #[test]
@@ -1915,7 +1937,7 @@ fn a_commondir_redirected_hook_never_runs_through_app_git() {
     assert!(!planted.exists(), "planted hook ran on the file diff");
     git_generate_commit_message_blocking(d.clone()).expect("commit message");
     assert!(!planted.exists(), "planted hook ran on commit-message generation");
-    git_add_path_blocking(d.clone(), "f.txt".into()).expect("stage");
+    change_index_path(d.clone(), "f.txt".into(), false, None).expect("stage");
     assert!(!planted.exists(), "planted hook ran on stage");
     let staged = plain_git(&dir, &["diff", "--cached", "--name-only"]);
     assert_eq!(String::from_utf8_lossy(&staged.stdout).trim(), "f.txt", "stage did not stage");

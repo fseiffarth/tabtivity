@@ -5,6 +5,9 @@ use crate::services::remote::{remote_target_for_dir, RemoteTarget};
 use crate::services::git_hosting::GitAuth;
 use crate::tauri_host::Ctx;
 
+mod branch_exchange;
+use branch_exchange::{BranchAction, BranchComparison, BranchExchange};
+
 // The hardened git runner lives in `services::git_hardened` (S5); these names
 // keep resolving here for every command-side caller.
 pub use crate::services::git_hardened::git_available_blocking;
@@ -60,16 +63,40 @@ pub struct GitStatus {
     /// Internal: lets the dot probe skip two git spawns ([`unpushed_count`]).
     #[serde(skip)]
     pub upstream_ahead: Option<usize>,
+    #[serde(skip)]
+    branch_header: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_exchange: Option<BranchExchange>,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn git_status(
     project_dir: String,
     worktree: Option<GitWorktreeSelection>,
+    branch_exchange: Option<bool>,
 ) -> Result<GitStatus, String> {
-    app_core::rt::try_blocking("git", move || match worktree {
-        None => git_status_blocking(project_dir),
-        Some(selection) => git_status_blocking_selected(project_dir, Some(selection)),
+    app_core::rt::try_blocking("git", move || {
+        if branch_exchange != Some(true) {
+            return match worktree {
+                None => git_status_blocking(project_dir),
+                Some(selection) => git_status_blocking_selected(project_dir, Some(selection)),
+            };
+        }
+        let mut status = git_status_probe_selected(project_dir.clone(), false, worktree.clone())?;
+        if !status.is_repo {
+            return Ok(status);
+        }
+        let exchange = branch_exchange::read_exchange(project_dir.clone(), worktree.as_ref(), &status);
+        if let BranchExchange::Branch { checkout, ahead, behind, destinations, .. } = &exchange {
+            status.has_remote = true;
+            let up_to_date = *ahead == Some(0) && *behind == Some(0)
+                && destinations.iter().all(|dest| dest.action == branch_exchange::ActionKind::Push && dest.ahead == 0);
+            if up_to_date && remote_target_for_dir(&project_dir).is_none() {
+                status.head_tagged = has_head_tag(checkout);
+            }
+        }
+        status.branch_exchange = Some(exchange);
+        Ok(status)
     })
     .await
 }
@@ -110,6 +137,8 @@ fn git_status_probe_selected(
         behind: 0,
         head_tagged: false,
         upstream_ahead: None,
+        branch_header: None,
+        branch_exchange: None,
     };
     if local_non_repo(target.as_ref(), &project_dir) {
         return Ok(no_repo);
@@ -136,8 +165,10 @@ fn git_status_probe_selected(
     let mut untracked = 0usize;
     let mut behind = 0usize;
     let mut upstream_ahead = None;
+    let mut branch_header = None;
     for line in text.lines() {
         if let Some(header) = line.strip_prefix("## ") {
+            branch_header = Some(header.to_string());
             let (ahead, back) = header
                 .rfind('[')
                 .map(|at| parse_track(&header[at..]))
@@ -164,14 +195,8 @@ fn git_status_probe_selected(
     }
 
     let has_remote = probe_remote
-        && run_git(target.as_ref(), &project_dir, &["remote"])
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false);
-    let head_tagged = has_remote
-        && target.is_none()
-        && run_git(None, &project_dir, &["tag", "--points-at", "HEAD"])
-            .map(|o| o.status.success() && !o.stdout.trim_ascii().is_empty())
-            .unwrap_or(false);
+        && stdout(target.as_ref(), &project_dir, &["remote"]).is_some_and(|out| !out.is_empty());
+    let head_tagged = has_remote && target.is_none() && has_head_tag(&project_dir);
 
     Ok(GitStatus {
         staged,
@@ -182,7 +207,13 @@ fn git_status_probe_selected(
         behind,
         head_tagged,
         upstream_ahead,
+        branch_header,
+        branch_exchange: None,
     })
+}
+
+fn has_head_tag(project_dir: &str) -> bool {
+    stdout(None, project_dir, &["tag", "--points-at", "HEAD"]).is_some_and(|out| !out.is_empty())
 }
 
 /// Whether a `git status --branch` header names an upstream that still
@@ -441,7 +472,7 @@ pub async fn git_commit(
     project_dir: String,
     message: String,
     worktree: Option<GitWorktreeSelection>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     app_core::rt::try_blocking("git", move || match worktree {
         None => git_commit_blocking(project_dir, message),
         Some(selection) => git_commit_blocking_selected(project_dir, message, Some(selection)),
@@ -449,7 +480,7 @@ pub async fn git_commit(
     .await
 }
 
-fn git_commit_blocking(project_dir: String, message: String) -> Result<(), String> {
+fn git_commit_blocking(project_dir: String, message: String) -> Result<String, String> {
     git_commit_blocking_selected(project_dir, message, None)
 }
 
@@ -457,14 +488,16 @@ fn git_commit_blocking_selected(
     project_dir: String,
     message: String,
     worktree: Option<GitWorktreeSelection>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
     require_hook_trust(target.as_ref(), &project_dir)?;
     let out = run_git_hooked(target.as_ref(), &project_dir, &["commit", "-m", &message])?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
-    Ok(())
+    // Git's commit summary identifies the branch and abbreviated commit
+    // that this operation recorded, even if another checkout follows.
+    Ok(String::from_utf8_lossy(&out.stdout).lines().find(|s| s.starts_with('[')).unwrap_or("").to_owned())
 }
 
 /// Returns a map of `relative_path → status` for all entries directly under `rel_path`.
@@ -734,17 +767,31 @@ fn holds_no_file(dir: &Path, budget: &mut usize) -> bool {
 
 /// Stages a specific path (file or directory) via `git add`.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn git_add_path(project_dir: String, rel_path: String) -> Result<(), String> {
-    app_core::rt::try_blocking("git", move || git_add_path_blocking(project_dir, rel_path)).await
+pub async fn git_add_path(project_dir: String, rel_path: String, unstage: Option<bool>, worktree: Option<GitWorktreeSelection>) -> Result<(), String> {
+    app_core::rt::try_blocking("git", move || {
+        change_index_path(project_dir, rel_path, unstage.unwrap_or(false), worktree.as_ref())
+    }).await
 }
 
-fn git_add_path_blocking(project_dir: String, rel_path: String) -> Result<(), String> {
-    let target = remote_target_for_dir(&project_dir);
-    let out = run_git(target.as_ref(), &project_dir, &["add", "--", &rel_path])?;
+fn change_index_path(project_dir: String, rel_path: String, unstage: bool, worktree: Option<&GitWorktreeSelection>) -> Result<(), String> {
+    let (dir, target) = selected_git_context(project_dir, worktree)?;
+    let verb = if unstage { "reset" } else { "add" };
+    // A row names one literal path. A wildcard in a filename must never
+    // stage or unstage a sibling. Path-limited reset only updates the index.
+    let pathspec = checkout_pathspec(&rel_path)?;
+    let out = run_git(target.as_ref(), &dir, &[verb, "--", &pathspec])?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
     Ok(())
+}
+
+fn checkout_pathspec(rel: &str) -> Result<String, String> {
+    use std::path::Component;
+    if rel.is_empty() || Path::new(rel).components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+        return Err("Expected a path within the selected checkout".into());
+    }
+    Ok(format!(":(literal){rel}"))
 }
 
 /// A single changed file with its line delta, used by the action-button change
@@ -755,6 +802,7 @@ pub struct FileChange {
     pub added: i64,
     pub deleted: i64,
     pub binary: bool,
+    pub needs_count: bool,
 }
 
 /// Per-file line stats (`git diff --numstat`) for one of three scopes:
@@ -768,25 +816,49 @@ pub async fn git_change_stats(
     project_dir: String,
     scope: String,
     worktree: Option<GitWorktreeSelection>,
+    rel_path: Option<String>,
+    branch_comparison: Option<BranchComparison>,
 ) -> Result<Vec<FileChange>, String> {
-    let pool = ctx.get::<crate::services::remote::RemotePoolState>();
-    let (project_dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
-    let dir = Path::new(&project_dir);
-    if local_non_repo(target.as_ref(), &project_dir) {
+    if scope == "unpushed" {
+        if let Some(comparison) = branch_comparison {
+            return app_core::rt::try_blocking("git", move || {
+                branch_exchange::resolve_comparison(project_dir, worktree.as_ref(), comparison)
+            }).await;
+        }
+    }
+    let (project_dir, target) = app_core::rt::try_blocking("git", move || selected_git_context(project_dir, worktree.as_ref())).await?;
+    if scope == "untracked-count" {
+        let rel = rel_path.ok_or("Missing file path")?;
+        return untracked_count(ctx, project_dir, target, rel).await;
+    }
+    app_core::rt::try_blocking("git", move || change_list(&project_dir, target.as_ref(), &scope)).await
+}
+
+fn change_list(project_dir: &str, target: Option<&RemoteTarget>, scope: &str) -> Result<Vec<FileChange>, String> {
+    change_list_with_range(project_dir, target, scope, None)
+}
+
+fn change_list_with_range(
+    project_dir: &str,
+    target: Option<&RemoteTarget>,
+    scope: &str,
+    range: Option<String>,
+) -> Result<Vec<FileChange>, String> {
+    if local_non_repo(target, project_dir) {
         return Ok(vec![]);
     }
 
-    let numstat_args: Option<Vec<String>> = match scope.as_str() {
+    let numstat_args: Option<Vec<String>> = match scope {
         "staged" => Some(vec![
             "diff".into(),
             "--cached".into(),
             "--numstat".into(),
             "--".into(),
         ]),
-        "unpushed" => unpushed_base(target.as_ref(), &project_dir).map(|base| {
+        "unpushed" => range.or_else(|| unpushed_base(target, project_dir).map(|base| format!("{base}.."))).map(|range| {
             vec![
                 "diff".into(),
-                format!("{base}.."),
+                range,
                 "--numstat".into(),
                 "--".into(),
             ]
@@ -798,15 +870,18 @@ pub async fn git_change_stats(
     // otherwise read "no changes" over a repo git could not read at all.
     let mut changes: Vec<FileChange> = Vec::new();
     if let Some(args) = numstat_args {
-        let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = run_git(target.as_ref(), &project_dir, &args)?;
+        let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
+        // Separate old and new paths and keep the filename verbatim, since a
+        // displayed row is also a literal target for an index edit.
+        args.splice(1..1, ["-z", "--no-renames"]);
+        let out = run_git(target, project_dir, &args)?;
         match failed_read(&out) {
             None => {}
             Some(ReadFailure::NotARepo) => return Ok(vec![]),
             Some(ReadFailure::Error(why)) => return Err(why),
         }
-        let text = String::from_utf8_lossy(&out.stdout);
-        for line in text.lines() {
+        for entry in out.stdout.split(|&b| b == 0).filter(|s| !s.is_empty()) {
+            let line = std::str::from_utf8(entry).map_err(|_| "Filename is not valid UTF-8")?;
             let mut parts = line.splitn(3, '\t');
             let a = parts.next().unwrap_or("");
             let d = parts.next().unwrap_or("");
@@ -815,10 +890,11 @@ pub async fn git_change_stats(
                 continue;
             }
             changes.push(FileChange {
-                path: normalize_numstat_path(p),
+                path: p.to_owned(),
                 added: a.parse().unwrap_or(0),
                 deleted: d.parse().unwrap_or(0),
                 binary: a == "-" || d == "-",
+                needs_count: false,
             });
         }
     }
@@ -827,8 +903,8 @@ pub async fn git_change_stats(
     // their lines as additions (the Add list shows them alongside modified files).
     if scope == "unstaged" {
         let out = run_git(
-            target.as_ref(),
-            &project_dir,
+            target,
+            project_dir,
             &["ls-files", "--others", "--exclude-standard", "-z"],
         )?;
         if !out.status.success() {
@@ -838,43 +914,18 @@ pub async fn git_change_stats(
             if chunk.is_empty() {
                 continue;
             }
-            let rel = String::from_utf8_lossy(chunk).into_owned();
-            // Untracked line counts read the file's bytes and apply the
-            // same NUL/newline logic for both project kinds:
-            //   * local  → `std::fs::read` under the project directory;
-            //   * remote → the bytes over the pooled SFTP session, with
-            //     the rel path confined under `spec.remote_path` (a path
-            //     that escapes the root is treated as unreadable).
-            // Any read/confinement error degrades to (0, false) rather
-            // than failing the whole listing.
-            let (added, binary) = match &target {
-                None => count_added_lines(&dir.join(&rel)),
-                Some(t) => count_added_lines_remote(pool, t, &rel).await,
-            };
+            let rel = std::str::from_utf8(chunk).map_err(|_| "Filename is not valid UTF-8")?;
             changes.push(FileChange {
-                path: rel,
-                added,
+                path: rel.to_owned(),
+                added: 0,
                 deleted: 0,
-                binary,
+                binary: false,
+                needs_count: true,
             });
         }
     }
 
     Ok(changes)
-}
-
-/// `git --numstat` renders renames as `old => new`, optionally with a braced
-/// common segment (`src/{a => b}/f.rs`). Reduce either form to the new path.
-fn normalize_numstat_path(p: &str) -> String {
-    let Some(arrow) = p.find(" => ") else {
-        return p.to_string();
-    };
-    if let (Some(lb), Some(rb)) = (p.find('{'), p.find('}')) {
-        if lb < arrow && arrow < rb {
-            return format!("{}{}{}", &p[..lb], &p[arrow + 4..rb], &p[rb + 1..]);
-        }
-    }
-    p[arrow + 4..].to_string()
 }
 
 /// Classify an untracked file's bytes into `(added_lines, binary)`, treating
@@ -889,32 +940,44 @@ fn count_lines_in_bytes(bytes: &[u8]) -> (i64, bool) {
     (newlines + trailing, false)
 }
 
-/// Line count of an untracked **local** file. An unreadable path degrades to
-/// `(0, false)` rather than failing the listing.
-fn count_added_lines(path: &Path) -> (i64, bool) {
-    match std::fs::read(path) {
-        Ok(bytes) => count_lines_in_bytes(&bytes),
-        Err(_) => (0, false),
-    }
-}
-
-/// Line count of an untracked **remote** file, read over the project's pooled
-/// SFTP session (mount-free remote). `rel` is the project-relative path from
-/// `git ls-files --others`; it is confined under `spec.remote_path` so a hostile
-/// path cannot escape the root. A confinement or read error degrades to
-/// `(0, false)`, mirroring the local reader.
-async fn count_added_lines_remote(
-    pool: &crate::services::remote::RemotePoolState,
-    target: &RemoteTarget,
-    rel: &str,
-) -> (i64, bool) {
-    let Ok(path) = crate::commands::fs::remote_join_confined(&target.spec.remote_path, rel) else {
-        return (0, false);
+async fn untracked_count(ctx: Ctx, dir: String, target: Option<RemoteTarget>, rel: String) -> Result<Vec<FileChange>, String> {
+    const LIMIT: u64 = 256 * 1024;
+    // Only count literal untracked rows Git currently lists in this checkout.
+    let (rel, target, local_bytes) = app_core::rt::try_blocking("git", move || {
+        let pathspec = checkout_pathspec(&rel)?;
+        let list = run_git(target.as_ref(), &dir, &["ls-files", "--others", "--exclude-standard", "-z", "--", &pathspec])?;
+        if !list.status.success() || list.stdout.strip_suffix(&[0]) != Some(rel.as_bytes()) {
+            return Err("File is no longer an untracked entry".into());
+        }
+        let local_bytes = if target.is_none() && !(cfg!(unix) && rel.contains('\\')) {
+            crate::services::home_io::HomeFile::open_existing(Path::new(&dir), &rel)
+                .and_then(|f| f.read_capped(LIMIT))
+        } else {
+            None
+        };
+        Ok((rel, target, local_bytes))
+    }).await?;
+    let bytes = match target {
+        None => local_bytes,
+        Some(target) => {
+            let pool = ctx.get::<crate::services::remote::RemotePoolState>();
+            let path = crate::commands::fs::remote_join_confined(&target.spec.remote_path, &rel)?;
+            let Some(sftp) = crate::commands::fs::pooled(pool, &target).await else { return Ok(vec![]) };
+            let read = async {
+                let mut fs = sftp.fs();
+                let meta = fs.symlink_metadata(&path).await.ok()?;
+                if !meta.file_type()?.is_file() || meta.len()? > LIMIT { return None; }
+                let root = fs.canonicalize(&target.spec.remote_path).await.ok()?;
+                let real = fs.canonicalize(&path).await.ok()?;
+                if !real.starts_with(root) { return None; }
+                crate::services::sftp::read_file_up_to(&sftp, &path, LIMIT).await.ok().flatten()
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(5), read).await.ok().flatten()
+        }
     };
-    match crate::commands::fs::remote_read(pool, target, &path, crate::services::remote_sync::MAX_SYNC_FILE_BYTES).await {
-        Ok(bytes) => count_lines_in_bytes(&bytes),
-        Err(_) => (0, false),
-    }
+    let Some(bytes) = bytes else { return Ok(Vec::new()) };
+    let (added, binary) = count_lines_in_bytes(&bytes);
+    Ok(vec![FileChange { path: rel, added, deleted: 0, binary, needs_count: false }])
 }
 
 /// The ref every "unpushed" view (tree markers, Push list, pill dot) measures
@@ -1026,8 +1089,12 @@ pub async fn git_push(
     project_dir: String,
     project_id: Option<String>,
     worktree: Option<GitWorktreeSelection>,
+    branch_action: Option<BranchAction>,
 ) -> Result<String, String> {
     app_core::rt::try_blocking("git", move || {
+        if let Some(action) = branch_action {
+            return branch_exchange::apply(project_dir, project_id, worktree.as_ref(), action);
+        }
         if worktree.is_none() {
             return git_push_blocking(project_dir, project_id);
         }
@@ -1128,9 +1195,17 @@ const PUSH_ARGS: [&str; 3] = ["-c", "push.autoSetupRemote=true", "push"];
 /// and the mirror-side push below, so both sides get identical auth.
 fn push_local(dir: &std::path::Path, auth: &GitAuth) -> Result<std::process::Output, String> {
     crate::services::exec_trust::require(crate::services::exec_trust::TrustKind::GitHooks, dir)?;
+    exchange_local(dir, auth, &PUSH_ARGS)
+}
+
+fn exchange_local(dir: &Path, auth: &GitAuth, git_args: &[&str]) -> Result<std::process::Output, String> {
     let mut args = auth.git_args("x-access-token");
-    args.extend(PUSH_ARGS.map(str::to_string));
-    let mut cmd = hooked_git_command_in(dir, &args);
+    args.extend(git_args.iter().map(|arg| arg.to_string()));
+    let mut cmd = if git_args.first() == Some(&"fetch") {
+        hardened_git_command_in(dir, &args)
+    } else {
+        hooked_git_command_in(dir, &args)
+    };
     if !auth.is_empty() {
         auth.apply_env(&mut cmd);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
@@ -1702,10 +1777,16 @@ pub async fn git_checkout(
     project_dir: String,
     target: String,
     worktree: Option<GitWorktreeSelection>,
+    create_branch: Option<bool>,
 ) -> Result<String, String> {
-    app_core::rt::try_blocking("git", move || match worktree {
-        None => git_checkout_blocking(project_dir, target),
-        Some(selection) => git_checkout_blocking_selected(project_dir, target, Some(selection)),
+    app_core::rt::try_blocking("git", move || {
+        if create_branch == Some(true) {
+            return branch_exchange::create_branch(project_dir, worktree.as_ref(), &target);
+        }
+        match worktree {
+            None => git_checkout_blocking(project_dir, target),
+            Some(selection) => git_checkout_blocking_selected(project_dir, target, Some(selection)),
+        }
     })
     .await
 }
@@ -1830,8 +1911,17 @@ const NOT_A_REPO: &str = "not a git repository";
 /// diff; the index diff stands in. A file outside any repository answers
 /// [`NOT_A_REPO`].
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub async fn git_diff_file(project_dir: String, rel_path: String) -> Result<String, String> {
-    app_core::rt::try_blocking("git", move || git_diff_file_blocking(project_dir, rel_path)).await
+pub async fn git_diff_file(project_dir: String, rel_path: String, staged: Option<bool>, worktree: Option<GitWorktreeSelection>) -> Result<String, String> {
+    app_core::rt::try_blocking("git", move || {
+        if staged == Some(true) {
+            let (dir, target) = selected_git_context(project_dir, worktree.as_ref())?;
+            let pathspec = checkout_pathspec(&rel_path)?;
+            let out = run_git(target.as_ref(), &dir, &["diff", "--cached", "--", &pathspec])?;
+            if !out.status.success() { return Err(failure_message(&out)); }
+            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+        }
+        git_diff_file_blocking(project_dir, rel_path)
+    }).await
 }
 
 fn git_diff_file_blocking(project_dir: String, rel_path: String) -> Result<String, String> {
@@ -2126,6 +2216,42 @@ pub(crate) fn selected_git_context(
         }
     }
     Ok((ctx.cwd, ctx.target))
+}
+
+/// Routing for a hosting exchange. A selected worktree takes precedence over
+/// the default mirror that owns the hosting origin.
+pub(crate) struct GitExchangeContext {
+    pub(crate) dir: String,
+    pub(crate) target: Option<RemoteTarget>,
+    pub(crate) mirror_project_id: Option<String>,
+}
+
+pub(crate) fn git_exchange_context(
+    project_dir: String,
+    selection: Option<&GitWorktreeSelection>,
+) -> Result<GitExchangeContext, String> {
+    let remote = remote_target_for_dir(&project_dir);
+    if selection.is_none() {
+        if let Some(target) = remote {
+            if let Some(mirror) = crate::commands::git_publish::mirror_origin_repo(&target.project_id) {
+                return Ok(GitExchangeContext {
+                    dir: mirror.to_string_lossy().into_owned(),
+                    target: None,
+                    mirror_project_id: Some(target.project_id),
+                });
+            }
+            return Ok(GitExchangeContext {
+                dir: project_dir,
+                target: Some(target),
+                mirror_project_id: None,
+            });
+        }
+        return Ok(GitExchangeContext { dir: project_dir, target: None, mirror_project_id: None });
+    }
+
+    let (dir, target) = selected_git_context(project_dir, selection)?;
+    let mirror_project_id = remote.filter(|_| target.is_none()).map(|remote| remote.project_id);
+    Ok(GitExchangeContext { dir, target, mirror_project_id })
 }
 
 /// Everything a worktree command needs once the site question is settled.
