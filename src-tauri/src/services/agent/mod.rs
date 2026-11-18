@@ -42,6 +42,9 @@ pub mod agent_registry;
 // An agent tab's conversation taken along to another worktree (the Reader's
 // branch chip).
 pub mod agent_relocate;
+// Whether a respawn would resume an agent tab's own conversation: the stop
+// sweep's check before it ends an idle tab (docs/agent_tab_stop_plan.md).
+pub mod agent_resume_pinned;
 pub mod agent_session;
 pub mod agent_shim;
 pub mod agent_sqlite;

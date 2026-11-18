@@ -2487,6 +2487,7 @@ pub fn run() {
             commands::terminal::local_tmux_rename,
             commands::terminal::local_tmux_screen,
             commands::terminal::local_tmux_pane_dead,
+            commands::terminal::local_tmux_app_sessions,
             commands::terminal::project_cpu_percent,
             // External apps / window tracking
             commands::apps::launch_app,
@@ -2737,6 +2738,7 @@ pub fn run() {
             commands::agents::agent_tab_changes,
             commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
+            commands::agents::agent_tab_resume_pinned,
             commands::agents::agent_tab_chats,
             commands::agents::agent_tab_resume_chat,
             commands::agents::agent_tab_move_session,

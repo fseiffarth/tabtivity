@@ -119,7 +119,7 @@ where
 /// The most of a legacy Vibe session's `meta.json` read to match its id.
 const VIBE_META_CAP: u64 = 16 * 1024 * 1024;
 
-fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
+pub(crate) fn vibe_session_exists(home: &std::path::Path, id: &str) -> bool {
     if !is_uuid_shaped(id) {
         return false;
     }
@@ -233,7 +233,7 @@ pub(crate) fn codex_session_exists(
     codex_session_exists_in(root, store, uuid)
 }
 
-fn codex_session_exists_in<'a>(
+pub(crate) fn codex_session_exists_in<'a>(
     root: &std::path::Path,
     stores: impl IntoIterator<Item = &'a std::path::Path>,
     uuid: &str,

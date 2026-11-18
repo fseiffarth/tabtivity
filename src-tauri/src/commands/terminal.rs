@@ -294,6 +294,21 @@ pub async fn local_tmux_pane_dead(session: String) -> Result<bool, String> {
     app_core::rt::blocking("terminal", move || mux.pane(&session).is_ok_and(|pane| pane.dead)).await
 }
 
+/// The local sessions the app minted that are running now
+/// (`tmux_local::sessions_to_reap`'s rule): what the window's restore wake
+/// reads to find a stopped tab whose agent a crash left running. Empty with no
+/// local session backend or no server.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn local_tmux_app_sessions() -> Vec<String> {
+    let mux = crate::services::session_mux::mux();
+    if !mux.holds_sessions() {
+        return Vec::new();
+    }
+    app_core::rt::try_blocking("terminal", move || Ok::<_, String>(crate::services::session_mux::app_session_names(mux.as_ref())))
+        .await
+        .unwrap_or_default()
+}
+
 /// The visible screen of a **local** tmux session, as plain rows — what the
 /// model tag beside an agent tab reads the session's status line from
 /// (`stores/agents/agentModels`). `None` when the session is not here (a remote
