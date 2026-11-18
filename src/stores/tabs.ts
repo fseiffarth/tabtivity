@@ -22,6 +22,7 @@ import { getDetachedWindowContext, type DetachedWindowContext } from "./detached
 import { usePopoutViewStore } from "./popoutView";
 import { closePdfPresentWindows } from "../lib/window/closePdfPresent";
 import { currentTabCommand } from "../lib/brandMigration";
+import { noteRestoredStopped, restoresStopped } from "../lib/agents/agentTabStopMarks";
 import { ASSISTANT_SCOPE, readAssistantLaunch } from "../lib/assistant";
 import { readCockpitMeta, sameCockpitMeta } from "../lib/cockpit/agentNotes";
 import type {
@@ -3889,11 +3890,19 @@ export const useTabsStore = create<TabsStore>((set, get) => ({
     // double as PTY ids, so always mint a fresh one on restore.
     const keyMap = new Map<string, string>();
     const scope = targetScope ?? get().scope;
+    // Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): with the cap
+    // on, every agent tab that may ever be stopped comes back stopped, so
+    // nothing spawns for it; the shown ones wake at once (`PaneSlot`), and the
+    // stop sweep's restore wake starts the most recently used up to the cap.
+    const restoredStopped: string[] = [];
     const tabs: TabEntry[] = layout.map((t) => {
       const entry = restoreSavedTab(t, { defaultCwd, scope, agentRoots });
       keyMap.set(t.key, entry.key);
-      return entry;
+      if (!restoresStopped(scope, entry)) return entry;
+      restoredStopped.push(entry.key);
+      return { ...entry, stopped: true };
     });
+    noteRestoredStopped(scope, restoredStopped);
 
     // Build the layout tree. With `groups` provided, rebuild from the saved
     // tree; otherwise (legacy) put all tabs in a single root group. Groups tagged

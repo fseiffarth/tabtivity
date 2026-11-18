@@ -28,6 +28,8 @@ import { isAgentProposal, nextScheduleOccurrence, scheduleVerdict, type Schedule
 import { scheduledAgentInput } from "../../lib/agents/scheduledAgentInput";
 import {
   SCHEDULE_SOON_MS,
+  staticStopBlockers,
+  stopAgentTabsCap,
   stopBlockers,
   type StopBlocker,
   type StopPlace,
@@ -39,7 +41,9 @@ import {
   agentTabStartedAt,
   noteAgentTabStarted,
   phoneSawTabAt,
+  setRestoreStopRule,
 } from "../../lib/agents/agentTabStopMarks";
+import { useSettingsStore } from "../settings";
 
 /** The last-use mark moves only by at least this much, so it does not churn
  *  the layout's save debounce. */
@@ -175,6 +179,14 @@ export function wakeAgentTab(scope: string, key: string): boolean {
   }
   return relaunchAwake(scope, key);
 }
+
+/** The restore's rule (`loadFromLayout`): with the cap on, a tab no static
+ *  guard holds for comes back stopped. With the cap off, none does. */
+export function restoredStopped(scope: string, tab: TabEntry): boolean {
+  if (stopAgentTabsCap(useSettingsStore.getState().settings) === null) return false;
+  return staticStopBlockers(tab, stopPlaceOf(scope, tab)).length === 0;
+}
+setRestoreStopRule(restoredStopped);
 
 /** The scope and tab a schedule target names. */
 export function tabOfScheduleTarget(scheduleTargetId: string): { scope: string; tab: TabEntry } | null {

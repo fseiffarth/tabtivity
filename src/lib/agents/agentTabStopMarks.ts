@@ -6,6 +6,7 @@
  * state, written by the pane layer (`PaneSlot`), the phone bridge and the
  * layout load, so nothing here imports a store.
  */
+import type { TabEntry } from "../../stores/tabs/types";
 
 const shownNow = new Set<string>();
 const lastShown = new Map<string, number>();
@@ -66,6 +67,22 @@ export function takeRestoredStopped(): Map<string, Set<string>> {
   const out = new Map(restoredStopped);
   restoredStopped.clear();
   return out;
+}
+
+/** The restore's rule: whether a tab of `scope` just rebuilt from a saved
+ *  layout comes back stopped. Set by `stores/agents/agentTabStop` (it reads
+ *  the settings and the projects store, which the tabs store must not
+ *  import); unset, nothing comes back stopped. */
+type RestoreStopRule = (scope: string, tab: TabEntry) => boolean;
+let restoreStopRule: RestoreStopRule | null = null;
+
+export function setRestoreStopRule(rule: RestoreStopRule | null): void {
+  restoreStopRule = rule;
+}
+
+/** Whether `loadFromLayout` restores this tab stopped. */
+export function restoresStopped(scope: string, tab: TabEntry): boolean {
+  return restoreStopRule?.(scope, tab) ?? false;
 }
 
 /** Forget a tab's marks (its pane went for good). */
