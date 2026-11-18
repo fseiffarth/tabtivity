@@ -572,3 +572,64 @@ section).
 * **Residual of the race fix**: a session from a pre-stamp build (no stamp)
   that loses the listing race is stamped by the attach.
 * The plan file `docs/mcp_reattach_plan.md` still says "Nothing implemented".
+
+## R3: Phase 2 security verification
+
+Verified R2's six findings from the code, on `8eedce18e`; fixes are one
+commit each with a regression test that fails without it
+(`git log 8eedce18e..`).
+
+### Verdicts
+
+1. **Medium, interception survives the first-try bind: CONFIRMED (facts),
+   not fixed — needs the user's decision.** A std-socket test on Linux: a
+   squatter that set `SO_REUSEADDR` keeps its accepted connection after
+   closing its listener, the app's bind (Rust sets `SO_REUSEADDR` on Unix)
+   succeeds on the first try, the old connection still delivers to the
+   squatter, new connections reach the app; without `SO_REUSEADDR` on the
+   squatter the app's bind fails (`EADDRINUSE`, fallback, purge). Fenced
+   agents share the host network (`--unshare-net` only for Local models
+   only projects) and know the port from their own MCP URLs. The core of
+   the risk (harvest during downtime, release before restart) was already
+   the accepted residual; the first-try guard narrows less than the docs
+   said. `loopback_owner` exists but reads only `LISTEN` rows and walks
+   `/proc/*/fd` of this uid (no peer lookup, Linux only).
+2. **Low, a revoke undone by a stale row write: CONFIRMED, fixed.** The
+   listener keeps the hashes this run revoked (`forgotten`): every write
+   strips them (a created or revived row written at commit after a revoke),
+   so does `candidate`; `forget_hashes` writes under the write lock (the
+   unlocked "named" pre-check is gone) and removes the record when its write
+   fails. Residual: a state dir that can be read but no longer written keeps
+   the hash on disk for a later run (this run still revives nothing of it).
+3. **Low, backward clock step: CONFIRMED (the cap stretched by the step,
+   not "never expires"), fixed.** `now < last_alive` is refused, and
+   `Listener::clock` (wall at open + monotonic elapsed, never behind the
+   wall clock) feeds `within_cap`, `candidate` and `pending_bearer`.
+4. **Low, revival creates a fresh tokenless agent: CONFIRMED, fixed.** A
+   revival is `host_attach_only`; on tmux an attach-only launch's argv is
+   the attach client's (`attach_only_client`), so a session gone since the
+   3 s listing is never created; the commit drops the row when the session
+   is gone. The AI switch's rejoin (same never-create rule, same tmux hole)
+   is covered by the same code.
+5. **Low, a schedule/root hash written as the grant: CONFIRMED, fixed.**
+   `created_row` returns `None` without a revivable lane.
+6. **Low, clean-quit race: CONFIRMED, fixed.** One per-listener `io` lock
+   over every write and the delete.
+
+### Tests run (targeted, one at a time; no gates)
+
+* `cargo test -p tabtivity --lib root_mcp_reattach` (6 new tests).
+* `cargo test -p tabtivity --lib -- launch_prep root_mcp_reattach` (new:
+  `a_revival_only_attaches`).
+* `cargo test -p tabtivity --lib -- root_mcp launch_prep session_mux tmux_local mobile_control::host terminal agent_privacy tabs_mcp`: 725 passed.
+* `cargo clippy -p tabtivity --lib -- -D warnings`: clean. Not run: gates, `--all-targets`, `--no-default-features`, Windows (`attach_only_client` is unused there: `allow(dead_code)`).
+
+### Flags for the user
+
+* Finding 1 needs a decision (see the R3 report): a peer check on revived
+  sessions (Linux: the connection's peer socket → its process → inside the
+  session's pane tree or fence), or not reviving git and tabs, or keep the
+  residual as documented.
+* A Mobile-host revival whose session ended meanwhile is refused with the
+  AI switch's message (`headless_rejoin`), which reads oddly.
+* Nothing was run live.

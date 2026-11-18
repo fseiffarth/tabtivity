@@ -1903,6 +1903,7 @@ impl McpRecord {
 /// the session — gone meanwhile, the client exits instead of starting a new
 /// agent. A backend that attaches by stream (the Windows session host) is
 /// left as it is: its spawn sends `Attach` alone for such a launch.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn attach_only_client(opts: &mut PtyOptions, mux: &dyn crate::services::session_mux::SessionMux) {
     let Some(session) = opts.tmux_session.clone().filter(|_| opts.mux_wrapped) else { return };
     if let Ok(client) = mux.attach_client(&session, false) {
