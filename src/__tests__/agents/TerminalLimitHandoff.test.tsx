@@ -15,6 +15,8 @@ vi.mock("../../stores/agents/agentClearUndo", () => ({ runsLocally: () => true }
 vi.mock("../../lib/agents/agentReader", () => ({ readerRequest: () => ({ sessionId: "session" }) }));
 vi.mock("../../lib/aiSwitch", () => ({ aiIsOff: () => false }));
 vi.mock("../../components/common/UntestedTag", () => ({ UntestedTag: () => null }));
+import { envName } from "../../lib/brand";
+import { isResumableAgentTab } from "../../stores/tabs/tabKinds";
 import { TerminalLimitHandoff } from "../../components/terminal/TerminalLimitHandoff";
 let sequence = 0;
 beforeEach(() => {
@@ -43,6 +45,17 @@ it("asks first, quotes the screen line that matched, and keeps the source", asyn
   const input = mocks.add.mock.calls[0][1].initialInput as string;
   expect(input).toContain("Finish task");
   expect(input).not.toMatch(/[\r\n]/);
+});
+it("opens a resumable successor tab with a session id, the tab uid env and the session-id args", async () => {
+  await show();
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Continue with Codex" })); });
+  const added = mocks.add.mock.calls[0][1];
+  expect(isResumableAgentTab(added)).toBe(true);
+  expect(added.sessionId).toBeTruthy();
+  expect(added.env[envName("TAB_UID")]).toBe(added.sessionId);
+  expect(added.scheduleTargetId).toBeTruthy();
+  expect(added.initialInput).toContain("Finish task");
+  expect(added.initialInput).not.toContain("/rename");
 });
 it("cancelling neither switches nor saves", async () => {
   await show();

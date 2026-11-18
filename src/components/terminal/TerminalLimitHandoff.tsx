@@ -13,6 +13,7 @@ import { cliLimitNoticeLine, nextLimitCli, type HandoffCli } from "../../lib/age
 import { runsLocally } from "../../stores/agents/agentClearUndo";
 import { readerRequest, type SessionTranscript } from "../../lib/agents/agentReader";
 import { aiIsOff } from "../../lib/aiSwitch";
+import { newAgentTabForDraft } from "../../lib/agents/prompt/newTab";
 import { UntestedTag } from "../common/UntestedTag";
 
 // Keep a dismissed notice dismissed across pane remounts until it leaves the screen.
@@ -46,9 +47,15 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
       const context = JSON.stringify(transcript.entries.filter((entry) => entry.kind === "prompt" || entry.kind === "answer")
         .slice(-20).map((entry) => ({ role: entry.kind, text: entry.text.slice(-1200) })));
       if (aiIsOff()) return;
+      // The "+" menu's own tab spec: session id, tab uid env and session-id args, so the tab is
+      // resumable (kept at restart) and the Reader can find its conversation. Its `/rename`
+      // initialInput is replaced by the hand-off prompt; auto tab names cover the label.
+      const { tab: spec } = newAgentTabForDraft({
+        agent: target.bin, customAgents: useSettingsStore.getState().settings?.custom_agents,
+        cwd: tab.cwd || cwd, projectName: "", t,
+      });
       useTabsStore.getState().addTabToScope(parts.scope, {
-        label: target.label, cmd: target.bin, args: [], env: {}, kind: "agent",
-        cwd: tab.cwd || cwd, location: tab.location,
+        ...spec, location: tab.location,
         initialInput: t("terminal.limitHandoff.prompt", { agent: tab.cmd, context }).replace(/\r?\n/g, " "),
       });
       setNext(null);
