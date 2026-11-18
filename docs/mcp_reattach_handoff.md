@@ -115,3 +115,94 @@ Commits: `31c8d7f64` (the whole step: code, tests, docs, this file) plus a one-l
 * Nothing was run live (no app start): the stable port, the stamp on a real
   restore and the probe between window and Mobile host are unverified outside
   unit/real-tmux tests on a private socket.
+
+## I2: Windows session host
+
+Branch `worktree-agent-a6043cb45f230d9ad`, based on I1 `4c0ea87dc`. Commits:
+see the I2 rows in `git log 4c0ea87dc..` (portable protocol part, then the
+`cfg(windows)` mux part with `CI-Only: windows`).
+
+### What landed
+
+1. **Protocol, additive** (`session_host/protocol.rs`): `Request::Spawn` gains
+   `mcp_mark: Option<String>` and `SessionInfo` gains `mcp_mark`, both
+   `serde(default, skip_serializing_if = "Option::is_none")`, so a stamp-less
+   message is byte-identical to before and an older peer drops the field. New cap
+   `CAP_MCP_MARK = "mcp-mark"` in `CAPS`. **No `PROTO` bump.** `MAX_MCP_MARK` 256.
+2. **Host** (`table.rs`, `server.rs`): `Entry.mcp_mark` is set only by the
+   `Spawn` that creates the session (`Created::New`); an attach never changes it,
+   a rename keeps it. A malformed stamp (`table::valid_mcp_mark`: empty, > 256
+   bytes, anything but printable ASCII without space) is `BadRequest` before
+   anything spawns. `List` returns it. `sessions.json` never carries it.
+3. **Client** (`client.rs`): `Client::mcp_marks()` sends one `List` and returns
+   `Some(rows)`. A host without the cap returns `None` and is sent nothing.
+4. **Decision, pure** (`route::marks_answer`, tested on every OS): listed rows →
+   `SessionMarks`. Old host → `Unavailable` (unknown). No host and the setting on
+   (and a copy to start) → empty (a new session is made by this build's host, so
+   it gets stamped). No host and the setting off → `Unavailable` (the tab runs
+   in-process with nothing to stamp). Any other error passes through, and
+   `launch_prep` reads it as unknown, so a spawn never breaks on it.
+5. **Mux** (`session_mux/winhost.rs`, `cfg(windows)`): `host_spawn_for` carries
+   `opts.mcp_mark`; `mcp_marks` asks any running host (setting or not) under
+   `LIST_DEADLINE`. The result is cached 3 s per pipe, single-flight (the lock is
+   held across the listing). `note_mcp_mark` folds into that pipe's entry.
+   `spawn_detached`, `kill`, `rename` and `kill_app_sessions` drop it.
+
+### Design choices
+
+* The cap is checked instead of sending a new request: an older host's `List`
+  would decode every session as "no stamp" (Stale). Without the cap the answer is
+  "unknown", so its tabs keep today's behaviour (grant, `has` for the rejoin).
+* Unknown only where no host runs **and** none will run (setting off).
+  With the setting on and no host running, the answer is "none" so the create is
+  stamped. Answering unknown there would leave every first session after a
+  crash unstamped, and so Stale on the next restore.
+* Mixed versions: a stamp sent to an older host (a race with a sidecar that
+  started an old copy) is dropped silently. That host then lists as unknown,
+  which is safe.
+
+### Gotchas
+
+* Same 3 s cache window as tmux: a session that ended on its own (not through
+  the mux) within 3 s still lists.
+* A mark noted for a launch that the host did not take (a batch launch, which
+  stays in-process) sits in the cache for at most 3 s.
+
+### Tests
+
+* Portable: `protocol::tests::the_mcp_stamp_is_additive_on_the_wire`,
+  `table::tests::{the_mcp_stamp_is_set_on_create_only, an_mcp_stamp_is_short_printable_ascii}`,
+  `server::tests::{the_mcp_stamp_is_kept_from_the_creating_spawn_and_listed, an_older_host_reads_as_unknown_not_as_unstamped}`
+  (a hand-written old host: no cap, so nothing is sent),
+  `route::tests::mcp_marks_are_known_only_from_a_host_of_this_build`, and the
+  `copies` test (the stamp never lands in `sessions.json`).
+* Windows only (`winhost/tests.rs`, CI is the only test bed):
+  `mcp_stamps_ride_the_creating_spawn_and_list_back` (real host: create vs
+  attach, note, rename, kill),
+  `with_no_host_mcp_marks_are_none_when_on_and_unknown_when_off`, and the
+  `host_spawn_for` stamp check in `wrap_marks_the_launch_and_keeps_its_argv`.
+
+### Gates
+
+* The full gates were **not** completed: the user stopped every running gate run
+  partway through (memory).
+* Before that stop: brand-check PASS, `git diff --check` PASS, and
+  `cargo clippy -p tabtivity -p app-serverd --all-targets -D warnings` PASS. That
+  clippy run came after a fix: `type_complexity` on `marks_answer`, solved with
+  `client::MarkRows`.
+* Then, alone: `cargo test -p tabtivity --lib session_host`, 92 passed, the new
+  portable tests included.
+* Not run: the `--no-default-features` clippy and its test, the full
+  `cargo test`, and the app-serverd clippy.
+* The Windows cross-check (`ci-local.sh` windows-clippy / scratch `CARGO_HOME`)
+  was not run either, because of the same memory stop. The `cfg(windows)` code
+  (`winhost.rs`, its tests, the `launch.rs` and `win/tests.rs` literals) has
+  never been compiled. Windows CI is its first compile.
+
+### Flagged for user
+
+* Nothing was run live. The Windows path (`winhost.rs`) has only been read, never
+  compiled or run.
+* A host started by an older build keeps answering "unknown" until it retires
+  (it stays while it has sessions). Its tabs get today's behaviour, not a stale
+  flag.

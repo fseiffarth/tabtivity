@@ -152,8 +152,9 @@ Length-prefixed frames, 1-byte kind (0 JSON control, 1 output, 2 input), ≤ 1 M
 `serde(tag)` with an `Unknown` variant → `Error{unsupported}`.
 
 - `Hello{token, proto_min, proto_max, client_version}` → `Welcome{proto, host_version, pid, caps}`.
-- `Spawn{name, argv, env, cwd, cols, rows, remain_on_exit, size_policy, create_only}`
-  (create-or-attach), `Attach{name, cols, rows, history_lines}` (connection
+- `Spawn{name, argv, env, cwd, cols, rows, remain_on_exit, size_policy, create_only, mcp_mark?}`
+  (create-or-attach; `mcp_mark` is kept only on a create and listed back in
+  `List`, behind the `mcp-mark` cap: `docs/context/tmux_sessions.md`), `Attach{name, cols, rows, history_lines}` (connection
   becomes a stream), `Resize`, `Input{bytes}`, `Paste{text, bracketed}`,
   `Capture{name, join_wrapped, history_lines}`, `Info{name}`, `List`, `Kill`,
   `KillPrefix`, `Rename`, `Shutdown{if_idle}` → `Ok{..}` / `Error{code,msg}`.
