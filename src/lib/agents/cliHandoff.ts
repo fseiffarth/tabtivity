@@ -12,7 +12,7 @@ export interface CliHandoffPreview {
   truncated: boolean;
   /** The file holds the conversation's first request. */
   firstRequest: boolean;
-  /** A count of files the conversation changed or the working tree shows. */
+  /** Files the conversation's CLI recorded editing (0 also when that record is not read); not `git status`. */
   changedFiles: number;
   /** The previous agent's cockpit notes are in the file. */
   notes: boolean;

@@ -410,7 +410,7 @@ them. ",
     md.push_str("## Not included\n\n");
     md.push_str("- Tool output, the previous agent's thinking, images and attachments.\n");
     md.push_str("- Subagent conversations (each appears above as one line: who and what it was sent to do).\n");
-    if g.truncated {
+    if g.truncated || omitted_recent {
         md.push_str("- Turns between the original request and the recent conversation.\n");
     }
 

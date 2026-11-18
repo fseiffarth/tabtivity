@@ -78,6 +78,21 @@ fn a_read_without_earlier_turns_puts_its_first_prompt_in_the_original_request_on
     assert!(md.contains("the original request above is not repeated"));
     assert!(preview.first_request && !preview.truncated);
     assert_eq!((preview.entries, preview.total), (3, 3));
+    let not_included = md.split("## Not included").nth(1).unwrap();
+    assert!(!not_included.contains("Turns between"), "nothing was left out: {not_included}");
+}
+
+#[test]
+fn turns_the_budget_left_out_are_listed_as_not_included() {
+    // The whole session was read (not truncated), but its middle does not fit.
+    let mut entries = vec![entry("prompt", "ORIGINAL-ASK")];
+    entries.extend((1..200).map(|i| entry(if i % 2 == 0 { "prompt" } else { "answer" }, &format!("msg-{i:04} {}", "x".repeat(1_000)))));
+    let (md, preview) = render(&gathered(entries), "Codex", now());
+    assert!(preview.truncated && preview.first_request);
+    assert!(!md.contains("msg-0001"), "the oldest turn after the request does not fit");
+    assert!(md.contains("the oldest entries did not fit the size budget"));
+    let not_included = md.split("## Not included").nth(1).unwrap();
+    assert!(not_included.contains("Turns between the original request and the recent conversation"), "{not_included}");
 }
 
 #[test]
