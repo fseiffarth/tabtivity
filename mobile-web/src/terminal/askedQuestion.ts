@@ -67,6 +67,27 @@ export function waitingQuestion(entries: readonly TranscriptEntry[]): Transcript
   return null;
 }
 
+/** What identifies a waiting entry across reads: the call has no id on the wire. */
+export const askedEntryKey = (entry: TranscriptEntry): string => `${entry.at ?? ""}|${entry.text}`;
+
+/**
+ * The entry whose dialog has been on screen, as `seen` last knew it (`null`
+ * when none): `seen` itself, or this `entry` once a dialog is on the screen.
+ * Desktop and phone both keep it per tab and ask [`entryStands`].
+ */
+export function dialogSeenFor(seen: string | null, entry: TranscriptEntry | null, dialogOnScreen: boolean): string | null {
+  return entry && dialogOnScreen ? askedEntryKey(entry) : seen;
+}
+
+/**
+ * Whether `entry` may still stand alone as a read-only card: not once its
+ * dialog has been on screen. A read of the stored session arrives late (poll
+ * and settle clocks, a lamp that clears a moment after the answer), so an
+ * entry outlives the dialog it came from; the dialog having been seen is the
+ * sign it was answered, and a card for it would flash back.
+ */
+export const entryStands = (seen: string | null, entry: TranscriptEntry): boolean => seen !== askedEntryKey(entry);
+
 const clean = (text: string): string => text.replace(/\s+/gu, " ").trim();
 /** A multi-select row's box, in front of its label. */
 const BOX = /^\[([^\]])\]\s+/u;

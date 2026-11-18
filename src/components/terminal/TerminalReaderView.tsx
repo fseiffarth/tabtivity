@@ -32,7 +32,7 @@ import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
 import { withWaitingEntry } from "../../lib/agents/liveCardGate";
-import { waitingQuestion } from "../../../mobile-web/src/terminal/askedQuestion";
+import { dialogSeenFor, entryStands, waitingQuestion } from "../../../mobile-web/src/terminal/askedQuestion";
 import { isPermissionDialog, permissionSubject, permissionSubjectLabel, type PermissionSubject } from "../../../mobile-web/src/terminal/permissionSubject";
 import { CheckboxIcon, SquareIcon } from "../common/icons/Icon";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
@@ -1562,10 +1562,15 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     () => (transcript?.available && !browsed && agentFamily(agentLabel) === "claude" ? waitingQuestion(transcript.entries) : null),
     [transcript, browsed, agentLabel],
   );
-  const live = useMemo(
-    () => withWaitingEntry(screenLive, waitingAsk, lampAsking),
-    [screenLive, lampAsking, waitingAsk],
-  );
+  /** The entry a dialog was last on screen for: once answered, the lamp can
+   * still say decision for a moment and the stored session still holds the
+   * call as waiting, so a spent entry never stands alone again
+   * (`entryStands`, the phone's rule too). */
+  const dialogSeen = useRef<string | null>(null);
+  const live = useMemo(() => {
+    dialogSeen.current = dialogSeenFor(dialogSeen.current, waitingAsk, !!screenLive.question);
+    return withWaitingEntry(screenLive, waitingAsk, lampAsking && (!waitingAsk || entryStands(dialogSeen.current, waitingAsk)));
+  }, [screenLive, lampAsking, waitingAsk]);
   const use24h = useUse24h();
   const modelTag = useAgentTabModelTag(scope, tab);
   /** The working row's name for the agent, as the phone's says it: the model

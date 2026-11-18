@@ -1171,6 +1171,28 @@ describe("the Reader's live rows", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(500); });
       expect(written).toEqual(["\r"]);
     });
+
+    it("does not bring the read-only card back once the answered dialog is gone, while the lamp and the record still say it asks", async () => {
+      withSession({ entries: [...transcript.entries, asked] });
+      await lamp("decision");
+      const rows = ["> fix the strings", "", "✻ Thinking… (3s · ↓ 120 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"];
+      term = fakeTerminal(rows);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      // Before the dialog: the read-only card stands.
+      const before = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(before.textContent).toMatch(/still drawing this question/);
+      // The dialog is drawn, then answered (it leaves the screen); the lamp is
+      // still "decision" and the stored session still holds the call as waiting.
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "←  ☐ Colours  →", "Which colours should the probe use?", "❯ 1. [ ] Red", "       warm", "  2. [ ] Blue", "  3. [ ] Type something", "     Submit", "", "  4. Chat about this", "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"); });
+      await waitFor(() => expect(screen.queryByText(/still drawing this question/)).toBeNull());
+      expect(within(screen.getByRole("group", { name: "Waiting for your answer" })).getByRole("button", { name: /Red/ })).toBeTruthy();
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "✻ Thinking… (4s · ↓ 150 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"); });
+      await waitFor(() => expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull());
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+      expect(screen.queryByText(/still drawing this question/)).toBeNull();
+    });
   });
 
   it("walks a several-question dialog's tabs with ←/→, so an answer can be changed before Submit", async () => {

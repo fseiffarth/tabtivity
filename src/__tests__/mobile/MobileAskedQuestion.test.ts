@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AskedQuestion, TranscriptEntry } from "../../../mobile-web/src/api";
-import { entryCardAllowed, mergeAskedQuestion, waitingQuestion, type LiveDialog } from "../../../mobile-web/src/terminal/askedQuestion";
+import { dialogSeenFor, entryCardAllowed, entryStands, mergeAskedQuestion, waitingQuestion, type LiveDialog } from "../../../mobile-web/src/terminal/askedQuestion";
 import { readableScreen, type ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
 import { freeTextRow, selectSignature } from "../../../mobile-web/src/terminal/selectPrompt";
 import { answerKeys, readReaderLive } from "../../lib/agents/readerLive";
@@ -205,5 +205,24 @@ describe("whether the phone's screen lets an entry-only card stand", () => {
     expect(entryCardAllowed([], "Claude")).toBe(false);
     expect(entryCardAllowed(screenOf(["", "  ", ""]), "Claude")).toBe(false);
     expect(entryCardAllowed(screenOf(["something"]), "Codex")).toBe(false);
+  });
+});
+
+describe("an entry whose dialog was seen is spent (desktop and phone share it)", () => {
+  const OTHER: TranscriptEntry = { ...ENTRY, at: "2026-11-18T09:25:00.000Z" };
+  it("stands until a dialog is on screen for it, then never again", () => {
+    let seen: string | null = null;
+    expect(entryStands(seen, ENTRY)).toBe(true);
+    seen = dialogSeenFor(seen, ENTRY, false);
+    expect(entryStands(seen, ENTRY)).toBe(true);
+    seen = dialogSeenFor(seen, ENTRY, true);
+    expect(entryStands(seen, ENTRY)).toBe(false);
+    // The dialog leaves the screen: still spent.
+    seen = dialogSeenFor(seen, ENTRY, false);
+    expect(entryStands(seen, ENTRY)).toBe(false);
+    // A later question is a new entry.
+    expect(entryStands(seen, OTHER)).toBe(true);
+    // No entry waiting: nothing changes.
+    expect(dialogSeenFor(seen, null, true)).toBe(seen);
   });
 });
