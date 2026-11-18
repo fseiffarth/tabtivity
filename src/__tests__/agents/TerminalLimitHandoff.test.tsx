@@ -14,7 +14,6 @@ vi.mock("../../components/tabs/paneTabContext", () => ({ usePaneTab: () => mocks
 vi.mock("../../lib/terminal/ptyId", () => ({ splitPtyId: () => ({ scope: "project", key: "a" }) }));
 vi.mock("../../lib/terminal/terminalRegistry", () => ({ terminalFor: () => ({ buffer: { active: {} } }) }));
 vi.mock("../../../mobile-web/src/terminal/readableScreen", () => ({ readableScreen: () => ({ lines: [mocks.screen] }) }));
-vi.mock("../../stores/agents/agentClearUndo", () => ({ runsLocally: () => true }));
 vi.mock("../../lib/agents/agentReader", () => ({ readerRequest: () => ({ sessionId: "session" }) }));
 vi.mock("../../lib/aiSwitch", () => ({ aiIsOff: () => false }));
 vi.mock("../../components/common/UntestedTag", () => ({ UntestedTag: () => null }));

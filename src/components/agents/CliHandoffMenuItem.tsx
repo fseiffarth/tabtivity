@@ -1,14 +1,18 @@
 import { useT } from "../../lib/i18n";
-import { runsLocally } from "../../stores/agents/agentClearUndo";
 import { useActivityStore } from "../../stores/activity";
+import { useProjectsStore } from "../../stores/projects";
 import type { TabEntry } from "../../stores/tabs";
 import { ArrowRightIcon } from "../common/icons/Icon";
 import { UntestedTag } from "../common/UntestedTag";
 
-/** Which tabs can hand their work to another CLI: a local agent tab that is not
- * the assistant. Remote-host tabs, local-model tabs and the phone come later. */
+/** Which tabs can hand their work to another CLI: an agent tab of a local
+ * project, not the assistant and not the root console's Host session. The
+ * backend (`services::agent_cli_handoff`) refuses every remote project, its
+ * here-running tabs included, and reads the scope's agent home, which is not
+ * the Host session's. Remote projects, local-model tabs and the phone come later. */
 export function canContinueInAnotherCli(scope: string, tab: TabEntry): boolean {
-  return tab.kind === "agent" && !tab.assistant && runsLocally(scope, tab);
+  if (tab.kind !== "agent" || tab.assistant || tab.hostSession) return false;
+  return !useProjectsStore.getState().projects.find((p) => p.id === scope)?.remote;
 }
 
 /**

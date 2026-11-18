@@ -6,7 +6,7 @@ import { splitPtyId } from "../../lib/terminal/ptyId";
 import { terminalFor } from "../../lib/terminal/terminalRegistry";
 import { readableScreen } from "../../../mobile-web/src/terminal/readableScreen";
 import { cliLimitNoticeLine, nextLimitCli, type HandoffCli } from "../../lib/agents/limitHandoff";
-import { runsLocally } from "../../stores/agents/agentClearUndo";
+import { canContinueInAnotherCli } from "../agents/CliHandoffMenuItem";
 import { aiIsOff } from "../../lib/aiSwitch";
 import { CliHandoffDialog } from "../agents/CliHandoffDialog";
 
@@ -27,7 +27,7 @@ export function TerminalLimitHandoff({ ptyId, visible, cwd }: { ptyId: string; v
 
   useEffect(() => {
     attempted.current = false;
-    if (!visible || !scope || !tab || tab.kind !== "agent" || tab.assistant || !runsLocally(scope, tab)) return;
+    if (!visible || !scope || !tab || !canContinueInAnotherCli(scope, tab)) return;
     let stopped = false;
     let checking = false;
     const check = async () => {

@@ -1,12 +1,19 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ local: true, open: vi.fn() }));
-vi.mock("../../stores/agents/agentClearUndo", () => ({ runsLocally: () => mocks.local }));
+const mocks = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock("../../components/common/UntestedTag", () => ({ UntestedTag: () => null }));
 import { useActivityStore } from "../../stores/activity";
+import { useProjectsStore } from "../../stores/projects";
 import type { TabEntry } from "../../stores/tabs";
+import type { ProjectEntry } from "../../types";
 import { CliHandoffMenuItem } from "../../components/agents/CliHandoffMenuItem";
+
+/** The scope's project, remote or not (only the fields the gate reads). */
+function project(remote: boolean) {
+  const entry = { id: "project", name: "p", path: "/p", ...(remote ? { remote: { host: "h" } } : {}) };
+  useProjectsStore.setState({ projects: [entry as unknown as ProjectEntry] });
+}
 
 const agent = { key: "a", cmd: "claude", kind: "agent", label: "Claude", sessionId: "s" } as TabEntry;
 function show(tab: TabEntry = agent) {
@@ -14,7 +21,7 @@ function show(tab: TabEntry = agent) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.local = true;
+  project(false);
   useActivityStore.setState({ busyByTab: {}, busyKindByTab: {} });
 });
 afterEach(cleanup);
@@ -42,12 +49,15 @@ it("stays enabled while only a shell command the agent started is running", () =
 });
 
 it.each([
-  ["the assistant", { ...agent, assistant: true }, true],
-  ["a shell tab", { ...agent, kind: "shell" }, true],
-  ["a local-model tab", { ...agent, kind: "local_agent" }, true],
-  ["a remote tab", agent, false],
-])("is absent for %s", (_name, tab, local) => {
-  mocks.local = local;
+  ["the assistant", { ...agent, assistant: true }, false],
+  ["a shell tab", { ...agent, kind: "shell" }, false],
+  ["a local-model tab", { ...agent, kind: "local_agent" }, false],
+  ["the root console's Host session", { ...agent, hostSession: true }, false],
+  // The backend refuses every remote project, a tab running here included.
+  ["a remote project's tab running here", { ...agent, location: "local" }, true],
+  ["a remote project's host tab", agent, true],
+])("is absent for %s", (_name, tab, remote) => {
+  project(remote);
   show(tab as TabEntry);
   expect(screen.queryByRole("button")).toBeNull();
 });

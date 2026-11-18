@@ -70,8 +70,11 @@ retry, because the source tab stays open and readable. **Dropped.**
 - **The source is never stopped.** The manual entry is disabled while the
   source's turn is running (`stores/activity.ts` working state), with "Wait for
   the turn to end or stop it". After a limit the source is idle anyway.
-- **Same gates as today:** local tabs (`runsLocally`), not the assistant. Remote
-  host tabs, local-model targets (`<scope>.local` home) and the phone come later.
+- **Gates:** agent tabs of a local project, not the assistant, not the root
+  console's Host session (`canContinueInAnotherCli`). A remote project's tabs,
+  even ones running here, are not offered (user decision 2026-11-18: the backend
+  refuses remote projects; the old limit notice used to offer them). Remote
+  projects, local-model targets (`<scope>.local` home) and the phone come later.
 - **No model call to summarize.** The file is the verbatim conversation in a
   fixed byte budget. The new agent reads and judges it.
 
