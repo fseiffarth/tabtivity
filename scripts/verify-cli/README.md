@@ -169,7 +169,8 @@ gives its usage.
 
 - **Vibe** (`vibe/`): `turn_hooks.py <label> <bin> <port> [apierr]` gives
   a scratch `VIBE_HOME` a provider at `stub_openai.py` and a dumping hook of
-  each of Vibe's seven hook types (with the hook's `VIBE*` environment), then
+  each of Vibe's hook types (seven; 3.1.3 adds `pre_llm` and `post_llm`, registered
+  only for a binary that names 3.1.3 or later), with the hook's `VIBE*` environment, then
   plays a prompt, an approval accepted and one declined, `/clear`, a `vibe -p`
   from the bash tool and `/exit`. `apierr` points the provider at a closed
   port. The binary is the agent install's `.local/bin/vibe`.

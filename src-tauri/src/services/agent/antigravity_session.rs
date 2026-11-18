@@ -554,6 +554,14 @@ mod tests {
         s.run(&payload("Stop", OTHER, PROMPT), &tab);
         assert_eq!(s.turn().as_deref(), Some("working"));
         assert_eq!(s.record().as_deref(), Some(CONV));
+        // A Stop while a subagent or background task runs (`fullyIdle`
+        // false; 1.5.11 fires one again, 1.5.10 did not): the turn goes on,
+        // and the Stop once that work has ended is the one that finishes it.
+        let paused = payload("Stop", CONV, &format!(r#""terminationReason":"NO_TOOL_CALL","error":"","fullyIdle":false,{PROMPT}"#));
+        s.run(&paused, &tab);
+        assert_eq!(s.turn().as_deref(), Some("working"));
+        s.run(&stop("NO_TOOL_CALL"), &tab);
+        assert_eq!(s.turn().as_deref(), Some("done"));
     }
 
     /// The command's argument names the event: 1.5.2 and 1.5.3 send no
