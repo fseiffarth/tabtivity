@@ -1193,6 +1193,12 @@ pub async fn prepare(
     // revoked, and nothing fresh reaches the session.
     let revive_row = local_session.as_ref().and_then(|plan| plan.revive.clone());
     let reviving = revive_row.is_some();
+    // A revival only rejoins the session it judged alive. One that ended
+    // since (the listing is cached for 3 s, the spawn comes later) must not
+    // be created again by a create-or-attach: a fresh agent with no token,
+    // re-stamped with the revived grant, while the revived tokens stay live
+    // with no holder.
+    host_attach_only |= reviving;
     // The agent's own program, before any wrap renames it: what a revival
     // later asks about its reconnecting (`root_mcp_reattach::cli_revives`).
     let agent_stem = crate::services::root_mcp::basename(&opts.cmd).to_string();
@@ -1776,7 +1782,11 @@ pub async fn prepare(
             }
         }
         drop_api_keys_for_old_tmux(&mut opts)?;
-        crate::services::session_mux::mux().wrap(&mut opts);
+        let mux = crate::services::session_mux::mux();
+        mux.wrap(&mut opts);
+        if host_attach_only {
+            attach_only_client(&mut opts, mux.as_ref());
+        }
     }
     // Windows: the session host takes what tmux would wrap on Unix, agents
     // only (`session_host::route`). The wrap only marks the launch; the
@@ -1870,11 +1880,35 @@ impl McpRecord {
                     port: listener.port(),
                 }
                 .render();
-                let restamped = crate::services::session_mux::mux().restamp_mcp(&session, &mark).is_ok();
+                let mux = crate::services::session_mux::mux();
+                let restamped = mux.restamp_mcp(&session, &mark).is_ok();
+                // The attach found no session (it ended after the listing):
+                // nothing holds the revived tokens, which go with the tab's
+                // PTY; neither does the row stay.
+                if !restamped && matches!(mux.has(&session), Ok(false)) {
+                    listener.drop_session(&session);
+                    return;
+                }
                 let row = reattach::revived_row(row, &outcome, restamped.then_some((listener.nonce(), first.as_str())));
                 listener.write_row(&session, row);
             }
         }
+    }
+}
+
+/// A launch that may only *attach* to its live session
+/// (`PreparedLaunch::host_attach_only`: a revival, a rejoin let through the
+/// AI switch) on a backend whose client is a process (tmux): its
+/// create-or-attach argv becomes the attach client's, which never creates
+/// the session — gone meanwhile, the client exits instead of starting a new
+/// agent. A backend that attaches by stream (the Windows session host) is
+/// left as it is: its spawn sends `Attach` alone for such a launch.
+fn attach_only_client(opts: &mut PtyOptions, mux: &dyn crate::services::session_mux::SessionMux) {
+    let Some(session) = opts.tmux_session.clone().filter(|_| opts.mux_wrapped) else { return };
+    if let Ok(client) = mux.attach_client(&session, false) {
+        opts.cmd = client.program.to_string_lossy().into_owned();
+        opts.args = client.args;
+        opts.env.extend(client.env);
     }
 }
 
@@ -3294,6 +3328,39 @@ mod tests {
             let strip = body.find("if reviving {").expect("the fresh tokens are stripped");
             assert!(revive < strip && body[strip..].contains("opts.env.remove(*var);"));
             assert!(body.contains("reattach::stamp_grant(&opts.env)"), "a stamp names a revivable lane first");
+        }
+
+        /// R3 (finding 4): a revival only attaches. `prepare` makes a
+        /// reviving launch attach-only, and on tmux an attach-only launch's
+        /// argv is the attach client's, so a session that ended since the
+        /// listing is never created again as a fresh agent without a token.
+        #[test]
+        fn a_revival_only_attaches() {
+            let source = include_str!("launch_prep.rs");
+            let start = source.find("pub async fn prepare(").expect("prepare");
+            let body = &source[start..start + source[start..].find("\n}\n").expect("end of prepare")];
+            let reviving = body.find("let reviving = revive_row.is_some();").expect("the revival verdict");
+            let attach_only = body.find("host_attach_only |= reviving;").expect("a revival is attach-only");
+            assert!(reviving < attach_only);
+            let wrap = body.find("mux.wrap(&mut opts);").expect("the tmux wrap");
+            let swap = body.find("attach_only_client(&mut opts, mux.as_ref());").expect("the attach-only argv");
+            assert!(wrap < swap, "the wrap's argv is what gets replaced");
+
+            let mux = crate::services::session_mux::tmux::TmuxMux::isolated("r3-attach-only");
+            let launch = || -> PtyOptions {
+                serde_json::from_value(serde_json::json!({ "id": "p:a", "cmd": "tmux", "args": ["new-session", "-A", "-s", "s1", "claude"],
+                    "cwd": "", "cols": 80, "rows": 24, "tmux_session": "s1" }))
+                .unwrap()
+            };
+            let mut opts = launch();
+            opts.mux_wrapped = true;
+            attach_only_client(&mut opts, &mux);
+            assert!(!opts.args.iter().any(|a| a == "new-session" || a == "-A"), "{:?}", opts.args);
+            assert!(opts.args.ends_with(&["attach-session".to_string(), "-t".into(), "=s1".into()]), "{:?}", opts.args);
+            // Not wrapped by a mux: nothing to swap.
+            let mut plain = launch();
+            attach_only_client(&mut plain, &mux);
+            assert_eq!(plain.args[0], "new-session");
         }
     }
 }
