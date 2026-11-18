@@ -31,7 +31,7 @@ import { terminalFor, watchTerminal } from "../../lib/terminal/terminalRegistry"
 import { noteUserInput, useActivityStore } from "../../stores/activity";
 import { typePaneKeys } from "../../lib/agents/paneKeys";
 import { dialogOnScreen } from "../../lib/agents/dialogOnScreen";
-import { hookLampHidesCard, withWaitingEntry, withoutCard } from "../../lib/agents/liveCardGate";
+import { withWaitingEntry } from "../../lib/agents/liveCardGate";
 import { waitingQuestion } from "../../../mobile-web/src/terminal/askedQuestion";
 import { isPermissionDialog, permissionSubject, permissionSubjectLabel, type PermissionSubject } from "../../../mobile-web/src/terminal/permissionSubject";
 import { CheckboxIcon, SquareIcon } from "../common/icons/Icon";
@@ -1547,9 +1547,6 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   const agentLabel = tab ? agentTabLabel(tab) : "";
   /** The tab's lamp says it asks (its hooks, else the screen). */
   const lampAsking = useActivityStore((state) => state.attentionByTab[ptyId] === "decision");
-  /** The screen's reading, with a card taken off it that a Claude tab's hooks
-   * do not announce (`hookLampHidesCard`): text on screen that only looks like
-   * a dialog. Every consumer below reads this, not the raw reading. */
   /** The question Claude is blocked on, from the stored session: its words and
    * previews, laid over the screen's rows (or standing alone, read-only, while
    * the dialog is not drawn yet and the lamp says it asks) — `withWaitingEntry`.
@@ -1559,8 +1556,8 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
     [transcript, browsed, agentLabel],
   );
   const live = useMemo(
-    () => withWaitingEntry(hookLampHidesCard(ptyId, agentLabel, lampAsking) ? withoutCard(screenLive) : screenLive, waitingAsk, lampAsking),
-    [screenLive, ptyId, agentLabel, lampAsking, waitingAsk],
+    () => withWaitingEntry(screenLive, waitingAsk, lampAsking),
+    [screenLive, lampAsking, waitingAsk],
   );
   const use24h = useUse24h();
   const modelTag = useAgentTabModelTag(scope, tab);
@@ -1776,7 +1773,7 @@ export function TerminalReaderView({ host, ptyId, scope, tabKey, cwd, localOnly 
   /** The call a permission dialog on screen waits on, named in full from the
    * stored session — only while the lamp says the agent asks: a running,
    * approved `Bash` call has no result either. */
-  const permission = lampAsking && agentFamily(agentLabel) === "claude" && isPermissionDialog(shownLive.question, shownLive.tabs.length) ? permissionSubject(transcript) : null;
+  const permission = lampAsking && agentFamily(agentLabel) === "claude" && isPermissionDialog(shownLive.question, shownLive.tabs.length) ? permissionSubject(transcript, [...shownLive.ask, ...shownLive.context, ...shownLive.question!.options.map((option) => option.label)]) : null;
   /** The terminal has shown something the chat cannot draw for `STRAY_MS`:
    * the chat says so and offers the way to it. Not while a picker the facts
    * row opened or an answer is on screen — the Reader put those there. */

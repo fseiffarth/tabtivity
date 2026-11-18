@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 
-import { hookLampHidesCard, lampHidesCardNow, withWaitingEntry, withoutCard } from "../../lib/agents/liveCardGate";
+import { withWaitingEntry } from "../../lib/agents/liveCardGate";
 import type { TranscriptEntry } from "../../../mobile-web/src/api";
-import { NO_LIVE, readReaderLive } from "../../lib/agents/readerLive";
+import { NO_LIVE, answerKeys, readReaderLive } from "../../lib/agents/readerLive";
 import { _clearPtyActivityForTest, noteAgentTurn, useActivityStore } from "../../stores/activity";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import type { ReadableBufferLike } from "../../../mobile-web/src/terminal/readableScreen";
@@ -27,47 +27,33 @@ beforeEach(() => {
 });
 afterEach(() => _clearPtyActivityForTest());
 
-describe("the hook lamp rules a card out", () => {
-  it("only for a Claude tab whose hooks have spoken and who is not asking", () => {
-    // No hook yet: a restored session, a first-run screen. The screen is all there is.
-    expect(hookLampHidesCard(PTY, "Claude", false)).toBe(false);
+describe("the hook lamp does not rule a screen-read card out", () => {
+  // A picker the user opened with a slash command, on a tab whose hooks have
+  // spoken and whose lamp is not asking: it fires no hook, and is a real dialog.
+  const picker = [
+    "❯ earlier prompt", "", "Resume Session", "❯ 1. fix the parser", "  2. rename the store", "  3. write the docs", "", "  Enter to select · Esc to cancel",
+  ];
+
+  it("reads and answers a /resume-style picker on a hook-driven tab with the lamp not asking", () => {
     noteAgentTurn(PTY, "done");
-    expect(hookLampHidesCard(PTY, "Claude", false)).toBe(true);
+    const live = readReaderLive(plainBuffer(picker), "Claude", 76);
+    expect(live.question?.options.map((option) => option.label)).toEqual(["fix the parser", "rename the store", "write the docs"]);
+    const pick = live.question!.options[2];
+    expect(answerKeys(live.question!, pick)).toEqual(["\u001b[B", "\u001b[B", "\r"]);
+    // Nothing in the gate drops it: no entry, no change.
+    expect(withWaitingEntry(live, null, false)).toBe(live);
+  });
+
+  it("keeps page 2 of a several-question dialog after the lamp dropped (a phone answer retires the verdict)", () => {
     noteAgentTurn(PTY, "working");
-    expect(hookLampHidesCard(PTY, "Claude", false)).toBe(true);
-    // Asking: the lamp announces it.
-    expect(hookLampHidesCard(PTY, "Claude", true)).toBe(false);
-    // Other CLIs keep the screen's reading.
-    expect(hookLampHidesCard(PTY, "Codex", false)).toBe(false);
-    expect(hookLampHidesCard(PTY, "OpenCode", false)).toBe(false);
-  });
-
-  it("reads the store's lamp for the steering digits", () => {
-    expect(lampHidesCardNow(PTY, "Claude")).toBe(false);
-    noteAgentTurn(PTY, "working");
-    expect(lampHidesCardNow(PTY, "Claude")).toBe(true);
-    useActivityStore.setState({ attentionByTab: { [PTY]: "decision" } });
-    expect(lampHidesCardNow(PTY, "Claude")).toBe(false);
-  });
-});
-
-describe("a card taken off the live reading", () => {
-  const dialog = readReaderLive(plainBuffer([
-    "❯ remove the old file", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "  Esc to cancel",
-  ]), "Claude", 76);
-
-  it("leaves no card and no way to answer, and points at the terminal instead", () => {
-    expect(dialog.question).not.toBeNull();
-    const hidden = withoutCard(dialog);
-    expect(hidden.question).toBeNull();
-    expect(hidden.signature).toBe("");
-    expect(hidden.ask).toEqual([]);
-    expect(hidden.stray).toBe(true);
-    expect(hidden.screen).toEqual(expect.arrayContaining(["Yes", "No"]));
-  });
-
-  it("is the reading itself when there was no dialog", () => {
-    expect(withoutCard(NO_LIVE)).toBe(NO_LIVE);
+    useActivityStore.setState({ attentionByTab: {} });
+    const page2 = readReaderLive(plainBuffer([
+      "❯ ask me", "", "←  ☒ Colours  ☐ Layout  ✔ Submit  →", "Which layout should the probe draw?",
+      "❯ 1. Grid", "  2. List", "  3. Type something", "     Next", "", "  4. Chat about this", "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
+    ]), "Claude", 76);
+    expect(page2.question?.options.map((option) => option.label).slice(0, 2)).toEqual(["Grid", "List"]);
+    expect(page2.tabs.map((tab) => tab.label)).toEqual(["Colours", "Layout"]);
+    expect(withWaitingEntry(page2, null, false)).toBe(page2);
   });
 });
 
@@ -101,8 +87,7 @@ describe("the transcript's waiting question laid over the live reading", () => {
   });
 
   it("is a read-only card of the entry while the screen shows no dialog, only under an asking lamp", () => {
-    const hidden = withoutCard(screen);
-    expect(withWaitingEntry(hidden, entry, false)).toBe(hidden);
+    expect(withWaitingEntry(NO_LIVE, entry, false)).toBe(NO_LIVE);
     const card = withWaitingEntry(NO_LIVE, entry, true);
     expect(card.question?.readOnly).toBe(true);
     expect(card.question?.options.map((option) => option.label)).toEqual(["Red", "Blue"]);

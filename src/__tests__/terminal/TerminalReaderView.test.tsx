@@ -1051,8 +1051,8 @@ describe("the Reader's live rows", () => {
     });
 
     it("names a Bash call's command in full", async () => {
-      withSession({ shells: [{ command: "rm -rf build && make all", at: "2026-09-30T08:03:00Z" }] });
-      term = fakeTerminal([...DIALOG]);
+      withSession({ shells: [{ command: "rm -rf build && make all", at: "2026-09-30T08:03:00Z" }], waitingTools: [{ name: "Agent", at: "2026-09-30T08:04:00Z" }] });
+      term = fakeTerminal(["> build it", "", "Bash command", "  rm -rf build && make all", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "  esc to cancel"]);
       registerTerminal("p:agent-1", term);
       await lamp("decision");
       reader(host);

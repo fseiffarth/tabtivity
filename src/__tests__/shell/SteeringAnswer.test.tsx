@@ -240,16 +240,16 @@ describe("steering digits on a tab that asks", () => {
     expect(newTabs).toEqual([]);
   });
 
-  it("a Claude tab whose hooks say it is not asking has no dialog to answer, whatever its screen reads as", () => {
+  it("a hook-driven Claude tab whose lamp is not asking still answers a dialog its screen shows (a picker the user opened)", () => {
     const tab = agentTab("a");
-    h.screens.set(`p:${tab.key}`, { question: permission, signature: "phantom" });
+    h.screens.set(`p:${tab.key}`, { question: permission, signature: "resume-picker" });
     // Its hooks have spoken (a turn is running), and none announced a decision.
     noteAgentTurn(`p:${tab.key}`, "working");
     render(<Harness />);
     press({ key: " ", shiftKey: true });
     press({ key: "1" });
-    expect(h.typed).toEqual([]);
-    expect(newTabs).toHaveLength(1);
+    expect(h.typed.length).toBe(1);
+    expect(newTabs).toEqual([]);
   });
 
   it("a tab that asks nothing keeps 1–9 as the new agent tabs", () => {

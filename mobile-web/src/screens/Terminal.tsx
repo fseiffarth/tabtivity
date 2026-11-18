@@ -2225,8 +2225,10 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
    * asks (a running, approved `Bash` call has no result either), since the
    * phone has no live lamp. */
   const permission = useMemo(
-    () => (agentKey === "claude" && isPermissionDialog(liveQuestion, questionTabs.length) ? permissionSubject(transcript) : null),
-    [agentKey, liveQuestion, questionTabs.length, transcript],
+    () => (agentKey === "claude" && liveQuestion && isPermissionDialog(liveQuestion, questionTabs.length)
+      ? permissionSubject(transcript, [...questionAsk.map((line) => line.text), ...questionContext.map((line) => line.text), ...liveQuestion.options.map((option) => option.label)])
+      : null),
+    [agentKey, liveQuestion, questionTabs.length, transcript, questionAsk, questionContext],
   );
   const asyncAsk = useAsyncAsk({ deliver, liveTail, liveQuestion, answerQuestion });
   /** Steering's Send now / Cancel and edit for the queued bubbles, filled in once the buttons' conditions are known (`queueMoves`). */
