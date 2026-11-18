@@ -53,7 +53,14 @@ import { useOverlayAgentStore } from "../../stores/overlayAgent";
 import { useSettingsStore } from "../../stores/settings";
 import { _clearAsleepPtysForTest, asleepPty } from "../../lib/terminal/sleepingPtys";
 import { SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
-import { _resetAgentTabStopMarksForTest, agentPaneShown, agentTabStartedAt } from "../../lib/agents/agentTabStopMarks";
+import {
+  _resetAgentTabStopMarksForTest,
+  agentPaneLastShownAt,
+  agentPaneShown,
+  agentTabStartedAt,
+  notePhoneSawTab,
+  phoneSawTabAt,
+} from "../../lib/agents/agentTabStopMarks";
 import type { ProjectEntry } from "../../types";
 
 const SCOPE = "p1";
@@ -162,6 +169,27 @@ describe("a stopped agent tab's pane", () => {
     expect(kills()).toEqual([ptyId]);
     expect(asleepPty(ptyId)).toBeUndefined();
     expect(stoppedPanes()).toBe(1);
+  });
+
+  it("forgets the tab's marks when the tab closes, never while it stays", async () => {
+    await mount();
+    const ptyId = `${SCOPE}:${agentKey}`;
+    notePhoneSawTab(ptyId);
+    await act(async () => {
+      st().setActive(agentKey);
+    });
+    await act(async () => {
+      st().setActive(shellKey);
+    });
+    expect(agentPaneLastShownAt(ptyId)).toBeDefined();
+    expect(agentTabStartedAt(ptyId)).toBeDefined();
+    expect(phoneSawTabAt(ptyId)).toBeDefined();
+    await act(async () => {
+      st().removeTabInScope(SCOPE, agentKey);
+    });
+    expect(agentPaneLastShownAt(ptyId)).toBeUndefined();
+    expect(agentTabStartedAt(ptyId)).toBeUndefined();
+    expect(phoneSawTabAt(ptyId)).toBeUndefined();
   });
 
   it("only agent tabs: a stopped flag on a shell is ignored", async () => {

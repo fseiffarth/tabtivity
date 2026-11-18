@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect } from "react";
-import type { TabEntry } from "../../stores/tabs";
+import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { killAsleepPty } from "../../lib/terminal/sleepingPtys";
-import { noteAgentPaneShown, noteAgentTabStarted } from "../../lib/agents/agentTabStopMarks";
+import { forgetAgentTabMarks, noteAgentPaneShown, noteAgentTabStarted } from "../../lib/agents/agentTabStopMarks";
 import { noteAgentTabUsed, wakeAgentTab } from "../../stores/agents/agentTabStop";
 
 /**
@@ -37,10 +37,18 @@ export function useAgentTabStopPane({
     if (shown) noteAgentTabUsed(scopeKey, key);
   }, [agent, ptyId, shown, stopped, scopeKey, key]);
 
+  // The slot goes when its tab closes or its scope unloads: a tab that is gone
+  // takes its marks with it, so the maps hold only tabs that exist. A slot
+  // that goes while its tab stays (a remount) keeps them — the phone's look
+  // among them, which guards a stop.
   useEffect(() => {
     if (!agent || !ptyId) return;
-    return () => noteAgentPaneShown(ptyId, false);
-  }, [agent, ptyId]);
+    return () => {
+      noteAgentPaneShown(ptyId, false);
+      const stays = useTabsStore.getState().tabsByScope[scopeKey]?.some((t) => t.key === key);
+      if (!stays) forgetAgentTabMarks(ptyId);
+    };
+  }, [agent, ptyId, scopeKey, key]);
 
   // A live pane mounted (or respawned by a relaunch): its agent starts now.
   useEffect(() => {
