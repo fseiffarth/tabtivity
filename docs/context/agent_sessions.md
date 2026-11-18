@@ -562,6 +562,47 @@ roots as `agentRoots`. (On the current Claude CLI `--resume <id>` finds a
 session from any cwd — verified live — so the cwd decides where the agent
 *works*, not whether the conversation comes back.)
 
+## Stopped tabs
+
+Plan: `docs/agent_tab_stop_plan.md` (decisions at its end). A **stopped**
+agent tab keeps its place, label and conversation; its process is ended and it
+respawns on its restore args (`resumeArgsOf`) when shown. The same resume a
+restart does, per tab. `TabEntry.stopped` is runtime only; `lastUsedAt` is
+saved, so a relaunch ranks which tabs come back running.
+
+- **Who decides**: `components/layout/AgentTabStopHost` sweeps every 60 s
+  (30 s under memory pressure) with the pure policy in
+  `lib/agents/agentTabStop` (guards, LRU ranking, `pickStops`); the three
+  triggers are settings (`stop_agent_tabs_cap` 30, `_idle_min` 120,
+  `_min_free_mb` 4096; `0` = off).
+- **Stop** (`stores/agents/agentTabStop.stopAgentTab`): every guard read again,
+  `stopped` set (the pane unmounts → `pty_kill`; a sleeping pane's parked PTY
+  is killed by `PaneSlot`), then the tab's own minted tmux session ended
+  (`local_tmux_kill`, never an attach).
+- **Wake**: shown (`PaneSlot`, also popout/console/dock), a due scheduled
+  prompt (`AgentScheduleHost`, delivered on a later tick), the phone opening it
+  (`wrapAgentTabForPhone`), steering typing into it. The wake waits for the
+  stop's tmux kill so `new-session -A` never lands on the dying session.
+- **Only CLIs that resume an id.** Claude and Codex, and Antigravity, Vibe,
+  OpenCode, Copilot and Muse only while `agent_tab_resume_pinned`
+  (`services::agent_resume_pinned`) says a respawn resumes the tab's *own*
+  recorded conversation — each arm reads what that CLI's resolver above reads
+  and writes nothing. Without a record those fall back to the folder's latest,
+  which can be another tab's. `--continue`/`latest` CLIs (Gemini, Cursor,
+  Grok, Qwen, Droid), custom agents, local-model, remote, container/VM,
+  root/Tabby, Host-session, sign-in and attach tabs are never stopped. For
+  Claude the check is strict: a live record with no log yet (a fresh `/clear`)
+  would resume the cleared conversation, so it is not pinned.
+- **Restore**: with the cap on, `loadFromLayout` brings every statically
+  stoppable tab back stopped (the rule is registered by the stop store, so the
+  tabs store does not import projects); once the launch's restore settles the
+  host wakes those whose tmux session survived a crash
+  (`local_tmux_app_sessions`), then the most recently used up to the cap.
+- **Not knowable cheaply, approximated**: a phone attached (a `tab_seen` /
+  `tab_input` within 15 min blocks); a pending push/release card (not guarded:
+  the request lives in the backend and the agent polls it); Codex/other
+  subagents (only Claude's transcript counts them).
+
 ## Reusing a session id is fatal
 
 `claude --session-id <id>` for an id that already has a transcript exits with

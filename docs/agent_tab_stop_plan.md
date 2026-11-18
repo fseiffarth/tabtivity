@@ -1,6 +1,8 @@
 # Stop idle agent tabs, resume them when shown — plan
 
-Status: being implemented (2026-11-18, base `7cc15e858`); decisions at the end.
+Status: implemented (2026-11-18, base `7cc15e858`), never run live; decisions
+at the end. Rationale now lives in `docs/context/agent_sessions.md`
+("Stopped tabs").
 Why: ~210 agent tabs, each live `claude` 0.35–0.45 GB (~50 GiB), systemd-oomd
 killing apps. "Unload hidden tabs after" (`sleep_tabs_after_min`) frees only
 the xterm; the agent process keeps running. This feature ends the process,
