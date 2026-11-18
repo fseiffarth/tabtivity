@@ -456,6 +456,21 @@ export interface TabEntry {
   // Runtime only: a restored Host session waits for an explicit Resume before
   // anything is spawned (see TabPane's HostSessionHold).
   hostSessionPaused?: boolean;
+  // Runtime only: the agent tab's process was ended to free memory and the
+  // tab kept (`stores/agents/agentTabStop`, plan `docs/agent_tab_stop_plan.md`).
+  // Nothing is spawned for it (`PaneSlot` draws `StoppedPane`); shown again it
+  // respawns on its resume args. Never saved, never copied by a duplicate or
+  // kept by the closed-tab record.
+  stopped?: boolean;
+  // Launched from a custom agent (`CustomAgent`, `customAgentToItem`), whatever
+  // binary it runs. Persisted. Such a tab is never stopped
+  // (`lib/agents/agentTabStop`): its wake respawns on the built-in's resume
+  // args, which would drop the custom agent's own.
+  customAgent?: boolean;
+  // Epoch ms the tab was last used (shown, typed into, a turn), written
+  // coarsely (`noteAgentTabUsed`). Persisted, so a relaunch ranks which tabs
+  // come back running; validated on the way in (`restoredLastUsedAt`).
+  lastUsedAt?: number;
   // The tab's pick between its CLI's own login and the user's stored API key
   // (`PtyOptions::api_key`): `true` from the ＋ menu's API section, `false`
   // from its plain rows, unset (the phone, scheduled agents, older tabs) for
@@ -778,6 +793,10 @@ export interface SavedTabEntry {
   localLaunch?: LocalLaunch;
   // Persisted Tabby chat launch (see TabEntry.assistant).
   assistant?: AssistantLaunch;
+  // Persisted last-use mark (see TabEntry.lastUsedAt).
+  lastUsedAt?: number;
+  // Launched from a custom agent (see TabEntry.customAgent).
+  customAgent?: boolean;
 }
 
 /** Serialized layout tree as persisted in project.json's `tab_groups`. */

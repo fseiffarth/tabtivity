@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { TabPane } from "../tabs/TabPane";
 import { SleepingPane } from "./SleepingPane";
+import { StoppedPane } from "./StoppedPane";
+import { useAgentTabStopPane } from "./useAgentTabStopPane";
 import { LinkBackButton } from "../tabs/LinkBackButton";
 import {
   isSleepableTab,
@@ -238,7 +240,17 @@ function PaneSlotImpl({
     hold: held,
     identity: spawnIdentity,
   });
-  const asleep = hidden && (timedAsleep || (viewerSleepable && inPopout && !held));
+  // A stopped agent tab (`docs/agent_tab_stop_plan.md`): its process is gone,
+  // so it never sleeps — it renders `StoppedPane` below, and wakes the render
+  // it is shown (the hook also reports the pane's on-screen state to the stop
+  // sweep and kills a parked PTY when a sleeping pane is stopped).
+  const stopped = useAgentTabStopPane({
+    tab,
+    scopeKey,
+    ptyId,
+    shown: visible || inPopout || drawnElsewhere,
+  });
+  const asleep = !stopped && hidden && (timedAsleep || (viewerSleepable && inPopout && !held));
   // Marked in the render that unmounts the pane, so the `TerminalView`
   // unmounting in this commit parks its PTY instead of killing it.
   // Not while held for a remote pool: that pane shows the Connect placeholder
@@ -260,6 +272,8 @@ function PaneSlotImpl({
     if (!asleep && holdRemoteTerminal && ptyId) killAsleepPty(ptyId);
   }, [asleep, holdRemoteTerminal, ptyId]);
 
+  // Stopped: nothing spawned until it is shown.
+  if (stopped) return <StoppedPane />;
   // Asleep: one element in place of the pane.
   if (asleep) return <SleepingPane kind={tab.kind} />;
   // A Windows agent waits for settings (the session host stamp, above).

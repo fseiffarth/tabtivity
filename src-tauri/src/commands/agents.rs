@@ -1614,6 +1614,22 @@ pub async fn agent_tab_undo_clear(
     .flatten()
 }
 
+/// Whether the local agent tab launched as `agent` with key `session_id` in
+/// `cwd` would, respawned now, resume the conversation it is in
+/// (`services::agent_resume_pinned`): the window's stop sweep stops an idle tab
+/// only then. Reads the CLI's stores under a short wait; no answer is `false`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn agent_tab_resume_pinned(agent: String, project_id: Option<String>, session_id: String, cwd: String) -> bool {
+    app_core::rt::spawn_blocking(move || {
+        crate::services::agent_sqlite::bounded(std::time::Duration::from_secs(3), move || {
+            crate::services::agent_resume_pinned::resume_pinned(&agent, project_id.as_deref(), &session_id, &cwd)
+        })
+        .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// The earlier conversations of the folder the tab launched as `agent` with
 /// launch id `session_id` runs in (`services::agent_chats`): the Reader's
 /// Resume menu, a page from the `offset`-th stored session on, newest first.

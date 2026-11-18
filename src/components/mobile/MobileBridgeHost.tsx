@@ -30,6 +30,8 @@ import { calendarColor, useCalendarStore, visibleCalendarIds } from "../../store
 import { agentTabState, noteUserInput, useActivityStore } from "../../stores/activity";
 import { useAgentModelsStore } from "../../stores/agents/agentModels";
 import { persistScopeLayout, useAgentSchedulesStore } from "../../stores/agents/agentSchedules";
+import { wakeAgentTab } from "../../stores/agents/agentTabStop";
+import { notePhoneSawTab } from "../../lib/agents/agentTabStopMarks";
 import { holdPhonePrompt } from "../../lib/agents/phoneHolds";
 import { noteInputFrom } from "../../lib/agents/inputFrom";
 import { findEmptyAgentTab } from "../../lib/agents/emptyAgentTab";
@@ -1374,6 +1376,15 @@ async function activate(projectId: string, tmuxSession?: string): Promise<Deskto
 function wrapAgentTabForPhone(scope: MobileScope, tmuxSession: string): string | null {
   const tab = mobileTargetTab(scope.id, tmuxSession);
   if (!tab) return "tab_not_found";
+  // A stopped tab (`stores/agents/agentTabStop`) has no process to lose: it
+  // wakes on its resume args, wrapped, and the phone's next catalog read
+  // finds the session live.
+  if (tab.stopped) {
+    if (localSessionsAvailableNow()) markMobileTmuxReady(scope.id, tab.key);
+    notePhoneSawTab(`${scope.id}:${tab.key}`);
+    wakeAgentTab(scope.id, tab.key);
+    return null;
+  }
   // A tab on a remote host (listed since the phone reaches it over the
   // desktop's SSH master) is never wrapped here, drawn or not: its session,
   // if any, runs on the host.
@@ -2527,7 +2538,11 @@ function markTabSeen(projectId: string, tmuxSession: string): DesktopResponse {
     return { status: "error", code: "project_ineligible", message: "Project is not enabled for Mobile access" };
   }
   const tab = scheduleTargetTab(scope.id, tmuxSession);
-  if (tab) useActivityStore.getState().clearAttention(`${scope.id}:${tab.key}`);
+  if (tab) {
+    useActivityStore.getState().clearAttention(`${scope.id}:${tab.key}`);
+    // The phone is looking: the stop sweep leaves the tab running.
+    notePhoneSawTab(`${scope.id}:${tab.key}`);
+  }
   return { status: "seen" };
 }
 
@@ -2907,6 +2922,7 @@ function markTabInput(projectId: string, tmuxSession: string, interrupt = false)
   const tab = scheduleTargetTab(scope.id, tmuxSession);
   if (tab) {
     noteUserInput(`${scope.id}:${tab.key}`, interrupt);
+    notePhoneSawTab(`${scope.id}:${tab.key}`);
     // `tabtivity-send` from this tab now puts files on the phone.
     noteInputFrom(`${scope.id}:${tab.key}`, "phone");
   }

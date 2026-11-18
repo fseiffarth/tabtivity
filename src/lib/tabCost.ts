@@ -205,8 +205,9 @@ const BYTES_PER_ROW = 64;
 
 export interface TerminalCost {
   /** live: an xterm here; asleep: §5.3 sleeping pane, the program runs on;
-   *  elsewhere: shown in a popout (main window); unbuilt: no xterm yet (§5.2). */
-  state: "live" | "asleep" | "elsewhere" | "unbuilt";
+   *  elsewhere: shown in a popout (main window); unbuilt: no xterm yet (§5.2);
+   *  stopped: an agent tab whose process was ended (`agentTabStop`). */
+  state: "live" | "asleep" | "elsewhere" | "unbuilt" | "stopped";
   /** Scrollback rows in use (beyond the viewport). */
   rows?: number;
   cols?: number;
@@ -254,6 +255,8 @@ function isPdfViewerTab(tab: TabEntry): boolean {
  * shows it.
  */
 export function tabCost(scope: string, tab: TabEntry): TabCost | null {
+  // A stopped agent tab holds no process and no terminal (`agentTabStop`).
+  if (tab.stopped && tab.kind === "agent") return { kind: "terminal", state: "stopped" };
   if (isPtyTabKind(tab.kind)) return { kind: "terminal", ...terminalCost(`${scope}:${tab.key}`) };
   const pdf = pdfCostFor(tab.key);
   if (pdf) return pdf.docs > 0 ? { kind: "pdf", ...pdf } : null;
@@ -301,6 +304,7 @@ export function describeTabCost(
       if (cost.state === "asleep") return t("tabCost.terminalAsleep");
       if (cost.state === "elsewhere") return t("tabCost.elsewhere");
       if (cost.state === "unbuilt") return t("tabCost.terminalUnbuilt");
+      if (cost.state === "stopped") return t("tabCost.terminalStopped");
       return t("tabCost.terminal", {
         size: formatBytes(cost.estBytes ?? 0),
         rows: (cost.rows ?? 0).toLocaleString(),

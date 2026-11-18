@@ -14,6 +14,15 @@ import { RootMcpSecurity } from "./RootMcpSecurity";
 import { CopilotCompletionCard } from "./CopilotCompletionCard";
 import { UntestedTag } from "../common/UntestedTag";
 import { SLEEP_TABS_CHOICES_MIN, SLEEP_TABS_DEFAULT_MIN } from "../../lib/sleepWhenHidden";
+import {
+  STOP_AGENT_TABS_CAP_CHOICES,
+  STOP_AGENT_TABS_CAP_DEFAULT,
+  STOP_AGENT_TABS_IDLE_CHOICES_MIN,
+  STOP_AGENT_TABS_IDLE_DEFAULT_MIN,
+  STOP_AGENT_TABS_MIN_FREE_CHOICES_MB,
+  STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB,
+  stopSettingMenu,
+} from "../../lib/agents/agentTabStop";
 import { AGENT_SCROLLBACK_ROWS, SHELL_SCROLLBACK_CHOICES, shellScrollbackRows } from "../../lib/terminal/scrollback";
 import { experimentalEnabled } from "../../lib/experimental";
 import { isDetachedWindow } from "../../stores/detachedContext";
@@ -1242,6 +1251,14 @@ export function SettingsDialog({
   initialReveal?: { path: string[]; open?: boolean };
 }) {
   const { settings, setTheme, setLanguage, updateSettings } = useSettingsStore();
+  // The stop-agent-tab rows show the value the sweep applies, an off-list one included.
+  const stopCapMenu = stopSettingMenu(settings?.stop_agent_tabs_cap, STOP_AGENT_TABS_CAP_DEFAULT, STOP_AGENT_TABS_CAP_CHOICES);
+  const stopIdleMenu = stopSettingMenu(settings?.stop_agent_tabs_idle_min, STOP_AGENT_TABS_IDLE_DEFAULT_MIN, STOP_AGENT_TABS_IDLE_CHOICES_MIN);
+  const stopMemoryMenu = stopSettingMenu(
+    settings?.stop_agent_tabs_min_free_mb,
+    STOP_AGENT_TABS_MIN_FREE_DEFAULT_MB,
+    STOP_AGENT_TABS_MIN_FREE_CHOICES_MB,
+  );
   const [panel, changePanel] = useState<SettingsPanelKind>(initialPanel);
   const [section, changeSection] = useState<MainSection>(sectionOfAnchor(initialAnchor));
   const [query, setQuery] = useState("");
@@ -2128,6 +2145,73 @@ export function SettingsDialog({
                     ...SLEEP_TABS_CHOICES_MIN.map((n) => ({
                       value: String(n),
                       label: t("settings.sleepTabsMinutes", { n }),
+                    })),
+                  ]}
+                />
+              }
+            />
+
+            {/* Stopping idle agent tabs (docs/agent_tab_stop_plan.md): read by
+                `AgentTabStopHost` through `lib/agents/agentTabStop`'s readers;
+                unset means the default, 0 switches a trigger off. */}
+            <SettingRow
+              label={
+                <>
+                  {t("settings.stopAgentTabsCap")} <UntestedTag id="settings.stopAgentTabs" />
+                </>
+              }
+              help={t("settings.stopAgentTabsCapHelp")}
+              control={
+                <Dropdown
+                  value={String(stopCapMenu.value)}
+                  onChange={(v) => void updateSettings({ stop_agent_tabs_cap: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.stopAgentTabsOff") },
+                    ...stopCapMenu.choices.map((n) => ({
+                      value: String(n),
+                      label: t("settings.stopAgentTabsCapCount", { n }),
+                    })),
+                  ]}
+                />
+              }
+            />
+            <SettingRow
+              label={
+                <>
+                  {t("settings.stopAgentTabsIdle")} <UntestedTag id="settings.stopAgentTabs" />
+                </>
+              }
+              help={t("settings.stopAgentTabsIdleHelp")}
+              control={
+                <Dropdown
+                  value={String(stopIdleMenu.value)}
+                  onChange={(v) => void updateSettings({ stop_agent_tabs_idle_min: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.stopAgentTabsOff") },
+                    ...stopIdleMenu.choices.map((n) => ({
+                      value: String(n),
+                      label: n < 60 ? t("settings.sleepTabsMinutes", { n }) : t("settings.stopAgentTabsHours", { n: Math.round((n / 60) * 10) / 10 }),
+                    })),
+                  ]}
+                />
+              }
+            />
+            <SettingRow
+              label={
+                <>
+                  {t("settings.stopAgentTabsMemory")} <UntestedTag id="settings.stopAgentTabs" />
+                </>
+              }
+              help={t("settings.stopAgentTabsMemoryHelp")}
+              control={
+                <Dropdown
+                  value={String(stopMemoryMenu.value)}
+                  onChange={(v) => void updateSettings({ stop_agent_tabs_min_free_mb: Number(v) })}
+                  options={[
+                    { value: "0", label: t("settings.stopAgentTabsOff") },
+                    ...stopMemoryMenu.choices.map((n) => ({
+                      value: String(n),
+                      label: t("settings.stopAgentTabsGiB", { n: Math.round((n / 1024) * 10) / 10 }),
                     })),
                   ]}
                 />

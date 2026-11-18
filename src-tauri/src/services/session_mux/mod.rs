@@ -254,6 +254,15 @@ pub trait SessionMux: Send + Sync {
     }
 }
 
+/// The names of the running sessions the app minted (the clean-quit reap's
+/// rule, `tmux_local::sessions_to_reap`); none when the backend cannot list.
+pub fn app_session_names<M: SessionMux + ?Sized>(mux: &M) -> Vec<String> {
+    match mux.list() {
+        Ok(listed) => crate::services::tmux_local::sessions_to_reap(listed.iter().map(|s| s.name.as_str())),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// [`SessionMux::kill_app_sessions`] over `list` and `kill`: every app
 /// session listed is ended, and each one that would not end is named.
 pub fn kill_app_sessions_in<M: SessionMux + ?Sized>(mux: &M) -> Result<(), MuxError> {
@@ -412,6 +421,16 @@ mod tests {
         assert_eq!(*mux.killed.lock().unwrap(), [ours, stuck]);
         let mux = Listed { names: vec!["work".into()], stuck, killed: Default::default() };
         assert_eq!(mux.kill_app_sessions(), Ok(()));
+        assert!(mux.killed.lock().unwrap().is_empty());
+    }
+
+    /// The restore wake's listing: the app's running sessions, never a
+    /// foreign one, and nothing is ended.
+    #[test]
+    fn the_app_session_listing_names_the_apps_sessions_only() {
+        let ours = concat!(crate::app_slug!(), "-p--agent-1");
+        let mux = Listed { names: vec![ours.into(), "work".into()], stuck: "", killed: Default::default() };
+        assert_eq!(app_session_names(&mux), [ours]);
         assert!(mux.killed.lock().unwrap().is_empty());
     }
 

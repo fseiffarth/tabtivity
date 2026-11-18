@@ -105,6 +105,9 @@ the window's × runs `local_tmux_kill_app_sessions` before `destroy()`, and
 exits that never reach frontend code (the dev launcher's Ctrl+C: SIGTERM/SIGINT
 are routed into `app.exit()` on Unix). Only a crash leaves local sessions
 behind, and those are what the next launch reattaches.
+A **stopped** agent tab (`docs/context/agent_sessions.md`, "Stopped tabs")
+ends its minted local session like a close but keeps the tab; showing it
+creates the session afresh on the resume args.
 Disconnecting a remote
 machine is deliberately different: `remote_disconnect` and
 `remote_disconnect_all_hosts` end *every* tmux session on each currently

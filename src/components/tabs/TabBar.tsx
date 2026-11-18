@@ -310,7 +310,7 @@ const TabItem = memo(function TabItem({
   const style = { "--tab-accent": userColor ?? TAB_ACCENT[tab.kind] } as React.CSSProperties;
   return (
     <div
-      className={`tab ${isActive ? "active" : ""}${stateClass}${userColor ? " has-tab-color" : ""}${isDragging ? " dragging" : ""}${editing ? " editing" : ""}${landing ? " landing" : ""}`}
+      className={`tab ${isActive ? "active" : ""}${stateClass}${tab.stopped && tab.kind === "agent" ? " stopped" : ""}${userColor ? " has-tab-color" : ""}${isDragging ? " dragging" : ""}${editing ? " editing" : ""}${landing ? " landing" : ""}`}
       style={style}
       data-tab-index={index}
       data-kind={tab.kind}

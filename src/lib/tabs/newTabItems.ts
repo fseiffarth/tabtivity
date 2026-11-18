@@ -24,6 +24,9 @@ export interface StaticMenuItem {
   // args that make the tab restart-resumable (cwd-continue tier). Threaded onto
   // the tab as `resumeArgs`; see buildStaticTabSpec / isResumableAgentTab.
   resumeArgs?: string[];
+  // A custom agent's item (`customAgentToItem`): the tab is marked
+  // `customAgent`, whatever binary it runs.
+  custom?: boolean;
   // Optional template for a command typed into the agent on launch to name its
   // own session after the project. Only set for agents with a known
   // session-rename command; others are skipped to avoid typing junk into them.
@@ -145,6 +148,7 @@ export function buildStaticTabSpec(
     initialInput,
     sessionId,
     ...(item.resumeArgs?.length ? { resumeArgs: item.resumeArgs } : {}),
+    ...(item.custom ? { customAgent: true } : {}),
     ...(item.apiKey !== undefined ? { apiKey: item.apiKey } : {}),
   };
 }
@@ -265,6 +269,7 @@ export function customAgentToItem(ca: CustomAgent): StaticMenuItem {
     args: ca.args,
     env: ca.env,
     resumeArgs: ca.resumeArgs,
+    custom: true,
   };
 }
 
