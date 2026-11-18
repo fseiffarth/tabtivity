@@ -25,6 +25,8 @@ beforeEach(() => {
     if (cmd === "git_worktree_selection_supported") return Promise.resolve(true);
     if (cmd === "git_repo_root") return Promise.resolve(null);
     if (cmd === "git_status") return Promise.resolve(status);
+    if (cmd === "git_change_stats") return Promise.resolve([{ path: "note.txt", added: 1, deleted: 0, binary: false, needs_count: false }]);
+    if (cmd === "git_diff_file") return Promise.resolve("+staged version");
     if (cmd === "git_generate_commit_message") return Promise.resolve("selected commit");
     if (cmd === "git_branches") return Promise.resolve([
       { name: "main", is_remote: false, is_current: !args.worktree },
@@ -47,13 +49,28 @@ describe("worktree selection in the shared Git viewer", () => {
         active mountTree={false} containerClassName="test-view" view="git" />);
     });
     await user.click(screen.getByRole("button", { name: "Select worktree feature" }));
-    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_status", { projectDir: "/p", worktree: selection }));
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_status", { projectDir: "/p", worktree: selection, branchExchange: true }));
     await user.click(await screen.findByRole("button", { name: /Add \(1\)/ }));
     expect(mockInvoke).toHaveBeenCalledWith("git_add_all", { projectDir: "/p", worktree: selection });
     await user.click(screen.getByRole("button", { name: "Show changed files" }));
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("git_change_stats", { projectDir: "/p", worktree: selection, scope: "unstaged" }));
+    await user.click(await screen.findByRole("button", { name: "Stage" }));
+    expect(mockInvoke).toHaveBeenCalledWith("git_add_path", { projectDir: "/p", worktree: selection, relPath: "note.txt", unstage: false });
+    await user.click(screen.getByRole("button", { name: "Show staged files" }));
+    await user.click(await screen.findByRole("button", { name: "Staged diff" }));
+    expect(await screen.findByText("+staged version")).toBeTruthy();
+    expect(mockInvoke).toHaveBeenCalledWith("git_diff_file", { projectDir: "/p", worktree: selection, relPath: "note.txt", staged: true });
+    await user.click(screen.getByRole("button", { name: "Unstage" }));
+    expect(mockInvoke).toHaveBeenCalledWith("git_add_path", { projectDir: "/p", worktree: selection, relPath: "note.txt", unstage: true });
     await user.click(screen.getByRole("button", { name: /Commit \(1\)/ }));
+    const draft = await screen.findByDisplayValue("selected commit");
+    await user.clear(draft);
+    await user.type(draft, "feature draft");
+    await user.click(screen.getByRole("button", { name: "Select worktree p" }));
+    await waitFor(() => expect(screen.queryByDisplayValue("feature draft")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Select worktree feature" }));
+    expect(await screen.findByDisplayValue("feature draft")).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: /Confirm/ }));
-    expect(mockInvoke).toHaveBeenCalledWith("git_commit", { projectDir: "/p", worktree: selection, message: "selected commit" });
+    expect(mockInvoke).toHaveBeenCalledWith("git_commit", { projectDir: "/p", worktree: selection, message: "feature draft" });
   });
 });
