@@ -248,7 +248,7 @@ type TodoAction =
   | { type: "column_delete"; column_id: string };
 /** `error` is a fixed code (`AgentUsageReport.code`), never the CLI's own
  * words: its stderr names paths on this machine. */
-interface MobileAgentUsage { label: string; supported: boolean; raw?: string; error?: string; cached: boolean }
+interface MobileAgentUsage { label: string; supported: boolean; raw?: string; error?: string; cached: boolean; readAt?: number }
 interface MobileAgentTally { prompts: number; worked_s: number; decisions: number; done: number }
 interface MobileAgentStatus {
   state: MobileAgentState;
@@ -1827,6 +1827,7 @@ async function agentStatusFor(
           ? "cli_output_withheld"
           : usage.code ?? (usage.error ? "cli_error" : undefined),
         cached: usage.cached,
+        readAt: usage.readAt,
       },
     },
   };

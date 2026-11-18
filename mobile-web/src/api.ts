@@ -1018,7 +1018,7 @@ export function deleteSchedule(tabId: string, scheduleId: string): Promise<Sched
 /** What one agent CLI answered when asked about its own quota. `raw` is the
  * panel as the CLI printed it — the sheet's Terminal half shows exactly that,
  * and `shared/usageReport.ts` is the only thing that parses it. */
-export interface AgentUsagePanel { label: string; supported: boolean; raw?: string; error?: string; cached: boolean }
+export interface AgentUsagePanel { label: string; supported: boolean; raw?: string; error?: string; cached: boolean; readAt?: number }
 /** Today's counters for the tab's project, at the grain the desktop records
  * them: `prompts` is this agent's, the other three are the project's — every
  * agent tab in it — which is what the sheet's wording says. */

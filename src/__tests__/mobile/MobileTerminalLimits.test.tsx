@@ -90,6 +90,18 @@ describe(`${BRAND.display} Mobile facts row shows the account's 5h and weekly wi
     expect(limits.map((node) => node.classList.contains("high"))).toEqual([false, true]);
   });
 
+  it("shows Codex account limits before any prompt or saved transcript exists", async () => {
+    localStorage.clear();
+    vi.stubGlobal("fetch", statusFetch({ label: "Codex", supported: true, raw: PANEL, cached: true, readAt: NOW * 1000 - 300_000 }));
+    const { container } = render(<Terminal tab={{ ...TAB, label: "Codex", agent_label: "Codex" }} back={() => {}} />);
+    await settle();
+    const limits = [...container.querySelectorAll<HTMLButtonElement>(".session-facts .fact-limit")];
+    expect(limits).toHaveLength(2);
+    expect(limits[0].textContent).toContain("5h 29%");
+    expect(limits[1].textContent).toContain("week 6%");
+    expect(limits[0].title).toContain("Usage last read 5 min ago");
+  });
+
   it("taps between percentages and bars, and keeps the choice", async () => {
     localStorage.clear();
     vi.stubGlobal("fetch", statusFetch({ label: "Claude Code", supported: true, raw: PANEL, cached: false }));

@@ -1126,6 +1126,7 @@ export const dict: Dict = {
   "mobile.facts.resetIn": "in {time}",
   "mobile.facts.sessionLabel": "5h",
   "mobile.facts.weekLabel": "Woche",
+  "agents.usage.readAge": "Nutzung zuletzt vor {minutes} Min. abgerufen",
   "mobile.facts.limitToggle": "Klicken: zwischen Prozent und Balken wechseln",
   "mobile.focus.lastPrompt": "Dein Prompt zu dieser Antwort — anzeigen",
   "mobile.focus.modeFixed": "OpenCode legt seinen Agenten beim Start der Sitzung fest — vom Telefon aus lässt er sich nicht wechseln. Starte den Tab mit `opencode --mini --agent plan` für den anderen.",

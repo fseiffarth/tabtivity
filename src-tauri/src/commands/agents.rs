@@ -1106,6 +1106,9 @@ pub struct AgentUsageReport {
     /// True when this answer came from the short-lived cache rather than from a
     /// fresh run, so a reader can tell a stale figure from a live one.
     pub cached: bool,
+    /// Unix milliseconds of the successful read, preserved across cache hits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_at: Option<u64>,
 }
 
 impl AgentUsageReport {
@@ -1118,7 +1121,16 @@ impl AgentUsageReport {
             error: Some(error),
             code: Some(code.to_string()),
             cached: false,
+            read_at: None,
         }
+    }
+
+    fn failed_read(agent: &str, label: &str, code: &str, error: String) -> Self {
+        let mut report = Self::refused(agent, label, true, code, error);
+        report.raw = crate::services::agent_usage::last_reading(agent);
+        report.cached = report.raw.is_some();
+        report.read_at = crate::services::agent_usage::read_at(agent);
+        report
     }
 }
 
@@ -1728,7 +1740,7 @@ pub async fn agent_tab_move_host(
     .await
 }
 
-/// Read `agent`'s own usage panel by running its CLI's print mode once.
+/// Read account usage through the CLI: Claude print mode or Codex account RPC.
 ///
 /// Free in every sense that matters: the run is client-side (Claude's envelope
 /// comes back with `num_turns: 0` and zero tokens), it needs no tab, no PTY and
@@ -1751,6 +1763,7 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
             format!("{} has no usage readout that can be read without a tab", spec.label),
         );
     };
+    let _read = usage::read_lock(spec.id).await;
     // A refresh still consults the cache, at a much shorter window: it means
     // "ask the CLI again", not "spawn one process per tap".
     let window = if refresh.unwrap_or(false) {
@@ -1767,9 +1780,12 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
             error: None,
             code: None,
             cached: true,
+            read_at: usage::read_at(spec.id),
         };
     }
-    usage::forget(spec.id);
+    if let Some(error) = usage::recent_failure(spec.id) {
+        return AgentUsageReport::failed_read(spec.id, spec.label, "cli_error", error);
+    }
     let Some(path) = resolve_spec_path(spec) else {
         return AgentUsageReport::refused(
             spec.id,
@@ -1805,6 +1821,22 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
         // Its own process group, for the reason the warm-up spawn gives: a
         // Ctrl+C in Tabtivity's launcher shell must not be what reaches this first.
         cmd.process_group(0);
+    }
+    if spec.id == "codex" {
+        return match usage::read_codex_limits(&mut cmd).await {
+            Ok(raw) => {
+                usage::remember(spec.id, &raw);
+                AgentUsageReport {
+                    agent: spec.id.to_string(), label: spec.label.to_string(), supported: true,
+                    raw: Some(raw), error: None, code: None, cached: false,
+                    read_at: usage::read_at(spec.id),
+                }
+            }
+            Err(error) => {
+                usage::remember_failure(spec.id, &error);
+                AgentUsageReport::failed_read(spec.id, spec.label, "cli_error", error)
+            }
+        };
     }
     let output = match tokio::time::timeout(usage::USAGE_TIMEOUT, async {
         cmd.spawn()
@@ -1845,9 +1877,10 @@ pub async fn agent_usage(agent: String, refresh: Option<bool>) -> AgentUsageRepo
                 error: None,
                 code: None,
                 cached: false,
+                read_at: usage::read_at(spec.id),
             }
         }
-        Err(error) => AgentUsageReport::refused(spec.id, spec.label, true, "cli_error", error),
+        Err(error) => AgentUsageReport::failed_read(spec.id, spec.label, "cli_error", error),
     }
 }
 

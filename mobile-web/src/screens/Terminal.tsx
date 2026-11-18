@@ -119,7 +119,7 @@ import { formatBytes } from "../../../src/lib/formatBytes";
 import { resetCountdown, resetText, StatusSheet } from "./StatusSheet";
 import { SignInSheet } from "./SignInSheet";
 import { hasSignInTab, readCloudLink, readCloudSession, readHiddenSignIn, readPagedSignIn, readSignedOut, readSignIn, readSignInPage, signInAlternate, signInCommand, signInDone, type SignIn, type SignInPage } from "../terminal/signIn";
-import { type LimitMeters } from "../../../shared/usageReport";
+import { resolveResetAt, type LimitMeters } from "../../../shared/usageReport";
 import { isUntested } from "../../../src/lib/untested";
 import { ChatChanges } from "../components/ChatChanges";
 import { AnswerAlbum, type AnswerFiles } from "../components/AnswerFiles";
@@ -1074,9 +1074,9 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   };
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   const [limitsReadAt, setLimitsReadAt] = useState(() => Date.now());
-  const rememberLimits = useCallback((next: LimitMeters) => {
+  const rememberLimits = useCallback((next: LimitMeters, readAt?: number) => {
     setLimits(next);
-    setLimitsReadAt(Date.now());
+    setLimitsReadAt(readAt ?? Date.now());
   }, []);
   /** The composer's **+**: a phone file into the project inbox, an image
    * already on the desktop, or an `@`. */
@@ -1542,10 +1542,8 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   }, [tab.id, movable, statusBranch, linkedBranch, linkedLabel, connected]);
   // The mode walk reads the status between two presses, outside React's render.
   useEffect(() => { statusRef.current = status; }, [status]);
-  /** Codex draws neither its context nor its limits on screen and has no
-   * usage panel the desktop can run, but writes both into its rollout: the
-   * stored session's figures fill in what the screen and the panel leave out,
-   * so its facts row reads like Claude's. */
+  /** Saved conversation usage fills gaps while an account read is pending or
+   * unavailable. Context remains specific to this conversation. */
   // The cleared conversation's figures are not the new chat's.
   const storedUsage = sinceClear ? undefined : transcript?.usage;
   /** The prompt the oldest turn answers, left behind "Show earlier turns",
@@ -1555,19 +1553,24 @@ export function Terminal({ tab, project: projectOfTab, back, pickModel = false, 
   const cutPromptTime = cutPromptMoment ? chatTime(cutPromptMoment) : undefined;
   const contextLeft = status?.context ?? (storedUsage?.contextLeft != null ? `${storedUsage.contextLeft}%` : undefined);
   const limitTime = new Date(limitsNow);
-  const shownLimits = limits.session || limits.week ? limits : sessionLimits(storedUsage, limitTime);
-  const readTime = limits.session || limits.week ? new Date(limitsReadAt) : limitTime;
+  const fromPanel = !!(limits.session || limits.week);
+  const shownLimits = fromPanel ? limits : sessionLimits(storedUsage, limitTime);
+  const readTime = fromPanel ? new Date(limitsReadAt) : limitTime;
   const sessionReset = shownLimits.session?.resets ? resetCountdown(shownLimits.session.resets, limitTime, readTime) : "";
   const weekReset = shownLimits.week?.resets ? resetCountdown(shownLimits.week.resets, limitTime, readTime) : "";
   // A tap on either limit flips both between the percentage and a bar of
   // what is left; the phone keeps the choice.
   const limitFact = (meter: LimitMeters["session"], reset: string, key: "mobile.facts.session" | "mobile.facts.week", label: "mobile.facts.sessionLabel" | "mobile.facts.weekLabel") => {
     if (!meter) return null;
+    const resetAt = meter.resets ? resolveResetAt(meter.resets, readTime) : null;
+    if (resetAt && resetAt.getTime() <= limitTime.getTime()) return null;
     const remaining = Math.max(0, Math.min(100, 100 - meter.percent));
     const percentText = t(key, { percent: Math.round(remaining) });
-    return <button type="button" className={`fact-limit${meter.percent >= 90 ? " high" : ""}`} onClick={toggleLimitBars} aria-pressed={limitBars} aria-label={limitBars ? percentText : undefined} title={meter.resets ? resetText(meter.resets, limitTime, readTime) : undefined}>
+    return <button type="button" className={`fact-limit${meter.percent >= 90 ? " high" : ""}`} onClick={toggleLimitBars} aria-pressed={limitBars} aria-label={limitBars ? percentText : undefined} title={[meter.resets ? resetText(meter.resets, limitTime, readTime) : "", fromPanel && limitsReadAt < limitsNow - 180_000 ? t("agents.usage.readAge", { minutes: Math.floor((limitsNow - limitsReadAt) / 60_000) }) : ""].filter(Boolean).join("\n")}>
       {limitBars ? <>{t(label)}<span className="fact-limit-bar" aria-hidden="true"><span style={{ width: `${remaining}%` }} /></span></> : percentText}
       {reset && <> · {t("mobile.facts.resetIn", { time: reset })}</>}
+      {fromPanel && limitsReadAt < limitsNow - 180_000 && <small> · {t("agents.usage.readAge", { minutes: Math.floor((limitsNow - limitsReadAt) / 60_000) })}</small>}
+      {fromPanel && /codex/i.test(agentLabel) && isUntested("agents.codex.accountLimits") && <em className="untested">{t("mobile.newTab.untested")}</em>}
     </button>;
   };
   const {

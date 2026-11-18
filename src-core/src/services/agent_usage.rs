@@ -1,4 +1,4 @@
-//! One agent CLI's own usage panel, read without opening a tab.
+//! Account usage without opening a tab: Claude print mode and Codex account RPC.
 //!
 //! `claude -p "/usage" --output-format json` prints what the `/usage` slash
 //! command draws in-session — the 5-hour window, the weekly window, the
@@ -46,12 +46,12 @@ pub const CACHE_TTL: Duration = Duration::from_secs(60);
 /// held down.
 pub const REFRESH_FLOOR: Duration = Duration::from_secs(10);
 
-/// Per-agent argv that prints the CLI's usage panel once and exits, keyed by
-/// the registry `id`. `claude` is the only entry because it is the only CLI
-/// whose usage panel is reachable from print mode at all: `/status` answers
-/// "isn't available in this environment" there, and no other agent documents a
-/// non-interactive usage readout.
-const RECIPES: &[(&str, &[&str])] = &[("claude", &["-p", "/usage", "--output-format", "json"])];
+/// Verified non-interactive usage entry points. Codex's app-server needs a
+/// JSON-RPC handshake and `account/rateLimits/read`, never a model turn.
+const RECIPES: &[(&str, &[&str])] = &[
+    ("claude", &["-p", "/usage", "--output-format", "json"]),
+    ("codex", &["app-server", "--listen", "stdio://"]),
+];
 
 /// The one-shot usage argv for `agent_id`, or `None` when that CLI has no
 /// readable usage panel.
@@ -176,7 +176,42 @@ pub fn report_text(stdout: &str, stderr: &str, code: Option<i32>) -> Result<Stri
     })
 }
 
-type Cache = Mutex<HashMap<String, (Instant, String)>>;
+// One probe at a time: callers waiting behind a read recheck the shared cache.
+pub async fn read_lock(agent_id: &str) -> tokio::sync::MutexGuard<'static, ()> {
+    static CODEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static OTHER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    if agent_id == "codex" { CODEX.lock().await } else { OTHER.lock().await }
+}
+
+fn failures() -> &'static Mutex<HashMap<String, (Instant, String)>> {
+    static FAILURES: OnceLock<Mutex<HashMap<String, (Instant, String)>>> = OnceLock::new();
+    FAILURES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Failed reads are briefly shared too, preventing one spawn per waiting tab.
+pub fn recent_failure(agent_id: &str) -> Option<String> {
+    let failures = failures().lock().ok()?;
+    let (at, error) = failures.get(agent_id)?;
+    (at.elapsed() < REFRESH_FLOOR).then(|| error.clone())
+}
+
+pub fn remember_failure(agent_id: &str, error: &str) {
+    if let Ok(mut failures) = failures().lock() {
+        failures.insert(agent_id.to_string(), (Instant::now(), error.to_string()));
+    }
+}
+
+type Cache = Mutex<HashMap<String, (Instant, u64, String)>>;
+
+/// When the cached reading was obtained, in Unix milliseconds (not cache-hit time).
+pub fn read_at(agent_id: &str) -> Option<u64> {
+    cache().lock().ok()?.get(agent_id).map(|(_, at, _)| *at)
+}
+
+/// Keep a failed refresh's last successful reading, without renewing its age.
+pub fn last_reading(agent_id: &str) -> Option<String> {
+    cache().lock().ok()?.get(agent_id).map(|(_, _, raw)| raw.clone())
+}
 
 fn cache() -> &'static Cache {
     static CACHE: OnceLock<Cache> = OnceLock::new();
@@ -186,7 +221,7 @@ fn cache() -> &'static Cache {
 /// The last panel read for this agent, if it is younger than `max_age`.
 pub fn cached_within(agent_id: &str, max_age: Duration) -> Option<String> {
     let cache = cache().lock().ok()?;
-    let (at, text) = cache.get(agent_id)?;
+    let (at, _, text) = cache.get(agent_id)?;
     (at.elapsed() < max_age).then(|| text.clone())
 }
 
@@ -197,8 +232,11 @@ pub fn cached(agent_id: &str) -> Option<String> {
 
 /// Keep a successful read for the next asker.
 pub fn remember(agent_id: &str, text: &str) {
+    if let Ok(mut failures) = failures().lock() { failures.remove(agent_id); }
     if let Ok(mut cache) = cache().lock() {
-        cache.insert(agent_id.to_string(), (Instant::now(), text.to_string()));
+        let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_millis() as u64;
+        cache.insert(agent_id.to_string(), (Instant::now(), at, text.to_string()));
     }
 }
 
@@ -210,19 +248,165 @@ pub fn forget(agent_id: &str) {
     }
 }
 
+/// Read a bounded JSON-RPC reply, ignoring notifications but refusing errors.
+async fn codex_reply<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R, id: u64) -> Result<serde_json::Value, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    // Bound both individual messages and the total notification stream.
+    for _ in 0..64 {
+        let mut line = Vec::new();
+        let n = (&mut *reader).take(64 * 1024 + 1).read_until(b'\n', &mut line).await
+            .map_err(|_| "cannot read Codex account limits".to_string())?;
+        if n == 0 || n > 64 * 1024 {
+            return Err("Codex account limits reply is missing or too large".into());
+        }
+        let value: serde_json::Value = serde_json::from_slice(&line)
+            .map_err(|_| "invalid Codex account limits reply".to_string())?;
+        if value.get("id").and_then(serde_json::Value::as_u64) != Some(id) { continue; }
+        if value.get("error").is_some() {
+            // Do not forward server diagnostics: they may contain credentials or paths.
+            return Err("Codex could not read account limits; check its ChatGPT sign-in".into());
+        }
+        return value.get("result").cloned().ok_or_else(|| "missing Codex result".into());
+    }
+    Err("too many Codex notifications before account limits".into())
+}
+
+async fn codex_exchange<R, W>(reader: &mut R, writer: &mut W) -> Result<String, String>
+where R: tokio::io::AsyncBufRead + Unpin, W: tokio::io::AsyncWrite + Unpin {
+    use tokio::io::AsyncWriteExt;
+    let initialize = serde_json::json!({"id": 0, "method": "initialize", "params": {
+        "clientInfo": {"name": crate::brand::SLUG, "version": env!("CARGO_PKG_VERSION")}
+    }});
+    writer.write_all(format!("{initialize}\n").as_bytes()).await.map_err(|_| "cannot initialize Codex".to_string())?;
+    writer.flush().await.map_err(|_| "cannot initialize Codex".to_string())?;
+    codex_reply(reader, 0).await?;
+    writer.write_all(b"{\"method\":\"initialized\"}\n{\"id\":1,\"method\":\"account/rateLimits/read\"}\n")
+        .await.map_err(|_| "cannot request Codex account limits".to_string())?;
+    writer.flush().await.map_err(|_| "cannot request Codex account limits".to_string())?;
+    codex_panel(&codex_reply(reader, 1).await?)
+}
+
+/// Normalize only the account-wide Codex bucket to the existing usage panel
+/// contract. Missing windows remain missing; other model buckets never substitute.
+pub fn codex_panel(result: &serde_json::Value) -> Result<String, String> {
+    let limits = result.pointer("/rateLimitsByLimitId/codex")
+        .or_else(|| result.get("rateLimits").filter(|v| {
+            v.get("limitId").and_then(serde_json::Value::as_str).is_none_or(|id| id == "codex")
+        })).ok_or_else(|| "Codex returned no account limits".to_string())?;
+    let mut lines = Vec::new();
+    for (key, fallback_session) in [("primary", true), ("secondary", false)] {
+        let Some(window) = limits.get(key) else { continue };
+        let Some(used) = window.get("usedPercent").and_then(serde_json::Value::as_f64).filter(|v| v.is_finite()) else { continue };
+        let session = window.get("windowDurationMins").and_then(serde_json::Value::as_u64)
+            .map_or(fallback_session, |minutes| minutes <= 24 * 60);
+        let label = if session { "Current session" } else { "Current week" };
+        let reset = window.get("resetsAt").and_then(serde_json::Value::as_i64)
+            .and_then(|at| chrono::DateTime::from_timestamp(at, 0))
+            .map(|at| format!(" · resets {} (UTC)", at.format("%b %-d, %Y, %-I:%M%P")))
+            .unwrap_or_default();
+        lines.push(format!("{label}: {}% used{reset}", used.clamp(0.0, 100.0)));
+    }
+    if lines.is_empty() { Err("Codex returned no account limit windows".into()) } else { Ok(lines.join("\n")) }
+}
+
+/// Start only the account RPC surface in the prepared probe home. Bound the
+/// exchange, then kill and reap the server on success, failure and timeout.
+pub async fn read_codex_limits(cmd: &mut tokio::process::Command) -> Result<String, String> {
+    let mut child = cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
+        .kill_on_drop(true).spawn().map_err(|_| "cannot start Codex account limits reader".to_string())?;
+    let result = tokio::time::timeout(USAGE_TIMEOUT, async {
+        let mut writer = child.stdin.take().ok_or("missing Codex stdin")?;
+        let mut reader = tokio::io::BufReader::new(child.stdout.take().ok_or("missing Codex stdout")?);
+        codex_exchange(&mut reader, &mut writer).await
+    }).await.unwrap_or_else(|_| Err("Codex account limits request timed out".into()));
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn only_claude_has_a_verified_usage_recipe() {
+    fn codex_limits_keep_partial_windows_and_select_the_account_bucket() {
+        let result = serde_json::json!({
+            "rateLimits": {"limitId": "other", "primary": {"usedPercent": 99}},
+            "rateLimitsByLimitId": {"codex": {
+                "primary": {"usedPercent": 12.5, "windowDurationMins": 300, "resetsAt": 1795003200i64},
+                "secondary": null
+            }}
+        });
+        assert_eq!(codex_panel(&result).unwrap(), "Current session: 12.5% used · resets Nov 18, 2026, 12:00pm (UTC)");
+        assert!(codex_panel(&serde_json::json!({"rateLimits": {"primary": null, "secondary": null}})).is_err());
+        assert!(codex_panel(&serde_json::json!({"rateLimits": {"limitId": "other", "primary": {"usedPercent": 99}}})).is_err());
+        let week = serde_json::json!({"rateLimits": {"primary": {"usedPercent": 104, "windowDurationMins": 10080}}});
+        assert_eq!(codex_panel(&week).unwrap(), "Current week: 100% used");
+    }
+
+    #[tokio::test]
+    async fn codex_handshake_reads_limits_without_starting_a_thread_or_turn() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (client, server) = tokio::io::duplex(8192);
+        let (client_read, mut client_write) = tokio::io::split(client);
+        let (server_read, mut server_write) = tokio::io::split(server);
+        let fake_server = async move {
+            let mut reader = BufReader::new(server_read);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "initialize");
+            server_write.write_all(b"{\"id\":0,\"result\":{}}\n").await.unwrap();
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&line).unwrap()["method"], "initialized");
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&line).unwrap(), serde_json::json!({"id":1,"method":"account/rateLimits/read"}));
+            server_write.write_all(b"{\"method\":\"account/updated\",\"params\":{}}\n{\"id\":1,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":25},\"secondary\":{\"usedPercent\":80}}}}\n").await.unwrap();
+        };
+        let read = async { codex_exchange(&mut BufReader::new(client_read), &mut client_write).await };
+        let (result, ()) = tokio::join!(read, fake_server);
+        assert_eq!(result.unwrap(), "Current session: 25% used\nCurrent week: 80% used");
+    }
+
+    #[tokio::test]
+    async fn codex_errors_and_unbounded_output_never_become_a_usage_reading() {
+        for body in [
+            "{\"id\":1,\"error\":{\"message\":\"private details\"}}\n".to_string(),
+            "x".repeat(64 * 1024 + 1),
+            "not JSON\n".to_string(),
+            String::new(),
+        ] {
+            let error = codex_reply(&mut body.as_bytes(), 1).await.unwrap_err();
+            assert!(!error.contains("private details"));
+        }
+    }
+
+    #[test]
+    fn a_failed_refresh_preserves_the_successful_reading_and_its_age() {
+        remember("stale-test", "Current session: 42% used");
+        let read_at = read_at("stale-test").unwrap();
+        remember_failure("stale-test", "offline");
+        assert_eq!(recent_failure("stale-test").as_deref(), Some("offline"));
+        assert_eq!(last_reading("stale-test").as_deref(), Some("Current session: 42% used"));
+        assert_eq!(super::read_at("stale-test"), Some(read_at));
+        remember("stale-test", "Current session: 43% used");
+        assert!(recent_failure("stale-test").is_none());
+        forget("stale-test");
+    }
+
+
+    #[test]
+    fn usage_recipes_do_not_start_a_model_turn() {
         assert_eq!(
             usage_argv("claude").unwrap(),
             vec!["-p", "/usage", "--output-format", "json"]
         );
         assert!(is_supported("claude"));
-        assert!(usage_argv("codex").is_none());
-        assert!(!is_supported("codex"));
+        assert_eq!(usage_argv("codex").unwrap(), vec!["app-server", "--listen", "stdio://"]);
+        assert!(is_supported("codex"));
         assert!(!is_supported("gemini"));
     }
 

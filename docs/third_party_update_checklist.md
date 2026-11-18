@@ -725,6 +725,17 @@ aliases, and anything about where or how credentials are stored.
 
 ### 1.2 Codex
 
+Account usage (`src-core/src/services/agent_usage.rs`, `commands/agents.rs`):
+`codex app-server --listen stdio://`, JSONL `initialize` → `initialized` →
+`account/rateLimits/read`; no thread or turn is started. Verified on 0.169.0
+and 0.170.0 (2026-11-18) with an empty temporary home: handshake accepted and the account
+method returned the expected sign-in refusal. Successful/partial replies,
+notifications, error redaction and output bounds are covered by the core tests.
+The signed-in desktop/phone read remains tagged for live verification. The
+account-wide `codex` bucket's camelCase windows are normalized to the shared
+usage-panel format with UTC reset dates; unknown buckets never substitute.
+
+
 Chat's queue (`mobile-web/src/terminal/queuePull.ts`, `queue_hint` in
 `pty_bridge.rs`, `agentQueueWrites`): mid-turn, Tab still lists a prompt under
 `• Queued follow-up inputs` with `… edit last queued message`, that key still

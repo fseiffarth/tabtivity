@@ -1120,6 +1120,7 @@ export const enSource = {
   "mobile.facts.resetIn": "in {time}",
   "mobile.facts.sessionLabel": "5h",
   "mobile.facts.weekLabel": "week",
+  "agents.usage.readAge": "Usage last read {minutes} min ago",
   "mobile.facts.limitToggle": "Click to switch between percent and bar",
   "mobile.focus.lastPrompt": "Your prompt for this answer — show it",
   "mobile.focus.modeFixed": "OpenCode settles its agent when the session starts — nothing on the phone switches it. Start the tab with `opencode --mini --agent plan` for the other one.",
