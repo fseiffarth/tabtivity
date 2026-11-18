@@ -326,7 +326,8 @@ fn a_lane_switched_off_since_the_crash_is_not_revived() {
 /// Each recomputed identity field that moved since the crash keeps its lane dead.
 #[test]
 fn a_changed_identity_is_not_revived() {
-    let cases: Vec<(&str, Caller, Box<dyn Fn(&mut Identity)>)> = vec![
+    type Tweak = Box<dyn Fn(&mut Identity)>;
+    let cases: Vec<(&str, Caller, Tweak)> = vec![
         ("project", Caller::Printer, Box::new(|id| id.project = Some("p2".into()))),
         ("schedule target", Caller::Marker, Box::new(|id| id.schedule_target.as_mut().unwrap().target = "t2".into())),
         ("push dir", Caller::Pusher, Box::new(|id| id.push.as_mut().unwrap().dir = std::env::temp_dir().join("elsewhere"))),
@@ -489,7 +490,7 @@ fn release_keeps_the_row_and_revoke_purges_it() {
     tokens().register(help, identity(tab, Caller::Helper), false);
     tokens().register(print, identity(tab, Caller::Printer), false);
     revoke_session(&print_hash).unwrap();
-    assert_eq!(hashes(), [help_hash.clone()], "a revoked session leaves the record");
+    assert_eq!(hashes(), std::slice::from_ref(&help_hash), "a revoked session leaves the record");
     assert!(revoke_tab(tab));
     assert!(hashes().is_empty(), "a revoked tab leaves the record");
     on_session_renamed("reattach-global-session", "reattach-global-renamed");
