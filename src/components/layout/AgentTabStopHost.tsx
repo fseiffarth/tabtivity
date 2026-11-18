@@ -15,6 +15,7 @@ import {
 } from "../../stores/agents/agentTabStop";
 import {
   MEMORY_STOPS_PER_TICK,
+  PINNED_ONLY_CLIS,
   STOPS_PER_TICK,
   freeMemoryBytes,
   lastUsedOf,
@@ -82,15 +83,20 @@ async function memoryLow(minFree: number | null): Promise<boolean> {
   return free !== null && free < minFree;
 }
 
-/** The answers only the backend has, one IPC each, for a final candidate. */
-async function finalChecks(a: Agent): Promise<FinalStopChecks> {
-  const projectId = projectIdOfScope(a.scope);
-  const resumePinned = await invoke<boolean>("agent_tab_resume_pinned", {
+/** The backend's word: a respawn of the tab now resumes its own conversation. */
+function askResumePinned(a: Agent): Promise<boolean> {
+  return invoke<boolean>("agent_tab_resume_pinned", {
     agent: a.tab.cmd,
-    projectId,
+    projectId: projectIdOfScope(a.scope),
     sessionId: a.tab.sessionId ?? "",
     cwd: a.tab.cwd,
   }).catch(() => false);
+}
+
+/** The answers only the backend has, one IPC each, for a final candidate. */
+async function finalChecks(a: Agent): Promise<FinalStopChecks> {
+  const projectId = projectIdOfScope(a.scope);
+  const resumePinned = await askResumePinned(a);
   if (!resumePinned) return { resumePinned };
   let runningSubagents = 0;
   if (a.tab.cmd === "claude") {
@@ -134,7 +140,19 @@ export function AgentTabStopHost() {
       const restored = takeRestoredStopped();
       if (restored.size === 0) return;
       const agents = agentTabs();
-      const stopped = agents.filter((a) => a.tab.stopped && restored.get(a.scope)?.has(a.tab.key));
+      const restoredStopped = agents.filter((a) => a.tab.stopped && restored.get(a.scope)?.has(a.tab.key));
+      // The restore stops by the static guards alone. A CLI that resumes its
+      // own conversation only while its record exists (`PINNED_ONLY_CLIS`)
+      // otherwise falls back to the folder's newest — woken later, possibly
+      // another tab's. Such a tab is always-live, as the sweep treats it: it
+      // wakes now, the cap aside, on the args a restore always gave it.
+      const unpinned = new Set<Agent>();
+      for (const a of restoredStopped) {
+        if (PINNED_ONLY_CLIS.has(a.tab.cmd) && !(await askResumePinned(a))) unpinned.add(a);
+      }
+      if (disposed) return;
+      for (const a of unpinned) wakeAgentTab(a.scope, a.tab.key);
+      const stopped = restoredStopped.filter((a) => !unpinned.has(a));
       if (stopped.length === 0) return;
       const sessions = stopped.some((a) => a.tab.tmuxSession)
         ? new Set(await invoke<string[]>("local_tmux_app_sessions").catch(() => []))

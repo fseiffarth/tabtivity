@@ -191,4 +191,22 @@ describe("the restore wake", () => {
     // Live: agent-5, then agent-1 (its session survived), then agent-2.
     expect(stoppedKeys()).toEqual(["agent-3", "agent-4"]);
   });
+
+  it("wakes a restored tab whose CLI would not resume its own conversation, past the cap", async () => {
+    // OpenCode without its plugin's record goes back on `--continue`, the
+    // folder's newest session: woken later, that may be another tab's.
+    settings({ stop_agent_tabs_cap: 1, stop_agent_tabs_idle_min: 0, stop_agent_tabs_min_free_mb: 0 });
+    setTabs([
+      agent(1, { stopped: true, cmd: "opencode", lastUsedAt: NOW - 5 * HOUR }),
+      agent(2, { stopped: true, cmd: "opencode", lastUsedAt: NOW - 4 * HOUR }),
+      agent(3, { lastUsedAt: NOW }),
+    ]);
+    pinned = (id) => !id.endsWith("1");
+    noteRestoredStopped(SCOPE, ["agent-1", "agent-2"]);
+    useProjectsStore.setState({ projects: [] });
+    await restoreActiveProjectScopes();
+    render(<AgentTabStopHost />);
+    await run(6_000);
+    expect(stoppedKeys()).toEqual(["agent-2"]);
+  });
 });
