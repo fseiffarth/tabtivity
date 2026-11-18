@@ -7596,6 +7596,7 @@ async fn a_server_names_window_only_requests_as_such() {
     assert_eq!(detail["diverged"], false);
     assert_ne!(detail["tabs"][0]["worktree_movable"], true, "the window's move is not offered: {body}");
     assert_ne!(detail["tabs"][0]["location_movable"], true);
+    assert_eq!(detail["desktop_images"], false, "no desktop screen to offer: {body}");
 
     for uri in [
         format!("/api/v1/tabs/{tab_id}/worktrees"),

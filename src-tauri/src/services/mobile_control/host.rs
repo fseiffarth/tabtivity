@@ -1567,8 +1567,9 @@ async fn project(
                 "create": project.create,
                 // Whether the phone may offer a new shell (`shells_open`).
                 "shells": shells_open(&state.config.state_dir),
-                // Whether the ＋ sheet offers Desktop (`desktop_images_open`).
-                "desktop_images": desktop_images_open(&state.config.state_dir),
+                // Whether the ＋ sheet offers Desktop (`desktop_images_open`);
+                // never on a server, which has no desktop screen.
+                "desktop_images": !state.web.on_server() && desktop_images_open(&state.config.state_dir),
                 // `tmux` where tabs attach through tmux; `unsupported` on a
                 // host with none (Windows), where the phone hides ＋, Schedule
                 // and Mark up's Submit (`terminals_support`).
@@ -6841,6 +6842,13 @@ async fn desktop_images(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    // A server has no desktop screen, clipboard or screenshots of the
+    // reader's: the folders a no-window answer would list are the server
+    // account's, which is not what "From the desktop" means. Said before the
+    // switch, which is about a desktop there is none of.
+    if state.web.on_server() {
+        return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW);
+    }
     if !desktop_images_open(&state.config.state_dir) {
         return desktop_image_error("desktop_images_off");
     }
@@ -6848,12 +6856,6 @@ async fn desktop_images(
         Ok(target) => target,
         Err(error) => return error,
     };
-    // A server has no desktop screen, clipboard or screenshots of the
-    // reader's: the folders a no-window answer would list are the server
-    // account's, which is not what "From the desktop" means.
-    if state.web.on_server() {
-        return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW);
-    }
     let request_id = new_request_id();
     let desktop_socket = state.config.control_dir.join("desktop-control.sock");
     let response = admin::desktop_call(
@@ -6898,6 +6900,9 @@ async fn attach_desktop_image(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if state.web.on_server() {
+        return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW);
+    }
     if !desktop_images_open(&state.config.state_dir) {
         return desktop_image_error("desktop_images_off");
     }
@@ -6911,9 +6916,6 @@ async fn attach_desktop_image(
         Ok(target) => target,
         Err(error) => return error,
     };
-    if state.web.on_server() {
-        return api_error(StatusCode::NOT_IMPLEMENTED, SERVER_NO_WINDOW);
-    }
     // This route puts a picture into a Tabby chat's folder (gap 78).
     if let Some(uid) = chat.as_deref() {
         crate::services::assistant_attach::note_attachment_in(&state.config.state_dir, uid);
