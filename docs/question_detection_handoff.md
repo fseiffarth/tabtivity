@@ -382,6 +382,26 @@ Not fixed, noticed (flag for the user):
 - A catalog `cwd` that is itself above the project (a tab opened at `/`-level)
   is trusted as before; only the transcript-supplied cwd was the hole.
 
+## Follow-ups (2026-11-18, after landing)
+
+- Probes `tui_edit`/`tui_write`/`tui_fetch`/`tui_ask_chat`/`tui_bash_no`
+  (2.1.327): the Edit/Create/Fetch wording matches `permissionSubject.ts`'s
+  matchers (now pinned by `MobilePermissionDialogs.test.ts`); `Chat about
+  this` and `No` + feedback are ended by `Stop` / `UserPromptSubmit` hooks,
+  so no settle change. Findings are in the plan's probe table.
+- The phone gets a `blocking` entry only while the tab's turn record says
+  `decision` (`phone_transcript`, fail closed: host/remote tabs fall back to
+  the screen-read card); a read that dropped one hands out no `version`, so
+  the phone does full reads until the record flips (cost: a full read per
+  poll for a tab with a stale unanswered question the phone is viewing,
+  until the next prompt — accepted).
+- The desktop shares the phone's "spent once its dialog was seen" rule
+  (`askedQuestion.ts` `entryStands`), ending the flash after the last answer.
+- Previews stay unmasked on the phone (user's decision, 2026-11-18).
+- Still open: other CLIs (OpenCode `question.asked`, Codex sync
+  `request_user_input`), each behind its own probe; the user's own repro of
+  the original misread.
+
 ## Flagged for user
 - S0 lamp gate turns user-opened Claude pickers (`/resume`, `/config`...) on a tab with a hook verdict into a `stray` pointer, no longer clickable cards/digit-answerable (plan says they stay unaffected).
 - Phone answers call `noteUserInput` with no dialog info, so the desktop lamp drops after page 1 of a multi-question dialog; with the Reader open on that tab the S0 gate hides page 2.
