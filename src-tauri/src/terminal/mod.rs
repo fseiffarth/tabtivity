@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use app_core::{Caller, ClientId, CoreCtx};
 
 pub mod host_pty;
+pub(crate) mod pty_child;
 mod replay_trim;
 use replay_trim::{trim_replay, ScreenState, REPLAY_TRIM_FLOOR};
 
@@ -2308,9 +2309,7 @@ fn open_native(cmd: CommandBuilder, cols: u16, rows: u16) -> Result<Opened, Stri
         })
         .map_err(|e| format!("openpty: {e}"))?;
 
-    let child = pair
-        .slave
-        .spawn_command(cmd)
+    let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd)
         .map_err(|e| format!("spawn: {e}"))?;
 
     let reader = pair
@@ -3864,7 +3863,7 @@ mod tests {
         let mut cmd = CommandBuilder::new("sh");
         cmd.arg("-c");
         cmd.arg("sleep 300; true");
-        let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+        let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd).expect("spawn sh");
         let leader = child.process_id().expect("leader pid");
         let writer = pair.master.take_writer().expect("take writer");
         let master = pair.master;
@@ -3934,7 +3933,7 @@ mod tests {
             let mut cmd = CommandBuilder::new("sh");
             cmd.arg("-c");
             cmd.arg("sleep 300; true");
-            let child = pair.slave.spawn_command(cmd).expect("spawn sh");
+            let child = pty_child::spawn_in_pty(&*pair.master, &*pair.slave, cmd).expect("spawn sh");
             leaders.push(child.process_id().expect("leader pid"));
             let writer = pair.master.take_writer().expect("take writer");
             registry.lock().unwrap().insert(
