@@ -144,7 +144,18 @@ subagent's own `UserPromptSubmit` carries the parent's `session_id` and an
 `agent_id`, so it counts as the tab working). An interrupted Claude tool fired
 no failure event on 2.1.325 (the `is_interrupt` guard is cheap insurance). A
 Codex or Vibe turn that fails on the API was not seen to end: both retry for
-longer than the probe waited.
+longer than the probe waited. A Codex turn stopped by its usage limit (a 429
+`usage_limit_reached`, never retried; 0.169.0, `turn_hooks.py … usage`,
+2026-11-18, never live) fires `UserPromptSubmit` and **no** `Stop`; its
+rollout ends the turn with `task_complete` carrying `error.codex_error_info:
+"usage_limit_exceeded"`. `agent_turn::settle_codex_turn` reads that: while a
+local Codex tab's record is in flight, the watcher's 2 s poll (and the Mobile
+sidecar's scheduler, with no window) reads the rollout's last 64 KB when it
+grew, and a `task_complete` no older than the record (2 s slack) is written
+over it as `done`, `.ask` removed, as the hook's `Stop` would. Without it a
+prompt scheduled for after the limit's reset found the tab `working` and was
+recorded as missed. An interrupt (`turn_aborted`) is left alone: the probe's
+Esc did not reach the tool call, so its rollout shape is unverified.
 
 Four more CLIs write the same record, each from a hook of its own module and
 never from the shared script (2026-11-16, probed offline, never live):
@@ -562,6 +573,50 @@ roots as `agentRoots`. (On the current Claude CLI `--resume <id>` finds a
 session from any cwd — verified live — so the cwd decides where the agent
 *works*, not whether the conversation comes back.)
 
+## Stopped tabs
+
+Plan: `docs/agent_tab_stop_plan.md` (decisions at its end). A **stopped**
+agent tab keeps its place, label and conversation; its process is ended and it
+respawns on its restore args (`resumeArgsOf`) when shown. The same resume a
+restart does, per tab. `TabEntry.stopped` is runtime only; `lastUsedAt` is
+saved, so a relaunch ranks which tabs come back running.
+
+- **Who decides**: `components/layout/AgentTabStopHost` sweeps every 60 s
+  (30 s under memory pressure) with the pure policy in
+  `lib/agents/agentTabStop` (guards, LRU ranking, `pickStops`); the three
+  triggers are settings (`stop_agent_tabs_cap` 30, `_idle_min` 120,
+  `_min_free_mb` 4096; `0` = off). No trigger takes a tab used (shown,
+  prompted, a turn) or spawned/woken within 10 min: the cap counts every live
+  agent tab, stoppable or not, so without that floor a cap filled by Gemini
+  tabs took a tab used a minute ago, and low memory had none at all.
+- **Stop** (`stores/agents/agentTabStop.stopAgentTab`): every guard read again,
+  `stopped` set (the pane unmounts → `pty_kill`; a sleeping pane's parked PTY
+  is killed by `PaneSlot`), then the tab's own minted tmux session ended
+  (`local_tmux_kill`, never an attach).
+- **Wake**: shown (`PaneSlot`, also popout/console/dock), a due scheduled
+  prompt (`AgentScheduleHost`, delivered on a later tick), the phone opening it
+  (`wrapAgentTabForPhone`), steering typing into it. The wake waits for the
+  stop's tmux kill so `new-session -A` never lands on the dying session.
+- **Only CLIs that resume an id.** Claude and Codex, and Antigravity, Vibe,
+  OpenCode, Copilot and Muse only while `agent_tab_resume_pinned`
+  (`services::agent_resume_pinned`) says a respawn resumes the tab's *own*
+  recorded conversation — each arm reads what that CLI's resolver above reads
+  and writes nothing. Without a record those fall back to the folder's latest,
+  which can be another tab's. `--continue`/`latest` CLIs (Gemini, Cursor,
+  Grok, Qwen, Droid), custom agents, local-model, remote, container/VM,
+  root/Tabby, Host-session, sign-in and attach tabs are never stopped. For
+  Claude the check is strict: a live record with no log yet (a fresh `/clear`)
+  would resume the cleared conversation, so it is not pinned.
+- **Restore**: with the cap on, `loadFromLayout` brings every statically
+  stoppable tab back stopped (the rule is registered by the stop store, so the
+  tabs store does not import projects); once the launch's restore settles the
+  host wakes those whose tmux session survived a crash
+  (`local_tmux_app_sessions`), then the most recently used up to the cap.
+- **Not knowable cheaply, approximated**: a phone attached (a `tab_seen` /
+  `tab_input` within 15 min blocks); a pending push/release card (not guarded:
+  the request lives in the backend and the agent polls it); Codex/other
+  subagents (only Claude's transcript counts them).
+
 ## Reusing a session id is fatal
 
 `claude --session-id <id>` for an id that already has a transcript exits with
@@ -597,3 +652,29 @@ every place a log can be has to be probed:
   its handle), a subagent's own file or a `Workflow` run's journal only when
   it is opened — and emptied when the copied session changes. A host
   tab of any other CLI has no chat.
+
+## Continuing in another CLI
+
+Code: `agent/agent_cli_handoff.rs` (backend), `CliHandoffDialog.tsx` +
+`CliHandoffMenuItem.tsx` + `lib/agents/cliHandoff.ts` (frontend); plan and
+history in `docs/cli_session_handoff_plan.md`.
+
+- The dialog opens from a limit notice (`TerminalLimitHandoff`) or the tab
+  menu. Both start a *new* tab on the chosen CLI through `newAgentTabForDraft`,
+  so it is resumable (`TAB_UID`, session id) like any "+" menu tab. The source
+  tab is never stopped or touched; the menu row is disabled only while an agent
+  turn runs.
+- The context travels as a file, not as typed text: `HANDOFF.md` in the
+  successor's agent home, `~/handoff/cli-<id>/` (the target's CLI shares the
+  scope's `agent-homes/<scope>`, so the path is the same fenced mount). The
+  first input is a short prompt naming that path.
+- The backend reads the transcript (`agent_cli_handoff_prepare` takes the
+  Reader's tab identity, never conversation text from the renderer or phone). No
+  summarizer runs; the file holds the first request, the newest turns that fit a
+  budget, the previous agent's cockpit notes (claims, with times) and
+  `git status`. Everything agent- or project-written is quoted in a fence.
+- Local tabs only: remote-host tabs, remote projects, reserved scopes (the
+  assistant) and CLIs whose transcript is not read are refused with the
+  `unsupported` code.
+- Old files are pruned only by ids the ledger recorded; nothing else in the
+  shared `handoff/` folder (byte-sync's `conflicts-*`) is ever deleted.

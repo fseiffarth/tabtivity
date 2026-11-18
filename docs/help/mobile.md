@@ -244,6 +244,12 @@ is refused. Works with the desktop window closed.
   disconnects within seconds, and **＋** offers no shell. Switch it off to
   see and open shells from the phone — they run as you, with no agent's
   permission prompts in between.
+- **Desktop pictures on the phone** (under **Project access**, off by
+  default) lets the composer's **＋ → Desktop** list this computer's
+  clipboard picture and newest screenshots, downloads and pictures, and copy
+  one into the project's inbox, where the project's agents can read it. Off,
+  the phone shows no **Desktop** tile. These are your folders, not the
+  project's, so a lost phone does not reach them unless you switch this on.
 
 ## Steering with a keyboard
 
@@ -602,7 +608,15 @@ the switch button in the header (also on the lock, pairing and setup screens)
 lists the linked computers; picking one shows that computer's phone pages inside
 the app, where you pair with and unlock it as usual. The app remembers the
 computer you picked. Notifications from a computer shown this way need that
-computer opened in the browser on its own. A phone that has the app open takes
+computer opened in the browser on its own.
+
+To keep one computer from tricking you into tapping something on another, a
+computer shown inside the app takes taps and keys only while the phone's
+browser confirms nothing covers it. Chrome on Android can confirm that, so
+there it just works; while the switch list is open over it, it waits until the
+list closes. iPhone and iPad (Safari) and Firefox can't, so there it shows a
+card instead, with **Open … on its own** (the computer in its own browser tab)
+and **Choose a desktop**. A phone that has the app open takes
 up a change at the app's next update.
 
 ## One phone at a time

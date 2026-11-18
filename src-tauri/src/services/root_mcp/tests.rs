@@ -118,12 +118,13 @@ fn opts(cmd: &str, args: &[&str], project_id: Option<&str>) -> PtyOptions {
         host_session: false,
         api_key: None,
         mux_wrapped: false,
+        mcp_mark: None,
     }
 }
 
 #[test]
 fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
-    let runtime = Runtime { port: 8765, serves_root: true, serves_markup: true, serves_web: false };
+    let runtime = Runtime { port: 8765, serves_root: true, serves_markup: true, serves_web: false, generation: "test-generation".into() };
     for cli in WIRED_CLIS {
         let mut spawn = opts(cli, &[], Some("p"));
         apply_schedule_to_spawn_with(&mut spawn, &runtime, "secret", &[]);
@@ -146,7 +147,7 @@ fn schedule_wiring_is_disjoint_scoped_and_secret_free() {
 }
 
 fn rt() -> Runtime {
-    Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: false }
+    Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: false, generation: "test-generation".into() }
 }
 
 /// One lane rule: a profile gets the web lane exactly when
@@ -156,7 +157,7 @@ fn the_assistant_grant_follows_the_profiles_own_lane_rule() {
     use super::super::assistant::{AssistantCli, AssistantLaunch};
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("settings.json"), json!({"assistant": true}).to_string()).unwrap();
-    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
     for cli in AssistantCli::ALL {
         let mut spawn = opts(cli.bin(), &[], Some(crate::storage::ASSISTANT_SCOPE));
         spawn.assistant = Some(AssistantLaunch { cli, model: None });
@@ -186,7 +187,7 @@ fn an_assistant_spawn_gets_the_web_and_help_lanes_alone_and_only_when_everything
         spawn.env.insert("KEPT".into(), "1".into());
         spawn
     };
-    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
     let lane_tokens = |spawn: &PtyOptions| {
         let mut keys: Vec<String> = spawn.env.keys().filter(|k| k.ends_with("_MCP_TOKEN") || k.ends_with("_MCP_URL")).cloned().collect();
         keys.sort();
@@ -2545,7 +2546,7 @@ fn cockpit_rename_is_self_only_versioned_and_revocable() {
     let mut spawn = opts("claude", &[], Some("p"));
     spawn.id = "p:mine".into();
     spawn.tmux_session = workspace::tmux_of(&mine).map(str::to_string);
-    let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
     let store = TokenStore::default();
     grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
     let token = spawn.env[COCKPIT_TOKEN_ENV].clone();
@@ -2593,7 +2594,7 @@ fn cockpit_rename_is_self_only_versioned_and_revocable() {
 #[test]
 fn cockpit_grants_require_a_saved_tab_and_do_not_change_assistant_tools() {
     let state = tempfile::tempdir().unwrap();
-    let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
     let store = TokenStore::default();
     let mut spawn = opts("codex", &[], Some("p"));
     grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
@@ -2651,7 +2652,7 @@ impl CockpitFixture {
         let mut spawn = opts("claude", &[], Some("p"));
         spawn.id = "p:mine".into();
         spawn.tmux_session = workspace::tmux_of(&mine).map(str::to_string);
-        let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+        let runtime = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
         let store = TokenStore::default();
         grant_cockpit(&mut spawn, &runtime, &store, state.path(), &[]);
         let session = Self::session_of(&store, &spawn);
@@ -3612,7 +3613,7 @@ fn tabs_lane_grant_matrix() {
     };
     let tmux = saved("p", "mine");
     let box_tmux = saved("box:b", "boxed");
-    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true };
+    let serving = Runtime { port: 4321, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
     let spawn = |cli: &str| {
         let mut o = opts(cli, &[], Some("p"));
         o.id = "p:tabs-matrix".into();
@@ -3759,4 +3760,85 @@ fn a_cockpit_binding_without_a_session_name_finds_its_tab_by_launch_uid() {
     if spawn.tmux_session.is_some() {
         assert_eq!(cockpit::binding_for_spawn_with(state.path(), &spawn, nonce).map(|b| b.id), workspace::tab_id(&mine).map(str::to_string));
     }
+}
+
+// ── reattach: a running agent keeps its grant (docs/mcp_reattach_plan.md) ──
+
+fn lane_identity(tab: &str, caller: Caller) -> Identity {
+    Identity { tab: tab.into(), caller, project: Some("p".into()), schedule_target: None, push: None, endpoint: None, model: None }
+}
+
+/// `adopt` re-keys every lane of the tab holding the grant to the new PTY id:
+/// the tokens still authenticate, the old id holds nothing, and a teardown of
+/// the new id revokes them (the revoke-on-exit path keeps working).
+#[test]
+fn adopt_rekeys_a_held_grant_to_the_new_pty_id() {
+    let store = TokenStore::default();
+    let (help, git) = (mint_token().unwrap(), mint_token().unwrap());
+    store.register(help.clone(), lane_identity("adopt:old", Caller::Helper), false);
+    store.register(git.clone(), lane_identity("adopt:old", Caller::Pusher), false);
+    let grant = crate::digest::sha256_hex(help.as_bytes());
+    assert!(store.holds_session(&grant));
+    assert!(!store.adopt(&"0".repeat(64), "adopt:new"), "a grant that is not held adopts nothing");
+    assert!(store.adopt(&grant, "adopt:new"));
+    for token in [&help, &git] {
+        let session = store.authenticate(Some(&format!("Bearer {token}"))).expect("the token survives");
+        assert_eq!(session.identity.tab, "adopt:new");
+    }
+    assert!(store.holds_session(&grant), "the session id is unchanged");
+    // Idempotent for the same id (a same-id respawn): nothing is revoked.
+    assert!(store.adopt(&grant, "adopt:new"));
+    assert!(store.authenticate(Some(&format!("Bearer {git}"))).is_some());
+}
+
+/// What the new PTY id was granted by an earlier spawn would share a lane with
+/// the adopted tokens: it goes, the adopted ones stay.
+#[test]
+fn adopt_replaces_what_the_new_id_held_in_a_lane() {
+    let store = TokenStore::default();
+    let (old, squatter) = (mint_token().unwrap(), mint_token().unwrap());
+    store.register(old.clone(), lane_identity("adopt:a", Caller::Helper), false);
+    store.register(squatter.clone(), lane_identity("adopt:b", Caller::Helper), false);
+    assert!(store.adopt(&crate::digest::sha256_hex(old.as_bytes()), "adopt:b"));
+    assert!(store.authenticate(Some(&format!("Bearer {squatter}"))).is_none(), "revoked");
+    assert_eq!(store.authenticate(Some(&format!("Bearer {old}"))).unwrap().identity.tab, "adopt:b");
+}
+
+/// A revoked grant is not held, so it is not adopted either.
+#[test]
+fn a_revoked_grant_is_not_held() {
+    let store = TokenStore::default();
+    let token = mint_token().unwrap();
+    store.register(token.clone(), lane_identity("adopt:r", Caller::Helper), false);
+    let grant = crate::digest::sha256_hex(token.as_bytes());
+    let session = store.authenticate(Some(&format!("Bearer {token}"))).unwrap();
+    session.revoked.store(true, Ordering::Release);
+    assert!(!store.holds_session(&grant));
+    assert!(!store.adopt(&grant, "adopt:r2"));
+}
+
+/// The hover card's server list is empty for a stale tab, whatever tokens the
+/// process happens to hold under its id.
+#[test]
+fn a_stale_tab_lists_no_servers() {
+    let tab = "stale:tab-1";
+    register_token(mint_token().unwrap(), lane_identity(tab, Caller::Helper), false);
+    assert_eq!(servers_of_tab(tab), vec![super::super::help_mcp::SERVER_NAME]);
+    assert!(!tab_stale(tab));
+    set_tab_stale(tab, true);
+    assert!(tab_stale(tab));
+    assert!(servers_of_tab(tab).is_empty());
+    forget_stale(tab);
+    assert_eq!(servers_of_tab(tab), vec![super::super::help_mcp::SERVER_NAME]);
+    revoke_tab(tab);
+}
+
+/// A grant is stamped by its first lane's id, never its token.
+#[test]
+fn the_stamp_names_a_hash_never_a_token() {
+    let token = "secret-token-value";
+    let grant = crate::digest::sha256_hex(token.as_bytes());
+    let rendered = root_mcp_mark::Mark { nonce: root_mcp_mark::new_nonce(), grant: Some(grant), port: 9 }.render();
+    assert!(!rendered.contains(token));
+    assert!(root_mcp_mark::Mark::parse(&rendered).is_some());
 }

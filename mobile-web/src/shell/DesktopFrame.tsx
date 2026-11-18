@@ -129,6 +129,7 @@ function DesktopFrame({ origin, retry }: { origin: string; retry: () => void }) 
       </div>
       {isUntested("mobile.shell.framedDesktop") && <p><span className="untested">{t("mobile.newTab.untested")}</span></p>}
     </div>}
-    {!stuck && isUntested("mobile.shell.framedDesktop") && <span className="untested shell-stage-tag" aria-hidden="true">{t("mobile.newTab.untested")}</span>}
+    {/* Nothing of the shell's is ever drawn over a framed desktop that loaded:
+        the frame's guard (`frameGuard.ts`) would read it as covered. */}
   </>;
 }

@@ -152,6 +152,7 @@ export function reopenSpec(closed: ClosedAgentTab): Omit<TabEntry, "key"> {
     launchedAt: _launchedAt,
     relaunchSeq: _relaunchSeq,
     hostSessionPaused: _paused,
+    stopped: _stopped,
     initialInput: _initialInput,
     mobileRequestHash: _requestHash,
     runFile: _runFile,

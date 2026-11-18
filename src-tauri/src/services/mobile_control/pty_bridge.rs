@@ -997,10 +997,7 @@ fn open_client(target: &AttachTarget, mux: &dyn SessionMux, cols: u16, rows: u16
         })
         .map_err(|e| e.to_string())?;
     let command = target.attach_command_on(mux)?;
-    let child = pair
-        .slave
-        .spawn_command(command)
-        .map_err(|e| e.to_string())?;
+    let child = crate::terminal::pty_child::spawn_in_pty(&*pair.master, &*pair.slave, command)?;
     // From here every exit kills and reaps it.
     let end = ClientEnd::Child(Some(child));
     drop(pair.slave);

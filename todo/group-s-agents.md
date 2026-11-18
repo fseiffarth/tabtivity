@@ -1,13 +1,26 @@
 ## Group S — Local Agents via Ollama Integrations (`ollama launch`)
 
-- [ ] **Continue work with another CLI** — planned, not implemented.
-  `docs/cli_session_handoff_plan.md`: manual Claude ↔ Codex handoff in local
-  project tabs, usable after a quota limit without another source-model call;
-  durable context, linked sessions, safe stop/delivery and retry recovery.
-  - [ ] Context collector and preview with explicit history coverage.
-  - [ ] Persisted lifecycle, source stop/continuation hold and crash recovery.
-  - [ ] Destination adapters, prompt receipts and linked-session restore.
-  - [ ] Shared desktop picker, i18n, untested register and regression coverage.
+- [ ] **Continue work with another CLI** — v0 on develop since 2026-11-04
+  (`TerminalLimitHandoff`, pill `terminal.limitHandoff`); plan
+  `docs/cli_session_handoff_plan.md` (rewritten 2026-11-18) hardens it.
+  Steps A–D implemented on branch `cli-handoff`, never live; new pill
+  `agent.cliHandoff` (tab menu).
+  - [x] A. Successor tab through `newAgentTabForDraft` (resumable, `TAB_UID`).
+    `9e10db308`
+  - [x] B. `agent_cli_handoff_prepare`: `HANDOFF.md` in the target's agent home
+    (first request, recent turns in a budget, cockpit notes, working tree).
+    `9f537d75a`
+  - [x] C. Shared `CliHandoffDialog`: limit notice + tab-menu entry, CLI picker,
+    preview, short bootstrap prompt. `275d12367`
+  - [ ] 🖐️ Manual: Claude → Codex, Codex → Claude, restart resumes the successor.
+    - [ ] ✅ Works on Linux (X11)
+    - [ ] ❌ Doesn't work on Linux (X11)
+    - [ ] ✅ Works on Linux (Wayland)
+    - [ ] ❌ Doesn't work on Linux (Wayland)
+    - [ ] ✅ Works on Windows
+    - [ ] ❌ Doesn't work on Windows
+    - [ ] ✅ Works on macOS
+    - [ ] ❌ Doesn't work on macOS
 
 - [ ] **Notes on diff lines, added to the Chat draft** (implemented 2026-11-13, never
   live; frontend only). Plan `docs/diff_notes_plan.md`, handoff
@@ -3665,6 +3678,20 @@ unchanged; the new agents are additive.
   marks. In a project tab, asked how to send a file, it names `tabtivity-send`.
   `/clear`, then Undo before another prompt: the tab reopens the cleared
   session. On Windows there is no Muse hook: the marks come from the screen.
+  - [ ] ✅ Works on Linux (X11)
+  - [ ] ❌ Doesn't work on Linux (X11)
+  - [ ] ✅ Works on Linux (Wayland)
+  - [ ] ❌ Doesn't work on Linux (Wayland)
+  - [ ] ✅ Works on Windows
+  - [ ] ❌ Doesn't work on Windows
+  - [ ] ✅ Works on macOS
+  - [ ] ❌ Doesn't work on macOS
+- [ ] 🖐️ Manual test — Codex usage-limit stop: in a Codex tab that hits its usage limit
+  ("You've hit your usage limit"), the working mark turns to finished within a
+  few seconds (no `Stop` hook fires; `agent_turn::settle_codex_turn` reads the
+  rollout). A prompt scheduled for after the reset is then typed in at its time,
+  not recorded as missed — with the window open, and with only the phone
+  sidecar running.
   - [ ] ✅ Works on Linux (X11)
   - [ ] ❌ Doesn't work on Linux (X11)
   - [ ] ✅ Works on Linux (Wayland)

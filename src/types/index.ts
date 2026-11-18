@@ -209,6 +209,10 @@ export interface Settings {
      * agents-only); read by the sidecar per catalog load and repeated by the
      * desktop bridge. */
     shell_tabs?: boolean;
+    /** A paired phone may list and attach this desktop's clipboard image and
+     * newest screenshots, downloads and pictures (+ → Desktop). Unset is off;
+     * read by the sidecar per request and repeated by the window's commands. */
+    desktop_images?: boolean;
     /** A paired phone may list the Ollama models installed here and load or
      * unload them (never download or delete). Unset is on; an explicit false
      * closes the routes. Read by the sidecar per request and repeated by the
@@ -905,6 +909,17 @@ export interface Settings {
    *  to be reloaded where it was when shown again. Unset → 10; `0` → never.
    *  Read through `sleepTabsAfterMs` (`lib/sleepWhenHidden`). */
   sleep_tabs_after_min?: number;
+  /** Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+   *  tabs with a running process before the least recently used are stopped
+   *  (kept, resumed when shown). Unset → 30; `0` → off. Read through
+   *  `stopAgentTabsCap` (`lib/agents/agentTabStop`). */
+  stop_agent_tabs_cap?: number;
+  /** Minutes an agent tab may sit unused before it is stopped. Unset → 120;
+   *  `0` → off. Read through `stopAgentTabsIdleMs`. */
+  stop_agent_tabs_idle_min?: number;
+  /** Free memory (MiB) under which least recently used agent tabs are
+   *  stopped. Unset → 4096; `0` → off. Read through `stopAgentTabsMinFreeBytes`. */
+  stop_agent_tabs_min_free_mb?: number;
   /** Lines of history a shell terminal keeps (`docs/done/tab_cost_plan.md` step
    *  2): every `TerminalView` whose kind is not `agent`/`local_agent`. Unset or
    *  invalid → 2,000; clamped to [100, 50,000]. Agent tabs keep a fixed 5,000.

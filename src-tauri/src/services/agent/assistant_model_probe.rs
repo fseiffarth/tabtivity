@@ -171,6 +171,7 @@ fn probe() -> Result<Vec<Screen>, String> {
         host_session: false,
         api_key: None,
         mux_wrapped: false,
+        mcp_mark: None,
     };
     #[cfg(target_os = "linux")]
     crate::services::agent_fence::wrap_pty_options_bwrap(&mut opts, &[], storage::ASSISTANT_SCOPE, &home.dir)?;

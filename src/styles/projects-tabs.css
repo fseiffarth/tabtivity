@@ -1900,6 +1900,23 @@
   opacity: 0.7;
 }
 
+/* A stopped agent tab (docs/agent_tab_stop_plan.md): its process was ended to
+   free memory and it resumes when shown. The label dims further and a small
+   pause mark, two static bars, sits before it. Static: nothing animates. */
+.tab.stopped .tab-label {
+  opacity: 0.5;
+}
+.tab.stopped .tab-label::before {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 0.7em;
+  margin-right: 5px;
+  border-left: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  vertical-align: -0.05em;
+}
+
 /* Member chip (TabMemberChip): which member of a box the tab works in. A round
    dot in the member's colour (a rounded square for the whole box: members are
    dots, boxes are squares, never swapped) and a short name. Quiet by design:

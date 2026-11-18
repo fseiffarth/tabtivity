@@ -33,6 +33,19 @@ project.json
 .claude/settings.json
 .claude/settings.local.json
 
+# Claude Code runtime state (also in Claude's own .git/info/exclude block, but a
+# fresh clone or another agent CLI never gets that). .claude/skills/ stays tracked.
+.claude/worktrees/
+.claude/checkpoints/
+.claude/mailbox/
+.claude/routines/.state/
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks.json
+.claude/agent-registry.json
+.claude/agent-memory-local
+.claude/first-run
+.claude/assistant-daemon-state.json
+
 # Rust / Cargo
 target/
 

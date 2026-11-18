@@ -345,6 +345,44 @@ describe("parseUnifiedDiff · git extended headers", () => {
     const [file] = parseUnifiedDiff("diff --git a/p b/p\nBinary files a/p and b/p differ\n");
     expect(wholeFileHunk(file, "text")).toBeNull();
   });
+
+  it("splits `Binary files` paths as the old regex did: at the last ` and ` with a path after it", () => {
+    const paths = (line: string) => {
+      const [file] = parseUnifiedDiff(`diff --git a/x b/x\n${line}\n`);
+      return file.binary ? [file.oldPath, file.newPath] : null;
+    };
+    const regex = /^Binary files (.+) and (.+) differ$/;
+    const lines = [
+      "Binary files a/salt and pepper.png and b/salt and pepper.png differ",
+      "Binary files a/x and b/y and  differ",
+      "Binary files a/x and b/y and z differ",
+      "Binary files  and  and  differ",
+      "Binary files a and b differ",
+      "Binary files  and b differ",
+      "Binary files a and  differ",
+      "Binary files and differ",
+      "Binary files a/x and b/x differs",
+    ];
+    for (const line of lines) {
+      const m = regex.exec(line);
+      const strip = (p: string) => (p.startsWith("a/") || p.startsWith("b/") ? p.slice(2) : p);
+      expect(paths(line), line).toEqual(m ? [strip(m[1]), strip(m[2])] : null);
+    }
+  });
+
+  it("parses a long line of repeated ` and ` in linear time (gap 111)", () => {
+    const hostile = `Binary files ${" and ".repeat(200_000)}`;
+    const started = performance.now();
+    parseUnifiedDiff(`diff --git a/x b/x\n${hostile}\n${hostile} differ\n`);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("unquotes a long quoted path of backslashes in linear time", () => {
+    const started = performance.now();
+    expect(unquotePath(`"${"\\\\".repeat(200_000)}"`)).toBe("\\".repeat(200_000));
+    expect(unquotePath('"a\\303\\251\\0619"')).toBe("aé19");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe("parseUnifiedDiff · paths", () => {

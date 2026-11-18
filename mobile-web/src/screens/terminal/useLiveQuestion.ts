@@ -7,6 +7,7 @@ import {
   type SelectPrompt,
 } from "../../terminal/selectPrompt";
 import { NO_QUESTION_PARTS, questionParts, type QuestionParts } from "../../terminal/questionParts";
+import type { AskedCard } from "../../terminal/askedQuestion";
 import { opensAgentMessage } from "../../terminal/chatTurns";
 import { MODEL_PICKER_WAIT } from "./terminalShared";
 
@@ -16,15 +17,21 @@ import { MODEL_PICKER_WAIT } from "./terminalShared";
  * new dialog's row unseen. */
 const NEXT_DIALOG_HOLD = 600;
 
+/** A line of the entry's question text as the list's heading shows it. */
+const entryLine = (text: string, index: number): ReadableLine => ({ key: `entry:${index}`, text, spans: [{ text }] });
+
 /** The question the session is waiting on, as the chat lists it, and the taps that answer it. */
 export function useLiveQuestion({
-  clearPending, deliver, agentLabel, liveTail, liveQuestion,
+  clearPending, deliver, agentLabel, liveTail, liveQuestion, askedCard = null,
 }: {
   clearPending: () => void;
   deliver: (writes: string[], prompt?: number) => boolean;
   agentLabel: string;
   liveTail: ReadableLine[];
   liveQuestion: SelectPrompt | null;
+  /** The transcript's waiting question over the screen's reading, when it
+   * applies (`mergeAskedQuestion`); `liveQuestion` is then its prompt. */
+  askedCard?: AskedCard | null;
 }) {
   /** The dialog's own question — the block right above its rows, which the
    * list below shows as its heading — and the screen it was drawn onto, which
@@ -37,8 +44,17 @@ export function useLiveQuestion({
    * are rejoined into paragraphs (`joinProseWraps`) — any other dialog's
    * screen, a diff or a command, stays as drawn. */
   const { ask: questionAsk, context: questionContext, tabs: questionTabs, tabFocus: questionTabFocus, tabSubmit: questionTabSubmit, tabKeys: questionStepKeys } = useMemo(
-    (): QuestionParts => (liveQuestion ? questionParts(liveTail, liveQuestion) : NO_QUESTION_PARTS),
-    [liveQuestion, liveTail],
+    (): QuestionParts => {
+      if (!liveQuestion) return NO_QUESTION_PARTS;
+      if (askedCard?.kind === "entry") {
+        return { ask: askedCard.ask.map(entryLine), context: [], tabs: askedCard.tabs, tabFocus: askedCard.tabFocus, tabSubmit: askedCard.tabSubmit, tabKeys: askedCard.tabKeys };
+      }
+      const parts = questionParts(liveTail, liveQuestion);
+      // The entry's whole question text in place of the screen's wrapped one;
+      // the tab row, its focus and the context stay the screen's.
+      return askedCard ? { ...parts, ask: askedCard.ask.map(entryLine) } : parts;
+    },
+    [liveQuestion, liveTail, askedCard],
   );
   /** An agent's own question (a tab row over it) shows the agent's message
    * above it only when that message is read from its first row. Anything else
@@ -51,9 +67,13 @@ export function useLiveQuestion({
    * below, which must not restart on every repaint of the same question. Two
    * questions of one dialog can offer the same rows (two yes/no questions):
    * the step they are on tells them apart. */
+  // The merged card's rows carry the entry's words, not the box glyphs the
+  // screen draws: its signature is the screen's own, so a tick still counts as
+  // the dialog being redrawn.
+  const rowsSignature = liveQuestion ? askedCard?.signature ?? selectSignature(liveQuestion) : "";
   const questionSignature = !liveQuestion ? ""
-    : questionTabs.length === 0 ? selectSignature(liveQuestion)
-    : [selectSignature(liveQuestion), ...questionTabs.map((tab) => `${tab.answered ? "✓" : "☐"}${tab.label}`), `@${questionTabFocus ?? ""}`, ...questionAsk.map((line) => line.text)].join("\n");
+    : questionTabs.length === 0 ? rowsSignature
+    : [rowsSignature, ...questionTabs.map((tab) => `${tab.answered ? "✓" : "☐"}${tab.label}`), `@${questionTabFocus ?? ""}`, ...questionAsk.map((line) => line.text)].join("\n");
   /** The question a tap just answered, while the session has not redrawn yet:
    * its rows stay listed, but nothing can be tapped twice. */
   const [questionSent, setQuestionSent] = useState<{ signature: string; number: number } | null>(null);
@@ -84,7 +104,7 @@ export function useLiveQuestion({
    * and Enter the on-screen key row sends, so a tapped row lands exactly as a
    * walked one. Nothing here decides what the options are. */
   const answerQuestion = (option: SelectOption) => {
-    if (!liveQuestion || questionHeld) return;
+    if (!liveQuestion || liveQuestion.readOnly || questionHeld) return;
     clearPending();
     if (!deliver(answerRowKeys(liveQuestion, option))) return;
     setQuestionSent({ signature: questionSignature, number: option.number });
@@ -94,7 +114,7 @@ export function useLiveQuestion({
    * sent. No row is pending, but none can be tapped until the session redraws. */
   const stepQuestion = (from: number, to: number) => {
     const keys = questionTabKeys(from, to, questionStepKeys);
-    if (!liveQuestion || questionHeld || keys.length === 0) return;
+    if (!liveQuestion || liveQuestion.readOnly || questionHeld || keys.length === 0) return;
     clearPending();
     if (!deliver(keys)) return;
     setQuestionSent({ signature: questionSignature, number: -1 });
@@ -103,7 +123,7 @@ export function useLiveQuestion({
    * under it: the highlight walked there, the words, and Enter where Enter
    * sends them (`freeTextWrites`). */
   const answerQuestionText = (option: SelectOption, text: string) => {
-    if (!liveQuestion || questionHeld) return;
+    if (!liveQuestion || liveQuestion.readOnly || questionHeld) return;
     const writes = freeTextWrites(liveQuestion.current, option, text);
     if (writes.length === 0) return;
     clearPending();

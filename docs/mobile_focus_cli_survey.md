@@ -216,7 +216,10 @@ scoped to a tab whose label names it ("Google Antigravity").
   Gemini 3.1 Pro · low`, `accept-edits · …`; 1.5.9, `--mode` or Shift+Tab, which
   cycles default → accept-edits → plan). Default, `--mode auto` and
   `--dangerously-skip-permissions` draw no word (read as default), and a pane
-  too narrow for the model drops the mode with it. It draws no path, branch or
+  too narrow for the model drops the mode with it. A signed-in account differs
+  (1.5.9, 2026-11-18, the user's session): Auto is the default and drawn
+  (`auto · Gemini 3.8 Flash · high`), and Shift+Tab cycles accept-edits → auto
+  → plan. It draws no path, branch or
   context on the live frame (the banner's folder scrolls away, unread).
 - Still open: the alternate-screen setting (`altScreenMode`, picked at first
   run) hands the tab to Terminal view.

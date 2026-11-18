@@ -930,6 +930,224 @@ async fn a_phone_transcript_masks_the_running_shells_command_lines() {
     }
 }
 
+/// The tool calls a permission dialog is about cross masked like the running
+/// shells (`shell_mask`): a file path project-relative or cut to its leaf, a
+/// URL to its scheme and host, any other tool by name alone — and a name that
+/// is no tool name (a transcript read from a remote host is not ours) not at
+/// all. No raw command, path or URL crosses the phone API.
+#[tokio::test]
+async fn a_phone_transcript_masks_the_waiting_tools_subjects() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell, WaitingTool};
+    let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(53)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let root = host.root.to_string_lossy().into_owned();
+    let tool = |name: &str, subject: String| WaitingTool { name: name.into(), subject, at: Some("2026-11-18T09:27:00.000Z".into()) };
+    let transcript = AgentTranscript {
+        // Only the waiting tools: the tab lookup must happen for them alone.
+        waiting_tools: vec![
+            tool("Edit", format!("{root}/src/a.rs")),
+            tool("Write", "/home/someone/private dir/notes/b.txt".into()),
+            tool("NotebookEdit", "~/.ssh/n.ipynb".into()),
+            tool("WebFetch", "https://user:hunter2@internal.example.org:8443/admin/reset?token=abc123#x".into()),
+            // Not a file tool: whatever subject a remote transcript smuggled is dropped.
+            tool("Read", "/etc/shadow".into()),
+            tool("mcp__srv__tool", "https://leak.example.org/p".into()),
+            tool("Edit; curl evil.example.org", "/x".into()),
+        ],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript).await;
+    let tools = wire["waitingTools"].as_array().expect("waitingTools");
+    let seen: Vec<(&str, &str)> = tools.iter().map(|t| (t["name"].as_str().unwrap(), t["subject"].as_str().unwrap_or(""))).collect();
+    assert_eq!(
+        seen,
+        vec![
+            ("Edit", "src/a.rs"),
+            ("Write", "…/b.txt"),
+            ("NotebookEdit", "~/…/n.ipynb"),
+            ("WebFetch", "https://internal.example.org"),
+            ("Read", ""),
+            ("mcp__srv__tool", ""),
+        ],
+        "{wire}"
+    );
+    assert_eq!(tools[0]["at"], "2026-11-18T09:27:00.000Z");
+    let text = wire.to_string();
+    for leaked in [root.as_str(), "someone", "private dir", ".ssh", "hunter2", "8443", "/admin", "abc123", "/etc/shadow", "leak.example", "evil.example"] {
+        assert!(!text.contains(leaked), "{leaked}: {wire}");
+    }
+
+    // Together with a running shell and a waiting question, nothing raw crosses either.
+    let transcript = AgentTranscript {
+        shells: vec![RunningShell { command: format!("cat {root}/x && curl https://u:p@h.example.org/secret/path"), ..Default::default() }],
+        waiting_tools: vec![tool("Edit", "/var/lib/other/c.rs".into())],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
+    assert_eq!(wire["waitingTools"][0]["subject"], "…/c.rs");
+    let command = wire["shells"][0]["command"].as_str().unwrap();
+    assert!(command.starts_with("cat x && curl https://"), "{wire}");
+    assert!(!command.contains("u:p@") && !command.contains(root.as_str()), "{wire}");
+}
+
+/// The phone has no live "asking" state, so a question the agent is blocked
+/// on (`blocking`) crosses only while the tab's turn record says `decision`;
+/// a working, done, idle, unreadable or missing record drops it (a dead or
+/// resumed session's leftover would be a phantom card). The other entries
+/// keep their place.
+#[tokio::test]
+async fn a_phone_transcript_keeps_a_waiting_question_only_while_the_turn_says_decision() {
+    use crate::services::agent_transcript::{AgentTranscript, AskedQuestion, TranscriptEntry};
+    let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(55)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let live = host.state.config.state_dir.join("live_sessions");
+    let record = live.join("9d0f-session.turn");
+    let transcript = || AgentTranscript {
+        entries: vec![
+            TranscriptEntry { kind: "prompt".into(), text: "ask me".into(), ..Default::default() },
+            TranscriptEntry {
+                kind: "answer".into(),
+                text: "Q".into(),
+                questions: vec![AskedQuestion { question: "Which?".into(), ..Default::default() }],
+                blocking: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let kinds = |wire: &Value| -> Vec<(String, bool)> {
+        wire["entries"].as_array().unwrap().iter().map(|e| (e["kind"].as_str().unwrap().to_string(), e["blocking"] == true)).collect()
+    };
+    let kept = vec![("prompt".to_string(), false), ("answer".to_string(), true)];
+    let dropped = vec![("prompt".to_string(), false)];
+
+    // No record at all, and a record that is no turn word: fail closed.
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+    std::fs::create_dir_all(&live).unwrap();
+    std::fs::write(&record, "garbage 1").unwrap();
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+
+    for (text, keeps) in [("decision 100", true), ("working 100", false), ("done 100", false), ("idle 100", false)] {
+        std::fs::write(&record, text).unwrap();
+        let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+        assert_eq!(kinds(&wire), if keeps { kept.clone() } else { dropped.clone() }, "{text}: {wire}");
+    }
+
+    // The project's own slice (where a fenced agent's hook writes) counts too,
+    // the newer stamp winning.
+    std::fs::write(&record, "working 100").unwrap();
+    let slice = live.join(crate::storage::project_key(RAW_PROJECT));
+    std::fs::create_dir_all(&slice).unwrap();
+    std::fs::write(slice.join("9d0f-session.turn"), "decision 200").unwrap();
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), kept, "{wire}");
+    std::fs::write(slice.join("9d0f-session.turn"), "decision 50").unwrap();
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript()).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+
+    // A transcript with no waiting question never needs the record.
+    let plain = AgentTranscript { entries: vec![TranscriptEntry { kind: "prompt".into(), text: "hi".into(), ..Default::default() }], ..Default::default() };
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, plain).await;
+    assert_eq!(kinds(&wire), dropped, "{wire}");
+}
+
+/// The same rule on the route: the window answers over the control socket and
+/// the phone gets the entries through `phone_transcript` (the no-window route
+/// calls the same function with the CLI's own transcript read off the tab
+/// record, so the rule holds for the headless sidecar too).
+#[tokio::test]
+async fn the_window_route_drops_a_waiting_question_unless_the_turn_says_decision() {
+    use crate::services::agent_transcript::{AgentTranscript, AskedQuestion, TranscriptEntry};
+    let host = Fixture::with_project();
+    let (cookie, _) = host.pair_device(&signing_key(56)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let socket = host.state.config.control_dir.join("desktop-control.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+    let desktop = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            if admin::read_frame::<DesktopRequest>(&mut stream).await.is_err() {
+                continue;
+            }
+            let transcript = AgentTranscript {
+                entries: vec![TranscriptEntry {
+                    kind: "answer".into(),
+                    text: "Q".into(),
+                    questions: vec![AskedQuestion { question: "Which?".into(), ..Default::default() }],
+                    blocking: true,
+                    ..Default::default()
+                }],
+                version: Some("v1".into()),
+                ..Default::default()
+            };
+            admin::write_frame(&mut stream, &DesktopResponse::AgentTranscript { transcript }).await.expect("answer");
+        }
+    });
+    let live = host.state.config.state_dir.join("live_sessions");
+    std::fs::create_dir_all(&live).unwrap();
+    for (text, count) in [("working 1", 0), ("decision 2", 1), ("done 3", 0)] {
+        std::fs::write(live.join("9d0f-session.turn"), text).unwrap();
+        let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/transcript"), &cookie)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(json(&body)["transcript"]["entries"].as_array().unwrap().len(), count, "{text}: {body}");
+        // A read that dropped the question hands out no version: the file does
+        // not move when `decision` lands, so the phone's next poll must not be
+        // answered `unchanged` and miss the entry for good.
+        assert_eq!(json(&body)["transcript"].get("version").is_some(), count == 1, "{text}: {body}");
+    }
+    desktop.abort();
+}
+
+/// The transcript's own `cwd` is the agent's to write: a folder above the
+/// tab's must not make every path below it relative, and the list a remote
+/// host sends is bounded and its stamps checked.
+#[tokio::test]
+async fn a_phone_transcript_trusts_no_cwd_outside_the_tab_and_bounds_the_waiting_tools() {
+    use crate::services::agent_transcript::{AgentTranscript, RunningShell, WaitingTool, MAX_TOOL_SUBJECT_CHARS, MAX_WAITING_TOOLS};
+    let host = Fixture::with_project();
+    let (cookie, device) = host.pair_device(&signing_key(54)).await;
+    let (_, tab_id) = project_and_tab(&host, &cookie).await;
+    let above = host.root.parent().expect("a parent").to_path_buf();
+    let private = above.join("alice").join(".ssh").join("id_key");
+    let transcript = AgentTranscript {
+        cwd: Some(above.to_string_lossy().into_owned()),
+        shells: vec![RunningShell { command: format!("cat {}", private.display()), ..Default::default() }],
+        waiting_tools: vec![WaitingTool { name: "Edit".into(), subject: private.to_string_lossy().into_owned(), at: None }],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript).await;
+    let text = wire.to_string();
+    assert!(!text.contains("alice") && !text.contains(".ssh"), "{wire}");
+    assert!(text.contains("id_key"), "{wire}");
+
+    // A cwd inside the tab's folder is still used (a worktree below it).
+    let inside = host.root.join("wt");
+    let transcript = AgentTranscript {
+        cwd: Some(inside.to_string_lossy().into_owned()),
+        waiting_tools: vec![WaitingTool { name: "Edit".into(), subject: inside.join("a.rs").to_string_lossy().into_owned(), at: None }],
+        ..Default::default()
+    };
+    let wire = phone_transcript(&host.state, &Phone(device.clone()), &tab_id, transcript).await;
+    assert_eq!(wire["waitingTools"][0]["subject"], "a.rs", "{wire}");
+
+    // Count, subject length and stamp.
+    let tool = |at: &str| WaitingTool { name: "Edit".into(), subject: format!("rel/{}", "d".repeat(MAX_TOOL_SUBJECT_CHARS * 4)), at: Some(at.into()) };
+    let mut tools: Vec<WaitingTool> = (0..100).map(|_| tool("2026-11-18T09:27:00.000Z")).collect();
+    tools.push(tool("<script>alert(1)</script>"));
+    tools.push(tool(&"2".repeat(5000)));
+    let transcript = AgentTranscript { waiting_tools: tools, ..Default::default() };
+    let wire = phone_transcript(&host.state, &Phone(device), &tab_id, transcript).await;
+    let tools = wire["waitingTools"].as_array().expect("waitingTools");
+    assert_eq!(tools.len(), MAX_WAITING_TOOLS);
+    assert!(tools[..MAX_WAITING_TOOLS - 2].iter().all(|t| t["at"] == "2026-11-18T09:27:00.000Z"), "{wire}");
+    assert!(tools[MAX_WAITING_TOOLS - 2..].iter().all(|t| t.get("at").is_none()), "{wire}");
+    assert!(tools.iter().all(|t| t["subject"].as_str().unwrap().chars().count() <= MAX_TOOL_SUBJECT_CHARS), "{wire}");
+}
+
 /// H3 (headless owner plan §3): with no window open, the phone's tab
 /// edits — rename, colour, close, reopen — are the owner's: they land in
 /// the session file through the workspace service, answered as stored
@@ -1328,8 +1546,12 @@ async fn writes_with_side_effects_are_the_owners_with_no_window() {
     assert_eq!(options["worktrees"], json!([]));
     assert_eq!(options["sign_in"], json!([]));
 
-    // Desktop images: a file in Tabtivity's own screenshot folder is listed
+    // Desktop images: closed until "Desktop pictures on the phone" is on
+    // (gap 65); then a file in Tabtivity's own screenshot folder is listed
     // (no clipboard) and attached into the project inbox.
+    let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie)).await;
+    assert_eq!((status, json(&body)["error"].as_str()), (StatusCode::FORBIDDEN, Some("desktop_images_off")), "{body}");
+    open_desktop_images(&state_dir);
     let shots = state_dir.join("screenshots-pending");
     std::fs::create_dir_all(&shots).expect("shots dir");
     std::fs::write(shots.join("shot.png"), b"\x89PNG\r\n\x1a\nnot really").expect("shot");
@@ -1968,6 +2190,7 @@ async fn a_tabby_chat_takes_the_phones_files_into_its_own_folder() {
     let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/inbox?names={leaf}"), &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(json(&body)["files"].as_array().map(Vec::len), Some(1), "{body}");
+    open_desktop_images(&state_dir);
     let (status, _, body) = host.send(get_as(&format!("/api/v1/tabs/{tab_id}/desktop-images"), &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
@@ -2050,6 +2273,7 @@ fn host_tab_fixture(reachable: bool) -> Fixture {
 #[tokio::test]
 async fn a_host_tab_is_listed_on_host_and_refuses_what_would_act_here() {
     let host = host_tab_fixture(true);
+    open_desktop_images(&host.state.config.state_dir);
     let cookie = host.pair_device(&signing_key(71)).await.0;
     let (p, t) = project_and_tab(&host, &cookie).await;
     let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{p}"), &cookie)).await;
@@ -2626,7 +2850,7 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
         }))
         .expect("options")
     };
-    let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: true };
+    let rooted = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: true, generation: "test-generation".into() };
     for project in [None, Some("vm-reader")] {
         let mut here = spawn("headless:c", project);
         root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
@@ -2650,7 +2874,7 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     root_mcp::grant_lanes(&mut here, true, root_mcp::runtime(), other, &state_dir);
     root_mcp::grant_lanes(&mut window, true, Some(&rooted), other, &state_dir);
     root_mcp::grant_lanes(&mut targetless, true, root_mcp::runtime(), other, &state_dir);
-    let not_markup = crate::services::root_mcp::Runtime { port: 9, serves_root: false, serves_markup: false, serves_web: true };
+    let not_markup = crate::services::root_mcp::Runtime { port: 9, serves_root: false, serves_markup: false, serves_web: true, generation: "test-generation".into() };
     root_mcp::grant_lanes(&mut unserved, true, Some(&not_markup), other, &state_dir);
     assert!(here.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", here.env.keys());
     assert!(window.env.contains_key(root_mcp::MARKUP_TOKEN_ENV), "{:?}", window.env.keys());
@@ -2693,7 +2917,7 @@ async fn a_headless_claude_tab_is_handed_the_hosts_mcp_servers() {
     }
     assert_eq!(mcp_status(port, "/mcp", &web).await, 404);
     assert_eq!(admission(other, "/mcp/web", &web).await, Err(StatusCode::UNAUTHORIZED), "another process's listener refuses it");
-    let daemon = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: false };
+    let daemon = crate::services::root_mcp::Runtime { port: 9, serves_root: true, serves_markup: true, serves_web: false, generation: "test-generation".into() };
     let mut none = assistant("headless:web-daemon", "claude");
     root_mcp::grant_lanes(&mut none, true, Some(&daemon), other, &state_dir);
     assert!(!none.env.contains_key(root_mcp::WEB_TOKEN_ENV), "a daemon does not serve the web lane");
@@ -4152,9 +4376,71 @@ fn inbox_request(tab_id: &str, name: &str, cookie: &str, bytes: Vec<u8>) -> Requ
         .expect("request")
 }
 
+/// Turns "Desktop pictures on the phone" on (gap 65), keeping whatever
+/// `settings.json` already held.
+fn open_desktop_images(state_dir: &std::path::Path) {
+    set_desktop_images(state_dir, true);
+}
+
+fn set_desktop_images(state_dir: &std::path::Path, on: bool) {
+    let file = state_dir.join("settings.json");
+    let mut settings: Value = std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| json!({}));
+    settings[crate::brand::MOBILE_HOST_KEY]["desktop_images"] = json!(on);
+    std::fs::write(&file, settings.to_string()).expect("settings");
+}
+
+/// Gap 65: the desktop's pictures and clipboard image are the user's, not a
+/// project's. With the switch unset or off both routes refuse
+/// `403 desktop_images_off` before any desktop call or folder scan, and
+/// nothing reaches the project inbox; turning it on opens them, and turning
+/// it off again closes them at once (read per request).
+#[tokio::test]
+async fn desktop_images_stay_closed_until_the_switch_is_on() {
+    let host = Fixture::with_project();
+    let state_dir = host.state.config.state_dir.clone();
+    let cookie = host.pair_device(&signing_key(36)).await.0;
+    let (project_id, tab_id) = project_and_tab(&host, &cookie).await;
+    let offered = || async {
+        let (_, _, detail) = host.send(get_as(&format!("/api/v1/projects/{project_id}"), &cookie)).await;
+        json(&detail)["desktop_images"].as_bool()
+    };
+    let shots = state_dir.join("screenshots-pending");
+    std::fs::create_dir_all(&shots).expect("shots dir");
+    std::fs::write(shots.join("shot.png"), b"\x89PNG\r\n\x1a\nnot really").expect("shot");
+    let list = format!("/api/v1/tabs/{tab_id}/desktop-images");
+    let closed = |status: StatusCode, body: &str| {
+        assert_eq!((status, json(body)["error"].as_str()), (StatusCode::FORBIDDEN, Some("desktop_images_off")), "{body}");
+        assert!(!body.contains("shot.png"), "{body}");
+    };
+
+    for setting in [None, Some(false)] {
+        if let Some(on) = setting {
+            set_desktop_images(&state_dir, on);
+        }
+        let (status, _, body) = host.send(get_as(&list, &cookie)).await;
+        closed(status, &body);
+        let (status, _, body) = host.send(request_as("POST", &list, &cookie, Some(json!({ "image_id": desktop_images::CLIPBOARD_ID })))).await;
+        closed(status, &body);
+        assert_eq!(offered().await, Some(false), "the ＋ sheet hides Desktop");
+    }
+    assert!(!host.root.join(inbox::INBOX_DIR).exists());
+
+    set_desktop_images(&state_dir, true);
+    assert_eq!(offered().await, Some(true));
+    let (status, _, body) = host.send(get_as(&list, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = json(&body)["images"].as_array().unwrap().iter().find(|i| i["name"] == "shot.png").expect("listed")["id"].as_str().unwrap().to_string();
+
+    set_desktop_images(&state_dir, false);
+    let (status, _, body) = host.send(request_as("POST", &list, &cookie, Some(json!({ "image_id": id })))).await;
+    closed(status, &body);
+    assert!(!host.root.join(inbox::INBOX_DIR).exists());
+}
+
 #[tokio::test]
 async fn desktop_images_need_the_bridge_a_known_tab_a_same_origin_and_a_listed_id() {
     let host = Fixture::with_project();
+    open_desktop_images(&host.state.config.state_dir);
     let cookie = host.pair_device(&signing_key(31)).await.0;
     let tab_id = fixture_tab_id(&host, &cookie).await;
     let attach = |tab: &str, origin: &str, body: Value| {
@@ -7252,10 +7538,15 @@ fn the_headless_spawn_runs_in_the_session_host_only_what_the_wrap_marked() {
 /// with the switch's code, which the create route answers as `ai_off`.
 #[test]
 fn a_rejoin_only_headless_launch_never_creates_a_session() {
-    assert_eq!(headless_rejoin(true), Ok(()));
-    let refused = headless_rejoin(false).expect_err("refused");
+    assert_eq!(headless_rejoin(true, true), Ok(()));
+    assert_eq!(headless_rejoin(true, false), Ok(()));
+    let refused = headless_rejoin(false, true).expect_err("refused");
     assert_eq!(refused, crate::services::ai_switch::AI_OFF);
     assert_eq!(headless_create_error(headless::CreateRefusal::LaunchFailed(refused)).0, StatusCode::FORBIDDEN);
+    // A revival whose session ended meanwhile says so, not that AI is off.
+    let ended = headless_rejoin(false, false).expect_err("refused");
+    assert_eq!(ended, SESSION_ENDED);
+    assert_ne!(headless_create_error(headless::CreateRefusal::LaunchFailed(ended)).0, StatusCode::FORBIDDEN);
     let body = include_str!("../host.rs");
     let spawner = &body[body.find("impl Default for HeadlessSpawner").unwrap()..];
     let spawner = &spawner[..spawner.find("\n}\n").unwrap()];

@@ -80,7 +80,6 @@ const STILL_HAND_ROLLED = new Set([
   "projects/VmSettingsDialog.tsx",
   "stats/StatsRecap.tsx",
   "tabs/CustomAgentDialog.tsx",
-  "terminal/TerminalLimitHandoff.tsx",
   "todo/TodoCardDialog.tsx",
 ]);
 

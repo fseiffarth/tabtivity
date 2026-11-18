@@ -86,4 +86,5 @@ sync, git, tabs-and-panels, keyboard, files-and-viewers, pdf-and-markup,
 latex-and-presenter, agent-clis, claude-code, codex, gemini-cli,
 local-models, scheduled-prompts, talking-to-an-agent, root-console,
 mail-calendar, workspace-apps, assistant, mobile, containers-boxes, checkpoints,
-server, server-sharing, settings-and-appearance, ask-tabtivity, troubleshooting.
+server, server-sharing, settings-and-appearance, settings-links, ask-tabtivity,
+troubleshooting.

@@ -95,14 +95,25 @@ describe(`${BRAND.display} Mobile — Antigravity's footer: model, effort and mo
 });
 
 describe(`${BRAND.display} Mobile — Antigravity's mode chip`, () => {
-  it("offers its three-mode cycle for a tab that names it, plan being a labelled word", () => {
+  it("offers its modes for a tab that names it, plan and auto being labelled words", () => {
+    const ALL = ["default", "accept-edits", "auto", "plan"];
     expect(modeOffered(LABEL)).toBe(true);
-    expect(modeChoices("plan", LABEL).map((choice) => choice.value)).toEqual(["default", "accept-edits", "plan"]);
-    expect(modeChoices("accept-edits", LABEL).map((choice) => choice.value)).toEqual(["default", "accept-edits", "plan"]);
+    expect(modeChoices("plan", LABEL).map((choice) => choice.value)).toEqual(ALL);
+    expect(modeChoices("accept-edits", LABEL).map((choice) => choice.value)).toEqual(ALL);
     // No word on a framed screen is the default mode; unlabelled, "plan" stays Claude's.
     expect(currentMode(modeChoices(undefined, LABEL), undefined, true)).toBe("default");
     expect(currentMode(modeChoices("plan", LABEL), "plan", true)).toBe("plan");
     expect(modeChoices("plan").map((choice) => choice.value)).toContain("accept edits");
     expect(modeChoices("accept-edits")).toEqual([]);
+  });
+
+  it("reads a signed-in session's drawn Auto default as auto, not as another family's", () => {
+    // A signed-in 1.5.9 session (2026-11-18): Auto is the default and drawn;
+    // Shift+Tab walks accept-edits -> auto -> plan.
+    const status = sessionStatus(lines(">", "? for shortcuts                                        auto · Gemini 3.8 Flash · high"), LABEL);
+    expect(status).toEqual({ model: "Gemini 3.8 Flash", effort: "high", mode: "auto" });
+    expect(currentMode(modeChoices("auto", LABEL), "auto", true)).toBe("auto");
+    // Unlabelled, "auto" is not claimed for Antigravity.
+    expect(modeChoices("auto").map((choice) => choice.value)).not.toContain("accept-edits");
   });
 });

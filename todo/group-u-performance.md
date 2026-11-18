@@ -1,5 +1,7 @@
 ## Group U — Interface Cost & Responsiveness
 
+- [ ] Improve the [Git workflow for projects](../docs/git_pipeline_optimization_plan.md), starting with publishing a new branch from the Git view.
+
 *Created 2026-08-26. Files: `src/lib/agents/fastMode.ts`, `src/stores/power.ts`,
 `src/styles/themes.css`, plus the surfaces each item names.*
 

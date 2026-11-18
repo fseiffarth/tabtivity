@@ -90,7 +90,9 @@ export function unquotePath(raw: string): string {
       continue;
     }
     const next = body[i + 1];
-    const oct = /^[0-7]{1,3}/.exec(body.slice(i + 1))?.[0];
+    // Three characters at most: slicing the whole rest per escape made a
+    // long quoted path of backslashes quadratic.
+    const oct = /^[0-7]{1,3}/.exec(body.slice(i + 1, i + 4))?.[0];
     if (oct) {
       bytes.push(parseInt(oct, 8) & 0xff);
       i += 1 + oct.length;
@@ -382,8 +384,9 @@ function parseMeta(line: string): { apply: (f: DiffFile) => void; opensFile: boo
     };
   }
   if (line === "GIT binary patch") return { opensFile: false, apply: (f) => { f.binary = true; } };
-  if ((m = hit(/^Binary files (.+) and (.+) differ$/))) {
-    const [, from, to] = m;
+  const binary = binaryFilesPaths(line);
+  if (binary) {
+    const [from, to] = binary;
     return {
       opensFile: true,
       apply: (f) => {
@@ -396,6 +399,24 @@ function parseMeta(line: string): { apply: (f: DiffFile) => void; opensFile: boo
     };
   }
   return null;
+}
+
+const BINARY_HEAD = "Binary files ";
+const BINARY_TAIL = " differ";
+const BINARY_AND = " and ";
+
+/** The two paths of a `Binary files <from> and <to> differ` line, split at the
+ *  last ` and ` that leaves `<to>` non-empty — what
+ *  `/^Binary files (.+) and (.+) differ$/` answers, in linear time: that regex
+ *  backtracks quadratically on a long line of repeated ` and ` (gap 111). */
+function binaryFilesPaths(line: string): [string, string] | null {
+  if (!line.startsWith(BINARY_HEAD) || !line.endsWith(BINARY_TAIL)) return null;
+  const body = line.slice(BINARY_HEAD.length, line.length - BINARY_TAIL.length);
+  // `.` stops at line terminators; a body holding one never matched.
+  if (/[\n\r\u2028\u2029]/.test(body)) return null;
+  const at = body.lastIndexOf(BINARY_AND, body.length - BINARY_AND.length - 1);
+  if (at < 1) return null;
+  return [body.slice(0, at), body.slice(at + BINARY_AND.length)];
 }
 
 /** `text` as lines: `\r\n` tolerated, a final newline ends the last line

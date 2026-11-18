@@ -81,6 +81,8 @@ function button(dialog: HTMLElement, text: string): HTMLButtonElement {
   return [...dialog.querySelectorAll("button")].find((b) => b.textContent?.includes(text)) as HTMLButtonElement;
 }
 
+const realUpdateSettings = useSettingsStore.getState().updateSettings;
+
 beforeEach(() => {
   mockInvoke.mockReset();
   mockInvoke.mockResolvedValue(null);
@@ -88,7 +90,7 @@ beforeEach(() => {
   useBoxEditorStore.getState().close();
   useProjectsStore.setState({ projects: [], activeId: null, loaded: true, switchToast: null });
   useBoxesStore.setState({ boxes: [], loaded: true });
-  useSettingsStore.setState({ settings: null } as never);
+  useSettingsStore.setState({ settings: null, updateSettings: realUpdateSettings } as never);
   useTabsStore.setState({ scope: "root" });
 });
 
@@ -443,12 +445,40 @@ describe("phone row", () => {
     expect(setBoxMobileAccess).toHaveBeenCalledWith("boxA", true, null);
   });
 
-  it("is hidden, with the reason, when persistent local sessions are off", async () => {
-    useSettingsStore.setState({ settings: { persist_local_sessions: false } } as never);
-    useBoxesStore.setState({ boxes: [box("boxA", [])] });
+  it("asks to turn persistent local sessions on when they are off, then switches on", async () => {
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+    useSettingsStore.setState({ settings: { persist_local_sessions: false }, updateSettings } as never);
+    const setBoxMobileAccess = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", [])], setBoxMobileAccess });
     const { dialog } = await openSheet("boxA");
-    expect(dialog.querySelector(".box-editor-phone")).toBeNull();
-    expect(dialog.textContent).toContain("needs persistent local sessions.");
+    expect(dialog.textContent).toContain("needs persistent local sessions");
+    await act(async () => {
+      fireEvent.click(dialog.querySelector('.box-editor-phone input[type="checkbox"]')!);
+    });
+    const question = await screen.findByRole("dialog", { name: /Turn on persistent local sessions\?/ });
+    expect(setBoxMobileAccess).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Turn on" }));
+    });
+    expect(updateSettings).toHaveBeenCalledWith({ persist_local_sessions: true });
+    expect(setBoxMobileAccess).toHaveBeenCalledWith("boxA", true, null);
+  });
+
+  it("leaves access off when turning the sessions on is declined", async () => {
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+    useSettingsStore.setState({ settings: { persist_local_sessions: false }, updateSettings } as never);
+    const setBoxMobileAccess = vi.fn().mockResolvedValue(undefined);
+    useBoxesStore.setState({ boxes: [box("boxA", [])], setBoxMobileAccess });
+    const { dialog } = await openSheet("boxA");
+    await act(async () => {
+      fireEvent.click(dialog.querySelector('.box-editor-phone input[type="checkbox"]')!);
+    });
+    const question = await screen.findByRole("dialog", { name: /Turn on persistent local sessions\?/ });
+    await act(async () => {
+      fireEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+    });
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(setBoxMobileAccess).not.toHaveBeenCalled();
   });
 });
 

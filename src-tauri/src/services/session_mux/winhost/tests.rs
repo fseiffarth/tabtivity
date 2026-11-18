@@ -179,6 +179,10 @@ fn wrap_marks_the_launch_and_keeps_its_argv() {
     assert!(spawn.env.iter().any(|(k, v)| k == "SECRET_TEST_KEY" && v == "s3cret-value"));
     assert!(spawn.env.iter().any(|(k, _)| k.eq_ignore_ascii_case("PATH")));
     assert!(spawn.remain_on_exit, "an agent tab keeps its pane");
+    assert_eq!(spawn.mcp_mark, None);
+    let mut stamped = o.clone();
+    stamped.mcp_mark = Some("n:g:1".into());
+    assert_eq!(host_spawn_for(&stamped, "wrapped").unwrap().mcp_mark.as_deref(), Some("n:g:1"), "the Spawn carries it");
     let mut chat = o.clone();
     chat.assistant = Some(serde_json::from_value(serde_json::json!({ "cli": "claude" })).unwrap());
     assert!(!host_spawn_for(&chat, "wrapped").unwrap().remain_on_exit, "an assistant chat ends");
@@ -487,4 +491,73 @@ async fn a_listing_is_quick_and_never_retires_a_host() {
     let took = began.elapsed();
     assert!(took >= LIST_DEADLINE - Duration::from_millis(100) && took < LIST_DEADLINE + Duration::from_millis(1500), "{took:?}");
     mute.abort();
+}
+
+/// The stamp rides the creating `Spawn` and is listed back in one request;
+/// an attach never changes it; kill and rename drop the cached listing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mcp_stamps_ride_the_creating_spawn_and_list_back() {
+    let th = test_host();
+    let mux = Arc::new(WinHostMux::with_launch(th.launch.clone()));
+    let stamped = |name: &str, mark: Option<&str>| {
+        let mut o = opts(name, &cmd_exe(), &["/q", "/k"]);
+        o.mcp_mark = mark.map(str::to_string);
+        o
+    };
+    let m = mux.clone();
+    let before = on_thread(move || m.mcp_marks()).await.unwrap();
+    assert!(!before.contains("wh-mark"));
+    let m = mux.clone();
+    let (a, b, c) = (stamped("wh-mark", Some("n1:g1:4000")), stamped("wh-mark", Some("n2:g2:5000")), stamped("wh-bare", None));
+    on_thread(move || {
+        m.spawn_detached(&a).unwrap();
+        m.spawn_detached(&b).unwrap();
+        m.spawn_detached(&c).unwrap();
+    })
+    .await;
+    let m = mux.clone();
+    let marks = on_thread(move || m.mcp_marks()).await.unwrap();
+    assert_eq!(marks.entry("wh-mark"), Some(&Some("n1:g1:4000".to_string())), "the creating Spawn's stamp");
+    assert_eq!(marks.entry("wh-bare"), Some(&None), "live, no stamp");
+
+    // A noted stamp is served from the cached listing.
+    mux.note_mcp_mark("wh-noted", "n3:-:1");
+    let m = mux.clone();
+    assert_eq!(on_thread(move || m.mcp_marks()).await.unwrap().entry("wh-noted"), Some(&Some("n3:-:1".to_string())));
+
+    // Rename and kill drop the cache: the next listing is the host's.
+    let m = mux.clone();
+    on_thread(move || m.rename("wh-mark", "wh-mark2")).await.unwrap();
+    let m = mux.clone();
+    let marks = on_thread(move || m.mcp_marks()).await.unwrap();
+    assert_eq!(marks.entry("wh-mark2"), Some(&Some("n1:g1:4000".to_string())), "a rename keeps the stamp");
+    assert!(!marks.contains("wh-noted") && !marks.contains("wh-mark"));
+    let m = mux.clone();
+    on_thread(move || m.kill("wh-mark2")).await.unwrap();
+    let m = mux.clone();
+    assert!(!on_thread(move || m.mcp_marks()).await.unwrap().contains("wh-mark2"));
+}
+
+/// No host running: "none" where a new session would be made by a host of
+/// this build (the setting on), "unknown" where none will run (off), and
+/// neither starts a host.
+#[tokio::test(flavor = "multi_thread")]
+async fn with_no_host_mcp_marks_are_none_when_on_and_unknown_when_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("state");
+    let launch = Launch {
+        control_dir: crate::services::mobile_control::config::control_dir_for(&state),
+        state_dir: state.clone(),
+        source: std::env::current_exe().unwrap(),
+        version: env!("CARGO_PKG_VERSION").into(),
+    };
+    let on = WinHostMux::with_launch(launch.clone());
+    on.forget_marks();
+    assert_eq!(on_thread(move || on.mcp_marks()).await, Ok(SessionMarks::default()));
+    WinHostMux::with_launch(launch.clone()).forget_marks();
+    let off = WinHostMux { launch: Ok(launch.clone()), gate: Gate::Settings(state.join("settings.json")) };
+    assert!(matches!(on_thread(move || off.mcp_marks()).await, Err(MuxError::Unavailable(_))));
+    let none = WinHostMux { launch: Err("no launch".into()), gate: Gate::Always };
+    assert!(matches!(none.mcp_marks(), Err(MuxError::Unavailable(_))));
+    assert!(!copies::copy_path(&launch.control_dir, &launch.identity()).exists(), "nothing staged or started");
 }

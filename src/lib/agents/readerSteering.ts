@@ -131,7 +131,8 @@ export function registerReaderComposer(id: string, open: ReaderComposerOpen): ()
 }
 
 /** Shows pane `id`'s Chat composer for steering; false when the pane has none
- *  on show (Terminal view, another CLI, a dialog up) — the prompt box then. */
+ *  on show (Terminal view, another CLI) — the prompt box then. A starting CLI
+ *  or a question up still answers: the composer takes the text, sent by hand once it can go. */
 export function openReaderComposer(id: string, level: SteeringBaseLevel, lead?: SteeringAgentCommand): boolean {
   return composers.get(id)?.(level, lead) ?? false;
 }

@@ -456,6 +456,7 @@ mod tests {
             login: None,
             assistant: None,
             mux_wrapped: false,
+            mcp_mark: None,
         }
     }
 

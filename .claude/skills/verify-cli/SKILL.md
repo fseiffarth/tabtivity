@@ -62,7 +62,8 @@ Two references, read as each step needs them:
    `VERIFIED` row(s) in `agent_versions.rs` (one row per checked surface:
    Codex has several), `FRONTEND_VERIFIED` in
    `src/stores/agents/agentVersionNotice.ts`, the `drift("<cli>", …)` test's
-   version, the "verified against" code comments, and the checklist prose. A
+   version, Codex's release in `AgentVersionTabCard.test.tsx` (it fails, not
+   drifts), the "verified against" code comments, and the checklist prose. A
    test ties `FRONTEND_VERIFIED` to `VERIFIED`. The rest drift silently. After
    backend edits, run `npm run backend:stale`.
 

@@ -36,7 +36,7 @@ use super::{
     config::{verify_tailscale_serve, HostConfig},
     deadline,
     diverged,
-    discovery::{shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
+    discovery::{desktop_images_open, shells_open, terminals_support, AgentCounts, Catalog, CatalogCache, PublicTab, ResolvedTab, ScopeKind, TabPrompt, TabSchedules},
     files,
     files_zip,
     git_overview,
@@ -236,17 +236,17 @@ impl Default for HeadlessSpawner {
                     // Off the async workers: the session host's connect may
                     // start the host (a lazy start, ≤ 3 s). A launch that may
                     // only rejoin its live session (`host_attach_only`: let
-                    // through the AI switch, or found alive in a host whose
-                    // setting is off) never goes through the create-or-attach
-                    // spawn: alive, there is nothing to start; gone meanwhile,
-                    // it is refused as the switch refuses a new agent.
+                    // through the AI switch, a revival of its MCP lanes, or
+                    // found alive in a host whose setting is off) never goes
+                    // through the create-or-attach spawn: alive, there is
+                    // nothing to start; gone meanwhile, it is refused.
                     let opts = prepared.opts.clone();
                     let attach_only = prepared.host_attach_only;
                     app_core::rt::blocking("headless spawn", move || {
                         if attach_only {
                             let name = opts.tmux_session.as_deref().unwrap_or_default();
                             let alive = mux.holds_sessions() && mux.has(name).unwrap_or(false);
-                            return headless_rejoin(alive);
+                            return headless_rejoin(alive, crate::services::ai_switch::is_off());
                         }
                         mux.spawn_detached(&opts).map_err(|e| e.to_string())
                     })
@@ -291,15 +291,19 @@ fn headless_spawn_refused(kind: crate::services::session_mux::MuxKind, wrapped: 
 
 /// The owner's answer to a launch that may only rejoin its session
 /// (`PreparedLaunch::host_attach_only`): nothing to start while it lives;
-/// ended meanwhile, refused with the AI switch's own code
-/// (`headless_create_error` reads it), never created again.
-fn headless_rejoin(alive: bool) -> Result<(), String> {
-    if alive {
-        Ok(())
-    } else {
-        Err(crate::services::ai_switch::AI_OFF.to_string())
+/// ended meanwhile, never created again — refused with the AI switch's own
+/// code while the switch is off (`headless_create_error` reads it), else
+/// with [`SESSION_ENDED`].
+fn headless_rejoin(alive: bool, ai_off: bool) -> Result<(), String> {
+    match (alive, ai_off) {
+        (true, _) => Ok(()),
+        (false, true) => Err(crate::services::ai_switch::AI_OFF.to_string()),
+        (false, false) => Err(SESSION_ENDED.to_string()),
     }
 }
+
+/// A rejoin-only launch (a revival) whose session ended before the rejoin.
+const SESSION_ENDED: &str = "the tab's session ended before it could be rejoined; start the tab again";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1547,6 +1551,8 @@ async fn project(
                 "create": project.create,
                 // Whether the phone may offer a new shell (`shells_open`).
                 "shells": shells_open(&state.config.state_dir),
+                // Whether the ＋ sheet offers Desktop (`desktop_images_open`).
+                "desktop_images": desktop_images_open(&state.config.state_dir),
                 // `tmux` where tabs attach through tmux; `unsupported` on a
                 // host with none (Windows), where the phone hides ＋, Schedule
                 // and Mark up's Submit (`terminals_support`).
@@ -5348,6 +5354,50 @@ fn mask_shell_commands(transcript: &mut crate::services::agent_transcript::Agent
     }
 }
 
+/// The waiting tool calls cross masked the same way: a file tool's path
+/// project-relative or cut to its leaf, `WebFetch`'s URL to its scheme and
+/// host, any other tool's subject dropped (the backend sets none; a transcript
+/// read off a remote host is not ours to trust). An entry whose name is no
+/// tool name is dropped.
+fn mask_waiting_tools(transcript: &mut crate::services::agent_transcript::AgentTranscript, folders: &[&str]) {
+    use crate::services::agent_transcript::{subject_kind, tool_name_ok, SubjectKind, MAX_TOOL_SUBJECT_CHARS, MAX_WAITING_TOOLS};
+    transcript.waiting_tools.retain(|tool| tool_name_ok(&tool.name));
+    // A remote host's list is as long and as odd as its agent made it: the
+    // newest few, each subject cut before it is masked, a stamp that is no
+    // timestamp dropped.
+    let extra = transcript.waiting_tools.len().saturating_sub(MAX_WAITING_TOOLS);
+    transcript.waiting_tools.drain(..extra);
+    for tool in &mut transcript.waiting_tools {
+        tool.at = tool.at.take().filter(|at| at.len() <= 40 && chrono::DateTime::parse_from_rfc3339(at).is_ok());
+        tool.subject = tool.subject.chars().take(MAX_TOOL_SUBJECT_CHARS).collect();
+        tool.subject = match subject_kind(&tool.name) {
+            Some(SubjectKind::Path) => shell_mask::mask_path(&tool.subject, folders),
+            Some(SubjectKind::Url) => shell_mask::mask_url(&tool.subject),
+            None => String::new(),
+        };
+    }
+}
+
+/// The folders a phone transcript is made relative to: the catalog's (the
+/// tab's cwd, the project's roots) and the transcript's own newest `cwd` only
+/// when it is one of them or inside one. That `cwd` is written by the agent
+/// (or read off a remote host): taken alone, `/home` would make every path
+/// below it relative and show `alice/.ssh/id` where `…/id` belongs.
+fn masking_folders(mut known: Vec<String>, transcript_cwd: Option<&str>) -> Vec<String> {
+    known.retain(|folder| !folder.is_empty());
+    let inside = |cwd: &std::path::Path| {
+        !cwd.components().any(|part| matches!(part, std::path::Component::ParentDir))
+            && known.iter().any(|folder| {
+                let folder = std::path::Path::new(folder);
+                folder.components().any(|part| matches!(part, std::path::Component::Normal(_))) && cwd.starts_with(folder)
+            })
+    };
+    if let Some(cwd) = transcript_cwd.filter(|cwd| inside(std::path::Path::new(cwd))) {
+        known.push(cwd.to_string());
+    }
+    known
+}
+
 /// Each of `folders` as a command line may spell it: as given, as
 /// `canonicalize` resolves it (links followed; on Windows the long names,
 /// without the `\\?\` prefix) and, on Windows, by its 8.3 short name (a CI
@@ -5386,29 +5436,57 @@ fn short_path_name(path: &std::path::Path) -> Option<String> {
 /// subagents work in are paths, which do not cross the browser API. A
 /// subagent's folder in a linked worktree of the tab's project crosses as that
 /// worktree's name and branch instead (`worktree` on its `agent` entry), as the
-/// tab cards name it. The running shells cross masked
-/// ([`mask_shell_commands`]).
+/// tab cards name it. The running shells and the waiting tool calls cross
+/// masked ([`mask_shell_commands`], [`mask_waiting_tools`]): no raw command,
+/// path or URL reaches `json!(transcript)`.
 async fn phone_transcript(
     state: &HostState,
     phone: &Phone,
     tab_id: &str,
     mut transcript: crate::services::agent_transcript::AgentTranscript,
 ) -> serde_json::Value {
-    let entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
-    let wants_tab = !transcript.shells.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
+    let mut entry_cwds: Vec<String> = transcript.entries.iter_mut().map(|entry| entry.cwd.take().unwrap_or_default()).collect();
+    let has_blocking = transcript.entries.iter().any(|entry| entry.blocking);
+    let wants_tab = has_blocking || !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() || entry_cwds.iter().any(|cwd| !cwd.is_empty());
     let found = wants_tab
         .then(|| catalog(state, phone).ok())
         .flatten()
-        .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone())));
-    if !transcript.shells.is_empty() {
-        let mut folders: Vec<String> = transcript.cwd.iter().cloned().collect();
-        if let Some((project, cwd)) = &found {
+        .and_then(|catalog| catalog.tab(tab_id).map(|(project, tab)| (project.clone(), tab.cwd.clone(), tab.session_id.clone().filter(|_| !tab.place.on_host()))));
+    if has_blocking {
+        // The phone has no live "asking" state, so a question the agent is
+        // blocked on stands only while the tab's turn record says `decision`;
+        // a leftover one (dead or resumed session, a question the phone never
+        // saw while Claude works) would be a phantom card. Fail closed.
+        let record = match found.as_ref().and_then(|(project, _, uid)| uid.clone().map(|uid| (project.raw_id.clone(), uid))) {
+            Some((project_id, uid)) => {
+                let state_dir = state.config.state_dir.clone();
+                tokio::task::spawn_blocking(move || headless::turn_record(&state_dir, &project_id, &uid)).await.ok().flatten()
+            }
+            None => None,
+        };
+        if !matches!(record, Some((crate::services::agent_turn::TurnState::Decision, _))) {
+            // `entry_cwds` is positional with the entries: drop in step.
+            let mut keep = transcript.entries.iter().map(|entry| !entry.blocking).collect::<Vec<_>>().into_iter();
+            entry_cwds.retain(|_| keep.next().unwrap_or(true));
+            transcript.entries.retain(|entry| !entry.blocking);
+            // The `version` fingerprints the file, which does not move when
+            // the hook writes `decision` a moment later: handing it out would
+            // answer the phone's next poll `unchanged` and the question would
+            // never arrive. No version, a full read until the record says so.
+            transcript.version = None;
+        }
+    }
+    if !transcript.shells.is_empty() || !transcript.waiting_tools.is_empty() {
+        let mut folders: Vec<String> = Vec::new();
+        if let Some((project, cwd, _)) = &found {
             folders.push(cwd.clone());
             folders.extend(std::iter::once(&project.root).chain(&project.roots).map(|root| root.to_string_lossy().into_owned()));
         }
+        let folders = masking_folders(folders, transcript.cwd.as_deref());
         let folders = folder_spellings(&folders);
         let folders: Vec<&str> = folders.iter().map(String::as_str).collect();
         mask_shell_commands(&mut transcript, &folders);
+        mask_waiting_tools(&mut transcript, &folders);
     }
     transcript.context_card = None;
     transcript.cwd = None;
@@ -5419,7 +5497,7 @@ async fn phone_transcript(
     let mut named: Vec<Option<git_overview::TabWorktree>> = Vec::new();
     let project = found
         .filter(|_| entry_cwds.iter().any(|cwd| !cwd.is_empty()))
-        .map(|(project, _)| project)
+        .map(|(project, _, _)| project)
         .filter(is_git_project);
     if let Some(project) = project {
         let all: Vec<&str> = entry_cwds.iter().map(String::as_str).collect();
@@ -6705,6 +6783,7 @@ fn desktop_image_error(code: &str) -> (StatusCode, Json<serde_json::Value>) {
             "file_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "inbox_full" => StatusCode::INSUFFICIENT_STORAGE,
             "desktop_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+            "desktop_images_off" => StatusCode::FORBIDDEN,
             _ => StatusCode::BAD_REQUEST,
         },
         code,
@@ -6714,7 +6793,8 @@ fn desktop_image_error(code: &str) -> (StatusCode, Json<serde_json::Value>) {
 /// `GET /api/v1/tabs/{tab_id}/desktop-images` — the composer's **+ → From the
 /// desktop**: what the desktop would copy into this tab's project inbox (its
 /// clipboard image, recent screenshots and pictures). Opaque ids and folder
-/// labels only; the desktop keeps every path.
+/// labels only; the desktop keeps every path. Closed unless the desktop's
+/// "Desktop pictures on the phone" switch is on (`desktop_images_open`).
 async fn desktop_images(
     State(state): State<HostState>,
     headers: HeaderMap,
@@ -6724,6 +6804,9 @@ async fn desktop_images(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if !desktop_images_open(&state.config.state_dir) {
+        return desktop_image_error("desktop_images_off");
+    }
     let (project_id, _) = match inbox_project(&state, &phone, &tab_id) {
         Ok(target) => target,
         Err(error) => return error,
@@ -6772,6 +6855,9 @@ async fn attach_desktop_image(
         Ok(phone) => phone,
         Err(error) => return error,
     };
+    if !desktop_images_open(&state.config.state_dir) {
+        return desktop_image_error("desktop_images_off");
+    }
     let Ok(request) = serde_json::from_slice::<AttachDesktopImageBody>(&body) else {
         return api_error(StatusCode::BAD_REQUEST, "invalid_request");
     };
@@ -9305,6 +9391,11 @@ pub async fn run_with(config: HostConfig, listen: Listen) -> Result<(), String> 
                 Notice::Markup => poke_desktop(&notice_dir, None, &["markup"]),
                 Notice::GitPush => {}
                 Notice::Workspace { scope, .. } => poke_desktop(&notice_dir, Some(&scope), &["workspace"]),
+                // A tab this host spawned: the window only joins its PTY and
+                // shows no stale card for it (`TerminalView`), so the flag
+                // stays this process's (a server daemon's clients hear it
+                // through `serve_everything`).
+                Notice::TabStale { .. } => {}
             }
         }),
         on_server.then_some(&core_ctx),

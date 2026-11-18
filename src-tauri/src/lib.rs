@@ -2487,6 +2487,7 @@ pub fn run() {
             commands::terminal::local_tmux_rename,
             commands::terminal::local_tmux_screen,
             commands::terminal::local_tmux_pane_dead,
+            commands::terminal::local_tmux_app_sessions,
             commands::terminal::project_cpu_percent,
             // External apps / window tracking
             commands::apps::launch_app,
@@ -2734,9 +2735,11 @@ pub fn run() {
             commands::agents::agent_tab_recent_prompts,
             commands::agents::agent_tab_transcript,
             commands::agents::agent_tab_artifact,
+            commands::agents::agent_cli_handoff_prepare,
             commands::agents::agent_tab_changes,
             commands::agents::agent_transcript_unwatch,
             commands::agents::agent_tab_undo_clear,
+            commands::agents::agent_tab_resume_pinned,
             commands::agents::agent_tab_chats,
             commands::agents::agent_tab_resume_chat,
             commands::agents::agent_tab_move_session,
@@ -2761,6 +2764,7 @@ pub fn run() {
             commands::ollama::ollama_version_status,
             commands::ollama::search_ollama_registry,
             commands::ollama::search_huggingface_models,
+            commands::ollama::ollama_public_key,
             // Local code/text autocomplete (opt-in, local-only)
             commands::ollama::complete_text,
             commands::ollama::prepare_text_completion,

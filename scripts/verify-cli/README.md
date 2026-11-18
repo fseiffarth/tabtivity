@@ -18,7 +18,7 @@ and the new version through the same probe, then compare the two labels.
 |------|---------------|
 | `flags.sh <cli> <label> <bin> [sub ...]` | `--version`, `--help`, each subcommand's `--help` → `flags/`; `diff -ru` two labels' `flags/` to see flags that moved. |
 | `tui.py <cli> <label> <name> [--step …] -- <bin> [args]` | Drives the TUI with steps (`sleep:`, `wait:TEXT[:SECS]`, `cap:`, `key:`, `type:`, `enter:`, `size:COLSxROWS`) and saves frames as `<name>/<frame>@<cols>x<rows>.esc`. `--home DIR` reuses a home (resume tests); `--env K=V`; `--stub openai\|gemini --port N` starts a stub. Default steps: one frame each at 120, 60 and 42 columns. |
-| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`; the GPT-6 family's `functions` namespace is plain names). It logs every request (offered tools, tool results), so you can force calls no real model would make. |
+| `stub_openai.py <port> <log>` | OpenAI-compatible streaming model at `http://127.0.0.1:<port>/v1` (chat completions and `/v1/responses`) plus MCP at `/mcp/web` and `/mcp/help`. A prompt `STUB:CALL <tool> <json>` makes it call that tool, `STUB:SEQ a {…} ;; b {…}` several, `STUB:FAIL <status>` answers that HTTP status (400 is not retried, 500 is); a Responses tool inside a namespace is `<namespace>.<tool>` (Codex's `multi_agent_v1.spawn_agent`; the GPT-6 family's `functions` namespace is plain names). It logs every request (offered tools, tool results; a chat completion also its `model` and every `STUBMARK-<WORD>` it carries), so you can force calls no real model would make. |
 | `hookdump.py <log> <event>` | A hook command that appends its event, pid, environment names (and the tab, Copilot and hook-depth values) and stdin payload to a JSONL log. Register it for every event to see which fire, with what. |
 | `stub_anthropic.py <port> <log>` | Anthropic Messages API (`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`), streaming or not. `STUB:CALL`/`STUB:SEQ` as above (only in a request that offers tools), `STUB:ERR <status> <type>` answers that API error. Lets Claude run with no login and no paid turn. |
 | `stub_gemini.py <port> <log>` | Gemini streaming endpoint (`GOOGLE_GEMINI_BASE_URL`), answers `stub answer done`. A prompt `STUB:CALL <tool> <json>` makes it call that tool once first, `STUB:FAIL` answers HTTP 500, `STUB:SLOW <secs>` waits first. Each request's log line lists the tools offered and every `STUBMARK-<WORD>` the request carries (what a hook injected). |
@@ -69,7 +69,10 @@ gives its usage.
   answers which event ends or opens a turn — an API error (`StopFailure`, no
   `Stop`), a failed tool (`PostToolUseFailure`), an Esc on a running tool, a
   permission dialog declined, an MCP elicitation (a stdio server inside the
-  script), a subagent, `/compact`, a `cd`, auto mode's classifier. Its
+  script), a subagent, `/compact`, a `cd`, auto mode's classifier, an
+  `AskUserQuestion` answered page by page or declined (`tui_ask`,
+  `tui_ask_esc`: payloads plus `timing.json`, i.e. hook vs transcript vs
+  screen). Its
   scratch work dir sits under the repo, so the TUI cases answer the repo
   `CLAUDE.md`'s external-imports question with its default.
 - **OpenCode** (`opencode/`): `turns.py <label> <bin> <port> full|mini [ask|allow|deny]`
@@ -109,6 +112,10 @@ gives its usage.
   conversation; `format` whether a release runs the hook and sets
   `ANTIGRAVITY_AGENT` for tool commands (run it on every baseline).
   `stub_gemini.py` forces the tool calls (`STUB:CALL <tool> <json>`).
+  `queued.py <label> <bin> <port> <cols> [rows]` holds a turn, queues two
+  prompts behind it and opens `/model` over them (`busy`, `queued`,
+  `queued_model`), for the phone's footer read beside `Press up to edit queued
+  messages`; run it at 44 and 56 columns.
   A pinned build: the updater manifest (`agent_latest::Source::Manifest`)
   names the tarball and its sha512.
 - **Codex** (`codex/`): `writer_lock.py <label> <bin> [model]` opens a
@@ -127,7 +134,10 @@ gives its usage.
   `codex_hook_hash`'s formula), `added` (a new event appended: the "Hooks
   need review" screen, the new hook inert), `approve` (`PermissionRequest`
   at the dialog, after accept and Esc), `extras` (`spawn_agent`, `/compact`;
-  `--dangerously-bypass-hook-trust`), `apierr` (a closed port). Give the
+  `--dangerously-bypass-hook-trust`), `apierr` (a closed port), `usage`
+  (`STUB:FAIL 429 usage_limit_reached`), `interrupt` (Esc on a `sleep 30`
+  call); the last three also write the rollout's events
+  (`rollout-events.txt`). Give the
   work folder its own `git init`, or the trust question offers to trust
   the enclosing repo.
   `async_question.py <label> <bin> <port> [model]` (same home, model
@@ -159,10 +169,16 @@ gives its usage.
 
 - **Vibe** (`vibe/`): `turn_hooks.py <label> <bin> <port> [apierr]` gives
   a scratch `VIBE_HOME` a provider at `stub_openai.py` and a dumping hook of
-  each of Vibe's seven hook types (with the hook's `VIBE*` environment), then
+  each of Vibe's hook types (seven; 3.1.3 adds `pre_llm` and `post_llm`, registered
+  only for a binary that names 3.1.3 or later), with the hook's `VIBE*` environment, then
   plays a prompt, an approval accepted and one declined, `/clear`, a `vibe -p`
   from the bash tool and `/exit`. `apierr` points the provider at a closed
   port. The binary is the agent install's `.local/bin/vibe`.
+  `resume.py <label> <bin> <port>` runs the app's own session hook (written
+  by the ignored test `writes_the_vibe_hook_for_a_probe`, into a folder with
+  a space in its name) with made-up tab keys: each tab's record, the unified
+  store's `CURRENT`, `--resume <id>`, a nested `vibe -p`, `/clear`, the turn
+  record, `VIBE_ACTIVE_MODEL` and the user-level `.vibe/AGENTS.md`.
 
 - **Muse** (`muse/`): `resume.py <label> <bin>` writes the app's session
   hook (through the ignored test `writes_the_hook_for_a_probe`) into a scratch

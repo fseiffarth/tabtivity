@@ -81,6 +81,7 @@ export function normalizeTodoId(value: unknown): string | undefined {
  *   own, armed afresh for the name of its own first prompt (`withAutoLabel`).
  * - `cockpitMeta` is dropped: the notes are the original agent's, and the
  *   host strips them from a created tab anyway.
+ * - `stopped` and `lastUsedAt` are dropped: a copy spawns now, a use of its own.
  */
 export function duplicateSpec(tab: TabEntry): Omit<TabEntry, "key"> {
   const {
@@ -96,6 +97,8 @@ export function duplicateSpec(tab: TabEntry): Omit<TabEntry, "key"> {
     autoNamed: _autoNamed,
     taskName: _taskName,
     cockpitMeta: _cockpitMeta,
+    stopped: _stopped,
+    lastUsedAt: _lastUsedAt,
     ...rest
   } = tab;
   if (!sessionId) return rest;
@@ -298,7 +301,17 @@ export function restoreSavedTab(
       // The agent's own notes, as the host stored them: validated and bounded
       // again on the way in, and never written back from here.
       cockpitMeta: readCockpitMeta(t.cockpitMeta),
+      lastUsedAt: restoredLastUsedAt(t.lastUsedAt),
+      // Only ever makes the tab less stoppable, so the file's word is enough.
+      customAgent: t.customAgent === true || undefined,
     };
+}
+
+/** A saved last-use mark, taken only as a finite epoch not past tomorrow:
+ *  the layout is a file on disk, and a mark far in the future would keep a
+ *  tab first in line to run forever. */
+export function restoredLastUsedAt(value: unknown, now = Date.now()): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= now + 86_400_000 ? value : undefined;
 }
 
 /** What makes two tabs the same tab: its key, the file a viewer shows, the

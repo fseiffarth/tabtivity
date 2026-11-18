@@ -2310,17 +2310,24 @@ fn apply_mobile_access(project: &mut ProjectEntry, enabled: bool, devices: Optio
     }
 }
 
-/// What this machine needs before any project can be a phone scope: local
-/// terminals that outlive the window (the phone attaches to their tmux
-/// sessions), and tmux itself.
-fn mobile_access_prerequisites() -> Result<(), String> {
+/// What this machine needs before any project or box can be a phone scope:
+/// local terminals that outlive the window (the phone attaches to their
+/// sessions), and the session backend itself (tmux; on Windows the session
+/// host). The desktop asks to turn these on before it calls a switch-on
+/// (`mobileSessionGate.ts`), so this refusal is the backstop.
+pub(crate) fn mobile_access_prerequisites() -> Result<(), String> {
     let settings: crate::schema::Settings =
         storage::read_json(&storage::settings_path()).unwrap_or_default();
     if !settings.persist_local_sessions() {
         return Err("Enable persistent local terminal sessions before Mobile access".into());
     }
     if !crate::services::session_mux::mux().available() {
-        return Err("Mobile access requires tmux on this machine".into());
+        // Windows has no tmux by design: its backend is the session host.
+        return Err(if cfg!(windows) {
+            "Mobile access on Windows needs the Windows session host: turn it on in Settings → Mobile".into()
+        } else {
+            "Mobile access requires tmux on this machine".into()
+        });
     }
     Ok(())
 }

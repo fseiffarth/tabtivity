@@ -6,15 +6,19 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../../stores/tabs", () => ({ useTabsStore: { getState: () => ({ addTabToScope: mocks.add }) } }));
-vi.mock("../../stores/settings", () => ({ useSettingsStore: { getState: () => ({ settings: { agent_limit_auto_handoff: mocks.automatic }, updateSettings: mocks.save }) } }));
+vi.mock("../../stores/settings", () => {
+  const state = () => ({ settings: { agent_limit_auto_handoff: mocks.automatic }, updateSettings: mocks.save });
+  return { useSettingsStore: Object.assign((select: (s: ReturnType<typeof state>) => unknown) => select(state()), { getState: state }) };
+});
 vi.mock("../../components/tabs/paneTabContext", () => ({ usePaneTab: () => mocks.tab }));
 vi.mock("../../lib/terminal/ptyId", () => ({ splitPtyId: () => ({ scope: "project", key: "a" }) }));
 vi.mock("../../lib/terminal/terminalRegistry", () => ({ terminalFor: () => ({ buffer: { active: {} } }) }));
 vi.mock("../../../mobile-web/src/terminal/readableScreen", () => ({ readableScreen: () => ({ lines: [mocks.screen] }) }));
-vi.mock("../../stores/agents/agentClearUndo", () => ({ runsLocally: () => true }));
 vi.mock("../../lib/agents/agentReader", () => ({ readerRequest: () => ({ sessionId: "session" }) }));
 vi.mock("../../lib/aiSwitch", () => ({ aiIsOff: () => false }));
 vi.mock("../../components/common/UntestedTag", () => ({ UntestedTag: () => null }));
+import { envName } from "../../lib/brand";
+import { isResumableAgentTab } from "../../stores/tabs/tabKinds";
 import { TerminalLimitHandoff } from "../../components/terminal/TerminalLimitHandoff";
 let sequence = 0;
 beforeEach(() => {
@@ -22,14 +26,16 @@ beforeEach(() => {
   mocks.automatic = false;
   mocks.screen = "You've hit your 5-hour limit · resets 10:20pm";
   mocks.save.mockResolvedValue(undefined);
-  mocks.invoke.mockImplementation(async (command: string) => {
+  mocks.invoke.mockImplementation(async (command: string, args: { previewOnly?: boolean }) => {
     if (command === "list_agents") return [{ bin: "claude", label: "Claude", installed: true }, { bin: "codex", label: "Codex", installed: true }];
-    return { available: true, entries: [{ kind: "prompt", text: "Finish task\nwithout repeating it" }, { kind: "answer", text: "Progress so far" }] };
+    return { preview: { entries: 3, total: 3, truncated: false, firstRequest: true, changedFiles: 1, notes: false }, file: args.previewOnly ? null : "~/handoff/cli-1/HANDOFF.md" };
   });
 });
 afterEach(cleanup);
 async function show() {
   await act(async () => { render(<TerminalLimitHandoff ptyId={`pane-${++sequence}`} visible cwd="/workspace" />); });
+  // The dialog reads its CLI list and, once the pick has settled, the preview.
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
 }
 it("asks first, quotes the screen line that matched, and keeps the source", async () => {
   await show();
@@ -41,8 +47,20 @@ it("asks first, quotes the screen line that matched, and keeps the source", asyn
   expect(mocks.save).not.toHaveBeenCalled();
   expect(mocks.add).toHaveBeenCalledWith("project", expect.objectContaining({ cmd: "codex", cwd: "/workspace", kind: "agent" }));
   const input = mocks.add.mock.calls[0][1].initialInput as string;
-  expect(input).toContain("Finish task");
+  expect(input).toContain("~/handoff/cli-1/HANDOFF.md");
+  expect(input).not.toContain("Finish task");
   expect(input).not.toMatch(/[\r\n]/);
+});
+it("opens a resumable successor tab with a session id, the tab uid env and the session-id args", async () => {
+  await show();
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Continue with Codex" })); });
+  const added = mocks.add.mock.calls[0][1];
+  expect(isResumableAgentTab(added)).toBe(true);
+  expect(added.sessionId).toBeTruthy();
+  expect(added.env[envName("TAB_UID")]).toBe(added.sessionId);
+  expect(added.scheduleTargetId).toBeTruthy();
+  expect(added.initialInput).toContain("HANDOFF.md");
+  expect(added.initialInput).not.toContain("/rename");
 });
 it("cancelling neither switches nor saves", async () => {
   await show();
@@ -65,10 +83,11 @@ it("quotes only a cleaned, cut line: no escapes, bidi marks or more than 160 cha
   expect(quoted).not.toMatch(/[\u001b\u0007\u202E]/);
   expect(quoted.length).toBeLessThan(160 + "Screen line that matched: ".length + 1);
 });
-it("retains the session and offers retry when reading context fails", async () => {
+it("retains the session and offers retry when preparing the file fails", async () => {
   await show();
-  mocks.invoke.mockRejectedValue(new Error("read failed"));
+  mocks.invoke.mockRejectedValue("write failed");
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Continue with Codex" })); });
-  expect(screen.getByRole("alert")).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain("Could not prepare the handoff");
   expect(mocks.add).not.toHaveBeenCalled();
+  expect(screen.getByRole("dialog")).toBeTruthy();
 });

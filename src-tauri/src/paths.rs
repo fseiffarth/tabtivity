@@ -44,13 +44,59 @@ pub fn path_finder(os: OsKind) -> &'static str {
 /// root-owned system directories first — see [`helper_program`].
 pub fn command_no_window(bin: impl AsRef<OsStr>) -> Command {
     let bin = bin.as_ref();
+    let path = effective_path();
     let mut cmd = match helper_program(bin) {
         Some(program) => Command::new(program),
-        None => Command::new(bin),
+        None => command_on_path(bin, path.as_deref()),
     };
-    augment_command_path(&mut cmd);
+    if let Some(path) = path {
+        cmd.env("PATH", path);
+    }
     hide_command_window(&mut cmd);
     cmd
+}
+
+/// `Command::new(bin)` for a bare name the child will look up on `path`,
+/// with the lookup done here (Unix). The standard library spawns through
+/// `posix_spawn` only when it has nothing to do in the child, and a bare name
+/// paired with a changed `PATH` is something: it must search the child's
+/// `PATH`, so it falls back to `fork`. A `fork` of this process copies its
+/// page tables under the address-space lock while every other thread waits on
+/// that lock for its next page fault — measured on a 6 GB process, twelve
+/// spawns took 7 s and stalled another thread for 1–2 s at a time; the same
+/// twelve by absolute path took 15 ms. The Machines menu's sweep spawns
+/// several per host, which froze the window for half a minute.
+///
+/// The child still sees `bin` as its `argv[0]`. A `PATH` with a relative
+/// entry keeps the bare name: that lookup depends on the child's directory.
+pub(crate) fn command_on_path(bin: &OsStr, path: Option<&OsStr>) -> Command {
+    #[cfg(unix)]
+    if let Some(program) = path.and_then(|path| program_on_path(bin, path)) {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new(program);
+        cmd.arg0(bin);
+        return cmd;
+    }
+    let _ = path;
+    Command::new(bin)
+}
+
+/// The file `execvp` would run for the bare name `bin` on `path`: the first
+/// executable regular file. `None` for a name with a separator, an empty
+/// name, a miss, or a `path` with any relative entry.
+#[cfg(unix)]
+fn program_on_path(bin: &OsStr, path: &OsStr) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    if bin.is_empty() || bin.as_encoded_bytes().contains(&b'/') {
+        return None;
+    }
+    let dirs: Vec<PathBuf> = std::env::split_paths(path).collect();
+    if dirs.iter().any(|dir| !dir.is_absolute()) {
+        return None;
+    }
+    dirs.into_iter().map(|dir| dir.join(bin)).find(|candidate| {
+        fs::metadata(candidate).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    })
 }
 
 pub(crate) fn hide_command_window(_cmd: &mut Command) {
@@ -737,8 +783,12 @@ fn command_for_program_for(os: OsKind, program: &Path) -> Command {
         cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(program);
         cmd
-    } else {
+    } else if os == OsKind::Windows {
         Command::new(program)
+    } else {
+        // A bare name is looked up here: `augment_command_path` below sets
+        // the child's `PATH`, which would otherwise be a `fork` of the app.
+        command_on_path(program.as_os_str(), effective_path().as_deref())
     };
     augment_command_path(&mut cmd);
     hide_command_window(&mut cmd);
@@ -951,7 +1001,11 @@ fn non_empty(value: Option<String>) -> Option<String> {
 /// A process that left the group and still holds a pipe cannot hold the call:
 /// the readers get a short grace after the child is gone, then whatever they
 /// read is all there is.
-pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
+///
+/// Never a `pre_exec` hook here: it forces a `fork` of the whole app
+/// ([`command_on_path`] has the numbers), and the Machines sweep runs every
+/// `ssh` through this.
+pub(crate) fn output_within(command: Command, limit: std::time::Duration) -> std::io::Result<std::process::Output> {
     use app_core::sync::LockExt;
     use std::time::{Duration, Instant};
     type Drained = (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, std::thread::JoinHandle<()>);
@@ -979,6 +1033,10 @@ pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) ->
         }
         std::mem::take(&mut *bytes.lock_ok())
     }
+    #[cfg(target_os = "linux")]
+    let mut command = die_with_parent(command);
+    #[cfg(not(target_os = "linux"))]
+    let mut command = command;
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -988,8 +1046,6 @@ pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) ->
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    #[cfg(target_os = "linux")]
-    die_with_parent(&mut command);
     let mut child = command.spawn()?;
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
@@ -1018,28 +1074,85 @@ pub(crate) fn output_within(mut command: Command, limit: std::time::Duration) ->
     Ok(std::process::Output { status, stdout: collect(stdout), stderr: collect(stderr) })
 }
 
-/// Linux: arm `SIGKILL` for `command`'s child when this process dies
-/// ([`output_within`]). The kernel sends it when the spawning *thread* ends;
-/// `output_within` waits for the child on that thread, so the thread outlives
-/// it. The parent is checked right after arming, so a process that died
-/// between fork and exec is caught too (the child was reparented by then).
+/// A program the spawn paths put in front of another (`setpriv`, `setsid`):
+/// the root-owned system copy ([`system_executable`]). Test builds also take
+/// an unverified one from the same directories: the agent fence shows every
+/// root-owned file as `nobody`, which would leave the wrapped paths untested
+/// where the tests are written.
 #[cfg(target_os = "linux")]
-fn die_with_parent(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    let parent = std::process::id() as libc::pid_t;
-    // SAFETY: the closure runs between fork and exec and makes only
-    // async-signal-safe syscalls; it allocates nothing.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != parent {
-                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-            }
-            Ok(())
-        });
+pub(crate) fn spawn_wrapper(bin: &str) -> Option<PathBuf> {
+    let found = system_executable(bin);
+    #[cfg(test)]
+    let found = found.or_else(|| SYSTEM_BIN_DIRS.iter().map(|dir| Path::new(dir).join(bin)).find(|path| path.is_file()));
+    found
+}
+
+/// Linux: `command` started through the system's `setpriv --pdeathsig KILL`,
+/// so its child gets `SIGKILL` when this process dies ([`output_within`]).
+/// The kernel sends it when the spawning *thread* ends; `output_within`
+/// waits for the child on that thread, so the thread outlives it.
+///
+/// `setpriv` arms the signal and execs the program (same pid, same process
+/// group), so nothing else changes for the caller. It replaces a `pre_exec`
+/// `prctl`, which made every such spawn a `fork` of the whole app — see
+/// [`command_on_path`] for what that cost. Without a root-owned `setpriv`
+/// the command runs unarmed, as on the other OSes.
+///
+/// The signal is armed when `setpriv` starts, a moment after the spawn: a
+/// parent thread that ends within that moment is not covered (a `pre_exec`
+/// check of the parent pid was). Callers wait on the child, so theirs never
+/// ends first.
+///
+/// Carried over: program, arguments, environment changes and directory. Not
+/// carried over: stdio (set it on the result), `env_clear`, `pre_exec`, uid/gid
+/// (no caller uses them), and `arg0` — the program then sees its own path as `argv[0]`.
+/// (`services::sheet_reader` execs its own image through `/proc/self/fd/0`
+/// rather than `/proc/self/exe`, which would name `setpriv` here.)
+#[cfg(target_os = "linux")]
+pub(crate) fn die_with_parent(command: Command) -> Command {
+    static SETPRIV: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    let Some(setpriv) = SETPRIV.get_or_init(|| spawn_wrapper("setpriv")) else {
+        return command;
+    };
+    // A program that is not there fails the spawn itself (`NotFound`, which
+    // callers tell apart); behind the wrapper it would be an exit status.
+    if !program_exists(&command) {
+        return command;
     }
+    let mut armed = Command::new(setpriv);
+    armed.args(["--pdeathsig", "KILL", "--"]).arg(command.get_program()).args(command.get_args());
+    for (key, value) in command.get_envs() {
+        match value {
+            Some(value) => armed.env(key, value),
+            None => armed.env_remove(key),
+        };
+    }
+    if let Some(dir) = command.get_current_dir() {
+        armed.current_dir(dir);
+    }
+    armed
+}
+
+/// Whether `command`'s program is there to run: a path to an executable file,
+/// or a bare name found on the `PATH` the child will have. A `PATH` with a
+/// relative entry answers no (the lookup depends on the child's directory).
+#[cfg(target_os = "linux")]
+fn program_exists(command: &Command) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let program = command.get_program();
+    if program.as_encoded_bytes().contains(&b'/') {
+        let path = match command.get_current_dir() {
+            Some(dir) => dir.join(program),
+            None => PathBuf::from(program),
+        };
+        return fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+    }
+    let path = command
+        .get_envs()
+        .find(|(key, _)| *key == OsStr::new("PATH"))
+        .map(|(_, value)| value.map(OsStr::to_owned))
+        .unwrap_or_else(|| std::env::var_os("PATH"));
+    path.is_some_and(|path| program_on_path(program, &path).is_some())
 }
 
 /// Render a (typically canonicalized) path as the string handed to the frontend.
@@ -1176,7 +1289,7 @@ pub fn is_windows_device_name(segment: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
 
@@ -1562,6 +1675,18 @@ mod tests {
         assert_eq!(exe.get_program(), OsStr::new(r"C:\tools\fmt.exe"));
     }
 
+    /// `command_for_program` sets the child's `PATH`, which would make a bare
+    /// name a `fork` of the whole app: the name is resolved first.
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_program_is_resolved_before_its_path_is_set() {
+        let cmd = command_for_program(Path::new("sh"));
+        assert!(Path::new(cmd.get_program()).is_absolute(), "{:?}", cmd.get_program());
+        assert_eq!(Path::new(cmd.get_program()).file_name(), Some(OsStr::new("sh")));
+        let kept = command_for_program(Path::new("/no/such/dir/tool"));
+        assert_eq!(kept.get_program(), OsStr::new("/no/such/dir/tool"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn spawn_reaped_then_reports_the_exit_to_the_callback() {
@@ -1606,6 +1731,150 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(gone(pid), "the backgrounded sleep {pid} outlived the deadline (state {:?})", state(pid));
+    }
+
+    /// A bare name is spawned by the path `execvp` would pick, so the
+    /// standard library can `posix_spawn` it instead of forking the whole app
+    /// (`command_on_path`); the child still sees the bare name as `argv[0]`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn command_no_window_spawns_a_bare_name_by_its_path() {
+        let mut cmd = command_no_window("sh");
+        assert!(Path::new(cmd.get_program()).is_absolute(), "{:?}", cmd.get_program());
+        assert_eq!(Path::new(cmd.get_program()).file_stem(), Some(OsStr::new("sh")));
+        let out = cmd.args(["-c", "cat /proc/$$/cmdline"]).output().expect("sh");
+        assert!(out.stdout.starts_with(b"sh\0-c\0"), "{:?}", String::from_utf8_lossy(&out.stdout));
+    }
+
+    /// `execvp`'s answer, or none: first executable regular file wins; a
+    /// non-executable file, a directory, a name with a separator and a PATH
+    /// with a relative entry (cwd-dependent) all leave the lookup to the child.
+    #[cfg(unix)]
+    #[test]
+    fn program_on_path_answers_what_execvp_would_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (plain, dirs, exec) = (root.path().join("plain"), root.path().join("dirs"), root.path().join("exec"));
+        for dir in [&plain, &dirs, &exec] {
+            fs::create_dir(dir).unwrap();
+        }
+        fs::write(plain.join("tool"), "").unwrap();
+        fs::create_dir(dirs.join("tool")).unwrap();
+        fs::write(exec.join("tool"), "").unwrap();
+        fs::set_permissions(exec.join("tool"), fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths([&plain, &dirs, &exec]).unwrap();
+        assert_eq!(program_on_path(OsStr::new("tool"), &path), Some(exec.join("tool")));
+        assert_eq!(program_on_path(OsStr::new("missing"), &path), None);
+        assert_eq!(program_on_path(OsStr::new("exec/tool"), &path), None);
+        assert_eq!(program_on_path(OsStr::new(""), &path), None);
+        let relative = std::env::join_paths([PathBuf::from("bin"), exec.clone()]).unwrap();
+        assert_eq!(program_on_path(OsStr::new("tool"), &relative), None);
+    }
+
+    /// `setpriv` arms the death signal and then execs the program, so the
+    /// child is armed once its name is the program's: a thread that ended
+    /// before that would leave nothing to signal.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn wait_until_armed(child: &std::process::Child, comm: &str) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_to_string(format!("/proc/{}/comm", child.id())).is_ok_and(|name| name.trim() != comm) {
+            assert!(std::time::Instant::now() < until, "the wrapper never exec'd {comm}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// A missing program is still the spawn's `NotFound`, not a `setpriv`
+    /// exit status; one that is there is wrapped.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn die_with_parent_wraps_only_a_program_that_is_there() {
+        if spawn_wrapper("setpriv").is_none() {
+            eprintln!("skipped: no setpriv");
+            return;
+        }
+        for missing in ["no-such-binary-for-this-test", "/no/such/dir/tool"] {
+            let mut kept = die_with_parent(Command::new(missing));
+            assert_eq!(kept.get_program(), OsStr::new(missing));
+            assert_eq!(kept.spawn().expect_err("spawn").kind(), std::io::ErrorKind::NotFound);
+        }
+        let wrapped = die_with_parent(Command::new("sh"));
+        assert_eq!(Path::new(wrapped.get_program()).file_name(), Some(OsStr::new("setpriv")));
+    }
+
+    /// The death signal still holds without `pre_exec`: a child started
+    /// through `die_with_parent` is killed once its spawning thread is gone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_die_with_parent_child_dies_with_its_spawning_thread() {
+        if spawn_wrapper("setpriv").is_none() {
+            eprintln!("skipped: no setpriv");
+            return;
+        }
+        let mut child = std::thread::spawn(|| {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("30").env("DIE_WITH_PARENT_PROBE", "1");
+            let child = die_with_parent(cmd).spawn().unwrap();
+            wait_until_armed(&child, "sleep");
+            child
+        })
+        .join()
+        .unwrap();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(status.signal(), Some(libc::SIGKILL), "{status:?}");
+                return;
+            }
+            assert!(std::time::Instant::now() < until, "the child outlived its spawning thread");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Source scan: a `pre_exec` hook makes `Command::spawn` `fork` the whole
+    /// app, which on a multi-GB process stalls every other thread (the window
+    /// included) for up to seconds per spawn (`command_on_path`). App-process
+    /// code spawns without one; the allowed files run in a small process of
+    /// their own or say where they do it why they still need it. A pty
+    /// slave's `spawn_command` is one too (`portable-pty` runs a hook in it):
+    /// `terminal::pty_child` is the one way to start a program in a pty.
+    #[test]
+    fn no_pre_exec_in_app_process_code() {
+        const PRE_EXEC_ALLOWED: &[&str] = &[
+            // The shell-tab shim is its own small process.
+            "agent_shim.rs",
+        ];
+        const SPAWN_COMMAND_ALLOWED: &[&str] = &["pty_child.rs"];
+        let (mut pre_exec, mut spawn_command) = (Vec::new(), Vec::new());
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut todo = vec![manifest.join("src"), manifest.join("..").join("src-core").join("src")];
+        while let Some(dir) = todo.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default().to_string();
+                if path.is_dir() {
+                    if name != "tests" {
+                        todo.push(path);
+                    }
+                    continue;
+                }
+                if !name.ends_with(".rs") || name == "tests.rs" {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).unwrap();
+                // Production code only: stop at the file's test module.
+                let body = text.split("#[cfg(test)]").next().unwrap_or_default();
+                let body = body.split("#[cfg(all(test").next().unwrap_or_default();
+                if body.contains(".pre_exec(") && !PRE_EXEC_ALLOWED.contains(&name.as_str()) {
+                    pre_exec.push(path.display().to_string());
+                }
+                if body.contains(".spawn_command(") && !SPAWN_COMMAND_ALLOWED.contains(&name.as_str()) {
+                    spawn_command.push(path.display().to_string());
+                }
+            }
+        }
+        assert!(pre_exec.is_empty(), "pre_exec in app-process code (forks the whole app): {pre_exec:?}");
+        assert!(spawn_command.is_empty(), "a pty spawn outside terminal::pty_child (forks the whole app): {spawn_command:?}");
     }
 
     /// A process that leaves the group and keeps a pipe open cannot hold a

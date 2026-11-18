@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CompareView } from "./CompareView";
-import { useTabsStore } from "../../stores/tabs";
+import { findTabByKey, useTabsStore } from "../../stores/tabs";
 import { useT } from "../../lib/i18n";
 import { UntestedTag } from "../common/UntestedTag";
 
@@ -19,12 +19,13 @@ interface MergeSides {
 /**
  * The Git pull's merge/diff view — the sync resolver's three-way `CompareView`
  * (see `SyncMergeView`), fed from git instead of mirror ⇄ host. The backend picks
- * what to show from the repo alone, so a restored tab needs nothing but `path`:
+ * conflict sides from the repo, so a restored conflict tab needs only `path`:
  *
  * - **conflict** (the repo is mid-merge and this file is unmerged): ours ⇄ merged
  *   ⇄ theirs. Apply writes the result to the file and stages it — the file is then
  *   resolved, and the Git panel's merge bar can commit once none are left.
- * - **incoming**: HEAD ⇄ its upstream, look-only — what a pull would change here.
+ * - **incoming**: the two reviewed commits, read-only. A legacy incoming tab
+ *   without reviewed tips reads HEAD ⇄ upstream.
  */
 export function GitMergeView({
   path,
@@ -36,6 +37,7 @@ export function GitMergeView({
   tabKey?: string;
 }) {
   const t = useT();
+  const tips = useTabsStore((state) => tabKey ? findTabByKey(state, tabKey)?.gitPullTips : undefined);
   const [sides, setSides] = useState<MergeSides | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
@@ -44,7 +46,7 @@ export function GitMergeView({
     setError(null);
     setSides(null);
     let cancelled = false;
-    invoke<MergeSides>("git_merge_sides", { path })
+    invoke<MergeSides>("git_merge_sides", { path, ...(tips ? { tips } : {}) })
       .then((s) => {
         if (!cancelled) setSides(s);
       })
@@ -54,7 +56,7 @@ export function GitMergeView({
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, tips]);
 
   useEffect(() => load(), [load]);
 

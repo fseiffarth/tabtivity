@@ -24,6 +24,10 @@ Phases (default: all, in this order):
             `SubagentStart`/`SubagentStop` and `PreCompact`/`PostCompact` carry.
   apierr    the same hooks, the provider pointed at a closed port, retries off:
             does a turn that fails on the API fire `Stop`?
+  usage     the same hooks, the stub answering 429 `usage_limit_reached` (the
+            usage-limit stop, never retried): which hooks fire, and what the
+            rollout records (`rollout-events.txt`).
+  interrupt the same hooks, a `sleep 30` tool call cut off with Esc: likewise.
 
 The tab variables are unset (common.Tui).
 """
@@ -45,7 +49,7 @@ EXTRA = ["PermissionRequest", "PreToolUse", "SubagentStart", "SubagentStop", "Pr
 LABEL = {"SessionStart": ("session_start", True), "PostToolUse": ("post_tool_use", True),
          "SessionEnd": ("session_end", True), "UserPromptSubmit": ("user_prompt_submit", False),
          "Stop": ("stop", False), "PermissionRequest": ("permission_request", True)}
-PHASES = ["trusted", "added", "approve", "extras", "apierr"]
+PHASES = ["trusted", "added", "approve", "extras", "apierr", "usage", "interrupt"]
 
 
 def hook_hash(label, matcher, command, timeout):
@@ -153,6 +157,30 @@ def summarize(phase_dir, dump):
     return rows
 
 
+def rollout_events(home, phase_dir, since):
+    """The event types of every rollout written after `since`, one line each
+    (`response_item`/`event_msg` with their payload type, error text cut)."""
+    rows = []
+    for root, _, files in os.walk(os.path.join(home.codex, "sessions")):
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            if not name.endswith(".jsonl") or os.path.getmtime(path) < since:
+                continue
+            rows.append(f"## {name}")
+            for line in open(path):
+                try:
+                    v = json.loads(line)
+                except ValueError:
+                    continue
+                pay = v.get("payload") or {}
+                kind = pay.get("type", "") if isinstance(pay, dict) else ""
+                extra = {k: str(pay[k])[:160] for k in ("message", "reason", "codex_error_info", "turn_id") if isinstance(pay, dict) and k in pay}
+                rows.append(f"{v.get('type', '?'):14} {kind:24} {json.dumps(extra)}")
+    with open(os.path.join(phase_dir, "rollout-events.txt"), "w") as f:
+        f.write("\n".join(rows) + "\n")
+    return rows
+
+
 def shell_call(tools, path):
     """A tool call that asks for an approval under `on-request`: the model
     asks to run it outside the sandbox."""
@@ -211,12 +239,16 @@ def main():
             if os.path.isdir(dump):
                 shutil.rmtree(dump)
             args = list(argv)
+            started = time.time()
             if phase == "trusted":
                 home.write(dump, CURRENT, CURRENT)
             elif phase == "added":
                 home.write(dump, CURRENT + ["PermissionRequest"], CURRENT)
             elif phase == "approve":
                 home.write(dump, CURRENT + ["PermissionRequest"], CURRENT + ["PermissionRequest"])
+            elif phase in ("usage", "interrupt"):
+                home.write(dump, CURRENT + EXTRA, [])
+                args.append("--dangerously-bypass-hook-trust")
             elif phase == "apierr":
                 # Nothing listens on port 9: the turn's request fails.
                 home.write(dump, CURRENT + EXTRA, [], port=9)
@@ -241,6 +273,12 @@ def main():
                     seen += settle(t)
                 if phase == "apierr":
                     turn(t, "hello", [], wait=15)
+                elif phase == "usage":
+                    turn(t, "STUB:FAIL 429 usage_limit_reached", [], wait=15)
+                elif phase == "interrupt":
+                    tool = "exec_command" if "exec_command" in tools else "shell"
+                    arg = {"cmd": "sleep 30"} if tool == "exec_command" else {"command": ["sleep", "30"]}
+                    turn(t, f"STUB:CALL {tool} {json.dumps(arg)}", ["Escape"], wait=6)
                 elif phase == "extras":
                     spawn = next((x for x in sorted(tools) if x.endswith("spawn_agent")), None)
                     if spawn:
@@ -260,6 +298,9 @@ def main():
             for row in summarize(pdir, dump):
                 print(row)
             shutil.copy(home.config, os.path.join(pdir, "config.after.toml"))
+            if phase in ("usage", "interrupt", "apierr"):
+                for row in rollout_events(home, pdir, started):
+                    print("  rollout:", row)
     finally:
         stub.terminate()
 

@@ -84,6 +84,8 @@ pane's fullscreen.
   animations) without losing any data.
 - **Energy saver** (same page) widens background timers on battery.
 - Hidden panes pause their work and catch up when shown.
+- Many agent tabs use a lot of memory: the **Stop agent tabs** settings (same
+  page) end idle agents' processes and resume them when you show the tab.
 
 ## Where Tabtivity keeps things
 

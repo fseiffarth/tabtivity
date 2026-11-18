@@ -82,6 +82,27 @@ describe(`${BRAND.display} Mobile Focus formats an answer's Markdown`, () => {
       .toEqual(["The gates are still running.", "A <br> in a sentence stays."]);
     expect(host.querySelector("pre code")?.textContent).toContain("<br>");
   });
+
+  it("drops the <proposed_plan> wrapper of a Codex plan and formats what it holds", () => {
+    const host = dom(answerHtml([
+      "<proposed_plan>",
+      "### Changes",
+      "",
+      "- Compare the caps.",
+      "</proposed_plan>",
+      "",
+      "A <proposed_plan> in a sentence stays.",
+      "",
+      "```xml",
+      "<proposed_plan>",
+      "```",
+    ].join("\n")));
+    expect(host.querySelector("h3")?.textContent).toBe("Changes");
+    expect(host.querySelector("li")?.textContent).toBe("Compare the caps.");
+    expect([...host.querySelectorAll("p")].map((p) => p.textContent))
+      .toEqual(["A <proposed_plan> in a sentence stays."]);
+    expect(host.querySelector("pre code")?.textContent).toContain("<proposed_plan>");
+  });
 });
 
 describe(`${BRAND.display} Mobile Focus formats a prompt's Markdown`, () => {

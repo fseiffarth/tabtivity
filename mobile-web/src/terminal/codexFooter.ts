@@ -4,7 +4,8 @@
  * `gpt-5.2-codex medium`, or a local Ollama name with a tag
  * (`nemotron-3.5-bolt:e4b default`) — so it is told by position, not by a
  * list of known families as `statusLine.ts` `MODEL` does. The effort is the
- * word after it; `default` is what Codex prints when none was chosen.
+ * word after it; `default` is what Codex prints when none was chosen, and
+ * is left unset — it says nothing the chip row should show.
  */
 
 const CODEX_TAB = /codex/iu;
@@ -35,7 +36,8 @@ export function codexModelSegment(
   const withEffort = WITH_EFFORT.exec(segment);
   if (withEffort && (first || MODEL_CHARS.test(withEffort[1]))) {
     status.model = withEffort[1];
-    status.effort = withEffort[2].toLowerCase();
+    const effort = withEffort[2].toLowerCase();
+    if (effort !== "default") status.effort = effort;
     return true;
   }
   if (first && BARE.test(segment) && MODEL_CHARS.test(segment)) {

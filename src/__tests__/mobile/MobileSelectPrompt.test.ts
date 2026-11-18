@@ -945,6 +945,71 @@ describe(`${BRAND.display} Mobile select dialog`, () => {
     expect(revealSelectRow(step, bottom)).toBe(6);
   });
 
+  it("reads Claude Code 2.1.326's `↑ N more` / `↓ N more` window rows", () => {
+    // 2.1.326 in an 80×24 pane (verify-cli model.py): the hidden sides are
+    // rows of their own, no arrow in a row's number slot, no `… +N` note.
+    const middle = readSelectPrompt(lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new",
+      "   sessions. For other or older models, use --model.",
+      "     ↑ 2 more",
+      "     3.  Fable 5.2              For your toughest challenges",
+      "     4.  Sonnet 5.5             Most efficient for simpler tasks",
+      "   ❯ 5.  Haiku 5.5              Fastest for quick answers",
+      "     ↓ 1 more",
+      "",
+      "   ◐ Medium effort (default) ←/→ to adjust",
+    ), "Claude")!;
+    expect(middle.title).toBe("Select model");
+    expect(middle.options.map((option) => option.number)).toEqual([3, 4, 5]);
+    expect(middle.current).toBe(2);
+    // Rows above (2) and the `↓` row's count (1), as the note gave on 2.1.325.
+    expect(middle.hidden).toBe(3);
+    const top = readSelectPrompt(lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new",
+      "   sessions. For other or older models, use --model.",
+      "   ❯ 1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks",
+      "     2.  Opus 5.5 ✔             For complex work and everyday tasks",
+      "     3.  Fable 5.2              For your toughest challenges",
+      "     ↓ 3 more",
+    ), "Claude")!;
+    expect(top.hidden).toBe(3);
+    let step = mergeSelectRows(null, top);
+    expect(missingSelectRow(step, top)).toBe(4);
+    step = mergeSelectRows(step, middle);
+    expect(missingSelectRow(step, middle)).toBe(6);
+  });
+
+  it("reads a scrolled 2.1.326 picker whose slice sits under `↑ N more`", () => {
+    // The expanded `/model` at 120×40, scrolled to its last row.
+    const prompt = readSelectPrompt(lines(
+      "   Select model",
+      "   Switch between Claude models. Your pick becomes the default for new sessions. For other or older models, use",
+      "   --model.",
+      "     ↑ 4 more",
+      "     5.  Haiku 5.5              Fastest for quick answers",
+      "     ▾   More models",
+      "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+      "     7.  Haiku 4.5              Fastest for quick answers",
+      "   ❯ 8.  Sonnet 5               Efficient for routine tasks",
+      "",
+      "   Enter to set as default · s to use this session only · Esc to cancel",
+    ), "Claude")!;
+    expect(prompt.options.map((option) => option.label)).toEqual(["Haiku 5.5", "More models", "Fable 5.1", "Haiku 4.5", "Sonnet 5"]);
+    expect(prompt.current).toBe(4);
+    // The slice's top row may be the expander itself.
+    const expanderTop = readSelectPrompt(lines(
+      "   Select model",
+      "     ↑ 5 more",
+      "     ▾   More models",
+      "     6.  Fable 5.1              Most capable for your hardest and longest-running tasks",
+      "   ❯ 7.  Haiku 4.5              Fastest for quick answers",
+    ), "Claude")!;
+    expect(expanderTop.options.map((option) => option.label)).toEqual(["More models", "Fable 5.1", "Haiku 4.5"]);
+    expect(expanderTop.current).toBe(2);
+  });
+
   it("still refuses a run that starts past 1 without a window's marks", () => {
     expect(readSelectPrompt(lines("❯ 2. Opus", "  3. Sonnet"))).toBeNull();
   });

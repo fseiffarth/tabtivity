@@ -34,6 +34,7 @@ import { worktreeOfPath } from "../../lib/agents/agentWorktrees";
 import { useAgentReaderStore, useReaderOpen } from "../../stores/agents/agentReader";
 import { useAgentClearUndoStore } from "../../stores/agents/agentClearUndo";
 import { useKeyboardSteeringStore } from "../../stores/keyboardSteering";
+import { useActivityStore } from "../../stores/activity";
 import { openReaderComposer } from "../../lib/agents/readerSteering";
 import { useTabsStore, type TabEntry } from "../../stores/tabs";
 import { registerTerminal, unregisterTerminal } from "../../lib/terminal/terminalRegistry";
@@ -326,6 +327,44 @@ describe("the agent pane's Reader", () => {
     }
   });
 
+  it.each(["Send now", "Cancel and edit"])("%s reaches Codex's queue above the last 40 rows", async (action) => {
+    useTabsStore.setState((state) => ({ ...state, tabsByScope: { p: [{ ...tab, cmd: "codex", label: "Codex", scheduleTargetId: "st-1" }] } }));
+    const queue = ["queued follow-up"];
+    let box = "";
+    const rows: string[] = [];
+    const draw = () => rows.splice(0, rows.length,
+      "• Working (5s • esc to interrupt)", "",
+      ...(queue.length ? ["• Queued follow-up inputs", "  ↳ queued follow-up", "    shift+← edit last queued message"] : []),
+      ...Array<string>(50).fill(""),
+      `› ${box || "Ask Codex to do anything"}`, "", "  GPT default · ~/work", "  ? for shortcuts",
+    );
+    draw();
+    const term = fakeTerminal(rows);
+    Object.defineProperty(term, "rows", { get: () => rows.length });
+    const hear = (key: string) => {
+      if (key === "\u001b[1;2D") box = queue.pop() ?? "";
+      else if (key === "\u0015") box = "";
+      else if (key === "\u001b") box = queue.splice(0).join("\n");
+      else if (key === "\r") box = "";
+      draw();
+    };
+    registerTerminal("p:agent-1", term);
+    onWritten.add(hear);
+    try {
+      reader(host);
+      await waitFor(() => expect(host.querySelector(".terminal-reader-working")).not.toBeNull());
+      act(() => noteSentPrompt("st-1", "queued follow-up"));
+      await act(async () => fireEvent.click(within(host).getByRole("button", { name: action })));
+      await waitFor(() => expect(queue).toEqual([]));
+      if (action === "Send now") await waitFor(() => expect(written).toContain("\r"));
+      else await waitFor(() => expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("queued follow-up"));
+      expect(box).toBe("");
+    } finally {
+      onWritten.delete(hear);
+      unregisterTerminal("p:agent-1", term);
+    }
+  });
+
   it("starts a new conversation the way the Clear key does, not as a prompt", async () => {
     clearAgentTab.mockReset();
     clearAgentTab.mockResolvedValue(true);
@@ -524,6 +563,50 @@ describe("the agent pane's Reader", () => {
       expect(written).not.toContain("\x1b");
     } finally {
       act(() => useKeyboardSteeringStore.getState().exit());
+    }
+  });
+
+  it("answers steering's Prompt key while a new chat's CLI is starting, keeping the text until it is up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // No input box yet: the CLI is still starting.
+    const rows = ["", "Starting…"];
+    const term = fakeTerminal(rows);
+    registerTerminal("p:agent-1", term);
+    act(() => useKeyboardSteeringStore.getState().enter("tabs"));
+    try {
+      sendSteeringPrompt.mockResolvedValue(undefined);
+      reader(host);
+      await screen.findByText("fix the parser");
+      let opened = false;
+      act(() => {
+        opened = openReaderComposer("p:agent-1", "tabs");
+        if (opened) useKeyboardSteeringStore.getState().handOff("prompt");
+      });
+      // The Chat's composer, not the prompt box over the window.
+      expect(opened).toBe(true);
+      const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+      expect(box.disabled).toBe(false);
+      expect(document.activeElement).toBe(box);
+      fireEvent.change(box, { target: { value: "first prompt" } });
+      await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+      expect(sendSteeringPrompt).not.toHaveBeenCalled();
+      expect(box.value).toBe("first prompt");
+      expect(screen.getByRole("alert").textContent).toContain("the agent is still starting");
+      // Up: nothing goes by itself; Enter sends it.
+      await act(async () => {
+        rows.splice(0, rows.length, "> ", "  ? for shortcuts");
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(sendSteeringPrompt).not.toHaveBeenCalled();
+      await act(async () => { fireEvent.keyDown(box, { key: "Enter" }); });
+      expect(sendSteeringPrompt).toHaveBeenCalledWith(expect.objectContaining({ key: "agent-1" }), "first prompt");
+      const steering = useKeyboardSteeringStore.getState();
+      expect(steering.active).toBe(true);
+      expect(steering.level).toBe("tabs");
+    } finally {
+      act(() => useKeyboardSteeringStore.getState().exit());
+      unregisterTerminal("p:agent-1", term);
+      vi.useRealTimers();
     }
   });
 
@@ -1016,6 +1099,100 @@ describe("the Reader's live rows", () => {
     expect(group.querySelector(".terminal-reader-question-context")).toBeNull();
     expect(group.textContent).not.toMatch(/☐|My fix is ready|\(Recommended\)/);
     expect(group.querySelector(".terminal-reader-recommended")?.textContent).toBe("Recommended");
+  });
+
+  describe("through the stored session's record of the call", () => {
+    const withSession = (extra: Record<string, unknown>) => invoke.mockImplementation((command: string) =>
+      Promise.resolve(command === "agent_tab_transcript" ? { ...transcript, truncated: false, ...extra } : []));
+    const lamp = (state: "decision" | undefined) => act(() => { useActivityStore.setState({ attentionByTab: state ? { "p:agent-1": state } : {} }); });
+    const asked = {
+      kind: "answer", text: "Which colours?", at: "2026-09-30T08:03:00Z", blocking: true,
+      questions: [{ header: "Colours", question: "Which colours should the probe use?", multiSelect: true,
+        options: [{ label: "Red", description: "warm", preview: "+--+\n|  |\n+--+" }, { label: "Blue" }] }],
+    };
+    const DIALOG = [
+      "> fix the strings", "", "Edit file", "  src/lib/i18n.ts", "",
+      "Do you want to make this edit to i18n.ts?",
+      "❯ 1. Yes", "  2. Yes, allow all edits during this session", "  3. No, and tell Claude what to do differently",
+      "", "  esc to cancel",
+    ];
+    afterEach(() => lamp(undefined));
+
+    it("names what a permission dialog waits on, only while the lamp says it asks", async () => {
+      withSession({ waitingTools: [{ name: "Edit", subject: "/p/src/lib/i18n.ts", at: "2026-09-30T08:03:00Z" }] });
+      term = fakeTerminal([...DIALOG]);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(group.querySelector(".terminal-reader-question-subject")).toBeNull();
+      await lamp("decision");
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject code")?.textContent).toBe("/p/src/lib/i18n.ts"));
+      expect(group.querySelector(".terminal-reader-question-subject small")?.textContent).toMatch(/approval to change/);
+      await lamp(undefined);
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject")).toBeNull());
+    });
+
+    it("names a Bash call's command in full", async () => {
+      withSession({ shells: [{ command: "rm -rf build && make all", at: "2026-09-30T08:03:00Z" }], waitingTools: [{ name: "Agent", at: "2026-09-30T08:04:00Z" }] });
+      term = fakeTerminal(["> build it", "", "Bash command", "  rm -rf build && make all", "", "Do you want to proceed?", "❯ 1. Yes", "  2. No", "", "  esc to cancel"]);
+      registerTerminal("p:agent-1", term);
+      await lamp("decision");
+      reader(host);
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      await waitFor(() => expect(group.querySelector(".terminal-reader-question-subject code")?.textContent).toBe("rm -rf build && make all"));
+      expect(group.querySelector(".terminal-reader-question-subject small")?.textContent).toMatch(/approval to run/);
+    });
+
+    it("shows a waiting question read-only before the terminal draws it, then clickable on its rows", async () => {
+      withSession({ entries: [...transcript.entries, asked] });
+      // The record is there, the dialog is not on screen yet.
+      const rows = ["> fix the strings", "", "✻ Thinking… (3s · ↓ 120 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"];
+      term = fakeTerminal(rows);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      // No lamp: the record alone shows nothing, and not as a chat bubble either.
+      await screen.findByText("fix the parser");
+      expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+      expect(screen.queryByRole("group", { name: "Question" })).toBeNull();
+      await lamp("decision");
+      const group = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(group.textContent).toMatch(/still drawing this question/);
+      expect((within(group).getByRole("button", { name: /Red/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect(group.querySelector(".terminal-reader-question-ask")?.textContent).toBe("Which colours should the probe use?");
+      // The dialog arrives: the same words on the screen's rows, the boxes and the sample.
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "←  ☐ Colours  →", "Which colours should the probe use?", "❯ 1. [ ] Red", "       warm", "  2. [ ] Blue", "  3. [ ] Type something", "     Submit", "", "  4. Chat about this", "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"); });
+      await waitFor(() => expect(screen.queryByText(/still drawing this question/)).toBeNull());
+      const red = within(screen.getByRole("group", { name: "Waiting for your answer" })).getByRole("button", { name: /Red/ }) as HTMLButtonElement;
+      expect(red.disabled).toBe(false);
+      expect(red.getAttribute("aria-pressed")).toBe("false");
+      expect(red.querySelector(".terminal-reader-option-preview")?.textContent).toBe("+--+\n|  |\n+--+");
+      // Its keys are the screen's: Enter on the highlighted row.
+      fireEvent.click(red);
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(written).toEqual(["\r"]);
+    });
+
+    it("does not bring the read-only card back once the answered dialog is gone, while the lamp and the record still say it asks", async () => {
+      withSession({ entries: [...transcript.entries, asked] });
+      await lamp("decision");
+      const rows = ["> fix the strings", "", "✻ Thinking… (3s · ↓ 120 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"];
+      term = fakeTerminal(rows);
+      registerTerminal("p:agent-1", term);
+      reader(host);
+      // Before the dialog: the read-only card stands.
+      const before = await screen.findByRole("group", { name: "Waiting for your answer" });
+      expect(before.textContent).toMatch(/still drawing this question/);
+      // The dialog is drawn, then answered (it leaves the screen); the lamp is
+      // still "decision" and the stored session still holds the call as waiting.
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "←  ☐ Colours  →", "Which colours should the probe use?", "❯ 1. [ ] Red", "       warm", "  2. [ ] Blue", "  3. [ ] Type something", "     Submit", "", "  4. Chat about this", "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"); });
+      await waitFor(() => expect(screen.queryByText(/still drawing this question/)).toBeNull());
+      expect(within(screen.getByRole("group", { name: "Waiting for your answer" })).getByRole("button", { name: /Red/ })).toBeTruthy();
+      act(() => { rows.splice(0, rows.length, "> fix the strings", "", "✻ Thinking… (4s · ↓ 150 tokens · esc to interrupt)", "", `${"─".repeat(60)} p ─`, "❯ ", "─".repeat(60), "  ? for shortcuts"); });
+      await waitFor(() => expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull());
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(screen.queryByRole("group", { name: "Waiting for your answer" })).toBeNull();
+      expect(screen.queryByText(/still drawing this question/)).toBeNull();
+    });
   });
 
   it("walks a several-question dialog's tabs with ←/→, so an answer can be changed before Submit", async () => {

@@ -1767,6 +1767,17 @@ span.files-close { background:transparent; }
 .asked-check { flex:0 0 auto; font-weight:700; }
 .asked-none { padding:0 4px; color:#98a0b4; font-size:.82rem; font-style:italic; }
 /* The pill the sheets' headings wear (`.option-sheet h2 small`). */
+/* The sample an agent put beside an answer (a question's `preview`): plain
+   preformatted text in a bounded box, never rendered as markup. */
+.question-preview { display:block; max-height:11em; margin-top:6px; padding:8px 10px; overflow:auto; white-space:pre; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.74rem; line-height:1.35; color:#c8ccdb; background:#0b0d13; border:1px solid var(--edge); }
+/* What a permission dialog waits on (`permissionSubject`): the call named in
+   full — plain text, bounded — over the dialog's rows. */
+.question-subject { display:grid; gap:4px; margin:0 0 8px; }
+.question-subject small { color:#98a0b4; font-size:.78rem; }
+.question-subject small em { font-style:normal; }
+.question-subject code { display:block; max-height:8em; padding:8px 10px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; line-height:1.35; color:#e7e9f2; background:#0b0d13; border:1px solid var(--edge); }
+/* The read-only card of a question the terminal has not drawn yet. */
+.question-waiting { display:block; padding:6px 4px 0; color:#98a0b4; font-size:.8rem; }
 .question-recommended { margin-left:6px; color:#8fb8ff; font-size:.62rem; font-style:normal; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
 /* Launch curtain — the desktop app's `.startup-splash` ported (see base.css):
    the Tabtivity mark inside two counter-rotating orbit rings, over the brand name,
@@ -2651,7 +2662,8 @@ ul.option-list:not(.files-list) > li:not(.option-list-group) { overflow:hidden; 
 .shell-frame-panel { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-4); padding:max(24px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom)); background:#0b0d13; color:#e7e9f2; text-align:center; }
 .shell-frame-panel > p { max-width:34ch; margin:0; line-height:1.5; }
 .shell-frame-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:var(--sp-3); }
-.shell-stage-tag { position:absolute; left:8px; bottom:max(8px,env(safe-area-inset-bottom)); pointer-events:none; }
+.frame-guard-panel { position:fixed; inset:0; z-index:2147483647; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:var(--sp-4); padding:max(24px,env(safe-area-inset-top)) 24px max(24px,env(safe-area-inset-bottom)); background:#0b0d13; color:#e7e9f2; text-align:center; }
+.frame-guard-panel > p { max-width:34ch; margin:0; line-height:1.5; }
 /* Over a screen with no header (splash, pairing, the lock sheet): above the
    lock sheet's backdrop (12). */
 .shell-switch-floating { position:fixed; z-index:13; top:max(10px,env(safe-area-inset-top)); right:max(10px,env(safe-area-inset-right)); border-radius:var(--r-md); }

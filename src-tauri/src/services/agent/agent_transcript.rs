@@ -82,6 +82,28 @@ const MAX_SHELL_CHARS: usize = 8_000;
 const MAX_SHELL_DESCRIPTION_CHARS: usize = 200;
 /// Longest question, option label or note of a question the agent asked.
 const MAX_QUESTION_CHARS: usize = 2_000;
+/// Most lines and characters of one option's preview (the sample a question
+/// shows beside a row, often a bit of code or a layout sketch): kept with its
+/// line breaks, so it is cut here and not by [`bounded_line`].
+const MAX_PREVIEW_LINES: usize = 40;
+const MAX_PREVIEW_CHARS: usize = 2_000;
+/// Longest name of a tool call the agent waits on; a longer one is no tool's.
+const MAX_TOOL_NAME_CHARS: usize = 120;
+/// Longest subject (file path, URL) of such a call, cut at one line.
+pub(crate) const MAX_TOOL_SUBJECT_CHARS: usize = 500;
+/// The most waiting calls one read lists, the newest.
+pub(crate) const MAX_WAITING_TOOLS: usize = 16;
+/// How many unanswered tool calls / asks the walk keeps at once (a bound on
+/// the per-record rescans, not on what is shown).
+const MAX_WALK_TOOLS: usize = 64;
+const MAX_WALK_ASKS: usize = 8;
+/// What one ask may hold: Claude's own tool takes 1-4 questions of 2-4 rows,
+/// so these are far past use; the file is the agent's, and an ask is sent
+/// again on every poll.
+const MAX_ASK_QUESTIONS: usize = 8;
+const MAX_ASK_OPTIONS: usize = 12;
+/// All the text one ask may hold, in characters.
+const MAX_ASK_CHARS: usize = 64_000;
 /// How deep a subagent's own subagents are followed.
 pub(crate) const MAX_SUBAGENT_DEPTH: usize = 8;
 
@@ -132,10 +154,11 @@ pub struct TranscriptEntry {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub workflow: bool,
     /// On an `answer` entry: the questions the agent asked the user (Claude's
-    /// `AskUserQuestion`), each with the answer it got. The entry is written
-    /// once the call has its result, so a question still waiting is the live
-    /// screen's and never in the chat twice; `text` is the same exchange as
-    /// plain text.
+    /// `AskUserQuestion`), each with the answer it got. Claude's entry is
+    /// written where the call has its result; a call still waiting is the
+    /// last entry of the read, marked [`blocking`](Self::blocking), and the
+    /// live card shows it, not the chat. `text` is the same exchange as plain
+    /// text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskedQuestion>,
     /// On an `answer` entry with `questions`: still waiting for the user's
@@ -145,6 +168,14 @@ pub struct TranscriptEntry {
     /// chat is where it shows. Dropped, by Codex too, when the turn ends.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub asking: bool,
+    /// On an `answer` entry with `questions`: the agent is blocked on this
+    /// question *on its own screen* (Claude's `AskUserQuestion` call that has
+    /// no result yet). The live card shows it, so the chat leaves it out; the
+    /// entry loses the mark once the call has its result and is then the
+    /// ordinary answered (or declined) card. Not [`asking`](Self::asking):
+    /// that is Codex's queue, answered by another route.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blocking: bool,
     /// On an `agent` entry: the folder the subagent works in — the worktree
     /// Claude made for it (`isolation: "worktree"`, named in its `.meta.json`),
     /// else the session's own folder when it was spawned. A path, so the
@@ -160,6 +191,9 @@ pub struct AskedQuestion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<String>,
     pub question: String,
+    /// Several rows may be ticked (Claude's `multiSelect`).
+    #[serde(rename = "multiSelect", default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_select: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<AskedOption>,
     /// What the user answered — a row's label, several joined by `, ` on a
@@ -175,6 +209,11 @@ pub struct AskedOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The sample the dialog shows beside the row, with its line breaks
+    /// (bounded by [`MAX_PREVIEW_LINES`] and [`MAX_PREVIEW_CHARS`]).
+    /// Preformatted text, never markdown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chosen: bool,
 }
@@ -247,6 +286,15 @@ pub struct AgentTranscript {
     /// line is not something that crosses to the browser.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shells: Vec<RunningShell>,
+    /// The other tool calls the agent waits on — every `tool_use` since the
+    /// last prompt that has no result yet and is no `Bash` call (those are
+    /// `shells`) nor an `AskUserQuestion` (a `blocking` entry), oldest first.
+    /// A running approved call has no result either, so a reader uses the
+    /// list as a permission dialog's subject only while the tab's lamp says
+    /// the agent asks. Desktop Reader only as it stands: the phone's API
+    /// masks every subject (`mobile_control`).
+    #[serde(default, rename = "waitingTools", skip_serializing_if = "Vec::is_empty")]
+    pub waiting_tools: Vec<WaitingTool>,
     /// The newest `/context` card Claude printed (its `local_command` stdout,
     /// colour codes stripped). The fullscreen renderer draws it in the
     /// alternate screen, which keeps no scrollback, so the Reader's Context
@@ -292,6 +340,47 @@ pub struct RunningShell {
     pub background: bool,
 }
 
+/// A tool call the agent waits on: which tool, and what it acts on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WaitingTool {
+    /// The tool's name as Claude calls it (`Edit`, `WebFetch`, `mcp__…`).
+    pub name: String,
+    /// What it acts on, for the few tools that name one ([`subject_kind`]):
+    /// a file path or a URL, cut at its bound. Empty for any other tool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    /// When the call was written (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+/// What a [`WaitingTool::subject`] is, so that whoever shows it to the phone
+/// masks it the way that kind needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubjectKind {
+    Path,
+    Url,
+}
+
+/// The kind of subject `tool` carries: the file tools a path, `WebFetch` a
+/// URL; any other tool none.
+pub(crate) fn subject_kind(tool: &str) -> Option<SubjectKind> {
+    match tool {
+        "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => Some(SubjectKind::Path),
+        "WebFetch" => Some(SubjectKind::Url),
+        _ => None,
+    }
+}
+
+/// `name` could be a tool's name: letters, digits and `_ - . :` only, and not
+/// long. The phone's API lists no other (a transcript read off a remote host
+/// is not this machine's own).
+pub(crate) fn tool_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_TOOL_NAME_CHARS
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+}
+
 /// The shells a transcript says are running: calls still waiting on their
 /// result, and background ones that no notification has ended yet — each
 /// with the output file its CLI named, by which [`running_outputs`] tells
@@ -299,6 +388,8 @@ pub struct RunningShell {
 #[derive(Debug, Default)]
 struct ShellCalls {
     waiting: Vec<RunningShell>,
+    /// The other tool calls still waiting on their result ([`WaitingTool`]).
+    tools: Vec<WaitingTool>,
     background: Vec<(RunningShell, String)>,
 }
 
@@ -1148,6 +1239,7 @@ fn read_transcript_in(
     let tokens = newest_tokens(&lines, kind);
     let context_card = newest_context_card(&lines, kind);
     let (mut entries, calls, shell_calls) = parse_entries(&lines, kind, sidechain);
+    let waiting_tools = shell_calls.tools.clone();
     let shells = running_shells(path, &current, shell_calls);
     // Every subagent the session spawned, as tokens, for `agents_earlier`.
     let mut spawned_tokens: Vec<String> = Vec::new();
@@ -1211,6 +1303,7 @@ fn read_transcript_in(
         effort,
         tokens,
         shells,
+        waiting_tools,
         context_card,
         cwd,
         running_cwds,
@@ -1597,6 +1690,9 @@ fn parse_entries(
     // Shell calls since the last prompt, by call id: one an earlier turn
     // never got a result for (the CLI was killed mid-call) is not running.
     let mut shells: Vec<(String, RunningShell)> = Vec::new();
+    // The same for every other tool call, by call id (a subagent's file has
+    // none: its calls are not this session's screen).
+    let mut tools: Vec<(String, WaitingTool)> = Vec::new();
     // Every shell call read, for a background one's command; the calls sent
     // to the background, with their output files; and those a notification
     // has since ended.
@@ -1618,7 +1714,10 @@ fn parse_entries(
     // Questions asked, by call id, until their result comes: the exchange is
     // one entry, placed where the result lands — the agent waits on it, so
     // nothing of its own comes in between.
-    let mut asked: std::collections::HashMap<String, (Vec<AskedQuestion>, Option<String>)> = std::collections::HashMap::new();
+    // A call still waiting at the end is the agent blocked on its own screen
+    // (`blocking`): kept in ask order, dropped by the next typed prompt or an
+    // interrupt notice (the CLI went on, or the call can never be answered).
+    let mut asked: Vec<(String, Vec<AskedQuestion>, Option<String>)> = Vec::new();
     // Codex's async questions by call: their entry, written when asked, and
     // whether the turn they wait in is still going.
     let mut async_asks: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1641,9 +1740,11 @@ fn parse_entries(
         }
         if kind == TranscriptKind::Claude {
             for call in claude_tool_results(&value) {
-                if let Some((questions, at)) = asked.remove(&call) {
+                if let Some(pos) = asked.iter().position(|(asked_call, ..)| *asked_call == call) {
+                    let (_, questions, at) = asked.remove(pos);
                     entries.extend(question_entry(questions, value.get("toolUseResult"), at));
                 }
+                tools.retain(|(tool_call, _)| *tool_call != call);
                 returned.insert(call);
             }
             backgrounded.extend(claude_backgrounded(&value));
@@ -1666,6 +1767,11 @@ fn parse_entries(
                 if let Some(entry) = transcript_entry("answer", &asked_text(&questions), at) {
                     async_asks.insert(call.clone(), entries.len());
                     async_open.push(call);
+                    // Bounded like Claude's asks: the reply's `retain` above
+                    // must not rescan an unbounded list per record.
+                    if async_open.len() > MAX_WALK_ASKS {
+                        async_open.remove(0);
+                    }
                     entries.push(TranscriptEntry { questions, ..entry });
                 }
             }
@@ -1690,7 +1796,13 @@ fn parse_entries(
                 Record::Turn(role, raw) => {
                     if typed && role == "prompt" {
                         shells.clear();
+                        tools.clear();
+                        asked.clear();
                         turn_start = entries.len();
+                    }
+                    if role == "interrupted" {
+                        asked.clear();
+                        tools.clear();
                     }
                     entries.extend(transcript_entry(role, &raw, at.clone()));
                 }
@@ -1712,9 +1824,25 @@ fn parse_entries(
                     commands.insert(call.clone(), shell.clone());
                     shells.push((call, shell));
                 }
+                Record::Tool { call, mut tool } => {
+                    if !sidechain {
+                        tool.at = at.clone();
+                        tools.retain(|(tool_call, _)| *tool_call != call);
+                        tools.push((call, tool));
+                        // The file is the agent's: a hostile tail of unique
+                        // calls must not make every record rescan them all.
+                        tools.drain(..tools.len().saturating_sub(MAX_WALK_TOOLS));
+                    }
+                }
                 Record::Plan(raw) => entries.extend(transcript_entry("answer", &raw, at.clone()).map(|entry| TranscriptEntry { plan: true, ..entry })),
                 Record::Question { call, questions } => {
-                    asked.insert(call, (questions, at.clone()));
+                    // A subagent's own file: its questions are not this
+                    // session's screen.
+                    if !sidechain {
+                        asked.retain(|(asked_call, ..)| *asked_call != call);
+                        asked.push((call, questions, at.clone()));
+                        asked.drain(..asked.len().saturating_sub(MAX_WALK_ASKS));
+                    }
                 }
                 Record::Workflow { call, title } => {
                     if let Some(mut entry) = agent_entry(&title, Some("workflow"), at.clone()) {
@@ -1757,13 +1885,18 @@ fn parse_entries(
             entry.asking = true;
         }
     }
+    for (_, questions, at) in asked {
+        entries.extend(waiting_question_entry(questions, at));
+    }
+    let mut tools: Vec<WaitingTool> = tools.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, tool)| tool).collect();
+    tools.drain(..tools.len().saturating_sub(MAX_WAITING_TOOLS));
     let waiting = shells.into_iter().filter(|(call, _)| !returned.contains(call)).map(|(_, shell)| shell).collect();
     let background = backgrounded
         .into_iter()
         .filter(|(call, _)| !ended.contains(call))
         .filter_map(|(call, output)| Some((RunningShell { background: true, ..commands.remove(&call)? }, output)))
         .collect();
-    (entries, calls, ShellCalls { waiting, background })
+    (entries, calls, ShellCalls { waiting, tools, background })
 }
 
 /// Claude's background subagents (`Agent` calls whose result is only the
@@ -2046,6 +2179,8 @@ enum Record {
     Spawn { call: String, task: String, kind: Option<String> },
     /// A `Workflow` run started by tool call `call`, titled `title`.
     Workflow { call: String, title: String },
+    /// A tool call other than a shell, a question or a spawn's own record.
+    Tool { call: String, tool: WaitingTool },
     /// A shell command started by tool call `call`.
     Shell { call: String, shell: RunningShell },
     /// Questions put to the user by tool call `call`, not yet answered.
@@ -2149,13 +2284,14 @@ fn claude_records(value: &Value, subagent_file: bool) -> Vec<Record> {
                         .join("\n\n"),
                     blocks
                         .iter()
-                        .filter_map(|b| {
-                            claude_plan(b)
+                        .flat_map(|b| {
+                            let specific = claude_plan(b)
                                 .or_else(|| claude_spawn(b))
                                 .or_else(|| claude_workflow(b))
                                 .or_else(|| claude_shell(b))
                                 .or_else(|| claude_question(b))
-                                .or_else(|| subagent_file.then(|| claude_handback_answer(b)).flatten())
+                                .or_else(|| subagent_file.then(|| claude_handback_answer(b)).flatten());
+                            claude_tool(b).into_iter().chain(specific)
                         })
                         .collect(),
                 ),
@@ -2305,6 +2441,33 @@ fn copilot_records(value: &Value) -> Vec<Record> {
     Vec::new()
 }
 
+/// Any `tool_use` block but a shell's (`shells`) and a question's (`blocking`
+/// entry): the tool and, for the file tools and `WebFetch`, what it acts on.
+/// A name that is no tool name (other characters, too long) is not listed.
+fn claude_tool(block: &Value) -> Option<Record> {
+    if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+        return None;
+    }
+    let name = block.get("name")?.as_str()?;
+    if !tool_name_ok(name) || matches!(name, "Bash" | "AskUserQuestion") {
+        return None;
+    }
+    let key = match subject_kind(name) {
+        Some(SubjectKind::Path) if name == "NotebookEdit" => "notebook_path",
+        Some(SubjectKind::Path) => "file_path",
+        Some(SubjectKind::Url) => "url",
+        None => "",
+    };
+    let subject = block
+        .get("input")
+        .and_then(|input| input.get(key))
+        .and_then(Value::as_str)
+        .and_then(clean_text)
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MAX_TOOL_SUBJECT_CHARS).collect())
+        .unwrap_or_default();
+    Some(Record::Tool { call: block.get("id")?.as_str()?.to_string(), tool: WaitingTool { name: name.to_string(), subject, at: None } })
+}
+
 /// An `ExitPlanMode` `tool_use` block: the plan Claude put up for approval.
 fn claude_plan(block: &Value) -> Option<Record> {
     if block.get("type").and_then(Value::as_str) != Some("tool_use")
@@ -2339,18 +2502,74 @@ fn claude_question(block: &Value) -> Option<Record> {
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter_map(|o| Some(AskedOption { label: field(o, "label")?, description: field(o, "description"), chosen: false }))
+                    .filter_map(|o| {
+                        Some(AskedOption {
+                            label: field(o, "label")?,
+                            description: field(o, "description"),
+                            preview: o.get("preview").and_then(Value::as_str).and_then(bounded_preview),
+                            chosen: false,
+                        })
+                    })
                     .collect(),
+                multi_select: q.get("multiSelect").and_then(Value::as_bool) == Some(true),
                 answer: None,
             })
         })
         .collect();
+    let questions = cap_questions(questions);
     (!questions.is_empty()).then_some(Record::Question { call, questions })
+}
+
+/// `questions` held to [`MAX_ASK_QUESTIONS`] questions of [`MAX_ASK_OPTIONS`]
+/// rows and [`MAX_ASK_CHARS`] characters of text in all: what comes past is
+/// dropped, the first question's first rows always kept.
+fn cap_questions(mut questions: Vec<AskedQuestion>) -> Vec<AskedQuestion> {
+    questions.truncate(MAX_ASK_QUESTIONS);
+    let mut used = 0usize;
+    let mut kept = 0;
+    for question in &mut questions {
+        used += question.header.as_deref().map_or(0, |h| h.chars().count()) + question.question.chars().count();
+        if kept > 0 && used > MAX_ASK_CHARS {
+            break;
+        }
+        question.options.truncate(MAX_ASK_OPTIONS);
+        let mut rows = 0;
+        for option in &question.options {
+            used += option.label.chars().count()
+                + option.description.as_deref().map_or(0, |d| d.chars().count())
+                + option.preview.as_deref().map_or(0, |p| p.chars().count());
+            if used > MAX_ASK_CHARS {
+                break;
+            }
+            rows += 1;
+        }
+        question.options.truncate(rows.max(usize::from(kept == 0 && !question.options.is_empty())));
+        kept += 1;
+    }
+    questions.truncate(kept);
+    questions
 }
 
 /// A question's text cleaned and cut at its bound; `None` when empty.
 fn bounded_line(raw: &str) -> Option<String> {
     Some(clean_text(raw)?.chars().take(MAX_QUESTION_CHARS).collect())
+}
+
+/// An option's preview cleaned (line breaks and tabs kept) and cut at
+/// [`MAX_PREVIEW_LINES`] lines and [`MAX_PREVIEW_CHARS`] characters; `None`
+/// when empty. Trailing blanks of each line go, its indentation stays.
+fn bounded_preview(raw: &str) -> Option<String> {
+    let text = clean_text(raw)?;
+    let lines: Vec<&str> = text.lines().take(MAX_PREVIEW_LINES).map(str::trim_end).collect();
+    Some(lines.join("\n").chars().take(MAX_PREVIEW_CHARS).collect())
+}
+
+/// The entry for a question whose call has no result yet: the agent waits on
+/// it on its own screen. `text` holds the questions alone; the entry is
+/// marked `blocking` and is placed after every other.
+fn waiting_question_entry(questions: Vec<AskedQuestion>, at: Option<String>) -> Option<TranscriptEntry> {
+    let text = questions.iter().map(|q| q.question.as_str()).collect::<Vec<_>>().join("\n\n");
+    transcript_entry("answer", &text, at).map(|entry| TranscriptEntry { questions, blocking: true, ..entry })
 }
 
 /// The entry for questions whose call has its result: each answer read off
@@ -2415,15 +2634,16 @@ fn codex_async_ask(value: &Value) -> Option<(String, Vec<AskedQuestion>)> {
                                 Value::String(label) => (label.as_str(), None),
                                 _ => (row.get("label")?.as_str()?, row.get("description").and_then(Value::as_str)),
                             };
-                            Some(AskedOption { label: bounded_line(label)?, description: description.and_then(bounded_line), chosen: false })
+                            Some(AskedOption { label: bounded_line(label)?, description: description.and_then(bounded_line), ..Default::default() })
                         })
                         .collect()
                 })
                 .unwrap_or_default();
             let header = q.get("header").and_then(Value::as_str).and_then(bounded_line);
-            Some(AskedQuestion { header, question, options, answer: None })
+            Some(AskedQuestion { header, question, options, ..Default::default() })
         })
         .collect();
+    let questions = cap_questions(questions);
     (!questions.is_empty()).then_some((call, questions))
 }
 

@@ -45,6 +45,11 @@ pub enum Source {
     /// A vendor's own release host (`<base>/manifests/<platform>.json`), the
     /// file its native installer reads.
     Manifest(&'static str),
+    /// A vendor's release channel: one JSON file whose `version` names the
+    /// release with its build (`1.4.23-R8977.1`), which the CLI's own
+    /// `--version` leads without (`Muse Code 1.4.23 (1.4.23-R8977.1)` reads as
+    /// `1.4.23`), so the `-R<build>` is dropped.
+    Channel(&'static str),
     /// A vendor's install script with its release baked in: the version is the
     /// path segment after `marker` in the download URL it names. Its installs
     /// live at `…/versions/<version>/<exe>`, which is read back for the
@@ -86,6 +91,10 @@ pub const SOURCES: &[(&str, Source)] = &[
         "antigravity",
         Source::Manifest("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"),
     ),
+    // On no public registry: the channel its launcher reads (`muse-stable`,
+    // 1.4.23-R8977.1 on 2026-11-17). Without a row here Manage CLIs never knew
+    // a newer Muse and offered no Update at all.
+    ("muse", Source::Channel("https://api.meta.ai/muse-code/channels/muse-stable")),
     // On no public registry, and `cursor-agent update` asks Cursor's signed-in
     // API. The public installer names the build it downloads
     // (`downloads.cursor.com/lab/2026.11.11-b912975/<os>/<arch>/…`, 2026-11-13);
@@ -136,7 +145,7 @@ fn url_for(source: Source) -> String {
             let platform = manifest_platform(std::env::consts::OS, std::env::consts::ARCH);
             format!("{base}/manifests/{platform}.json")
         }
-        Source::InstallScript { url, .. } => url.to_string(),
+        Source::Channel(url) | Source::InstallScript { url, .. } => url.to_string(),
     }
 }
 
@@ -149,6 +158,7 @@ pub fn parse_latest(source: Source, body: &str) -> Option<String> {
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
     let raw = match source {
         Source::Npm(_) | Source::Manifest(_) => json["version"].as_str()?,
+        Source::Channel(_) => json["version"].as_str()?.split("-R").next()?,
         Source::PyPi(_) => json["info"]["version"].as_str()?,
         // `v1.53.0`, or a monorepo's `cli/v2.2.1`: the part after the last slash.
         Source::GitHub(_) => json["tag_name"].as_str()?.rsplit('/').next()?,
@@ -264,7 +274,7 @@ pub fn installed_version_near(exe: &Path, source: Source) -> Option<String> {
         Source::Npm(pkg) => npm_version_near(start, pkg),
         Source::PyPi(project) => dist_info_version_near(start, project),
         Source::InstallScript { .. } => versions_dir_version(start),
-        Source::GitHub(_) | Source::Manifest(_) => None,
+        Source::GitHub(_) | Source::Manifest(_) | Source::Channel(_) => None,
     })
 }
 
@@ -504,6 +514,23 @@ mod tests {
             .as_deref(),
             Some("1.4.11")
         );
+        // Muse's channel (2026-11-17): the build is not part of the version
+        // its `--version` is read as, so an installed 1.4.23 is up to date.
+        let muse = source_for("muse").unwrap();
+        assert_eq!(url_for(muse), "https://api.meta.ai/muse-code/channels/muse-stable");
+        assert_eq!(
+            parse_latest(
+                muse,
+                r#"{"channel":"muse-stable","version":"1.4.23-R8977.1","manifest_url":"https://x","state":"public"}"#
+            )
+            .as_deref(),
+            Some("1.4.23")
+        );
+        assert_eq!(
+            crate::services::agent_versions::parse_version("Muse Code 1.4.23 (1.4.23-R8977.1)").as_deref(),
+            Some("1.4.23")
+        );
+        assert_eq!(parse_latest(muse, r#"{"channel":"muse-stable"}"#), None);
         assert_eq!(parse_latest(Source::Npm("x"), r#"{"error":"Not found"}"#), None);
         assert_eq!(parse_latest(Source::Npm("x"), "<html>"), None);
     }

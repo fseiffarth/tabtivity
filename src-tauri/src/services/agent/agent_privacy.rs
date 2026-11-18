@@ -1396,6 +1396,10 @@ fn forget_sessions(sweep: &Sweep) {
         crate::services::tmux_local::remove_launcher(session);
         crate::services::api_proxy::on_tmux_session_gone(session);
     }
+    // The mux's cached stamp listing still names them (`session_mux::tmux`).
+    if !sweep.ended.is_empty() || !sweep.unconfirmed.is_empty() {
+        crate::services::session_mux::tmux::forget_marks();
+    }
 }
 
 /// Whether this machine's sessions are tmux's and tmux runs: where [`machine_tmux`]

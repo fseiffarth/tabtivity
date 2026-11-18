@@ -463,7 +463,7 @@ export function useLimitsPoll({
 }: {
   tab: TabRow;
   setLimitsNow: Dispatch<SetStateAction<number>>;
-  rememberLimits: (next: LimitMeters) => void;
+  rememberLimits: (next: LimitMeters, readAt?: number) => void;
 }) {
   /** Reads the usage panel now and every `LIMITS_POLL` while the page is
    * visible. A CLI with no usage readout stops the polling; a failed read keeps
@@ -484,7 +484,7 @@ export function useLimitsPoll({
             unsupported = true;
             return;
           }
-          if (report.usage.raw) rememberLimits(limitMeters(parseUsageReport(report.usage.raw)));
+          if (report.usage.raw) rememberLimits(limitMeters(parseUsageReport(report.usage.raw)), report.usage.readAt);
         },
         () => {},
       );

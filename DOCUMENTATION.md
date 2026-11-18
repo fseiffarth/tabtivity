@@ -652,7 +652,11 @@ access lists. Phases 0–2 of `docs/phone_multi_desktop_plan.md` are built (also
 host on an explicit Serve port names its session cookie after the port, so two
 hosts on one machine keep separate sign-ins), and so is a minimal Phase 3: the
 phone's switcher shell with one framed desktop (`mobile-web/src/shell/`,
-`docs/phone_multi_desktop_handoff.md`). None of it has run on a real phone yet.
+`docs/phone_multi_desktop_handoff.md`). A framed page guards its own input
+against clickjacking by the computer framing it (`shell/frameGuard.ts`): taps
+and keys pass only once IntersectionObserver v2 has reported it visible for
+500 ms; a browser without that report (iOS Safari, Firefox) fails closed with a
+card that opens the computer on its own. None of it has run on a real phone yet.
 
 ### Hosted server: signing in with your organisation's account
 

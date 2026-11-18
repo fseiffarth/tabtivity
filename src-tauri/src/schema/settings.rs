@@ -106,6 +106,13 @@ pub struct AppMobileHostSettings {
     /// bridge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_tabs: Option<bool>,
+    /// May a paired phone list and attach the desktop's clipboard image and
+    /// newest screenshots, downloads and pictures (composer + → From the
+    /// desktop)? Default off (threat model gap 65). Read by the sidecar per
+    /// request (`mobile_control::discovery::desktop_images_open`) and repeated
+    /// by the window's commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desktop_images: Option<bool>,
     /// May a paired phone list the desktop's Ollama models and load/unload them
     /// (never download or delete)? Unset is **on**; `false` closes the routes.
     /// Read by the sidecar per request
@@ -1044,6 +1051,22 @@ pub struct Settings {
     /// frontend type declares it and it round-trips as written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep_tabs_after_min: Option<u32>,
+    /// Stopping idle agent tabs (`docs/agent_tab_stop_plan.md`): the most agent
+    /// tabs with a running process before the least recently used are stopped
+    /// (kept as a tab, resumed when shown). Absent → 30, `0` → off. Read
+    /// entirely on the frontend (`src/lib/agents/agentTabStop.ts`); a named
+    /// field so it round-trips as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_agent_tabs_cap: Option<u32>,
+    /// Minutes an agent tab may sit unused before it is stopped. Absent → 120,
+    /// `0` → off. Frontend-read, as `stop_agent_tabs_cap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_agent_tabs_idle_min: Option<u32>,
+    /// Free memory (MiB) under which the least recently used agent tabs are
+    /// stopped. Absent → 4096, `0` → off. Frontend-read, as
+    /// `stop_agent_tabs_cap`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_agent_tabs_min_free_mb: Option<u32>,
     /// Lines of history a shell terminal keeps (tab cost plan step 2): every
     /// terminal but agent tabs, which keep a fixed 5,000. Absent → 2,000;
     /// clamped to [100, 50,000]. Read entirely on the frontend
@@ -1871,6 +1894,26 @@ mod tests {
             let back: Settings =
                 serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
             assert_eq!(back.sleep_tabs_after_min, Some(n));
+        }
+    }
+
+    /// The three stop-agent-tab settings are absent by default (the frontend
+    /// reads its defaults), real fields rather than `extra` passengers, and an
+    /// explicit `0` (off) and a chosen value survive a round trip.
+    #[test]
+    fn stop_agent_tabs_settings_default_absent_and_round_trip() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(!raw.contains("stop_agent_tabs"), "default settings must omit stop_agent_tabs_*: {raw}");
+        for n in [0u32, 30] {
+            let s: Settings = serde_json::from_str(&format!(
+                r#"{{"stop_agent_tabs_cap":{n},"stop_agent_tabs_idle_min":{n},"stop_agent_tabs_min_free_mb":{n}}}"#
+            ))
+            .expect("parse");
+            assert!(s.extra.is_empty(), "fell through to `extra`: {:?}", s.extra.keys());
+            let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).expect("round trip");
+            assert_eq!(back.stop_agent_tabs_cap, Some(n));
+            assert_eq!(back.stop_agent_tabs_idle_min, Some(n));
+            assert_eq!(back.stop_agent_tabs_min_free_mb, Some(n));
         }
     }
 

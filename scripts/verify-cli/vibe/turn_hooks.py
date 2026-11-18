@@ -6,7 +6,7 @@ Offline: a scratch HOME whose `~/.vibe` (`VIBE_HOME`) holds a provider at
 `stub_openai.py`'s chat completions (`STUB:CALL <tool> <json>` forces a tool
 call) and a `hooks.toml` with a dumping hook of every type Vibe 3.1 knows
 (`post_agent`, `pre_agent`, `pre_tool`, `post_tool`, `notification`,
-`session_start`, `session_end`). One TUI session: a plain prompt, a prompt
+`session_start`, `session_end`; from 3.1.3 also `pre_llm`, `post_llm`). One TUI session: a plain prompt, a prompt
 whose bash call waits on an approval (accepted), the same declined (Esc), then
 `/clear` and one more prompt, a `vibe -p` run from the bash tool (accepted),
 then `/exit`. Payloads go to
@@ -22,7 +22,9 @@ the app's session hook.
 """
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 
@@ -30,6 +32,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import common  # noqa: E402
 
 TYPES = ["post_agent", "pre_agent", "pre_tool", "post_tool", "notification", "session_start", "session_end"]
+# Since 3.1.3: before each model call and after each response (tool calls included).
+LLM_TYPES = ["pre_llm", "post_llm"]
+
+
+def hook_types(binp, home):
+    """Every type the binary knows: an older one is not handed the 3.1.3 types."""
+    out = subprocess.run([binp, "--version"], env=common.clean_environ(common.scratch_env(home)), capture_output=True, text=True).stdout
+    found = re.search(r"(\d+)\.(\d+)\.(\d+)", out)
+    return TYPES + LLM_TYPES if found and tuple(map(int, found.groups())) >= (3, 1, 3) else TYPES
 
 
 def main():
@@ -58,7 +69,7 @@ def main():
                 '[[models]]\nname = "stub"\nprovider = "stub"\nalias = "stub"\ntemperature = 0.2\n'
                 'input_price = 0.0\noutput_price = 0.0\n')
     with open(os.path.join(vibe, "hooks.toml"), "w") as f:
-        for t in TYPES:
+        for t in hook_types(binp, home):
             f.write(f'[[hooks]]\nname = "dump-{t}"\ntype = "{t}"\ncommand = "{hook}"\ntimeout = 10.0\n\n')
     env = common.scratch_env(home, {"VIBE_HOME": vibe, "PATH": os.environ.get("PATH", "/usr/bin:/bin")})
     stub = common.start_stub("stub_openai.py", port, os.path.join(out, "stub.jsonl"))

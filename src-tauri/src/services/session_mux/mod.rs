@@ -162,6 +162,36 @@ pub struct PaneInfo {
     pub window: Option<(u16, u16)>,
 }
 
+/// Every live session and the MCP stamp it was created with
+/// ([`SessionMux::mcp_marks`]): what a restore reads once for all its tabs,
+/// instead of one `has` per tab.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionMarks(std::collections::HashMap<String, Option<String>>);
+
+impl SessionMarks {
+    /// `(session, raw stamp)` rows; `None` is a session with no stamp.
+    pub fn from_rows(rows: impl IntoIterator<Item = (String, Option<String>)>) -> Self {
+        Self(rows.into_iter().collect())
+    }
+
+    /// The session is live.
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+
+    /// The listing's row for `name` (`None`: not live; `Some(None)`: live, no
+    /// stamp) — the shape `root_mcp_mark::Stamp::of` reads.
+    pub fn entry(&self, name: &str) -> Option<&Option<String>> {
+        self.0.get(name)
+    }
+
+    /// Note a session this process just created with `mark`, ahead of the
+    /// next listing.
+    pub fn note(&mut self, name: &str, mark: &str) {
+        self.0.insert(name.to_string(), Some(mark.to_string()));
+    }
+}
+
 /// One key for [`SessionMux::send_keys`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Key {
@@ -226,6 +256,42 @@ pub trait SessionMux: Send + Sync {
     /// Ready the server for a phone viewer (tmux: `keep_dim`). Best effort.
     fn prepare_viewer(&self) {}
     fn list(&self) -> Result<Vec<SessionInfo>, MuxError>;
+    /// Every live session with the MCP stamp it was created with
+    /// (`services::root_mcp::root_mcp_mark`): one listing for all tabs of a
+    /// restore, so a backend may serve it from a short cache (tmux: about
+    /// 3 s behind a single flight). No server is `Ok` and empty. The default is
+    /// "cannot tell" (`Unavailable`): `launch_prep` then treats every launch as
+    /// a create and asks [`SessionMux::has`] for a rejoin, as it did before
+    /// sessions were stamped. A backend that can carry the stamp (the Windows
+    /// session host) overrides this and [`SessionMux::note_mcp_mark`], and
+    /// writes the stamp `PtyOptions::mcp_mark` carries when it creates a
+    /// session.
+    fn mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        Err(MuxError::Unavailable("this backend keeps no MCP stamp".into()))
+    }
+    /// [`SessionMux::mcp_marks`] read now, past any cache (which it then
+    /// refreshes): for a launch whose live [`SessionMux::has`] found a session
+    /// the cached listing does not name yet (`launch_prep`'s AI-off rejoin).
+    fn fresh_mcp_marks(&self) -> Result<SessionMarks, MuxError> {
+        self.mcp_marks()
+    }
+    /// `mark` was just set on the new session `name` (`launch_prep` decided a
+    /// create): a backend that caches [`SessionMux::mcp_marks`] folds it in, so
+    /// a second launch of the same session within the cache's life does not
+    /// read it as absent.
+    fn note_mcp_mark(&self, name: &str, mark: &str) {
+        let _ = (name, mark);
+    }
+    /// Overwrite the live session `name`'s stamp with `mark`: a revival
+    /// (`root_mcp_reattach`) renews the nonce, so the next reattach in this
+    /// run reads the stamp as its own and adopts. The default cannot
+    /// (`Unavailable`): the session keeps its old stamp, and a revived
+    /// session is then found on this listener's port by its grant
+    /// (`root_mcp_mark::classify_reattach`) but not revived by a later run.
+    fn restamp_mcp(&self, name: &str, mark: &str) -> Result<(), MuxError> {
+        let _ = (name, mark);
+        Err(MuxError::Unavailable("this backend cannot re-stamp a session".into()))
+    }
     fn has(&self, name: &str) -> Result<bool, MuxError>;
     fn pane(&self, name: &str) -> Result<PaneInfo, MuxError>;
     /// The window's `(cols, rows)`. A backend may answer it more cheaply than
@@ -251,6 +317,15 @@ pub trait SessionMux: Send + Sync {
     /// reap (`tmux_local::sessions_to_reap` owns the rule). No server is `Ok`.
     fn kill_app_sessions(&self) -> Result<(), MuxError> {
         kill_app_sessions_in(self)
+    }
+}
+
+/// The names of the running sessions the app minted (the clean-quit reap's
+/// rule, `tmux_local::sessions_to_reap`); none when the backend cannot list.
+pub fn app_session_names<M: SessionMux + ?Sized>(mux: &M) -> Vec<String> {
+    match mux.list() {
+        Ok(listed) => crate::services::tmux_local::sessions_to_reap(listed.iter().map(|s| s.name.as_str())),
+        Err(_) => Vec::new(),
     }
 }
 
@@ -412,6 +487,16 @@ mod tests {
         assert_eq!(*mux.killed.lock().unwrap(), [ours, stuck]);
         let mux = Listed { names: vec!["work".into()], stuck, killed: Default::default() };
         assert_eq!(mux.kill_app_sessions(), Ok(()));
+        assert!(mux.killed.lock().unwrap().is_empty());
+    }
+
+    /// The restore wake's listing: the app's running sessions, never a
+    /// foreign one, and nothing is ended.
+    #[test]
+    fn the_app_session_listing_names_the_apps_sessions_only() {
+        let ours = concat!(crate::app_slug!(), "-p--agent-1");
+        let mux = Listed { names: vec![ours.into(), "work".into()], stuck: "", killed: Default::default() };
+        assert_eq!(app_session_names(&mux), [ours]);
         assert!(mux.killed.lock().unwrap().is_empty());
     }
 

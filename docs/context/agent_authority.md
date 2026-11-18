@@ -806,8 +806,12 @@ intended. **Home:** the scope's agent home, never the user's; `~/.cache` a tmpfs
 **Host processes:** `--unshare-pid` plus a fresh `--proc` mean
 `/proc/1` is the fence's own bwrap. Host PIDs are absent, so there is no
 `/proc/<host-pid>/root` to walk into. **Inherited descriptors:** none cross.
-`portable-pty` closes every fd above 2 before exec (`close_random_fds`), Rust
-opens files close-on-exec, and tmux closes stray fds in the panes it spawns.
+Rust opens files close-on-exec, and tmux closes stray fds in the panes it spawns.
+`portable-pty` also closed every fd above 2 before exec (`close_random_fds`),
+but only on the path that forks the whole app; on Linux `terminal::pty_child`
+starts the program with `posix_spawn` through `setsid --ctty` and closes
+nothing, so a non-close-on-exec fd in the app would now cross (macOS and a
+Linux without `setsid` keep the old path).
 **Environment:** not filtered (no `--clearenv`). An API key exported in the
 shell that launched Tabtivity reaches every fenced agent. **Display:** `DISPLAY`
 is kept, and the abstract X11 socket is reachable through the shared network

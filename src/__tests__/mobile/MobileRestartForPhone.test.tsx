@@ -123,6 +123,17 @@ describe("Mobile bridge — an agent tab started before Mobile access", () => {
     expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "local_tmux_kill")).toBe(false);
   });
 
+  it("wakes a stopped tab, wrapped, on its resume args", async () => {
+    useTabsStore.setState({ tabsByScope: { [project.id]: [agentTab({ stopped: true, initialInput: "first\r" })] } });
+    mobileAgentTmuxReady.set(mobileTmuxReadyKey(project.id, "agent-1"), false);
+    expect(await openFromPhone()).toMatchObject({ status: "activated" });
+    expect(tabNow()?.stopped).toBeUndefined();
+    expect(tabNow()?.initialInput).toBeUndefined();
+    expect(tabNow()?.relaunchSeq).toBe(1);
+    expect(tabNow()?.args).toEqual(RESUMABLE_AGENTS.claude(SESSION));
+    expect(mobileTmuxReadiness(project.id, "agent-1")).toBe(true);
+  });
+
   it("still refuses to restart a wrapped agent while it is working", async () => {
     mobileAgentTmuxReady.set(mobileTmuxReadyKey(project.id, "agent-1"), true);
     useActivityStore.setState({ busyByTab: { [`${project.id}:agent-1`]: true } });

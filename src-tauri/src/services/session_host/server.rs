@@ -48,7 +48,7 @@ use super::protocol::{
     KIND_OUTPUT, MAX_FRAME, MAX_HELLO_FRAME, PROTO, PROTO_MIN,
 };
 use super::screen::{complete_prefix, paste_chunk, CaptureOpts, Screen, DEFAULT_HISTORY_ROWS};
-use super::table::{validate_spawn, ClientId, Clock, Created, IdleTimer, NewSession, SessionId, Table, TableError};
+use super::table::{valid_mcp_mark, validate_spawn, ClientId, Clock, Created, IdleTimer, NewSession, SessionId, Table, TableError};
 
 /// What a session is started with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,6 +429,7 @@ impl Host {
                 cwd: e.cwd.clone(),
                 argv: e.argv.clone(),
                 dead: e.is_dead(),
+                mcp_mark: e.mcp_mark.clone(),
             })
             .collect()
     }
@@ -691,7 +692,7 @@ impl Host {
     /// One request/reply.
     async fn handle(&self, req: Request) -> Reply {
         match req {
-            Request::Spawn { name, argv, env, cwd, cols, rows, remain_on_exit, size_policy, create_only } => {
+            Request::Spawn { name, argv, env, cwd, cols, rows, remain_on_exit, size_policy, create_only, mcp_mark } => {
                 let new = NewSession {
                     name,
                     argv,
@@ -701,6 +702,7 @@ impl Host {
                     policy: size_policy,
                     remain_on_exit,
                     create_only,
+                    mcp_mark,
                 };
                 self.spawn(new, env).await
             }
@@ -819,6 +821,9 @@ impl Host {
     async fn spawn(&self, new: NewSession, env: Vec<(String, String)>) -> Reply {
         if let Err(msg) = validate_spawn(&new.argv, &env, new.cwd.as_deref()) {
             return Reply::error(ErrorCode::BadRequest, msg);
+        }
+        if new.mcp_mark.as_deref().is_some_and(|m| !valid_mcp_mark(m)) {
+            return Reply::error(ErrorCode::BadRequest, "malformed MCP stamp");
         }
         let spec = SpawnSpec {
             argv: new.argv.clone(),

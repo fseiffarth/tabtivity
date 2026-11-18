@@ -357,9 +357,9 @@ export function resumeArgsOf(
  * at startup — so they are dropped like other live-process tabs.
  */
 export function isRestorableEmbedTab(
-  tab: { kind: TabKind; viewer?: TabEntry["viewer"] },
+  tab: Pick<TabEntry, "kind" | "viewer" | "gitPullTips">,
 ): boolean {
-  return tab.kind === "embed" && !!tab.viewer;
+  return tab.kind === "embed" && !!tab.viewer && !tab.gitPullTips;
 }
 
 /**
@@ -375,6 +375,7 @@ export function isRestorableTab(
     sessionId?: string;
     resumeArgs?: string[];
     viewer?: TabEntry["viewer"];
+    gitPullTips?: TabEntry["gitPullTips"];
     localLaunch?: LocalLaunch;
     login?: LoginTarget;
   },

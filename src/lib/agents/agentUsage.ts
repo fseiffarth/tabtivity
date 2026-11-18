@@ -12,6 +12,7 @@ export interface AgentUsageReport {
    * phone is shown in place of `error`, which may name paths on this machine. */
   code?: string;
   cached: boolean;
+  readAt?: number;
 }
 
 /** The phone may see quota figures, but never host paths. A diagnostic or a

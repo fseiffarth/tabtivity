@@ -109,14 +109,22 @@ fn a_claude_question_stays_in_the_chat_with_its_answer_once_answered() {
     text += &ask("toolu_B", "Which one?");
     text += "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_B\",\"content\":\"The user doesn't want to proceed\",\"is_error\":true}]},\"toolUseResult\":\"User rejected tool use\"}\n";
     text += "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Noted.\"}]}}\n";
-    // Still waiting: the live screen shows it, the chat does not yet.
+    // Still waiting: the entry comes last, marked blocking (the live card shows it).
     text += &ask("toolu_C", "Still open?");
     std::fs::write(&path, text).unwrap();
     let read = read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap();
     assert_eq!(
         kinds(&read),
-        vec![("prompt", "ask me"), ("answer", "Which colours?\n→ Red, Blue"), ("answer", "Which one?\n→ —"), ("answer", "Noted.")]
+        vec![
+            ("prompt", "ask me"),
+            ("answer", "Which colours?\n→ Red, Blue"),
+            ("answer", "Which one?\n→ —"),
+            ("answer", "Noted."),
+            ("answer", "Still open?")
+        ]
     );
+    assert!(read.entries[..4].iter().all(|e| !e.blocking));
+    assert!(read.entries[4].blocking);
     let answered = &read.entries[1];
     // Placed at the question's own time, not the answer's.
     assert_eq!(answered.at.as_deref(), Some("2026-10-02T10:00:00Z"));
@@ -131,6 +139,330 @@ fn a_claude_question_stays_in_the_chat_with_its_answer_once_answered() {
     assert_eq!(declined.answer, None);
     assert!(declined.options.iter().all(|o| !o.chosen));
     assert!(serde_json::to_value(&read.entries[3]).unwrap().get("questions").is_none());
+}
+
+// The records Claude 2.1.327 wrote for an `AskUserQuestion` (scripts/verify-cli/claude/turn_hooks.py,
+// tui_ask / tui_ask_esc), keeping only what the reader reads; ids and the working folder are scrubbed.
+const PROBE_QUESTIONS: &str = r#"[{"header":"Colours","question":"Which colours should the probe use?","multiSelect":true,"options":[{"label":"Red","description":"warm"},{"label":"Blue","description":"cool"},{"label":"Green","description":"calm"}]},{"header":"Layout","question":"Which layout should the probe draw?","multiSelect":false,"options":[{"label":"Grid","description":"rows and columns","preview":"+--+--+\n|  |  |\n+--+--+"},{"label":"List","description":"one column","preview":"- one\n- two"}]}]"#;
+
+fn probe_prompt(text: &str) -> String {
+    format!("{{\"type\":\"user\",\"timestamp\":\"2026-11-18T09:19:13.492Z\",\"message\":{{\"role\":\"user\",\"content\":{}}}}}\n", serde_json::json!(text))
+}
+
+fn probe_ask(call: &str, questions: &str, at: &str) -> String {
+    format!(
+        "{{\"isSidechain\":false,\"type\":\"assistant\",\"timestamp\":\"{at}\",\"message\":{{\"role\":\"assistant\",\"model\":\"claude-stub\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"{call}\",\"name\":\"AskUserQuestion\",\"input\":{{\"questions\":{questions}}}}}],\"stop_reason\":\"tool_use\"}}}}\n"
+    )
+}
+
+const PROBE_ANSWERED: &str = r#"{"isSidechain":false,"type":"user","timestamp":"2026-11-18T09:19:25.513Z","message":{"role":"user","content":[{"type":"tool_result","content":"Your questions have been answered","tool_use_id":"toolu_P"}]},"toolUseResult":{"questions":[],"answers":{"Which colours should the probe use?":"Red","Which layout should the probe draw?":"Grid"},"annotations":{"Which layout should the probe draw?":{"preview":"+--+--+\n|  |  |\n+--+--+"}}}}
+"#;
+const PROBE_REJECTED: &str = r#"{"isSidechain":false,"type":"user","timestamp":"2026-11-18T09:19:39.183Z","message":{"role":"user","content":[{"type":"tool_result","content":"The user doesn't want to proceed with this tool use.","is_error":true,"tool_use_id":"toolu_P"}]},"toolUseResult":"User rejected tool use","toolDenialKind":"user-rejected"}
+"#;
+const PROBE_INTERRUPT: &str = r#"{"isSidechain":false,"type":"user","timestamp":"2026-11-18T09:19:39.185Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}
+"#;
+
+fn read_claude(text: String) -> AgentTranscript {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    std::fs::write(&path, text).unwrap();
+    read_transcript(&path, TranscriptKind::Claude, None, DEFAULT_LIMIT).unwrap()
+}
+
+#[test]
+fn a_claude_question_still_waiting_is_the_last_entry_marked_blocking() {
+    let read = read_claude(probe_prompt("ask me") + &probe_ask("toolu_P", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z"));
+    assert_eq!(read.entries.len(), 2);
+    let waiting = &read.entries[1];
+    assert!(waiting.blocking && !waiting.asking);
+    assert_eq!(waiting.kind, "answer");
+    assert_eq!(waiting.at.as_deref(), Some("2026-11-18T09:19:13.591Z"));
+    assert_eq!(waiting.text, "Which colours should the probe use?\n\nWhich layout should the probe draw?");
+    assert_eq!(waiting.questions.len(), 2);
+    let colours = &waiting.questions[0];
+    assert_eq!((colours.header.as_deref(), colours.multi_select, colours.answer.clone()), (Some("Colours"), true, None));
+    assert_eq!(colours.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["Red", "Blue", "Green"]);
+    assert_eq!(colours.options[0].description.as_deref(), Some("warm"));
+    assert_eq!(colours.options[0].preview, None);
+    let layout = &waiting.questions[1];
+    assert!(!layout.multi_select);
+    // A preview keeps its line breaks and its inner spacing.
+    assert_eq!(layout.options[0].preview.as_deref(), Some("+--+--+\n|  |  |\n+--+--+"));
+    assert_eq!(layout.options[1].preview.as_deref(), Some("- one\n- two"));
+    // The wire shape the phone and the Reader read.
+    let json = serde_json::to_value(waiting).unwrap();
+    assert_eq!(json["blocking"], true);
+    assert_eq!(json["questions"][0]["multiSelect"], true);
+    assert!(json["questions"][1].get("multiSelect").is_none());
+    assert_eq!(json["questions"][1]["options"][0]["preview"], "+--+--+\n|  |  |\n+--+--+");
+    assert!(json.get("asking").is_none());
+    // An ordinary entry carries neither mark.
+    let prompt = serde_json::to_value(&read.entries[0]).unwrap();
+    assert!(prompt.get("blocking").is_none());
+}
+
+#[test]
+fn an_answered_claude_question_loses_its_blocking_mark_and_keeps_rows_and_previews() {
+    let text = probe_prompt("ask me")
+        + &probe_ask("toolu_P", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z")
+        + PROBE_ANSWERED
+        + "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"stub answer done\"}]}}\n";
+    let read = read_claude(text);
+    assert_eq!(read.entries.len(), 3);
+    assert!(read.entries.iter().all(|e| !e.blocking));
+    let answered = &read.entries[1];
+    assert_eq!(answered.at.as_deref(), Some("2026-11-18T09:19:13.591Z"));
+    assert_eq!(answered.questions[0].answer.as_deref(), Some("Red"));
+    assert_eq!(answered.questions[1].answer.as_deref(), Some("Grid"));
+    assert!(answered.questions[1].options[0].chosen && !answered.questions[1].options[1].chosen);
+    assert!(answered.questions[0].multi_select);
+    assert_eq!(answered.questions[1].options[0].preview.as_deref(), Some("+--+--+\n|  |  |\n+--+--+"));
+}
+
+#[test]
+fn a_declined_claude_question_is_the_plain_card_with_no_answer_and_the_interrupt_notice() {
+    let read = read_claude(probe_prompt("ask me") + &probe_ask("toolu_P", PROBE_QUESTIONS, "2026-11-18T09:19:37.511Z") + PROBE_REJECTED + PROBE_INTERRUPT);
+    assert_eq!(read.entries.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), vec!["prompt", "answer", "interrupted"]);
+    assert!(read.entries.iter().all(|e| !e.blocking));
+    assert!(read.entries[1].questions.iter().all(|q| q.answer.is_none() && q.options.iter().all(|o| !o.chosen)));
+}
+
+#[test]
+fn a_waiting_question_of_an_earlier_turn_or_before_an_interrupt_is_not_waiting() {
+    // Asked, never answered, then the user typed a new prompt.
+    let later = probe_prompt("ask me") + &probe_ask("toolu_A", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z") + &probe_prompt("never mind, do this instead");
+    let read = read_claude(later);
+    assert_eq!(kinds(&read), vec![("prompt", "ask me"), ("prompt", "never mind, do this instead")]);
+    // Asked, then the interrupt notice with no result in between.
+    let interrupted = probe_prompt("ask me") + &probe_ask("toolu_A", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z") + PROBE_INTERRUPT;
+    let read = read_claude(interrupted);
+    assert_eq!(read.entries.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), vec!["prompt", "interrupted"]);
+    // A question of the new turn is waiting even so.
+    let again = probe_prompt("ask me")
+        + &probe_ask("toolu_A", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z")
+        + &probe_prompt("again")
+        + &probe_ask("toolu_B", PROBE_QUESTIONS, "2026-11-18T09:20:00.000Z");
+    let read = read_claude(again);
+    assert_eq!(read.entries.iter().map(|e| (e.kind.as_str(), e.blocking)).collect::<Vec<_>>(), vec![("prompt", false), ("prompt", false), ("answer", true)]);
+    assert_eq!(read.entries[2].at.as_deref(), Some("2026-11-18T09:20:00.000Z"));
+}
+
+#[test]
+fn two_waiting_claude_questions_come_last_in_the_order_they_were_asked() {
+    let one = r#"[{"question":"First?","options":[{"label":"Yes"}]}]"#;
+    let two = r#"[{"question":"Second?","options":[{"label":"No"}]}]"#;
+    let text = probe_prompt("ask me")
+        + &probe_ask("toolu_1", one, "2026-11-18T09:19:13.591Z")
+        + &probe_ask("toolu_2", two, "2026-11-18T09:19:14.000Z")
+        + "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Meanwhile.\"}]}}\n";
+    let read = read_claude(text);
+    // The text came after the asks in the file but the waiting ones close the list.
+    assert_eq!(kinds(&read), vec![("prompt", "ask me"), ("answer", "Meanwhile."), ("answer", "First?"), ("answer", "Second?")]);
+    assert!(read.entries[2].blocking && read.entries[3].blocking && !read.entries[1].blocking);
+    // Answering the first leaves the second waiting.
+    let answered = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"toolUseResult":{"answers":{"First?":"Yes"}}}"#;
+    let text = probe_prompt("ask me") + &probe_ask("toolu_1", one, "2026-11-18T09:19:13.591Z") + &probe_ask("toolu_2", two, "2026-11-18T09:19:14.000Z") + answered + "\n";
+    let read = read_claude(text);
+    assert_eq!(
+        read.entries.iter().map(|e| (e.text.as_str(), e.blocking)).collect::<Vec<_>>(),
+        vec![("ask me", false), ("First?\n→ Yes", false), ("Second?", true)]
+    );
+}
+
+#[test]
+fn a_subagent_files_questions_are_never_waiting() {
+    let line = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z").replace("\"isSidechain\":false", "\"isSidechain\":true");
+    let lines: Vec<&str> = line.lines().collect();
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, true);
+    assert!(entries.iter().all(|e| e.questions.is_empty()), "{entries:?}");
+    // The same call in the session's own file does wait.
+    let own = probe_ask("toolu_S", PROBE_QUESTIONS, "2026-11-18T09:19:13.591Z");
+    let lines: Vec<&str> = own.lines().collect();
+    let (entries, _, _) = parse_entries(&lines, TranscriptKind::Claude, false);
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].blocking);
+}
+
+#[test]
+fn a_preview_is_bounded_by_lines_and_characters_and_keeps_its_breaks() {
+    let long_lines = (0..100).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n");
+    let wide = "x".repeat(MAX_PREVIEW_CHARS * 3);
+    let questions = serde_json::json!([{
+        "question": "Pick?", "multiSelect": "yes",
+        "options": [
+            {"label": "Lines", "preview": long_lines},
+            {"label": "Wide", "preview": wide},
+            {"label": "Code", "preview": "fn main() {\n\tprintln!(\"hi\");   \n}\u{7}\n"},
+            {"label": "Blank", "preview": "  \n "}
+        ]
+    }])
+    .to_string();
+    let read = read_claude(probe_prompt("ask me") + &probe_ask("toolu_P", &questions, "2026-11-18T09:19:13.591Z"));
+    let question = &read.entries[1].questions[0];
+    // A non-boolean `multiSelect` is not one.
+    assert!(!question.multi_select);
+    let lines = question.options[0].preview.as_deref().unwrap();
+    assert_eq!(lines.lines().count(), MAX_PREVIEW_LINES);
+    assert!(lines.ends_with(&format!("line {}", MAX_PREVIEW_LINES - 1)));
+    assert_eq!(question.options[1].preview.as_deref().unwrap().chars().count(), MAX_PREVIEW_CHARS);
+    // Tab kept, trailing blanks and the control character dropped, indentation untouched.
+    assert_eq!(question.options[2].preview.as_deref(), Some("fn main() {\n\tprintln!(\"hi\");\n}"));
+    assert_eq!(question.options[3].preview, None);
+}
+
+// The tool calls a permission dialog is about. `Bash` is the probe's own record
+// (tui_bash, 2.1.327, scrubbed); `Edit`/`Write`/`WebFetch` are unprobed and
+// follow the same `tool_use` block shape with the inputs Claude's tools take.
+fn tool_call(call: &str, name: &str, input: serde_json::Value, at: &str) -> String {
+    serde_json::json!({
+        "isSidechain": false, "type": "assistant", "timestamp": at,
+        "message": {"role": "assistant", "model": "claude-stub", "content": [{"type": "tool_use", "id": call, "name": name, "input": input}], "stop_reason": "tool_use"}
+    })
+    .to_string()
+        + "\n"
+}
+
+fn tool_result(call: &str, rejected: bool) -> String {
+    let mut block = serde_json::json!({"type": "tool_result", "tool_use_id": call, "content": "done"});
+    if rejected {
+        block["is_error"] = serde_json::json!(true);
+    }
+    serde_json::json!({"isSidechain": false, "type": "user", "message": {"role": "user", "content": [block]}}).to_string() + "\n"
+}
+
+#[test]
+fn the_tool_calls_with_no_result_are_listed_with_what_they_act_on() {
+    let text = probe_prompt("go")
+        + &tool_call("toolu_B", "Bash", serde_json::json!({"command": "touch tui.txt", "description": "probe"}), "2026-11-18T09:26:52.899Z")
+        + &tool_call("toolu_E", "Edit", serde_json::json!({"file_path": "/work/proj/src/a.rs", "old_string": "x", "new_string": "y"}), "2026-11-18T09:27:00.000Z")
+        + &tool_call("toolu_N", "NotebookEdit", serde_json::json!({"notebook_path": "/work/proj/n.ipynb", "new_source": "1"}), "2026-11-18T09:27:01.000Z")
+        + &tool_call("toolu_W", "WebFetch", serde_json::json!({"url": "https://user:pw@example.org:8443/a/b?q=secret#f", "prompt": "summarise"}), "2026-11-18T09:27:02.000Z")
+        + &tool_call("toolu_R", "Read", serde_json::json!({"file_path": "/work/proj/read.txt"}), "2026-11-18T09:27:03.000Z")
+        + &tool_call("toolu_Done", "Write", serde_json::json!({"file_path": "/work/proj/done.txt", "content": "z"}), "2026-11-18T09:27:04.000Z")
+        + &tool_result("toolu_Done", false)
+        + &tool_call("toolu_Q", "AskUserQuestion", serde_json::from_str(r#"{"questions":[{"question":"Which?","options":[{"label":"A"}]}]}"#).unwrap(), "2026-11-18T09:27:05.000Z");
+    let read = read_claude(text);
+    // The shell stays `shells`' business, the question the blocking entry's.
+    assert_eq!(read.shells.len(), 1);
+    assert_eq!(read.shells[0].command, "touch tui.txt");
+    assert_eq!(
+        read.waiting_tools.iter().map(|t| (t.name.as_str(), t.subject.as_str(), t.at.as_deref())).collect::<Vec<_>>(),
+        vec![
+            ("Edit", "/work/proj/src/a.rs", Some("2026-11-18T09:27:00.000Z")),
+            ("NotebookEdit", "/work/proj/n.ipynb", Some("2026-11-18T09:27:01.000Z")),
+            ("WebFetch", "https://user:pw@example.org:8443/a/b?q=secret#f", Some("2026-11-18T09:27:02.000Z")),
+            // Any other tool: its name only.
+            ("Read", "", Some("2026-11-18T09:27:03.000Z")),
+        ]
+    );
+    assert!(read.entries.iter().any(|e| e.blocking));
+    // The wire shape: camelCase list, an empty subject left out.
+    let json = serde_json::to_value(&read).unwrap();
+    assert_eq!(json["waitingTools"][0]["subject"], "/work/proj/src/a.rs");
+    assert!(json["waitingTools"][3].get("subject").is_none());
+    assert!(serde_json::to_value(AgentTranscript::default()).unwrap().get("waitingTools").is_none());
+}
+
+#[test]
+fn a_rejected_call_a_new_prompt_or_an_interrupt_ends_the_wait() {
+    let edit = |call: &str| tool_call(call, "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
+    // A declined call has its (error) result, the interrupt notice follows.
+    let declined = probe_prompt("go") + &edit("toolu_1") + &tool_result("toolu_1", true) + PROBE_INTERRUPT;
+    assert!(read_claude(declined).waiting_tools.is_empty());
+    // Never answered, then the user typed on: an earlier turn's call is not waiting.
+    let later = probe_prompt("go") + &edit("toolu_1") + &probe_prompt("again") + &edit("toolu_2");
+    let read = read_claude(later);
+    assert_eq!(read.waiting_tools.len(), 1);
+    // An interrupt notice with no result in between.
+    let cut = probe_prompt("go") + &edit("toolu_1") + PROBE_INTERRUPT;
+    assert!(read_claude(cut).waiting_tools.is_empty());
+}
+
+#[test]
+fn waiting_tools_skip_a_subagent_file_odd_names_and_are_bounded() {
+    let call = tool_call("toolu_S", "Edit", serde_json::json!({"file_path": "/work/proj/a.rs"}), "2026-11-18T09:27:00.000Z");
+    let lines: Vec<&str> = call.lines().collect();
+    let (_, _, sidechain) = parse_entries(&lines, TranscriptKind::Claude, true);
+    assert!(sidechain.tools.is_empty());
+    let (_, _, own) = parse_entries(&lines, TranscriptKind::Claude, false);
+    assert_eq!(own.tools.len(), 1);
+
+    let mut text = probe_prompt("go");
+    text += &tool_call("toolu_bad", "Edit; rm -rf /", serde_json::json!({"file_path": "/work/x"}), "2026-11-18T09:27:00.000Z");
+    text += &tool_call("toolu_long", "Write", serde_json::json!({"file_path": format!("/work/{}\n/second line", "d".repeat(2000))}), "2026-11-18T09:27:00.000Z");
+    for n in 0..20 {
+        text += &tool_call(&format!("toolu_{n}"), "mcp__srv__tool", serde_json::json!({}), "2026-11-18T09:27:00.000Z");
+    }
+    let read = read_claude(text);
+    assert!(read.waiting_tools.iter().all(|t| t.name != "Edit; rm -rf /"));
+    // Only the newest MAX_WAITING_TOOLS: the long path is among the older ones.
+    assert_eq!(read.waiting_tools.len(), MAX_WAITING_TOOLS);
+    assert!(read.waiting_tools.iter().all(|t| t.name == "mcp__srv__tool"));
+    let read = read_claude(
+        probe_prompt("go") + &tool_call("toolu_long", "Write", serde_json::json!({"file_path": format!("/work/{}\n/second line", "d".repeat(2000))}), "2026-11-18T09:27:00.000Z"),
+    );
+    let subject = &read.waiting_tools[0].subject;
+    assert_eq!(subject.chars().count(), MAX_TOOL_SUBJECT_CHARS);
+    assert!(!subject.contains('\n'));
+}
+
+#[test]
+fn a_tail_of_unique_tool_calls_and_asks_is_walked_in_linear_time() {
+    // The file is the agent's: every record used to rescan all the calls
+    // still waiting, so a hostile tail made one read quadratic. Four times
+    // the records may take about four times as long, not sixteen: a ratio of
+    // two runs side by side, so a loaded machine does not tip it.
+    let run = |calls: usize| {
+        let mut text = probe_prompt("go");
+        for n in 0..calls {
+            text += &tool_call(&format!("t{n}"), "mcp__srv__tool", serde_json::json!({}), "2026-11-18T09:27:00.000Z");
+        }
+        for n in 0..calls {
+            text += &probe_ask(&format!("q{n}"), r#"[{"question":"Which?","options":[{"label":"A"}]}]"#, "2026-11-18T09:27:00.000Z");
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        let started = std::time::Instant::now();
+        let (entries, _, shell_calls) = parse_entries(&lines, TranscriptKind::Claude, false);
+        (started.elapsed(), entries, shell_calls)
+    };
+    let (small, ..) = run(30_000);
+    let (large, entries, shell_calls) = run(120_000);
+    assert!(large < small * 9, "30k records took {small:?}, 120k took {large:?}");
+    assert_eq!(shell_calls.tools.len(), MAX_WAITING_TOOLS);
+    // Only the newest asks stay, each a blocking entry.
+    assert_eq!(entries.iter().filter(|e| e.blocking).count(), MAX_WALK_ASKS);
+}
+
+#[test]
+fn a_result_ends_the_wait_of_a_call_among_many_unanswered_ones() {
+    let mut text = probe_prompt("go");
+    for n in 0..30 {
+        text += &tool_call(&format!("t{n}"), "mcp__srv__tool", serde_json::json!({}), "2026-11-18T09:27:00.000Z");
+    }
+    for n in (0..30).step_by(2) {
+        text += &tool_result(&format!("t{n}"), false);
+    }
+    let read = read_claude(text);
+    assert_eq!(read.waiting_tools.len(), 15);
+}
+
+#[test]
+fn an_ask_is_held_to_a_few_questions_rows_and_characters() {
+    let rows: Vec<_> = (0..40).map(|n| serde_json::json!({"label": format!("row {n}"), "description": "d"})).collect();
+    let questions: Vec<_> = (0..40).map(|n| serde_json::json!({"question": format!("Q{n}?"), "options": rows})).collect();
+    let read = read_claude(probe_prompt("ask") + &probe_ask("toolu_P", &serde_json::json!(questions).to_string(), "2026-11-18T09:19:13.591Z"));
+    let asked = &read.entries[1].questions;
+    assert_eq!(asked.len(), MAX_ASK_QUESTIONS);
+    assert!(asked.iter().all(|q| q.options.len() == MAX_ASK_OPTIONS));
+    // A few huge rows: the characters in all are bounded, the first question is not emptied.
+    let big = "x".repeat(MAX_QUESTION_CHARS);
+    let rows: Vec<_> = (0..12).map(|n| serde_json::json!({"label": format!("{n}{big}"), "description": big})).collect();
+    let questions: Vec<_> = (0..8).map(|n| serde_json::json!({"question": format!("Q{n}?{big}"), "options": rows})).collect();
+    let read = read_claude(probe_prompt("ask") + &probe_ask("toolu_P", &serde_json::json!(questions).to_string(), "2026-11-18T09:19:13.591Z"));
+    let asked = &read.entries[1].questions;
+    let chars: usize = asked.iter().map(|q| q.question.len() + q.options.iter().map(|o| o.label.len() + o.description.as_deref().map_or(0, str::len)).sum::<usize>()).sum();
+    assert!(chars <= MAX_ASK_CHARS + 4 * MAX_QUESTION_CHARS, "{chars}");
+    assert!(!asked.is_empty() && !asked[0].options.is_empty());
 }
 
 #[test]
@@ -187,6 +519,29 @@ fn a_codex_async_question_shows_while_it_waits_and_takes_its_reply() {
     assert!(read.entries[7].asking);
     assert_eq!(serde_json::to_value(&read.entries[7]).unwrap()["asking"], serde_json::json!(true));
     assert!(serde_json::to_value(&read.entries[1]).unwrap().get("asking").is_none());
+}
+
+#[test]
+fn codex_async_asks_left_open_are_bounded_to_the_newest() {
+    // A hostile rollout can leave any number of async asks open in one turn;
+    // the walk keeps only the newest `MAX_WALK_ASKS` (each reply rescans them).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout.jsonl");
+    let ask = |call: &str| {
+        let args = serde_json::json!({"questions": [{"title": format!("Ask {call}?"), "options": ["Yes", "No"]}]}).to_string();
+        serde_json::json!({"type": "response_item", "payload": {"type": "function_call", "name": "request_user_input_async", "arguments": args, "call_id": call}}).to_string() + "\n"
+    };
+    let mut text = serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "go"}]}}).to_string() + "\n";
+    let total = MAX_WALK_ASKS + 4;
+    for n in 0..total {
+        text += &ask(&format!("call_{n}"));
+    }
+    std::fs::write(&path, &text).unwrap();
+    let read = read_transcript(&path, TranscriptKind::Codex, None, DEFAULT_LIMIT).unwrap();
+    let asking: Vec<bool> = read.entries.iter().filter(|e| !e.questions.is_empty()).map(|e| e.asking).collect();
+    assert_eq!(asking.len(), total);
+    assert!(asking[..total - MAX_WALK_ASKS].iter().all(|a| !a));
+    assert!(asking[total - MAX_WALK_ASKS..].iter().all(|a| *a));
 }
 
 #[test]
