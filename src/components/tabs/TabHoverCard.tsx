@@ -30,6 +30,7 @@ import { tabTaskName } from "../../lib/agents/autoTabName";
 import { DotIcon } from "../common/icons/Icon";
 import { tabMemberInfo, tabMemberTitle, useScopeMemberTable, type MemberTable } from "./TabMemberChip";
 import { unreadFor, useTabMessages } from "../../stores/tabMessages";
+import { McpStaleHoverMark } from "../terminal/TerminalMcpStaleCard";
 
 /** Friendly, human-readable name for a tab kind, shown as the card's muted
  *  sub-line. Falls back to the raw kind for anything unmapped. */
@@ -83,6 +84,8 @@ interface AgentTabFeatures {
   sandbox: "fenced" | "host_session" | "unfenced" | null;
   appMcp: string[];
   ownMcp: string[];
+  /** Tabtivity's servers are dead: the tab reattached an agent of an earlier run. */
+  appMcpStale?: boolean;
   /** Configured in the tab's home but switched off for this folder. */
   ownMcpOff?: string[];
   skills: string[];
@@ -390,6 +393,7 @@ export function TabHoverCard({
   if (features?.sandbox) {
     featureRows.push({ label: t("tabHoverCard.sandboxLabel"), value: t(`tabHoverCard.sandbox.${features.sandbox}`) });
   }
+  if (features?.appMcpStale) featureRows.push({ label: t("tabHoverCard.mcpStaleLabel"), value: <McpStaleHoverMark /> });
   // Each server green when the CLI starts it, red when it is switched off.
   const mcp = [
     ...[...(features?.appMcp ?? []), ...(features?.ownMcp ?? [])].map((name) => ({ name, on: true })),

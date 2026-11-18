@@ -115,3 +115,77 @@ Commits: `31c8d7f64` (the whole step: code, tests, docs, this file) plus a one-l
 * Nothing was run live (no app start): the stable port, the stamp on a real
   restore and the probe between window and Mobile host are unverified outside
   unit/real-tmux tests on a private socket.
+
+## I3: Phase 1 frontend
+
+Branch `worktree-agent-a345e92f66fd1b56e`, based on I1's `4c0ea87dc`.
+
+### What landed
+
+* **`stores/agents/mcpStale.ts`** (new): per-PTY `stale`/`armed`/`dismissed`
+  plus the turn hook's verdicts seen since. `TerminalView` calls
+  `noteMcpStale(id, spawned.mcpStale === true)` after every `pty_spawn` that is
+  not a join (`attached`) or an `attachOnly` view, so a relaunch clears it.
+  * `mcpReconnectKind`: `byId` (claude, codex, vibe, opencode), `latest` (every
+    other resumable CLI or custom `resumeArgs`: Cursor, Grok, Qwen, Droid,
+    Gemini, also Antigravity, Copilot, Muse), `none` (no resume, or a tab that
+    does not run locally).
+  * Reconnect = `agentClearUndo::relaunch` (kill the tab's own tmux session,
+    relaunch on `resumeArgsOf`); the flag clears at once and the respawn's own
+    answer raises it again if the new run is stale too.
+  * "Reconnect when this turn ends": `armMcpReconnect` arms only while a turn is
+    in flight (hook verdict `working`/`decision`, else `busyByTab`); idle, it
+    reconnects at once. Fires on `agent-turn` `done`/`idle` (own `subscribeTauri`
+    listener, live only while a tab is stale) or, for an agent with no hooks,
+    on an `useActivityStore` change that leaves it not busy (subscribed only
+    while something is armed).
+  * Bulk toast: after the last stale answer, `TOAST_SETTLE_MS` (3 s) later, one
+    `switchToast` "N agent tabs lost their {app} tools" per batch of newly stale
+    tabs (main window only). Its action "Reconnect idle ones" is offered only
+    when a candidate exists: stale, open, `byId`, not armed, no turn, no
+    background `job`, not byte-busy. `reconnectIdleMcpStale` runs 4 slots; each
+    slot waits for its tab's next `noteMcpStale` (its respawn) or 15 s before
+    taking the next, and re-checks idleness first.
+* **`terminal/TerminalMcpStaleCard.tsx`** (new): the dead-pane card's classes
+  (`hint-bubble terminal-sign-in`), with the undo-clear card's ✕ and lift
+  (`.terminal-mcp-stale` added to that one CSS rule). Buttons: Reconnect /
+  Reconnect when this turn ends / Don't reconnect (armed). `latest` goes
+  through `useDialogs().confirmAction` before both Reconnect and arming.
+  `none` shows the notice only. Mounted in `TerminalView` beside the dead-pane
+  card (one line).
+* **Hover card**: `AgentTabFeatures.appMcpStale`; a row "{app} tools:
+  disconnected — reconnect from the tab" (`McpStaleHoverMark`, red
+  `tab-popup-mcp off`).
+* `switchToastAction` gained an optional `untested` id; the box Undo toast now
+  passes its own (`ProjectSwitcher`), so AppShell no longer hard-codes it.
+* i18n: 16 `terminal.mcpStale.*` + 2 `tabHoverCard.mcpStale*` keys in all five
+  dictionaries. Untested rows: `terminal.mcpStale`, `terminal.mcpStale.bulk`,
+  `tabHoverCard.mcpStale`. Filemap row beside `TerminalDeadPaneCard`.
+
+### Tests
+
+* `src/__tests__/agents/McpStale.test.ts`: reconnect kinds; bulk filter
+  (working, job, armed, Gemini excluded); 4-at-a-time with respawn waits;
+  armed fires on `done`; idle arm reconnects at once; toast once per batch,
+  no action when only a `latest` tab is stale.
+* `src/__tests__/terminal/TerminalMcpStaleCard.test.tsx`: hidden when live;
+  Reconnect kills + relaunches; mid-turn arm and disarm; Gemini confirm; Aider
+  notice only and ✕.
+* `src/__tests__/tabs/TabHoverCardMcpStale.test.tsx`: stale row, MCP row keeps
+  only the tab's own servers; no row when live.
+
+### For R1
+
+* **Deviation:** the `latest` set is the rule (every resumable CLI not resumed
+  by id), not only the five named CLIs: Antigravity, Copilot, Muse and custom
+  agents also confirm and stay out of the bulk.
+* An armed reconnect fires on `done` even with a background `job` running
+  (it would never fire on a long-lived dev server otherwise); the bulk skips
+  job tabs.
+* The toast reuses the shared `switchToast` slot (6 s with an action): a
+  project-switch toast set in the same moment replaces it.
+* Stale entries of closed tabs stay in the store until their id spawns again;
+  every reader filters by open tabs.
+* A dead pane on a stale tab shows both cards in the same corner (the dead
+  one's Restart also clears the stale flag through the respawn).
+* Popouts: the card works there, the toast is main-window only.

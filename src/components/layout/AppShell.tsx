@@ -1300,7 +1300,7 @@ export function AppShell() {
               }}
             >
               {switchToastAction.label}
-              <UntestedTag id="projectSwitcher.undoRemove" />
+              {switchToastAction.untested && <UntestedTag id={switchToastAction.untested} />}
             </button>
           )}
         </div>
